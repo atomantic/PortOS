@@ -147,8 +147,16 @@ describe('VideoGen cross-page Remix handoff', () => {
     expect(readRestoredForm()).toEqual(fromHistory);
   });
 
-  it('resets the optional controls to their sentinels for a legacy record', async () => {
-    await renderVideoGenPage(`/media/video?remix=${LEGACY_RECORD.id}`);
+  it('clears the optional controls when a legacy record follows a configured one', async () => {
+    // The configured record first, so every control under test holds a
+    // NON-default value. Asserting the sentinels on a freshly mounted form
+    // would pass even if the restore stopped clearing them at all.
+    await renderVideoGenPage(`/media/video?remix=${RECORD.id}`);
+    await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(RECORD.prompt));
+    expect(readRestoredForm().speedProfileId).toBe('turbo');
+
+    // A second handoff arriving in place, with the page already mounted.
+    await act(async () => { state.navigate(`/media/video?remix=${LEGACY_RECORD.id}`); });
     await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(LEGACY_RECORD.prompt));
 
     const restored = readRestoredForm();
@@ -156,9 +164,11 @@ describe('VideoGen cross-page Remix handoff', () => {
     expect(restored.speedProfileId).toBe('quality');
     expect(restored.draftDecode).toBe('full');
     expect(restored.loras).toEqual([]);
+    expect(restored.negativePrompt).toBe('');
     expect(restored.steps).toBe('');
     expect(restored.guidanceScale).toBe('');
     expect(restored.chunks).toBe(1);
+    expect(restored.chunkPrompts).toEqual([]);
   });
 
   it('says nothing about a missing record while the history fetch is still in flight', async () => {
@@ -200,12 +210,19 @@ describe('VideoGen cross-page Remix handoff', () => {
     // The banner can sit for as long as the user leaves it there, and the form
     // is live the whole time. A render finishing in the background re-fetches
     // history — the stranded handoff must not ride in on it and wipe the form.
-    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a kite over a field' } });
-    state.listVideoHistory.mockResolvedValue([RECORD]);
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a half-typed idea' } });
+    state.listVideoHistory.mockResolvedValue([RECORD, LEGACY_RECORD]);
     await act(async () => { await state.completionRefresh.onVideoCompleted(); });
 
-    expect(screen.getByLabelText('Prompt')).toHaveValue('a kite over a field');
+    expect(screen.getByLabelText('Prompt')).toHaveValue('a half-typed idea');
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+
+    // The wait belongs to THAT handoff, not to the page: a different record
+    // arriving afterwards must resolve against the history that has since
+    // loaded rather than inherit the stranded one's block.
+    await act(async () => { state.navigate(`/media/video?remix=${LEGACY_RECORD.id}`); });
+    await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(LEGACY_RECORD.prompt));
+    expect(screen.queryByText(/Couldn't load your render history/)).toBeNull();
   });
 
   it('reports an actionable missing-record state when the load holds no such record', async () => {

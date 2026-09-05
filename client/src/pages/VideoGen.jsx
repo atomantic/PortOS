@@ -449,11 +449,12 @@ export default function VideoGen() {
   // null while nothing is wrong; otherwise 'error' (the history fetch failed,
   // retryable) or 'missing' (history loaded and holds no such record).
   const [remixHandoffProblem, setRemixHandoffProblem] = useState(null);
-  // Set when the fetch failed under a pending handoff. The restore then waits
-  // for an explicit Retry instead of riding in on the next background refresh:
-  // a render completing minutes later would otherwise replay the handoff over
-  // a form the user has been editing since the banner appeared.
-  const [remixHandoffBlocked, setRemixHandoffBlocked] = useState(false);
+  // The handoff id whose fetch failed. That restore then waits for an explicit
+  // Retry instead of riding in on the next background refresh: a render
+  // completing minutes later would otherwise replay it over a form the user has
+  // been editing since the banner appeared. Holding the ID rather than a flag
+  // keeps the block on that one handoff — a later one resolves normally.
+  const [blockedRemixHandoffId, setBlockedRemixHandoffId] = useState(null);
   const consumeRemixHandoff = useCallback(() => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -466,15 +467,16 @@ export default function VideoGen() {
     // Clearing the settled id here is what lets the NEXT handoff through, even
     // when it names the same record.
     if (!remixHandoffId) { settledRemixHandoffRef.current = null; return; }
-    if (settledRemixHandoffRef.current === remixHandoffId || remixHandoffBlocked) return;
+    if (settledRemixHandoffRef.current === remixHandoffId || blockedRemixHandoffId === remixHandoffId) return;
     // Still fetching: say nothing. Reporting "no such record" here would be a
     // lie every time the page is opened faster than the history round trip.
-    if (historyLoad === 'loading') return;
+    // Any banner still up belongs to a previous handoff, so it goes.
+    if (historyLoad === 'loading') { setRemixHandoffProblem(null); return; }
     if (historyLoad === 'error') {
       // Keep the param so Retry can resolve it, and leave the handoff unsettled
       // so that retry actually re-runs this effect.
       setRemixHandoffProblem('error');
-      setRemixHandoffBlocked(true);
+      setBlockedRemixHandoffId(remixHandoffId);
       return;
     }
     const record = history.find((v) => String(v.id) === remixHandoffId);
@@ -486,19 +488,19 @@ export default function VideoGen() {
       setRemixHandoffProblem('missing');
     }
     consumeRemixHandoff();
-  }, [remixHandoffId, historyLoad, history, remixHandoffBlocked, applyRemix, consumeRemixHandoff]);
+  }, [remixHandoffId, historyLoad, history, blockedRemixHandoffId, applyRemix, consumeRemixHandoff]);
   // Back to 'loading' first, so a retry that fails again still moves the state
   // ('loading' → 'error') and re-runs the effect above.
   const retryRemixHandoff = useCallback(() => {
     setHistoryLoad('loading');
     setRemixHandoffProblem(null);
-    setRemixHandoffBlocked(false);
+    setBlockedRemixHandoffId(null);
     refreshHistory();
   }, [refreshHistory]);
   const dismissRemixHandoff = useCallback(() => {
     settledRemixHandoffRef.current = remixHandoffId;
     setRemixHandoffProblem(null);
-    setRemixHandoffBlocked(false);
+    setBlockedRemixHandoffId(null);
     consumeRemixHandoff();
   }, [remixHandoffId, consumeRemixHandoff]);
 

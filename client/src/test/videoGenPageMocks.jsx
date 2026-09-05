@@ -23,7 +23,7 @@
  */
 
 import { act, render } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, useNavigate } from 'react-router';
 import { vi } from 'vitest';
 
 /** Universe style the stub picker hands to the page when its button is clicked. */
@@ -80,6 +80,12 @@ export const state = {
   completionRefresh: null,
   /** `listLorasFull` — the installed library the LoRA picker resolves names against. */
   availableLoras: [],
+  /**
+   * The mounted router's `navigate`, for a suite that needs a SECOND in-place
+   * navigation — a URL handoff arriving while the page is already mounted,
+   * which is a different code path from a fresh mount on that URL.
+   */
+  navigate: null,
 };
 
 const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 'attach', 'start', 'startWhenIdle', 'repair', 'cancel', 'refresh', 'listVideoHistory'];
@@ -99,6 +105,7 @@ export function resetVideoGenMockState() {
   state.galleryProps = null;
   state.completionRefresh = null;
   state.availableLoras = [];
+  state.navigate = null;
   for (const key of SPIES) state[key].mockReset();
   state.listVideoHistory.mockResolvedValue([]);
 }
@@ -273,6 +280,12 @@ vi.mock('../components/media/ResolutionField', () => ({ default: () => null }));
 
 let VideoGen = null;
 
+/** Publishes the router's `navigate` on `state`. Renders nothing. */
+function NavigateProbe() {
+  state.navigate = useNavigate();
+  return null;
+}
+
 /**
  * Import the page under the mocks above. Every suite loads it dynamically at
  * module scope so the registrations are in place first; the component is kept
@@ -293,6 +306,7 @@ export async function renderVideoGenPage(entry = '/media/video') {
   await act(async () => {
     view = render(
       <MemoryRouter initialEntries={[entry]}>
+        <NavigateProbe />
         <VideoGen />
       </MemoryRouter>,
     );
