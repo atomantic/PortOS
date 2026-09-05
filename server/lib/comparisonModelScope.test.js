@@ -36,6 +36,13 @@ describe('catalogSlugForProviderModel', () => {
       expect(catalogSlugForProviderModel(entry)).toBe('');
     }
   });
+
+  it('rejects a routing alias that arrives namespaced, and one that is only recognizable namespaced', () => {
+    // 'opencode/big-pickle' matches the alias only after the namespace comes off;
+    // 'stealth/ox-alpha' matches only before it does.
+    expect(catalogSlugForProviderModel('opencode/big-pickle')).toBe('');
+    expect(catalogSlugForProviderModel('stealth/ox-alpha')).toBe('');
+  });
 });
 
 describe('canonicalCatalogModelSlug', () => {

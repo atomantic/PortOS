@@ -87,6 +87,11 @@ export function catalogSlugForProviderModel(modelId) {
   const prefix = PREFIXES.find(candidate => slug.startsWith(candidate));
   if (prefix) slug = slug.slice(prefix.length);
   slug = slug.slice(slug.lastIndexOf('/') + 1); // vendor / gateway namespace
+  // Re-test after stripping: a routing alias reaches us namespaced
+  // (`opencode/big-pickle`), which the anchored pattern misses in its full form.
+  // The first test still has to happen before stripping, because some patterns
+  // (`stealth/…`) match only the namespaced form.
+  if (NOT_A_MODEL.test(slug)) return '';
   slug = canonicalCatalogModelSlug(slug.replace(TAIL, ''));
   return ALIASES.get(slug) || slug;
 }

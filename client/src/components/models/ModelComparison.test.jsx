@@ -165,3 +165,24 @@ it('plots an unpublished effort cost as a flagged estimate that can be turned of
   expect(screen.getByTestId('scatter-claude-fable-5.1')).toHaveAttribute('data-points', '1');
   expect(screen.queryByText(/· 1 estimated cost/)).toBeNull();
 });
+
+it('leaves only the models that actually plot a curve selected', async () => {
+  const mixed = [
+    // Two efforts, both plottable → a real curve.
+    { ...observation, id: 'p-low', model: 'gpt-5.6-sol', effort: 'low', quality: metric(41), costPerTask: metric(0.2) },
+    { ...observation, id: 'p-max', model: 'gpt-5.6-sol', effort: 'max', quality: metric(51), costPerTask: metric(1.2) },
+    // Two efforts, neither plottable (no cost anywhere in the family, so no
+    // anchor to estimate from) → must not survive the quick filter.
+    { ...observation, id: 'u-low', model: 'unpriced-model', effort: 'low', quality: metric(30), costPerTask: null },
+    { ...observation, id: 'u-max', model: 'unpriced-model', effort: 'max', quality: metric(35), costPerTask: null },
+  ];
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: mixed, inventory: [] });
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  await screen.findByText(/1 reasoning curves/);
+  fireEvent.click(screen.getByText(/Reasoning curves \(1\)/));
+  expect(screen.getByRole('button', { name: 'Toggle gpt-5.6-sol' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByRole('button', { name: 'Toggle unpriced-model' })).toHaveAttribute('aria-pressed', 'false');
+});

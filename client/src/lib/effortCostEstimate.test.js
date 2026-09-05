@@ -35,6 +35,18 @@ describe('deriveEffortCostRatios', () => {
   it('ignores families that publish fewer than two ladder costs', () => {
     expect(deriveEffortCostRatios([row('anchored', 'max', 10)]).size).toBe(0);
   });
+
+  it('calibrates only against families anchored at the highest published effort', () => {
+    // 'short' tops out at high, so its high/high = 1 must not pool with
+    // full-curve's high/max = 0.5 — the two have different denominators.
+    const ratios = deriveEffortCostRatios([
+      ...catalog,
+      row('short', 'medium', 5),
+      row('short', 'high', 10),
+    ]);
+    expect(ratios.get('high')).toBeCloseTo(0.5);
+    expect(ratios.get('medium')).toBeCloseTo(0.2);
+  });
 });
 
 describe('withEstimatedCosts', () => {

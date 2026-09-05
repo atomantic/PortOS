@@ -67,11 +67,25 @@ function anchorOf(rows) {
 }
 
 function ratiosFromFamilies(families) {
-  const samples = new Map();
+  const calibrating = [];
   for (const rows of families.values()) {
     const priced = rows.filter(isPriced);
-    if (priced.length < 2) continue;
-    const anchor = anchorOf(priced);
+    if (priced.length >= 2) calibrating.push({ priced, anchor: anchorOf(priced) });
+  }
+  // Every sample has to share one denominator. A family whose top published cost
+  // is xhigh contributes xhigh/xhigh = 1 to the same pool as a complete family's
+  // xhigh/max ≈ 0.72, and the median across those two denominators is not a ratio
+  // of anything — so the baseline is the highest effort any family is anchored at,
+  // and only families anchored there calibrate. Reading it from the data rather
+  // than naming 'max' keeps it right if the ladder grows a rung above it.
+  const baseline = calibrating.reduce(
+    (best, family) => (best === null || rank(family.anchor.effort) > rank(best) ? family.anchor.effort : best),
+    null
+  );
+
+  const samples = new Map();
+  for (const { priced, anchor } of calibrating) {
+    if (anchor.effort !== baseline) continue;
     for (const row of priced) {
       if (!samples.has(row.effort)) samples.set(row.effort, []);
       samples.get(row.effort).push(row.costPerTask.value / anchor.costPerTask.value);

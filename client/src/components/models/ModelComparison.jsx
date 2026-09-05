@@ -320,13 +320,10 @@ export default function ModelComparison() {
   };
 
   const selectReasoningOnly = () => {
-    // Counted over the same scoped rows the pills list, so the button's count
-    // and the models it leaves selected agree.
-    const allKnown = scoped.filter(r => r.benchmark === benchmark);
-    const countMap = new Map();
-    for (const r of allKnown) countMap.set(r.model, (countMap.get(r.model) || 0) + 1);
-    const toHide = models.filter(m => (countMap.get(m) || 0) < 2);
-    setAllHidden('hideModel', toHide);
+    // Keyed on the models that actually PLOT a curve — the same set the button's
+    // count names. Counting catalog rows instead would leave models selected
+    // that have two efforts but no plottable cost at either.
+    setAllHidden('hideModel', models.filter(model => !reasoningCurveModels.includes(model)));
   };
 
   const clearAllModels = () => {
