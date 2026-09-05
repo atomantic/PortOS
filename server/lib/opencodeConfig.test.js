@@ -392,18 +392,39 @@ describe('buildOpencodeEnvVars', () => {
 // every generation control silently discarded (#4765). Walk LOCAL_RUNTIMES so a
 // seventh runtime cannot land with the same hole.
 describe('every OpenCode-reachable local runtime forwards generation controls', () => {
-  // LM Studio is skipped deliberately — nothing spawns OpenCode against it, so
+  // Slotstream is skipped deliberately — nothing spawns OpenCode against it, so
   // it has no provider entry (and no base URL) in opencodeConfig's table.
   const opencodeRuntimes = Object.keys(LOCAL_RUNTIMES).filter((id) => opencodeLocalBaseUrl(id));
 
   it('actually walks the runtimes (a degenerate filter would pass vacuously)', () => {
-    expect(opencodeRuntimes).toEqual(expect.arrayContaining(['vllm', 'sglang']));
+    expect(opencodeRuntimes).toEqual(expect.arrayContaining(['vllm', 'sglang', 'lmstudio']));
     expect(opencodeRuntimes.length).toBeGreaterThanOrEqual(5);
   });
 
   it.each(opencodeRuntimes)('%s', (id) => {
     expect(buildAgentGeneration({ temperature: 0.7, topP: 0.9, effort: 'high' }, id))
       .toMatchObject({ temperature: 0.7, topP: 0.9, reasoningEffort: 'high' });
+  });
+});
+
+describe('LM Studio OpenCode config', () => {
+  it('declares the lmstudio namespace at the local server', () => {
+    const result = buildOpencodeEnvVars(
+      { command: 'opencode', lmstudioBacked: true, models: ['qwen3-coder-30b'] },
+      'qwen3-coder-30b',
+    );
+    const config = JSON.parse(result.OPENCODE_CONFIG_CONTENT);
+    expect(config.provider.lmstudio.options.baseURL).toBe('http://localhost:1234/v1');
+    expect(config.provider.lmstudio.models['qwen3-coder-30b']).toEqual({ name: 'qwen3-coder-30b', tool_call: true });
+  });
+
+  it('forwards sampling but never a thinking toggle — reasoning is a load-time choice', () => {
+    // LM Studio's OpenAI-compatible endpoint documents no per-request reasoning
+    // field: the instance is loaded with (or without) it in the app. A toggle
+    // here would pin a value nothing reads, so THINKING_STYLE.lmstudio is null —
+    // which must still leave temperature/topP/effort forwarding, the #4765 hole.
+    expect(buildAgentGeneration({ temperature: 0.7, topP: 0.9, thinking: true, effort: 'high' }, 'lmstudio'))
+      .toEqual({ temperature: 0.7, topP: 0.9, reasoningEffort: 'high' });
   });
 });
 

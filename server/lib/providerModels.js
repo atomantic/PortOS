@@ -640,7 +640,7 @@ export const OPENCODE_BUILD_AGENT = 'build';
  * already-qualified id (`openai/gpt-4o`, `anthropic/claude-sonnet`), and blindly
  * prefixing `ollama/` would route it to the wrong backend. No-op for
  * non-local / non-OpenCode providers and empty models.
- * @param {{command?:string, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, orcarouterBacked?:boolean}} provider
+ * @param {{command?:string, ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, orcarouterBacked?:boolean}} provider
  * @param {string|null|undefined} model
  * @returns {string|null|undefined}
  */
@@ -667,11 +667,12 @@ export function prefixOpencodeModel(provider, model) {
  * opted into one. Structural markers avoid deriving a backend from an editable
  * display name or endpoint and preserve the legacy Ollama outcome if a malformed
  * record carries both markers.
- * @param {{ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean}|null|undefined} provider
- * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string|null}
+ * @param {{ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean}|null|undefined} provider
+ * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|string|null}
  */
 export function getOpencodeLocalProviderNamespace(provider) {
   if (provider?.ollamaBacked === true) return 'ollama';
+  if (provider?.lmstudioBacked === true) return 'lmstudio';
   if (provider?.mtplxBacked === true) return 'mtplx';
   if (provider?.llamaBacked === true) return 'llama';
   if (provider?.vllmBacked === true) return 'vllm';
@@ -696,7 +697,7 @@ export function getOpencodeLocalProviderNamespace(provider) {
  * it wraps.
  *
  * @param {object|null|undefined} provider
- * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|null}
+ * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|null}
  */
 export function localRuntimeNamespace(provider) {
   const namespace = getOpencodeLocalProviderNamespace(provider);
@@ -718,10 +719,12 @@ export function localRuntimeNamespace(provider) {
  * rejects, and forwarding nothing would silently run the record against the
  * OpenAI cloud — which is why `codexUnsupportedLocalRuntime` below exists.
  *
- * `lmstudio` is absent because PortOS has no LM Studio backing marker yet; the
- * row lands with the marker, not before it.
+ * Both of Codex's values are mapped: `lmstudio` joined the axis with the
+ * `lmstudioBacked` marker (#6309). The remaining three (mtplx / vllm / sglang)
+ * have no Codex spelling at all, which is what `codexUnsupportedLocalRuntime`
+ * below is for.
  */
-export const CODEX_OSS_LOCAL_PROVIDERS = Object.freeze({ ollama: 'ollama' });
+export const CODEX_OSS_LOCAL_PROVIDERS = Object.freeze({ ollama: 'ollama', lmstudio: 'lmstudio' });
 
 /**
  * The first Codex CLI release that ships `--oss` / `--local-provider`. Used

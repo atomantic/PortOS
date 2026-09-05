@@ -510,7 +510,7 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
   it('widens the Claude output ceiling for any LOCAL backend, never a hosted one', () => {
     const forClaude = (extra) => composeProviderEnv({ provider: { command: 'claude', envVars: {}, ...extra } });
 
-    for (const marker of ['ollamaBacked', 'sglangBacked', 'llamaBacked', 'mtplxBacked', 'vllmBacked']) {
+    for (const marker of ['ollamaBacked', 'lmstudioBacked', 'sglangBacked', 'llamaBacked', 'mtplxBacked', 'vllmBacked']) {
       expect(forClaude({ [marker]: true }).CLAUDE_CODE_MAX_OUTPUT_TOKENS, marker).toBe('65536');
     }
     // OrcaRouter is a hosted gateway whose upstream models own their own output

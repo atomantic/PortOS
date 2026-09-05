@@ -639,7 +639,7 @@ const FAMILIES = PROVIDER_FAMILIES.map((family) => ({ ...family, fetch: FAMILY_F
  * wrapper its family's card).
  */
 export function resolveEnabledFamilies(providers) {
-  const enabled = (providers || []).filter((p) => p?.enabled && p.ollamaBacked !== true && p.mtplxBacked !== true && p.llamaBacked !== true && p.vllmBacked !== true && p.sglangBacked !== true);
+  const enabled = (providers || []).filter((p) => p?.enabled && p.ollamaBacked !== true && p.lmstudioBacked !== true && p.mtplxBacked !== true && p.llamaBacked !== true && p.vllmBacked !== true && p.sglangBacked !== true);
   return FAMILIES.filter((family) => enabled.some((p) => family.matches(p)));
 }
 
@@ -704,7 +704,7 @@ export async function getProviderQuotas({ wait = WAIT.CACHED, family = null } = 
 async function readProviderQuotas({ wait, family }) {
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
-  const enabled = providers.filter((p) => p?.enabled && p.ollamaBacked !== true && p.mtplxBacked !== true && p.llamaBacked !== true && p.vllmBacked !== true && p.sglangBacked !== true);
+  const enabled = providers.filter((p) => p?.enabled && p.ollamaBacked !== true && p.lmstudioBacked !== true && p.mtplxBacked !== true && p.llamaBacked !== true && p.vllmBacked !== true && p.sglangBacked !== true);
   const families = resolveEnabledFamilies(providers).filter((f) => !family || f.id === family);
   const familyCards = await Promise.all(families.map((f) =>
     fetchFamilyQuota(f, { wait, providers: enabled.filter((p) => f.matches(p)) })));
