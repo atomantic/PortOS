@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { chmod, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { delimiter, join } from 'path';
 import { createProviderService, isOllamaBackedProvider } from './providers.js';
 
 // Temp dir, NOT a cwd-rooted one — see providerStatus.test.js (#3823).
@@ -1451,6 +1451,27 @@ rl.on('line', (line) => {
       const updated = await providerService.refreshProviderModels('codex-tui');
       expect(updated, 'the id clause on the TUI arm matches').not.toBeNull();
       expect(updated.models).toEqual(['gpt-6-astra', 'gpt-5.6-sol']);
+    });
+
+    it.skipIf(process.platform !== 'win32')('resolves the Windows codex.cmd shim before refreshing', async () => {
+      const fakeCodex = await writeFakeCodex({ data: [{ id: 'gpt-6-astra' }] });
+      const shimDir = await mkdtemp(join(tmpdir(), 'portos-codex-shim-'));
+      const previousPath = process.env.PATH;
+      try {
+        const shim = join(shimDir, 'codex.cmd');
+        await writeFile(shim, `@echo off\r\nnode "${fakeCodex}" %*\r\n`);
+        process.env.PATH = `${shimDir}${delimiter}${previousPath || ''}`;
+
+        const p = await providerService.createProvider({
+          name: 'Codex TUI', type: 'tui', command: 'codex',
+          models: ['gpt-5.3-codex-spark'], defaultModel: 'gpt-5.3-codex-spark',
+        });
+        const updated = await providerService.refreshProviderModels(p.id);
+        expect(updated.models).toEqual(['gpt-6-astra']);
+      } finally {
+        process.env.PATH = previousPath;
+        await rm(shimDir, { recursive: true, force: true });
+      }
     });
 
     it('reports a failed codex app-server probe as a refresh failure, leaving the stored list intact', async () => {
