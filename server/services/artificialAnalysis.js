@@ -1,8 +1,9 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { modelComparisonImportSchema } from '../lib/validation.js';
 import { importModelComparison } from './modelComparison.js';
+import { canonicalCatalogModelSlug } from '../lib/comparisonModelScope.js';
 
-export const KNOWN_EFFORTS = ['non-reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const KNOWN_EFFORTS = ['non-reasoning', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'];
 
 export function slugify(text) {
   return String(text || '')
@@ -22,7 +23,7 @@ export function parseModelNameAndEffort(rawName) {
     const inside = parenMatch[2].trim();
     configDetail = inside;
 
-    const effortMatch = inside.match(/\b(minimal|low|medium|high|xhigh|very_high|max|non-reasoning)\b/i);
+    const effortMatch = inside.match(/\b(minimal|low|medium|high|xhigh|very_high|max|ultracode|non-reasoning)\b/i);
     if (effortMatch) {
       effort = effortMatch[1].toLowerCase();
       if (effort === 'very_high') effort = 'xhigh';
@@ -33,7 +34,7 @@ export function parseModelNameAndEffort(rawName) {
     }
   }
 
-  const modelSlug = slugify(name);
+  const modelSlug = canonicalCatalogModelSlug(slugify(name));
   return { baseName: name, modelSlug, effort, configDetail };
 }
 
@@ -45,7 +46,7 @@ const EXISTING_CATALOG_IDENTITIES = new Map([
   ['aa-v4.2-openai-gpt-5.6-terra-max', { provider: 'OpenAI', model: 'gpt-5.6-terra', effort: 'max', configuration: 'Published API model; max reasoning effort' }],
   ['aa-v4.2-openai-gpt-5.6-luna-max', { provider: 'OpenAI', model: 'gpt-5.6-luna', effort: 'max', configuration: 'Published API model; max reasoning effort' }],
   ['aa-v4.2-google-gemini-3.8-flash-high', { provider: 'Google', model: 'gemini-3.8-flash', effort: 'high', configuration: 'Published API model; high reasoning effort' }],
-  ['aa-v4.2-anthropic-claude-fable-5-1-max', { provider: 'Anthropic', model: 'claude-fable-5-1', effort: 'max', configuration: 'Adaptive reasoning, max effort, default fallback; published evaluation configuration' }],
+  ['aa-v4.2-anthropic-claude-fable-5-1-max', { provider: 'Anthropic', model: 'claude-fable-5.1', effort: 'max', configuration: 'Adaptive reasoning, max effort, default fallback; published evaluation configuration' }],
 ]);
 
 export function transformAAModelsToObservations(models, options = {}) {
@@ -69,10 +70,6 @@ export function transformAAModelsToObservations(models, options = {}) {
       }
     }
 
-    if (modelSlug === 'claude-fable-5.1' && effort === 'max') {
-      id = 'aa-v4.2-anthropic-claude-fable-5-1-max';
-    }
-
     let finalId = id;
     let counter = 1;
     while (seenIds.has(finalId)) {
@@ -93,23 +90,12 @@ export function transformAAModelsToObservations(models, options = {}) {
       },
     } : null;
 
-    let costVal = m.artificial_analysis_intelligence_index_cost?.cost_per_task?.total_cost;
-    // Known benchmark curve values for OpenAI reasoning models when omitted from AA free cost_per_task
-    if (costVal == null) {
-      if (modelSlug === 'gpt-5.6-terra') {
-        if (effort === 'low') costVal = 0.089;
-        if (effort === 'medium') costVal = 0.124;
-      } else if (modelSlug === 'gpt-5.6-luna') {
-        if (effort === 'low') costVal = 0.012;
-        if (effort === 'medium') costVal = 0.018;
-        if (effort === 'high') costVal = 0.024;
-      } else if (modelSlug === 'gpt-5.5') {
-        if (effort === 'low') costVal = 0.258;
-        if (effort === 'medium') costVal = 0.495;
-        if (effort === 'high') costVal = 0.798;
-        if (effort === 'xhigh') costVal = 1.172;
-      }
-    }
+    // AA omits cost_per_task for most sub-max effort rows, and a stored value
+    // carries an AA source url + methodology — so a hand-entered figure would
+    // persist, federate and re-sync as something AA published. The gap is filled
+    // at render time instead (`client/src/lib/effortCostEstimate.js`), where it
+    // is drawn and labelled as an estimate.
+    const costVal = m.artificial_analysis_intelligence_index_cost?.cost_per_task?.total_cost;
 
     const costPerTask = Number.isFinite(costVal) ? {
       value: Math.round(costVal * 10000) / 10000,

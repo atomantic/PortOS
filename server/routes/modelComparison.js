@@ -5,17 +5,21 @@ import { getModelComparison, importModelComparison } from '../services/modelComp
 import { syncArtificialAnalysisCatalog } from '../services/artificialAnalysis.js';
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
+import { providerCatalogSlugs } from '../lib/comparisonModelScope.js';
 
 export function createModelComparisonRoutes(providerService) {
   const router = Router();
   router.get('/', asyncHandler(async (req, res) => {
     const [catalog, { providers }] = await Promise.all([getModelComparison(), providerService.getAllProviders()]);
-    res.json({ ...catalog, inventory: providers.filter(p => p.enabled !== false).map(p => ({
+    const inventory = providers.filter(p => p.enabled !== false).map(p => ({
       id: p.id, name: p.name, type: p.type, canDiscover: canRefreshModels(p),
       models: filterSelectableModels(p.models).filter(m => typeof m === 'string' && m).map(model => ({
         model, efforts: effortLevelsForProvider(p, model) || [],
       })),
-    })) });
+    }));
+    // Benchmark rows the user can act on: the chart defaults to the models their
+    // own providers can dispatch, with the rest of the index one click away.
+    res.json({ ...catalog, inventory, availableModels: [...providerCatalogSlugs(inventory)].sort() });
   }));
   // Explicit read-only catalog discovery: no model inference or provider writes.
   router.post('/discover', asyncHandler(async (req, res) => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
   ArrowUpRight,
@@ -27,6 +27,7 @@ import {
 } from '../../services/apiModelComparison';
 import Modal from '../ui/Modal';
 import ComparisonResearch from './ComparisonResearch';
+import { EFFORT_LADDER, withEstimatedCosts } from '../../lib/effortCostEstimate';
 
 const COLORS = [
   '#2563eb', // blue (GPT-5.6 Sol)
@@ -58,18 +59,16 @@ const METRICS = [
   'quota',
 ];
 
+// Where each effort sits on a model's curve. The ladder itself comes from the
+// estimator so the two can't drift; the rest are the model-level configurations
+// that are not points on it, plus the aliases the sources use.
 const EFFORT_ORDER = {
   'non-reasoning': 0,
   none: 0,
   unspecified: 0.5,
-  minimal: 1,
-  low: 2,
-  medium: 3,
-  high: 4,
-  xhigh: 5,
-  very_high: 5,
-  max: 6,
-  reasoning: 7,
+  ...Object.fromEntries(EFFORT_LADDER.map((effort, index) => [effort, index + 1])),
+  very_high: EFFORT_LADDER.indexOf('xhigh') + 1,
+  reasoning: EFFORT_LADDER.length + 1,
 };
 
 const STALE_MS = 30 * 86400000;
@@ -96,6 +95,17 @@ export default function ModelComparison() {
   const [syncing, setSyncing] = useState(false);
 
   const load = useCallback(() => getModelComparison({ silent: true }), []);
+
+  const showEstimates = params.get('estimates') !== '0';
+  // Estimating costs walks the whole catalog, and the model filter input below
+  // re-renders on every keystroke — memoize so typing doesn't redo the pass.
+  const estimatedRows = useMemo(() => {
+    const observations = catalog?.observations || [];
+    return showEstimates ? withEstimatedCosts(observations) : observations;
+  }, [catalog, showEstimates]);
+  // Models the user's own providers can dispatch. Everything else in the index
+  // is available behind "All models" but is not what the page opens on.
+  const availableSet = useMemo(() => new Set(catalog?.availableModels || []), [catalog]);
 
   useEffect(() => {
     let active = true;
@@ -234,28 +244,39 @@ export default function ModelComparison() {
   const benchmark = benchmarks.includes(params.get('benchmark'))
     ? params.get('benchmark')
     : benchmarks.at(-1);
-  const providers = [...new Set(catalog.observations.map(row => row.provider))].sort();
-  const models = [...new Set(catalog.observations.map(row => row.model))].sort();
-  const efforts = [...new Set(catalog.observations.map(row => row.effort))].sort();
-
   const mode = params.get('cost') === 'scenario' ? 'scenario' : 'benchmark';
   const showLines = params.get('lines') !== '0';
   const lineStyle = params.get('lineStyle') || 'dotted';
   const showLabels = params.get('labels') === '1' || !params.has('labels');
-  const scale = params.get('scale') === 'log' ? 'log' : 'linear';
+  // Cost spans four orders of magnitude across the catalog, so a linear axis
+  // stacks every affordable model on the y-axis. Log is the readable default.
+  const scale = params.get('scale') === 'linear' ? 'linear' : 'log';
+  const showAllModels = params.get('allModels') === '1' || availableSet.size === 0;
 
-  const visible = catalog.observations.filter(
+  // Scope once, then derive every list from the scoped rows — so the provider
+  // and effort pills can't offer values that have nothing left to plot.
+  const scoped = showAllModels ? estimatedRows : estimatedRows.filter(row => availableSet.has(row.model));
+  const models = [...new Set(scoped.map(row => row.model))].sort();
+  const providers = [...new Set(scoped.map(row => row.provider))].sort();
+  const efforts = [...new Set(scoped.map(row => row.effort))].sort();
+
+  const hidden = {
+    provider: new Set(params.getAll('hideProvider')),
+    model: new Set(params.getAll('hideModel')),
+    effort: new Set(params.getAll('hideEffort')),
+  };
+  const visible = scoped.filter(
     row =>
       row.benchmark === benchmark &&
-      !params.getAll('hideProvider').includes(row.provider) &&
-      !params.getAll('hideModel').includes(row.model) &&
-      !params.getAll('hideEffort').includes(row.effort)
+      !hidden.provider.has(row.provider) &&
+      !hidden.model.has(row.model) &&
+      !hidden.effort.has(row.effort)
   );
 
   const rows = visible.map(row => {
     const cost =
       mode === 'benchmark'
-        ? row.costPerTask?.value
+        ? (row.costPerTask?.value ?? row.estimatedCostPerTask?.value)
         : row.billing === 'api' &&
             (scenario.input === 0 || row.inputPerMillion) &&
             (scenario.output === 0 || row.outputPerMillion) &&
@@ -271,6 +292,7 @@ export default function ModelComparison() {
       displayName,
       x: cost,
       y: row.quality?.value,
+      costEstimated: mode === 'benchmark' && row.costEstimated === true,
       label: `${row.model} (${row.effort})${row.responseSeconds ? ` · ${row.responseSeconds.value}s` : ''}`,
     };
   });
@@ -278,8 +300,10 @@ export default function ModelComparison() {
   const plotted = rows.filter(row => Number.isFinite(row.x) && Number.isFinite(row.y) && (scale !== 'log' || row.x > 0));
 
   // Count models that have 2 or more effort points plotted
+  let estimatedCount = 0;
   const multiEffortModelCounts = new Map();
   for (const row of plotted) {
+    if (row.costEstimated) estimatedCount += 1;
     multiEffortModelCounts.set(row.model, (multiEffortModelCounts.get(row.model) || 0) + 1);
   }
   const reasoningCurveModels = [...multiEffortModelCounts.entries()]
@@ -296,11 +320,10 @@ export default function ModelComparison() {
   };
 
   const selectReasoningOnly = () => {
-    const allKnown = catalog.observations.filter(r => r.benchmark === benchmark);
-    const countMap = new Map();
-    for (const r of allKnown) countMap.set(r.model, (countMap.get(r.model) || 0) + 1);
-    const toHide = models.filter(m => (countMap.get(m) || 0) < 2);
-    setAllHidden('hideModel', toHide);
+    // Keyed on the models that actually PLOT a curve — the same set the button's
+    // count names. Counting catalog rows instead would leave models selected
+    // that have two efforts but no plottable cost at either.
+    setAllHidden('hideModel', models.filter(model => !reasoningCurveModels.includes(model)));
   };
 
   const clearAllModels = () => {
@@ -309,45 +332,44 @@ export default function ModelComparison() {
 
   return (
     <div className="space-y-5 min-w-0">
-      {/* Header */}
-      <div className="flex flex-wrap justify-between gap-4 items-start">
-        <div className="max-w-3xl">
-          <div className="flex items-center gap-2 text-xs font-medium tracking-widest uppercase text-port-accent-text mb-2">
-            <ChartScatter size={15} aria-hidden="true" /> Model comparison
-          </div>
-          <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight">
-            Intelligence vs. Cost per Intelligence Index Task — with Response Time
+      {/* Header — one compact row: the chart is the page, so the chrome above it
+          stays under a single line of text on desktop and never pushes the plot
+          below the fold. */}
+      <div className="flex flex-wrap justify-between gap-3 items-center">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+            <ChartScatter size={18} aria-hidden="true" className="shrink-0 text-port-accent-text" />
+            Intelligence vs. cost per task
           </h2>
-          <p className="text-sm text-port-text-muted mt-2 leading-relaxed">
-            Artificial Analysis Intelligence Index + cost per task; point labels add standardized end-to-end response time.
-            Models across reasoning effort levels connected by lines.
+          <p className="text-xs text-port-text-muted mt-0.5">
+            Artificial Analysis Intelligence Index against cost per task; labels add end-to-end response time, lines connect reasoning efforts.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-port-card border border-port-border rounded-xl hover:border-port-accent transition-colors"
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-port-card border border-port-border rounded-lg hover:border-port-accent transition-colors"
             onClick={() => setSyncModalOpen(true)}
           >
-            <CloudDownload size={15} aria-hidden="true" className="text-port-accent-text" />
+            <CloudDownload size={14} aria-hidden="true" className="text-port-accent-text" />
             Sync from Artificial Analysis
           </button>
           <button
             type="button"
-            className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-port-card border border-port-border rounded-xl hover:border-port-accent transition-colors"
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-port-card border border-port-border rounded-lg hover:border-port-accent transition-colors"
             onClick={() => changeParam('research', params.get('research') === '1' ? '' : '1')}
             aria-expanded={params.get('research') === '1'}
           >
-            <SlidersHorizontal size={15} aria-hidden="true" />
+            <SlidersHorizontal size={14} aria-hidden="true" />
             Research & schedule
           </button>
           <button
             type="button"
-            className="inline-flex items-center gap-2 px-3 py-2 text-sm bg-port-card border border-port-border rounded-xl hover:border-port-accent disabled:opacity-50 transition-colors"
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-port-card border border-port-border rounded-lg hover:border-port-accent disabled:opacity-50 transition-colors"
             disabled={busy}
             onClick={refreshView}
           >
-            <RefreshCw size={15} aria-hidden="true" className={busy ? 'animate-spin' : ''} />
+            <RefreshCw size={14} aria-hidden="true" className={busy ? 'animate-spin' : ''} />
             Reload data
           </button>
         </div>
@@ -357,13 +379,18 @@ export default function ModelComparison() {
       {error && <p role="alert" className="text-port-error">{error}</p>}
 
       {/* Sync Modal */}
+      {/* Modal owns only the backdrop and the panel box; the surface and heading
+          are the caller's. Without them the dialog renders transparent. */}
       <Modal
         open={syncModalOpen}
         onClose={() => setSyncModalOpen(false)}
         size="sm"
-        title="Sync Artificial Analysis Data"
+        ariaLabelledBy="aa-sync-title"
       >
-        <div className="space-y-4">
+        <div className="bg-port-card border border-port-border rounded-xl shadow-2xl p-5 space-y-4">
+          <h3 id="aa-sync-title" className="text-base font-semibold tracking-tight">
+            Sync Artificial Analysis data
+          </h3>
           <p className="text-xs text-port-text-muted leading-relaxed">
             Fetch the latest benchmark evaluations, pricing, response times, and reasoning effort measurements from the
             Artificial Analysis Free API.
@@ -484,6 +511,29 @@ export default function ModelComparison() {
           />
           Point labels
         </label>
+
+        <label className="flex items-center gap-2 self-end py-2.5 text-sm text-port-text-muted cursor-pointer" htmlFor="comparison-estimates">
+          <input
+            id="comparison-estimates"
+            type="checkbox"
+            className="accent-port-accent size-4 shrink-0"
+            checked={showEstimates}
+            onChange={e => changeParam('estimates', e.target.checked ? '1' : '0')}
+          />
+          Estimate unpublished costs
+        </label>
+
+        <label className="flex items-center gap-2 self-end py-2.5 text-sm text-port-text-muted cursor-pointer" htmlFor="comparison-all-models">
+          <input
+            id="comparison-all-models"
+            type="checkbox"
+            className="accent-port-accent size-4 shrink-0"
+            checked={showAllModels}
+            disabled={availableSet.size === 0}
+            onChange={e => changeParam('allModels', e.target.checked ? '1' : '0')}
+          />
+          All models (not just yours)
+        </label>
       </div>
 
       {/* Scenario Token Inputs */}
@@ -544,6 +594,7 @@ export default function ModelComparison() {
             <span aria-live="polite">
               {plotted.length} plotted · {rows.length - plotted.length} missing quality or cost
               {reasoningCurveModels.length > 0 ? ` · ${reasoningCurveModels.length} reasoning curves` : ''}
+              {estimatedCount > 0 ? ` · ${estimatedCount} estimated cost` : ''}
             </span>
 
             {/* Quick selection actions */}
@@ -687,7 +738,9 @@ export default function ModelComparison() {
                             Provider: <span className="text-port-text font-medium">{item.provider}</span>
                           </div>
                           <div>
-                            USD / task: <span className="text-port-text font-semibold">${item.x?.toFixed(4)}</span>
+                            USD / task:{' '}
+                            <span className="text-port-text font-semibold">${item.x?.toFixed(4)}</span>
+                            {item.costEstimated && <span className="text-port-text-muted"> est.</span>}
                           </div>
                           <div>
                             Index Score: <span className="text-port-accent-text font-bold">{item.y}</span>
@@ -740,10 +793,19 @@ export default function ModelComparison() {
                             }
                           : false
                       }
-                      shape={({ cx, cy, fill }) => (
+                      // A hollow marker means the cost came from the effort-ratio
+                      // estimate, not from a published cost per task.
+                      shape={({ cx, cy, fill, payload }) => (
                         <g>
                           <circle cx={cx} cy={cy} r={9} fill={fill} fillOpacity={0.16} stroke="none" />
-                          <circle cx={cx} cy={cy} r={5} fill={fill} stroke="rgb(var(--port-card))" strokeWidth={1.5} />
+                          <circle
+                            cx={cx}
+                            cy={cy}
+                            r={5}
+                            fill={payload?.costEstimated ? 'rgb(var(--port-card))' : fill}
+                            stroke={payload?.costEstimated ? fill : 'rgb(var(--port-card))'}
+                            strokeWidth={payload?.costEstimated ? 2 : 1.5}
+                          />
                         </g>
                       )}
                     >
@@ -786,8 +848,10 @@ export default function ModelComparison() {
         )}
         <p className="text-xs leading-relaxed text-port-text-muted border-t border-port-border px-4 sm:px-6 py-4">
           Response-time labels reflect measured source workloads, independent of the intelligence evaluation. Connected lines
-          link the same model family across reasoning efforts (ordered from low to max). Shaded upper-left area highlights
-          cost-efficiency frontier.
+          link the same model family across reasoning efforts (ordered from low to max). Hollow markers are estimated costs:
+          Artificial Analysis publishes cost per task for only one effort of most models, so the remaining efforts are scaled
+          from that model&apos;s published anchor using the effort-cost curve measured across the models that do publish a full
+          set. Turn them off with &ldquo;Estimate unpublished costs&rdquo;.
         </p>
       </div>
 

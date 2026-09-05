@@ -128,7 +128,8 @@ describe('artificialAnalysis service', () => {
       expect(solMax.responseSeconds.value).toBe(113);
       expect(solMax.tokensPerSecond.value).toBe(85.5);
 
-      const fableMax = obs.find(o => o.model === 'claude-fable-5-1');
+      // Frozen id, dotted model — max has to join the rest of Fable 5.1's curve.
+      const fableMax = obs.find(o => o.model === 'claude-fable-5.1');
       expect(fableMax).toBeDefined();
       expect(fableMax.id).toBe('aa-v4.2-anthropic-claude-fable-5-1-max');
     });

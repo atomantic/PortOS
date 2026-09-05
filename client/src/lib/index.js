@@ -92,6 +92,7 @@ export * from './chipContrast.js';
 export * from './clientErrorReporter.js';
 export * from './clinicianReport.js';
 export * from './clipboard.js';
+export * from './effortCostEstimate.js';
 export * from './compareHelpers.js';
 export * from './consoleFilters.js';
 export * from './cosTaskType.js';
