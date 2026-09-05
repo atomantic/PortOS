@@ -253,6 +253,40 @@ describe('execGh backoffKey', () => {
     await expect(p2).rejects.toThrow(/exited with code 1/); // real second attempt, not a backoff rejection
     expect(spawn).toHaveBeenCalledTimes(2);
   });
+
+  it('honors a caller-supplied backoffMaxMs instead of the default cap', async () => {
+    // Regression for a real defect: a caller whose own retry interval exceeds
+    // the default 15-min cap (e.g. updateChecker's 30-min scheduler) would see
+    // the cooldown always expire before its next attempt, making the backoff a
+    // silent no-op — a real gh call fires every tick regardless of consecutive
+    // failures. A longer backoffMaxMs must actually widen the window past what
+    // the default cap would allow.
+    //
+    // 6 consecutive failures push the uncapped exponential delay (30s * 2^5 =
+    // 960s = 16min) past the DEFAULT 15-min cap but under a 60-min custom cap —
+    // the exact boundary where the two caps disagree. Each iteration advances
+    // time past its own delay first, so the prior failure's cooldown never
+    // blocks the next attempt from actually spawning.
+    for (let i = 0; i < 6; i++) {
+      const uncappedDelay = 30_000 * 2 ** i;
+      if (i > 0) vi.advanceTimersByTime(uncappedDelay + 1000);
+      const failing = makeChild();
+      spawn.mockReturnValueOnce(failing);
+      const attempt = execGh(['api', 'releases/latest'], 5000, { backoffKey: 'k', backoffMaxMs: 60 * 60 * 1000 });
+      attempt.catch(() => {});
+      failing.emit('close', 1);
+      await expect(attempt).rejects.toThrow();
+    }
+    expect(spawn).toHaveBeenCalledTimes(6);
+
+    // Past the 15-min DEFAULT cap (which would have already expired and let a
+    // real 7th attempt through) but short of the 16-min delay the custom
+    // 60-min cap actually applies.
+    vi.advanceTimersByTime(15 * 60 * 1000 + 1000);
+    await expect(execGh(['api', 'releases/latest'], 5000, { backoffKey: 'k', backoffMaxMs: 60 * 60 * 1000 }))
+      .rejects.toThrow(/backing off/);
+    expect(spawn).toHaveBeenCalledTimes(6); // still no 7th spawn — the custom cap, not the default, governed this
+  });
 });
 
 // The merge-follow-up reaper turns "the forge says this PR is OPEN" into a
