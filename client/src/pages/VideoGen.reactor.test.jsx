@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 
 import {
   loadVideoGenPage,
@@ -125,6 +125,23 @@ describe('VideoGen reactor.inc lane', () => {
     fireEvent.change(picker, { target: { value: REACTOR_RENDER.clipId } });
     fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'the gate swings open' } });
     expect((await submit()).reactorClipId).toBe(REACTOR_RENDER.clipId);
+  });
+
+  // The option disappears with the render, so the picker would show "Start a
+  // fresh shot" while the submission still carried the deleted clip's id.
+  it('drops a continuation whose render is no longer in history', async () => {
+    await renderVideoGenPage();
+    await selectReactor();
+
+    fireEvent.change(screen.getByLabelText('Continue from clip'), { target: { value: REACTOR_RENDER.clipId } });
+
+    // The render leaves history (deleted, or hidden) and the page refreshes.
+    state.listVideoHistory.mockResolvedValue([LOCAL_RENDER]);
+    await act(async () => { await state.completionRefresh.onVideoCompleted(); });
+
+    await waitFor(() => expect(screen.getByLabelText('Continue from clip')).toBeDisabled());
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'the gate swings open' } });
+    expect((await submit()).reactorClipId).toBeUndefined();
   });
 
   it('offers no continuation until a reactor render has stored a clip id', async () => {

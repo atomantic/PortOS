@@ -20,7 +20,7 @@ import { FormField } from '../ui/FormField';
 export default function ReactorPanel({
   clipId,
   onClipIdChange,
-  continuableClips,
+  continuableClips = [],
   imageModeActive,
   seconds,
   onSecondsChange,

@@ -1014,9 +1014,9 @@ export default function VideoGen() {
   // Only grok folds a negative prompt into its request (as an "Avoid:" line);
   // fal's queue body and reactor's enqueue command have no such field, and a
   // CFG-distilled local model ignores one. Hide the box rather than showing a
-  // dead field that quietly does nothing.
-  // A federated render is the peer's model to judge, so the local selection's
-  // gate must not hide a field that lane does submit.
+  // dead field that quietly does nothing. A federated render is the PEER's
+  // model to judge, so the local selection's gate must not take away a field
+  // that lane does submit.
   const negativePromptSupported = isGrok || remoteTarget.isRemote
     || (!isFal && !isReactor && currentModel?.supportsNegativePrompt !== false);
 
@@ -1030,6 +1030,18 @@ export default function VideoGen() {
       clipId: v.clipId,
       label: `${(v.prompt || v.filename || v.clipId).slice(0, 60)} · ${timeAgo(v.createdAt, 'unknown')}`,
     })), [visibleHistory]);
+
+  // A selection the picker no longer offers must not survive in state: the
+  // deleted clip's option is gone, so the select falls back to displaying
+  // "Start a fresh shot" while the submission would still carry the stale id.
+  // Image mode clears it for the same reason — a continuation and a starting
+  // frame are exclusive, and the field is disabled there.
+  useEffect(() => {
+    if (!reactorClipId) return;
+    if (mode === 'image' || !reactorContinuableClips.some((clip) => clip.clipId === reactorClipId)) {
+      setReactorClipId('');
+    }
+  }, [reactorClipId, mode, reactorContinuableClips, setReactorClipId]);
 
   // A federated render answers to the PEER’s readiness, not to this machine’s
   // runtime gates — none of the local probes below describe the hardware it
