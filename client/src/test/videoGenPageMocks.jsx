@@ -97,6 +97,7 @@ const SPIES = ['getVideoGenStatus', 'getVideoGenModelContext', 'generateVideo', 
 /** Restore every documented default, including fresh spies. Call it first in `beforeEach`. */
 export function resetVideoGenMockState() {
   state.peers = [];
+  state.settings = null;
   state.activeJob = null;
   state.modelStatuses = {};
   state.modelDownloadExtra = {};
@@ -186,7 +187,7 @@ vi.mock('../services/api', () => ({
   listImageGallery: vi.fn(async () => []),
   patchSettingsSlice: vi.fn(async () => ({})),
   getActiveVideoJob: vi.fn(async () => ({ activeJob: state.activeJob })),
-  getSettings: vi.fn(async () => ({ imageGen: { grok: { enabled: false } } })),
+  getSettings: vi.fn(async () => state.settings ?? ({ imageGen: { grok: { enabled: false } } })),
   getVideoGenRuntimeStatus: vi.fn(async () => ({ installed: true, ready: true, current: true })),
   listLorasFull: (...args) => state.listLorasFull(...args),
   // The prompt-enhancement controls mount useProviderModels, which fetches the

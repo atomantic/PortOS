@@ -1444,11 +1444,13 @@ export default function VideoGen() {
             />
           )}
 
-          <RemoteMediaTargetPicker
-            target={remoteTarget}
-            kind="video"
-            localBlockedReason={remoteUnsupportedInputs}
-          />
+          {!isGrok && !isFal && !isReactor && (
+            <RemoteMediaTargetPicker
+              target={remoteTarget}
+              kind="video"
+              localBlockedReason={remoteUnsupportedInputs}
+            />
+          )}
 
           {isGrok ? (
             <div className="grid grid-cols-2 gap-3">
