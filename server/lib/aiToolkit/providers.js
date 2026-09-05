@@ -1384,7 +1384,14 @@ export function createProviderService(config = {}) {
      */
     async _fetchCodexModels(provider) {
       const bin = provider?.command || 'codex';
-      const { command, args } = prepareWindowsSafeSpawn(bin, ['app-server']);
+      // On Windows, npm places a POSIX `codex` stub beside its runnable
+      // `codex.cmd` shim. `spawn('codex')` can select the former (or fail to
+      // resolve it entirely), even though the provider passed its capability
+      // check. Resolve the extension-bearing shim before the safe cmd.exe
+      // wrapper below, matching the other CLI probes in this module.
+      const childEnv = { ...process.env, ...provider?.envVars };
+      const resolvedBin = resolveWindowsExecutable(bin, process.platform === 'win32', childEnv) || bin;
+      const { command, args } = prepareWindowsSafeSpawn(resolvedBin, ['app-server']);
       return new Promise((resolve, reject) => {
         let settled = false;
         let child;
@@ -1407,7 +1414,7 @@ export function createProviderService(config = {}) {
         try {
           child = spawn(command, args, {
             stdio: ['pipe', 'pipe', 'pipe'],
-            env: { ...process.env, ...provider?.envVars },
+            env: childEnv,
             windowsHide: true,
           });
         } catch (err) {
