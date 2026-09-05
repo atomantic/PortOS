@@ -132,11 +132,11 @@ export default function EidoverseWorldDrawer({
           <select id="eidoverse-label-visibility" className={fieldClass} value={labelVisibility}
             onChange={(event) => onLabelVisibilityChange(event.target.value)}>
             <option value="nearby">Nearby — respect each object's label mode</option>
-            <option value="all-nearby">All nearby — include inspect-only objects</option>
-            <option value="off">Off — inspect selected objects only</option>
+            <option value="all-nearby">All nearby — label objects within 60 metres</option>
+            <option value="off">Off — hide floating labels</option>
           </select>
         </label>
-        <p className="mt-2 text-xs text-gray-400">Saved in this browser; changing visibility does not rewrite the world. Object details remain available with labels off.</p>
+        <p className="mt-2 text-xs text-gray-400">Labels appear above objects in the world. Click or tap a label to learn what it represents. Saved in this browser; turning labels off keeps already-open details available.</p>
         {!frameConnection?.capabilities?.labelPreferences && (
           <p className="mt-1 text-xs text-gray-400">The preference will apply when a compatible renderer connects.</p>
         )}
