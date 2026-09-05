@@ -107,6 +107,7 @@
     "/api/privacy",
     "/api/prompts",
     "/api/providers",
+    "/api/providers/comparison",
     "/api/quota-burn",
     "/api/rapid-reader",
     "/api/remote-desktop",
@@ -13897,6 +13898,30 @@
     },
     {
       "method": "GET",
+      "path": "/api/providers/comparison",
+      "mountPath": "/api/providers/comparison",
+      "sources": [
+        "server/routes/modelComparison.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/comparison/discover",
+      "mountPath": "/api/providers/comparison",
+      "sources": [
+        "server/routes/modelComparison.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/comparison/import",
+      "mountPath": "/api/providers/comparison",
+      "sources": [
+        "server/routes/modelComparison.js"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/providers/fleet-host",
       "mountPath": "/api/providers",
       "sources": [
@@ -17714,9 +17739,9 @@
     }
   ],
   "stats": {
-    "mounts": 149,
-    "operations": 2194,
-    "declarations": 2202,
-    "sourceFiles": 232
+    "mounts": 150,
+    "operations": 2197,
+    "declarations": 2205,
+    "sourceFiles": 233
   }
 }

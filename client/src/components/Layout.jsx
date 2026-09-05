@@ -289,6 +289,7 @@ export const NAV_PRESENTATION = {
   '/models/llms': { icon: Cpu },
   '/models/loras': { icon: Sparkles },
   '/models/media': { icon: HardDrive },
+  '/models/comparison': { icon: Gauge },
   '/models/performance': { icon: Gauge },
   '/local-llm/playground': { icon: FlaskConical },
   '/models/status': { icon: Activity },

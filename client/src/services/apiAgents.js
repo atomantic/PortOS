@@ -297,7 +297,7 @@ export const getCosDecisionSummary = (options) => request('/cos/decisions/summar
 
 // Task Schedule (Configurable Intervals)
 export const getCosUpcomingTasks = (limit = 10, options) => request(`/cos/upcoming?limit=${limit}`, options);
-export const getCosSchedule = () => request('/cos/schedule');
+export const getCosSchedule = (options) => request('/cos/schedule', options);
 // Unified task interval update
 export const updateCosTaskInterval = (taskType, settings, options = {}) => request(`/cos/schedule/task/${taskType}`, {
   method: 'PUT',

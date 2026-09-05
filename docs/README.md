@@ -20,6 +20,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [PORTS.md](./PORTS.md) | Port allocation (5553–5561) and how 5555/5553/5554 relate |
 | [PM2.md](./PM2.md) | Recommended PM2 ecosystem patterns for sub-projects |
 | [QUOTA-BURN.md](./QUOTA-BURN.md) | Quota-burn automation — spending subscription-backed CLI quota before expiry |
+| [MODEL-COMPARISON.md](./MODEL-COMPARISON.md) | Sourced provider/model/effort comparisons, cost estimates and CoS research refresh |
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |

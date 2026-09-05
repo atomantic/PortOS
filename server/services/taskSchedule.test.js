@@ -291,7 +291,7 @@ describe('taskSchedule', () => {
     it('names only task types that really sweep the whole install', () => {
       // repo-sync sweeps every managed checkout; user-action-review reads the
       // install-wide operator-action ledger — neither is a per-app run.
-      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review'])
+      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review', 'model-comparison-refresh'])
     })
 
     it('every install-wide type is a registered task type', () => {
@@ -484,13 +484,13 @@ describe('taskSchedule', () => {
       expect(schedule.executions).toBeDefined()
     })
 
-    it('installs every registered task as an enabled on-demand action', async () => {
+    it('installs tasks on demand and keeps model research disabled until configured', async () => {
       const schedule = await loadSchedule()
 
       for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
         expect(schedule.tasks[taskType], taskType).toMatchObject({
           type: INTERVAL_TYPES.ON_DEMAND,
-          enabled: true
+          enabled: taskType !== 'model-comparison-refresh'
         })
       }
     })

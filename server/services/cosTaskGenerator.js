@@ -1842,12 +1842,12 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
     if (inputHook.hookPrompt) description = inputHook.hookPrompt;
   }
 
-  // user-action-review delivers filed issues / queued tasks, never a commit.
+  // Operator review and model research deliver actions/data, never a commit.
   // Stamp the action-output posture the way the audit file-issues path does —
   // `noCodeOutput` is dispatch-stamped, not user-settable, so it cannot arrive
   // from DEFAULT_TASK_INTERVALS through sanitizeTaskMetadata. Without it the
   // completion contract tells a live-checkout agent to commit and `/do:push`.
-  if (taskType === 'user-action-review') {
+  if (taskType === 'user-action-review' || taskType === 'model-comparison-refresh') {
     metadata.noCodeOutput = true;
     metadata.worktreeChangesExpected = false;
   }

@@ -7,6 +7,7 @@
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 export const PROMPT_VERSIONS = {
+  'model-comparison-refresh': 1,
   // Current claim-flow bumps retire the Copilot fallback, drive local reviewers
   // fail closed, verify the remote merge state, and clean up without force-delete.
   'do-replan': 2,       // v2: scheduled issue-quality gate rejects speculative/future-only work and keeps valid current refactors claimable

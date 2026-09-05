@@ -1,0 +1,20 @@
+import { afterEach, expect, it } from 'vitest';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import migration from './350-model-comparison.js';
+let rootDir;
+afterEach(async () => { if (rootDir) await rm(rootDir, { recursive: true, force: true }); });
+it('seeds missing installs while preserving an existing researched catalog across reruns', async () => {
+  rootDir = await mkdtemp(join(tmpdir(), 'comparison-migration-'));
+  await mkdir(join(rootDir, 'data'));
+  await mkdir(join(rootDir, 'data.reference'));
+  const source = JSON.stringify({ schemaVersion: 1, observations: [{ id: 'example-seed' }] });
+  await writeFile(join(rootDir, 'data.reference/model-comparison.json'), source);
+  await migration.up({ rootDir });
+  expect(await readFile(join(rootDir, 'data/model-comparison.json'), 'utf8')).toBe(source);
+  const researched = JSON.stringify({ schemaVersion: 1, observations: [{ id: 'example-researched' }] });
+  await writeFile(join(rootDir, 'data/model-comparison.json'), researched);
+  await migration.up({ rootDir });
+  expect(await readFile(join(rootDir, 'data/model-comparison.json'), 'utf8')).toBe(researched);
+});
