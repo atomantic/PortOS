@@ -16,6 +16,8 @@ import {
   REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_DEFAULT_CLIP_LENGTH,
   REACTOR_ASPECTS, reactorCanvas,
 } from '../../lib/reactorVideoClip.js';
+import { extractEvaluationFrames } from '../../lib/ffmpeg.js';
+import { describeFrameStats, isDegenerateFrame } from '../../lib/imageFrameStats.js';
 import { prepareReactorStartingFrame } from '../../lib/reactorStartingFrame.js';
 
 export const REACTOR_API_BASE = 'https://api.reactor.inc';
@@ -168,7 +170,8 @@ function captureClip(entry, input, pythonPath, job, jobId) {
         try {
           const message = JSON.parse(line);
           if (message.type === 'complete' && typeof message.clipId === 'string' && Number.isFinite(message.seconds)) complete = message;
-          if (message.type === 'error' && /^[a-z]+$/.test(message.phase) && /^[A-Za-z]+$/.test(message.errorType)) failure = new Error(`Reactor ${message.phase} failed (${message.errorType})`);
+          if (message.type === 'error' && message.code === 'INVALID_FRAME_BUFFER') failure = new Error('Reactor supplied an invalid video frame buffer; expected width × height × 4 bytes');
+          if (!failure && message.type === 'error' && /^[a-z]+$/.test(message.phase) && /^[A-Za-z]+$/.test(message.errorType)) failure = new Error(`Reactor ${message.phase} failed (${message.errorType})`);
           if (message.type === 'status') {
             if (typeof message.message === 'string' && /^Captured [0-9.]+ of [0-9.]+ frames; audio=(True|False)$/.test(message.message)) console.log(`🎬 ${message.message}`);
             broadcastSse(job, { type: 'status', message: 'Reactor session rendering…' });
@@ -277,6 +280,16 @@ async function runReactorVideo(job, jobId, {
     if (entry.aborted) return finalizeCanceled(job, jobId);
     const output = await stat(outputPath).catch(() => null);
     if (!output?.isFile() || !output.size) throw new Error('Reactor completed without a playable output file');
+    const samples = await extractEvaluationFrames(outputPath, `${jobId}-capture`, 5);
+    try {
+      const verdicts = await Promise.all(samples.map((name) => describeFrameStats(join(PATHS.videoThumbnails, name))));
+      if (verdicts.length && verdicts.every(isDegenerateFrame)) {
+        throw new Error(`Reactor streamed ${result.frames ?? Math.round(result.seconds * 24)} frames but every sampled frame was blank`);
+      }
+    } finally {
+      await Promise.all(samples.map((name) => rm(join(PATHS.videoThumbnails, name), { force: true }).catch(() => {})));
+    }
+    if (entry.aborted) return finalizeCanceled(job, jobId);
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, aspect: frame.aspect, width: frame.canvas.width, height: frame.canvas.height, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {

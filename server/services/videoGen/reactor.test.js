@@ -5,13 +5,14 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 const root = join(tmpdir(), `reactor-test-${process.pid}`);
-const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: vi.fn() }));
+const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: vi.fn(), samples: vi.fn() }));
 vi.mock('../../lib/childProcess.js', async (importOriginal) => ({ ...await importOriginal(), spawn: mocks.spawn }));
+vi.mock('../../lib/ffmpeg.js', () => ({ extractEvaluationFrames: mocks.samples }));
 vi.mock('./generateVideoHelpers.js', () => ({ finalizeGeneratedVideo: mocks.finalize }));
 vi.mock('../settings.js', () => ({ getSettings: mocks.settings }));
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
-  return { ...actual, PATHS: { ...actual.PATHS, videos: join(root, 'videos'), data: root }, ensureDir: (dir) => mkdir(dir, { recursive: true }) };
+  return { ...actual, PATHS: { ...actual.PATHS, videos: join(root, 'videos'), videoThumbnails: root, data: root }, ensureDir: (dir) => mkdir(dir, { recursive: true }) };
 });
 const reactor = await import('./reactor.js');
 const { videoGenEvents } = await import('./events.js');
@@ -25,6 +26,7 @@ beforeEach(async () => {
   vi.stubEnv('REACTOR_PYTHON_PATH', join(root, 'python'));
   vi.stubEnv('REACTOR_API_KEY', '');
   mocks.settings.mockResolvedValue(settings);
+  mocks.samples.mockResolvedValue([]);
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ jwt: 'example-jwt' }) })));
   mocks.spawn.mockImplementation(() => {
     child = new EventEmitter();
@@ -61,6 +63,40 @@ describe('Reactor SDK adapter', () => {
     expect(mocks.finalize).not.toHaveBeenCalled();
     child.emit('close', 0);
     await vi.waitFor(() => expect(mocks.finalize).toHaveBeenCalledWith(expect.objectContaining({ jobId: job.jobId, meta: expect.objectContaining({ clipId: 'clip-example', seconds: 6 }) })));
+  });
+
+  it('rejects all blank samples before history publication and removes the output', async () => {
+    const sharp = (await import('sharp')).default;
+    await sharp({ create: { width: 32, height: 32, channels: 3, background: '#000000' } }).png().toFile(join(root, 'blank.png'));
+    mocks.samples.mockResolvedValue(Array(5).fill('blank.png'));
+    await started();
+    await writeFile(input.outputPath, 'example-video');
+    const failed = once(videoGenEvents, 'failed');
+    child.stdout.emit('data', Buffer.from('{"type":"complete","clipId":"clip-example","seconds":6,"frames":116}\n'));
+    child.emit('close', 0);
+    const [event] = await failed;
+    expect(event.error).toContain('Reactor streamed 116 frames but every sampled frame was blank');
+    expect(mocks.finalize).not.toHaveBeenCalled();
+    await expect(stat(input.outputPath)).rejects.toBeTruthy();
+    await expect(stat(join(root, 'blank.png'))).rejects.toBeTruthy();
+  });
+
+  it.each(['dark-content', 'unmeasurable'])('accepts a black opening when a later sample is %s', async (kind) => {
+    const sharp = (await import('sharp')).default;
+    await sharp({ create: { width: 32, height: 32, channels: 3, background: '#000000' } }).png().toFile(join(root, 'blank.png'));
+    const later = join(root, 'later.png');
+    if (kind === 'unmeasurable') await writeFile(later, 'undecodable');
+    else {
+      const pixels = Buffer.from(Array.from({ length: 32 * 32 * 3 }, (_, i) => Math.floor(i / 3) % 8));
+      await sharp(pixels, { raw: { width: 32, height: 32, channels: 3 } }).png().toFile(later);
+    }
+    mocks.samples.mockResolvedValue(['blank.png', 'blank.png', 'later.png', 'blank.png', 'blank.png']);
+    await started();
+    await writeFile(input.outputPath, 'example-video');
+    child.stdout.emit('data', Buffer.from('{"type":"complete","clipId":"clip-example","seconds":6}\n'));
+    child.emit('close', 0);
+    await vi.waitFor(() => expect(mocks.finalize).toHaveBeenCalledOnce());
+    expect(mocks.samples).toHaveBeenCalledWith(input.outputPath, expect.stringContaining('-capture'), 5);
   });
 
   it('rejects unsupported requests before minting or spending', async () => {
