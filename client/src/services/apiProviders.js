@@ -84,3 +84,6 @@ export const getCodexModels = (options = {}) => {
   const { fresh = false, ...rest } = options;
   return request(`/providers/codex/models${fresh ? '?fresh=1' : ''}`, rest);
 };
+
+export const getFleetLlmHost = (options) => request('/providers/fleet-host', options);
+export const revealFleetLlmHostKey = (options) => request('/providers/fleet-host/key', { method: 'POST', ...options });

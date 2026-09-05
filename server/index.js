@@ -491,4 +491,7 @@ getBuildIdentity().catch((err) => console.error(`❌ Build identity probe failed
 // process itself. See services/bootstrap.js.
 runBootSequence({ io, httpServer, localHttpServer, httpsEnabled, port: PORT, host: HOST, spawnerReady });
 
+// Opt-in listener only: restores host configuration without generating tokens.
+import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
+  .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
 registerShutdownHandlers({ io, httpServer, localHttpServer });

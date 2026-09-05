@@ -13839,6 +13839,30 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/providers/fleet-host",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/fleet-host/key",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/fleet-host/setup",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/providers/opencode/install",
       "mountPath": "/api/providers",
@@ -17634,8 +17658,8 @@
   ],
   "stats": {
     "mounts": 148,
-    "operations": 2184,
-    "declarations": 2192,
+    "operations": 2187,
+    "declarations": 2195,
     "sourceFiles": 231
   }
 }

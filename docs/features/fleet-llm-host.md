@@ -1,20 +1,20 @@
 # Dedicated LLM host for a PortOS fleet
 
 One PortOS machine with a capable GPU can serve every other install on the
-tailnet. Clients connect directly to the model runtime's OpenAI-compatible API;
+tailnet. Clients connect to the host's queued OpenAI-compatible API;
 PortOS federation supplies the known-peer address, but it does not proxy prompts
 or responses through `:5555`.
 
 For one RTX 3090, the default stack is:
 
 ```text
-PortOS clients ── Tailscale ──> vLLM :18020 ──> Qwen3.8-27B + DFlash2
+PortOS clients ── Tailscale ──> queue :18022 ──> private vLLM :18020 ──> Qwen3.8-27B + DFlash2
       │
       ├─ OpenCode TUI provider: coding agents and tool use
       └─ API provider: text generation, analysis, and thinking workflows
 ```
 
-Open **Settings → AI Providers → Fleet setup** on each client to create either
+Open **Settings → AI Providers → Model host setup** on each client to create either
 provider. The walkthrough can prefill the endpoint from an existing PortOS peer
 and writes it into both the provider record and OpenCode's actual `baseURL`.
 
@@ -53,35 +53,26 @@ Other existing PortOS paths remain useful, but solve different problems:
 
 ## Host setup
 
-Follow [vLLM Qwen3.8-27B on an RTX 3090](./qwen38-rtx3090.md) for installation
-and WSL2 requirements. For a fleet host, these settings are load-bearing:
+Open **AI Providers → Model host setup → Host**. The banner is visible above the provider list and detects GPU/platform capabilities. On Windows/Linux with an RTX 3090 (24 GB), the recommended action prepares missing weights, preserves the prepared image by digest, selects DFlash 2 and prefix caching, and starts a persistent container. The recorded warm agent-prompt result was **105.3 tok/s**; this is a measured reference, not a speed guarantee for every prompt.
 
-1. Set a strong `VLLM_API_KEY`. The runtime listens on `0.0.0.0`; never expose
-   it to the LAN or tailnet without the key.
-2. Use `SPEC=dflash2` and `PREFIX_CACHE=1`. Keep the normal seven-token draft
-   depth for agent work; `DFLASH_TOKENS=15` trades away request slots and context
-   for prompt-reproduction workloads.
-3. Keep model id `qwen3.8-27b`, or enter the actual id in the client walkthrough.
-4. Confirm `http://<gpu-host>:18020/v1/models` answers from another tailnet
-   machine with the bearer key.
-5. On a **dedicated** host, configure the container with `restart:
-   unless-stopped` (or Docker's equivalent) and ensure Docker starts at boot.
+Setup binds the underlying runtime to loopback `:18020` and exposes a bearer-authenticated queue on `:18022`. It creates a direct API provider and moves existing local vLLM providers (including OpenCode's baseURL) through the queue. Competing local LM Studio/Ollama/llama/SGLang/SlotStream providers are disabled; their configurations remain available. Unload other GPU models before starting. PortOS no longer enables the default local backend at boot while dedicated hosting is enabled.
 
-The last step is intentionally different from PortOS's mixed-workstation
-default. Qwen3.8 occupies nearly all 24 GB of VRAM, so PortOS never auto-starts
-the container on a machine that may also render images or video. A dedicated
-fleet host has made the opposite allocation decision: availability is its job.
+The status panel checks Docker, prepared weights/key, the loaded model, Tailscale and queue listener. Copy the endpoint and explicitly reveal/copy the key only when connecting a client. The key never appears in the status payload. Driver installation, Docker engine repair, Windows reboot and enabling Docker Desktop startup may still require host interaction. Once Docker starts, the container's `unless-stopped` policy restores the model; PortOS restores the queue from its machine-local opt-in flag. Cold model initialization can take 5–7 minutes. Boot makes no generation requests.
 
-Use Tailscale ACLs to restrict `:18020` to the client machines. The API key is
-still required: the tailnet authenticates machines, while the key prevents an
-unrelated process on one of those machines from consuming the model.
+Restrict `:18022` to your clients using Tailscale/network rules. Existing installations using a directly exposed `:18020` must run host setup before changing clients to `:18022`. Older clients can enter the queue URL manually; no federation schema upgrade is required. Prompts and responses use this separately configured inference API, never federation record sync.
+
+### Queue behavior
+
+One inference request runs at a time across clients, with at most 16 waiting requests. Waiting expires after two minutes with HTTP 429 and Retry-After; active requests have a ten-minute ceiling. Bodies are limited to 2 MiB. SSE streams pass through, disconnects cancel work, and requests are never persisted or replayed after restart. Each model call acquires a slot; a coding agent's tool execution happens on its client and does not hold a GPU slot. The underlying runtime also uses one sequence as a backstop. Direct runtime calls bypass the gateway and should be reserved for local diagnostics.
+
+To revert dedicated hosting, set `PORTOS_FLEET_LLM_ENABLED=0` in the install's `.env`, restart PortOS, stop the Qwen container, and re-enable the desired providers. This does not delete weights or provider settings.
 
 ## Client setup
 
 On each client PortOS:
 
 1. Add the GPU host under **Instances** if it is not already a peer.
-2. Open **AI Providers → Fleet setup → Connect client**.
+2. Open **AI Providers → Model host setup → Connect client**.
 3. Select the peer (or enter its MagicDNS/IP endpoint), paste the host's
    `VLLM_API_KEY`, and keep the served model id in sync.
 4. Choose **OpenCode TUI** for CoS coding agents. Choose **Direct API** for
@@ -106,6 +97,5 @@ driver updates, container restarts, and network maintenance. PortOS should route
 around that outage rather than cold-start another large model on each client.
 
 No cold-bootstrap request is involved in this feature. Opening the walkthrough
-only reads the saved peer list. The model is contacted only when the user clicks
-Refresh Models, Test, or starts a real task.
+reads saved configuration, machine health and model discovery. Generation happens only when the user clicks Test or starts a real task.
 

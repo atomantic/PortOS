@@ -162,6 +162,32 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
  */
 export function createPortOSProviderRoutes(aiToolkit) {
   const router = Router();
+
+  router.get('/fleet-host', asyncHandler(async (req, res) => {
+    const { getFleetLlmHostStatus } = await import('../services/fleetLlmHost.js');
+    res.set('Cache-Control', 'no-store').json(await getFleetLlmHostStatus());
+  }));
+  // Explicit reveal; secrets are never included in status, URLs or install logs.
+  router.post('/fleet-host/key', asyncHandler(async (req, res) => {
+    const { revealFleetLlmKey } = await import('../services/fleetLlmHost.js');
+    res.set('Cache-Control', 'no-store').json({ apiKey: await revealFleetLlmKey() });
+  }));
+  router.post('/fleet-host/setup', asyncHandler(async (req, res) => {
+    const { configureFleetLlmHost } = await import('../services/fleetLlmHost.js');
+    if (runtimeSetupInFlight) throw new ServerError('Another model setup is running.', { status: 409, code: 'SETUP_BUSY' });
+    runtimeSetupInFlight = true;
+    const { send, safeEnd } = openSseStream(res);
+    let clientGone = false;
+    onClientDisconnect(req, res, () => { clientGone = true; });
+    const result = await configureFleetLlmHost({
+      emit: (message) => send({ type: 'log', message }),
+      isCancelled: () => clientGone,
+    }).catch((err) => ({ success: false, error: err.message }))
+      .finally(() => { runtimeSetupInFlight = false; resetProviderReadinessCache(); });
+    send(result.success ? { type: 'complete', message: 'Host configured. Check model readiness below.' } : { type: 'error', message: result.error });
+    safeEnd();
+  }));
+
   const providerService = aiToolkit.services.providers;
   const providerStatusService = aiToolkit.services.providerStatus;
 

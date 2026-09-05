@@ -22,6 +22,7 @@
  * queue an AI provider call. Boot only loads on-disk state and ARMS schedulers;
  * every scheduler here is off by default or user-configured.
  */
+import { readPortosEnvValue } from '../lib/portosEnv.js';
 import { join } from 'path';
 import { resolveInstallRoot } from '../lib/dataRoot.js';
 import { PORTS } from '../lib/ports.js';
@@ -279,6 +280,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     // the Ollama server is not a provider CALL — nothing is inferred until the
     // user asks for it.
     ensureLocalLlmBackend: () => {
+      if (readPortosEnvValue('PORTOS_FLEET_LLM_ENABLED') === '1') return;
       const activeLocalLlmBackend = getLocalLlmBackend();
       ensureBackendProvider(activeLocalLlmBackend).catch((err) =>
         console.error(`⚠️ Failed to enable local LLM backend provider: ${err.message}`));
@@ -878,6 +880,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // -shutdown would `pm2 stop` a model server the user never asked to lose,
     // and PortOS is about to stop being the thing that could restart it.
     stopIdleReaper();
+    await import('./fleetLlmHost.js').then(({ stopFleetLlmHost }) => stopFleetLlmHost())
+      .catch(() => console.error('❌ Dedicated model host shutdown failed'));
     // Same reasoning for the hosted-session sweeper: a tick mid-shutdown would
     // emit into a namespace we are about to close.
     stopHostedSessionSweep();

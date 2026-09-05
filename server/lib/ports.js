@@ -19,7 +19,9 @@ export const PORTS = {
   EIDOVERSE_HOST: 5563, // Optional HTTPS/WebSocket bridge to Eidoverse Worlds on :8940
   SLOTSTREAM: 5564,   // Loopback SSD-streaming MoE runtime (never 11434 — that collides with Ollama)
   LLAMA_SERVER: 5568, // Loopback llama.cpp speculative-decoding server
-  VLLM_QWEN: 18020, // Loopback vLLM Qwen3.8-27B (DFlash 2) container — operator-started, never by PortOS
+  FLEET_LLM: 18022, // Authenticated shared inference queue for dedicated hosts
+
+  VLLM_QWEN: 18020, // Loopback vLLM Qwen3.8-27B (DFlash 2) container — opt-in dedicated host setup
   SGLANG_QWEN: 18021, // Loopback SGLang Qwen3.8-27B container (Hopper/Blackwell) — operator-started, never by PortOS
   POSTGRES_NATIVE: 5432  // System PostgreSQL (PGMODE=native)
 };

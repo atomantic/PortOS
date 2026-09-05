@@ -20,6 +20,7 @@ import ProviderCard from '../components/providers/ProviderCard';
 import ProviderForm from '../components/providers/ProviderForm';
 import CollapsibleSection from '../components/ui/CollapsibleSection';
 import FleetProviderSetup from '../components/providers/FleetProviderSetup';
+import FleetHostSetup from '../components/providers/FleetHostSetup';
 
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
@@ -713,6 +714,8 @@ export default function AIProviders() {
 
       <div className="flex-1 overflow-auto p-4 space-y-6">
 
+      <FleetHostSetup compact />
+
       {/* Sample Providers Panel */}
       {showSamples && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-4">
@@ -1065,6 +1068,7 @@ export default function AIProviders() {
           peers={fleetPeers}
           onClose={closeForm}
           onCreate={handleCreateFleetProvider}
+          onConfigured={loadData}
         />
       )}
       {/* The readiness checklist's one-click fix. Same streaming modal as the

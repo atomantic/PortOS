@@ -216,3 +216,7 @@ Apply this checklist to **every new feature that persists data**, and require it
 - [Backup & Restore](./BACKUP.md) — what gets backed up (data/ files + mandatory Postgres dump) and how restore works.
 - [`docs/plans/2026-06-06-create-postgres-storage-inventory.md`](./plans/2026-06-06-create-postgres-storage-inventory.md) — full inventory + migration phases.
 - [`server/lib/README.md`](../server/lib/README.md) — storage helpers (`collectionStore`, `fileUtils`, `db.js`, `assetHash`).
+
+### Dedicated inference host
+
+`PORTOS_FLEET_LLM_ENABLED` in the install `.env` is machine-local deployment configuration, alongside `VLLM_QWEN_PROJECT_DIR`. The existing runtime project holds its API key, compose override and model weights; none enters federation sync. Provider records use the existing provider store. The bounded inference queue exists only in memory, with no prompt/response persistence and no restart replay. No new app-native data store or migration is introduced.

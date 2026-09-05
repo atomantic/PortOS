@@ -30,7 +30,7 @@ import { join } from 'path';
 import { atomicWrite, formatBytes, tryReadFile } from '../lib/fileUtils.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
-import { localEndpointPort } from '../lib/localProviderRuntime.js';
+import { localEndpointPort, localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { PORTS } from '../lib/ports.js';
 import {
   inspectVllmQwenProject,
@@ -193,7 +193,7 @@ async function applyVllmApiKeyToProviders(apiKey, emit) {
     return null;
   });
   const all = Array.isArray(data?.providers) ? data.providers : [];
-  const targets = all.filter((p) => p?.vllmBacked === true && p.apiKey !== apiKey);
+  const targets = all.filter((p) => p?.vllmBacked === true && localRuntimeForProvider(p)?.kind === 'vllm' && p.apiKey !== apiKey);
   let stored = 0;
   for (const provider of targets) {
     // A failed provider write must not undo a successful 30 GB provision — this

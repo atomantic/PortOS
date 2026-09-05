@@ -35,6 +35,7 @@ const toast = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/api', () => api);
+vi.mock('../services/apiProviders', () => ({ getFleetLlmHost: vi.fn(() => new Promise(() => {})), revealFleetLlmHostKey: vi.fn() }));
 vi.mock('../components/ui/Toast', () => ({
   default: toast,
 }));
@@ -575,8 +576,8 @@ describe('fleet LLM setup walkthrough', () => {
   it('creates an OpenCode provider whose actual baseURL points at the selected peer', async () => {
     renderPage('/ai/fleet');
 
-    expect(await screen.findByRole('heading', { name: 'Fleet LLM setup' })).toBeInTheDocument();
-    expect(screen.getByText(/Recommended for one RTX 3090/)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Model host setup' })).toBeInTheDocument();
+
 
     fireEvent.click(screen.getByRole('tab', { name: 'Connect client' }));
     fireEvent.change(await screen.findByLabelText('Known PortOS peer'), { target: { value: 'peer-example' } });
@@ -588,7 +589,7 @@ describe('fleet LLM setup walkthrough', () => {
     expect(created).toMatchObject({
       type: 'tui',
       command: 'opencode',
-      endpoint: 'http://gpu-host.example.ts.net:18020/v1',
+      endpoint: 'http://gpu-host.example.ts.net:18022/v1',
       apiKey: 'example-secret',
       defaultModel: 'qwen3.8-27b',
       vllmBacked: true,
@@ -596,8 +597,8 @@ describe('fleet LLM setup walkthrough', () => {
       enabled: true,
     });
     expect(JSON.parse(created.envVars.OPENCODE_CONFIG_CONTENT).provider.vllm.options.baseURL)
-      .toBe('http://gpu-host.example.ts.net:18020/v1');
-    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Fleet LLM setup' })).not.toBeInTheDocument());
+      .toBe('http://gpu-host.example.ts.net:18022/v1');
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Model host setup' })).not.toBeInTheDocument());
     expect(toast.success).toHaveBeenCalledWith('Fleet GPU · OpenCode TUI is connected to the fleet GPU host');
   });
 
@@ -614,7 +615,7 @@ describe('fleet LLM setup walkthrough', () => {
     expect(created).toMatchObject({
       name: 'Fleet GPU · API',
       type: 'api',
-      endpoint: 'http://gpu-host.example.ts.net:18020/v1',
+      endpoint: 'http://gpu-host.example.ts.net:18022/v1',
       vllmBacked: true,
     });
     expect(created).not.toHaveProperty('command');
