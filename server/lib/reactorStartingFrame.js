@@ -25,6 +25,7 @@
  * refusing a render PortOS merely failed to measure would be worse than letting
  * reactor fit it.
  */
+import { rm } from 'node:fs/promises';
 import sharp from 'sharp';
 import {
   REACTOR_DEFAULT_ASPECT, nearestReactorAspect, reactorCanvas,
@@ -69,7 +70,14 @@ export async function prepareReactorStartingFrame(sourceImagePath, requestedAspe
     .toFile(fittedPath)
     .then(() => true)
     .catch(() => false);
-  if (!written) return passthrough;
+  if (!written) {
+    // A failed encode can still have created the destination. Nothing reports
+    // this path back to the caller (passthrough carries `fittedPath: null`), so
+    // its cleanup would never run and a truncated PNG would sit in the video
+    // gallery directory forever.
+    await rm(fittedPath, { force: true }).catch(() => {});
+    return passthrough;
+  }
   console.log(`🖼️ Reactor starting frame fitted ${size.width}x${size.height} → ${canvas.width}x${canvas.height} (${aspect})`);
   return { aspect, canvas, framePath: fittedPath, fittedPath };
 }
