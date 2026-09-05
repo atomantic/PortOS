@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import useEidoverseFrame from './useEidoverseFrame';
-import { safeRemoveStorage } from '../lib/safeStorage';
+import { safeRemoveStorage, safeWriteStorage } from '../lib/safeStorage';
 
 const hostUrl = 'https://world.example.com/';
 const objects = [{ id: 'portos-design-v2-signal-app-example', route: '/apps' }];
@@ -36,7 +36,7 @@ describe('hosted Eidoverse frame navigation', () => {
     fireEvent.load(frame);
     const [hello, origin] = post.mock.calls.at(-1);
     expect(origin).toBe('https://world.example.com');
-    expect(hello).toMatchObject({ type: 'portos:connect', version: 1, labelVisibility: 'nearby' });
+    expect(hello).toMatchObject({ type: 'portos:connect', version: 1, labelVisibility: 'all-nearby' });
     expect(Object.keys(hello).sort()).toEqual(['capabilities', 'labelVisibility', 'nonce', 'type', 'version']);
     const navigation = { type: 'eidoverse:navigate', version: 1, nonce: hello.nonce, entityId: objects[0].id, route: '/apps' };
     send(source, navigation); // No handshake yet.
@@ -75,6 +75,15 @@ describe('hosted Eidoverse frame navigation', () => {
     send(source, { ...ready, nonce: nextHello.nonce });
     send(source, { ...navigation, nonce: nextHello.nonce });
     expect(screen.getByLabelText('Route')).toHaveTextContent('/apps');
+  });
+
+  it('preserves an explicit saved opt-out when a new renderer connects', () => {
+    safeWriteStorage('portos-eidoverse-label-visibility', 'off');
+    mount();
+    const iframe = screen.getByTitle('Test renderer');
+    const post = vi.spyOn(iframe.contentWindow, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(iframe);
+    expect(post.mock.calls.at(-1)[0]).toMatchObject({ type: 'portos:connect', labelVisibility: 'off' });
   });
 
   it('marks an unresponsive older renderer unsupported without waiting in production time', () => {

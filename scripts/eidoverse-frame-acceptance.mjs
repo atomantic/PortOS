@@ -64,7 +64,7 @@ const SEED = {
   pin: { label: { name: 'Example Goals', visibility: 'always' }, portos: { route: '/goals/list' } },
   url: { label: { name: 'Elsewhere', visibility: 'always' }, portos: { route: 'https://evil.example/goals/list' } },
   query: { label: { name: 'Queried', visibility: 'always' }, portos: { route: '/goals/list?steal=1' } },
-  plain: { label: { name: 'Bench', visibility: 'always' } },
+  plain: { label: { name: 'Bench', visibility: 'inspect' } },
 };
 // The saved projection legend PortOS would hold for that world.
 const LEGEND = [{ id: 'pin', route: '/goals/list' }];
@@ -209,24 +209,26 @@ async function main() {
     if (!frame) throw new Error('renderer frame is gone');
     return frame;
   };
-  const panel = () => renderer().locator('details').filter({ hasText: 'Inspect objects' });
-  await panel().waitFor({ timeout: 90000 });
+  const panel = () => renderer().locator('.ew-object-detail');
+  await renderer().getByRole('group', { name: 'World object labels' }).waitFor({ timeout: 90000 });
 
   console.log('\n— C. a synthetic scene, and the one action it may offer —');
   await renderer().evaluate(async (seed) => {
-    const [{ state, hydrate }, { entities }, { THREE, camera, scene }, { tickObjectLabels }] = await Promise.all([
-      import('/lib/state.js'), import('/lib/world.js'), import('/lib/core.js'), import('/lib/objectlabels.js')]);
+    const [{ hydrate }, { entities }, { THREE, camera, scene }, { tickObjectLabels }, { emptyState, foldEntry }] = await Promise.all([
+      import('/lib/state.js'), import('/lib/world.js'), import('/lib/core.js'), import('/lib/objectlabels.js'), import('/shared/fold.js')]);
     camera.position.set(0, 2, 8); camera.lookAt(0, 1, 0); camera.updateMatrixWorld();
-    const snapshot = structuredClone(state.st);
-    snapshot.entities = {};
+    const snapshot = emptyState();
+    let seq = 0;
     for (const [id, comp] of Object.entries(seed)) {
-      snapshot.entities[id] = { id, lib: 'missing.glb', pos: [0, 0, 0], comp };
+      const fold = (verb, args) => foldEntry(snapshot, { verb, args, seq: ++seq, actor: 'fixture', ts: seq });
+      fold('spawn', { id, lib: 'missing.glb', pos: [0, 0, 0] });
+      for (const [type, data] of Object.entries(comp)) fold('comp', { id, type, data });
     }
     hydrate(snapshot);
     let index = 0;
     for (const id of Object.keys(seed)) {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, 1, 0.4), new THREE.MeshBasicMaterial());
-      mesh.position.set((index - 1.5) * 0.5, 0, 0);
+      mesh.position.set((index - 1.5) * 8, 0, 0);
       index += 1;
       scene.add(mesh);
       mesh.updateMatrixWorld();
@@ -238,11 +240,25 @@ async function main() {
     window.sent = [];
     WebSocket.prototype.send = function record(data) { window.sent.push(String(data)); return send.call(this, data); };
   }, SEED);
-  await panel().getByText('Inspect objects', { exact: true }).click();
   const open = panel().getByRole('button', { name: 'Open in PortOS' });
-  const select = (id) => panel().getByLabel('Choose object to inspect').selectOption(id);
+  const pointAt = (id) => renderer().evaluate(async (target) => {
+    const { entities } = await import('/lib/world.js');
+    const { camera } = await import('/lib/core.js');
+    const object = entities.get(target);
+    camera.position.set(object.position.x, 2, 4);
+    camera.lookAt(object.position.x, 0.5, 0);
+    camera.updateMatrixWorld();
+    window.labelTick(window.labelClock = Math.max(performance.now() + 1000, (window.labelClock || 0) + 101));
+  }, id);
+  const select = async (id) => {
+    await pointAt(id);
+    await renderer().getByRole('button', { name: `About ${SEED[id].label.name}`, exact: true }).click();
+  };
   await select('pin');
   check('a projected object offers Open in PortOS', await open.count() === 1);
+  await page.evaluate(([version, session]) => window.post({
+    type: 'portos:label-preference', version, nonce: session, labelVisibility: 'all-nearby',
+  }), [EIDOVERSE_FRAME_VERSION, nonce]);
   for (const id of ['url', 'query', 'plain']) {
     await select(id);
     check(`"${id}" offers no action — its component names no route PortOS knows`, await open.count() === 0);
@@ -274,27 +290,26 @@ async function main() {
     String(await page.evaluate(() => window.navigates().length)));
 
   console.log('\n— E. label preference is browser-only, and rides the session —');
-  const preference = () => panel().getByLabel('Object labels', { exact: true }).inputValue();
   const post = (message) => page.evaluate((value) => window.post(value), message);
-  const plaques = () => renderer().evaluate(() => [...document.querySelectorAll('body > div > span')]
-    .filter((element) => element.style.position === 'absolute' && element.style.display !== 'none').length);
-  await renderer().evaluate(() => window.labelTick(performance.now() + 2000));
-  check('nearby shows the authored plaques', await plaques() > 0, String(await plaques()));
+  const plaques = () => renderer().locator('.ew-object-labels button:visible').count();
+  await post({ type: 'portos:label-preference', version: EIDOVERSE_FRAME_VERSION, nonce, labelVisibility: 'nearby' });
+  await pointAt('plain');
+  check('nearby hides an unselected inspect-only object', await plaques() === 0);
+  await pointAt('pin');
+  check('nearby shows authored landmark labels', await plaques() > 0, String(await plaques()));
   await post({ type: 'portos:label-preference', version: EIDOVERSE_FRAME_VERSION, nonce, labelVisibility: 'all-nearby' });
-  check('all-nearby reaches the renderer', await until(async () => await preference() === 'all'), await preference());
-  await post({ type: 'portos:label-preference', version: EIDOVERSE_FRAME_VERSION, nonce, labelVisibility: 'off' });
-  const wentOff = await until(async () => await preference() === 'off');
-  await renderer().evaluate(() => window.labelTick(performance.now() + 4000));
-  check('off hides every floating plaque', wentOff && await plaques() === 0,
-    `${await preference()} / ${await plaques()} plaques`);
+  await pointAt('plain');
+  check('all-nearby reveals the inspect-only object', await until(async () => await plaques() > 0));
   await select('pin');
+  await post({ type: 'portos:label-preference', version: EIDOVERSE_FRAME_VERSION, nonce, labelVisibility: 'off' });
+  check('off hides every floating label', await until(async () => await plaques() === 0));
   check('off still leaves selected-object details readable',
-    /Entity: pin/.test(await panel().innerText()) && await open.count() === 1);
+    await panel().getByRole('heading', { name: 'Example Goals', exact: true }).count() === 1 && await open.count() === 1);
 
   console.log('\n— F. repeated refresh, and no world write —');
   await post({ type: 'portos:label-preference', version: EIDOVERSE_FRAME_VERSION, nonce, labelVisibility: 'nearby' });
-  await until(async () => await preference() === 'nearby');
-  await renderer().evaluate(() => window.labelTick(performance.now() + 6000));
+  await pointAt('pin');
+  await until(async () => await plaques() > 0);
   const before = await plaques();
   for (let round = 1; round <= 3; round += 1) {
     await renderer().evaluate((step) => window.labelTick(performance.now() + 6000 + step * 500), round);

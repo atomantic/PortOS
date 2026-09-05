@@ -444,8 +444,15 @@ section route. Only the fixed source-section routes (plus `/eidoverse`) are
 allowed. URLs, query strings, encoded/relative paths, record payloads, and
 unknown entities cannot navigate. No URL proxy is exposed.
 
+The Eidoverse framework leaves object labels off by default. PortOS explicitly enables
+them through its trusted frame session, defaulting to `all-nearby` when this browser
+has no saved preference. Existing saved choices, including `off`, are preserved.
+Labels are positioned over their objects; clicking or tapping one opens its semantic
+name and description, with Open in PortOS supplied only by our fork. The old detached
+object dropdown and armed inspection buttons are removed.
+
 Floating-label preference is browser-only: `nearby` respects authored modes,
-`all-nearby` includes inspect-only objects within the renderer's bounded range,
+`all-nearby` includes authored inspect-only objects within 60 metres,
 and `off` hides floating labels while keeping selected-object details accessible.
 PortOS sends `portos:label-preference` with `version`, `nonce`, and
 `labelVisibility` only after the frame advertises V1 preference support. A

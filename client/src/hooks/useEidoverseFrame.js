@@ -11,7 +11,8 @@ import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 const PREFERENCE_KEY = 'portos-eidoverse-label-visibility';
 const readPreference = () => {
   const stored = safeReadStorage(PREFERENCE_KEY);
-  return EIDOVERSE_LABEL_PREFERENCES.includes(stored) ? stored : 'nearby';
+  // PortOS opts into world annotations; the standalone framework defaults off.
+  return EIDOVERSE_LABEL_PREFERENCES.includes(stored) ? stored : 'all-nearby';
 };
 
 export default function useEidoverseFrame(hostUrl, objects = []) {
