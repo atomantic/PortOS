@@ -1,4 +1,5 @@
 import { io } from 'socket.io-client';
+import { isPublicGuestRoute } from '../lib/publicGuestRoutes';
 import { showStaleBuildToast, showBuildDriftToast } from './staleBuildToast';
 import { createBuildDriftWatcher, SERVED_BUILD_ID } from '../lib/buildStamp.js';
 import { getSystemBuild } from './apiSystem';
@@ -7,7 +8,7 @@ import toast from '../components/ui/Toast';
 // Connect to Socket.IO using relative path (works with Tailscale)
 // The connection will use the same host the page was loaded from
 const isHostedAudienceRoute = typeof window !== 'undefined' &&
-  window.location.pathname.replace(/\/+$/, '') === '/fableloom/join';
+  isPublicGuestRoute(window.location.pathname);
 const socket = io({
   path: '/socket.io',
   transports: ['websocket', 'polling'],

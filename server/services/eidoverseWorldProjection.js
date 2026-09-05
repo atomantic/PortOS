@@ -5,7 +5,7 @@
  * identical environment, infrastructure, live, ambient, and cleanup verbs.
  */
 
-import { eidoverseCityArchitecture, eidoverseCityFurniture, eidoverseCitySignalPosition, eidoverseModelPlacement, eidoverseDistrictPoint, eidoverseDistrictYaw, eidoverseDesktopHeight } from '../lib/eidoverseCityLayout.js';
+import { eidoverseCityTravelPod, eidoverseCityArchitecture, eidoverseCityFurniture, eidoverseCitySignalPosition, eidoverseModelPlacement, eidoverseDistrictPoint, eidoverseDistrictYaw, eidoverseDesktopHeight } from '../lib/eidoverseCityLayout.js';
 import { createHash } from 'node:crypto';
 import { canonicalStringify } from '../lib/objects.js';
 import {
@@ -174,10 +174,11 @@ function worldSignal(kind, sourceKey, item, districts) {
     resourceKey,
     kind,
     resource: COMPONENT_RESOURCE_BY_KIND[kind] || kind,
-    route: COMPONENT_ROUTE_BY_KIND[kind] || '/eidoverse',
+    route: kind === 'peer' && item.travelAvailable ? '/eidoverse' : (COMPONENT_ROUTE_BY_KIND[kind] || '/eidoverse'),
+    ...(kind === 'peer' && item.travelAvailable ? { travelPeerId: sourceIdentity, action: 'visit' } : {}),
     districtId: district.id,
     districtLabel: district.label,
-    label: COMPONENT_LABEL_BY_KIND[kind] || 'PortOS signal',
+    label: kind === 'peer' && item.travelAvailable ? 'Teleport pod' : (COMPONENT_LABEL_BY_KIND[kind] || 'PortOS signal'),
     status,
     severity,
     freshness: 'current',
@@ -258,6 +259,7 @@ function labelOperation({ prior, id, component, layer, lib, labelContext }) {
     districtId: component.districtId || component.toDistrictId || 'nexus',
     resourceKey: component.resourceKey || null,
     route: component.route,
+    ...(component.travelPeerId ? { travelPeerId: component.travelPeerId } : {}),
     ...label,
     asset: {
       path: lib,
@@ -603,7 +605,7 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     if (!effectiveRecipe.includes[sourceKey] || !available || !slot) continue;
     const values = kind === 'health' ? [source.health] : source[sourceKey];
     const normalized = values
-      .filter(Boolean)
+      .filter((item) => item && !(kind === 'peer' && item.travelAvailable))
       .map((item) => worldSignal(kind, sourceKey, item, districts));
     liveBuckets.push({
       key: kind,
@@ -626,6 +628,23 @@ export function buildProjectionPlan({ source = {}, recipe = DEFAULT_EIDOVERSE_PR
     .map(({ id }) => id));
   let liveEntityCount = retainedStaleIds.size;
   const districtCounts = Object.fromEntries(districts.map(({ id }) => [id, 0]));
+  // Travel destinations are infrastructure, not a capped health sample: every
+  // available peer gets a chamber even when the live signal budget is full.
+  const travelSignals = effectiveRecipe.includes.peers && Array.isArray(source.peers)
+    ? source.peers.filter((peer) => peer?.travelAvailable).map((peer) => worldSignal('peer', 'peers', peer, districts)).sort((a, b) => a.id.localeCompare(b.id))
+    : [];
+  for (const signal of travelSignals) {
+    const district = districtForSource(districts, 'peers');
+    const delta = upsertModel({ operations, labelContext, stateEntities, desiredIds,
+      id: `${EIDOVERSE_MANAGED_PREFIX}travel-${signal.resourceKey}`,
+      lib: assetPathFor(effectiveRecipe, 'peer', 'peer'),
+      pos: eidoverseCitySignalPosition(district, districtCounts[district.id]),
+      yaw: eidoverseDistrictYaw(district), structure: eidoverseCityTravelPod(), collide: null,
+      component: signal, layer: 'infrastructure' });
+    created += delta.created; updated += delta.updated; removed += delta.removed;
+    cityEntityCount += 1;
+    districtCounts[district.id] += 1;
+  }
   const droppedBySource = {};
   for (const { kind } of retainedStaleCandidates) {
     const sourceKey = EIDOVERSE_PROJECTION_KINDS.find((entry) => entry.kind === kind)?.source;

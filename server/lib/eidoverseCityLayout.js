@@ -116,3 +116,16 @@ export function eidoverseModelPlacement({ bounds, pos, yaw, scale, size = 2 }) {
     yaw, scale: fittedScale,
   };
 }
+
+
+/** Two-metre visitor chamber: glazed back/sides and a clear plaza-facing entry. */
+export function eidoverseCityTravelPod() {
+  return {
+    tile: 1, wallH: 2.8, wallT: 0.12, slabT: 0.12,
+    levels: [{
+      y: 0, tiles: [[-1, 0], [0, 0], [-1, 1], [0, 1]],
+      walls: [[0, -1, 0], [0, 0, 0], [1, -1, 0], [1, -1, 1], [1, 1, 0], [1, 1, 1]],
+      apertures: [[0, -1, 0, 'window'], [0, 0, 0, 'window'], [1, -1, 0, 'window'], [1, 1, 0, 'window']],
+    }],
+  };
+}

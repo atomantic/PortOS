@@ -6,8 +6,8 @@ import { safeRemoveStorage, safeWriteStorage } from '../lib/safeStorage';
 
 const hostUrl = 'https://world.example.com/';
 const objects = [{ id: 'portos-design-v2-signal-app-example', route: '/apps' }];
-function Harness() {
-  const frame = useEidoverseFrame(hostUrl, objects);
+function Harness({ projected = objects, onTravel } = {}) {
+  const frame = useEidoverseFrame(hostUrl, projected, onTravel);
   const location = useLocation();
   return <>
     <iframe title="Test renderer" ref={frame.frameRef} onLoad={frame.onFrameLoad} />
@@ -28,6 +28,23 @@ afterEach(() => {
 });
 
 describe('hosted Eidoverse frame navigation', () => {
+  it('resolves a pod through the local legend rather than a destination claimed by the frame', () => {
+    const onTravel = vi.fn();
+    const pod = { id: 'example-pod', route: '/eidoverse', travelPeerId: 'peer-example' };
+    render(<MemoryRouter><Harness projected={[pod]} onTravel={onTravel} /></MemoryRouter>);
+    const iframe = screen.getByTitle('Test renderer');
+    const source = iframe.contentWindow;
+    const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(iframe);
+    const { nonce } = post.mock.calls.at(-1)[0];
+    send(source, { type: 'eidoverse:ready', version: 1, nonce, capabilities: { portosNavigation: 1 } });
+    const action = { type: 'eidoverse:navigate', version: 1, nonce, entityId: pod.id, route: pod.route, travelPeerId: 'untrusted-peer' };
+    send(source, { ...action, entityId: 'foreign-pod' });
+    expect(onTravel).not.toHaveBeenCalled();
+    send(source, action);
+    expect(onTravel).toHaveBeenCalledExactlyOnceWith('peer-example');
+  });
+
   it('requires the hosted window, exact origin, current handshake and projected section route', () => {
     mount();
     const frame = screen.getByTitle('Test renderer');

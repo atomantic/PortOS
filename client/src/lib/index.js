@@ -1,4 +1,5 @@
 // Barrel for client/src/lib/ — discovery surface, not a forced import path.
+export * from './publicGuestRoutes.js';
 // See client/src/lib/README.md for the human-readable catalog and
 // AGENTS.md "Module organization" for the maintenance convention.
 

@@ -6,8 +6,10 @@ import {
   eidoverseNavigationTarget,
   isEidoverseFrameMessage,
 } from '../lib/eidoverseFrame';
-export default function useEidoverseFrame(hostUrl, objects = []) {
+export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null) {
   const frameRef = useRef(null);
+  const travelRef = useRef(onTravel);
+  travelRef.current = onTravel;
   const objectsRef = useRef(objects);
   objectsRef.current = objects;
   const sessionRef = useRef(null);
@@ -49,7 +51,10 @@ export default function useEidoverseFrame(hostUrl, objects = []) {
         }, origin);
       } else if (data.type === 'eidoverse:navigate' && session.capabilities.portosNavigation) {
         const target = eidoverseNavigationTarget(data, objectsRef.current);
-        if (target) navigate(target);
+        if (!target) return;
+        const object = objectsRef.current.find((entry) => entry.id === data.entityId);
+        if (object?.travelPeerId && travelRef.current) travelRef.current(object.travelPeerId);
+        else navigate(target);
       }
     };
     window.addEventListener('message', receive);

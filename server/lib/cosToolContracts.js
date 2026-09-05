@@ -7,6 +7,7 @@ export const PORTOS_SEMANTIC_TOOL_GRANT_KEYS = Object.freeze([
   'readPortos',
   'writePortos',
   'manageEidoverse',
+  'visitEidoversePeers',
 ]);
 export const COS_TOOL_CALL_LIMITS = Object.freeze({
   requestIdChars: 200,
@@ -21,12 +22,14 @@ export const portosSemanticToolGrantsSchema = z.object({
   readPortos: z.boolean().optional(),
   writePortos: z.boolean().optional(),
   manageEidoverse: z.boolean().optional(),
+  visitEidoversePeers: z.boolean().optional(),
 }).strict();
 
 export const createDefaultPortosSemanticToolGrants = () => ({
   readPortos: false,
   writePortos: false,
   manageEidoverse: false,
+  visitEidoversePeers: false,
 });
 
 export const normalizePortosSemanticToolGrants = (raw) => {
@@ -35,6 +38,7 @@ export const normalizePortosSemanticToolGrants = (raw) => {
     readPortos: source.readPortos === true,
     writePortos: source.writePortos === true,
     manageEidoverse: source.manageEidoverse === true,
+    visitEidoversePeers: source.visitEidoversePeers === true,
   };
 };
 

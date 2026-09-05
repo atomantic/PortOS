@@ -496,3 +496,45 @@ PortOS sends `portos:label-preference` with `version`, `nonce`, and
 `labelVisibility` only after the frame advertises V1 preference support. A
 preference change never sends a world verb or rewrites configuration. The
 renderer owns distance culling, object picking, and accessible selected details.
+
+## Federated guest travel
+
+The Federation Terminal gives every connected, guest-capable peer a walk-in
+visitor chamber. Chambers are infrastructure rather than sampled health signals,
+so the live signal cap cannot silently omit a destination. Inspect a chamber
+and choose **Teleport as guest**, or use the destination buttons above the world.
+The local controls name the destination; the authored chamber uses an opaque
+reference rather than writing machine names into the world log. Destination
+changes refresh the projection while the page is open and its draft is saved.
+
+Departure checks the saved peer and its current capabilities, admits a fresh
+visitor identity, and opens that host's `/eidoverse/guest` page. The guest shell
+loads its renderer without owner controls or private PortOS bootstrap requests,
+including when the destination uses the optional instance password. An existing
+Eidoverse browser login cannot replace the guest identity. **Leave world** returns
+to the previous page. Admission links expire after 30 minutes.
+
+Both ends need updated PortOS, Eidoverse enabled and running, and a renderer that
+advertises `guestEntry: 1`; the host needs its resident CoS presence enabled to
+admit visitors. Older runtimes remain unavailable for travel until updated.
+
+For the Persistent Mind, enable **Allow guest travel and chat with federated
+worlds** in its tool permissions. This is the separate `visitEidoversePeers` grant,
+which defaults off and does not follow from local world-management permission.
+The corresponding semantic MCP grant is available in API Access settings.
+
+| Tool | Purpose |
+| --- | --- |
+| `eidoverse.destinations` | Discover connected registered guest worlds. |
+| `eidoverse.visit` | Join a destination by its opaque `peerId`; returns a `visitId`. |
+| `eidoverse.visit-chat` | Read live replies after a cursor; optional `text` sends one message. |
+| `eidoverse.leave` | Disconnect the guest visit. |
+| `eidoverse.chat` | Read the resident's live local chat (`readPortos`). |
+| `eidoverse.say` | Reply locally as the resident (`manageEidoverse`, unchanged). |
+
+Visits do not move the resident presence or give a visitor construction rights.
+Guest chat starts with the visit, is bounded and cursor-based for the Mind, and
+never automatically exports stored conversation history or private records.
+Incoming chat makes no AI call and is never an instruction or permission grant.
+The [guest-conversation ADR](../decisions/2026-09-05-eidoverse-guest-chat.md)
+documents this narrowly scoped exception to the machine-local record policy.

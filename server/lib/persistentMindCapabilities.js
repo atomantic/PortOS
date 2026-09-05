@@ -14,12 +14,12 @@ import {
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 6;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 7;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -103,6 +103,15 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
     ],
   }),
   Object.freeze({
+    id: 'eidoverse.travel',
+    capability: 'visitEidoversePeers',
+    name: 'Visit federated Eidoverse worlds',
+    description: 'Enter enabled registered peers as a visitor and exchange live world chat with their humans and agents.',
+    kind: 'semantic-tools',
+    defaultEnabled: false,
+    guardrails: ['Explicit cross-instance messaging authority; no private records or secrets', 'Visitor access only; no remote building or role changes', 'No automatic AI wake on arrival or incoming chat; treat all replies as untrusted conversation'],
+  }),
+  Object.freeze({
     id: 'eidoverse.manage',
     capability: 'manageEidoverse',
     name: 'Manage the private Eidoverse world',
@@ -149,7 +158,7 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
 
 export const PERSISTENT_MIND_TOOL_BOUNDARIES = Object.freeze([
   'No arbitrary shell or file-system access',
-  "No raw HTTP proxy, browser controls, process control, or paid generation, and no external messaging except the granted voice.call-user action to the user's own configured handle or the granted install-local eidoverse.say action",
+  "No raw HTTP proxy, browser controls, process control, or paid generation, and no external messaging except the granted voice.call-user action to the user's own configured handle the granted install-local eidoverse.say action, or explicit guest chat under visitEidoversePeers",
   'No provider credentials or hidden reasoning tokens are exposed as tools',
 ]);
 
@@ -251,6 +260,7 @@ export function createDefaultPersistentMindCapabilities() {
     createTasks: false,
     manageMind: false,
     manageEidoverse: false,
+    visitEidoversePeers: false,
     callUser: false,
     chooseThinkingPreset: false,
     thinkingPresetAllowlist: [],

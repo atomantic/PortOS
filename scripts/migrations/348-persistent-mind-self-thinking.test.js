@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration from './348-persistent-mind-self-thinking.js';
+import { PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION } from '../../server/lib/persistentMindCapabilities.js';
 let rootDir;
 afterEach(async () => { if (rootDir) await rm(rootDir, { recursive: true, force: true }); });
 it('adds disabled grants and durable state while preserving old preferences, unrelated fields and existing allowance', async () => {
@@ -17,7 +18,7 @@ it('adds disabled grants and durable state while preserving old preferences, unr
   await migration.up({ rootDir });
   expect(JSON.parse(await readFile(configPath, 'utf8'))).toMatchObject({
     persistentMindProfile: config.persistentMindProfile,
-    persistentMindCapabilities: { ...config.persistentMindCapabilities, schemaVersion: 6, chooseThinkingPreset: false, thinkingPresetAllowlist: [] },
+    persistentMindCapabilities: { ...config.persistentMindCapabilities, schemaVersion: PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION, chooseThinkingPreset: false, thinkingPresetAllowlist: [] },
   });
   expect(JSON.parse(await readFile(statePath, 'utf8'))).toEqual({ persistentMind: { schemaVersion: 8, thinkingRequests }, unrelated: true });
   const saved = await readFile(configPath, 'utf8');

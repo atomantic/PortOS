@@ -6,6 +6,7 @@ export const ALWAYS_PUBLIC_API_PATHS = Object.freeze([
   '/api/auth/login',
   '/api/auth/logout',
   '/api/system/health',
+  '/api/eidoverse/travel/guest',
 ]);
 
 export const GATED_NON_API_PREFIXES = Object.freeze(['/sdapi/']);

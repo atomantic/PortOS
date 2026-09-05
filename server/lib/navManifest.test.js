@@ -629,7 +629,9 @@ describe('nav coverage — every navigable App.jsx route has a manifest entry', 
     expect(appSrc).toMatch(/useTimezoneBootstrap\(!isHostedAudienceRoute\)/);
     expect(appSrc).toMatch(/useDocumentTitle\(!isHostedAudienceRoute\)/);
     expect(appSrc).toMatch(/isHostedAudienceRoute\s*\?\s*routeContent/);
-    expect(mainSrc).toContain("const isHostedAudienceRoute = window.location.pathname.replace(/\\/+$/, '')");
+    expect(mainSrc).toContain('const isHostedAudienceRoute = isPublicGuestRoute(window.location.pathname)');
+    expect(appSrc).toContain('isPublicGuestRoute(pathname)');
+    expect(socketSrc).toContain('isPublicGuestRoute(window.location.pathname)');
     expect(socketSrc).toMatch(/autoConnect: !isHostedAudienceRoute/);
   });
 

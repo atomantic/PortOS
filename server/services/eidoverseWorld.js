@@ -10,7 +10,7 @@
 
 import { buildEidoverseCitySurface } from '../lib/eidoverseCitySurface.js';
 import { eidoverseModelBounds } from '../lib/eidoverseCityLayout.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { atomicWrite, dataPath, ensureDir, readJSONFile } from '../lib/fileUtils.js';
@@ -650,7 +650,7 @@ function asConnectionError(error, fallback = 'Eidoverse Worlds is unavailable.')
   });
 }
 
-function createWorldConnection({ world, id, avatar, agent = true, onClosed = null }) {
+function createWorldConnection({ world, id, avatar, agent = true, guest = false, onClosed = null }) {
   const socket = new WebSocket(resolveWorldWsUrl());
   let closed = false;
   let failure = null;
@@ -663,6 +663,8 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
   let closeResolver = null;
   let messageTail = Promise.resolve();
   const pendingVerbs = [];
+  const chat = [];
+  let chatCursor = -1;
 
   const cleanupPending = (pending) => {
     clearTimeout(pending.timer);
@@ -748,6 +750,14 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
       }));
       return;
     }
+    if (message?.type === 'log' && message.entry?.verb === 'say') {
+      const entry = message.entry;
+      if (Number.isSafeInteger(entry.seq) && typeof entry.args?.text === 'string') {
+        chatCursor = Math.max(chatCursor, entry.seq);
+        chat.push({ seq: entry.seq, actor: String(entry.actor).slice(0, 64), text: entry.args.text.slice(0, 2000) });
+        if (chat.length > 100) chat.shift();
+      }
+    }
     if (message?.type !== 'log' || !message.entry || !pendingVerbs.length) return;
     const pending = pendingVerbs[0];
     if (message.entry.actor !== id || message.entry.verb !== pending.verb) return;
@@ -771,6 +781,7 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
       id,
       agent,
       avatar,
+      ...(guest ? { guest: true } : {}),
     };
     socket.send(JSON.stringify(join), (error) => {
       if (error) fail(error, 'Eidoverse Worlds rejected the join connection.');
@@ -882,6 +893,21 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
     close,
     isOpen: () => !closed && socket.readyState === WebSocket.OPEN,
     getSnapshot: () => snapshotValue,
+    readChat: (after = -1) => {
+      const unread = chat.filter((entry) => entry.seq > after);
+      const messages = [];
+      for (const entry of unread.slice(0, 20)) {
+        // Preserve a usable cursor inside the Mind's 4KB tool-result budget.
+        // Even heavily escaped text gets one bounded, explicitly clipped row.
+        const row = JSON.stringify(entry).length > 3000
+          ? { ...entry, text: entry.text.slice(0, 400), textTruncated: true } : entry;
+        if (JSON.stringify([...messages, row]).length > 3000) break;
+        messages.push(row);
+      }
+      return { messages, cursor: messages.at(-1)?.seq ?? Math.max(after, chatCursor),
+        hasMore: messages.length < unread.length, truncated: chat.length === 100 && after < chat[0].seq };
+    },
+    chatSummary: () => ({ cursor: chatCursor, retained: chat.length }),
   });
 }
 
@@ -1955,7 +1981,8 @@ export async function getEidoverseWorldStatus({ compact = false } = {}) {
     }
     return {
       setup: { installed: setup.installed, runtimeStatus: setup.runtimeStatus, worldDataReady: setup.worldDataReady },
-      cos: { enabled: config.cos.enabled, connected: config.cos.connected, role: config.cos.role },
+      cos: { enabled: config.cos.enabled, connected: config.cos.connected, role: config.cos.role,
+        chat: cosPresence?.connection?.chatSummary() ?? { cursor: -1, retained: 0 } },
       design: { selectedVersion: config.design.selectedVersion, lastAppliedVersion: config.design.lastAppliedVersion, pendingVersion: config.design.pendingVersion },
       assets,
       assetsTruncated: Object.keys(assets).length < availableAssets.length,
@@ -2003,3 +2030,44 @@ export async function closeEidoverseWorldConnections() {
 }
 
 export const __resetEidoverseWorldForTests = closeEidoverseWorldConnections;
+
+
+/** Guest admission happens through the owner before any guest joins. */
+export async function admitEidoverseGuest({ agent = false } = {}) {
+  return worldLock(async () => {
+    await assertInstalled();
+    const presence = await ensureCosPresenceInternal();
+    if (presence.snapshot?.yourRights?.role !== 'owner') {
+      throw new ServerError('The resident must own this world to admit visitors.', { status: 409, code: 'EIDOVERSE_GUEST_ADMISSION_UNAVAILABLE' });
+    }
+    const id = `guest-${randomUUID()}`;
+    await sendPacedVerb(presence.connection, 'grant', { id, role: 'visitor', gen: false }, { pacing: presence.pacing });
+    const identity = { world: presence.connection.world, name: id, avatar: DEFAULT_HUMAN_AVATAR };
+    if (!agent) return { identity };
+    const connection = createWorldConnection({ world: identity.world, id, avatar: identity.avatar, agent: true, guest: true });
+    return connection.waitForSnapshot().then(async (snapshot) => {
+      if (snapshot.yourRights?.role !== 'visitor' || snapshot.yourRights?.gen || snapshot.yourRights?.open) {
+        await connection.close();
+        throw new ServerError('The world did not confirm visitor access.', { status: 409, code: 'EIDOVERSE_GUEST_ROLE_INVALID' });
+      }
+      return { identity, connection };
+    }).catch((error) => connection.close().then(() => { throw error; }));
+  });
+}
+
+/** Live messages only: joining never exports the world's stored chat history. */
+export async function readEidoverseWorldChat(after = -1) {
+  return worldLock(async () => {
+    const presence = await ensureCosPresenceInternal();
+    return presence.connection.readChat(after);
+  });
+}
+
+
+/** Fail closed when the managed renderer cannot isolate browser guest identity. */
+export async function supportsEidoverseGuestEntry() {
+  const response = await fetch(libraryUrl('/version'), { signal: AbortSignal.timeout(3000) }).catch(() => null);
+  if (!response?.ok) return false;
+  const version = await response.json().catch(() => null);
+  return version?.capabilities?.guestEntry === 1;
+}

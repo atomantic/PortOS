@@ -43,6 +43,8 @@ const opaqueId = (namespace, value, fallback) => `${namespace}-${opaqueDigest(na
  * reads this, so it is a one-way digest of the federation instance id — never
  * the hostname, tailnet name, address, OS user, or a filesystem path.
  */
+export const eidoversePeerId = (peer) => opaqueId('peer', peer.instanceId || peer.id, 'unknown-peer');
+
 export const eidoverseHostId = (instanceId) => `hst_${opaqueDigest('hst', instanceId, 'unknown-instance')}`;
 
 const coarseStatus = (value) => {
@@ -464,10 +466,13 @@ export async function collectEidoverseWorldSources({ signal } = {}) {
       id: safeText(feature.id, 'feature'), label: 'District feature', enabled: feature.enabled === true,
     }))
     : null;
+  const travel = await import('./eidoverseTravel.js').then((service) => service.listEidoverseDestinations()).catch(() => ({ destinations: [] }));
+  const destinations = new Set(travel.destinations.map((entry) => entry.peerId));
   const projectedPeers = Array.isArray(peers)
-    ? peers.map((peer, index) => ({
-      id: opaqueId('peer', peer.instanceId || peer.id, `peer-${index}`),
+    ? peers.map((peer) => ({
+      id: eidoversePeerId(peer),
       label: 'Federated peer',
+      travelAvailable: destinations.has(eidoversePeerId(peer)),
       enabled: peer.enabled !== false,
       fullSync: peer.fullSync === true,
       status: coarseStatus(peer.status),

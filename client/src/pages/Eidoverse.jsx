@@ -13,6 +13,7 @@ import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import useEidoverseFrame from '../hooks/useEidoverseFrame';
 import EidoverseWorldDrawer from '../components/eidoverse/EidoverseWorldDrawer';
+import EidoverseTravel from '../components/eidoverse/EidoverseTravel';
 import EidoverseUpdateBanner from '../components/eidoverse/EidoverseUpdateBanner';
 import {
   EIDOVERSE_SOURCE_KIND as SOURCE_KIND,
@@ -188,7 +189,8 @@ export default function Eidoverse() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
 
-  const frame = useEidoverseFrame(hostUrl, worldState?.projection?.lastSummary?.objects);
+  const travelRef = useRef(null);
+  const frame = useEidoverseFrame(hostUrl, worldState?.projection?.lastSummary?.objects, (peerId) => travelRef.current?.(peerId));
 
   const applyWorldResponse = useCallback((updated, { replaceDraft = true } = {}) => {
     setWorldState((current) => current
@@ -536,6 +538,12 @@ export default function Eidoverse() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-port-bg">
+      <EidoverseTravel travelRef={travelRef} enabled={Boolean(hostUrl)} objects={worldState?.projection?.lastSummary?.objects || []}
+        onDestinationsChange={() => {
+          if (projectionStatus === 'running' || draftDirty) return false;
+          if (worldState?.recipe?.includes?.peers !== false) void runProjection().catch(() => {});
+          return true;
+        }} />
       <PageHeader
         icon={Orbit}
         title="Eidoverse Worlds"
