@@ -306,13 +306,21 @@ an empty join token; do not expose this configuration to the public internet.
 An instance that needs a broader trust model should configure Eidoverse access
 control in that project before starting it.
 
-Eidoverse itself remains a plain-HTTP service on `:8940`. For an HTTPS PortOS
-session, the embedded page lazily opens a PortOS-owned HTTPS/WebSocket bridge on
-`:5563`, using the same machine certificate as `:5555` and forwarding to
-`127.0.0.1:8940`. This avoids browser mixed-content rejection while leaving both
-external repositories unchanged. The bridge starts only when the page is
-opened, waits for the managed app to answer before mounting the iframe, and
-returns an explicit unavailable state when the runtime does not become ready.
+Eidoverse itself remains a plain-HTTP service on `:8940`. The embedded page
+lazily opens a PortOS-owned HTTP/WebSocket bridge on `:5563` that forwards to
+`127.0.0.1:8940`; when a machine certificate is present it serves HTTPS using
+the same certificate as `:5555`, which is what avoids browser mixed-content
+rejection. Both external repositories stay unchanged. The bridge starts only
+when the page is opened, waits for the managed app to answer before mounting the
+iframe, and returns an explicit unavailable state when the runtime does not
+become ready.
+
+The page embeds through that bridge whenever the bridge's scheme matches the
+page's, because the bridge is also what arms the renderer's frame bridge (see
+below). The single exception is a plain-HTTP page in front of an HTTPS bridge —
+the loopback `:5553` mirror and the Vite dev server — where the shared
+certificate does not cover the hostname in use; there the iframe points straight
+at `:8940`, the scene renders normally, and the frame handshake stays dormant.
 
 Projection protocol and asset preflight target the same runtime. The default
 HTTP library origin is derived from `EIDOVERSE_WS_URL` by mapping `ws`/`wss` to
@@ -366,11 +374,16 @@ versions reject the newer config schema rather than discarding the aliases.
 
 ## Renderer capabilities and frame contract V1
 
-The external Worlds checkout remains the sole renderer. This PortOS contract
-can ship before its companion implementation in
-[Worlds issue 5](https://github.com/atomantic/eidoverse-worlds/issues/5).
+The external Worlds checkout remains the sole renderer. Its half of this
+contract shipped in
+[Worlds issue 5](https://github.com/atomantic/eidoverse-worlds/issues/5) and
+[Worlds issue 7](https://github.com/atomantic/eidoverse-worlds/issues/7).
 End-to-end label/picking/touch/keyboard acceptance requires that companion;
-producer and frame-contract tests alone do not establish it.
+producer and frame-contract tests alone do not establish it, so
+`scripts/eidoverse-frame-acceptance.mjs` drives the whole exchange against a
+disposable synthetic world in a real browser. It is deliberately outside CI —
+it needs the installed checkout, Bun, Playwright and a real Chrome — and it
+never touches the install's own world under `data/eidoverse/worlds`.
 
 `GET /version` advertises independently versioned capabilities alongside its
 existing build identity:
@@ -396,7 +409,18 @@ The renderer validates `event.source === parent` and the embedding PortOS origin
 then replies to that exact origin with `eidoverse:ready`, echoing `version` and
 `nonce` and advertising its supported capabilities. The renderer must obtain
 the expected parent origin from its trusted embedding configuration; accepting
-an arbitrary opener as the parent is not sufficient. Each later message carries
+an arbitrary opener as the parent is not sufficient.
+
+**PortOS supplies that configuration.** The renderer reads it from
+`GET /embed-config`, which the bridge on `:5563` answers itself rather than
+forwarding: the hostname is the one the browser just used to reach the bridge,
+and the scheme and port are PortOS's own. The checkout's static
+`EMBED_PARENT_ORIGIN` is deliberately left unset, because one install is
+reachable as `localhost`, as a LAN address and as a MagicDNS name, and a single
+configured origin could only ever match one of them — an unmatched origin leaves
+the frame bridge silently dormant. A request whose `Host` is unusable resolves
+to no embedder rather than to a repaired guess, since the browser compares
+origins with `===` and a repair would be a silent mismatch at handshake time. Each later message carries
 the same version and nonce. A reload invalidates the prior session. Unsupported
 clients simply ignore the handshake and continue rendering.
 

@@ -147,7 +147,7 @@ describe('Eidoverse hosted page', () => {
     renderPage();
 
     const frame = await screen.findByTitle('Eidoverse Worlds');
-    expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:8940/?world=portos&name=example-portos-user`);
+    expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:5563/?world=portos&name=example-portos-user`);
     expect(screen.getByRole('button', { name: 'Refresh world' }))
       .toHaveAttribute('aria-label', 'Refresh world');
     expect(screen.getByRole('button', { name: 'Refresh world' })).not.toHaveClass('port-media-overlay');
@@ -155,7 +155,7 @@ describe('Eidoverse hosted page', () => {
     expect(screen.queryByRole('region', { name: 'PortOS district legend' })).not.toBeInTheDocument();
     expect(screen.queryByText('12/48 live signals')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Eidoverse without PortOS controls' }))
-      .toHaveAttribute('href', `http://${window.location.hostname}:8940/?world=portos&name=example-portos-user`);
+      .toHaveAttribute('href', `http://${window.location.hostname}:5563/?world=portos&name=example-portos-user`);
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
     expect(screen.getByRole('link', { name: 'Manage Eidoverse app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
 
@@ -365,6 +365,25 @@ describe('Eidoverse hosted page', () => {
     )).toThrow(/shared certificate/);
   });
 
+  // Only the bridge answers the renderer's /embed-config with this page's
+  // origin, and without that answer the renderer never completes the frame
+  // handshake — so a plain-HTTP install has to go through it too. The one
+  // exception is an HTTP page in front of an HTTPS-only bridge (the loopback
+  // mirror, the dev server): the shared certificate does not cover those
+  // hostnames, so the iframe would fail on the certificate instead.
+  it('routes a plain-HTTP page through the bridge, and only falls back when the bridge is HTTPS', () => {
+    expect(hostUrlFor(
+      { running: true, protocol: 'http', port: 5563 },
+      setup,
+      { protocol: 'http:', hostname: 'host-alpha.example-tailnet.ts.net' },
+    )).toBe('http://host-alpha.example-tailnet.ts.net:5563/');
+    expect(hostUrlFor(
+      { running: true, protocol: 'https', port: 5563 },
+      setup,
+      { protocol: 'http:', hostname: 'localhost' },
+    )).toBe(`http://localhost:${setup.uiPort}/`);
+  });
+
   it('keeps a successful local save visible when projection fails', async () => {
     const user = userEvent.setup();
     renderPage();
@@ -414,7 +433,7 @@ describe('Eidoverse hosted page', () => {
 
     await waitFor(() => expect(screen.getByTitle('Eidoverse Worlds')).toHaveAttribute(
       'src',
-      `http://${window.location.hostname}:8940/?world=portos-two&name=example-portos-user`,
+      `http://${window.location.hostname}:5563/?world=portos-two&name=example-portos-user`,
     ));
   });
 

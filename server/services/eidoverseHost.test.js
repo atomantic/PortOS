@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createEidoverseHost } from './eidoverseHost.js';
@@ -35,6 +35,7 @@ const closeServer = (server) => new Promise((resolve, reject) => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   webSocketClients.splice(0).forEach((client) => client.terminate());
   await Promise.all(bridges.splice(0).map((bridge) => bridge.close()));
   await Promise.all(webSocketServers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
@@ -148,6 +149,80 @@ describe('Eidoverse host bridge', () => {
     // A forwarded request would have shown up here; the whole point is that it
     // does not, so the upstream checkout needs no change to serve this.
     expect(upstreamRequests).toEqual([]);
+  });
+
+  // The renderer takes its trusted parent origin from GET /embed-config and
+  // stays permanently dormant without one. The external checkout answers that
+  // from a single static env var, which cannot name one install reachable as
+  // localhost, a LAN address AND a MagicDNS name — so PortOS answers instead,
+  // from the hostname the browser actually used plus its own scheme and port.
+  it('answers GET /embed-config with the PortOS page origin the browser reached it by', async () => {
+    const upstreamRequests = [];
+    const upstreamPort = await listen(createServer((req, res) => {
+      upstreamRequests.push(req.url);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ parentOrigin: null }));
+    }));
+    const bridge = createEidoverseHost({
+      targetPort: upstreamPort,
+      listenHost: '127.0.0.1',
+      listenPort: 0,
+      certDir: null,
+    });
+    bridges.push(bridge);
+    vi.stubEnv('PORT', '5599');
+
+    const host = await bridge.start();
+    const response = await fetch(`http://127.0.0.1:${host.port}/embed-config`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    // The bridge's own port is never the answer — the parent is the PortOS page.
+    expect(await response.json()).toEqual({ parentOrigin: 'http://127.0.0.1:5599' });
+    // Forwarding it would hand back the checkout's unset value and leave the
+    // renderer with no embedder at all.
+    expect(upstreamRequests).toEqual([]);
+
+    const posted = await fetch(`http://127.0.0.1:${host.port}/embed-config`, { method: 'POST' });
+    expect(posted.status).toBe(405);
+    expect(upstreamRequests).toEqual([]);
+  });
+
+  it('names no embedder when the request carries no usable host', async () => {
+    const upstreamPort = await listen(createServer((_req, res) => {
+      res.writeHead(200);
+      res.end('sequencer');
+    }));
+    const bridge = createEidoverseHost({
+      targetPort: upstreamPort,
+      listenHost: '127.0.0.1',
+      listenPort: 0,
+      certDir: null,
+    });
+    bridges.push(bridge);
+
+    const host = await bridge.start();
+    // `fetch` refuses to set Host, so the raw client is the only way to ask.
+    // A repaired origin would be a silent mismatch at handshake time: the
+    // browser compares with ===, so an unusable host must resolve to "nobody".
+    const answer = await new Promise((settle, reject) => {
+      const probe = httpRequest({
+        host: '127.0.0.1',
+        port: host.port,
+        path: '/embed-config',
+        headers: { host: 'not a hostname' },
+      }, (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => { body += chunk; });
+        response.on('end', () => settle({ status: response.statusCode, body }));
+      });
+      probe.once('error', reject);
+      probe.end();
+    });
+
+    expect(answer.status).toBe(200);
+    expect(JSON.parse(answer.body)).toEqual({ parentOrigin: null });
   });
 
   it('refuses to write through the descriptor path, and reports an unreadable descriptor honestly', async () => {
