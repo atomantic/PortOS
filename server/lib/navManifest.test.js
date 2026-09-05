@@ -399,15 +399,13 @@ describe('nav contract — tabbed pages match their tab constants', () => {
   }
 });
 
-// Settings is the one tabbed page whose tab bar (SettingsTabsHeader.jsx `TABS`,
-// the nav guard's source of truth for /settings) and render dispatch live in
-// separate files: `Settings.jsx`'s `switch (activeTab)`. They're hand-kept in
-// sync, so a tab added to the header (+ nav) but forgotten in the switch would
-// silently render the default `general` view, and a `case` with no header entry
-// is an orphan reachable only by URL. The nav↔header guard above can't see the
-// switch; this pins header↔switch parity. Cross-links (Prompts → /prompts,
-// Providers → /ai) point off /settings, so the `links` extractor already drops
-// them — the two filtered sets are therefore expected to match exactly.
+// Settings is the one tabbed page whose child-nav wrapper and render dispatch
+// live in separate files: `Settings.jsx`'s `switch (activeTab)`. A tab added to
+// the manifest but forgotten in the switch would silently render the default
+// `general` view, and a `case` with no manifest entry would be an orphan
+// reachable only by URL. The nav↔header guard above can't see the switch; this
+// pins manifest↔switch parity. Standalone pages such as Prompts are intentionally
+// outside the /settings switch and therefore are not part of this comparison.
 describe('nav contract — Settings tab bar header ↔ page switch parity', () => {
   const SETTINGS_PAGE = 'client/src/pages/Settings.jsx';
 
