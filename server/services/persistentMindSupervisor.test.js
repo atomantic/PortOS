@@ -1063,4 +1063,141 @@ describe('persistent mind supervisor', () => {
     expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['plain-1']);
     expect(mock.root.persistentMind.recentMessageIds).toEqual([]);
   });
+
+  describe('per-call provider boundary', () => {
+    const mindCallReceipts = () => mock.appendMindEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.kind === 'mind.model.call');
+
+    it('admits and accounts each provider call of a turn instead of the whole span', async () => {
+      mock.prepareContext.mockImplementationOnce(async ({ summarize }) => {
+        await summarize({ events: [], previousSummary: null });
+        return { text: 'bounded context', chars: 15, summaryState: 'ready' };
+      });
+      const summarize = vi.fn(async ({ callBoundary }) => {
+        await callBoundary({ purpose: 'summary' }, async ({ reportRunId }) => {
+          reportRunId('run-summary');
+          return { text: 'An earlier stretch of my life.', runId: 'run-summary' };
+        });
+        return 'An earlier stretch of my life.';
+      });
+      const run = vi.fn(async ({ callBoundary }) => {
+        for (const round of [0, 1]) {
+          await callBoundary({ purpose: round === 0 ? 'turn' : 'tool-round', round }, async ({ reportRunId }) => {
+            reportRunId(`run-${round}`);
+            return { text: '{}', runId: `run-${round}`, usage: { inputTokens: 10, outputTokens: 2 } };
+          });
+        }
+        return {};
+      });
+      await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run, summarize });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-calls', text: 'Do the work.' });
+      await supervisor.drainPersistentMind();
+
+      expect(summarize).toHaveBeenCalledTimes(1);
+      // Three calls, three accounted actions — and no extra action for the turn
+      // itself, which would double-count the span the receipts already cover.
+      expect(mock.recordUsage).toHaveBeenCalledTimes(3);
+      expect(mock.recordUsage.mock.calls.every(([domain, delta]) => domain === 'cos' && delta.actions === 1)).toBe(true);
+      expect(mindCallReceipts().map((event) => event.data.purpose)).toEqual(['summary', 'turn', 'tool-round']);
+      expect(mindCallReceipts().map((event) => event.data.runId)).toEqual(['run-summary', 'run-0', 'run-1']);
+      expect(mindCallReceipts()[1].data).toMatchObject({
+        providerId: 'example-cloud',
+        model: 'example-model',
+        effort: 'high',
+        outcome: 'completed',
+        temporaryRoute: false,
+      });
+      expect(mindCallReceipts()[1].data.elapsedMs).toBeGreaterThanOrEqual(0);
+      expect(mindCallReceipts()[1].data.usage).toMatchObject({ state: 'reported', totalTokens: 12 });
+      expect(mock.root.persistentMind.status).toBe('idle');
+    });
+
+    it('denies a later round when the budget empties mid-turn and parks the turn as waiting', async () => {
+      const run = vi.fn(async ({ callBoundary }) => {
+        await callBoundary({ purpose: 'turn', round: 0 }, async () => ({ text: '{}', runId: 'run-0' }));
+        mock.budget = { withinBudget: false, exceeded: 'actions' };
+        await callBoundary({ purpose: 'tool-round', round: 1 }, async () => {
+          throw new Error('this second provider call must never start');
+        });
+        return {};
+      });
+      await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-budget', text: 'Keep going.' });
+      await supervisor.drainPersistentMind();
+
+      expect(mock.recordUsage).toHaveBeenCalledTimes(1);
+      expect(mindCallReceipts().map((event) => event.data.outcome)).toEqual(['completed', 'denied']);
+      expect(mindCallReceipts()[1].data.reason).toBe('CoS actions budget exhausted');
+      expect(mock.root.persistentMind).toMatchObject({
+        status: 'waiting',
+        pauseReason: 'CoS actions budget exhausted',
+      });
+    });
+
+    it('records a failed attempt and still leaves its route and elapsed time readable', async () => {
+      const run = vi.fn(async ({ callBoundary }) => callBoundary(
+        { purpose: 'turn', round: 0 },
+        async ({ reportRunId }) => {
+          reportRunId('run-0');
+          throw new Error('provider stream ended without a response');
+        },
+      ));
+      await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-failed', text: 'Try this.' });
+      await supervisor.drainPersistentMind();
+
+      expect(mock.recordUsage).toHaveBeenCalledTimes(1);
+      expect(mindCallReceipts()[0].data).toMatchObject({
+        outcome: 'failed',
+        runId: 'run-0',
+        providerId: 'example-cloud',
+        model: 'example-model',
+        reason: 'provider stream ended without a response',
+      });
+      expect(mindCallReceipts()[0].data.usage.state).toBe('unknown');
+      expect(mock.root.persistentMind.status).toBe('interrupted');
+    });
+
+    it('refuses the next call and retires the wake when a temporary preset is revoked mid-turn', async () => {
+      withDeepPreset();
+      const run = vi.fn(async ({ callBoundary }) => {
+        await callBoundary({ purpose: 'turn', round: 0 }, async () => ({ text: '{}', runId: 'run-0' }));
+        mock.thinkingSession = {
+          ok: false,
+          requiresResubmission: true,
+          error: 'Temporary thinking preset "Deep pass" is no longer available',
+        };
+        await callBoundary({ purpose: 'tool-round', round: 1 }, async () => {
+          throw new Error('this second provider call must never start');
+        });
+        return {};
+      });
+      await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-revoked', text: 'Deep pass please.', thinkingPresetId: 'deep' });
+      await supervisor.drainPersistentMind();
+
+      const receipts = mindCallReceipts();
+      expect(receipts.map((event) => event.data.outcome)).toEqual(['completed', 'denied']);
+      expect(receipts[0].data).toMatchObject({
+        providerId: 'example-alt',
+        model: 'alt-model',
+        effort: 'max',
+        thinkingPresetId: 'deep',
+        temporaryRoute: true,
+      });
+      expect(mock.root.persistentMind.status).toBe('degraded');
+      // A spent temporary session is never replayed automatically.
+      expect(mock.root.persistentMind.queuedMessages).toEqual([]);
+      expect(mock.root.persistentMind.recentMessageIds).toContain('message-revoked');
+    });
+  });
 });
