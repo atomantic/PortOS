@@ -13,10 +13,12 @@ import { sanitizeFilename } from './mimeTypes.js';
 import { isSafeFilename } from './pathSafety.js';
 import {
   asPersistentMindThinkingPresetId,
+  normalizePersistentMindThinkingRequest,
+  normalizePersistentMindThinkingRequests,
   normalizePersistentMindThinkingSelection,
 } from './persistentMindThinkingPresets.js';
 
-export const PERSISTENT_MIND_SCHEMA_VERSION = 7;
+export const PERSISTENT_MIND_SCHEMA_VERSION = 8;
 
 export const PERSISTENT_MIND_IMAGE_EXTENSIONS = Object.freeze(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 export const PERSISTENT_MIND_IMAGE_MIME_TYPES = Object.freeze({
@@ -289,6 +291,7 @@ const sanitizeSelfWake = (value) => {
       : 'requested',
     reason,
     sourceTurnId,
+    ...(value?.thinkingRequest ? { thinkingRequest: normalizePersistentMindThinkingRequest(value.thinkingRequest) } : {}),
     createdAt: asIso(value?.createdAt) || new Date(0).toISOString(),
     notBefore: asIso(value?.notBefore),
   };
@@ -332,6 +335,7 @@ export function createDefaultPersistentMindState() {
     recentMessageIds: [],
     recentMessageFingerprints: [],
     callHistory: [],
+    thinkingRequests: normalizePersistentMindThinkingRequests(),
     lastCompletedTurnId: null,
     lastCompletedAt: null,
     nextEligibleWakeAt: null,
@@ -413,10 +417,16 @@ export function normalizePersistentMindState(raw) {
           if (queuedMessages.length > PERSISTENT_MIND_LIMITS.MAX_QUEUED_MESSAGES) queuedMessages.pop();
         }
       }
-    } else if (!selfWake) {
+    } else if (!selfWake && !activeTurn.wake.thinkingRequest) {
       selfWake = activeTurn.wake;
     }
     activeTurn = null;
+  }
+
+  const thinkingRequests = normalizePersistentMindThinkingRequests(source.thinkingRequests);
+  if (!started) {
+    thinkingRequests.history = thinkingRequests.history.map((entry) => entry.outcome === 'admitted'
+      ? { ...entry, outcome: 'interrupted' } : entry);
   }
 
   return {
@@ -433,6 +443,7 @@ export function normalizePersistentMindState(raw) {
     activeTurn,
     recentMessageIds: recentMessageIds.slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
     recentMessageFingerprints: recentMessageFingerprints.slice(-PERSISTENT_MIND_LIMITS.MAX_RECENT_MESSAGE_IDS),
+    thinkingRequests,
     callHistory: callHistory.slice(-PERSISTENT_MIND_LIMITS.MAX_CALL_HISTORY),
     lastCompletedTurnId: asId(source.lastCompletedTurnId) || null,
     lastCompletedAt: asIso(source.lastCompletedAt),
@@ -518,13 +529,14 @@ export function takeNextPersistentMindWake(raw, now = Date.now()) {
 /**
  * Does abandoning this wake risk repeating work the user may already be billed for?
  *
- * Only an explicitly selected temporary thinking session does: it is the one
+ * Human-selected temporary sessions and approved self-selected wakes consume
+ * an attempt. A human-selected session is the one
  * route the user opted into per-message, and it may sit on an account-backed
  * provider. The home profile is the mind's ordinary heartbeat, so a self-wake
  * or an ordinary message still requeues and retries as before.
  */
 export function persistentMindWakeConsumesAttempt(wake) {
-  return wake?.kind === 'message' && Boolean(wake.message?.thinkingPresetId);
+  return Boolean(wake?.thinkingRequest) || (wake?.kind === 'message' && Boolean(wake.message?.thinkingPresetId));
 }
 
 /**
@@ -536,6 +548,13 @@ export function persistentMindWakeConsumesAttempt(wake) {
 export function holdPersistentMindWake(raw, wake) {
   const state = normalizePersistentMindState(raw);
   const sanitized = sanitizeWake(wake);
+  if (sanitized?.kind === 'self' && sanitized.thinkingRequest) {
+    const { thinkingRequest: _request, ...ordinary } = sanitized;
+    return { ...state, selfWake: state.selfWake || {
+      ...ordinary, reason: 'Resume default after local thinking attempt',
+      notBefore: new Date(Date.now() + PERSISTENT_MIND_LIMITS.MAX_QUIET_MS).toISOString(),
+    } };
+  }
   if (sanitized?.kind !== 'message') return state;
   const { id } = sanitized.message;
   return {

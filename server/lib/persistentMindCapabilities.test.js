@@ -15,6 +15,7 @@ import {
 describe('persistent mind capabilities', () => {
   it('describes every persistent-mind grant from the capability contract', () => {
     expect(PERSISTENT_MIND_TOOL_CATALOG).toEqual([
+      expect.objectContaining({ capability: 'chooseThinkingPreset', defaultEnabled: false }),
       expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', defaultEnabled: false }),
       expect.objectContaining({ id: 'portos.read', capability: 'readPortos', defaultEnabled: false }),
       expect.objectContaining({ id: 'portos.write', capability: 'writePortos', defaultEnabled: false }),
@@ -46,10 +47,10 @@ describe('persistent mind capabilities', () => {
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 2, createTasks: true }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 3, callUser: true }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 5 }).success).toBe(true);
-    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 6 }).success).toBe(false);
+    expect(persistentMindCapabilitiesSchema.safeParse({ schemaVersion: 7 }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ taskModelAllowlist: [{ providerId: 'ollama', model: 'example-local' }] }).success).toBe(true);
     expect(normalizePersistentMindCapabilities({ schemaVersion: 2, createTasks: true }))
-      .toMatchObject({ schemaVersion: 5, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false });
+      .toMatchObject({ schemaVersion: 6, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false });
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: ['example-app', 'second-app'] }).success).toBe(true);
     expect(persistentMindCapabilitiesSchema.safeParse({ allowedAppIds: Array.from({ length: 51 }, (_, index) => `app-${index}`) }).success).toBe(false);
     expect(persistentMindCapabilitiesSchema.safeParse({ createTasks: true, shell: true }).success).toBe(false);

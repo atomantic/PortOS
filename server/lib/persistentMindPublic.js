@@ -29,7 +29,9 @@ const publicActiveRoute = (activeTurn) => {
 // Presentation only — consent already happened at admission, and the resolver
 // re-validates the route against the saved preset before any provider call.
 const publicActiveThinkingSession = (activeTurn) => {
-  const message = activeTurn?.wake?.kind === 'message' ? activeTurn.wake.message : null;
+  const request = activeTurn?.wake?.thinkingRequest;
+  const message = request ? { thinkingPresetId: request.selection.id, thinkingPreset: request.selection }
+    : activeTurn?.wake?.kind === 'message' ? activeTurn.wake.message : null;
   if (!message?.thinkingPresetId) return null;
   const selection = normalizePersistentMindThinkingSelection(message.thinkingPreset);
   return {

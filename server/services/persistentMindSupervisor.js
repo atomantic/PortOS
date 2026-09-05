@@ -54,6 +54,7 @@ import {
 } from './persistentMindCallGuard.js';
 import { appendMindEvent } from './agentRunEventLog.js';
 import { preparePersistentMindContext } from './persistentMindContext.js';
+import { resolvePersistentMindSelfThinkingRequest } from './persistentMindThinkingRequests.js';
 import { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } from './persistentMindProfile.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
@@ -91,7 +92,13 @@ async function mutateMindState(mutator) {
     const root = await loadState();
     const mind = normalizePersistentMindState(root.persistentMind);
     const result = await mutator(mind, root);
-    root.persistentMind = normalizePersistentMindState(result?.mind || mind);
+    const next = result?.mind || mind;
+    const request = mind.activeTurn?.wake?.thinkingRequest;
+    if (request && !next.activeTurn) {
+      next.thinkingRequests.history = next.thinkingRequests.history.map((entry) => entry.requestId === request.requestId
+        ? { ...entry, outcome: next.lastCompletedTurnId === mind.activeTurn.id ? 'completed' : 'failed' } : entry);
+    }
+    root.persistentMind = normalizePersistentMindState(next);
     await saveState(root);
     return { state: root.persistentMind, value: result?.value };
   });
@@ -597,7 +604,7 @@ async function parkActiveTurn(turnId, reason, status = 'waiting', { retryAt = nu
     if (mind.activeTurn?.id !== turnId) return { mind, value: false };
     // Transport/slot waits may retry; a revoked route or uncertain inference
     // requires a fresh user submission.
-    const held = (consumedAttempt || retireWake) && persistentMindWakeConsumesAttempt(mind.activeTurn.wake);
+    const held = (consumedAttempt || retireWake || Boolean(mind.activeTurn.wake.thinkingRequest)) && persistentMindWakeConsumesAttempt(mind.activeTurn.wake);
     const next = held
       ? holdPersistentMindWake(mind, mind.activeTurn.wake)
       : requeuePersistentMindWake(mind, mind.activeTurn.wake);
@@ -633,6 +640,14 @@ async function claimNextTurn() {
     if (root.paused || getDomainMode(root.config, 'cos') !== 'execute') return { mind, value: null };
     const selected = takeNextPersistentMindWake(mind);
     if (!selected.wake) return { mind: selected.state, value: null };
+    if (selected.wake.kind === 'self' && selected.state.thinkingRequests.pending) {
+      selected.wake = { ...selected.wake, thinkingRequest: selected.state.thinkingRequests.pending };
+      selected.state.thinkingRequests = {
+        pending: null,
+        history: selected.state.thinkingRequests.history.map((entry) => entry.requestId === selected.wake.thinkingRequest.requestId
+          ? { ...entry, outcome: 'admitted', admittedAt: nowIso() } : entry),
+      };
+    }
     const id = `mind-turn-${randomUUID()}`;
     const startedAt = nowIso();
     const activeTurn = {
@@ -667,7 +682,7 @@ async function claimNextTurn() {
         wakeKind: result.value.wake.kind,
         wakeId: result.value.wake.id || null,
         messageId: result.value.wake.message?.id || null,
-        thinkingPresetId: result.value.wake.message?.thinkingPresetId || null,
+        thinkingPresetId: result.value.wake.thinkingRequest?.selection.id || result.value.wake.message?.thinkingPresetId || null,
         reason: result.value.wake.reason || null,
       },
     });
@@ -917,14 +932,18 @@ async function runOnePersistentMindTurn() {
       // unchanged default, because the selection lives on the message rather
       // than in config. A preset that has since been removed, retired, or
       // narrowed is a refusal — never a silent return to the default route.
-      const thinkingPresetId = turn.wake.kind === 'message'
+      const selfThinkingRequest = turn.wake.thinkingRequest || null;
+      const thinkingSelection = selfThinkingRequest?.selection || turn.wake.message?.thinkingPreset || null;
+      const thinkingPresetId = selfThinkingRequest?.selection.id || (turn.wake.kind === 'message'
         ? turn.wake.message.thinkingPresetId || null
-        : null;
+        : null);
       const routeConfig = (await loadState()).config;
-      const profile = thinkingPresetId
+      const profile = selfThinkingRequest
+        ? await resolvePersistentMindSelfThinkingRequest({ request: selfThinkingRequest, config: routeConfig })
+        : thinkingPresetId
         ? await resolvePersistentMindThinkingSession({
             presetId: thinkingPresetId,
-            selection: turn.wake.message.thinkingPreset,
+            selection: thinkingSelection,
             config: routeConfig,
           })
         : await resolvePersistentMindProfile(routeConfig?.persistentMindProfile);
@@ -979,11 +998,13 @@ async function runOnePersistentMindTurn() {
       // waits must be refused before even a context-summary call can begin.
       const admissionRoot = await loadState();
       if (thinkingPresetId) {
-        const admissionProfile = await resolvePersistentMindThinkingSession({
-          presetId: thinkingPresetId,
-          selection: turn.wake.message.thinkingPreset,
-          config: admissionRoot.config,
-        });
+        const admissionProfile = selfThinkingRequest
+          ? await resolvePersistentMindSelfThinkingRequest({ request: selfThinkingRequest, config: admissionRoot.config })
+          : await resolvePersistentMindThinkingSession({
+              presetId: thinkingPresetId,
+              selection: thinkingSelection,
+              config: admissionRoot.config,
+            });
         if (!await turnCanContinue(turn.id, generation, controller.signal)) return;
         if (!admissionProfile.ok) {
           await parkActiveTurn(turn.id, admissionProfile.error, 'degraded', { retireWake: admissionProfile.requiresResubmission === true });
@@ -1016,7 +1037,8 @@ async function runOnePersistentMindTurn() {
         thinkingPresetId,
         // The ACCEPTED preset snapshot the message carries (#6283) — never the
         // mutable preset id, which the user can repoint mid-turn.
-        thinkingSelection: thinkingPresetId ? turn.wake.message.thinkingPreset : null,
+        thinkingSelection,
+        selfThinkingRequest,
         capabilityFingerprint: persistentMindCapabilityGrantFingerprint(admissionRoot.config?.persistentMindCapabilities),
         signal: controller.signal,
       });

@@ -21,6 +21,7 @@ import PersistentMindRoutePanel from '../PersistentMindRoutePanel';
 import PersistentMindRuntimePanel, { PersistentMindThoughtStatus } from '../PersistentMindRuntimePanel';
 import PersistentMindSessions from '../PersistentMindSessions';
 import PersistentMindTemporaryRoute from '../PersistentMindTemporaryRoute';
+import PersistentMindThinkingRequests from '../PersistentMindThinkingRequests';
 import PersistentMindThinkingPresets from '../PersistentMindThinkingPresets';
 import PersistentMindVisibilityPanel from '../PersistentMindVisibilityPanel';
 import PersistentMindTools from '../../../pages/PersistentMindTools';
@@ -267,6 +268,7 @@ export default function MindTab() {
           capabilities: response.capabilities,
           imageCapability: response.imageCapability,
           autonomyMode: response.autonomyMode,
+          thinkingRequests: response.thinkingRequests,
           thinkingPresets: response.thinkingPresets?.presets || NO_PRESETS,
           turnExecutions: response.turnExecutions || NO_TURN_EXECUTIONS,
         });
@@ -943,6 +945,12 @@ export default function MindTab() {
           <PersistentMindTools onCapabilitiesChange={(capabilities) => setMind((current) => current ? { ...current, capabilities } : current)} onSavingChange={setCapabilitiesSaving} />
         </div>}
         {(visitedPanels.has('models') || activePanel === 'models') && <div hidden={activePanel !== 'models'} className="space-y-6">
+          <PersistentMindThinkingRequests
+            catalog={mind?.thinkingRequests}
+            capabilities={mind?.capabilities}
+            onSaved={(capabilities) => setMind((current) => ({ ...current, capabilities }))}
+            onCancelled={() => setMind((current) => ({ ...current, thinkingRequests: { ...current.thinkingRequests, pending: null } }))}
+          />
           <PersistentMindThinkingPresets
             presets={thinkingPresets}
             disabled={!mind}

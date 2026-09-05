@@ -14,12 +14,12 @@ import {
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 5;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 6;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -55,6 +55,12 @@ export const PERSISTENT_MIND_CALL_LIMITS = Object.freeze({
 // agents. Keep this catalog beside the capability schema so the API and the UI
 // describe the same grants instead of maintaining a second client-only list.
 export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
+  Object.freeze({
+    id: 'mind.request-thinking-preset', capability: 'chooseThinkingPreset',
+    name: 'Request a local thinking preset', kind: 'semantic-tools', defaultEnabled: false,
+    description: 'Borrow an explicitly approved local API preset for the next self-directed wake.',
+    guardrails: ['One pending or active alternate wake', 'At most three requests per rolling 24 hours, 30 minutes apart', 'No default-profile edits, paid routes, downloads, or permission changes'],
+  }),
   Object.freeze({
     id: 'cos.create-task',
     capability: 'createTasks',
@@ -177,6 +183,8 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
   createTasks: z.boolean().optional(),
   manageMind: z.boolean().optional(),
   callUser: z.boolean().optional(),
+  chooseThinkingPreset: z.boolean().optional(),
+  thinkingPresetAllowlist: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   // An empty list preserves the legacy unrestricted task catalog. Once any
   // entries are configured, requests must name one of these exact pairs.
   taskModelAllowlist: z.array(persistentMindTaskModelAllowlistEntrySchema)
@@ -244,6 +252,9 @@ export function createDefaultPersistentMindCapabilities() {
     manageMind: false,
     manageEidoverse: false,
     callUser: false,
+    chooseThinkingPreset: false,
+    thinkingPresetAllowlist: [],
+    thinkingPresetGrants: {},
     readPortos: false,
     writePortos: false,
     taskModelAllowlist: [],
@@ -297,6 +308,9 @@ export function normalizePersistentMindCapabilities(raw) {
     createTasks: source.createTasks === true,
     manageMind: source.manageMind === true,
     callUser: source.callUser === true,
+    chooseThinkingPreset: source.chooseThinkingPreset === true,
+    thinkingPresetAllowlist: z.array(z.string().min(1).max(64)).max(20).safeParse(source.thinkingPresetAllowlist).data || [],
+    thinkingPresetGrants: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)).safeParse(source.thinkingPresetGrants).data || {},
     ...semanticGrants,
     taskModelAllowlist: taskModelAllowlist.entries,
     // A malformed hand-edited persisted policy must not silently become the

@@ -27,6 +27,7 @@ import { buildPersistentMindCallDenial, buildPersistentMindCallReceipt } from '.
 import { loadState } from './cosState.js';
 import { appendMindEvent } from './agentRunEventLog.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
+import { resolvePersistentMindSelfThinkingRequest } from './persistentMindThinkingRequests.js';
 import { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } from './persistentMindProfile.js';
 
 /** Mind status a denial should park the turn under, by cause. */
@@ -71,6 +72,7 @@ export async function evaluatePersistentMindCallAdmission({
   route,
   thinkingPresetId = null,
   thinkingSelection = null,
+  selfThinkingRequest = null,
   capabilityFingerprint = null,
   signal,
 } = {}) {
@@ -96,7 +98,9 @@ export async function evaluatePersistentMindCallAdmission({
 
   // Provider availability/authorization and preset lifecycle both resolve here:
   // the same exact-or-refuse resolvers the supervisor admitted the turn with.
-  const resolved = thinkingPresetId
+  const resolved = selfThinkingRequest
+    ? await resolvePersistentMindSelfThinkingRequest({ request: selfThinkingRequest, config: root?.config })
+    : thinkingPresetId
     ? await resolvePersistentMindThinkingSession({ presetId: thinkingPresetId, selection: thinkingSelection, config: root?.config })
     : await resolvePersistentMindProfile(root?.config?.persistentMindProfile);
   if (!resolved.ok) {
@@ -139,6 +143,7 @@ export function createPersistentMindCallBoundary({
   route,
   thinkingPresetId = null,
   thinkingSelection = null,
+  selfThinkingRequest = null,
   capabilityFingerprint = null,
   signal,
   now = () => Date.now(),
@@ -171,7 +176,7 @@ export function createPersistentMindCallBoundary({
   };
 
   const call = async ({ purpose, round = null } = {}, run) => {
-    const admission = await evaluate({ turnId, route, thinkingPresetId, thinkingSelection, capabilityFingerprint, signal });
+    const admission = await evaluate({ turnId, route, thinkingPresetId, thinkingSelection, selfThinkingRequest, capabilityFingerprint, signal });
     if (!admission.ok) {
       await writeReceipt({ purpose, round, outcome: 'denied', reason: admission.reason });
       throw buildPersistentMindCallDenial(admission);

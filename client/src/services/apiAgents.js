@@ -53,6 +53,8 @@ export const repairRunRecords = (body = {}, options = {}) =>
 // timed-out request cannot duplicate a message or annotation.
 export const getPersistentMind = (filters = {}, options = {}) =>
   request(`/cos/mind${runEventQuery(filters)}`, options);
+export const cancelPersistentMindThinkingRequest = (options = {}) =>
+  request('/cos/mind/thinking-request', { method: 'DELETE', ...options });
 export const getPersistentMindContext = (options = {}) => request('/cos/mind/context', options);
 export const getPersistentMindTools = (options = {}) => request('/cos/mind/tools', options);
 export const getCosToolCatalog = ({ scope = 'all', format = 'portos', intent, ...options } = {}) => {

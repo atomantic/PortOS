@@ -135,3 +135,34 @@ export function findPersistentMindThinkingPreset(raw, presetId) {
   if (!id) return null;
   return normalizePersistentMindThinkingPresets(raw).presets.find((preset) => preset.id === id) || null;
 }
+
+
+export const persistentMindThinkingRequestSchema = z.object({
+  presetId: persistentMindThinkingPresetSchema.shape.id,
+  reason: z.string().trim().min(1).max(200),
+}).strict();
+
+export const PERSISTENT_MIND_THINKING_LIMITS = Object.freeze({ maxPerRollingDay: 3, rollingWindowMs: 86_400_000, minGapMs: 1_800_000 });
+
+const thinkingRequestRecordSchema = z.object({
+  requestId: z.string().min(1).max(200),
+  turnId: z.string().min(1).max(200),
+  at: z.string().datetime(),
+  admittedAt: z.string().datetime().optional(),
+  reason: z.string().max(200),
+  selection: persistentMindThinkingSelectionSchema,
+  outcome: z.enum(['pending', 'admitted', 'completed', 'failed', 'cancelled', 'interrupted']).optional(),
+  grant: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
+export function normalizePersistentMindThinkingRequest(value) {
+  return thinkingRequestRecordSchema.safeParse(value).data || null;
+}
+
+export function normalizePersistentMindThinkingRequests(value) {
+  return {
+    pending: normalizePersistentMindThinkingRequest(value?.pending),
+    history: (Array.isArray(value?.history) ? value.history : [])
+      .map(normalizePersistentMindThinkingRequest).filter(Boolean).slice(-20),
+  };
+}
