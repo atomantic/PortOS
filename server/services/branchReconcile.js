@@ -32,7 +32,7 @@ import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
-import { readVerdictLedger, partitionSuperseded, recordVerdictInstruction, recordVerdict, sameDirtyPaths } from './supersededLedger.js';
+import { ledgerPath, readVerdictLedger, partitionSuperseded, recordVerdictInstruction, recordVerdict, sameDirtyPaths } from './supersededLedger.js';
 import { backupSupersededBranch } from './supersededBackup.js';
 
 // Never reconciled — the canonical long-lived-branch set (`main`/`master`/`dev`/
@@ -1296,7 +1296,8 @@ const supersessionGate = ({ collisionPaths = [], behind } = {}) => {
     `The default branch has ALSO changed these files since this branch diverged: ${shown.map((p) => `\`${p}\``).join(', ')}${more}.`,
     'For each, read the default branch\'s current version and compare it to what this branch does there. You are looking for one thing: has the default branch already solved this branch\'s problem, by any means? A differently-named function, a policy object where this branch has a boolean, a scheduled tick where this branch has a watcher — all count. It does not need to look like this branch\'s approach to have replaced it.',
     'If it HAS been solved there, this branch is SUPERSEDED: stop, do not commit, rebase, resolve, or merge anything, and report it as superseded naming the file(s) and what on the default branch replaced it. Merging it would undo work already shipped. Say so plainly rather than resolving the conflict — a conflict you can resolve is exactly how a regression gets in looking deliberate.',
-    recordVerdictInstruction(),
+    recordVerdictInstruction(ledgerPath()),
+    'Recording the verdict is the handoff to this scheduled task\'s deterministic cleanup pass. It backs up the branch commits, tracked diff, and untracked files, then removes the worktree and branch on the immediately-following drain pass. Do not describe the surviving branch as work a human must clean up, and do not write the verdict anywhere except the absolute ledger path above — a ledger inside the abandoned worktree is invisible to the running PortOS instance and leaves the branch stranded.',
     'Only once you have confirmed the work is still needed, continue.'
   ].join(' ');
 };
@@ -1350,8 +1351,8 @@ export function desiredEndState(state, actions, { prNumber, worktreePath, collis
     // leaving it for a human, since it converts recoverable scratch state into
     // branch history.
     const where = worktreePath ? `\`${worktreePath}\`` : 'the branch\'s worktree';
-    const assess = `This branch has no commits of its own — its work is sitting UNCOMMITTED in ${where}, the worktree of a CoS agent that is no longer running (it exited, crashed, or was reaped before committing). Nothing is lost, but nothing lands either until someone finishes it. Working INSIDE that worktree, run \`git status\` and \`git diff\` (plus \`git diff\` against untracked files) and read the WHOLE change set before touching anything. Then judge whether it is coherent, finished work: the test suites for the touched workspaces pass, no stub/TODO/placeholder left mid-edit, no half-renamed symbol.`;
-    const bail = 'If it is NOT finished, do not commit it and do not delete it — leave every file exactly as it is and report what the work appears to be, how far it got, and what is missing, so a human can decide whether to finish or discard it.';
+    const assess = `This branch has no commits of its own — its work is sitting UNCOMMITTED in ${where}, the worktree of a CoS agent that is no longer running (it exited, crashed, or was reaped before committing). Nothing is lost, but nothing lands either until you finish it. Working INSIDE that worktree, run \`git status\` and \`git diff\` (plus inspect every untracked file) and read the WHOLE change set before touching anything. Recover the intended deliverable from the task/issue context, the diff, and its tests; then finish incomplete code, remove stubs/TODOs/placeholders, repair half-renamed symbols, and run the touched workspaces' test suites. Do not merely inventory unfinished work and leave it for another run.`;
+    const bail = 'If the work is still needed but you genuinely cannot finish it because required intent, credentials, or an external dependency is unavailable, preserve it and report the concrete blocker. That is the exceptional blocked outcome, not the default for an incomplete diff.';
     const commit = 'If it IS finished, commit it on this branch (a message that states what changed and why — never a bare "wip"), then ship it with `/do:pr --no-merge` (by hand, if slash commands are unavailable: self-review the diff, `git push -u origin <branch>`, then `gh pr create` with a Summary + Test plan).';
     if (!actionOn(actions, 'autoMerge')) {
       return `${stillNeeded} ${assess} ${bail} ${commit} ${verifyGate} Do NOT merge (auto-merge is disabled) — stop once the PR is open and report its URL.`;
@@ -1359,7 +1360,7 @@ export function desiredEndState(state, actions, { prNumber, worktreePath, collis
     return `${stillNeeded} ${assess} ${bail} ${commit} ${verifyGate} ${driveToMerge(pr)}`;
   }
   if (state === 'NEEDS_PR') {
-    const verify = `${stillNeeded} Verify the branch's work is complete and ready (tests pass, no stubs/TODO markers). If NOT ready, report it as incomplete and leave the branch untouched — do not open a half-baked PR.`;
+    const verify = `${stillNeeded} Verify the branch's work is complete and ready (tests pass, no stubs/TODO markers). If it is incomplete, finish it on this branch and verify the completed behavior; do not merely report it for another run, and do not open a half-baked PR. Preserve it without shipping only when required intent, credentials, or an external dependency makes completion genuinely impossible, and report that concrete blocker.`;
     // `--no-merge` is passed explicitly on BOTH paths — not to disable merging,
     // but to keep the merge decision here rather than inside slashdo. Under
     // `--merge`, /do:pr first tries GitHub-native auto-merge and reports the PR
