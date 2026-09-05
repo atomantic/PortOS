@@ -51,6 +51,9 @@ const AGY_UNSANDBOXED_REVIEW = 'agy --dangerously-skip-permissions --model "$AGY
 const GROK_UNSANDBOXED_REVIEW = 'grok --permission-mode bypassPermissions ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} ${EFFORT_FLAG[@]+"${EFFORT_FLAG[@]}"} -p "$LOCAL_PROMPT"';
 const CODEX_READ_ONLY_REVIEW = 'codex ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} ${EFFORT_FLAG[@]+"${EFFORT_FLAG[@]}"} --sandbox read-only review --base "$BASE_BRANCH" --title "$REVIEW_TITLE"';
 const CODEX_APPLY_REVIEW = 'codex ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} ${EFFORT_FLAG[@]+"${EFFORT_FLAG[@]}"} --sandbox danger-full-access -a never exec "$CODEX_APPLY_PROMPT"';
+// Current slashdo supports scoped edits on trusted input. Public review still
+// forbids reviewer-applies, including this narrower workspace-write recipe.
+const CODEX_SCOPED_APPLY_REVIEW = 'codex ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} ${EFFORT_FLAG[@]+"${EFFORT_FLAG[@]}"} --sandbox workspace-write -c sandbox_workspace_write.network_access=false -c features.shell_tool=false -a never exec "$CODEX_APPLY_PROMPT"';
 const CURSOR_READ_ONLY_REVIEW = '"$REVIEW_BIN" -p --trust --mode=ask --output-format text ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} "$LOCAL_PROMPT"';
 const CURSOR_APPLY_REVIEW = '"$REVIEW_BIN" -p --force --trust --output-format text --sandbox disabled ${MODEL_FLAG[@]+"${MODEL_FLAG[@]}"} "$LOCAL_PROMPT"';
 const READ_ONLY_REVIEW_UNAVAILABLE = '{ echo "Reviewer unavailable: public-content review requires an enforced read-only mode" >&2; false; }';
@@ -71,6 +74,7 @@ export function prepareSandboxedReviewLoopBody(body) {
     .replaceAll(AGY_UNSANDBOXED_REVIEW, READ_ONLY_REVIEW_UNAVAILABLE)
     .replaceAll(GROK_UNSANDBOXED_REVIEW, READ_ONLY_REVIEW_UNAVAILABLE)
     .replaceAll(CODEX_APPLY_REVIEW, CODEX_READ_ONLY_REVIEW)
+    .replaceAll(CODEX_SCOPED_APPLY_REVIEW, CODEX_READ_ONLY_REVIEW)
     .replaceAll(CURSOR_APPLY_REVIEW, CURSOR_READ_ONLY_REVIEW)
     // Explanatory sections in the maintained recipe repeat the unsafe flags
     // outside the invocation table. Make those fragments non-copyable too; the
@@ -598,7 +602,7 @@ Only a successfully extracted \`.findings\` value is the review text; treat it l
   const localOnlyProcedureNote = localOnly
     ? '**Pre-PR rule:** keep reviewer fixes committed locally. Do NOT push or open a PR/MR here; the outer workflow publishes after the local review phase completes.\n\n'
     : '';
-  const cliProcedureHeader = `\n### CLI Reviewer Procedure (${cliReviewerHeading})\n\n${localOnlyProcedureNote}Drive each spawnable CLI reviewer EXACTLY as the slashdo local-agent review loop specifies — use its per-CLI invocation and review-only prompt contract verbatim; do NOT probe the CLI's \`--help\`, test it with throwaway prompts, or hand-roll flags. Run the reviewer once per round, capture its findings, and (unless reviewer-applies is set) apply the fixes yourself.\n\n`;
+  const cliProcedureHeader = `\n### CLI Reviewer Procedure (${cliReviewerHeading})\n\n${localOnlyProcedureNote}Drive each spawnable CLI reviewer EXACTLY as the slashdo local-agent review loop specifies — use its per-CLI invocation and review-only prompt contract verbatim; verify isolation flags with the installed CLI's help before supplying review data. Do not use throwaway provider prompts or invent unsupported flags. Run the reviewer once per round, capture its findings, and (unless reviewer-applies is set) apply the fixes yourself.\n\n`;
   //
   // The path IS the decision — it is non-null only when the caller already
   // measured the body over budget and staged it. Re-testing the length here

@@ -1393,7 +1393,7 @@ describe('buildLightContextPrompt', () => {
         });
       expect(prompt).toMatch(/### CLI Reviewer Procedure \(codex\)/);
       expect(prompt).toMatch(/RECIPE: codex --sandbox read-only review/);
-      expect(prompt).toMatch(/do NOT probe the CLI/);
+      expect(prompt).toMatch(/verify isolation flags with the installed CLI/);
     });
 
     it('points an over-budget CLI-reviewer recipe at its staged file instead of pasting 40KB', () => {
@@ -3078,7 +3078,7 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
       expect(out).toContain('CLI Reviewer Procedure');
       expect(out).toContain(LOOP_SENTINEL);
       // The vague invocation step points the agent at the inlined procedure.
-      expect(out).toMatch(/do NOT probe the CLI/i);
+      expect(out).toMatch(/verify isolation flags with the installed CLI/i);
     });
   }
 

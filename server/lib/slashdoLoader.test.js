@@ -46,6 +46,28 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     expect(await loadSlashdoLib('example')).toContain('SUBPROCESS');
   });
 
+  it('renders the bundled scoped review without rejecting it or enabling public edits', async () => {
+    const { buildReviewLoopFollowUpSection } = await import('../services/promptSections/reviewLifecycle.js');
+    const recipe = readFileSync(new URL('../../lib/slashdo/lib/local-agent-review-loop.md', import.meta.url), 'utf8');
+    write(join(fixtureRoot, 'lib/scoped-review.md'), recipe);
+    const body = await loadSlashdoLib('scoped-review');
+    const prompt = buildReviewLoopFollowUpSection(
+      { reviewLoopReviewers: ['claude', 'antigravity', 'codex'], reviewLoopReviewerApplies: true },
+      { localOnly: true, baseBranch: 'main', localAgentLoopBody: body },
+    );
+
+    expect(prompt).not.toContain('entire recipe was rejected');
+    expect(prompt).toContain('--tools "Read,Glob,Grep" --allowedTools "Read,Glob,Grep"');
+    expect(prompt).toContain('--strict-mcp-config');
+    expect(prompt).toContain('disableAllHooks');
+    expect(prompt).toMatch(/Inlining a\s+diff alone is not tool isolation/);
+    expect(prompt).toContain('--sandbox read-only review --base');
+    expect(prompt).not.toContain('--sandbox workspace-write');
+    expect(prompt).not.toContain('--sandbox danger-full-access');
+    expect(prompt).not.toContain('agy --dangerously');
+    expect(prompt).toContain('Reviewer applies (off)');
+  });
+
   it('keeps inline reviewer recipes limited to explicit reads', async () => {
     write(join(fixtureRoot, 'lib/recipe.md'), 'Recipe\n!read lib/required.md\nSee `lib/unrelated.md`.');
     write(join(fixtureRoot, 'lib/required.md'), 'Required verification');
