@@ -544,22 +544,118 @@ export const withStaleAntigravityPin = (provider, models, selectedModel) => {
 };
 
 /**
+ * The model ids in a signed-in ChatGPT account's catalog, or `null` when the
+ * catalog is not a SUCCESSFUL read.
+ *
+ * The server ships `{ models, fetchedAt, error }` on a Codex-subscription
+ * provider (`codexModelCatalog`), and all three states are distinct:
+ * `models: null` = never fetched, a set `error` = the last read failed (the
+ * list, if any, is only last-known-good), and `[]` = this account genuinely
+ * exposes no models. Only the last two of those are answers about the account,
+ * so a never-fetched or failed read collapses to `null` here and the caller
+ * keeps its shipped list — an offline or signed-out user must never be handed
+ * an empty dropdown.
+ *
+ * CLIENT-ONLY (no server mirror).
+ * @param {{codexModelCatalog?:{models?:unknown, error?:unknown}}|null|undefined} provider
+ * @returns {string[]|null}
+ */
+export const codexCatalogModelIds = (provider) => {
+  if (!isCodexSubscriptionProvider(provider)) return null;
+  const catalog = provider?.codexModelCatalog;
+  if (!catalog || catalog.error || !Array.isArray(catalog.models)) return null;
+  return catalog.models
+    .map((entry) => (typeof entry === 'string' ? entry : entry?.id))
+    .filter((id) => typeof id === 'string' && id !== '');
+};
+
+/**
+ * The RAW model list a picker should read for a provider, before any
+ * sentinel/effort/hardware filtering: the signed-in ChatGPT account's own
+ * catalog when one has been fetched, otherwise the provider's configured
+ * `models` — falling back to its `defaultModel` when that list is empty (a
+ * cloud/manual provider configured with only a default; `[]` is truthy, so a
+ * bare `||` would leave such a picker empty).
+ *
+ * This is the single place the account catalog enters a picker, so a caller
+ * that reads `provider.models` directly is the one bug this exists to prevent
+ * (#6306). A successfully-read EMPTY catalog is returned as `[]` and must not
+ * fall through to `defaultModel`: the account really has no models, and
+ * offering its default would put back the un-runnable option.
+ *
+ * CLIENT-ONLY (no server mirror).
+ * @param {{models?:unknown[], defaultModel?:string}|null|undefined} provider
+ * @returns {unknown[]}
+ */
+export const providerModelList = (provider) => {
+  const catalog = codexCatalogModelIds(provider);
+  if (catalog) return catalog;
+  return provider?.models?.length ? provider.models : [provider?.defaultModel];
+};
+
+/** Where a picker's option list came from. */
+export const MODEL_SOURCE = Object.freeze({
+  /** The provider's shipped/configured `models` array. */
+  shipped: 'shipped',
+  /** The signed-in ChatGPT account's own catalog. */
+  account: 'account',
+  /** The account was read successfully and exposes no models. */
+  accountEmpty: 'account-empty',
+});
+
+/**
+ * The option list for a picker, plus WHERE it came from.
+ *
+ * For a Codex-subscription provider whose account catalog has been fetched, the
+ * options are that account's real models — so a tier the plan cannot run is not
+ * selectable and cannot be queued against a worktree that would only fail later.
+ * Every other state (never fetched, failed read, non-Codex provider) falls back
+ * to the shipped list unchanged.
+ *
+ * ADDITIVE: a stored `selectedModel` the catalog no longer lists is retained as
+ * its own option and reported via `unlistedSelection`, so an existing task
+ * template renders what it actually holds instead of silently changing model.
+ *
+ * CLIENT-ONLY (no server mirror).
+ * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
+ * @param {string|null|undefined} selectedModel
+ * @returns {{models: unknown[], source: string, unlistedSelection: boolean}}
+ */
+export const resolveProviderModelOptions = (provider, selectedModel) => {
+  const shipped = withStaleAntigravityPin(
+    provider,
+    filterSelectableModels(selectableModelsForProvider(provider, provider?.models)),
+    selectedModel,
+  );
+  const catalog = codexCatalogModelIds(provider);
+  if (!catalog) return { models: shipped, source: MODEL_SOURCE.shipped, unlistedSelection: false };
+  const models = filterSelectableModels(catalog);
+  const unlistedSelection = !!selectedModel
+    && !isConfiguredDefaultModel(selectedModel)
+    && !models.includes(selectedModel);
+  return {
+    models: unlistedSelection ? [...models, selectedModel] : models,
+    source: models.length > 0 ? MODEL_SOURCE.account : MODEL_SOURCE.accountEmpty,
+    unlistedSelection,
+  };
+};
+
+/**
  * The option list for a picker that renders an effort control but reads
  * `provider.models` directly (no `useProviderModels`): base models, sentinels
  * stripped, plus any legacy suffixed pin so the stored value stays visible.
  * The hook's own list is assembled from the same two primitives, so the two
- * paths can't drift.
+ * paths can't drift. Codex-subscription providers resolve through
+ * `resolveProviderModelOptions`, so every picker offers the same account-aware
+ * answer without each one reimplementing the fallback.
  *
  * CLIENT-ONLY (no server mirror).
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null|undefined} selectedModel
  * @returns {unknown[]}
  */
-export const effortAwareModelOptions = (provider, selectedModel) => withStaleAntigravityPin(
-  provider,
-  filterSelectableModels(selectableModelsForProvider(provider, provider?.models)),
-  selectedModel,
-);
+export const effortAwareModelOptions = (provider, selectedModel) =>
+  resolveProviderModelOptions(provider, selectedModel).models;
 
 /**
  * The model a run will ACTUALLY use: the explicit pin, else the provider's own

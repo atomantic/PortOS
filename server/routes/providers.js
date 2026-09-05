@@ -26,6 +26,7 @@ import { isCodexSubscriptionProvider } from '../lib/codexAccount.js';
 import {
   cancelCodexChatGptLogin,
   peekCodexAccountReadiness,
+  peekCodexModelCatalog,
   codexLogout,
   listCodexModels,
   getCodexAccountReadiness,
@@ -189,13 +190,18 @@ export function createPortOSProviderRoutes(aiToolkit) {
     // `null` here means NOT PROBED, and the dedicated `/codex/account` fetch is
     // what fills it — a card renders "unknown", never "signed out", until then.
     const codexAccount = peekCodexAccountReadiness();
+    // Same cache-only contract, for the CoS/model pickers (#6306): the signed-in
+    // account's real catalog when one has been fetched, otherwise the three-state
+    // shape that tells the client to keep showing its shipped list. Rendering a
+    // picker must never be what starts `codex app-server`.
+    const codexModelCatalog = peekCodexModelCatalog();
     res.json({
       activeProvider: data.activeProvider,
       providers: data.providers.map((provider) => ({
         ...presentProvider(provider, capabilities),
         prerequisitesMet: prerequisites[provider.id]?.met ?? true,
         missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
-        ...(isCodexSubscriptionProvider(provider) ? { codexAccount } : {}),
+        ...(isCodexSubscriptionProvider(provider) ? { codexAccount, codexModelCatalog } : {}),
       })),
       runnerAllowedCommands: RUNNER_ALLOWED_COMMANDS
     });

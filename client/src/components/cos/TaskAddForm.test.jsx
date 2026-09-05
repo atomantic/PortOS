@@ -14,6 +14,9 @@ const api = vi.hoisted(() => ({
   applyCosTaskTemplate: vi.fn(),
   addCosTask: vi.fn(),
   getOrchestrationProfiles: vi.fn(),
+  // Declared so the render-path assertion below is real: the picker must read the
+  // cached catalog off the provider payload, never fetch one of its own (#6306).
+  getCodexModels: vi.fn(),
 }));
 
 // useAssignableInstances reads the instance registry straight off apiSystem, so
@@ -717,5 +720,78 @@ describe('TaskAddForm worktree/PR defaults', () => {
         );
       });
     });
+  });
+});
+
+// #6306: a Codex task must not be queued against a model the signed-in ChatGPT
+// account cannot run — and a cold/failed catalog must not empty the dropdown.
+describe('TaskAddForm Codex model catalog', () => {
+  const SHIPPED = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.4'];
+  const codexProvider = (codexModelCatalog) => ({
+    id: 'codex',
+    name: 'Codex CLI',
+    type: 'cli',
+    command: 'codex',
+    enabled: true,
+    models: SHIPPED,
+    codexModelCatalog,
+  });
+
+  const renderWithCodex = async (catalog) => {
+    const user = userEvent.setup();
+    render(
+      <TaskAddForm
+        providers={[codexProvider(catalog)]}
+        apps={[{ id: 'example-app', name: 'Example App', repoPath: 'example.com/repo' }]}
+        defaultApp="example-app"
+        onTaskAdded={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(screen.getByLabelText('AI provider')).not.toBeDisabled());
+    await user.selectOptions(screen.getByLabelText('AI provider'), 'codex');
+    return user;
+  };
+
+  const modelValues = () =>
+    Array.from(screen.getByLabelText('AI model').querySelectorAll('option'))
+      .map((option) => option.value)
+      .filter(Boolean);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getCosPopularTemplates.mockResolvedValue({ templates: [] });
+    api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
+    api.getAppWorkTracker.mockResolvedValue({ resolved: 'github' });
+    api.getAppRepositorySources.mockResolvedValue({
+      issueTargets: { default: 'origin', canChoose: false, origin: { fullName: 'example-org/example-app' }, upstream: { fullName: 'example-org/example-app' } },
+    });
+    api.applyCosTaskTemplate.mockResolvedValue({ success: true });
+    api.getOrchestrationProfiles.mockResolvedValue({ profiles: [] });
+    apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
+  });
+
+  it('offers the signed-in account catalog, and never fetches one from a render', async () => {
+    await renderWithCodex({ models: [{ id: 'gpt-5.4' }, { id: 'gpt-5.4-mini' }], fetchedAt: 1, error: null });
+
+    expect(modelValues()).toEqual(['gpt-5.4', 'gpt-5.4-mini']);
+    expect(screen.getByText(/signed-in ChatGPT account can run/i)).toBeInTheDocument();
+    // Rendering a picker must not be what starts `codex app-server`.
+    expect(api.getCodexModels).not.toHaveBeenCalled();
+  });
+
+  it('keeps the shipped list, and says so, when the catalog failed to load', async () => {
+    await renderWithCodex({ models: null, fetchedAt: null, error: { code: 'protocol', message: 'boom' } });
+
+    expect(modelValues()).toEqual(SHIPPED);
+    expect(screen.getByText(/bundled list/i)).toBeInTheDocument();
+  });
+
+  it('explains a successfully-read empty catalog instead of rendering a blank control', async () => {
+    await renderWithCodex({ models: [], fetchedAt: 1, error: null });
+
+    expect(screen.queryByLabelText('AI model')).not.toBeInTheDocument();
+    expect(screen.getByText(/exposes no models/i)).toBeInTheDocument();
   });
 });

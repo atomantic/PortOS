@@ -79,6 +79,10 @@ import {
   selectableModelsForProvider,
   withStaleAntigravityPin,
   effortAwareModelOptions,
+  resolveProviderModelOptions,
+  codexCatalogModelIds,
+  providerModelList,
+  MODEL_SOURCE,
   effectiveModelFor,
   effortSurvivingModel,
   seedModelEffort,
@@ -330,6 +334,80 @@ describe('Antigravity base-model split (server mirror)', () => {
       const codex = { id: 'codex', command: 'codex', models: ['gpt-5', 'gpt-5-mini'] };
       expect(effortAwareModelOptions(codex, 'gpt-5')).toEqual(['gpt-5', 'gpt-5-mini']);
       expect(effortAwareModelOptions(null, '')).toEqual([]);
+    });
+  });
+
+  // #6306: the CoS picker must offer the SIGNED-IN account's catalog, and must
+  // never be emptied by a cold cache or a failed read.
+  describe('resolveProviderModelOptions (Codex account catalog)', () => {
+    const SHIPPED = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.4'];
+    const codex = (codexModelCatalog) => ({
+      id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', models: SHIPPED, codexModelCatalog,
+    });
+
+    it('offers the account catalog when one was fetched', () => {
+      const result = resolveProviderModelOptions(
+        codex({ models: [{ id: 'gpt-5.4' }, { id: 'gpt-5.4-mini' }], fetchedAt: 1, error: null }),
+        'gpt-5.4',
+      );
+      expect(result.models).toEqual(['gpt-5.4', 'gpt-5.4-mini']);
+      expect(result.source).toBe(MODEL_SOURCE.account);
+      expect(result.unlistedSelection).toBe(false);
+    });
+
+    it('keeps the shipped list for a never-fetched catalog and for a failed read', () => {
+      for (const catalog of [
+        undefined,
+        { models: null, fetchedAt: null, error: null },
+        { models: null, fetchedAt: null, error: { code: 'protocol', message: 'boom' } },
+        // A failed read hands back a LAST-KNOWN-GOOD list, which is not an answer
+        // about the account either — the shipped list stands.
+        { models: [{ id: 'gpt-5.4' }], fetchedAt: 1, error: { code: 'protocol', message: 'boom' } },
+      ]) {
+        const result = resolveProviderModelOptions(codex(catalog), '');
+        expect(result.models).toEqual(SHIPPED);
+        expect(result.source).toBe(MODEL_SOURCE.shipped);
+      }
+    });
+
+    it('reports a successfully-read empty catalog as its own state, not as shipped', () => {
+      const result = resolveProviderModelOptions(codex({ models: [], fetchedAt: 1, error: null }), '');
+      expect(result.models).toEqual([]);
+      expect(result.source).toBe(MODEL_SOURCE.accountEmpty);
+    });
+
+    it('retains a stored model the catalog no longer lists, flagged', () => {
+      const result = resolveProviderModelOptions(
+        codex({ models: [{ id: 'gpt-5.4' }], fetchedAt: 1, error: null }),
+        'gpt-6-astra',
+      );
+      expect(result.models).toEqual(['gpt-5.4', 'gpt-6-astra']);
+      expect(result.unlistedSelection).toBe(true);
+    });
+
+    it('leaves a non-subscription provider on its own catalog', () => {
+      const agy = { id: 'antigravity-cli', command: 'agy', models: CATALOG, codexModelCatalog: { models: [], error: null } };
+      expect(resolveProviderModelOptions(agy, '').source).toBe(MODEL_SOURCE.shipped);
+      expect(codexCatalogModelIds({ codexModelCatalog: { models: null, error: null } })).toBeNull();
+    });
+
+    it('is the raw list every other picker reads, so none reimplements the fallback', () => {
+      // providerModelList is the ONE place the account catalog enters a picker —
+      // useProviderModels, AppProviderPin and the allowlist controls all read it.
+      expect(providerModelList(codex({ models: [{ id: 'gpt-5.4' }], fetchedAt: 1, error: null })))
+        .toEqual(['gpt-5.4']);
+      expect(providerModelList(codex({ models: null, fetchedAt: null, error: null }))).toEqual(SHIPPED);
+      // A successfully-read EMPTY catalog must NOT fall through to defaultModel:
+      // the account really has no models, and the default is one of them.
+      expect(providerModelList({ ...codex({ models: [], fetchedAt: 1, error: null }), models: [], defaultModel: 'gpt-6-astra' }))
+        .toEqual([]);
+      // Non-Codex providers keep the defaultModel fallback for an empty list.
+      expect(providerModelList({ id: 'x', models: [], defaultModel: 'only-default' })).toEqual(['only-default']);
+    });
+
+    it('is what effortAwareModelOptions returns, so every picker agrees', () => {
+      const provider = codex({ models: [{ id: 'gpt-5.4' }], fetchedAt: 1, error: null });
+      expect(effortAwareModelOptions(provider, '')).toEqual(resolveProviderModelOptions(provider, '').models);
     });
   });
 
