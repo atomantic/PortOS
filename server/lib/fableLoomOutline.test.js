@@ -264,3 +264,12 @@ describe('FableLoom story beat outlines', () => {
     }));
   });
 });
+
+it('measures audience introduction in dramatic scenes after a shot split', () => {
+  const scenes = Array.from({ length: 6 }, (_, index) => ({ key: `shot-${index}`, title: `Shot ${index}`, summary: 'An opening action.', playbackMode: 'cut', audienceConnection: index >= 4 ? 'connected' : 'disconnected', isEnding: index === 5, transitions: index < 5 ? [{ targetKey: `shot-${index + 1}`, intent: 'continue' }] : [] }));
+  const outline = { startKey: 'shot-0', scenes };
+  const options = { participationMode: 'helper', requireAudienceIntroduction: true };
+  expect(analyzeStoryOutline(outline, options).issues.some((issue) => issue.code === 'LATE_AUDIENCE_CONNECTION')).toBe(true);
+  const nodes = scenes.map((scene, index) => ({ id: scene.key, shot: { dramaticSceneId: index < 4 ? 'opening' : 'invitation' } }));
+  expect(analyzeStoryOutline(outline, { ...options, nodes }).issues.some((issue) => issue.code === 'LATE_AUDIENCE_CONNECTION')).toBe(false);
+});

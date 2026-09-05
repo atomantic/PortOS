@@ -26,7 +26,8 @@ You are the story editor for an interactive branching series. Apply the author's
 - Reordering is separate: include the existing ids to move in the desired relative order. Items omitted from an order array remain after the explicitly ordered items.
 - Episode references must use an episode id from the supplied outline or `null`.
 - Side-quest status is one of `idea`, `planned`, `active`, or `resolved`.
-- Do not change episode titles, synopses, scenes, paths, or ids in this pass.
+- Keep episode synopses consistent with the revised arc using sparse `episodeSynopsisEdits` for existing episode ids. Do not change episode titles, beat outlines, scenes, paths, or ids in this pass.
+- Keep plot-point descriptions under 4000 characters. Summarize their dramatic job; do not duplicate full episode beat outlines or put temporary workflow status in the story arc.
 
 Return ONLY valid JSON matching this shape, omitting unchanged top-level fields:
 
@@ -34,6 +35,7 @@ Return ONLY valid JSON matching this shape, omitting unchanged top-level fields:
 {
   "storyArc": "complete revised arc",
   "plotPointEdits": [{ "id": "existing id, or omit for new", "title": "only when changed", "description": "only when changed", "episodeId": "episode id or null, only when changed", "remove": false }],
+  "episodeSynopsisEdits": [{ "id": "existing episode id", "synopsis": "complete revised synopsis" }],
   "plotPointOrder": ["existing plot-point id"],
   "sideQuestEdits": [{ "id": "existing id, or omit for new", "title": "only when changed", "description": "only when changed", "status": "planned", "startEpisodeId": "episode id or null", "endEpisodeId": "episode id or null", "remove": false }],
   "sideQuestOrder": ["existing side-quest id"],

@@ -60,8 +60,11 @@ const EXPECTED_STAGE_OLD = {
   'fableloom-play-turn.md': ['bb33dc9bc483668d88196ca972d5f364'],
   'fableloom-feedback-episode.md': ['43d1525fcedce99b933ae5b003516a36', 'd09bb405478d24c294b0c658ef365cd1'],
   'fableloom-review.md': ['2802f269f246e00ec5a8937637d42de6'],
-  'fableloom-outline-episode.md': ['3f5144103b2ab6203fa071ff5026251b', '513b2b5b8fa98766852cdde7b87198c9'],
-  'fableloom-review-episode-outline.md': ['96d631104155ff11be08bcc5144cca1c'],
+  'fableloom-outline-episode.md': ['3f5144103b2ab6203fa071ff5026251b', '513b2b5b8fa98766852cdde7b87198c9', '820b8c157c1977b34eb317e44236519e'],
+  'fableloom-review-episode-outline.md': ['96d631104155ff11be08bcc5144cca1c', '8154b4c289b10268df8fd3c625bcdac2'],
+  'fableloom-feedback-series-plan.md': ['6c4f6c846acc6186eaa8da297080b9d9'],
+  'fableloom-plan-shots.md': ['4cf0fb96d4e9a17a8ae8285ec134f37f'],
+  'fableloom-review-shots.md': ['699ba1189f67338728b74834269759a9'],
   'fableloom-generate-series-plan.md': ['2591cf4ca6cc160765f029fcc497dc35'],
 };
 const EXPECTED_STAGE_NEW = {
@@ -101,8 +104,11 @@ const EXPECTED_STAGE_NEW = {
   'fableloom-play-turn.md': 'e35ad91aae263e3adf28d1e047a46661',
   'fableloom-feedback-episode.md': '1aaa6f17acad6a3215e48dcce14e8670',
   'fableloom-review.md': 'c26a641f6d0530caef7d1186c3b09937',
-  'fableloom-outline-episode.md': '820b8c157c1977b34eb317e44236519e',
-  'fableloom-review-episode-outline.md': '8154b4c289b10268df8fd3c625bcdac2',
+  'fableloom-outline-episode.md': '2ff6fb72777ff0c6fc70f3afd0ddfd53',
+  'fableloom-review-episode-outline.md': '0f549ed25dea8566ce2d3c515968783b',
+  'fableloom-feedback-series-plan.md': '2d1b40041223baa02a1517a102f103c2',
+  'fableloom-plan-shots.md': '9b1cd4b406ee327d6dc3fcbd57b48483',
+  'fableloom-review-shots.md': '8cf5fe685cc5f75537caddea1d272a00',
   'fableloom-generate-series-plan.md': '27336d8c64e6193aecd1ba697f52315e',
 };
 const EXPECTED_PARTIAL_OLD = {

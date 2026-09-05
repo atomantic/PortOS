@@ -81,6 +81,7 @@ function FindingLink({ loom, finding }) {
 /** Whole-series one-pass editor, bounded editor/reviewer autopilot, and playthrough QA. */
 export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
   const [route, setRoute] = useState({ providerId: '', model: '', effort: '' });
+  const [mode, setMode] = useState(() => loom.episodes.some((episode) => episode.nodes?.length) ? 'series' : 'planning');
   const [maxRounds, setMaxRounds] = useState(3);
   const [selfImprove, setSelfImprove] = useState(false);
   const [result, setResult] = useState(null);
@@ -104,7 +105,16 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
     handledTerminalRunRef.current = null;
     let ignore = false;
     getLoomEditorialAutopilotStatus(loom.id, { silent: true })
-      .then(({ run }) => { if (!ignore && run) setAutopilotRun(run); })
+      .then(({ run }) => {
+        if (ignore || !run) return;
+        setAutopilotRun(run);
+        if (ACTIVE_STATUSES.has(run.status)) {
+          setRoute({ providerId: run.route?.providerId || '', model: run.route?.model || '', effort: run.route?.effort || '' });
+          setMode(run.mode || 'series');
+          setMaxRounds(run.maxRounds);
+          setSelfImprove(run.selfImproveEnabled === true);
+        }
+      })
       .catch(() => {});
     return () => { ignore = true; };
   }, [loom.id]);
@@ -173,6 +183,7 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
     const run = await startLoomEditorialAutopilot(loom.id, {
       ...routeBody,
       maxRounds,
+      ...(mode === 'planning' ? { mode } : {}),
       ...(selfImprove ? { selfImprove: true } : {}),
     }, { silent: true });
     handledTerminalRunRef.current = null;
@@ -208,7 +219,7 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
     ? response?.passed
     : shownRun?.status === 'completed' || diagnostics?.passed;
   const resultHeading = passed
-    ? 'Series clears the current editorial gates'
+    ? (shownRun?.mode === 'planning' ? 'Series planning is ready for scene expansion' : 'Series clears the current editorial gates')
     : shownRun?.status === 'failed'
       ? 'Editorial automation needs attention'
       : shownRun?.status === 'canceled'
@@ -229,7 +240,9 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
             <BrainCircuit size={16} className="text-port-accent" /> AI editor, reviewer & playtest
           </h3>
           <p className="mt-1 text-xs text-port-text-muted max-w-3xl">
-            One editor can evaluate and safely repair the complete series. Autopilot alternates that editor with an independent review of every enumerated gameplay path until the story passes or reaches its bounded round limit. Rejected graph patches are corrected with validator feedback before a run can fail.
+            {mode === 'planning'
+              ? 'Review the series arc and challenges, then draft and check each episode’s camera-cut outline. Resolve planning problems before writing the teleplay or generating media.'
+              : 'Evaluate and repair the complete teleplay, then independently review every enumerated gameplay path. Autopilot repeats until the story passes or reaches its round limit.'}
           </p>
         </div>
         {shownRun ? (
@@ -241,6 +254,14 @@ export default function LoomEditorialAutomation({ loom, dirty, onLoomUpdate }) {
         ) : null}
       </div>
 
+      <div>
+        <label htmlFor="fableloom-autopilot-mode" className="block text-xs text-port-text-muted mb-1">Autopilot stage</label>
+        <select id="fableloom-autopilot-mode" value={mode} onChange={(event) => setMode(event.target.value)} disabled={busy} className="w-full min-h-11 rounded border border-port-border bg-port-bg px-3 text-sm">
+          <option value="planning">Plan the series before writing scenes</option>
+          <option value="series">Edit and playtest the complete teleplay</option>
+        </select>
+        <p className="mt-1 text-xs text-port-text-muted">Planning reviews the arc first, then drafts and reviews each episode outline in order. It stops before scene expansion or media generation.</p>
+      </div>
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_9rem]">
         <ProviderModelSelector
           providers={providers}

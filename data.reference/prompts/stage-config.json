@@ -1093,6 +1093,27 @@
       "model": "heavy",
       "returnsJson": true,
       "variables": []
+    },
+    "fableloom-plan-shots": {
+      "name": "FableLoom — Plan Timed Shots",
+      "description": "Episode-scoped short-shot production planning before media generation.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": [
+        "source",
+        "guidance",
+        "feedback"
+      ]
+    },
+    "fableloom-review-shots": {
+      "name": "FableLoom — Review Timed Shots",
+      "description": "Episode-scoped short-shot production planning before media generation.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": [
+        "source",
+        "shots"
+      ]
     }
   }
 }

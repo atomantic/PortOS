@@ -8,6 +8,33 @@ decision nodes loop while the viewer chooses a path or gives free-text
 feedback—when that story's audience role permits it. A loom holds one or more ordered episodes, and the Play surface can
 rehearse the same experience at any of those three production stages.
 
+## Planning a series
+
+The series editor has separate, linkable sections for the arc, plot points and
+challenges, side quests, episode outlines, AI editing, and viewer handoffs.
+Save remains visible while the selected section scrolls. Plot points and side
+quests show compact expandable summaries; adding an item opens it and focuses
+its title without changing the order of existing beats. Drafts survive section
+changes.
+
+Create the intended episode slots and assign plot points and playable challenges
+before starting **Plan the series before writing scenes** in the AI editor.
+This explicit autopilot mode reviews the plan first, repairs concrete findings,
+then drafts and reviews each episode outline in order with bounded retries.
+Plan edits can synchronize existing episode synopses while preserving episode
+titles and scene graphs. Advice for later prose expansion does not force another
+outline rewrite. The first episode also receives a cold opening review: only its
+first three dramatic groups are supplied (or three beats before shot splitting),
+stopping at the first decision, without synopsis, canon or later payoffs. Missing
+immediate motivation, orientation or understandable personal stakes blocks planning
+before the full contextual review. A missing verdict is not approval.
+Each outline scene represents one camera-cut beat, not a complete dramatic scene.
+Plot points assigned to another episode cannot be expanded into the current
+episode. Deterministic validation must pass across the complete arc. Planning does not
+expand scenes, render media, or set editorial production approval. Choose the
+episode to expand afterward; later episodes may remain outlines for human review.
+The complete-teleplay editor/playtest mode remains available separately.
+
 ## Concepts
 
 | Term | Meaning |
@@ -327,3 +354,33 @@ as Games / Creative Director:
 - The link is soft in both directions — deleting a series is never blocked by a
   loom pointing at it, and the loom editor's series backlink renders **no chip**
   (rather than a dead link) once the series is gone.
+
+### Timed shots before media
+
+In the episode outline editor, **Preview shot split** drafts and reviews a camera-cut plan without replacing the episode. **Run shot autopilot** applies the plan after deterministic timing/graph checks and an explicit editorial pass. Both use the selected provider, model, and effort. A changed source invalidates a preview; failed reviews leave the episode intact. Applying replaces that episode's scene media bindings, so finish this stage before generating images.
+
+A dramatic scene groups multiple shot nodes. Each shot records its framing and a 5–10 second intended duration. Dialogue is budgeted at 2.2 words per second with 1.5 seconds reserved for pauses/action. The editor shows overflow and production batches refuse oversized timed shots. This is a planning estimate; spoken delivery still needs review. A decision's question is staged before a quiet loop, which can repeat while the viewer chooses. The server preserves the existing branch targets and outcomes when splitting.
+
+Draft visual bindings can select a character image from the gallery. This fixed identity anchor accompanies subsequent shots and branches without changing the Universe's approved identity pack. Locked production continues to require approved canon; selecting a draft reference does not approve it. Draft anchors travel with the FableLoom asset manifest when sharing is enabled.
+
+### Reactor video previews
+
+Reactor FastH3 uses a live SDK session: upload the storyboard image, enqueue one
+shot, play it once, capture its video and native audio, then disconnect. Install
+the pinned SDK with `npm run setup:reactor` (Python 3.11+ and ffmpeg required).
+`REACTOR_PYTHON_PATH` can select an existing SDK environment. Installation is
+explicit; starting PortOS never installs or opens a Reactor session.
+
+The outline and shot editor show incoming reference images beside the current
+shot, including every incoming branch at a convergence. Review room geometry,
+lighting, props, wardrobe and camera direction together, then approve the current
+storyboard. FableLoom Reactor renders require that approved first frame even in
+draft mode. Prompt instructions exclude subtitles and dialogue overlays, but
+generated previews still need visual review.
+
+Keep preview batches small before authorizing an episode render. Each request
+uses its reference image and a prompt of at most 800 characters; longer prompts
+are rejected rather than silently losing dialogue. Reactor accepts 5.167–14.375
+seconds and snaps durations to its frame grid. Local interactive voice profiles
+are independent of Reactor's generated audio. Cross-request clip chaining is not
+supported because Reactor clip IDs belong to the session that generated them.

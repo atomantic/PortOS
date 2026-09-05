@@ -378,7 +378,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v6 = the loom-level render pin gained image/video backend, model, and
   // effort preferences. A v5 peer would preserve the format but strip these
   // additive preferences during an unrelated whole-record update.
-  fableLoom: 6,
+  // v7 = shot duration and dramatic-scene grouping survive whole-record sync.
+  fableLoom: 7,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).

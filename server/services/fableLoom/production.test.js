@@ -315,6 +315,36 @@ describe('fableLoom production service', () => {
     expect(fetched).toEqual(run);
   });
 
+  it('queues Reactor with its compact compiled script and fails oversized scripts before queueing', async () => {
+    const loom = structuredClone(sampleLoom);
+    loom.episodes[0].nodes.forEach((node) => { node.image = 'example-frame.png'; });
+    loom.episodes[0].nodes[0].shot = { durationSeconds: 8 };
+    records.getLoom.mockResolvedValue(loom);
+    settingsMocks.getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-key' } } });
+    const prompt = 'Preserve source identity. No subtitles. Static close-up. HERO: "The gate is open."';
+    visualConditioningMocks.compileFableLoomVisualRequest.mockResolvedValue({
+      prompt, sourceImagePath: '/example/frame.png', visualConditioning: { compiledPrompt: prompt },
+    });
+    const options = { videoMode: 'reactor', assetTypes: ['video_entry'], nodeIds: ['node-1'] };
+    await startEpisodeProductionBatch('loom-1', 'ep-1', options);
+    await vi.waitFor(() => expect(queueMocks.enqueueJob).toHaveBeenCalled());
+    expect(visualConditioningMocks.fableLoomVideoCapabilities).toHaveBeenCalledWith(expect.objectContaining({ backend: 'reactor', model: { id: 'reactor-video', supportedModes: ['text', 'image'] } }));
+    expect(queueMocks.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'video', params: expect.objectContaining({
+        mode: 'reactor', prompt, seconds: 8, sourceImagePath: '/example/frame.png',
+        visualConditioning: expect.objectContaining({ compiledPrompt: prompt, render: expect.objectContaining({ provider: 'reactor', parameters: expect.objectContaining({ seconds: 8 }) }) }),
+      }),
+    }));
+
+    _resetProductionBatchRuns();
+    queueMocks.enqueueJob.mockClear();
+    visualConditioningMocks.compileFableLoomVisualRequest.mockResolvedValue({ prompt: 'x'.repeat(801) });
+    const rejected = await startEpisodeProductionBatch('loom-1', 'ep-1', options);
+    await vi.waitFor(() => expect(getEpisodeProductionBatch(rejected.id).status).toBe('failed'));
+    expect(queueMocks.enqueueJob).not.toHaveBeenCalled();
+    expect(getEpisodeProductionBatch(rejected.id).error).toContain('1–800');
+  });
+
   it('refuses a batch when its selected assets are blocked', async () => {
     const blockedLoom = structuredClone(sampleLoom);
     blockedLoom.episodes[0].nodes[0].prose = '';

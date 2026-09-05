@@ -6866,6 +6866,22 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/shots/apply",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        "server/routes/fableLoom.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/shots/plan",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        "server/routes/fableLoom.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/fableloom/:id/episodes/:episodeId/validate",
       "mountPath": "/api/fableloom",
@@ -17748,8 +17764,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2198,
-    "declarations": 2206,
+    "operations": 2200,
+    "declarations": 2208,
     "sourceFiles": 233
   }
 }

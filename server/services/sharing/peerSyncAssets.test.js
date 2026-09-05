@@ -315,12 +315,13 @@ describe('buildFableLoomAssetManifest — scene renders', () => {
     const imageBytes = Buffer.from('scene-image');
     const videoBytes = Buffer.from('scene-video');
     writeImage('scene.png', imageBytes);
+    writeImage('anchor.png', imageBytes);
     writeVideo('video-1.mp4', videoBytes);
 
     const manifest = await buildFableLoomAssetManifest({
       episodes: [
         { nodes: [{ id: 'node-1', image: 'scene.png', videoHistoryId: 'video-1' }] },
-        { nodes: [{ id: 'node-2', image: 'scene.png', videoHistoryId: 'video-1' }] },
+        { nodes: [{ id: 'node-2', image: 'scene.png', videoHistoryId: 'video-1', visualCanon: { characterAppearances: [{ referenceImage: 'anchor.png' }] } }] },
       ],
     });
 
@@ -330,7 +331,8 @@ describe('buildFableLoomAssetManifest — scene renders', () => {
     expect(manifest).toContainEqual({
       filename: 'video-1.mp4', kind: 'video', sha256: sha(videoBytes),
     });
-    expect(manifest).toHaveLength(2);
+    expect(manifest).toContainEqual(expect.objectContaining({ filename: 'anchor.png', kind: 'image' }));
+    expect(manifest).toHaveLength(3);
   });
 
   it('includes typed playback assets — entry, hold loops, and transition exits (#6006)', async () => {

@@ -121,3 +121,4 @@ export {
   getFalVideoAutomation,
   startFalVideoAutomation,
 } from './falVideoAutomation.js';
+export { applyEpisodeShots, runEpisodeShotAutopilot } from './shots.js';

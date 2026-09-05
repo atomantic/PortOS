@@ -18,6 +18,7 @@ const isText = (value) => typeof value === 'string' && value.trim().length > 0;
 
 export const OUTLINE_ISSUE_CODES = Object.freeze({
   NO_SCENES: 'NO_SCENES',
+  WRONG_EPISODE_PLOT_POINT: 'WRONG_EPISODE_PLOT_POINT',
   MISSING_START: 'MISSING_START',
   START_NOT_FOUND: 'START_NOT_FOUND',
   NO_ENDINGS: 'NO_ENDINGS',
@@ -176,7 +177,7 @@ const outlineIssue = (issues, code, severity, message, extra = {}) => {
 
 /** Deterministic validation for the log-line graph, independent of an LLM. */
 export function analyzeStoryOutline(outline, {
-  participationMode = 'protagonist', requireAudienceIntroduction = false, challenges = [],
+  participationMode = 'protagonist', requireAudienceIntroduction = false, challenges = [], plotPoints = [], episodeId = null, nodes = [],
 } = {}) {
   const scenes = asArray(outline?.scenes);
   const byKey = new Map(scenes.map((scene) => [scene.key, scene]));
@@ -195,9 +196,12 @@ export function analyzeStoryOutline(outline, {
 
   const reachable = new Set();
   const depthByKey = new Map();
+  const dramaticDepthByKey = new Map();
+  const groupByKey = new Map(asArray(nodes).map((node) => [node.id, node.shot?.dramaticSceneId || node.id]));
   if (byKey.has(startKey)) {
     const queue = [startKey];
     depthByKey.set(startKey, 0);
+    dramaticDepthByKey.set(startKey, 0);
     let cursor = 0;
     while (cursor < queue.length) {
       const key = queue[cursor];
@@ -207,6 +211,9 @@ export function analyzeStoryOutline(outline, {
       for (const transition of asArray(byKey.get(key)?.transitions)) {
         if (byKey.has(transition.targetKey) && !depthByKey.has(transition.targetKey)) {
           depthByKey.set(transition.targetKey, depthByKey.get(key) + 1);
+          // Extra camera cuts do not make the audience introduction narratively later.
+          const sameScene = groupByKey.has(key) && groupByKey.get(key) === groupByKey.get(transition.targetKey);
+          dramaticDepthByKey.set(transition.targetKey, dramaticDepthByKey.get(key) + (sameScene ? 0 : 1));
           queue.push(transition.targetKey);
         }
       }
@@ -231,13 +238,13 @@ export function analyzeStoryOutline(outline, {
         'The outline never activates the audience communication channel.',
       );
     } else {
-      const firstDepth = Math.min(...connected.map((scene) => depthByKey.get(scene.key)));
+      const firstDepth = Math.min(...connected.map((scene) => dramaticDepthByKey.get(scene.key)));
       if (firstDepth > 3) {
         push(
           OUTLINE_ISSUE_CODES.LATE_AUDIENCE_CONNECTION,
           'warning',
           'The audience communication channel is not activated until late in the opening sequence.',
-          { sceneKey: connected.find((scene) => depthByKey.get(scene.key) === firstDepth)?.key },
+          { sceneKey: connected.find((scene) => dramaticDepthByKey.get(scene.key) === firstDepth)?.key },
         );
       }
     }
@@ -246,6 +253,10 @@ export function analyzeStoryOutline(outline, {
   for (const scene of scenes) {
     const transitions = asArray(scene.transitions);
     const label = scene.title || scene.key || 'Untitled beat';
+    const assignedPlot = asArray(plotPoints).find((item) => item.id === scene.plotPointId);
+    if (episodeId && assignedPlot?.episodeId && assignedPlot.episodeId !== episodeId) {
+      push(OUTLINE_ISSUE_CODES.WRONG_EPISODE_PLOT_POINT, 'error', `"${label}" uses a plot point assigned to another episode. Keep that payoff in its assigned episode.`, { sceneKey: scene.key });
+    }
     if (!isText(scene.summary)) {
       push(OUTLINE_ISSUE_CODES.EMPTY_SUMMARY, 'error', `"${label}" has no scene log-line.`, { sceneKey: scene.key });
     }
@@ -496,9 +507,12 @@ export function analyzeSeriesStoryOutlines(loom, { replacingEpisodeId = null } =
       return;
     }
     const validation = analyzeStoryOutline(episode.storyOutline, {
+      nodes: episode.nodes,
       participationMode: loom?.participationMode,
       requireAudienceIntroduction: index === 0,
       challenges: fableLoomEpisodeChallenges(loom, episode.id),
+      plotPoints: loom?.seriesPlan?.plotPoints,
+      episodeId: episode.id,
     });
     validation.issues.forEach((issue) => {
       push(issue.code, issue.severity, `Episode ${episode.number || index + 1}: ${issue.message}`, {

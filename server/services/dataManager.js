@@ -110,6 +110,7 @@ export const CATEGORIES = {
   'pipeline-series-review': { label: 'Series Review', description: 'Cached series reviews — re-running them costs LLM calls', archivable: true, deletable: false },
   'privacy': { label: 'Privacy', description: 'Data-broker opt-out records and request history', archivable: true, deletable: false },
   'prompts': { label: 'Prompts', description: 'AI prompt templates', archivable: false, deletable: false },
+  'venvs': { label: 'Optional SDK Runtimes', description: 'Explicitly installed Python environments for media SDKs; reinstall with the corresponding setup command', archivable: false, deletable: false },
   'python': { label: 'Python Runtime', description: 'Managed virtualenv for local ML tooling — rebuilt on the next Python-backed run (re-downloads several GB of wheels)', archivable: false, deletable: true, purgeScope: 'category' },
   // A pasted or URL-fetched book is the user's only copy — the shelf is not a
   // cache of anything re-fetchable, so it is neither archivable nor deletable.

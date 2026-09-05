@@ -12,6 +12,8 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
+  shotAutopilotSchema,
+  shotApplySchema,
   branchSchema,
   episodeCreateSchema,
   episodePatchSchema,
@@ -51,6 +53,8 @@ import {
 } from '../lib/fableLoomPlayback.js';
 import { getUniverse } from '../services/universeBuilder.js';
 import {
+  runEpisodeShotAutopilot,
+  applyEpisodeShots,
   addEpisode,
   addNode,
   addNodeTransition,
@@ -321,6 +325,13 @@ router.post('/:id/episodes/:episodeId/weave', asyncHandler(async (req, res) => {
 // Story-first authoring: draft and review the small beat outline before the
 // full teleplay graph is expanded. Validation is deterministic and persisted
 // so the expansion button can enforce the same gate from every client.
+router.post('/:id/episodes/:episodeId/shots/plan', asyncHandler(async (req, res) => {
+  res.json(await runEpisodeShotAutopilot(req.params.id, req.params.episodeId, validateRequest(shotAutopilotSchema, req.body)));
+}));
+router.post('/:id/episodes/:episodeId/shots/apply', asyncHandler(async (req, res) => {
+  res.json(await applyEpisodeShots(req.params.id, req.params.episodeId, validateRequest(shotApplySchema, req.body)));
+}));
+
 router.post('/:id/episodes/:episodeId/outline/generate', asyncHandler(async (req, res) => {
   const input = validateRequest(outlineGenerateSchema, req.body);
   res.json(await generateEpisodeOutline(req.params.id, req.params.episodeId, input));

@@ -431,6 +431,32 @@ describe('loom CRUD', () => {
     });
   });
 
+  it('preserves v7 shot and character references from older peers while accepting current explicit clears', async () => {
+    let loom = await makeLoom({ name: 'A timed episode' });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    const episodeId = loom.episodes[0].id;
+    loom = await addNode(loom.id, episodeId, {
+      title: 'Arrival', shot: { dramaticSceneId: 'arrival', dramaticSceneTitle: 'Arrival', durationSeconds: 8, framing: 'Wide' },
+      visualCanon: { mode: 'draft', characterAppearances: [{ characterId: 'courier', referenceImage: 'courier.png' }] },
+    });
+    const remote = structuredClone(loom);
+    remote.updatedAt = '2099-01-01T00:00:00.000Z';
+    remote.name = 'Renamed on older peer';
+    delete remote.episodes[0].nodes[0].shot;
+    delete remote.episodes[0].nodes[0].visualCanon.characterAppearances[0].referenceImage;
+    remote.episodes[0].nodes[0].visualCanon.characterAppearances[0].expression = 'smiling';
+    await mergeLoomsFromSync([remote], { senderSchemaVersions: { fableLoom: 6 } });
+    const saved = await getLoom(loom.id);
+    expect(saved.name).toBe(remote.name);
+    expect(saved.episodes[0].nodes[0].shot).toEqual(loom.episodes[0].nodes[0].shot);
+    expect(saved.episodes[0].nodes[0].visualCanon.characterAppearances[0]).toMatchObject({ referenceImage: 'courier.png', expression: 'smiling' });
+    remote.updatedAt = '2099-01-02T00:00:00.000Z';
+    await mergeLoomsFromSync([remote], { senderSchemaVersions: { fableLoom: 7 } });
+    const cleared = (await getLoom(loom.id)).episodes[0].nodes[0];
+    expect(cleared.shot).toBeUndefined();
+    expect(cleared.visualCanon.characterAppearances[0].referenceImage).toBeUndefined();
+  });
+
   it('preserves playable challenge mappings when a v4 peer wins an unrelated edit', async () => {
     let loom = await makeLoom({ name: 'Local challenge plan' });
     loom = await addEpisode(loom.id, { title: 'Pilot' });

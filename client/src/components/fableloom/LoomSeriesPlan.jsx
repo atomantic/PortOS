@@ -5,7 +5,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
+import TabPills from '../ui/TabPills';
+import useDrawerTab from '../../hooks/useDrawerTab';
 import { BrainCircuit, CheckCircle2, ChevronDown, ChevronUp, Loader2, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import toast from '../ui/Toast';
@@ -27,6 +29,15 @@ import { fieldClass, labelClass } from './fieldStyles';
 import LoomAiRunStatus from './LoomAiRunStatus';
 import LoomEditorialAutomation from './LoomEditorialAutomation';
 import { fableLoomPlotPointKind } from '../../../../server/lib/fableLoomOutline.js';
+
+const PLAN_SECTIONS = [
+  { id: 'arc', label: 'Story arc' },
+  { id: 'challenges', label: 'Plot & challenges' },
+  { id: 'quests', label: 'Side quests' },
+  { id: 'episodes', label: 'Episode outlines' },
+  { id: 'editorial', label: 'AI editor' },
+  { id: 'handoffs', label: 'Viewer handoffs' },
+];
 
 const newItemId = (prefix) => `${prefix}-${uuidv4()}`;
 const CHALLENGE_DESCRIPTION_TEMPLATE = 'SETUP: Establish the blockade and plant the clue. VIEWER DECISION LOOP: Offer 2–4 actionable options with escalating feedback. SUCCESS: Advance with an earned advantage. FAILURE: Continue with a visible cost. RECOVERY / PAYOFF: Converge without erasing the choice.';
@@ -67,8 +78,8 @@ const withVoicemailDrafts = (plan, episodes) => {
 };
 
 export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
-  const [searchParams] = useSearchParams();
-  const requestedSection = searchParams.get('section');
+  const [requestedSection, setSection] = useDrawerTab('section', 'arc', PLAN_SECTIONS.map(({ id }) => id));
+  const contentRef = useRef(null);
   const [plan, setPlan] = useState(() => normalizePlan(loom.seriesPlan));
   const [dirty, setDirty] = useState(false);
   const revisionRef = useRef(0);
@@ -77,20 +88,8 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
   const routeGuard = useUnsavedChangesGuard(dirty);
 
   useEffect(() => {
-    const targetId = {
-      arc: 'fableloom-plan-arc',
-      challenges: 'fableloom-plan-challenges',
-      editorial: 'fableloom-plan-editorial',
-      handoffs: 'fableloom-plan-handoffs',
-    }[requestedSection];
-    if (!targetId) return undefined;
-    const frame = requestAnimationFrame(() => {
-      const target = document.getElementById(targetId);
-      target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-      target?.focus?.({ preventScroll: true });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [loom.id, requestedSection]);
+    contentRef.current?.scrollTo?.({ top: 0 });
+  }, [requestedSection]);
 
   useEffect(() => {
     if (loomIdRef.current !== loom.id) {
@@ -166,7 +165,7 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
   };
 
   return (
-    <section className="flex-1 overflow-y-auto p-4 md:p-6" aria-label="Series plan">
+    <section className="flex min-h-0 flex-1 flex-col" aria-label="Series plan">
       <UnsavedChangesConfirm
         guard={routeGuard}
         when={!saving}
@@ -174,103 +173,85 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
         label={`Discard unsaved changes to ${loom.name}`}
         onDiscard={discardAndExit}
       />
-      <div className="max-w-7xl mx-auto">
-        <div className="flex flex-col lg:flex-row items-start gap-6">
-          <div className="flex-1 min-w-0 w-full space-y-6">
-            <div>
-              <h2 className="text-lg font-semibold">Series plan</h2>
-              <p className="text-sm text-port-text-muted mt-1">
-                Shape the full narrative before working inside individual episode graphs.
-              </p>
-            </div>
-
-            <div id="fableloom-plan-arc" tabIndex={-1} className="rounded-lg border border-port-border bg-port-card p-4 focus:outline-none">
-              <FormField
-                label="Story arc"
-                hint="The beginning-to-end dramatic movement, central conflict, and intended resolution."
-                labelClassName={labelClass}
-              >
-                <textarea
-                  rows={7}
-                  className={fieldClass}
-                  value={plan.storyArc}
-                  placeholder="What changes across the series, why it matters, and where the story lands…"
-                  onChange={(event) => changePlan((current) => ({ ...current, storyArc: event.target.value }))}
-                />
-              </FormField>
-            </div>
-
-            <div id="fableloom-plan-challenges" tabIndex={-1} className="focus:outline-none">
-              <PlanCollection
-                title="Plot points"
-                description="Order tentpoles and playable challenges, then assign each one to the episode where it must appear."
-                items={plan.plotPoints}
-                episodes={episodeOptions}
-                onAdd={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
-                  id: newItemId('plot'), kind: 'beat', title: '', description: '', episodeId: null,
-                }] }))}
-                onUpdate={(id, patch) => updateItem('plotPoints', id, patch)}
-                onAddChallenge={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
-                  id: newItemId('plot'), kind: 'challenge', title: '', description: CHALLENGE_DESCRIPTION_TEMPLATE, episodeId: null,
-                }] }))}
-                onRemove={(id) => removeItem('plotPoints', id)}
-                onMove={(index, direction) => moveItem('plotPoints', index, direction)}
+      <div className="shrink-0 border-b border-port-border bg-port-bg p-3 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div><h2 className="font-semibold">Series plan</h2><p className="text-xs text-port-text-muted">{dirty ? 'Unsaved changes' : 'All changes saved'}</p></div>
+          <button type="button" onClick={save} disabled={!dirty || saving} className="flex min-h-[44px] items-center gap-2 rounded bg-port-accent px-3 text-sm text-white disabled:opacity-50">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{saving ? 'Saving…' : 'Save plan'}
+          </button>
+        </div>
+        <TabPills tabs={PLAN_SECTIONS} activeTab={requestedSection} onChange={setSection} mobileDropdown ariaLabel="Series plan section" controlsIdPrefix="series-section" />
+      </div>
+      <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
+        <div className="max-w-5xl mx-auto">
+          <div hidden={requestedSection !== 'arc'} role="tabpanel" aria-labelledby="tab-arc" id="series-section-arc" tabIndex={-1} className="rounded-lg border border-port-border bg-port-card p-4 focus:outline-none">
+            <FormField
+              label="Story arc"
+              hint="The beginning-to-end dramatic movement, central conflict, and intended resolution."
+              labelClassName={labelClass}
+            >
+              <textarea
+                rows={7}
+                className={fieldClass}
+                value={plan.storyArc}
+                placeholder="What changes across the series, why it matters, and where the story lands…"
+                onChange={(event) => changePlan((current) => ({ ...current, storyArc: event.target.value }))}
               />
-            </div>
-
-            <PlanCollection
-              title="Side quests"
-              description="Track supporting threads without letting them disappear inside a single episode."
-              items={plan.sideQuests}
-              episodes={episodeOptions}
-              sideQuests
-              onAdd={() => changePlan((current) => ({ ...current, sideQuests: [...current.sideQuests, {
-                id: newItemId('quest'), title: '', description: '', status: 'idea', startEpisodeId: null, endEpisodeId: null,
-              }] }))}
-              onUpdate={(id, patch) => updateItem('sideQuests', id, patch)}
-              onRemove={(id) => removeItem('sideQuests', id)}
-              onMove={(index, direction) => moveItem('sideQuests', index, direction)}
-            />
-
-            <EpisodeBeatReadiness loom={loom} />
-
-            <div id="fableloom-plan-editorial" tabIndex={-1} className="focus:outline-none">
-              <LoomEditorialAutomation loom={loom} dirty={dirty} onLoomUpdate={adoptServerPlan} />
-            </div>
-
-            <div id="fableloom-plan-handoffs" tabIndex={-1} className="focus:outline-none">
-              <SeriesDeliveryPlan
-                plan={plan}
-                episodes={loom.episodes}
-                onChange={changePlan}
-              />
-            </div>
+            </FormField>
           </div>
 
-          <aside className="w-full lg:w-[380px] xl:w-[420px] shrink-0 space-y-6 lg:sticky lg:top-0 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto" aria-label="AI tools and actions">
-            <div className="rounded-lg border border-port-border bg-port-card p-4 space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="font-semibold text-sm">Series plan actions</h3>
-                  <p className="text-xs flex items-center gap-1.5 mt-0.5">
-                    <span className={`inline-block w-2 h-2 rounded-full ${dirty ? 'bg-amber-400' : 'bg-emerald-400'}`} />
-                    <span className="text-port-text-muted">{dirty ? 'Unsaved changes' : 'All changes saved'}</span>
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={save}
-                  disabled={!dirty || saving}
-                  className="shrink-0 flex items-center gap-2 px-3 py-2 rounded bg-port-accent text-white text-sm disabled:opacity-50 font-medium"
-                >
-                  {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  {saving ? 'Saving…' : 'Save plan'}
-                </button>
-              </div>
-            </div>
+          <div hidden={requestedSection !== 'challenges'} role="tabpanel" aria-labelledby="tab-challenges" id="series-section-challenges" tabIndex={-1} className="focus:outline-none">
+            <PlanCollection
+              title="Plot points"
+              description="Order tentpoles and playable challenges, then assign each one to the episode where it must appear."
+              items={plan.plotPoints}
+              episodes={episodeOptions}
+              onAdd={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
+                id: newItemId('plot'), kind: 'beat', title: '', description: '', episodeId: null,
+              }] }))}
+              onUpdate={(id, patch) => updateItem('plotPoints', id, patch)}
+              onAddChallenge={() => changePlan((current) => ({ ...current, plotPoints: [...current.plotPoints, {
+                id: newItemId('plot'), kind: 'challenge', title: '', description: CHALLENGE_DESCRIPTION_TEMPLATE, episodeId: null,
+              }] }))}
+              onRemove={(id) => removeItem('plotPoints', id)}
+              onMove={(index, direction) => moveItem('plotPoints', index, direction)}
+            />
+          </div>
 
-            <SeriesAiEditor loom={loom} dirty={dirty} onLoomUpdate={adoptServerPlan} />
-          </aside>
+          <div hidden={requestedSection !== 'quests'} role="tabpanel" aria-labelledby="tab-quests" id="series-section-quests">
+          <PlanCollection
+            title="Side quests"
+            description="Track supporting threads without letting them disappear inside a single episode."
+            items={plan.sideQuests}
+            episodes={episodeOptions}
+            sideQuests
+            onAdd={() => changePlan((current) => ({ ...current, sideQuests: [...current.sideQuests, {
+              id: newItemId('quest'), title: '', description: '', status: 'idea', startEpisodeId: null, endEpisodeId: null,
+            }] }))}
+            onUpdate={(id, patch) => updateItem('sideQuests', id, patch)}
+            onRemove={(id) => removeItem('sideQuests', id)}
+            onMove={(index, direction) => moveItem('sideQuests', index, direction)}
+          />
+
+          </div>
+          <div hidden={requestedSection !== 'episodes'} role="tabpanel" aria-labelledby="tab-episodes" id="series-section-episodes">
+            <EpisodeBeatReadiness loom={loom} />
+          </div>
+
+          <div hidden={requestedSection !== 'editorial'} role="tabpanel" aria-labelledby="tab-editorial" id="series-section-editorial" tabIndex={-1} className="focus:outline-none">
+            <LoomEditorialAutomation loom={loom} dirty={dirty || saving} onLoomUpdate={adoptServerPlan} />
+            <details className="mt-4 rounded border border-port-border p-3"><summary className="min-h-11 cursor-pointer">Manual AI plan tools</summary>
+              <SeriesAiEditor loom={loom} dirty={dirty || saving} onLoomUpdate={adoptServerPlan} />
+            </details>
+          </div>
+
+          <div hidden={requestedSection !== 'handoffs'} role="tabpanel" aria-labelledby="tab-handoffs" id="series-section-handoffs" tabIndex={-1} className="focus:outline-none">
+            <SeriesDeliveryPlan
+              plan={plan}
+              episodes={loom.episodes}
+              onChange={changePlan}
+            />
+          </div>
         </div>
       </div>
     </section>
@@ -726,11 +707,23 @@ function PlanCollection({
   title, description, items, episodes, sideQuests = false,
   onAdd, onAddChallenge, onUpdate, onRemove, onMove,
 }) {
+  const collectionRef = useRef(null);
+  const previousIds = useRef(new Set(items.map((item) => item.id)));
+  useEffect(() => {
+    const added = items.find((item) => !previousIds.current.has(item.id));
+    previousIds.current = new Set(items.map((item) => item.id));
+    if (!added) return;
+    const row = Array.from(collectionRef.current?.querySelectorAll('[data-plan-item]') || [])
+      .find((element) => element.dataset.planItem === added.id);
+    if (row) row.open = true;
+    row?.scrollIntoView?.({ block: 'nearest' });
+    row?.querySelector('input')?.focus({ preventScroll: true });
+  }, [items]);
   const challenges = sideQuests ? [] : items.filter((item) => fableLoomPlotPointKind(item) === 'challenge');
   const assignedChallenges = challenges.filter((item) => item.episodeId);
   return (
-    <div className="rounded-lg border border-port-border bg-port-card p-4 space-y-4">
-      <div className="flex items-start justify-between gap-3">
+    <div ref={collectionRef} className="rounded-lg border border-port-border bg-port-card p-4 space-y-4">
+      <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold">{title}</h3>
           <p className="text-xs text-port-text-muted mt-1">{description}</p>
@@ -758,17 +751,23 @@ function PlanCollection({
           Add the first {sideQuests ? 'side quest' : 'plot point'}
         </button>
       ) : items.map((item, index) => (
-        <div key={item.id} className="rounded border border-port-border p-3 space-y-3">
+        <details key={item.id} data-plan-item={item.id} className="rounded border border-port-border p-3">
+          <summary className="min-h-[44px] cursor-pointer text-sm leading-6">
+            <span className="font-medium">{index + 1}. {item.title || (sideQuests ? 'New side quest' : 'New plot point')}</span>
+            <span className="ml-2 text-xs text-port-text-muted">{episodes.find((episode) => episode.id === (sideQuests ? item.startEpisodeId : item.episodeId))?.label || 'Unassigned'}</span>
+            {!sideQuests && fableLoomPlotPointKind(item) === 'challenge' ? <span className="ml-2 text-xs text-port-accent">Challenge</span> : null}
+          </summary>
+          <div className="space-y-3 pt-3">
           {!sideQuests && fableLoomPlotPointKind(item) === 'challenge' ? (
             <span className="inline-flex rounded bg-port-accent/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-port-accent">
               Playable challenge
             </span>
           ) : null}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs font-medium text-port-text-muted w-6">{index + 1}.</span>
             <input
               aria-label={`${title} ${index + 1} title`}
-              className={fieldClass}
+              className={`${fieldClass} min-w-0 flex-1 basis-40`}
               value={item.title}
               placeholder={sideQuests ? 'Side quest title' : 'Plot point title'}
               onChange={(event) => onUpdate(item.id, { title: event.target.value })}
@@ -797,7 +796,8 @@ function PlanCollection({
           ) : (
             <PlanSelect label="Episode" value={item.episodeId || ''} onChange={(value) => onUpdate(item.id, { episodeId: value || null })} options={episodes} emptyLabel="Unassigned" />
           )}
-        </div>
+          </div>
+        </details>
       ))}
     </div>
   );
