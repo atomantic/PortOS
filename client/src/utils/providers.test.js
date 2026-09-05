@@ -81,6 +81,7 @@ import {
   effortAwareModelOptions,
   resolveProviderModelOptions,
   codexCatalogModelIds,
+  providerModelList,
   MODEL_SOURCE,
   effectiveModelFor,
   effortSurvivingModel,
@@ -388,6 +389,20 @@ describe('Antigravity base-model split (server mirror)', () => {
       const agy = { id: 'antigravity-cli', command: 'agy', models: CATALOG, codexModelCatalog: { models: [], error: null } };
       expect(resolveProviderModelOptions(agy, '').source).toBe(MODEL_SOURCE.shipped);
       expect(codexCatalogModelIds({ codexModelCatalog: { models: null, error: null } })).toBeNull();
+    });
+
+    it('is the raw list every other picker reads, so none reimplements the fallback', () => {
+      // providerModelList is the ONE place the account catalog enters a picker —
+      // useProviderModels, AppProviderPin and the allowlist controls all read it.
+      expect(providerModelList(codex({ models: [{ id: 'gpt-5.4' }], fetchedAt: 1, error: null })))
+        .toEqual(['gpt-5.4']);
+      expect(providerModelList(codex({ models: null, fetchedAt: null, error: null }))).toEqual(SHIPPED);
+      // A successfully-read EMPTY catalog must NOT fall through to defaultModel:
+      // the account really has no models, and the default is one of them.
+      expect(providerModelList({ ...codex({ models: [], fetchedAt: 1, error: null }), models: [], defaultModel: 'gpt-6-astra' }))
+        .toEqual([]);
+      // Non-Codex providers keep the defaultModel fallback for an empty list.
+      expect(providerModelList({ id: 'x', models: [], defaultModel: 'only-default' })).toEqual(['only-default']);
     });
 
     it('is what effortAwareModelOptions returns, so every picker agrees', () => {

@@ -1,5 +1,5 @@
 import ProviderModelSelector from '../ProviderModelSelector';
-import { filterSelectableModels } from '../../utils/providers';
+import { filterSelectableModels, providerModelList } from '../../utils/providers';
 import { providerPinPatch } from './constants';
 
 /**
@@ -48,7 +48,7 @@ export default function AppProviderPin({
   const selectedModel = model || '';
   const selectedProvider = providers?.find(p => p.id === selectedProviderId);
   const availableModels = selectedProvider
-    ? filterSelectableModels(selectedProvider.models || [selectedProvider.defaultModel])
+    ? filterSelectableModels(providerModelList(selectedProvider))
     : [];
   // Keep a pinned model visible even when it isn't in the provider's fetched list
   // (a stale or hand-typed model must not render as a blanked select).

@@ -561,11 +561,36 @@ export const withStaleAntigravityPin = (provider, models, selectedModel) => {
  * @returns {string[]|null}
  */
 export const codexCatalogModelIds = (provider) => {
+  if (!isCodexSubscriptionProvider(provider)) return null;
   const catalog = provider?.codexModelCatalog;
   if (!catalog || catalog.error || !Array.isArray(catalog.models)) return null;
   return catalog.models
     .map((entry) => (typeof entry === 'string' ? entry : entry?.id))
     .filter((id) => typeof id === 'string' && id !== '');
+};
+
+/**
+ * The RAW model list a picker should read for a provider, before any
+ * sentinel/effort/hardware filtering: the signed-in ChatGPT account's own
+ * catalog when one has been fetched, otherwise the provider's configured
+ * `models` — falling back to its `defaultModel` when that list is empty (a
+ * cloud/manual provider configured with only a default; `[]` is truthy, so a
+ * bare `||` would leave such a picker empty).
+ *
+ * This is the single place the account catalog enters a picker, so a caller
+ * that reads `provider.models` directly is the one bug this exists to prevent
+ * (#6306). A successfully-read EMPTY catalog is returned as `[]` and must not
+ * fall through to `defaultModel`: the account really has no models, and
+ * offering its default would put back the un-runnable option.
+ *
+ * CLIENT-ONLY (no server mirror).
+ * @param {{models?:unknown[], defaultModel?:string}|null|undefined} provider
+ * @returns {unknown[]}
+ */
+export const providerModelList = (provider) => {
+  const catalog = codexCatalogModelIds(provider);
+  if (catalog) return catalog;
+  return provider?.models?.length ? provider.models : [provider?.defaultModel];
 };
 
 /** Where a picker's option list came from. */
@@ -602,7 +627,7 @@ export const resolveProviderModelOptions = (provider, selectedModel) => {
     filterSelectableModels(selectableModelsForProvider(provider, provider?.models)),
     selectedModel,
   );
-  const catalog = isCodexSubscriptionProvider(provider) ? codexCatalogModelIds(provider) : null;
+  const catalog = codexCatalogModelIds(provider);
   if (!catalog) return { models: shipped, source: MODEL_SOURCE.shipped, unlistedSelection: false };
   const models = filterSelectableModels(catalog);
   const unlistedSelection = !!selectedModel
