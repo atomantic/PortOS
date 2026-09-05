@@ -2101,34 +2101,39 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPul
   // A human "Run" is unaffected: applyOnDemandRunResets clears the park for a
   // USER-origin request before it reaches generation.
   if (taskSchedule && await taskSchedule.isPerpetualParkActive(taskType, app.id)) {
-    emitLog('info', `Skipping pr-reviewer for ${app.name}: parked until its recheck cadence`, { appId: app.id, analysisType: taskType });
-    return { skipped: true, reason: 'parked' };
+    const reason = 'parked';
+    emitLog('info', `Skipping pr-reviewer for ${app.name}: ${reason} until its recheck cadence`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason };
   }
 
   const stages = metadata.pipeline?.stages;
   const securityStage = stages?.[0];
   const nextStage = stages?.[1];
   if (!securityStage || !nextStage) {
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: security pipeline requires an eligibility gate`, { appId: app.id, analysisType: taskType });
-    return { skipped: true };
+    const reason = 'pipeline-misconfigured';
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason} — security pipeline requires an eligibility gate`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason };
   }
 
   const { listExternalOpenPullRequests, runPrReviewerSecurityScan, securityScanFingerprint } = await import('./prReviewerSecurity.js');
   const { writePublicReviewInputSnapshot } = await import('./modelAbuseGuard.js');
   let target = await listExternalOpenPullRequests(app);
   if (!target.ok) {
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${target.code || 'security-scan-target-unavailable'}`, { appId: app.id, analysisType: taskType });
-    return { skipped: true };
+    const reason = target.code || 'security-scan-target-unavailable';
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason };
   }
   if (target.prs.length === 0) {
-    emitLog('info', `Skipping pr-reviewer for ${app.name}: no-external-open-prs`, { appId: app.id, analysisType: taskType });
-    return { skipped: true, reason: 'no-external-open-prs' };
+    const reason = 'no-external-open-prs';
+    emitLog('info', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason };
   }
   if (targetPullRequest) {
     const scoped = target.prs.filter((pr) => pr.number === targetPullRequest);
     if (scoped.length === 0) {
-      emitLog('warn', `Skipping pr-reviewer for ${app.name}: target-pull-request-not-reviewable (#${targetPullRequest})`, { appId: app.id, analysisType: taskType });
-      return { skipped: true, reason: 'target-pull-request-not-reviewable' };
+      const reason = 'target-pull-request-not-reviewable';
+      emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason} (#${targetPullRequest})`, { appId: app.id, analysisType: taskType });
+      return { skipped: true, reason };
     }
     // A maintainer pressed "Review this PR" on this row. The linked-open-issue
     // prerequisite exists to bound UNATTENDED spend on unsolicited PRs; an
@@ -2145,8 +2150,9 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPul
   const scanKey = securityScanFingerprint(target);
   const active = await findActiveSecurityScanTask(app.id, scanKey);
   if (active.unavailable) {
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: security-scan-task-state-unavailable`, { appId: app.id, analysisType: taskType });
-    return { skipped: true };
+    const reason = 'security-scan-task-state-unavailable';
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason };
   }
   if (active.task) {
     emitLog('info', `Skipping pr-reviewer for ${app.name}: security-scan-report-pending`, { appId: app.id, analysisType: taskType, taskId: active.task.id });
@@ -2159,8 +2165,9 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPul
   });
   const reports = securityScanReports(scan);
   if (!scan.ok && !reports.length) {
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${scan.code || 'security-scan-not-passed'}`, { appId: app.id, analysisType: taskType });
-    return { skipped: true };
+    const reason = scan.code || 'security-scan-not-passed';
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason };
   }
 
   const status = !scan.ok ? 'unavailable' : (scan.passed ? 'passed' : 'findings');
@@ -2169,8 +2176,9 @@ async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPul
     pullRequests: scan.ok ? (scan.reviewInputs || []) : [],
   });
   if (!snapshotWritten) {
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: public-review-input-snapshot-failed`, { appId: app.id, analysisType: taskType });
-    return { skipped: true };
+    const reason = 'public-review-input-snapshot-failed';
+    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
+    return { skipped: true, reason };
   }
   const reviewOutput = buildSecurityScanPipelineOutput(scan, reports, status);
   // A partial/unavailable scan is never a usable allowlist. Keeping already
@@ -2423,6 +2431,14 @@ const transientVerdictKey = (taskType, appId) => `${taskType}:${appId || 'global
  * Record why a perpetual work gate skipped WITHOUT parking. `cli` is the forge
  * CLI whose probe failed (`gh` / `glab`), or null when no forge was involved.
  * Passing a null verdict clears any stale entry (the actionable / park paths).
+ *
+ * Also doubles as pr-reviewer's idle-skip reason channel: pr-reviewer is
+ * on-demand, not perpetual, so its preflight skip (churn park, no external PRs,
+ * a target PR that isn't reviewable, the security guard not being ready, …)
+ * reaches emitOnDemandEmpty as a plain 'idle' outcome with no channel of its own
+ * for WHY — the same gap this map already closes for 'transient'. The payload
+ * shape here is a free-form object (`{ ...verdict }`), so a `{ reason }` payload
+ * under the `taskType: 'pr-reviewer'` key needs no separate map or TTL logic.
  */
 export function recordPerpetualTransient(taskType, appId, verdict) {
   const key = transientVerdictKey(taskType, appId);
@@ -2478,6 +2494,9 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
     const { getAppById } = await import('./apps.js');
     const app = await getAppById(appId).catch(() => null);
     reason = app?.layeredIntelligence?.lastRunReason || null;
+  }
+  if (outcome === 'idle' && request.taskType === 'pr-reviewer') {
+    reason = takePerpetualTransient('pr-reviewer', appId)?.reason ?? null;
   }
 
   // 'transient' says "the forge probe failed, try again shortly" — only true when
@@ -2862,6 +2881,13 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);
   const securityPreflight = await runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest, taskSchedule);
+  // Record (or clear a stale) skip reason in the SAME call: clearing on a passed
+  // gate matters too, or an unrelated later idle outcome for this app (e.g. a
+  // downstream precondition skip below) could read back a reason that no longer
+  // applies.
+  if (taskType === 'pr-reviewer') {
+    recordPerpetualTransient('pr-reviewer', app.id, securityPreflight.skipped ? { reason: securityPreflight.reason || null } : null);
+  }
   if (securityPreflight.skipped) return null;
   if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
 

@@ -1118,6 +1118,57 @@ describe('emitOnDemandEmpty', () => {
     }
   });
 
+  it("surfaces the pr-reviewer preflight's recorded skip reason on an idle outcome", async () => {
+    recordPerpetualTransient('pr-reviewer', 'app-1', { reason: 'security-guard-not-ready' });
+    const events = [];
+    const handler = (d) => events.push(d);
+    cosEvents.on('schedule:on-demand-empty', handler);
+    try {
+      await emitOnDemandEmpty({
+        taskScheduleMod: stubMod,
+        request: { id: 'req-pr-reviewer', taskType: 'pr-reviewer' },
+        targetApp: { id: 'app-1', name: 'PortOS' },
+        taskConfig: { type: 'on-demand', perpetual: false }
+      });
+    } finally {
+      cosEvents.off('schedule:on-demand-empty', handler);
+    }
+    expect(events[0]).toMatchObject({ taskType: 'pr-reviewer', outcome: 'idle', reason: 'security-guard-not-ready' });
+  });
+
+  it('consumes the pr-reviewer skip reason on read, so a stale one cannot be reported twice', async () => {
+    recordPerpetualTransient('pr-reviewer', 'app-1', { reason: 'no-external-open-prs' });
+    const first = [];
+    let handler = (d) => first.push(d);
+    cosEvents.on('schedule:on-demand-empty', handler);
+    try {
+      await emitOnDemandEmpty({
+        taskScheduleMod: stubMod,
+        request: { id: 'req-a', taskType: 'pr-reviewer' },
+        targetApp: { id: 'app-1', name: 'PortOS' },
+        taskConfig: { type: 'on-demand', perpetual: false }
+      });
+    } finally {
+      cosEvents.off('schedule:on-demand-empty', handler);
+    }
+    expect(first[0]).toMatchObject({ reason: 'no-external-open-prs' });
+
+    const second = [];
+    handler = (d) => second.push(d);
+    cosEvents.on('schedule:on-demand-empty', handler);
+    try {
+      await emitOnDemandEmpty({
+        taskScheduleMod: stubMod,
+        request: { id: 'req-b', taskType: 'pr-reviewer' },
+        targetApp: { id: 'app-1', name: 'PortOS' },
+        taskConfig: { type: 'on-demand', perpetual: false }
+      });
+    } finally {
+      cosEvents.off('schedule:on-demand-empty', handler);
+    }
+    expect(second[0]).toMatchObject({ reason: null });
+  });
+
   it('reads the LI last-run reason only for the layered-intelligence task type', () => {
     // Source-pinned (the behavioral read dynamic-imports the live app store):
     // the reason surfacing is gated on the LI task type + the 'idle' outcome and
@@ -1606,6 +1657,10 @@ describe('pr-reviewer security preflight wiring', () => {
     expect(preconditionAt, 'the ordinary stage gate must remain in the generator').toBeGreaterThan(-1);
     expect(preflightAt).toBeLessThan(preconditionAt);
     expect(promptAt, 'a passed preflight must select the current pipeline stage body').toBeGreaterThan(-1);
+    // The skip reason must be recorded before the `return null;` — otherwise a
+    // user-initiated "Review this PR" that hits the security guard, an unreviewable
+    // target PR, etc. reports the generic "nothing to do" toast instead of why.
+    expect(body).toContain("recordPerpetualTransient('pr-reviewer', app.id, securityPreflight.skipped ? { reason: securityPreflight.reason || null } : null)");
     expect(body).toContain('if (securityPreflight.skipped) return null;');
     expect(GEN_SRC).toContain('previousStageOutput');
     expect(GEN_SRC).toContain('security-scan-report-pending');
@@ -1626,7 +1681,8 @@ describe('pr-reviewer security preflight wiring', () => {
 
     expect(parkAt, 'a parked pr-reviewer must not regenerate').toBeGreaterThan(-1);
     expect(parkAt).toBeLessThan(scanAt);
-    expect(body).toContain("return { skipped: true, reason: 'parked' };");
+    expect(body).toContain("const reason = 'parked';");
+    expect(body).toContain('return { skipped: true, reason };');
   });
 
   it('narrows a targeted run before the fingerprint, the scan, and the stage-2 allowlist', () => {
