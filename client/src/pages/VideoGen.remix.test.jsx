@@ -217,6 +217,23 @@ describe('VideoGen cross-page Remix handoff', () => {
     expect(screen.getByRole('button', { name: /Generate/ })).toBeEnabled();
   });
 
+  it('keeps waiting when a background refresh fails beside the fetch it is waiting on', async () => {
+    // The mount fetch and the completion refresh write one shared load
+    // sentinel. A blip on the background one must not strand the handoff and
+    // leave "couldn't load your history" sitting over a gallery that loaded.
+    let settleMount;
+    state.listVideoHistory.mockReturnValueOnce(new Promise((resolve) => { settleMount = resolve; }));
+    await renderVideoGenPage(`/media/video?remix=${RECORD.id}`);
+
+    state.listVideoHistory.mockRejectedValueOnce(new Error('transient'));
+    await act(async () => { await state.completionRefresh.onVideoCompleted(); });
+    expect(screen.queryByText(/Couldn't load your render history/)).toBeNull();
+
+    await act(async () => { settleMount([RECORD]); });
+    await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(RECORD.prompt));
+    expect(screen.queryByText(/Couldn't load your render history/)).toBeNull();
+  });
+
   it('offers a retry when the history fetch fails, and restores once it succeeds', async () => {
     state.listVideoHistory.mockRejectedValueOnce(new Error('offline'));
     await renderVideoGenPage(`/media/video?remix=${RECORD.id}`);

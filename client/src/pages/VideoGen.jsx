@@ -340,13 +340,26 @@ export default function VideoGen() {
   // sentinel rather than `history.length` — the Remix handoff below has to tell
   // "history is still in flight / failed to load" apart from "history loaded
   // and has no such record", and an empty array is a legitimate loaded state.
+  //
+  // The mount fetch and the completion refresh share this one sentinel, so the
+  // handoff also needs to know whether ANOTHER fetch is still running before it
+  // trusts an 'error': a transient failure on a background refresh must not
+  // strand a handoff that the in-flight mount fetch is about to satisfy. The
+  // count is a ref because only the effects read it, and they run after commit.
   const [historyLoad, setHistoryLoad] = useState('loading');
-  const refreshHistory = useCallback(() => listVideoHistory()
-    .then((items) => {
-      setHistory(Array.isArray(items) ? items : []);
-      setHistoryLoad('loaded');
-    })
-    .catch(() => setHistoryLoad('error')), []);
+  const historyInFlightRef = useRef(0);
+  // `silent` — this page owns the failure UI (the Remix banner below, and the
+  // gallery simply staying empty), so the shared toast would double it.
+  const refreshHistory = useCallback(() => {
+    historyInFlightRef.current += 1;
+    return listVideoHistory({ silent: true })
+      .then((items) => {
+        setHistory(Array.isArray(items) ? items : []);
+        setHistoryLoad('loaded');
+      })
+      .catch(() => setHistoryLoad('error'))
+      .finally(() => { historyInFlightRef.current -= 1; });
+  }, []);
   useMediaCompletionRefresh({ onVideoCompleted: refreshHistory });
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
 
@@ -452,17 +465,18 @@ export default function VideoGen() {
   // otherwise replay it over a form the user has been editing the whole time.
   const remixHandoffId = searchParams.get('remix');
   const settledRemixHandoffRef = useRef(null);
+  // null while nothing is wrong; otherwise 'error' (the history fetch failed,
+  // retryable) or 'missing' (history loaded and holds no such record).
+  const [remixHandoffProblem, setRemixHandoffProblem] = useState(null);
   // The restore waits on a history round trip, so unlike the old URL bundle
   // (applied synchronously on mount) there is a window in which the form still
   // holds the page defaults and is about to be replaced wholesale. Announce it
   // and hold Generate: rendering here would spend GPU time on the defaults while
-  // the user believes they are looking at the clip's settings.
-  // Only Retry puts `historyLoad` back to 'loading' after it has settled, and
-  // that is exactly a re-pending handoff — so the two conditions are enough.
-  const remixHandoffPending = !!remixHandoffId && historyLoad === 'loading';
-  // null while nothing is wrong; otherwise 'error' (the history fetch failed,
-  // retryable) or 'missing' (history loaded and holds no such record).
-  const [remixHandoffProblem, setRemixHandoffProblem] = useState(null);
+  // the user believes they are looking at the clip's settings. The window runs
+  // from the parameter appearing until the handoff either restores (which strips
+  // it) or reports a problem — which also covers the wait on a sibling fetch
+  // below, with no second sentinel. Retry re-enters it by clearing the problem.
+  const remixHandoffPending = !!remixHandoffId && !remixHandoffProblem;
   const consumeRemixHandoff = useCallback(() => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -480,6 +494,12 @@ export default function VideoGen() {
     // lie every time the page is opened faster than the history round trip.
     // Any banner still up belongs to a previous handoff, so it goes.
     if (historyLoad === 'loading') { setRemixHandoffProblem(null); return; }
+    // The sentinel is shared with the completion refresh, so an 'error' may
+    // belong to a background fetch that failed alongside the one this handoff is
+    // actually waiting on. Keep waiting while any fetch is still running, or a
+    // transient blip on the sibling would strand a handoff the in-flight request
+    // is about to satisfy.
+    if (historyLoad === 'error' && historyInFlightRef.current > 0) return;
     settledRemixHandoffRef.current = remixHandoffId;
     if (historyLoad === 'error') {
       // Keep the param in the URL — Retry resolves this same handoff.
