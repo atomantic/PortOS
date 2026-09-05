@@ -202,7 +202,15 @@ export async function checkForUpdate() {
     const state = await loadState();
     const currentVersion = await getCurrentVersion();
 
-    const raw = await execGh(['api', `repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest`]);
+    // `backoffKey` opts this periodic read into execGh's consecutive-failure
+    // backoff — the 30-min scheduler retries a failure on its very next tick
+    // with no cooldown of its own, which piled up alongside branch-reconcile's
+    // identical gap during a real `gh` blip (both logged the same incident).
+    const raw = await execGh(
+      ['api', `repos/${UPSTREAM_OWNER}/${UPSTREAM_REPO}/releases/latest`],
+      undefined,
+      { backoffKey: 'update-check' }
+    );
     let data;
     try { data = JSON.parse(raw); } catch { throw new Error(`Failed to parse GitHub release response: ${raw.slice(0, 200)}`); }
     const release = {

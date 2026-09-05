@@ -77,6 +77,40 @@ const reposForAccount = (data, login = data.githubUser) => Object.fromEntries(
   Object.entries(data.repos || {}).filter(([, repo]) => repoBelongsToAccount(repo, login))
 );
 
+// Consecutive-failure backoff, opt-in per call via `backoffKey`. A caller that
+// polls the same gh read on every scheduler tick (branch-reconcile's `pr list`,
+// updateChecker's release check, …) must not re-fire it on the very next tick
+// after a failure — that is what piled up concurrent 60s-timeout `gh`
+// processes across every managed repo during a real `gh` blip (branch-reconcile,
+// updateChecker, and repeated retries all hit the same struggling `gh` at once).
+// One-off/mutating calls (create a PR, merge, set a secret) intentionally opt
+// out by not passing `backoffKey` — silently skipping those would be a correctness
+// surprise, not a load-shedding win. In-memory only: a stuck cooldown clears
+// itself after GH_BACKOFF_MAX_MS, same as a server restart would clear it.
+const GH_BACKOFF_BASE_MS = 30_000;
+const GH_BACKOFF_MAX_MS = 15 * 60 * 1000;
+const ghCallBackoff = new Map();
+
+function ghBackoffActive(key, now = Date.now()) {
+  const entry = ghCallBackoff.get(key);
+  return Boolean(entry && now < entry.retryAfter);
+}
+
+function recordGhCallOutcome(key, ok, now = Date.now()) {
+  if (ok) {
+    ghCallBackoff.delete(key);
+    return;
+  }
+  const failures = (ghCallBackoff.get(key)?.failures || 0) + 1;
+  const delay = Math.min(GH_BACKOFF_BASE_MS * 2 ** (failures - 1), GH_BACKOFF_MAX_MS);
+  ghCallBackoff.set(key, { failures, retryAfter: now + delay });
+}
+
+/** Test seam — drops the in-memory `execGh` backoff state between runs. */
+export function __resetGhCallBackoff() {
+  ghCallBackoff.clear();
+}
+
 /**
  * Execute a gh CLI command safely using spawn. `gh` hits the network, so a
  * stalled call (bad credentials prompt, hung network) would otherwise leave
@@ -85,8 +119,13 @@ const reposForAccount = (data, login = data.githubUser) => Object.fromEntries(
  * process. `timeoutMs` kills the child and rejects with a clear error; it's
  * cleared on normal exit so it never fires for a completed run. `input`, when
  * supplied, is written to stdin (used by structured `gh api --input -` calls).
+ * `backoffKey`, when supplied, opts this call into the consecutive-failure
+ * backoff above — see the comment there for why it's opt-in.
  */
-export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null, env = null, input = null } = {}) {
+export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = null, env = null, input = null, backoffKey = null } = {}) {
+  if (backoffKey !== null && ghBackoffActive(backoffKey)) {
+    return Promise.reject(new Error(`gh command backing off for ${backoffKey} after repeated failures`));
+  }
   return new Promise((resolve, reject) => {
     const operation = 'gh command';
     const baseEnv = env || process.env;
@@ -97,11 +136,13 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    const settle = (ok) => { if (backoffKey !== null) recordGhCallOutcome(backoffKey, ok); };
     const timer = setTimeout(() => {
       timedOut = true;
       // setTimeout callback boundary — guard so a kill() throw can't crash
       // the process (e.g. the child already exited between checks).
       try { child.kill('SIGKILL'); } catch (err) { console.error(`❌ execGh: failed to kill timed-out ${operation}: ${err.message}`); }
+      settle(false);
       reject(new Error(`${operation} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     child.stdout.on('data', (d) => { stdout += d.toString(); });
@@ -110,23 +151,27 @@ export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS, { cwd = nul
       if (timedOut) return;
       clearTimeout(timer);
       if (code !== 0) {
+        settle(false);
         const error = new Error(stderr.trim() || `gh exited with code ${code}`);
         error.ghExitCode = code;
         error.ghStderr = stderr.trim();
         reject(error);
       } else {
+        settle(true);
         resolve(stdout.trim());
       }
     });
     child.on('error', (err) => {
       if (timedOut) return;
       clearTimeout(timer);
+      settle(false);
       reject(err);
     });
     if (input !== null && input !== undefined) {
       child.stdin.on('error', (err) => {
         if (timedOut || err.code === 'EPIPE') return;
         clearTimeout(timer);
+        settle(false);
         reject(err);
       });
       child.stdin.end(String(input));

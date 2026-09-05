@@ -34,6 +34,7 @@ vi.mock('./settings.js', () => {
 import { spawn } from '../lib/childProcess.js';
 import {
   __resetGitHubDataCache,
+  __resetGhCallBackoff,
   execGh,
   getGitHubAuthStatus,
   getPullRequestState,
@@ -157,6 +158,86 @@ describe('execGh', () => {
       authenticated: false,
       status: 'unreachable',
     });
+  });
+});
+
+// A caller that polls the same gh read on every scheduler tick (branch-reconcile's
+// `pr list`, updateChecker's release check, …) must not re-fire it on the very
+// next tick after a failure — see the comment above `execGh`'s backoff map for
+// the incident this prevents.
+describe('execGh backoffKey', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    __resetGhCallBackoff();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not spawn while a key is in its cooldown after a failure', async () => {
+    const failing = makeChild();
+    spawn.mockReturnValueOnce(failing);
+    const first = execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' });
+    first.catch(() => {});
+    failing.emit('close', 1);
+    await expect(first).rejects.toThrow();
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    await expect(execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' }))
+      .rejects.toThrow(/backing off/);
+    expect(spawn).toHaveBeenCalledTimes(1); // second call never spawned a child
+  });
+
+  it('spawns again once the backoff window elapses', async () => {
+    const failing = makeChild();
+    spawn.mockReturnValueOnce(failing);
+    const first = execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' });
+    first.catch(() => {});
+    failing.emit('close', 1);
+    await expect(first).rejects.toThrow();
+
+    vi.advanceTimersByTime(31_000); // past the 30s base cooldown for one failure
+
+    const succeeding = makeChild();
+    spawn.mockReturnValueOnce(succeeding);
+    const second = execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' });
+    succeeding.emit('close', 0);
+    await expect(second).resolves.toBe('');
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears the backoff on success so a later failure starts a fresh cooldown', async () => {
+    const ok = makeChild();
+    spawn.mockReturnValueOnce(ok);
+    const p1 = execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' });
+    ok.emit('close', 0);
+    await expect(p1).resolves.toBe('');
+
+    const ok2 = makeChild();
+    spawn.mockReturnValueOnce(ok2);
+    const p2 = execGh(['pr', 'list'], 5000, { backoffKey: 'github.com/o/r' });
+    ok2.emit('close', 0);
+    await expect(p2).resolves.toBe('');
+    expect(spawn).toHaveBeenCalledTimes(2); // no backoff was ever armed
+  });
+
+  it('never backs off a call with no backoffKey — one-off/mutating calls opt out', async () => {
+    const failing = makeChild();
+    spawn.mockReturnValueOnce(failing);
+    const p1 = execGh(['repo', 'create', 'o/r']);
+    p1.catch(() => {});
+    failing.emit('close', 1);
+    await expect(p1).rejects.toThrow();
+
+    const failing2 = makeChild();
+    spawn.mockReturnValueOnce(failing2);
+    const p2 = execGh(['repo', 'create', 'o/r']);
+    p2.catch(() => {});
+    failing2.emit('close', 1);
+    await expect(p2).rejects.toThrow(/exited with code 1/); // real second attempt, not a backoff rejection
+    expect(spawn).toHaveBeenCalledTimes(2);
   });
 });
 

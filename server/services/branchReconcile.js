@@ -213,7 +213,9 @@ export function classifyBranches(inputs) {
  * Three answers, never two (#3358):
  *   - a Map (possibly empty) — the forge answered
  *   - an EMPTY Map for a non-GitHub origin — there is no GitHub PR state to have
- *   - `null` — we could NOT ask (gh transport/auth failure, unparseable output)
+ *   - `null` — we could NOT ask (gh transport/auth failure, unparseable output,
+ *     or a backoff cooldown from recent consecutive failures — see `execGh`'s
+ *     `backoffKey`, passed here as the repo spec)
  *
  * `null` must never be read as "this branch has no PR": that is what made an
  * unreachable forge classify every pushed branch as NEEDS_PR and hand the
@@ -235,11 +237,16 @@ async function getOpenPrsByHead(repoPath, providedOrigin) {
   // the host-qualified `HOST/OWNER/REPO` selector (null for a non-GitHub origin).
   const repoSpec = githubRepoSpec(origin);
   if (!repoSpec) return new Map();
+  // `backoffKey: repoSpec` opts this polling read into execGh's consecutive-
+  // failure backoff — this call is retried on every scheduler tick with no
+  // parking cooldown (resolveBranchReconcileBlock treats `prStateUnavailable`
+  // as transient), so a `gh` blip must not turn into every managed repo
+  // re-firing this same expensive call on its very next tick.
   const raw = await execGh([
     'pr', 'list', '--repo', repoSpec, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),
     '--json', 'number,headRefName,mergeable,isDraft,url'
-  ]).catch((err) => {
+  ], undefined, { backoffKey: repoSpec }).catch((err) => {
     console.error(`❌ branch-reconcile: gh pr list failed for ${repoSpec}: ${err.message}`);
     return null;
   });
