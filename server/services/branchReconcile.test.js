@@ -764,6 +764,24 @@ describe('unreachable forge (#3358)', () => {
     expect(res.inFlight).toEqual([]);
   });
 
+  it('opts the `gh pr list` read into execGh\'s consecutive-failure backoff, keyed by repo spec', async () => {
+    // The actual backoff/cooldown mechanics live in execGh itself (github.js,
+    // mocked wholesale here) so every polling caller shares one implementation —
+    // this only proves branch-reconcile hands it the right key. See
+    // github.test.js for the backoff behavior itself.
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    git.isBranchMergedInto.mockResolvedValue(false);
+    execGh.mockResolvedValue('[]');
+
+    await reconcile('/repo');
+
+    const [, , options] = execGh.mock.calls.find(([callArgs]) => callArgs[0] === 'pr' && callArgs[1] === 'list');
+    expect(options).toMatchObject({ backoffKey: 'github.com/atomantic/PortOS' });
+  });
+
   it('reuses the successful origin read for PR state instead of reopening a fail-closed gap', async () => {
     git.getBranches.mockResolvedValue([
       { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }

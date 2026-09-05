@@ -289,6 +289,29 @@ describe('checkForUpdate', () => {
     expect(result.latestRelease.version).toBe('1.27.0');
   });
 
+  it('opts the release-check read into execGh\'s consecutive-failure backoff', async () => {
+    readJSONFile
+      .mockResolvedValueOnce({
+        lastCheck: null,
+        latestRelease: null,
+        ignoredVersions: [],
+        updateInProgress: false,
+        lastUpdateResult: null
+      })
+      .mockResolvedValueOnce({ version: '1.26.0' });
+    execGh.mockResolvedValue(JSON.stringify({ tag_name: 'v1.27.0' }));
+
+    await checkForUpdate();
+    // The scheduler retries a failed check on its next 30-min tick with no
+    // cooldown of its own — the actual backoff mechanics live in execGh
+    // itself (github.js, mocked wholesale here); see github.test.js.
+    expect(execGh).toHaveBeenCalledWith(
+      ['api', 'repos/atomantic/PortOS/releases/latest'],
+      undefined,
+      { backoffKey: 'update-check' }
+    );
+  });
+
   it('should not detect update when versions match', async () => {
     readJSONFile
       .mockResolvedValueOnce({
