@@ -39,6 +39,8 @@ import { readCodexRoutingOverride } from '../lib/codexUserConfig.js';
 import { inferTuiCommand } from '../lib/providerVendors.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { peekCodexAccountReadiness } from './codexAppServer.js';
+import { getCodexOssSupport, peekCodexOssSupport, refreshCodexOssSupportInBackground } from './codexOssSupport.js';
+import { codexOssLocalProvider } from '../lib/providerModels.js';
 import { delimiter, isAbsolute } from 'path';
 import {
   getProviderRuntime,
@@ -98,6 +100,19 @@ const runtimeSnapshotFor = (keys) => {
   return runtimes;
 };
 
+// The codex `--oss` verdict for a LOCAL-BACKED codex record, read cache-only.
+// Unlike the ChatGPT account read (a heavyweight `codex app-server` spawn, so
+// cache-only with no background fill), `codex exec --help` is the same class of
+// probe as the runtime `--version` sweep above — so a cold cache kicks the same
+// kind of background refresh and the NEXT read is accurate. A record with no
+// local backing is never probed: the flags are not among its prerequisites.
+const codexOssSupportFor = (provider) => {
+  if (!codexOssLocalProvider(provider)) return null;
+  const support = peekCodexOssSupport(provider?.command);
+  if (!support) refreshCodexOssSupportInBackground(provider?.command);
+  return support;
+};
+
 // CACHE-ONLY (`peek`, never `get`): the Codex ChatGPT readiness a card shows
 // must never be the thing that spawns `codex app-server`. A cold cache answers
 // `null` — NOT PROBED — so `GET /api/providers` stays a synchronous read and a
@@ -113,6 +128,7 @@ const forProvider = (provider, runtimes, gatewayKeySet) => providerPrerequisites
   // Advisory only: it never reaches `missing`, so it cannot change routing or
   // a readiness verdict.
   codexRouting: readCodexRoutingOverride(),
+  codexOssSupport: codexOssSupportFor(provider),
 });
 
 const effectiveProcessCommand = (provider) => {
@@ -205,6 +221,13 @@ export async function getProviderPrerequisiteReadinessMap(providers, {
     await getProviderRuntimeStatus(key),
   ]));
   const runtimes = { ...cached, ...Object.fromEntries(probed) };
+  // An authoritative caller cannot publish a codex-local choice on an unprobed
+  // flag verdict, so this path AWAITS the `--help` probe the sync path can only
+  // kick in the background. One probe per distinct command, not per provider.
+  await Promise.all([...new Set(processProviders
+    .filter((provider) => codexOssLocalProvider(provider))
+    .map((provider) => provider.command))]
+    .map((command) => getCodexOssSupport(command).catch(() => null)));
   const gatewayKeySet = gatewayKeyState(list);
   return Object.fromEntries(targetList.map((provider, index) => {
     const effectiveProvider = processProviders[index];

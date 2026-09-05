@@ -9,9 +9,23 @@
  * Dependency-light on purpose: imports only `providerModels.js` helpers,
  * mirroring the other vendor files so it stays importable from the standalone
  * autofixer.
+ *
+ * The RECORD-CLASSIFICATION half of the local-model backing
+ * (`CODEX_OSS_LOCAL_PROVIDERS`, `codexOssLocalProvider`,
+ * `codexUnsupportedLocalRuntime`) lives in `providerModels.js` beside the
+ * `localRuntimeNamespace` it wraps, for the same reason `isCodexProvider` is
+ * defined there rather than here: classifying a provider RECORD is that file's
+ * job, and it lets a consumer that only needs the verdict —
+ * `providerPrerequisites.js` — skip a vendor's argv module entirely. Argv
+ * construction stays here.
  */
 
-import { argvHasFlag, buildCodexStartupArgs, commandBasename } from './providerModels.js';
+import {
+  argvHasFlag,
+  buildCodexStartupArgs,
+  codexOssLocalProvider,
+  commandBasename,
+} from './providerModels.js';
 
 export const CODEX_COMMAND = 'codex';
 export const CODEX_CLI_ID = 'codex';
@@ -60,5 +74,28 @@ export function ensureCodexTuiArgs(args, provider = null) {
     prefix.push('--ignore-user-config');
   }
   prefix.push(...buildCodexStartupArgs(args));
+  // The local backing, on the same posture-flag step both TUI spawn paths
+  // share — an interactive `codex-ollama` session without it silently reaches
+  // the OpenAI cloud instead of the daemon the record names.
+  prefix.push(...buildCodexOssArgs(provider, args));
   return prefix.length ? [...prefix, ...args] : args;
+}
+
+
+/**
+ * `['--oss', '--local-provider', '<ns>']` for a local-runtime-backed codex
+ * record, or `[]`.
+ *
+ * Skipped when `existingArgs` already pins either flag, so a user who typed the
+ * pair into their provider args keeps their own spelling instead of getting a
+ * duplicate codex rejects.
+ * @param {object|null|undefined} provider
+ * @param {string[]} [existingArgs]
+ * @returns {string[]}
+ */
+export function buildCodexOssArgs(provider, existingArgs = []) {
+  const localProvider = codexOssLocalProvider(provider);
+  if (!localProvider) return [];
+  if (argvHasFlag(existingArgs, ['--oss', '--local-provider'])) return [];
+  return ['--oss', '--local-provider', localProvider];
 }
