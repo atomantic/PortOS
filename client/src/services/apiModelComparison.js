@@ -7,3 +7,7 @@ export const importModelComparison = (catalog, options) => request('/providers/c
 export const discoverComparisonModels = (providerId, options) => request('/providers/comparison/discover', {
   method: 'POST', body: JSON.stringify({ providerId }), ...options,
 });
+
+export const syncArtificialAnalysis = (data, options) => request('/providers/comparison/sync-aa', {
+  method: 'POST', body: JSON.stringify(data || {}), ...options,
+});

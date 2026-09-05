@@ -88,3 +88,41 @@ it('imports an observation when reasoning pricing is its only known metric', asy
   const stored = (await request(app).get('/comparison')).body.observations.find(item => item.id === row.id);
   expect(stored).toEqual(row);
 });
+
+it('rejects sync-aa when no API key is provided and syncs successfully when mocked', async () => {
+  delete process.env.ARTIFICIAL_ANALYSIS_API_KEY;
+  const noKey = await request(app).post('/comparison/sync-aa').send({});
+  expect(noKey.status).toBe(400);
+
+  const originalFetch = globalThis.fetch;
+  const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((url, opts) => {
+    if (typeof url === 'string' && url.includes('artificialanalysis.ai')) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          data: [{
+            id: 'test-uuid-1',
+            name: 'TestModel (high)',
+            slug: 'test-model-high',
+            model_creator: { name: 'TestProvider' },
+            evaluations: { artificial_analysis_intelligence_index: 45.5 },
+            artificial_analysis_intelligence_index_cost: { cost_per_task: { total_cost: 0.12 } },
+            pricing: { price_1m_input_tokens: 1, price_1m_output_tokens: 5 },
+            performance: { median_end_to_end_response_time_seconds: 12.3, median_output_tokens_per_second: 80 },
+          }],
+          pagination: { has_more: false },
+        }),
+      });
+    }
+    return originalFetch(url, opts);
+  });
+
+  try {
+    const res = await request(app).post('/comparison/sync-aa').send({ apiKey: 'mock-key' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.observations).toBeGreaterThan(0);
+  } finally {
+    spy.mockRestore();
+  }
+});
