@@ -913,6 +913,13 @@ const analysisStrings = (value) => (Array.isArray(value) ? value : [])
   .filter(Boolean)
   .slice(0, 12);
 
+const requirePlanningVerdict = (content) => {
+  if (typeof content?.summary !== 'string' || !content.summary.trim()
+    || !Array.isArray(content.risks) || !content.risks.every((risk) => typeof risk === 'string' && risk.trim())) {
+    throw aiShapeError('The planning review returned no explicit verdict');
+  }
+};
+
 /** Read-only story-editor pass over one episode's beat outline. */
 export async function reviewEpisodeOutline(loomId, episodeId, { providerId, model, effort, operationId, planningGate = false } = {}) {
   const loom = await requireLoom(loomId);
@@ -977,6 +984,7 @@ export async function reviewEpisodeOutline(loomId, episodeId, { providerId, mode
   }, { providerId, model, effort, operationId }, {
     action: 'review-episode-outline', label: 'Reviewing episode outline', source: 'fableloom-review-episode-outline', status: reviewStatus,
   });
+  if (planningGate) requirePlanningVerdict(content);
   const analysis = {
     summary: trimTo(content?.summary, 2000),
     strengths: analysisStrings(content?.strengths),
@@ -1043,6 +1051,7 @@ export async function reviewSeriesPlan(loomId, { providerId, model, effort, oper
   }, { providerId, model, effort, operationId }, {
     action: 'review-series-plan', label: 'Reviewing series plan', source: 'fableloom-review-series-plan',
   });
+  if (planningOnly) requirePlanningVerdict(content);
   const analysis = {
     summary: trimTo(content?.summary, 2000),
     strengths: analysisStrings(content?.strengths),

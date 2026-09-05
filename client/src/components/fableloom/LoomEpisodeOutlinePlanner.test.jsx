@@ -12,6 +12,8 @@ vi.mock('../ProviderModelSelector', () => ({ default: ({ onProviderChange, onMod
 
 vi.mock('../../services/api', () => ({
   generateLoomEpisodeOutline: vi.fn(),
+  planLoomEpisodeShots: vi.fn(),
+  applyLoomEpisodeShots: vi.fn(),
   reviewLoomEpisodeOutline: vi.fn(),
   updateLoomEpisode: vi.fn(),
   validateLoomEpisodeOutline: vi.fn(),
@@ -153,4 +155,16 @@ describe('LoomEpisodeOutlinePlanner', () => {
       { silent: true },
     ));
   });
+});
+
+it('blocks competing outline work until shot planning settles', async () => {
+  let finish;
+  api.planLoomEpisodeShots.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  render(<LoomEpisodeOutlinePlanner open loom={loom} episode={{ ...episode, nodes: [{ id: 'scene-1' }] }} onLoomUpdate={vi.fn()} onExpand={vi.fn()} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Preview shot split' }));
+  expect(screen.getByRole('button', { name: 'Refresh with AI' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Validate outline' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Expand validated outline to teleplay' })).toBeDisabled();
+  finish({ review: { summary: 'Ready.' }, groups: [] });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Expand validated outline to teleplay' })).toBeEnabled());
 });

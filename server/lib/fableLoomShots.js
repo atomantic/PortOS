@@ -12,6 +12,9 @@ export function sanitizeShot(raw) {
   };
 }
 
+// Shared with the structured shot schema so every accepted speaker is counted.
+export const isShotSpeakerCue = (text) => typeof text === 'string' && !/^(?:INT\.|EXT\.|INT\/EXT\.|EST\.|CUT TO|FADE|TELEPLAY)/.test(text) && /^[\p{Lu}\d][\p{Lu}\d .’'()—\-/:&]{0,69}$/u.test(text);
+
 /** Fountain-style cues; action and parentheticals consume no spoken-word budget. */
 export function shotDialogueWords(prose = '') {
   let speaking = false;
@@ -20,7 +23,7 @@ export function shotDialogueWords(prose = '') {
     const text = line.trim();
     if (!text) { speaking = false; continue; }
     if (/^(?:INT\.|EXT\.|INT\/EXT\.|EST\.|CUT TO|FADE|TELEPLAY)/.test(text)) { speaking = false; continue; }
-    if (!speaking && /^[\p{Lu}\d][\p{Lu}\d .’'()—-]{1,70}$/u.test(text)) { speaking = true; continue; }
+    if (!speaking && isShotSpeakerCue(text)) { speaking = true; continue; }
     if (speaking && !/^\([^)]*\)$/.test(text)) words += text.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)?.length || 0;
   }
   return words;

@@ -356,7 +356,7 @@ describe('planning autopilot boundary', () => {
     const planned = { id: 'loom-plan', participationMode: 'protagonist', seriesPlan: { storyArc: 'A complete arc.', plotPoints: [] }, episodes: [1, 2].map((number) => ({ id: `ep-${number}`, number, nodes: [] })) };
     getLoomMock.mockImplementation(async () => planned);
     const order = [];
-    planningMocks.reviewSeriesPlan.mockImplementation(async () => { order.push('review-plan'); return { analysis: { risks: ['Clarify the payoff'], recommendations: [] } }; });
+    planningMocks.reviewSeriesPlan.mockImplementation(async () => { order.push('review-plan'); return { analysis: { risks: order.includes('repair-plan') ? [] : ['Clarify the payoff'], recommendations: [] } }; });
     planningMocks.feedbackSeriesPlan.mockImplementation(async () => { order.push('repair-plan'); });
     planningMocks.generateEpisodeOutline.mockImplementation(async (_id, episodeId) => {
       order.push(`draft-${episodeId}`);
@@ -370,11 +370,22 @@ describe('planning autopilot boundary', () => {
     const run = await startFableLoomEditorialAutopilot('loom-plan', { mode: 'planning', maxRounds: 1 });
     const finished = await waitForTerminal(run.id);
     expect(finished.status).toBe('completed');
-    expect(order).toEqual(['review-plan', 'repair-plan', 'draft-ep-1', 'review-ep-1', 'draft-ep-2', 'review-ep-2']);
+    expect(order).toEqual(['review-plan', 'repair-plan', 'review-plan', 'draft-ep-1', 'review-ep-1', 'draft-ep-2', 'review-ep-2']);
     expect(remediateMock).not.toHaveBeenCalled();
     expect(playtestMock).not.toHaveBeenCalled();
     expect(mutateLoomMock).not.toHaveBeenCalled();
     expect(planned.episodes.every((episode) => !episode.nodes.length)).toBe(true);
+  });
+
+  it('stops before drafting when the bounded plan repair did not resolve its findings', async () => {
+    getLoomMock.mockResolvedValue({ seriesPlan: { storyArc: 'An arc.', plotPoints: [] }, episodes: [{ id: 'ep-1', number: 1, nodes: [] }] });
+    planningMocks.reviewSeriesPlan.mockResolvedValue({ analysis: { risks: ['The payoff contradicts the premise.'] } });
+    planningMocks.feedbackSeriesPlan.mockResolvedValue({});
+    const run = await startFableLoomEditorialAutopilot('loom-plan', { mode: 'planning', maxRounds: 1 });
+    expect(await waitForTerminal(run.id)).toMatchObject({ status: 'paused', pauseReason: 'round-limit', residualFindings: [expect.objectContaining({ problem: 'The payoff contradicts the premise.' })] });
+    expect(planningMocks.reviewSeriesPlan).toHaveBeenCalledTimes(2);
+    expect(planningMocks.feedbackSeriesPlan).toHaveBeenCalledTimes(1);
+    expect(planningMocks.generateEpisodeOutline).not.toHaveBeenCalled();
   });
 
   it('stops at a broken outline within the retry budget before later episodes or media', async () => {

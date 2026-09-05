@@ -18,7 +18,7 @@ const requireSource = async (id, episodeId) => {
   if (!episode.nodes.length) throw new ServerError('Write the dramatic scenes before splitting them into shots.', { status: 409 });
   return { loom, episode };
 };
-const script = (shot) => [shot.action, ...shot.dialogue.map((line) => `${line.speaker.toUpperCase()}\n${line.text}`)].join('\n\n');
+const script = (shot) => [shot.action, ...shot.dialogue.map((line) => `${line.speaker.toUpperCase()}\n${line.text.replace(/\s+/g, ' ').trim()}`)].join('\n\n');
 
 function compile(loom, episode, groups) {
   const parsed = shotGroupsSchema.parse(groups).map((group) => ({ ...group, shots: group.shots.map((shot) => ({

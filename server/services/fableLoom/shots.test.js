@@ -49,6 +49,15 @@ describe('timed shot autopilot', () => {
     expect(nodes[0].shot.dramaticSceneId).toBe(nodes[1].shot.dramaticSceneId);
     expect(result.validation.stats.ready).toBe(true);
   });
+  it('counts short and compound speaker cues before accepting a shot plan', async () => {
+    const { loom, ep, groups } = await setup();
+    groups[0].shots[0].dialogue = [{ speaker: 'Q', text: 'Too many spoken words. '.repeat(8) }, { speaker: 'RADIO/AI', text: '\n\nMore spoken words. '.repeat(8) }];
+    runStagedLLM.mockResolvedValueOnce({ content: { groups } });
+    await expect(runEpisodeShotAutopilot(loom.id, ep, { maxRounds: 1, apply: true })).rejects.toThrow('dialogue needs');
+    expect(runStagedLLM).toHaveBeenCalledTimes(1);
+    expect((await getLoom(loom.id)).episodes).toEqual(loom.episodes);
+  });
+
   it('rejects oversized dialogue before editorial or mutation, and rejects stale previews', async () => {
     const { loom, ep, groups } = await setup();
     const bad = structuredClone(groups);

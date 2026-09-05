@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { isShotSpeakerCue } from './fableLoomShots.js';
 import { LOOM_LIMITS } from './fableLoomLimits.js';
 import { LOOM_FORMATS } from './fableLoomFormats.js';
 import {
@@ -461,7 +462,7 @@ export const shotDraftSchema = z.object({
   protagonistPresence: z.enum(['onscreen', 'offscreen']).optional(),
   title: z.string().min(1).max(300), durationSeconds: z.number().min(5).max(10),
   action: z.string().min(1).max(1200), framing: z.string().min(1).max(500),
-  dialogue: z.array(z.object({ speaker: z.string().min(1).max(70), text: z.string().min(1).max(500) })).max(6),
+  dialogue: z.array(z.object({ speaker: z.string().min(1).max(70).refine((value) => isShotSpeakerCue(value.toUpperCase()), 'Use a screenplay speaker cue without line breaks or unsupported punctuation'), text: z.string().min(1).max(500) })).max(6),
   imagePrompt: z.string().min(1).max(2000), videoPrompt: z.string().min(1).max(4000),
 });
 export const shotGroupsSchema = z.array(z.object({ sceneId: z.string().min(1).max(80), shots: z.array(shotDraftSchema).min(1).max(40) })).min(1).max(200);

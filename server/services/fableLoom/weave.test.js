@@ -455,6 +455,17 @@ describe('episode outline AI review', () => {
     await expect(reviewEpisodeOutline(loomId, episodeId, {})).rejects.toThrow('explicit comprehension verdict');
   });
 
+  it('requires an explicit full review verdict before the planning gate can pass', async () => {
+    const { loomId, episodeId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline() });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'The opening is clear.', risks: [] } });
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'Looks fine.' } });
+    await expect(reviewEpisodeOutline(loomId, episodeId, { planningGate: true })).rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'Looks fine.', risks: 'No problems' } });
+    await expect(reviewSeriesPlan(loomId, { planningOnly: true })).rejects.toMatchObject({ code: 'AI_RESPONSE_INVALID' });
+  });
+
   it('returns deterministic findings alongside editorial analysis', async () => {
     const { loomId, episodeId } = await setup();
     runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });

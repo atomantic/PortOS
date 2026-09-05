@@ -320,11 +320,19 @@ async function runPlanning(run) {
   touch(run, { round: 1, currentStep: 'review-plan', stepIndex: 1, stepLabel: 'Review series plan', message: 'Checking the series arc and challenge assignments before drafting episode outlines…' });
   const review = await reviewSeriesPlan(run.loomId, { ...options, planningOnly: true });
   if (run.cancelRequested) return finishCanceled(run);
-  const planFindings = review.analysis.risks;
-  if (planFindings.length) {
+  let planFindings = review.analysis.risks;
+  for (let attempt = 1; planFindings.length && attempt <= run.maxRounds; attempt += 1) {
     touch(run, { currentStep: 'repair-plan', stepLabel: 'Refine series plan', message: 'Resolving planning findings before episode outlines…' });
     await feedbackSeriesPlan(run.loomId, { ...options, feedback: trimTo(`Resolve these planning findings before scene production. Preserve the episode count and ids. Map every challenge to its intended episode with setup, decision, success, failure and recovery. Do not expand scenes.\n${planFindings.join('\n')}`, 4000) });
     if (run.cancelRequested) return finishCanceled(run);
+    touch(run, { round: attempt, currentStep: 'review-plan', stepLabel: 'Check repaired series plan', message: 'Confirming the series planning findings are resolved before drafting outlines…' });
+    const checked = await reviewSeriesPlan(run.loomId, { ...options, planningOnly: true });
+    if (run.cancelRequested) return finishCanceled(run);
+    planFindings = checked.analysis.risks;
+  }
+  if (planFindings.length) {
+    run.residualFindings = planFindings.map((problem) => ({ severity: 'high', category: 'structure', problem }));
+    return finishPaused(run, 'round-limit', 'The series plan still has review findings. No episode outlines, teleplay or media were generated.');
   }
   let loom = await requireLoomForRun(run.loomId);
   const unmapped = (loom.seriesPlan?.plotPoints || []).filter((item) => item.kind === 'challenge' && !loom.episodes.some((episode) => episode.id === item.episodeId));

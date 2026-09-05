@@ -16,6 +16,25 @@ it('previews with the selected route, then explicitly applies the reviewed finge
   expect(api.planLoomEpisodeShots).toHaveBeenCalledWith('loom-1', 'ep-1', expect.objectContaining({ model: 'example-model', effort: 'low', apply: false }), { silent: true });
   expect(onLoomUpdate).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Apply reviewed shots' }));
+  expect(api.applyLoomEpisodeShots).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Replace with reviewed shots' }));
   await waitFor(() => expect(onLoomUpdate).toHaveBeenCalled());
   expect(api.applyLoomEpisodeShots).toHaveBeenCalledWith('loom-1', 'ep-1', { sourceFingerprint: 'a'.repeat(64), groups }, { silent: true });
+});
+
+it('confirms destructive autopilot replacement and reports its active lifecycle', async () => {
+  let finish;
+  api.planLoomEpisodeShots.mockClear();
+  api.planLoomEpisodeShots.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  const onRunningChange = vi.fn();
+  render(<LoomShotPlanner loom={{ id: 'loom-1' }} episode={{ id: 'ep-1', nodes: [{ id: 'scene-1', image: 'example.png' }] }} onLoomUpdate={vi.fn()} onRunningChange={onRunningChange} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Run shot autopilot' }));
+  expect(api.planLoomEpisodeShots).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  expect(api.planLoomEpisodeShots).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Run shot autopilot' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Replace with shot autopilot' }));
+  await waitFor(() => expect(onRunningChange).toHaveBeenLastCalledWith(true));
+  finish({ review: { summary: 'Applied.' }, groups: [], loom: { id: 'loom-1' } });
+  await waitFor(() => expect(onRunningChange).toHaveBeenLastCalledWith(false));
 });
