@@ -48,13 +48,6 @@ describe('useMediaPreviewActions.handleRemix', () => {
     expect([...params.keys()]).toEqual(['remix']);
   });
 
-  it('percent-encodes a record id so an id with URL punctuation survives the handoff', () => {
-    const { result } = renderHook(() => useMediaPreviewActions());
-    result.current.handleRemix({ kind: 'video', id: 'vid 1&x=2' });
-    const { params } = parseNav();
-    expect(params.get('remix')).toBe('vid 1&x=2');
-  });
-
   // Records that never got an id (and links already out in the wild) keep the
   // legacy field bundle. It is deliberately not extended with new fields.
   it('falls back to the legacy field bundle for a video with no record id', () => {

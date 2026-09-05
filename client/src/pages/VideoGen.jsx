@@ -452,6 +452,14 @@ export default function VideoGen() {
   // otherwise replay it over a form the user has been editing the whole time.
   const remixHandoffId = searchParams.get('remix');
   const settledRemixHandoffRef = useRef(null);
+  // The restore waits on a history round trip, so unlike the old URL bundle
+  // (applied synchronously on mount) there is a window in which the form still
+  // holds the page defaults and is about to be replaced wholesale. Announce it
+  // and hold Generate: rendering here would spend GPU time on the defaults while
+  // the user believes they are looking at the clip's settings.
+  // Only Retry puts `historyLoad` back to 'loading' after it has settled, and
+  // that is exactly a re-pending handoff — so the two conditions are enough.
+  const remixHandoffPending = !!remixHandoffId && historyLoad === 'loading';
   // null while nothing is wrong; otherwise 'error' (the history fetch failed,
   // retryable) or 'missing' (history loaded and holds no such record).
   const [remixHandoffProblem, setRemixHandoffProblem] = useState(null);
@@ -970,7 +978,7 @@ export default function VideoGen() {
   // A federated render answers to the PEER’s readiness, not to this machine’s
   // runtime gates — none of the local probes below describe the hardware it
   // will actually run on.
-  const canEnqueue = prompt.trim() && (remoteTarget.isRemote
+  const canEnqueue = prompt.trim() && !remixHandoffPending && (remoteTarget.isRemote
     ? remoteBlocked === null
     : (isGrok || isFal || isReactor || (!notConnected && !extendModeBlocked
       && !a2vModeBlocked && !icLoraModeBlocked && !byovGateBlocked
@@ -1123,6 +1131,11 @@ export default function VideoGen() {
               would be the worst outcome here: the user pressed Remix, landed on
               a form holding whatever it held before, and would start a render
               with the wrong settings believing they were the clip's. */}
+          {remixHandoffPending && (
+            <p role="status" className="rounded-lg border border-port-border bg-port-bg px-3 py-2 text-xs text-gray-400">
+              Restoring this render's settings — the form below is about to be replaced with them.
+            </p>
+          )}
           {remixHandoffProblem && (
             <div
               role="status"

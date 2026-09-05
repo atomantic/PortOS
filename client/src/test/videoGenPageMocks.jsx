@@ -53,6 +53,8 @@ export const state = {
   activeJob: null,
   /** Cache-status entries keyed by download id, read by the default `getModelStatus`. */
   modelStatuses: {},
+  /** `useModelDownloadStatus().extra` — carries the SHARED text encoder's cache status. */
+  modelDownloadExtra: {},
   /** Override to answer ids the map cannot (e.g. the `__text_encoder_option__:` prefix). */
   getModelStatus: (id) => state.modelStatuses[id] ?? null,
   start: vi.fn(),
@@ -97,6 +99,7 @@ export function resetVideoGenMockState() {
   state.peers = [];
   state.activeJob = null;
   state.modelStatuses = {};
+  state.modelDownloadExtra = {};
   state.getModelStatus = (id) => state.modelStatuses[id] ?? null;
   state.queuedModelId = null;
   state.runtimeInstallComplete = null;
@@ -197,7 +200,7 @@ vi.mock('../hooks/useModelDownloadStatus', () => ({
   TEXT_ENCODER_DOWNLOAD_ID: '__text_encoder__',
   textEncoderDownloadId: (id) => `__text_encoder_option__:${id}`,
   useModelDownloadStatus: () => ({
-    extra: {},
+    extra: state.modelDownloadExtra,
     loading: false,
     statusError: null,
     activeModelId: null,

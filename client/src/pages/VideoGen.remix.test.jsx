@@ -122,6 +122,11 @@ describe('VideoGen cross-page Remix handoff', () => {
     state.attach.mockResolvedValue({ filename: 'example.mp4' });
     state.availableLoras = [LORA];
     state.listVideoHistory.mockResolvedValue([RECORD, LEGACY_RECORD]);
+    // Every weight cached — a ready install. Without this the Generate button
+    // is disabled by the weights gate no matter what, which would let the
+    // "held while the handoff is pending" assertion pass for the wrong reason.
+    state.getModelStatus = () => ({ cached: true });
+    state.modelDownloadExtra = { textEncoder: { cached: true } };
   });
 
   it('restores the same settings from a History handoff as from the in-page gallery', async () => {
@@ -198,9 +203,18 @@ describe('VideoGen cross-page Remix handoff', () => {
     expect(screen.queryByText(/no longer in your history/)).toBeNull();
     expect(screen.queryByText(/Couldn't load your render history/)).toBeNull();
 
+    // It IS announced, and Generate is held: the form still shows the page
+    // defaults and is about to be replaced wholesale, so a render started here
+    // would spend GPU time on the wrong settings under the clip's name.
+    screen.getByText(/Restoring this render's settings/);
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'anything at all' } });
+    expect(screen.getByRole('button', { name: /Generate/ })).toBeDisabled();
+
     await act(async () => { settleHistory([RECORD]); });
     await waitFor(() => expect(screen.getByLabelText('Prompt')).toHaveValue(RECORD.prompt));
     expect(screen.queryByText(/no longer in your history/)).toBeNull();
+    expect(screen.queryByText(/Restoring this render's settings/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Generate/ })).toBeEnabled();
   });
 
   it('offers a retry when the history fetch fails, and restores once it succeeds', async () => {
