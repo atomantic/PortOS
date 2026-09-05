@@ -46,16 +46,21 @@ const FRESH_WORLD_VISIBLE_CHECKPOINTS = new Set([
 const failedStart = (result) => Object.values(result?.results || {})
   .find((entry) => entry?.success === false);
 
+// Prefer the PortOS-owned bridge whenever its scheme matches this page's. The
+// bridge answers the renderer's `/embed-config` with this page's origin, which
+// is the only thing that arms the frame bridge — a direct `:uiPort` load leaves
+// the renderer with no trusted parent and it never replies to the handshake.
+// An HTTP page in front of an HTTPS-only bridge is the one case that still goes
+// direct: the shared certificate covers the MagicDNS name, so an iframe pointed
+// at `https://localhost:5563` would fail on the certificate instead. There the
+// scene renders and the handshake stays dormant, as the contract intends.
 export const hostUrlFor = (host, setup, location = window.location, identity = null) => {
-  let baseUrl;
-  if (location.protocol === 'https:') {
-    if (host.protocol !== 'https') {
-      throw new Error('PortOS is using HTTPS, but the Eidoverse host could not load the shared certificate.');
-    }
-    baseUrl = `https://${location.hostname}:${host.port}/`;
-  } else {
-    baseUrl = `http://${location.hostname}:${setup.uiPort}/`;
+  if (location.protocol === 'https:' && host.protocol !== 'https') {
+    throw new Error('PortOS is using HTTPS, but the Eidoverse host could not load the shared certificate.');
   }
+  const baseUrl = location.protocol === 'https:' || host.protocol === 'http'
+    ? `${host.protocol}://${location.hostname}:${host.port}/`
+    : `http://${location.hostname}:${setup.uiPort}/`;
   if (!identity) return baseUrl;
 
   const url = new URL(baseUrl);

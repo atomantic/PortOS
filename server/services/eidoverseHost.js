@@ -9,6 +9,7 @@ import { EIDOVERSE_PORT } from './eidoverse.js';
 
 const BAD_GATEWAY_BODY = 'Eidoverse Worlds is not running.';
 const HOST_DESCRIPTOR_PATH = '/host';
+const EMBED_CONFIG_PATH = '/embed-config';
 
 // Where a conflicting listener would sit. A local squatter almost always claims
 // loopback — Docker publishes to 127.0.0.1, dev servers bind localhost — and
@@ -64,6 +65,47 @@ const serveHostDescriptor = async (req, res) => {
     return;
   }
   const body = JSON.stringify(descriptor);
+  res.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store',
+  });
+  res.end(body);
+};
+
+// The hostname the browser actually used to reach this bridge. An origin keeps
+// IPv6 brackets and drops the port, so `[::1]:5563` and `host:5563` are split
+// differently; anything that is neither is refused rather than repaired.
+const requestHostname = (req) => {
+  const raw = String(req.headers.host || '').trim();
+  if (!raw) return null;
+  const bracketed = raw.startsWith('[') && raw.includes(']') ? raw.slice(0, raw.indexOf(']') + 1) : null;
+  const hostname = bracketed || raw.split(':')[0];
+  return /^\[[0-9a-fA-F:.]+\]$/.test(hostname) || /^[a-zA-Z0-9.-]+$/.test(hostname) ? hostname : null;
+};
+
+/**
+ * The PortOS page origin this bridge is embedded by. The renderer's frame
+ * contract requires the parent origin to come from trusted embedding
+ * configuration rather than from whoever opened the frame, and PortOS is that
+ * configuration: the hostname is the one the browser just used, while the
+ * scheme and port are PortOS's own. A static `EMBED_PARENT_ORIGIN` in the
+ * external checkout cannot do this — one install is reachable as localhost, a
+ * LAN address and a MagicDNS name, and only one of those would ever match.
+ */
+const embedParentOrigin = (req, protocol) => {
+  const hostname = requestHostname(req);
+  return hostname ? `${protocol}://${hostname}:${Number(process.env.PORT) || PORTS.API}` : null;
+};
+
+// Terminated here rather than forwarded: the managed checkout answers this from
+// its own environment, which PortOS deliberately leaves unset.
+const serveEmbedConfig = (req, res, protocol) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    writePlainText(res, 405, 'The PortOS embedding configuration is read-only.', { allow: 'GET, HEAD' });
+    return;
+  }
+  const body = JSON.stringify({ parentOrigin: embedParentOrigin(req, protocol) });
   res.writeHead(200, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(body),
@@ -135,7 +177,12 @@ export function createEidoverseHost({
   };
 
   const handleHttp = (req, res) => {
-    if (requestPathname(req.url) === HOST_DESCRIPTOR_PATH) {
+    const pathname = requestPathname(req.url);
+    if (pathname === EMBED_CONFIG_PATH) {
+      serveEmbedConfig(req, res, protocol());
+      return;
+    }
+    if (pathname === HOST_DESCRIPTOR_PATH) {
       // Nothing holds this promise, and a client that hung up mid-write makes
       // `res` throw — so own the rejection here rather than killing the process.
       serveHostDescriptor(req, res).catch((error) => {
