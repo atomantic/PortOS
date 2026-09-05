@@ -73,8 +73,10 @@ export const cancelCodexLogin = (loginId, options) => request('/providers/codex/
 });
 export const codexLogout = (options) => request('/providers/codex/account/logout', { method: 'POST', ...options });
 // The models this subscription may run, from the app-server catalog (#5590).
-// Not yet called from a component: the Providers-page picker that consumes it is
-// #5591 (phase 3), which also ships the toggle that sets `textTransportEnabled`.
+// This is the LAZY read that may spawn `codex app-server` — call it only from an
+// explicit user action (the Providers page's refresh). Render paths read the
+// cached catalog off `codexModelCatalog` on the `GET /providers` payload instead
+// (#6306), which spawns nothing.
 // Resolves to { models, fetchedAt, error }. `models: null` means NEVER FETCHED
 // and `[]` means fetched-and-empty; when `error` is set the list is the
 // last-known-good one, so render that rather than emptying the picker.

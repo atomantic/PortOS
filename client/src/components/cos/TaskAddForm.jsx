@@ -8,7 +8,7 @@ import { processScreenshotUploads, processAttachmentUploads } from '../../servic
 import { ATTACHMENT_ACCEPT } from '../../utils/fileUpload';
 import FilePickerButton from '../ui/FilePickerButton';
 import { formatBytes } from '../../utils/formatters';
-import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, isOpencodeLocalProvider, generationControlsFor, seedModelEffort } from '../../utils/providers';
+import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, isCodexSubscriptionProvider, isOpencodeLocalProvider, generationControlsFor, seedModelEffort, resolveProviderModelOptions, MODEL_SOURCE } from '../../utils/providers';
 import { DEFAULT_PR_COMPLETION, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, PR_COMPLETION_OPTIONS, prCompletionOption } from './constants';
 import { clickableProps } from '../../lib/a11yKeyboard';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
@@ -406,11 +406,27 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // with the tier picked separately — a legacy suffixed id saved in a template
   // stays selectable as its own option.
   const selectedProvider = providers?.find(p => p.id === newTask.provider);
-  const availableModels = effortAwareModelOptions(selectedProvider, newTask.model);
+  // A Codex-subscription provider offers the SIGNED-IN ACCOUNT's catalog when one
+  // has been fetched, so a tier the plan cannot run is never queued (#6306); every
+  // other state falls back to the shipped list, and the note below says which.
+  const { models: availableModels, source: modelSource, unlistedSelection } =
+    resolveProviderModelOptions(selectedProvider, newTask.model);
+  const NO_ACCOUNT_MODELS_NOTE = 'Your signed-in ChatGPT account exposes no models.';
+  const modelSourceNote = (() => {
+    if (!isCodexSubscriptionProvider(selectedProvider)) return '';
+    if (modelSource === MODEL_SOURCE.account) return 'Models your signed-in ChatGPT account can run.';
+    // Reachable with a stored pin the account no longer lists — the select still
+    // renders that one option, so it must not be labelled as the bundled list.
+    if (modelSource === MODEL_SOURCE.accountEmpty) return NO_ACCOUNT_MODELS_NOTE;
+    return 'Showing PortOS\u2019s bundled list \u2014 the ChatGPT account catalog has not been loaded.';
+  })();
   const providerModelNote = (() => {
     if (!selectedProvider) return '';
+    if (modelSource === MODEL_SOURCE.accountEmpty) return NO_ACCOUNT_MODELS_NOTE;
     if (isTuiProvider(selectedProvider)) return `${selectedProvider.name} runs in an attachable terminal UI session.`;
-    if (isCodexProvider(selectedProvider)) return 'Codex uses the model configured in ~/.codex/config.toml.';
+    // PortOS passes `--model` on every Codex spawn (providerVendors.js#codexSpawnArgs),
+    // so ~/.codex/config.toml is NOT what picks the model here.
+    if (isCodexProvider(selectedProvider)) return 'PortOS runs Codex with the model it selects; no models are listed for this provider yet.';
     if (isCliProvider(selectedProvider)) return `${selectedProvider.name} uses its CLI configured default model.`;
     return 'No models are configured. PortOS will use the provider default.';
   })();
@@ -1179,9 +1195,16 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 >
                   <option value="">Select model...</option>
                   {availableModels.map(m => (
-                    <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
+                    <option key={m} value={m}>
+                      {unlistedSelection && m === newTask.model
+                        ? `${m} (not in account catalog)`
+                        : m.replace('claude-', '').replace(/-\d+$/, '')}
+                    </option>
                   ))}
                 </select>
+                {modelSourceNote && (
+                  <p className="mt-1 text-xs text-gray-400">{modelSourceNote}</p>
+                )}
               </div>
             ) : selectedProvider ? (
               <div className="flex-1 px-3 py-2 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 flex items-center">
