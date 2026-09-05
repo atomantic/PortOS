@@ -23,8 +23,21 @@ vi.mock('recharts', () => ({
   CartesianGrid: () => null,
   LabelList: () => null,
   Tooltip: () => null,
-  XAxis: ({ scale }) => <div data-testid="xaxis" data-scale={scale} />,
-  YAxis: () => null,
+  XAxis: ({ scale, domain, allowDataOverflow }) => (
+    <div
+      data-testid="xaxis"
+      data-scale={scale}
+      data-domain={JSON.stringify(domain)}
+      data-allow-overflow={allowDataOverflow ? 'true' : 'false'}
+    />
+  ),
+  YAxis: ({ domain, allowDataOverflow }) => (
+    <div
+      data-testid="yaxis"
+      data-domain={JSON.stringify(domain)}
+      data-allow-overflow={allowDataOverflow ? 'true' : 'false'}
+    />
+  ),
 }));
 const source = { url: 'https://example.com/benchmark', retrievedAt: '2026-01-01T00:00:00Z', methodology: 'Example v1' };
 const metric = value => ({ value, source });
@@ -186,3 +199,100 @@ it('leaves only the models that actually plot a curve selected', async () => {
   expect(screen.getByRole('button', { name: 'Toggle gpt-5.6-sol' })).toHaveAttribute('aria-pressed', 'true');
   expect(screen.getByRole('button', { name: 'Toggle unpriced-model' })).toHaveAttribute('aria-pressed', 'false');
 });
+
+it('stretches chart width and adjusts height', async () => {
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  await screen.findByText('1 plotted · 1 missing quality or cost');
+
+  // Initially at 1x
+  expect(screen.getByRole('button', { name: '1×' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.queryByText(/Chart stretched/)).toBeNull();
+
+  // Switch to 2x stretch
+  fireEvent.click(screen.getByRole('button', { name: '2×' }));
+  expect(screen.getByRole('button', { name: '2×' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByText(/Chart stretched 2×/)).toBeTruthy();
+
+  // Switch height to 600px
+  expect(screen.getByRole('button', { name: '480px' })).toHaveAttribute('aria-pressed', 'true');
+  fireEvent.click(screen.getByRole('button', { name: '600px' }));
+  expect(screen.getByRole('button', { name: '600px' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+it('scales axes via zoom buttons and manual bounds inputs', async () => {
+  const multi = [
+    { ...observation, id: 'm1', model: 'model-a', quality: metric(30), costPerTask: metric(0.02) },
+    { ...observation, id: 'm2', model: 'model-b', quality: metric(45), costPerTask: metric(0.50) },
+    { ...observation, id: 'm3', model: 'model-c', quality: metric(55), costPerTask: metric(2.00) },
+  ];
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: multi, inventory: [] });
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  await screen.findByText('3 plotted · 0 missing quality or cost');
+  const xaxis = screen.getByTestId('xaxis');
+  const yaxis = screen.getByTestId('yaxis');
+
+  expect(xaxis).toHaveAttribute('data-allow-overflow', 'false');
+  expect(yaxis).toHaveAttribute('data-allow-overflow', 'false');
+
+  // Click Zoom in
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'true');
+  expect(screen.getByTestId('yaxis')).toHaveAttribute('data-allow-overflow', 'true');
+  expect(screen.getByRole('button', { name: 'Reset zoom' })).toBeTruthy();
+  expect(screen.getByText(/\(\d in zoom\)/)).toBeTruthy();
+
+  // Click Reset zoom
+  fireEvent.click(screen.getByRole('button', { name: 'Reset zoom' }));
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'false');
+  expect(screen.queryByRole('button', { name: 'Reset zoom' })).toBeNull();
+
+  // Click Fit visible
+  fireEvent.click(screen.getByRole('button', { name: 'Fit visible' }));
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'true');
+  expect(screen.getByRole('button', { name: 'Reset zoom' })).toBeTruthy();
+
+  // Toggle Scale axes manual inputs
+  fireEvent.click(screen.getByRole('button', { name: /Scale axes/i }));
+  const minCostInput = screen.getByLabelText('Minimum cost per task');
+  const maxCostInput = screen.getByLabelText('Maximum cost per task');
+  const minScoreInput = screen.getByLabelText('Minimum index score');
+  const maxScoreInput = screen.getByLabelText('Maximum index score');
+
+  fireEvent.change(minCostInput, { target: { value: '0.10' } });
+  fireEvent.change(maxCostInput, { target: { value: '1.00' } });
+  fireEvent.change(minScoreInput, { target: { value: '40' } });
+  fireEvent.change(maxScoreInput, { target: { value: '50' } });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Apply range' }));
+
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-domain', JSON.stringify([0.1, 1]));
+  expect(screen.getByTestId('yaxis')).toHaveAttribute('data-domain', JSON.stringify([40, 50]));
+
+  // Clear range resets zoom
+  fireEvent.click(screen.getByRole('button', { name: 'Clear range' }));
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'false');
+});
+
+it('respects initial zoom and stretch URL search parameters', async () => {
+  render(
+    <MemoryRouter initialEntries={['/?stretch=1.5&height=600&xMin=0.2&xMax=1.5&yMin=40&yMax=60']}>
+      <ModelComparison />
+    </MemoryRouter>
+  );
+  await act(async () => {});
+
+  await screen.findByText(/1 plotted/);
+  expect(screen.getByRole('button', { name: '1.5×' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByRole('button', { name: '600px' })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.getByText(/Chart stretched 1.5×/)).toBeTruthy();
+
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'true');
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-domain', JSON.stringify([0.2, 1.5]));
+  expect(screen.getByTestId('yaxis')).toHaveAttribute('data-domain', JSON.stringify([40, 60]));
+});
+

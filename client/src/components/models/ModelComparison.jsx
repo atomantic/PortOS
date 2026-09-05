@@ -1,13 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import {
   ArrowUpRight,
   ChartScatter,
   Check,
   CloudDownload,
+  Focus,
+  MoveHorizontal,
   RefreshCw,
+  RotateCcw,
   Search,
   SlidersHorizontal,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import {
   CartesianGrid,
@@ -94,6 +99,36 @@ export default function ModelComparison() {
   const [syncError, setSyncError] = useState('');
   const [syncing, setSyncing] = useState(false);
 
+  const xMinParam = params.get('xMin');
+  const xMaxParam = params.get('xMax');
+  const yMinParam = params.get('yMin');
+  const yMaxParam = params.get('yMax');
+
+  const parsedXMin = xMinParam !== null && xMinParam !== '' && !Number.isNaN(Number(xMinParam)) ? Number(xMinParam) : null;
+  const parsedXMax = xMaxParam !== null && xMaxParam !== '' && !Number.isNaN(Number(xMaxParam)) ? Number(xMaxParam) : null;
+  const parsedYMin = yMinParam !== null && yMinParam !== '' && !Number.isNaN(Number(yMinParam)) ? Number(yMinParam) : null;
+  const parsedYMax = yMaxParam !== null && yMaxParam !== '' && !Number.isNaN(Number(yMaxParam)) ? Number(yMaxParam) : null;
+
+  const isZoomed = parsedXMin !== null || parsedXMax !== null || parsedYMin !== null || parsedYMax !== null;
+
+  const [inputXMin, setInputXMin] = useState(xMinParam ?? '');
+  const [inputXMax, setInputXMax] = useState(xMaxParam ?? '');
+  const [inputYMin, setInputYMin] = useState(yMinParam ?? '');
+  const [inputYMax, setInputYMax] = useState(yMaxParam ?? '');
+  const [showAxisInputs, setShowAxisInputs] = useState(false);
+
+  const scrollContainerRef = useRef(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [startX, setStartX] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
+
+  useEffect(() => {
+    setInputXMin(xMinParam ?? '');
+    setInputXMax(xMaxParam ?? '');
+    setInputYMin(yMinParam ?? '');
+    setInputYMax(yMaxParam ?? '');
+  }, [xMinParam, xMaxParam, yMinParam, yMaxParam]);
+
   const load = useCallback(() => getModelComparison({ silent: true }), []);
 
   const showEstimates = params.get('estimates') !== '0';
@@ -121,16 +156,23 @@ export default function ModelComparison() {
     };
   }, [load]);
 
-  const changeParam = (key, value) =>
+  const changeParams = updates =>
     setParams(
       previous => {
         const next = new URLSearchParams(previous);
-        if (value) next.set(key, value);
-        else next.delete(key);
+        for (const [key, value] of Object.entries(updates)) {
+          if (value !== null && value !== undefined && value !== '') {
+            next.set(key, String(value));
+          } else {
+            next.delete(key);
+          }
+        }
         return next;
       },
       { replace: true }
     );
+
+  const changeParam = (key, value) => changeParams({ [key]: value });
 
   const toggle = (key, value) =>
     setParams(
@@ -252,6 +294,29 @@ export default function ModelComparison() {
   // stacks every affordable model on the y-axis. Log is the readable default.
   const scale = params.get('scale') === 'linear' ? 'linear' : 'log';
   const showAllModels = params.get('allModels') === '1' || availableSet.size === 0;
+  const stretch = Math.min(4, Math.max(1, parseFloat(params.get('stretch')) || 1));
+  const chartHeight = Math.min(1000, Math.max(380, parseInt(params.get('height'), 10) || 480));
+
+
+  const handleMouseDown = e => {
+    if (stretch <= 1 || !scrollContainerRef.current) return;
+    if (e.target.closest('button, input, select, a, [role="button"]')) return;
+    setIsDragging(true);
+    setStartX(e.pageX - scrollContainerRef.current.offsetLeft);
+    setScrollLeft(scrollContainerRef.current.scrollLeft);
+  };
+
+  const handleMouseMove = e => {
+    if (!isDragging || !scrollContainerRef.current) return;
+    e.preventDefault();
+    const x = e.pageX - scrollContainerRef.current.offsetLeft;
+    const walk = x - startX;
+    scrollContainerRef.current.scrollLeft = scrollLeft - walk;
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
 
   // Scope once, then derive every list from the scoped rows — so the provider
   // and effort pills can't offer values that have nothing left to plot.
@@ -298,6 +363,159 @@ export default function ModelComparison() {
   });
 
   const plotted = rows.filter(row => Number.isFinite(row.x) && Number.isFinite(row.y) && (scale !== 'log' || row.x > 0));
+
+  const xs = plotted.map(r => r.x).filter(x => Number.isFinite(x) && x > 0);
+  const ys = plotted.map(r => r.y).filter(y => Number.isFinite(y));
+  const dataBounds = {
+    xMin: xs.length ? Math.min(...xs) : 0.01,
+    xMax: xs.length ? Math.max(...xs) : 10,
+    yMin: ys.length ? Math.min(...ys) : 0,
+    yMax: ys.length ? Math.max(...ys) : 100,
+  };
+
+  const visibleInZoomCount = !isZoomed
+    ? plotted.length
+    : plotted.filter(row => {
+        if (parsedXMin !== null && row.x < parsedXMin) return false;
+        if (parsedXMax !== null && row.x > parsedXMax) return false;
+        if (parsedYMin !== null && row.y < parsedYMin) return false;
+        if (parsedYMax !== null && row.y > parsedYMax) return false;
+        return true;
+      }).length;
+
+  const handleZoomIn = () => {
+    if (!plotted.length) return;
+    const currentXMin = parsedXMin ?? (scale === 'log' ? dataBounds.xMin : 0);
+    const currentXMax = parsedXMax ?? dataBounds.xMax;
+    const currentYMin = parsedYMin ?? dataBounds.yMin;
+    const currentYMax = parsedYMax ?? dataBounds.yMax;
+
+    let newXMin;
+    let newXMax;
+    if (scale === 'log') {
+      const logMin = Math.log10(Math.max(1e-4, currentXMin));
+      const logMax = Math.log10(Math.max(1e-3, currentXMax));
+      const logCenter = (logMin + logMax) / 2;
+      const newSpan = (logMax - logMin) * 0.7;
+      newXMin = Number(Math.pow(10, logCenter - newSpan / 2).toPrecision(3));
+      newXMax = Number(Math.pow(10, logCenter + newSpan / 2).toPrecision(3));
+    } else {
+      const span = currentXMax - currentXMin;
+      const center = (currentXMin + currentXMax) / 2;
+      const newSpan = span * 0.7;
+      newXMin = Math.max(0, Number((center - newSpan / 2).toFixed(3)));
+      newXMax = Number((center + newSpan / 2).toFixed(3));
+    }
+
+    const ySpan = currentYMax - currentYMin;
+    const yCenter = (currentYMin + currentYMax) / 2;
+    const newYSpan = ySpan * 0.7;
+    const newYMin = Math.round(yCenter - newYSpan / 2);
+    const newYMax = Math.round(yCenter + newYSpan / 2);
+
+    changeParams({
+      xMin: newXMin,
+      xMax: newXMax,
+      yMin: newYMin,
+      yMax: newYMax,
+    });
+  };
+
+  const handleZoomOut = () => {
+    if (!plotted.length) return;
+    const currentXMin = parsedXMin ?? (scale === 'log' ? dataBounds.xMin : 0);
+    const currentXMax = parsedXMax ?? dataBounds.xMax;
+    const currentYMin = parsedYMin ?? dataBounds.yMin;
+    const currentYMax = parsedYMax ?? dataBounds.yMax;
+
+    let newXMin;
+    let newXMax;
+    if (scale === 'log') {
+      const logMin = Math.log10(Math.max(1e-4, currentXMin));
+      const logMax = Math.log10(Math.max(1e-3, currentXMax));
+      const logCenter = (logMin + logMax) / 2;
+      const newSpan = (logMax - logMin) * 1.4;
+      newXMin = Number(Math.pow(10, logCenter - newSpan / 2).toPrecision(3));
+      newXMax = Number(Math.pow(10, logCenter + newSpan / 2).toPrecision(3));
+    } else {
+      const span = currentXMax - currentXMin;
+      const center = (currentXMin + currentXMax) / 2;
+      const newSpan = span * 1.4;
+      newXMin = Math.max(0, Number((center - newSpan / 2).toFixed(3)));
+      newXMax = Number((center + newSpan / 2).toFixed(3));
+    }
+
+    const ySpan = currentYMax - currentYMin;
+    const yCenter = (currentYMin + currentYMax) / 2;
+    const newYSpan = ySpan * 1.4;
+    const newYMin = Math.round(yCenter - newYSpan / 2);
+    const newYMax = Math.round(yCenter + newYSpan / 2);
+
+    const resetX = newXMin <= dataBounds.xMin && newXMax >= dataBounds.xMax;
+    const resetY = newYMin <= dataBounds.yMin && newYMax >= dataBounds.yMax;
+
+    changeParams({
+      xMin: resetX ? null : newXMin,
+      xMax: resetX ? null : newXMax,
+      yMin: resetY ? null : newYMin,
+      yMax: resetY ? null : newYMax,
+    });
+  };
+
+  const handleFitVisible = () => {
+    if (!plotted.length) return;
+    const xs = plotted.map(r => r.x).filter(x => Number.isFinite(x) && x > 0);
+    const ys = plotted.map(r => r.y).filter(y => Number.isFinite(y));
+    if (!xs.length || !ys.length) return;
+
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+
+    let fitXMin;
+    let fitXMax;
+    if (scale === 'log') {
+      fitXMin = Number((minX * 0.9).toPrecision(2));
+      fitXMax = Number((maxX * 1.1).toPrecision(2));
+    } else {
+      fitXMin = Math.max(0, Number((minX * 0.9).toFixed(3)));
+      fitXMax = Number((maxX * 1.05).toFixed(3));
+    }
+    const fitYMin = Math.max(0, Math.floor(minY - 2));
+    const fitYMax = Math.ceil(maxY + 2);
+
+    changeParams({
+      xMin: fitXMin,
+      xMax: fitXMax,
+      yMin: fitYMin,
+      yMax: fitYMax,
+    });
+  };
+
+  const handleResetZoom = () => {
+    changeParams({
+      xMin: null,
+      xMax: null,
+      yMin: null,
+      yMax: null,
+    });
+  };
+
+  const handleApplyCustomBounds = e => {
+    if (e) e.preventDefault();
+    const xMinNum = inputXMin.trim() !== '' ? Number(inputXMin) : null;
+    const xMaxNum = inputXMax.trim() !== '' ? Number(inputXMax) : null;
+    const yMinNum = inputYMin.trim() !== '' ? Number(inputYMin) : null;
+    const yMaxNum = inputYMax.trim() !== '' ? Number(inputYMax) : null;
+
+    changeParams({
+      xMin: xMinNum !== null && !Number.isNaN(xMinNum) ? xMinNum : null,
+      xMax: xMaxNum !== null && !Number.isNaN(xMaxNum) ? xMaxNum : null,
+      yMin: yMinNum !== null && !Number.isNaN(yMinNum) ? yMinNum : null,
+      yMax: yMaxNum !== null && !Number.isNaN(yMaxNum) ? yMaxNum : null,
+    });
+  };
 
   // Count models that have 2 or more effort points plotted
   let estimatedCount = 0;
@@ -592,7 +810,7 @@ export default function ModelComparison() {
 
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-port-text-muted">
             <span aria-live="polite">
-              {plotted.length} plotted · {rows.length - plotted.length} missing quality or cost
+              {plotted.length} plotted{isZoomed ? ` (${visibleInZoomCount} in zoom)` : ''} · {rows.length - plotted.length} missing quality or cost
               {reasoningCurveModels.length > 0 ? ` · ${reasoningCurveModels.length} reasoning curves` : ''}
               {estimatedCount > 0 ? ` · ${estimatedCount} estimated cost` : ''}
             </span>
@@ -675,171 +893,465 @@ export default function ModelComparison() {
           </div>
         </div>
 
+        {/* Chart Scale, Zoom & Stretch Controls Bar */}
+        <div className="px-4 sm:px-6 py-3 bg-port-bg/40 border-b border-port-border space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            {/* Left: Stretch Width & Height */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-port-text-muted">
+                <MoveHorizontal size={14} className="text-port-accent-text" aria-hidden="true" />
+                <span>Stretch width:</span>
+                <div className="inline-flex rounded-lg border border-port-border bg-port-bg p-0.5" role="group" aria-label="Chart stretch width">
+                  {[
+                    { label: '1×', value: '1' },
+                    { label: '1.5×', value: '1.5' },
+                    { label: '2×', value: '2' },
+                    { label: '3×', value: '3' },
+                  ].map(opt => {
+                    const active = (opt.value === '1' && stretch === 1) || String(stretch) === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => changeParam('stretch', opt.value === '1' ? null : opt.value)}
+                        aria-pressed={active}
+                        className={`px-2 py-0.5 rounded text-xs transition-colors ${
+                          active
+                            ? 'bg-port-accent text-port-on-accent font-medium shadow-xs'
+                            : 'text-port-text-muted hover:text-port-text'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 text-xs font-medium text-port-text-muted">
+                <span>Height:</span>
+                <div className="inline-flex rounded-lg border border-port-border bg-port-bg p-0.5" role="group" aria-label="Chart height">
+                  {[
+                    { label: '480px', value: 480 },
+                    { label: '600px', value: 600 },
+                    { label: '720px', value: 720 },
+                  ].map(opt => {
+                    const active = chartHeight === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => changeParam('height', opt.value === 480 ? null : opt.value)}
+                        aria-pressed={active}
+                        className={`px-2 py-0.5 rounded text-xs transition-colors ${
+                          active
+                            ? 'bg-port-accent text-port-on-accent font-medium shadow-xs'
+                            : 'text-port-text-muted hover:text-port-text'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Right: Zoom In, Zoom Out, Fit Visible, Reset, Scale Axes Toggle */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleZoomIn}
+                disabled={!plotted.length}
+                title="Zoom in on both axes"
+                aria-label="Zoom in"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-port-border bg-port-bg text-xs hover:border-port-accent hover:text-port-text disabled:opacity-50 transition-colors"
+              >
+                <ZoomIn size={13} aria-hidden="true" />
+                <span>Zoom in</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleZoomOut}
+                disabled={!plotted.length}
+                title="Zoom out on both axes"
+                aria-label="Zoom out"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-port-border bg-port-bg text-xs hover:border-port-accent hover:text-port-text disabled:opacity-50 transition-colors"
+              >
+                <ZoomOut size={13} aria-hidden="true" />
+                <span>Zoom out</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleFitVisible}
+                disabled={!plotted.length}
+                title="Fit axes tightly to visible models"
+                aria-label="Fit visible"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-port-border bg-port-bg text-xs hover:border-port-accent hover:text-port-text disabled:opacity-50 transition-colors"
+              >
+                <Focus size={13} aria-hidden="true" />
+                <span>Fit visible</span>
+              </button>
+
+              {isZoomed && (
+                <button
+                  type="button"
+                  onClick={handleResetZoom}
+                  title="Reset axis zoom to auto"
+                  aria-label="Reset zoom"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-port-accent/50 bg-port-accent/10 text-port-accent-text text-xs hover:bg-port-accent/20 transition-colors"
+                >
+                  <RotateCcw size={13} aria-hidden="true" />
+                  <span>Reset zoom</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setShowAxisInputs(!showAxisInputs)}
+                aria-expanded={showAxisInputs}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs transition-colors ${
+                  showAxisInputs || isZoomed
+                    ? 'border-port-accent text-port-accent-text bg-port-accent/10'
+                    : 'border-port-border bg-port-bg text-port-text-muted hover:border-port-accent hover:text-port-text'
+                }`}
+              >
+                <SlidersHorizontal size={13} aria-hidden="true" />
+                <span>Scale axes</span>
+                {isZoomed && (
+                  <span className="size-1.5 rounded-full bg-port-accent" aria-hidden="true" />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Expandable Manual Axis Scale Inputs */}
+          {showAxisInputs && (
+            <form
+              onSubmit={handleApplyCustomBounds}
+              className="flex flex-wrap items-end gap-3 pt-2 border-t border-port-border text-xs"
+            >
+              {/* Cost X Axis Bounds */}
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-port-text">Cost (USD):</span>
+                <label className="flex items-center gap-1 text-port-text-muted">
+                  <span>Min $</span>
+                  <input
+                    type="number"
+                    step="any"
+                    min={scale === 'log' ? '0.0001' : '0'}
+                    placeholder="Auto"
+                    aria-label="Minimum cost per task"
+                    value={inputXMin}
+                    onChange={e => setInputXMin(e.target.value)}
+                    className="w-20 px-2 py-1 bg-port-bg border border-port-border rounded text-port-text text-xs font-mono"
+                  />
+                </label>
+                <label className="flex items-center gap-1 text-port-text-muted">
+                  <span>Max $</span>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    placeholder="Auto"
+                    aria-label="Maximum cost per task"
+                    value={inputXMax}
+                    onChange={e => setInputXMax(e.target.value)}
+                    className="w-20 px-2 py-1 bg-port-bg border border-port-border rounded text-port-text text-xs font-mono"
+                  />
+                </label>
+              </div>
+
+              {/* Quality Y Axis Bounds */}
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-port-text">Score (Index):</span>
+                <label className="flex items-center gap-1 text-port-text-muted">
+                  <span>Min</span>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="Auto"
+                    aria-label="Minimum index score"
+                    value={inputYMin}
+                    onChange={e => setInputYMin(e.target.value)}
+                    className="w-16 px-2 py-1 bg-port-bg border border-port-border rounded text-port-text text-xs font-mono"
+                  />
+                </label>
+                <label className="flex items-center gap-1 text-port-text-muted">
+                  <span>Max</span>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="Auto"
+                    aria-label="Maximum index score"
+                    value={inputYMax}
+                    onChange={e => setInputYMax(e.target.value)}
+                    className="w-16 px-2 py-1 bg-port-bg border border-port-border rounded text-port-text text-xs font-mono"
+                  />
+                </label>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="submit"
+                  className="px-3 py-1 bg-port-accent text-port-on-accent rounded text-xs font-medium hover:opacity-90 transition-opacity"
+                >
+                  Apply range
+                </button>
+                {isZoomed && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInputXMin('');
+                      setInputXMax('');
+                      setInputYMin('');
+                      setInputYMax('');
+                      handleResetZoom();
+                    }}
+                    className="px-2.5 py-1 border border-port-border rounded text-xs text-port-text-muted hover:text-port-text transition-colors"
+                  >
+                    Clear range
+                  </button>
+                )}
+              </div>
+            </form>
+          )}
+        </div>
+
         {/* Chart Area */}
         {plotted.length ? (
-          <div
-            className="h-[380px] sm:h-[480px] px-1 sm:px-4 pt-4"
-            role="img"
-            aria-label={`Quality versus ${mode === 'benchmark' ? 'benchmark' : 'estimated'} cost per task. Exact values and source links are in the table below.`}
-          >
-            <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart margin={{ top: 32, right: 24, bottom: 36, left: 10 }}>
-                <CartesianGrid strokeDasharray="3 5" stroke="rgb(var(--port-border))" vertical={false} />
-                <XAxis
-                  tick={{ fill: 'rgb(var(--port-text-muted))', fontSize: 11 }}
-                  tickLine={false}
-                  axisLine={{ stroke: 'rgb(var(--port-border))' }}
-                  type="number"
-                  dataKey="x"
-                  name="USD / task"
-                  scale={scale === 'log' ? 'log' : 'linear'}
-                  domain={scale === 'log' ? ['auto', 'auto'] : [0, 'auto']}
-                  tickFormatter={value => `$${value < 0.01 ? value.toFixed(3) : value < 1 ? value.toFixed(2) : value.toFixed(1)}`}
-                  label={{
-                    value: `Cost per task (USD) — ${scale.toUpperCase()} SCALE`,
-                    position: 'bottom',
-                    fill: 'rgb(var(--port-text-muted))',
-                    fontSize: 12,
-                    offset: 10,
-                  }}
-                />
-                <YAxis
-                  tick={{ fill: 'rgb(var(--port-text-muted))', fontSize: 11 }}
-                  tickLine={false}
-                  axisLine={{ stroke: 'rgb(var(--port-border))' }}
-                  type="number"
-                  dataKey="y"
-                  name="Benchmark score"
-                  domain={['auto', 'auto']}
-                  width={55}
-                  label={{
-                    value: 'Artificial Analysis Intelligence Index',
-                    angle: -90,
-                    position: 'insideLeft',
-                    fill: 'rgb(var(--port-text-muted))',
-                    fontSize: 12,
-                  }}
-                />
-                <Tooltip
-                  cursor={{ strokeDasharray: '4 4', stroke: 'rgb(var(--port-text-muted))' }}
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.[0]) return null;
-                    const item = payload[0].payload;
-                    return (
-                      <div className="bg-port-card border border-port-border rounded-xl shadow-xl p-3.5 text-xs max-w-72 space-y-1.5 z-50">
-                        <div className="flex items-center justify-between gap-2 border-b border-port-border pb-1.5">
-                          <span className="font-semibold text-sm text-port-text truncate">{item.displayName || item.model}</span>
-                          <span className="px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-[10px] uppercase font-mono text-port-accent-text">
-                            {item.effort}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-port-text-muted">
-                          <div>
-                            Provider: <span className="text-port-text font-medium">{item.provider}</span>
-                          </div>
-                          <div>
-                            USD / task:{' '}
-                            <span className="text-port-text font-semibold">${item.x?.toFixed(4)}</span>
-                            {item.costEstimated && <span className="text-port-text-muted"> est.</span>}
-                          </div>
-                          <div>
-                            Index Score: <span className="text-port-accent-text font-bold">{item.y}</span>
-                          </div>
-                          {item.responseSeconds && (
-                            <div>
-                              E2E Latency: <span className="text-port-text font-medium">{item.responseSeconds.value}s</span>
-                            </div>
-                          )}
-                          {item.tokensPerSecond && (
-                            <div>
-                              Speed: <span className="text-port-text font-medium">{item.tokensPerSecond.value} t/s</span>
-                            </div>
-                          )}
-                          {item.inputPerMillion && (
-                            <div>
-                              In: <span className="text-port-text font-medium">${item.inputPerMillion.value}/1M</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  }}
-                />
-                {models.map((model, index) => {
-                  const modelData = plotted
-                    .filter(row => row.model === model)
-                    .sort(
-                      (a, b) =>
-                        (EFFORT_ORDER[a.effort] ?? 99) - (EFFORT_ORDER[b.effort] ?? 99) || (a.x - b.x)
-                    );
-                  if (!modelData.length) return null;
-                  const color = COLORS[index % COLORS.length];
-                  const hasLine = showLines && modelData.length > 1;
-
-                  return (
-                    <Scatter
-                      key={model}
-                      name={model}
-                      isAnimationActive={false}
-                      data={modelData}
-                      fill={color}
-                      line={
-                        hasLine
-                          ? {
-                              stroke: color,
-                              strokeDasharray:
-                                lineStyle === 'dotted' ? '3 3' : lineStyle === 'dashed' ? '6 4' : undefined,
-                              strokeWidth: 2,
-                            }
-                          : false
+          <div className="relative">
+            {stretch > 1 && (
+              <div className="flex items-center justify-between px-4 py-1.5 text-xs text-port-text-muted bg-port-bg/60 border-b border-port-border">
+                <span className="inline-flex items-center gap-1.5 text-[11px]">
+                  <MoveHorizontal size={13} aria-hidden="true" className="text-port-accent-text shrink-0" />
+                  Chart stretched {stretch}× — scroll or drag horizontally to explore
+                </span>
+                <span className="font-mono text-[10px]">
+                  {visibleInZoomCount} of {plotted.length} points visible
+                </span>
+              </div>
+            )}
+            <div
+              ref={scrollContainerRef}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              style={{ height: `${chartHeight}px` }}
+              className={`overflow-x-auto px-1 sm:px-4 pt-4 scrollbar-thin ${
+                stretch > 1 ? (isDragging ? 'cursor-grabbing select-none' : 'cursor-grab') : ''
+              }`}
+              role="img"
+              aria-label={`Quality versus ${mode === 'benchmark' ? 'benchmark' : 'estimated'} cost per task. Exact values and source links are in the table below.`}
+            >
+              <div
+                style={{
+                  width: stretch > 1 ? `${Math.round(stretch * 100)}%` : '100%',
+                  minWidth: '100%',
+                  height: '100%',
+                }}
+              >
+                <ResponsiveContainer width="100%" height="100%">
+                  <ScatterChart margin={{ top: 32, right: 24, bottom: 36, left: 10 }}>
+                    <CartesianGrid strokeDasharray="3 5" stroke="rgb(var(--port-border))" vertical={false} />
+                    <XAxis
+                      tick={{ fill: 'rgb(var(--port-text-muted))', fontSize: 11 }}
+                      tickLine={false}
+                      axisLine={{ stroke: 'rgb(var(--port-border))' }}
+                      type="number"
+                      dataKey="x"
+                      name="USD / task"
+                      scale={scale === 'log' ? 'log' : 'linear'}
+                      domain={
+                        isZoomed
+                          ? [
+                              parsedXMin !== null
+                                ? parsedXMin
+                                : scale === 'log'
+                                  ? 'auto'
+                                  : 0,
+                              parsedXMax !== null ? parsedXMax : 'auto',
+                            ]
+                          : scale === 'log'
+                            ? ['auto', 'auto']
+                            : [0, 'auto']
                       }
-                      // A hollow marker means the cost came from the effort-ratio
-                      // estimate, not from a published cost per task.
-                      shape={({ cx, cy, fill, payload }) => (
-                        <g>
-                          <circle cx={cx} cy={cy} r={9} fill={fill} fillOpacity={0.16} stroke="none" />
-                          <circle
-                            cx={cx}
-                            cy={cy}
-                            r={5}
-                            fill={payload?.costEstimated ? 'rgb(var(--port-card))' : fill}
-                            stroke={payload?.costEstimated ? fill : 'rgb(var(--port-card))'}
-                            strokeWidth={payload?.costEstimated ? 2 : 1.5}
-                          />
-                        </g>
-                      )}
-                    >
-                      {showLabels && (
-                        <LabelList
-                          dataKey="label"
-                          position="top"
-                          content={labelProps => {
-                            const { x, y, index: ptIdx } = labelProps;
-                            const pt = modelData[ptIdx];
-                            if (!pt) return null;
-                            const shortName = pt.displayName || pt.model;
-                            const effortLabel = pt.effort && pt.effort !== 'unspecified' ? pt.effort : '';
-                            const e2eStr = pt.responseSeconds?.value ? `${pt.responseSeconds.value} s E2E` : '';
-                            return (
-                              <g transform={`translate(${x}, ${y - 12})`} className="pointer-events-none select-none">
-                                <text textAnchor="middle" className="text-[10px] fill-port-text font-medium">
-                                  {effortLabel ? `${shortName} (${effortLabel})` : shortName}
-                                </text>
-                                {e2eStr && (
-                                  <text textAnchor="middle" dy="11" className="text-[9px] fill-port-text-muted">
-                                    {e2eStr}
-                                  </text>
-                                )}
-                              </g>
-                            );
-                          }}
-                        />
-                      )}
-                    </Scatter>
-                  );
-                })}
-              </ScatterChart>
-            </ResponsiveContainer>
+                      allowDataOverflow={isZoomed}
+                      tickFormatter={value => `$${value < 0.01 ? value.toFixed(3) : value < 1 ? value.toFixed(2) : value.toFixed(1)}`}
+                      label={{
+                        value: `Cost per task (USD) — ${scale.toUpperCase()} SCALE${isZoomed ? ' (ZOOMED)' : ''}`,
+                        position: 'bottom',
+                        fill: 'rgb(var(--port-text-muted))',
+                        fontSize: 12,
+                        offset: 10,
+                      }}
+                    />
+                    <YAxis
+                      tick={{ fill: 'rgb(var(--port-text-muted))', fontSize: 11 }}
+                      tickLine={false}
+                      axisLine={{ stroke: 'rgb(var(--port-border))' }}
+                      type="number"
+                      dataKey="y"
+                      name="Benchmark score"
+                      domain={
+                        isZoomed
+                          ? [
+                              parsedYMin !== null ? parsedYMin : 'auto',
+                              parsedYMax !== null ? parsedYMax : 'auto',
+                            ]
+                          : ['auto', 'auto']
+                      }
+                      allowDataOverflow={isZoomed}
+                      width={55}
+                      label={{
+                        value: 'Artificial Analysis Intelligence Index',
+                        angle: -90,
+                        position: 'insideLeft',
+                        fill: 'rgb(var(--port-text-muted))',
+                        fontSize: 12,
+                      }}
+                    />
+                    <Tooltip
+                      cursor={{ strokeDasharray: '4 4', stroke: 'rgb(var(--port-text-muted))' }}
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.[0]) return null;
+                        const item = payload[0].payload;
+                        if (
+                          (parsedXMin !== null && item.x < parsedXMin) ||
+                          (parsedXMax !== null && item.x > parsedXMax) ||
+                          (parsedYMin !== null && item.y < parsedYMin) ||
+                          (parsedYMax !== null && item.y > parsedYMax)
+                        ) {
+                          return null;
+                        }
+                        return (
+                          <div className="bg-port-card border border-port-border rounded-xl shadow-xl p-3.5 text-xs max-w-72 space-y-1.5 z-50">
+                            <div className="flex items-center justify-between gap-2 border-b border-port-border pb-1.5">
+                              <span className="font-semibold text-sm text-port-text truncate">{item.displayName || item.model}</span>
+                              <span className="px-1.5 py-0.5 rounded bg-port-bg border border-port-border text-[10px] uppercase font-mono text-port-accent-text">
+                                {item.effort}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-port-text-muted">
+                              <div>
+                                Provider: <span className="text-port-text font-medium">{item.provider}</span>
+                              </div>
+                              <div>
+                                USD / task:{' '}
+                                <span className="text-port-text font-semibold">${item.x?.toFixed(4)}</span>
+                                {item.costEstimated && <span className="text-port-text-muted"> est.</span>}
+                              </div>
+                              <div>
+                                Index Score: <span className="text-port-accent-text font-bold">{item.y}</span>
+                              </div>
+                              {item.responseSeconds && (
+                                <div>
+                                  E2E Latency: <span className="text-port-text font-medium">{item.responseSeconds.value}s</span>
+                                </div>
+                              )}
+                              {item.tokensPerSecond && (
+                                <div>
+                                  Speed: <span className="text-port-text font-medium">{item.tokensPerSecond.value} t/s</span>
+                                </div>
+                              )}
+                              {item.inputPerMillion && (
+                                <div>
+                                  In: <span className="text-port-text font-medium">${item.inputPerMillion.value}/1M</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+                    {models.map((model, index) => {
+                      const modelData = plotted
+                        .filter(row => row.model === model)
+                        .sort(
+                          (a, b) =>
+                            (EFFORT_ORDER[a.effort] ?? 99) - (EFFORT_ORDER[b.effort] ?? 99) || (a.x - b.x)
+                        );
+                      if (!modelData.length) return null;
+                      const color = COLORS[index % COLORS.length];
+                      const hasLine = showLines && modelData.length > 1;
+
+                      return (
+                        <Scatter
+                          key={model}
+                          name={model}
+                          isAnimationActive={false}
+                          data={modelData}
+                          fill={color}
+                          line={
+                            hasLine
+                              ? {
+                                  stroke: color,
+                                  strokeDasharray:
+                                    lineStyle === 'dotted' ? '3 3' : lineStyle === 'dashed' ? '6 4' : undefined,
+                                  strokeWidth: 2,
+                                }
+                              : false
+                          }
+                          // A hollow marker means the cost came from the effort-ratio
+                          // estimate, not from a published cost per task.
+                          shape={({ cx, cy, fill, payload }) => (
+                            <g>
+                              <circle cx={cx} cy={cy} r={9} fill={fill} fillOpacity={0.16} stroke="none" />
+                              <circle
+                                cx={cx}
+                                cy={cy}
+                                r={5}
+                                fill={payload?.costEstimated ? 'rgb(var(--port-card))' : fill}
+                                stroke={payload?.costEstimated ? fill : 'rgb(var(--port-card))'}
+                                strokeWidth={payload?.costEstimated ? 2 : 1.5}
+                              />
+                            </g>
+                          )}
+                        >
+                          {showLabels && (
+                            <LabelList
+                              dataKey="label"
+                              position="top"
+                              content={labelProps => {
+                                const { x, y, index: ptIdx } = labelProps;
+                                const pt = modelData[ptIdx];
+                                if (!pt) return null;
+                                if (
+                                  (parsedXMin !== null && pt.x < parsedXMin) ||
+                                  (parsedXMax !== null && pt.x > parsedXMax) ||
+                                  (parsedYMin !== null && pt.y < parsedYMin) ||
+                                  (parsedYMax !== null && pt.y > parsedYMax)
+                                ) {
+                                  return null;
+                                }
+                                const shortName = pt.displayName || pt.model;
+                                const effortLabel = pt.effort && pt.effort !== 'unspecified' ? pt.effort : '';
+                                const e2eStr = pt.responseSeconds?.value ? `${pt.responseSeconds.value} s E2E` : '';
+                                return (
+                                  <g transform={`translate(${x}, ${y - 12})`} className="pointer-events-none select-none">
+                                    <text textAnchor="middle" className="text-[10px] fill-port-text font-medium">
+                                      {effortLabel ? `${shortName} (${effortLabel})` : shortName}
+                                    </text>
+                                    {e2eStr && (
+                                      <text textAnchor="middle" dy="11" className="text-[9px] fill-port-text-muted">
+                                        {e2eStr}
+                                      </text>
+                                    )}
+                                  </g>
+                                );
+                              }}
+                            />
+                          )}
+                        </Scatter>
+                      );
+                    })}
+                  </ScatterChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
           </div>
         ) : (
           <p className="py-12 text-center text-port-text-muted">
