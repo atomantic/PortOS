@@ -48,10 +48,16 @@ function codexHasApprovalPolicy(args) {
 // independent of the approval posture (the modal is orthogonal to sandboxing),
 // so it rides even when a provider pins its own policy, while the bypass flag is
 // skipped when the argv already declares an approval/sandbox posture.
-export function ensureCodexTuiArgs(args) {
+export function ensureCodexTuiArgs(args, provider = null) {
   const prefix = [];
   if (!codexHasApprovalPolicy(args)) {
     prefix.push('--dangerously-bypass-approvals-and-sandbox');
+  }
+  // Same pin the CLI arm applies: an interactive Codex session reads the user's
+  // `~/.codex/config.toml` too, so a provider the user pinned to PortOS's own
+  // account must not silently route through a bridge here either.
+  if (provider?.ignoreUserConfig === true && !args.includes('--ignore-user-config')) {
+    prefix.push('--ignore-user-config');
   }
   prefix.push(...buildCodexStartupArgs(args));
   return prefix.length ? [...prefix, ...args] : args;

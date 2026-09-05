@@ -149,3 +149,41 @@ describe('ProviderCard model refresh', () => {
   });
 });
 
+
+/**
+ * The routing-override badge (#6304). What this uniquely catches: the card
+ * silently presenting ChatGPT account quota for work that account never served,
+ * and the inverse leak — the machine-local base URL reaching a card that has no
+ * advisory to render.
+ */
+describe('ProviderCard codex routing override', () => {
+  const codex = (overrides = {}) => ({
+    id: 'codex',
+    name: 'Codex CLI',
+    type: 'cli',
+    command: 'codex',
+    models: ['gpt-5.6-terra'],
+    enabled: true,
+    ...overrides,
+  });
+  const advisory = {
+    code: 'codexRoutingOverridden',
+    label: 'Codex model routing is overridden by your own ~/.codex/config.toml',
+    keys: ['openai_base_url'],
+    baseUrl: 'http://127.0.0.1:9999/v1',
+  };
+
+  it('names the overridden route and caveats the subscription quota', () => {
+    renderCard(codex({ prerequisiteAdvisories: [advisory] }));
+    expect(screen.getByText(/Model routing is overridden by your Codex config/)).toBeTruthy();
+    expect(screen.getByText('http://127.0.0.1:9999/v1')).toBeTruthy();
+    expect(screen.getByText(/may not be counted here/)).toBeTruthy();
+  });
+
+  it('renders nothing — and no base URL — when the server published no advisory', () => {
+    renderCard(codex({ prerequisiteAdvisories: [] }));
+    expect(screen.queryByText(/Model routing is overridden/)).toBeNull();
+    expect(screen.queryByText(/127\.0\.0\.1/)).toBeNull();
+    expect(screen.queryByText(/may not be counted here/)).toBeNull();
+  });
+});

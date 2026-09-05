@@ -11,6 +11,12 @@ vi.mock('./providerRuntimeInstaller.js', async (importOriginal) => ({
   peekProviderRuntimeStatuses: vi.fn(),
 }));
 
+// The routing probe reads the DEVELOPER's own ~/.codex/config.toml otherwise,
+// which would make every assertion below depend on the machine the suite runs
+// on. Stubbed to a clean snapshot; the advisory path has its own case.
+vi.mock('../lib/codexUserConfig.js', () => ({ readCodexRoutingOverride: vi.fn() }));
+
+const { readCodexRoutingOverride } = await import('../lib/codexUserConfig.js');
 const {
   getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
@@ -33,6 +39,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   __resetPrerequisiteRefresh();
   peekProviderRuntimeStatuses.mockReturnValue({});
+  readCodexRoutingOverride.mockReturnValue({ overridden: false, keys: [], baseUrl: null });
   getProviderRuntimeStatus.mockResolvedValue(null);
   getProviderRuntimeStatuses.mockResolvedValue({});
   vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -49,7 +56,7 @@ describe('getProviderPrerequisiteMap', () => {
       { id: 'lmstudio', type: 'api', endpoint: 'http://localhost:1234/v1' },
     ]);
 
-    expect(map.codex).toEqual({ met: false, missing: [{ code: 'runtime', label: 'Codex CLI is not installed' }] });
+    expect(map.codex).toEqual({ met: false, missing: [{ code: 'runtime', label: 'Codex CLI is not installed' }], advisories: [] });
     expect(map.openai.met).toBe(false);
     expect(map.lmstudio.met).toBe(true);
   });
@@ -59,7 +66,7 @@ describe('getProviderPrerequisiteMap', () => {
   it('never awaits the probe; a cold cache publishes no runtime finding and refreshes behind the request', () => {
     const map = getProviderPrerequisiteMap([codex()]);
 
-    expect(map.codex).toEqual({ met: true, missing: [] });
+    expect(map.codex).toEqual({ met: true, missing: [], advisories: [] });
     expect(getProviderRuntimeStatuses).toHaveBeenCalledTimes(1);
   });
 
@@ -311,5 +318,36 @@ describe('prerequisitesMetForRouting', () => {
     prerequisitesMetForRouting(codex(), {});
 
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Codex CLI is not installed'));
+  });
+});
+
+/**
+ * The routing advisory reaches the published map without ever becoming a
+ * prerequisite — the regression that would otherwise bench a working Codex
+ * provider for a configuration choice the user deliberately made.
+ */
+describe('codex routing advisory in the published map', () => {
+  it('publishes the advisory while the verdict stays met', () => {
+    readCodexRoutingOverride.mockReturnValue({
+      overridden: true,
+      keys: ['openai_base_url'],
+      baseUrl: 'http://127.0.0.1:9999/v1',
+    });
+    peekProviderRuntimeStatuses.mockReturnValue({ codex: CODEX_PRESENT });
+
+    const map = getProviderPrerequisiteMap([codex()]);
+
+    expect(map.codex.met).toBe(true);
+    expect(map.codex.missing).toEqual([]);
+    expect(map.codex.advisories[0]).toMatchObject({ code: 'codexRoutingOverridden' });
+  });
+
+  it('keeps an overridden route out of the strict readiness verdict', async () => {
+    readCodexRoutingOverride.mockReturnValue({ overridden: true, keys: ['model_provider'], baseUrl: null });
+    peekProviderRuntimeStatuses.mockReturnValue({ codex: CODEX_PRESENT });
+
+    const readiness = await getProviderPrerequisiteReadinessMap([codex()]);
+
+    expect(readiness.codex).toEqual({ status: 'ready', reasonCodes: [] });
   });
 });

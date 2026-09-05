@@ -178,6 +178,13 @@ export const providerSchema = z.object({
   // exfiltration to a hostile or mistyped host — see
   // endpointGuard.js. Metadata endpoints stay blocked even when true.
   allowCustomEndpoint: z.boolean().optional(),
+  // Pin a Codex CLI/TUI provider to PortOS's own account by appending
+  // `--ignore-user-config` at spawn, so a bridge that re-pointed model routing
+  // in the user's `~/.codex/config.toml` no longer decides where PortOS's runs
+  // go. Default OFF: today's behavior (Codex reads the user's config) is the
+  // one an existing install already relies on, and an override that silently
+  // turned itself on would be its own surprise.
+  ignoreUserConfig: z.boolean().optional(),
   envVars: z.record(z.string()).optional(),
   secretEnvVars: z.array(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),

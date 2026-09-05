@@ -137,6 +137,7 @@ export * from './cliStderrNoise.js';
 export * from './codex.js';
 export * from './codexAccount.js';
 export * from './codexTurn.js';
+export * from './codexUserConfig.js';
 export * from './codexAssistantExtract.js';
 export * from './codexCliOutput.js';
 export * from './contextBudget.js';

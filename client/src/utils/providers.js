@@ -112,6 +112,26 @@ export const isCodexSubscriptionProvider = (provider) =>
   && commandBasename(provider?.command) === 'codex';
 
 /**
+ * The 'your own ~/.codex/config.toml is re-pointing this provider' advisory the
+ * server publishes on `GET /api/providers`, or `null`.
+ *
+ * Deliberately NOT part of `missingPrerequisites`: pointing Codex at a local
+ * bridge is a legitimate choice, so it must never bucket a card as NEEDS SETUP.
+ * What it fixes is PortOS reporting a ChatGPT account's readiness and quota for
+ * work that account never served. `advisory.baseUrl` is machine-local — render
+ * it here and nowhere else.
+ *
+ * SERVER-ONLY, with no client fallback: the browser cannot read the user's
+ * config file, so an older server publishing nothing correctly yields `null`.
+ * @returns {{code:string,label:string,keys:string[],baseUrl:string|null}|null}
+ */
+export const codexRoutingAdvisory = (provider) => (
+  Array.isArray(provider?.prerequisiteAdvisories)
+    ? provider.prerequisiteAdvisories.find((entry) => entry?.code === 'codexRoutingOverridden') || null
+    : null
+);
+
+/**
  * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
  * ids or any provider whose launch command basename is `kimi` (path/exe tolerant).
  * MIRROR of `isKimiProvider` in server/lib/providerModels.js — keep in lockstep.

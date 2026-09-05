@@ -472,6 +472,7 @@
       "timeout": 300000,
       "enabled": true,
       "textTransport": "codex-app-server",
+      "ignoreUserConfig": false,
       "envVars": {},
       "secretEnvVars": []
     },
@@ -490,6 +491,7 @@
       "timeout": 600000,
       "enabled": false,
       "textTransport": "codex-app-server",
+      "ignoreUserConfig": false,
       "envVars": {},
       "secretEnvVars": [],
       "tuiPromptDelayMs": 2500
