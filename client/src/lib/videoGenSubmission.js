@@ -23,6 +23,16 @@ const stylePresetsFor = (selectedUniverse, stylePreset) => [
   stylePreset,
 ].filter(Boolean);
 
+/**
+ * The prompt the cloud lanes actually submit: the user's text with any universe
+ * / style-preset prompt folded in front of it. Exported because reactor.inc caps
+ * the SUBMITTED prompt at 800 characters — the form's counter has to measure the
+ * same string this module builds, not the raw textarea, or a preset silently
+ * pushes a "safe" prompt over the cap.
+ */
+export const styledVideoPrompt = (text, { negativePrompt, stylePreset, selectedUniverse } = {}) =>
+  composeStyledPrompt(text, negativePrompt, stylePresetsFor(selectedUniverse, stylePreset)).prompt;
+
 export function envelopVideoPrompt(text, {
   currentModel, negativePrompt, stylePreset, selectedUniverse, noMusic, disableAudio,
 }) {
@@ -77,7 +87,8 @@ export function buildVideoGenSubmission({
     return {
       backend: 'fal',
       prompt: composed.prompt,
-      negativePrompt: composed.negativePrompt,
+      // No negativePrompt: fal's buildRequestBody never sends one, so posting it
+      // only stamped a promise on the history record that nothing honored.
       falDuration,
       falModelId: falModelId || undefined,
       width: clampImageEdge(width, VIDEO_EDGE_BOUNDS),
@@ -92,8 +103,14 @@ export function buildVideoGenSubmission({
     return {
       backend: 'reactor',
       prompt: composed.prompt,
-      negativePrompt: composed.negativePrompt,
-      reactorClipId: reactorClipId || undefined,
+      // No negativePrompt: fast-h3's enqueue command has no such field (same as
+      // the fal lane above).
+      // The clip id chains this render onto a previous reactor clip via
+      // continue_from_clip_id; the picker only offers ids off completed reactor
+      // history records. Dropped in Image mode because continuation and a
+      // starting frame are exclusive — the service rejects a request carrying
+      // both, and the picker is already disabled there.
+      reactorClipId: (mode === 'image' ? '' : reactorClipId) || undefined,
       reactorSeconds: reactorSeconds || undefined,
       // Unlike falDuration/falModelId, a seed of 0 is a real, meaningful
       // value — `|| undefined` would silently drop it (the reactor route

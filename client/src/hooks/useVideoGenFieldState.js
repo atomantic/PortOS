@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
+import { REACTOR_DEFAULT_CLIP_LENGTH } from '../lib/reactorVideoClip.js';
 import { DEFAULT_I2V_REFERENCE_MODE } from '../lib/videoReferenceModes.js';
 import {
   DEFAULT_CONTEXT_FRAMES,
@@ -24,7 +25,7 @@ export function useVideoGenFieldState({
   const [falDuration, setFalDuration] = useState('');
   const [falModelId, setFalModelId] = useState('');
   const [reactorClipId, setReactorClipId] = useState('');
-  const [reactorSeconds, setReactorSeconds] = useState('');
+  const [reactorSeconds, setReactorSeconds] = useState(REACTOR_DEFAULT_CLIP_LENGTH);
   const [reactorSeed, setReactorSeed] = useState('');
   const [mode, setMode] = useState(incomingAudioFilename ? 'a2v' : (incomingSourceImage ? 'image' : 'text'));
   const [prompt, setPrompt] = useState(incomingPrompt || '');

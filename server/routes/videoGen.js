@@ -16,6 +16,9 @@ import {
   validateRequest, videoModelTermsSchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
+import {
+  REACTOR_MAX_CLIP_ID_LENGTH, REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS,
+} from '../lib/reactorVideoClip.js';
 import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import {
@@ -269,11 +272,13 @@ const generateBodySchema = z.object({
   ),
   // reactor.inc fast-h3 (#6214): the clip id to chain from
   // (continue_from_clip_id — frame-accurate continuation, unlike fal/grok
-  // which start a fresh render each time) and clip length in seconds.
-  reactorClipId: z.string().min(1).max(200).optional(),
+  // which start a fresh render each time) and clip length in seconds. The
+  // bounds come from lib/reactorVideoClip.js rather than a hand-copied 1-60,
+  // which accepted lengths the fast-h3 API rejects outright.
+  reactorClipId: z.string().min(1).max(REACTOR_MAX_CLIP_ID_LENGTH).optional(),
   reactorSeconds: z.preprocess(
     (v) => (v == null || v === '' ? undefined : Number(v)),
-    optionalNum(1, 60, 'reactorSeconds'),
+    optionalNum(REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, 'reactorSeconds'),
   ),
   reactorSeed: z.preprocess(
     (v) => (v == null || v === '' ? undefined : Number(v)),
