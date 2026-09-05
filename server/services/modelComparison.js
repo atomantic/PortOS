@@ -44,5 +44,3 @@ export function importModelComparison(input) {
     return result;
   });
 }
-
-export { syncArtificialAnalysisCatalog, transformAAModelsToObservations } from './artificialAnalysis.js';

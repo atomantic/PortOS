@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, modelComparisonImportSchema, modelComparisonDiscoverySchema, modelComparisonSyncSchema } from '../lib/validation.js';
-import { getModelComparison, importModelComparison, syncArtificialAnalysisCatalog } from '../services/modelComparison.js';
+import { getModelComparison, importModelComparison } from '../services/modelComparison.js';
+import { syncArtificialAnalysisCatalog } from '../services/artificialAnalysis.js';
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
 

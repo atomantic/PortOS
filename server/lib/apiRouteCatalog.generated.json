@@ -13921,6 +13921,14 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/providers/comparison/sync-aa",
+      "mountPath": "/api/providers/comparison",
+      "sources": [
+        "server/routes/modelComparison.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/providers/fleet-host",
       "mountPath": "/api/providers",
@@ -17740,8 +17748,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2197,
-    "declarations": 2205,
+    "operations": 2198,
+    "declarations": 2206,
     "sourceFiles": 233
   }
 }
