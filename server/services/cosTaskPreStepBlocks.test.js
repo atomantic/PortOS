@@ -21,6 +21,7 @@ import {
   resolveReconcileDrainGate,
   resolveSwarmBlock,
 } from './cosTaskPreStepBlocks.js';
+import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../lib/dispatchLabels.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
@@ -231,6 +232,19 @@ describe('resolveSwarmBlock', () => {
     expect(block).toContain('glab mr view --output json | jq -r .description');
     expect(block).not.toContain('glab mr view <iid>');
     expect(block).not.toContain('gh pr view');
+  });
+
+  it('routes each fan-out agent from its own issue\u2019s model:/effort: labels', () => {
+    // The orchestrator is the only actor in this flow that chooses how an agent
+    // runs, and planners have been labeling issues all along. Without this the
+    // swarm dispatched all N agents at the run's default and the routing was lost.
+    const block = resolveSwarmBlock('claim-issue', 3);
+    expect(block).toContain(DISPATCH_HINT_FANOUT_GUIDANCE);
+    // Partitioning (which issues run together) and routing (how each one runs)
+    // are separate decisions, and Phase A is where the labels get carried.
+    expect(block).toMatch(/Keep each picked issue's `model:` \/ `effort:` labels/);
+    // …and the orchestrator has to say what it routed each issue at.
+    expect(block).toMatch(/Name the model and effort you used for each issue/);
   });
 
   it('is a no-op for non-forge claim types (plan-task / jira have no swarm flow)', () => {
