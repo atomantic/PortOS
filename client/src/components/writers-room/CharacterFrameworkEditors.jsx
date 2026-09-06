@@ -21,8 +21,8 @@
 import { Plus, Trash2 } from 'lucide-react';
 import {
   CHARACTER_PSYCHOLOGY_DRIVE_HINTS,
+  CHARACTER_PSYCHOLOGY_DRIVE_LEAVES,
   CHARACTER_PSYCHOLOGY_EDITOR_FIELDS,
-  CHARACTER_PSYCHOLOGY_LIMITS,
   CHARACTER_PSYCHOLOGY_NOTE_FIELD,
   CHARACTER_SLIDER_AXES,
   CHARACTER_SLIDER_MAX,
@@ -118,15 +118,15 @@ export function PsychologyFields({ value, onChange, idPrefix, inputCls }) {
         <div key={axis} className="space-y-1 border border-port-border/40 rounded p-1.5">
           <p className="text-[10px] uppercase tracking-wider text-gray-400 capitalize">{axis}</p>
           <p className={hintCls}>{CHARACTER_PSYCHOLOGY_DRIVE_HINTS[axis]}</p>
-          {['desire', 'fear'].map((leaf) => (
-            <div key={leaf}>
-              <label htmlFor={`${idPrefix}-${axis}-${leaf}`} className={subLabelCls}>{`${axis} ${leaf}`}</label>
+          {CHARACTER_PSYCHOLOGY_DRIVE_LEAVES.map((leaf) => (
+            <div key={leaf.name}>
+              <label htmlFor={`${idPrefix}-${axis}-${leaf.name}`} className={subLabelCls}>{`${axis} ${leaf.name}`}</label>
               <input
-                id={`${idPrefix}-${axis}-${leaf}`}
-                value={asObject(drives[axis])[leaf] || ''}
-                onChange={(e) => commitDrive(axis, { [leaf]: e.target.value })}
-                placeholder={leaf === 'desire' ? 'what they reach for on this axis' : 'what they are bracing against on this axis'}
-                maxLength={CHARACTER_PSYCHOLOGY_LIMITS.drive}
+                id={`${idPrefix}-${axis}-${leaf.name}`}
+                value={asObject(drives[axis])[leaf.name] || ''}
+                onChange={(e) => commitDrive(axis, { [leaf.name]: e.target.value })}
+                placeholder={leaf.placeholder}
+                maxLength={leaf.max}
                 className={inputCls}
               />
             </div>

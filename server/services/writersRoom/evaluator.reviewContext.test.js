@@ -80,6 +80,31 @@ describe('writers room evaluate — review variables', () => {
     expect(cast[0].imageRefs).toBeUndefined();
   });
 
+  it('carries the psychology profile and the rated sliders through the store', async () => {
+    const workId = await seedWork();
+    await createCharacter(workId, {
+      name: 'Wren Calloway',
+      psychology: {
+        theoryOfControl: 'If I stay useful, nobody leaves.',
+        assessment: 'assessed',
+        drives: { connection: { fear: 'being set down' } },
+      },
+      sliders: { proactivity: 8, likability: null, competence: 7 },
+    });
+
+    await runAnalysis(workId, { kind: 'evaluate' });
+
+    const [, variables] = vi.mocked(runStagedLLM).mock.calls[0];
+    const [entry] = JSON.parse(variables.castFrameworkJson);
+    expect(entry.psychology).toEqual({
+      theoryOfControl: 'If I stay useful, nobody leaves.',
+      assessment: 'assessed',
+      drives: { connection: { fear: 'being set down' } },
+    });
+    // An unrated axis is dropped rather than sent as a low or null rating.
+    expect(entry.sliders).toEqual({ proactivity: 8, competence: 7 });
+  });
+
   it('omits the variable entirely when no character has an authored framework', async () => {
     const workId = await seedWork();
     await createCharacter(workId, { name: 'Wren Calloway', physicalDescription: 'tall, freckles' });

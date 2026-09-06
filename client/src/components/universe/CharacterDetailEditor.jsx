@@ -24,8 +24,15 @@ import {
   CHARACTER_ARC_TYPES,
   CHARACTER_FRAMEWORK_EDITOR_FIELDS,
   CHARACTER_MOTIVATIONS_FIELD,
+  CHARACTER_PSYCHOLOGY_DRIVE_HINTS,
+  CHARACTER_PSYCHOLOGY_DRIVE_LEAVES,
+  CHARACTER_PSYCHOLOGY_EDITOR_FIELDS,
+  CHARACTER_PSYCHOLOGY_NOTE_FIELD,
   CHARACTER_SECRETS_FIELD,
   CHARACTER_SLIDER_AXES,
+  PSYCHOLOGY_ASSESSMENTS,
+  PSYCHOLOGY_DRIVE_AXES,
+  RELATIONSHIP_LINK_TYPES,
 } from '../../lib/characterFramework';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useRowDraft from '../../hooks/useRowDraft';
@@ -86,13 +93,9 @@ const SECTIONS = Object.freeze([
   },
 ]);
 
-// Mirrors `RELATIONSHIP_LINK_TYPES` / `RELATIONSHIP_OPPOSITION_AXES` in
-// server/lib/storyBible.js (#1287). The server sanitizer coerces an
-// unrecognized value to 'custom', so adding a token here without the server
-// side just means the UI offers a value the server folds back to custom.
-const RELATIONSHIP_LINK_TYPES = Object.freeze([
-  'ally', 'antagonist', 'rival', 'mentor', 'love-interest', 'family', 'custom',
-]);
+// Opposing-force axes (#1287) stay local: tagging a link as an opposing force
+// is Universe-editor-only, so the Writers Room row editor has no use for them.
+// The link TYPES are shared — see the `characterFramework` import above.
 const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
   'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
 ]);
@@ -1169,56 +1172,6 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
   );
 }
 
-// Mirrors `PSYCHOLOGY_DRIVE_AXES` / `PSYCHOLOGY_ASSESSMENTS` in
-// server/lib/storyBible.js (#6414). `status` is PERCEIVED VALUE TO A GROUP —
-// not wealth, not dominance — which is why the axis carries its own hint below
-// rather than relying on the label alone.
-const PSYCHOLOGY_DRIVE_AXES = Object.freeze(['survival', 'connection', 'status']);
-const PSYCHOLOGY_ASSESSMENTS = Object.freeze(['assessed', 'unknown', 'not-applicable']);
-const DRIVE_HINTS = Object.freeze({
-  survival: 'staying safe, fed, intact — physical or existential continuity',
-  connection: 'being known, kept, belonged to',
-  status: 'perceived value to a group — respect, standing, being counted; NOT wealth or dominance',
-});
-const PSYCHOLOGY_PROSE_FIELDS = Object.freeze([
-  {
-    name: 'theoryOfControl',
-    label: 'Theory of control (one sentence)',
-    placeholder: 'the rule they operate by — "if I stay useful, nobody leaves"',
-    max: L.THEORY_OF_CONTROL_MAX,
-  },
-  {
-    name: 'strategy',
-    label: 'Strategy it motivates',
-    placeholder: 'the behavior the theory produces — "takes on everyone else\'s work, never asks for anything"',
-    max: L.PSYCHOLOGY_STRATEGY_MAX,
-  },
-  {
-    name: 'protectiveBenefit',
-    label: 'What it protects',
-    placeholder: 'the real thing it keeps them from feeling or losing',
-    max: L.PSYCHOLOGY_PROTECTION_MAX,
-  },
-  {
-    name: 'presentCost',
-    label: 'What it costs now',
-    placeholder: 'the price the strategy charges in the present',
-    max: L.PSYCHOLOGY_COST_MAX,
-  },
-  {
-    name: 'testingPressure',
-    label: 'Anticipated testing pressure',
-    placeholder: 'what would put the theory under load — anticipated, not yet dramatized',
-    max: L.PSYCHOLOGY_PRESSURE_MAX,
-  },
-  {
-    name: 'candidateChange',
-    label: 'Candidate change',
-    placeholder: 'the revision the theory might undergo if the pressure lands',
-    max: L.PSYCHOLOGY_CHANGE_MAX,
-  },
-]);
-
 // One draft-buffered textarea inside the psychology profile. A sub-component
 // because `useFieldDraft` is a hook and cannot be called inside a `.map`.
 function PsychologyField({ id, label, hint, placeholder, max, value, onCommit, disabled, rows = 2 }) {
@@ -1255,7 +1208,7 @@ function PsychologySection({ entry, onPatch, disabled }) {
   const commitDrive = (axis, patch) => commit({
     drives: { ...drives, [axis]: { ...(drives[axis] || {}), ...patch } },
   });
-  const filled = PSYCHOLOGY_PROSE_FIELDS.filter((f) => String(psychology[f.name] || '').trim()).length
+  const filled = CHARACTER_PSYCHOLOGY_EDITOR_FIELDS.filter((f) => String(psychology[f.name] || '').trim()).length
     + PSYCHOLOGY_DRIVE_AXES.filter((axis) => String(drives[axis]?.desire || '').trim() || String(drives[axis]?.fear || '').trim()).length;
   // "unassessed" is keyed on the PERSISTED object, not on the filled count: an
   // author who ruled the profile out wrote a real assessment even though every
@@ -1265,7 +1218,7 @@ function PsychologySection({ entry, onPatch, disabled }) {
     ? 'unassessed'
     : psychology.assessment && psychology.assessment !== 'assessed'
       ? psychology.assessment
-      : `${filled}/${PSYCHOLOGY_PROSE_FIELDS.length + PSYCHOLOGY_DRIVE_AXES.length} filled`;
+      : `${filled}/${CHARACTER_PSYCHOLOGY_EDITOR_FIELDS.length + PSYCHOLOGY_DRIVE_AXES.length} filled`;
   const assessmentId = `chr-psych-assessment-${entry.id}`;
   return (
     <BoxedSection icon={Compass} label="Psychology (theory of control & drives)" summary={summary}>
@@ -1299,16 +1252,16 @@ function PsychologySection({ entry, onPatch, disabled }) {
       {psychology.assessment === 'unknown' || psychology.assessment === 'not-applicable' ? (
         <PsychologyField
           id={`chr-psych-note-${entry.id}`}
-          label="Why"
-          hint="Required for unknown / not-applicable. A hive, a weather front, or an intelligence with no interior is a legitimate answer — say so here rather than inventing a human interior."
-          placeholder="why this character has no legible theory of control, or how to read one for a nonhuman"
-          max={L.PSYCHOLOGY_NOTE_MAX}
+          label={CHARACTER_PSYCHOLOGY_NOTE_FIELD.label}
+          hint={CHARACTER_PSYCHOLOGY_NOTE_FIELD.hint}
+          placeholder={CHARACTER_PSYCHOLOGY_NOTE_FIELD.placeholder}
+          max={CHARACTER_PSYCHOLOGY_NOTE_FIELD.max}
           value={psychology.assessmentNote}
           onCommit={(v) => commit({ assessmentNote: v })}
           disabled={disabled}
         />
       ) : null}
-      {PSYCHOLOGY_PROSE_FIELDS.map((field) => (
+      {CHARACTER_PSYCHOLOGY_EDITOR_FIELDS.map((field) => (
         <PsychologyField
           key={field.name}
           id={`chr-psych-${entry.id}-${field.name}`}
@@ -1329,27 +1282,20 @@ function PsychologySection({ entry, onPatch, disabled }) {
         {PSYCHOLOGY_DRIVE_AXES.map((axis) => (
           <div key={axis} className="space-y-1 border border-port-border/40 rounded p-1.5">
             <p className="text-[10px] uppercase tracking-wider text-gray-400 capitalize">{axis}</p>
-            <p className="text-[10px] leading-snug text-gray-500">{DRIVE_HINTS[axis]}</p>
-            <PsychologyField
-              id={`chr-psych-${entry.id}-${axis}-desire`}
-              label={`${axis} desire`}
-              placeholder="what they reach for on this axis"
-              max={L.PSYCHOLOGY_DRIVE_FIELD_MAX}
-              value={drives[axis]?.desire}
-              onCommit={(v) => commitDrive(axis, { desire: v })}
-              disabled={disabled}
-              rows={1}
-            />
-            <PsychologyField
-              id={`chr-psych-${entry.id}-${axis}-fear`}
-              label={`${axis} fear`}
-              placeholder="what they are bracing against on this axis"
-              max={L.PSYCHOLOGY_DRIVE_FIELD_MAX}
-              value={drives[axis]?.fear}
-              onCommit={(v) => commitDrive(axis, { fear: v })}
-              disabled={disabled}
-              rows={1}
-            />
+            <p className="text-[10px] leading-snug text-gray-500">{CHARACTER_PSYCHOLOGY_DRIVE_HINTS[axis]}</p>
+            {CHARACTER_PSYCHOLOGY_DRIVE_LEAVES.map((leaf) => (
+              <PsychologyField
+                key={leaf.name}
+                id={`chr-psych-${entry.id}-${axis}-${leaf.name}`}
+                label={`${axis} ${leaf.name}`}
+                placeholder={leaf.placeholder}
+                max={leaf.max}
+                value={drives[axis]?.[leaf.name]}
+                onCommit={(v) => commitDrive(axis, { [leaf.name]: v })}
+                disabled={disabled}
+                rows={1}
+              />
+            ))}
           </div>
         ))}
       </div>

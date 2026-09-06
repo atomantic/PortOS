@@ -60,7 +60,9 @@ export const CHARACTER_FRAMEWORK_FIELDS = Object.freeze([
 // to judge delivery against, without shipping the render-oriented half of the
 // profile (physical description, image refs, wardrobes, voice). Entries with
 // nothing authored are dropped so an unfilled cast contributes no prompt text
-// at all rather than a page of empty keys.
+// at all rather than a page of empty keys. Carries the whole framework the
+// store persists — the prose chain, the arc, the secrets and links, plus the
+// psychology profile (#6414) and the rated Three Sliders (#2175).
 export function pickCharacterFramework(entry) {
   if (!entry || typeof entry !== 'object') return null;
   const out = { name: typeof entry.name === 'string' ? entry.name : '' };
@@ -80,9 +82,62 @@ export function pickCharacterFramework(entry) {
       description: l?.description || '',
     }));
   }
+  const psychology = pickCharacterPsychology(entry.psychology);
+  if (psychology) out.psychology = psychology;
+  const sliders = pickCharacterSliders(entry.sliders);
+  if (sliders) out.sliders = sliders;
   // `name` alone means the writer has authored no framework for this
   // character — the caller drops it rather than prompting against a husk.
   return Object.keys(out).length > 1 ? out : null;
+}
+
+/**
+ * Authored half of the psychology profile (#6414), for the projection above.
+ * Returns null when nothing was authored, so an unassessed character adds no
+ * `psychology` key at all rather than a page of empty leaves.
+ *
+ * A NON-`assessed` verdict is authorship, not a gap: an author who marked a
+ * character `unknown` / `not-applicable` and said why in `assessmentNote` made
+ * a real decision, and it carries even when every prose leaf is blank — a
+ * review that read it as unfilled would flag that decision as a defect.
+ */
+function pickCharacterPsychology(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  for (const field of CHARACTER_PSYCHOLOGY_TEXT_FIELDS) {
+    const value = typeof raw[field] === 'string' ? raw[field].trim() : '';
+    if (value) out[field] = value;
+  }
+  if (PSYCHOLOGY_ASSESSMENTS.includes(raw.assessment)) out.assessment = raw.assessment;
+  const note = typeof raw.assessmentNote === 'string' ? raw.assessmentNote.trim() : '';
+  if (note) out.assessmentNote = note;
+  const rawDrives = raw.drives && typeof raw.drives === 'object' ? raw.drives : {};
+  const drives = {};
+  for (const axis of PSYCHOLOGY_DRIVE_AXES) {
+    const row = rawDrives[axis] && typeof rawDrives[axis] === 'object' ? rawDrives[axis] : {};
+    const desire = typeof row.desire === 'string' ? row.desire.trim() : '';
+    const fear = typeof row.fear === 'string' ? row.fear.trim() : '';
+    // The sanitizer materializes all three axes even when only one is filled,
+    // so an axis with neither leaf authored is dropped here rather than
+    // shipped as `{ desire: '', fear: '' }`.
+    if (desire || fear) drives[axis] = { ...(desire ? { desire } : {}), ...(fear ? { fear } : {}) };
+  }
+  if (Object.keys(drives).length) out.drives = drives;
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Rated Three-Sliders axes (#2175), for the projection above. `null` on an
+ * axis means UNRATED — never a low rating — so an unrated axis is omitted and
+ * an entirely unrated cast contributes no `sliders` key.
+ */
+function pickCharacterSliders(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const out = {};
+  for (const axis of CHARACTER_SLIDER_AXES) {
+    if (Number.isInteger(raw[axis])) out[axis] = raw[axis];
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // Framework projection for a whole cast, empty entries removed. Returns `[]`
