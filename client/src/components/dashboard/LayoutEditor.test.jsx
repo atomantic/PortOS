@@ -101,7 +101,7 @@ describe('LayoutEditor reorder signal', () => {
   it('does not flag a widget toggle as a reorder', async () => {
     const { onSave } = await renderEditor();
     fireEvent.click(within(widgetRows()[1]).getByLabelText('Remove widget'));
-    clickButton('Death Clock');
+    clickButton('Meatspace Time Remaining');
     await save();
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
       widgets: ['quick-task', 'backup', 'death-clock'],
@@ -113,7 +113,7 @@ describe('LayoutEditor reorder signal', () => {
   // would otherwise auto-place it at the bottom, ignoring where it was put.
   it('flags a widget that was added and then moved up', async () => {
     const { onSave } = await renderEditor();
-    clickButton('Death Clock');
+    clickButton('Meatspace Time Remaining');
     moveUp(3);
     await save();
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({
@@ -124,7 +124,7 @@ describe('LayoutEditor reorder signal', () => {
 
   it('flags a swap between two widgets added in the same session', async () => {
     const { onSave } = await renderEditor();
-    clickButton('Death Clock');
+    clickButton('Meatspace Time Remaining');
     clickButton('Review Hub');
     moveUp(4);
     await save();
@@ -138,7 +138,7 @@ describe('LayoutEditor reorder signal', () => {
   // baseline has to come from the order the widgets were added in.
   it('flags a reorder in a layout that started empty', async () => {
     const { onSave } = await renderEditor({ id: 'blank', name: 'Blank', widgets: [], grid: [] });
-    clickButton('Death Clock');
+    clickButton('Meatspace Time Remaining');
     clickButton('Review Hub');
     moveUp(1);
     await save();

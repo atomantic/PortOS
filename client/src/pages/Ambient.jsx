@@ -142,7 +142,7 @@ export default function Ambient() {
             />
             {deathData.percentComplete != null && (
               <div className="text-xs text-gray-700 mt-1">
-                {deathData.percentComplete}% of life elapsed
+                {deathData.percentComplete}% of est. meatspace time elapsed
               </div>
             )}
           </div>
