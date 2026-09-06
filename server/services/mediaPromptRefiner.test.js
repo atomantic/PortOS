@@ -23,6 +23,7 @@ vi.mock('./runner.js', async (importOriginal) => {
 const providers = await import('./providers.js');
 const runner = await import('./runner.js');
 const { buildMediaPromptRefinePrompt, refineMediaPrompt } = await import('./mediaPromptRefiner.js');
+const { REACTOR_MAX_PROMPT_LENGTH } = await import('../lib/reactorVideoClip.js');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -388,5 +389,67 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
     });
 
     expect(result.prompt).toBe('enhanced prompt description');
+  });
+
+  it('tells the model the backend prompt cap and clamps an over-length answer', async () => {
+    providers.getProviderById.mockResolvedValue({
+      id: 'openai', type: 'api', enabled: true, defaultModel: 'gpt-test',
+    });
+    // A realistic failure: the model enriches a short reactor prompt into
+    // something well past fast-h3's 800-character cap, which the API rejects
+    // outright rather than trimming.
+    const overLong = `${'A neon-drenched alley in the rain. '.repeat(40)}Final beat.`;
+    expect(overLong.length).toBeGreaterThan(REACTOR_MAX_PROMPT_LENGTH);
+    mockRunnerSuccess(runner.executeApiRun, JSON.stringify({
+      prompt: overLong,
+      negativePrompt: 'blurry',
+      rationale: 'Added lighting.',
+      changes: ['Added lighting'],
+    }));
+
+    const result = await refineMediaPrompt({
+      kind: 'video',
+      prompt: 'a neon alley',
+      providerId: 'openai',
+      maxPromptLength: REACTOR_MAX_PROMPT_LENGTH,
+    });
+
+    expect(result.prompt.length).toBeLessThanOrEqual(REACTOR_MAX_PROMPT_LENGTH);
+    expect(result.truncated).toBe(true);
+
+    const sentToModel = runner.executeApiRun.mock.calls[0][0].prompt;
+    expect(sentToModel).toContain(`AT MOST ${REACTOR_MAX_PROMPT_LENGTH} characters`);
+  });
+
+  it('leaves a within-limit prompt untouched and reports no truncation', async () => {
+    providers.getProviderById.mockResolvedValue({
+      id: 'openai', type: 'api', enabled: true, defaultModel: 'gpt-test',
+    });
+    mockRunnerSuccess(runner.executeApiRun, JSON.stringify({
+      prompt: 'a neon-drenched alley in the rain, handheld camera, sodium streetlights',
+      negativePrompt: '',
+      rationale: 'Added lighting.',
+      changes: [],
+    }));
+
+    const result = await refineMediaPrompt({
+      kind: 'video',
+      prompt: 'a neon alley',
+      providerId: 'openai',
+      maxPromptLength: 800,
+    });
+
+    expect(result.prompt).toBe('a neon-drenched alley in the rain, handheld camera, sodium streetlights');
+    expect(result.truncated).toBe(false);
+  });
+
+  it('omits the length rule when the backend has no prompt cap', () => {
+    const prompt = buildMediaPromptRefinePrompt({
+      kind: 'video',
+      prompt: 'a futuristic city at night',
+      feedback: 'more rain',
+    });
+
+    expect(prompt).not.toContain('HARD LENGTH LIMIT');
   });
 });

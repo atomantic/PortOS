@@ -60,6 +60,10 @@ export default function PromptFromMedia({
   setPrompt,
   setNegativePrompt,
   applyKind,
+  // Hard character cap the video backend the host is composing for enforces
+  // (reactor.inc fast-h3: 800). Forwarded so the generated video prompt is
+  // written inside the budget rather than coming back unrenderable.
+  maxVideoPromptLength,
   initialSource = null,
   disabled = false,
   alwaysOpen = false,
@@ -162,12 +166,18 @@ export default function PromptFromMedia({
       providerId: selectedProviderId,
       model: selectedModel || undefined,
       effort: effort || undefined,
+      maxVideoPromptLength: maxVideoPromptLength > 0 ? maxVideoPromptLength : undefined,
     };
     const data = await promptFromMedia(payload).catch(() => null);
     setRunning(false);
     if (!data) return;
     setResult(data);
-    toast.success('Prompts ready');
+    // Name the trim rather than letting a cut prompt read as a thin analysis.
+    if (data.videoPromptTruncated) {
+      toast.warning(`Prompts ready — the video prompt was trimmed to fit the ${maxVideoPromptLength} character render limit`);
+    } else {
+      toast.success('Prompts ready');
+    }
     if (onResult) onResult(data);
   };
 
