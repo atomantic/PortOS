@@ -71,6 +71,37 @@ export const BIBLE_LIMITS = Object.freeze({
   PSYCHOLOGY_NOTE_MAX: 800,
   // Per-drive desire + fear.
   PSYCHOLOGY_DRIVE_FIELD_MAX: 400,
+  // Five-stage character evolution lens (#6440) — the OPTIONAL, story-scoped
+  // craft lens layered over the universe-level psychology profile above. It
+  // records, per stage, the belief under test, the pressure applied, the
+  // choice made, and what that choice caused. The lens lives on a series arc
+  // (or a FableLoom plan), never on the universe character: a story's realized
+  // change must not overwrite world-level identity. Absent on every record
+  // that has not authored one.
+  EVOLUTION_TESTED_BELIEF_MAX: 600,
+  EVOLUTION_EXTERNAL_PRESSURE_MAX: 800,
+  EVOLUTION_CHARACTER_CHOICE_MAX: 800,
+  EVOLUTION_CAUSAL_CONSEQUENCE_MAX: 800,
+  // Why this outcome was DECLARED. Same job as PSYCHOLOGY_NOTE_MAX: a
+  // deliberate flat or tragic-refusal arc has to read as an authored decision,
+  // not as an unfilled transformation.
+  EVOLUTION_OUTCOME_NOTE_MAX: 800,
+  // Evidence anchors reuse each host's existing vocabulary rather than a new
+  // one: a free-text scene anchor (as `characterArcs[].transitions[]` uses),
+  // and opaque record pointers (`trn-` transition, `ep-` episode, an outline
+  // scene key). The pointer cap comfortably fits a prefixed uuid and an
+  // 80-char outline key.
+  EVOLUTION_EVIDENCE_ANCHOR_MAX: 300,
+  EVOLUTION_EVIDENCE_REF_MAX: 120,
+  // Lenses per FableLoom plan — one per character, matching
+  // CHARACTER_ARC_LIMITS.ARCS_PER_SERIES_MAX (the pipeline host nests its
+  // lenses inside that already-capped arc list instead).
+  EVOLUTIONS_PER_PLAN_MAX: 60,
+  // Upper bound for an issue number a story beat anchors to. Read by BOTH
+  // `seriesCharacterArc.js` (CHARACTER_ARC_LIMITS.ISSUE_MAX) and the evolution
+  // lens, so the two anchor vocabularies cannot drift apart. Generous enough
+  // for any real series while still rejecting a hallucinated integer.
+  STORY_ISSUE_NUMBER_MAX: 9999,
   // Secrets the character keeps (≥2 encouraged in the prompt). Short prose
   // items, capped per-item and per-character like other string lists.
   SECRET_MAX: 600,

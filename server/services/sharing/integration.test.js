@@ -2380,7 +2380,14 @@ describe('sharing round-trip', () => {
       const result = await importer.processManifest(bucket.id, exp.filename);
       expect(result.skipped).toBe(true);
       expect(result.reason).toBe('portos-schema-ahead');
-      expect(result.ahead).toEqual([{ category: 'pipelineSeries', senderV: 99, receiverV: 12 }]);
+      // Receiver version read from the live registry — this test is about the
+      // per-category GATE, not about which number pipelineSeries is on today
+      // (the registry's own test pins that). Imported lazily because the
+      // static-import graph is hoisted above this file's `vi.mock` setup.
+      const { PORTOS_SCHEMA_VERSIONS } = await import('../../lib/schemaVersions.js');
+      expect(result.ahead).toEqual([
+        { category: 'pipelineSeries', senderV: 99, receiverV: PORTOS_SCHEMA_VERSIONS.pipelineSeries },
+      ]);
       expect(result.producedByVersion).toBe('99.0.0');
       // Series stayed tombstoned (or absent) — apply was refused.
       await expect(series.getSeries(s.id)).rejects.toThrow();

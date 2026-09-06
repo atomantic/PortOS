@@ -27,6 +27,7 @@ export * as agentContextValidation from './agentContextValidation.js';
 export * as appleHealthValidation from './appleHealthValidation.js';
 export * as brainValidation from './brainValidation.js';
 export * as catalogValidation from './catalogValidation.js';
+export * as characterEvolutionValidation from './characterEvolutionValidation.js';
 export * as cosValidation from './cosValidation.js';
 export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
@@ -113,6 +114,8 @@ export * from './streamLines.js';
 export * from './taskDataInputCatalog.js';
 // The canon field caps storyBible.js sanitizes against, as a pure leaf.
 export * from './bibleLimits.js';
+// The optional five-stage character evolution lens, as a pure leaf.
+export * from './characterEvolution.js';
 // The narrative-character framework field list, as a pure leaf — storyBible.js
 // re-exports CHARACTER_ARC_TYPES from here, so keep this flat export ahead of
 // the namespaced storyBible below.

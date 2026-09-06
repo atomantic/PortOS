@@ -8,6 +8,7 @@
 import { z } from 'zod';
 import { isShotSpeakerCue } from './fableLoomShots.js';
 import { LOOM_LIMITS } from './fableLoomLimits.js';
+import { characterEvolutionListSchema } from './characterEvolutionValidation.js';
 import { LOOM_FORMATS } from './fableLoomFormats.js';
 import {
   FABLELOOM_AUDIO_TARGETS,
@@ -113,6 +114,12 @@ const seriesPlan = z.object({
     title: z.string().max(LOOM_LIMITS.PLAN_ITEM_TITLE_MAX),
     transcript: z.string().max(LOOM_LIMITS.DELIVERY_MESSAGE_MAX),
   }).nullable().optional(),
+  // The OPTIONAL five-stage character evolution lens per character (#6440).
+  // Optional here so every pre-#6440 client keeps saving a plan unchanged;
+  // omitting it on a PATCH clears the lenses, because the plan rides a
+  // wholesale-`seriesPlan` PATCH (the sync path is where an absent key
+  // preserves — see preserveLegacyCharacterEvolutions).
+  characterEvolutions: characterEvolutionListSchema.optional(),
 });
 
 const outlineTransitionSchema = z.object({
