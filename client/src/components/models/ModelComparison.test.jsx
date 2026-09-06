@@ -150,6 +150,19 @@ it('syncs straight away without a key prompt when one is already configured', as
   expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull();
 });
 
+it('discards a typed key when the prompt is cancelled', async () => {
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'abandoned-key' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toHaveValue('');
+  expect(api.syncArtificialAnalysis).not.toHaveBeenCalled();
+});
+
 it('falls back to the key prompt when a sync with the stored key is rejected', async () => {
   api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation], inventory: [], artificialAnalysisKeyConfigured: true });
   api.syncArtificialAnalysis.mockRejectedValue(new Error('Artificial Analysis API failed (401): Unauthorized'));

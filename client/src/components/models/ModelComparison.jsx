@@ -305,6 +305,16 @@ export default function ModelComparison() {
       });
   };
 
+  // Dismissing the prompt discards the typed key. Without this it survives in
+  // state, and the next click of a button that no longer opens the dialog would
+  // silently sync — and re-save — the key the user just backed out of.
+  const closeSyncModal = () => {
+    setSyncModalOpen(false);
+    setSyncKey('');
+    setSyncError('');
+    setSyncStatus('');
+  };
+
   // A configured key makes the dialog a pure speed bump — sync straight away and
   // only prompt when there is nothing stored to sync with.
   const startSyncAA = () => {
@@ -659,7 +669,7 @@ export default function ModelComparison() {
           are the caller's. Without them the dialog renders transparent. */}
       <Modal
         open={syncModalOpen}
-        onClose={() => setSyncModalOpen(false)}
+        onClose={closeSyncModal}
         size="sm"
         ariaLabelledBy="aa-sync-title"
       >
@@ -695,7 +705,7 @@ export default function ModelComparison() {
             <button
               type="button"
               className="px-3 py-1.5 text-sm border border-port-border rounded-lg hover:bg-port-bg"
-              onClick={() => setSyncModalOpen(false)}
+              onClick={closeSyncModal}
               disabled={syncing}
             >
               Cancel
