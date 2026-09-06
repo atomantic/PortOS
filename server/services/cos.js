@@ -133,6 +133,7 @@ import {
   generateManagedAppImprovementTaskForType,
   recordDeferredPerpetualDispatch,
   applyOnDemandConsent,
+  drainProgrammaticOnDemandRequests,
   emitOnDemandEmpty,
   blockIfExceedsMaxSpawns,
   selectDryRunAutoApproved,
@@ -996,10 +997,19 @@ async function spawnDequeuePriority0OnDemand(ctx) {
   // (avoids a second load).
   ctx.taskSchedule = taskSchedule;
 
+  // Programmatic handlers first, and outside the slot-bounded loop below: they
+  // spawn nothing, so a full spawn budget must not hold a user's Run Now.
+  const handledProgrammatically = await drainProgrammaticOnDemandRequests({
+    taskScheduleMod, requests: onDemandRequests, schedule: taskSchedule, state
+  });
+
   // Track apps already marked review-started this cycle so multiple on-demand
   // requests for the same app don't each rewrite its activity record.
   const reviewStartedApps = new Set();
   for (const request of onDemandRequests) {
+    // Already handled above (and its request cleared) — `onDemandRequests` is a
+    // snapshot taken before that drain.
+    if (handledProgrammatically.has(request.id)) continue;
     if (capacity.spawned >= capacity.availableSlots) break;
 
     if (!isImprovementEnabled(state)) {

@@ -1,10 +1,13 @@
 /**
- * Burn job — fill in the blanks on universe bible entries that are named but
- * not actually described.
+ * Scheduled handler `universe-bible-describe` — fill in the blanks on universe
+ * bible entries that are named but not actually described.
  *
  * PROGRAMMATIC: no agent is spawned. PortOS sends one headless expand prompt per
- * entry through the stage runner, pinned to the burning family's own CLI/TUI
- * provider, so a `codex` burn spends CODEX's subscription window.
+ * entry through the stage runner. Run from CoS → Schedule it uses the task's own
+ * provider pin (or, unpinned, the install's active provider, like any other
+ * task); run as a Quota Burn step it is pinned to the burning family's own
+ * CLI/TUI provider, so a `codex` burn spends CODEX's subscription window. Both
+ * paths go through this one implementation — see `scheduledHandlers/index.js`.
  *
  * This is the step that belongs BEFORE `universe-bible-images` in a plan: an
  * image rendered from a character row holding only a name is a generic figure
@@ -108,28 +111,45 @@ async function collect(params, inFlight = new Set()) {
 }
 
 /**
- * The provider this job would prompt through, or null when the family has none.
+ * Which provider this handler prompts through, as `{ providerId, reason }`.
  *
- * Same rule the image job applies to render backends: a family with no usable
- * provider must NOT fall through to the install's active provider, or the expand
- * calls would spend a DIFFERENT subscription while this family's window expires
- * unused and its dispatch cap is charged for the privilege.
+ * `family` is the discriminator (see `scheduledHandlers/index.js`):
+ *
+ *   - A QUOTA BURN passes one, and the pin is the whole point: a family with no
+ *     usable provider must NOT fall through to the install's active provider, or
+ *     the expand calls would spend a DIFFERENT subscription while this family's
+ *     window expires unused and its dispatch cap is charged for the privilege.
+ *     No match ⇒ `providerId: null` plus the `reason` the caller reports.
+ *   - An ORDINARY SCHEDULED RUN passes none. There is no window to pin to, so
+ *     the task's own pin wins and an unpinned run leaves `providerId` null for
+ *     the stage runner to resolve the active provider — exactly what every other
+ *     scheduled task does. Never a refusal: "no pin" is a valid configuration.
+ *
+ * Returning the reason alongside (rather than a bare null) keeps "this family
+ * cannot burn" distinguishable from "nothing was pinned", which is the same
+ * sentinel-vs-empty rule the rest of the resolution paths follow.
  */
-export const resolveDescribeProvider = ({ job, family }) =>
+export async function resolveDescribeProvider({ job, family } = {}) {
+  if (!family?.id) return { providerId: job?.providerId || null };
   // Headless one-shot prompts, not a watchable agent session — see `providerForFamily`.
-  resolveBurnProvider({ job, family, prefer: 'cli' });
+  const provider = await resolveBurnProvider({ job, family, prefer: 'cli' });
+  return provider ? { providerId: provider.id } : { providerId: null, reason: noProviderReason(family) };
+}
+
+/** How a run reports the provider it used when nothing was pinned. */
+const providerLabel = (providerId) => providerId || 'the active provider';
 
 export async function countPending({ params, job, family } = {}) {
-  const provider = await resolveDescribeProvider({ job, family });
-  if (!provider) return { count: 0, detail: noProviderReason(family) };
+  const resolved = await resolveDescribeProvider({ job, family });
+  if (resolved.reason) return { count: 0, detail: resolved.reason };
   const collected = await collect(params, await getQuotaBurnInFlight());
   const { picked, total, depth } = collected;
   const next = picked?.rows.length || 0;
   return {
     count: total,
-    // Handed back to run() by the runner so the bible scan + provider lookup
+    // Handed back to run() by the caller so the bible scan + provider lookup
     // happen once per dispatch instead of twice — see the registry's contract.
-    context: { ...collected, provider },
+    context: { ...collected, providerId: resolved.providerId, providerResolved: true },
     detail: total
       ? `${total} bible ${total === 1 ? 'entry is' : 'entries are'} under-described (${depth}) — ${next} queued next from "${picked.universeName}"`
       : `every bible entry is described (${depth}) or was just attempted`,
@@ -155,8 +175,14 @@ const expandRow = (universeId, row, options) => (row.kind === BIBLE_KIND.CHARACT
  * went unreported).
  */
 export async function run({ params, job, family, context, force = false } = {}) {
-  const provider = context?.provider ?? await resolveDescribeProvider({ job, family });
-  if (!provider) return { dispatched: false, reason: noProviderReason(family) };
+  // `providerResolved` is the sentinel, not `providerId` truthiness: an ordinary
+  // scheduled run legitimately resolves to a NULL pin, and reading that as "the
+  // probe didn't resolve one" would repeat the provider lookup on every dispatch.
+  const resolved = context?.providerResolved === true
+    ? { providerId: context.providerId }
+    : await resolveDescribeProvider({ job, family });
+  if (resolved.reason) return { dispatched: false, reason: resolved.reason };
+  const { providerId } = resolved;
 
   // Reuse the probe's scan when the runner supplied it; the page's force path
   // calls run() with no probe, so fall back to scanning here. A forced run
@@ -165,7 +191,7 @@ export async function run({ params, job, family, context, force = false } = {}) 
   const { picked, total, max, depth } = collected;
   if (!picked) return { dispatched: false, reason: 'every bible entry is already described' };
 
-  const options = { providerId: provider.id, model: job?.model || undefined, effort: job?.effort || undefined };
+  const options = { providerId: providerId || undefined, model: job?.model || undefined, effort: job?.effort || undefined };
   const outcome = { described: 0, fields: 0, skipped: 0, failed: 0 };
   const failures = [];
   for (const row of picked.rows) {
@@ -188,7 +214,7 @@ export async function run({ params, job, family, context, force = false } = {}) 
   // and return BEFORE the cooldown stamp: a provider that was down for one tick
   // must not park this batch for the ledger's whole six-hour TTL.
   if (outcome.described === 0 && outcome.failed === picked.rows.length) {
-    return { dispatched: false, reason: `every expand failed via ${provider.id} — ${failures[0] || 'unknown error'}` };
+    return { dispatched: false, reason: `every expand failed via ${providerLabel(providerId)} — ${failures[0] || 'unknown error'}` };
   }
 
   // Stamp EVERY attempted entry of a batch that got somewhere, including the
@@ -199,13 +225,13 @@ export async function run({ params, job, family, context, force = false } = {}) 
   // never reach the rest.
   await recordQuotaBurnInFlight(picked.rows.map((row) => describeInFlightKey(picked.universeId, row.kind, row.id)));
 
-  console.log(`🔥 Quota-burn describe "${picked.universeName}" via ${provider.id} — described=${outcome.described} fields=${outcome.fields} skipped=${outcome.skipped} failed=${outcome.failed}`);
+  console.log(`📖 Bible describe "${picked.universeName}" via ${providerLabel(providerId)} — described=${outcome.described} fields=${outcome.fields} skipped=${outcome.skipped} failed=${outcome.failed}`);
   return {
     dispatched: true,
-    summary: `Described ${outcome.described} of ${picked.rows.length} bible entr${picked.rows.length === 1 ? 'y' : 'ies'} (${outcome.fields} field${outcome.fields === 1 ? '' : 's'}) in "${picked.universeName}" via ${provider.id}`,
+    summary: `Described ${outcome.described} of ${picked.rows.length} bible entr${picked.rows.length === 1 ? 'y' : 'ies'} (${outcome.fields} field${outcome.fields === 1 ? '' : 's'}) in "${picked.universeName}" via ${providerLabel(providerId)}`,
     detail: {
       universeId: picked.universeId,
-      providerId: provider.id,
+      providerId: providerId || null,
       model: job?.model || null,
       effort: job?.effort || null,
       depth,

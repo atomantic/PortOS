@@ -1,11 +1,16 @@
 /**
- * Burn job — render images for universe bible entries that have none.
+ * Scheduled handler `universe-bible-images` — render images for universe bible
+ * entries that have none.
  *
  * PROGRAMMATIC: no agent is spawned. PortOS compiles the missing entries' render
  * prompts itself and enqueues them on the media job queue, exactly as the
- * Universe Builder's "Render" button does. The quota it burns is the CLOUD IMAGE
- * backend's (codex `image_gen`, grok `image_gen`, agy `generate_image`), which is
- * why the job's render backend defaults to the burning family's own mode.
+ * Universe Builder's "Render" button does. The quota a render spends is the
+ * CLOUD IMAGE backend's (codex `image_gen`, grok `image_gen`, agy
+ * `generate_image`), which is why a Quota Burn step's render backend defaults to
+ * the burning family's own mode. Run from CoS → Schedule there is no family to
+ * pin to, so an unset backend falls through to the universe-bible render-target
+ * ladder — see `resolveRenderMode`. Both paths go through this one
+ * implementation; see `scheduledHandlers/index.js`.
  *
  * "Has no image" means the entry's `imageRefs[]` is empty — the same array the
  * collection hook appends a finished render's filename to. An entry that has
@@ -144,25 +149,38 @@ function dedupeByLabel(rows) {
 }
 
 /**
- * The image backend this job would render through, or null when it cannot
- * resolve one it is willing to use.
+ * The image backend to render through, as `{ mode, reason }`.
  *
- * A family with no cloud image mode of its own (`claude` — it renders no
- * images) must NOT silently fall through to the install default: the renders
- * would spend a DIFFERENT provider's image quota while this family's window
- * expires unused and its dispatch cap is charged for the privilege. Pinning the
- * backend to the burning family is the entire point of the job, so a family
- * that can't be pinned needs an explicit `params.mode` or nothing happens.
+ * `mode` is the backend id, or `undefined` for "let the universe-bible
+ * render-target ladder decide" (what `renderUniverseJobs` does with no `mode`).
+ * `reason` is set — and `mode` left null — only when the handler must REFUSE.
+ * An explicit sentinel rather than a bare null because "nothing pinned, use the
+ * install default" and "this family cannot render, do not spend" are opposite
+ * outcomes that a single falsy value would collapse.
+ *
+ * An explicit `params.mode` always wins. Otherwise `family` decides:
+ *
+ *   - A QUOTA BURN passes one, and a family with no cloud image mode of its own
+ *     (`claude` — it renders no images) must NOT silently fall through to the
+ *     install default: the renders would spend a DIFFERENT provider's image quota
+ *     while this family's window expires unused and its dispatch cap is charged
+ *     for the privilege. Pinning the backend to the burning family is the entire
+ *     point, so a family that can't be pinned needs an explicit `params.mode` or
+ *     nothing happens.
+ *   - An ORDINARY SCHEDULED RUN passes none. There is no window to protect, so
+ *     an unset backend behaves like every other render PortOS enqueues.
  */
-export function resolveRenderMode({ params, family }) {
-  if (typeof params?.mode === 'string' && params.mode) return params.mode;
-  return CLOUD_IMAGE_GEN_MODES.includes(family?.id) ? family.id : null;
+export function resolveRenderMode({ params, family } = {}) {
+  if (typeof params?.mode === 'string' && params.mode) return { mode: params.mode };
+  if (!family?.id) return { mode: undefined };
+  return CLOUD_IMAGE_GEN_MODES.includes(family.id)
+    ? { mode: family.id }
+    : { mode: null, reason: `${family.id} renders no images — pick a render backend on this job` };
 }
 
 export async function countPending({ params, family } = {}) {
-  if (!resolveRenderMode({ params, family })) {
-    return { count: 0, detail: `${family?.id} renders no images — pick a render backend on this job` };
-  }
+  const resolvedMode = resolveRenderMode({ params, family });
+  if (resolvedMode.reason) return { count: 0, detail: resolvedMode.reason };
   const inFlight = await getQuotaBurnInFlight();
   const collected = await collect(params, inFlight);
   const { picked, total, requireDescribed } = collected;
@@ -182,16 +200,17 @@ export async function countPending({ params, family } = {}) {
 }
 
 /**
- * Enqueue the next batch. The render backend resolves as
- * `params.mode` → the burning family's own image mode (when it has one) →
- * whatever the universe-bible render-target ladder decides. Pinning to the
- * family by default is the point of the job: a `codex` burn should spend
- * CODEX's image quota, not silently fall through to the install default and
- * burn a different provider's.
+ * Enqueue the next batch. The render backend resolves as `params.mode` → the
+ * burning family's own image mode (a burn with a family that has one) →
+ * whatever the universe-bible render-target ladder decides (an ordinary
+ * scheduled run). Pinning to the family by default is the point of a BURN: a
+ * `codex` burn should spend CODEX's image quota, not silently fall through to
+ * the install default and burn a different provider's — a family with no image
+ * mode is refused rather than redirected. See `resolveRenderMode`.
  */
 export async function run({ params, job, family, context, force = false } = {}) {
-  const mode = resolveRenderMode({ params, family });
-  if (!mode) return { dispatched: false, reason: `${family?.id} renders no images — pick a render backend on this job` };
+  const { mode, reason } = resolveRenderMode({ params, family });
+  if (reason) return { dispatched: false, reason };
 
   // Reuse the probe's scan when the runner supplied it; the page's force path
   // calls run() with no probe, so fall back to scanning here.
@@ -218,7 +237,7 @@ export async function run({ params, job, family, context, force = false } = {}) 
   // window's whole cap re-rendering them.
   await recordQuotaBurnInFlight(picked.rows.map((row) => inFlightKey(picked.universeId, row)));
 
-  console.log(`🔥 Quota-burn rendered ${result.promptCount} bible image(s) for "${picked.universeName}" via ${result.mode}`);
+  console.log(`🖼️ Bible images: rendered ${result.promptCount} bible image(s) for "${picked.universeName}" via ${result.mode}`);
   return {
     dispatched: true,
     summary: `Queued ${result.promptCount} image render${result.promptCount === 1 ? '' : 's'} for "${picked.universeName}" via ${result.mode}`,

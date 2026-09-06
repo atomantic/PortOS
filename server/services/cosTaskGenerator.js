@@ -61,7 +61,7 @@ import {
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { isReconcileDrainTaskType } from './taskScheduleConstants.js';
-import { requiresInstallWideTarget } from './taskScheduleRegistry.js';
+import { isProgrammaticScheduledTaskType, requiresInstallWideTarget } from './taskScheduleRegistry.js';
 import {
   appendClaimOverrideContext,
   appendPrefetchedIssueContext,
@@ -775,10 +775,20 @@ async function spawnPriority0OnDemand(ctx) {
   // names an unknown app and get cleared, silently dropping user-initiated
   // work. On a failure we leave the requests queued for the next cycle.
   const apps = onDemandRequests.length > 0 ? await getActiveApps().catch(() => null) : [];
+
+  // Programmatic handlers first, and outside the slot-bounded loop below: they
+  // spawn nothing, so a busy autonomy budget must not hold a user's Run Now.
+  const handledProgrammatically = await drainProgrammaticOnDemandRequests({
+    taskScheduleMod: taskSchedule, requests: onDemandRequests, schedule: liveSchedule, state
+  });
+
   if (!apps) {
     emitLog('warn', `On-demand requests deferred — the app registry could not be read this cycle`);
   } else if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
     for (const request of onDemandRequests) {
+      // Already handled above (and its request cleared) — `onDemandRequests` is
+      // a snapshot taken before that drain.
+      if (handledProgrammatically.has(request.id)) continue;
       if (tasksToSpawn.length >= availableSlots) break;
 
       if (!isImprovementEnabled(state)) {
@@ -2460,6 +2470,91 @@ function takePerpetualTransient(taskType, appId) {
   transientVerdicts.delete(key);
   if (!verdict || (Date.now() - verdict.at) > TRANSIENT_VERDICT_TTL_MS) return null;
   return verdict;
+}
+
+/**
+ * Drain the on-demand requests for PROGRAMMATIC scheduled task types
+ * (`services/scheduledHandlers/`) — the ones PortOS performs ITSELF.
+ *
+ * They never become a CoS task and never spawn an agent, so they are drained
+ * ahead of (and outside) the slot-bounded loops in the two on-demand engines:
+ * queueing a describe/render batch behind agent capacity it does not use would
+ * leave a user's explicit "Run Now" sitting until an unrelated agent finished.
+ *
+ * Both engines call this once per cycle and then skip the ids it returns in
+ * their own loop, so a request drained here is handled exactly once whichever
+ * engine gets there first (the request is cleared before the handler runs).
+ * Returning the ids rather than re-testing the task type keeps the engines from
+ * importing the handler registry statically — see server/AGENTS.md's import
+ * scoping rule — and covers requests the drain cleared WITHOUT running (the
+ * type was disabled, or Improve is off), which must not fall through either.
+ *
+ * `force: true` — a manual Run is explicit consent for THIS work, so the run
+ * ignores the shared in-flight cooldown that stops the burn rotation re-picking
+ * rows whose render hasn't landed yet. `context` is deliberately omitted: with
+ * no probe to reuse, `run` does its own scan, which is the contract's
+ * `context: undefined` path.
+ *
+ * Returns the ids of the requests it took responsibility for. Never throws —
+ * `runScheduledHandler` converts a handler throw into a non-dispatch, and this
+ * runs outside the request lifecycle.
+ */
+export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, requests, schedule, state }) {
+  const handled = new Set();
+  const pending = (requests || []).filter((request) => isProgrammaticScheduledTaskType(request.taskType));
+  if (pending.length === 0) return handled;
+
+  const { runScheduledHandler } = await import('./scheduledHandlers/index.js');
+  for (const request of pending) {
+    const taskConfig = schedule?.tasks?.[request.taskType];
+    handled.add(request.id);
+    if (!isImprovementEnabled(state)) {
+      emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
+      await taskScheduleMod.clearOnDemandRequest(request.id);
+      continue;
+    }
+    // Parity with the agent engines: the type may have been disabled after the
+    // request was queued.
+    if (!taskConfig?.enabled) {
+      emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
+      await taskScheduleMod.clearOnDemandRequest(request.id);
+      continue;
+    }
+
+    // CLAIM the request, and only run if this drain is the one that took it.
+    // The two engines are independent and each drains its own snapshot, so both
+    // can hold the same request; `clearOnDemandRequest` is a serialized
+    // read-modify-write that returns the record only to the caller that removed
+    // it, and returns null to the loser. Without this check one "Run Now" would
+    // spend two describe/render batches and toast twice — the agent path gets
+    // the same protection from `addTask`'s duplicate detection, which a handler
+    // that queues nothing has no equivalent of.
+    const claimed = await taskScheduleMod.clearOnDemandRequest(request.id);
+    if (!claimed) continue;
+
+    await taskScheduleMod.recordExecution(`task:${request.taskType}`);
+    const outcome = await runScheduledHandler({
+      taskType: request.taskType,
+      params: taskConfig.taskMetadata || {},
+      job: { model: taskConfig.model || null, effort: taskConfig.effort || null, providerId: taskConfig.providerId || null },
+      force: true,
+    });
+
+    emitLog(outcome?.dispatched ? 'info' : 'debug',
+      `${request.taskType}: ${outcome?.summary || outcome?.reason || 'nothing to do'}`,
+      { requestId: request.id });
+    // The client toasts this so an explicit Run isn't a silent no-op. Separate
+    // from `schedule:on-demand-empty`: that channel means "no agent task was
+    // produced", while this one reports work PortOS already finished.
+    cosEvents.emit('schedule:on-demand-handled', {
+      requestId: request.id,
+      taskType: request.taskType,
+      dispatched: outcome?.dispatched === true,
+      summary: outcome?.summary || null,
+      reason: outcome?.reason || null,
+    });
+  }
+  return handled;
 }
 
 /**

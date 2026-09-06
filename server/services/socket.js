@@ -379,6 +379,9 @@ function setupCosEventForwarding() {
   // this so an explicit trigger that finds no actionable work (parked) isn't a
   // silent no-op.
   cosEvents.on('schedule:on-demand-empty', (data) => broadcastToCos('cos:schedule:on-demand-empty', data));
+  // Programmatic scheduled handlers report what they actually did — no agent
+  // task is created, so there is nothing else for the user to watch.
+  cosEvents.on('schedule:on-demand-handled', (data) => broadcastToCos('cos:schedule:on-demand-handled', data));
 }
 
 // Set up error event forwarding

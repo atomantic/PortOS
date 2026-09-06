@@ -159,6 +159,9 @@ import {
   TASK_TYPE_PROMPT_INFO,
   getTaskTypeInvocation,
   requiresManagedAppTarget,
+  requiresInstallWideTarget,
+  getTaskTypePromptInfo,
+  PROGRAMMATIC_SCHEDULED_TASK_TYPES,
   REFERENCE_WATCH_AUDITED_VERSION,
   boundParkedUntil
 } from './taskSchedule.js'
@@ -368,6 +371,66 @@ describe('taskSchedule', () => {
       expect(status.tasks['user-action-review']).toMatchObject({
         installWide: true, fileIssuesCapable: true, defaultFileIssues: true
       });
+    });
+  });
+
+  describe('programmatic scheduled handlers (universe bible)', () => {
+    it('ships both as enabled ON_DEMAND tasks with no interval and no cron', () => {
+      for (const taskType of PROGRAMMATIC_SCHEDULED_TASK_TYPES) {
+        expect(SELF_IMPROVEMENT_TASK_TYPES, taskType).toContain(taskType);
+        expect(TASK_TYPE_DESCRIPTIONS[taskType], taskType).toBeTruthy();
+        const shipped = DEFAULT_TASK_INTERVALS[taskType];
+        expect(shipped, taskType).toMatchObject({ type: INTERVAL_TYPES.ON_DEMAND, enabled: true });
+        // No cadence of any kind: a clock-due default would spend the user's
+        // provider quota on a fresh install before they ever asked for it.
+        expect(shipped, taskType).not.toHaveProperty('intervalMs');
+        expect(shipped, taskType).not.toHaveProperty('cronExpression');
+        expect(shipped, taskType).not.toHaveProperty('recheckCron');
+        expect(shipped.perpetual, taskType).toBeUndefined();
+      }
+    });
+
+    it('never becomes due on the clock, however much time has passed', async () => {
+      // The acceptance guarantee for #6376: enabled + runnable from Run Now, yet
+      // never picked up by the scheduler. `cronDueNow` puts the clock where a
+      // cron task WOULD fire, so a passing assertion here is about the cadence,
+      // not about the time of day.
+      cronDueNow();
+      mockSchedule({
+        tasks: {
+          ...PAUSED_SHIPPED_DRAINS,
+          ...Object.fromEntries(PROGRAMMATIC_SCHEDULED_TASK_TYPES.map((t) => [t, { type: 'on-demand', enabled: true }])),
+        },
+        executions: Object.fromEntries(PROGRAMMATIC_SCHEDULED_TASK_TYPES.map((t) => [
+          `task:${t}`, { lastRun: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString(), count: 1 }
+        ])),
+      });
+
+      for (const taskType of PROGRAMMATIC_SCHEDULED_TASK_TYPES) {
+        expect(await shouldRunTask(taskType), taskType).toMatchObject({ shouldRun: false, reason: 'on-demand-only' });
+      }
+      const due = await getDueTasks();
+      expect(due.map((t) => t.taskType)).not.toEqual(expect.arrayContaining([...PROGRAMMATIC_SCHEDULED_TASK_TYPES]));
+    });
+
+    it('refuses a managed-app target — a universe is not a repo', async () => {
+      for (const taskType of PROGRAMMATIC_SCHEDULED_TASK_TYPES) {
+        expect(requiresInstallWideTarget(taskType), taskType).toBe(true);
+        expect(await shouldRunTask(taskType, 'app-1'), taskType)
+          .toMatchObject({ shouldRun: false, reason: 'requires-install-wide-target' });
+      }
+      // The gate is per type, not "everything install-wide" — repo-sync's
+      // whole point is that it CAN be pointed at one app.
+      expect(requiresInstallWideTarget('repo-sync')).toBe(false);
+    });
+
+    it('has no prompt template and is surfaced as programmatic, not runtime-generated', () => {
+      for (const taskType of PROGRAMMATIC_SCHEDULED_TASK_TYPES) {
+        // PortOS performs the work itself: there is no prompt for a hook to
+        // render, so the prompt-version machinery must find nothing to migrate.
+        expect(DEFAULT_TASK_PROMPTS[taskType], taskType).toBeUndefined();
+        expect(getTaskTypePromptInfo(taskType).mode, taskType).toBe('programmatic');
+      }
     });
   });
 

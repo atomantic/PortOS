@@ -14,6 +14,7 @@ import { isPlainObject } from './objects.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
+import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 import { PUBLIC_REVIEW_EXECUTION_PROFILES } from './agentExecutionProfiles.js';
 import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
@@ -781,8 +782,36 @@ const ALLOWED_TASK_METADATA_KEYS = [
   // Dispatch gate: when true, the generated system task is always awaiting-
   // approve — including an explicit Run Now. Absent/false keeps the default
   // (Run Now consents; unattended runs follow confidence/safety-kind).
-  'requireApproval'
+  'requireApproval',
+  // `universe-bible-images`: hold canon entries that have no description yet
+  // out of the render batch, so image quota isn't spent on a name with nothing
+  // behind it. See services/scheduledHandlers/universeBibleImages.js.
+  'requireDescribed'
 ];
+
+// The params bag for the PROGRAMMATIC scheduled handlers
+// (services/scheduledHandlers/) is stored as taskMetadata, so its non-boolean
+// keys need the same constrained treatment as `verifyMode` / `branchesPerAgent`
+// below — a hand-edited schedule must not smuggle an arbitrary string into a
+// value the handler feeds to a store lookup or a render backend.
+//
+// `scope` accepts the UNION of the two handlers' option lists: task metadata is
+// keyed by task type but sanitized by one type-agnostic function, and each
+// handler already normalizes a scope it doesn't recognize back to 'all'
+// (`SCOPE_KINDS[scope] || SCOPE_KINDS.all`, `wantsScope`). Widening here can
+// therefore only accept a value the wrong handler ignores, never run the wrong
+// work — which is why the enum stays explicit rather than becoming a free string.
+export const BIBLE_HANDLER_SCOPES = ['all', 'characters', 'places', 'objects', 'variations', 'canon', 'sheets'];
+export const BIBLE_HANDLER_DEPTHS = ['core', 'full'];
+// Mirrors QUOTA_BURN_BOUNDS.maxEntries in lib/quotaBurnConfig.js — the same
+// range the burn job form advertises. Both doors bound the same batch.
+export const BIBLE_HANDLER_MAX_ENTRIES = { min: 1, max: 50 };
+// `universeId` is a universe collection-store id, or the literal 'all'. Held to
+// the store's OWN id alphabet (createCollectionStore's `idPattern`) so a
+// hand-edited schedule can't put a path segment where a record id belongs.
+const UNIVERSE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const isBibleUniverseId = (value) =>
+  value === 'all' || (typeof value === 'string' && UNIVERSE_ID_PATTERN.test(value));
 
 // pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated
 // user (the PortOS operator / their automation); 'others' = everyone else;
@@ -1050,6 +1079,34 @@ export function sanitizeTaskMetadata(raw) {
       && raw.branchesPerAgent >= BRANCHES_PER_AGENT_MIN
       && raw.branchesPerAgent <= BRANCHES_PER_AGENT_MAX) {
     clean.branchesPerAgent = raw.branchesPerAgent;
+    hasKeys = true;
+  }
+  // The programmatic bible handlers' params bag (BIBLE_HANDLER_* above). Each
+  // key is dropped when it doesn't match, so a bad value falls back to the
+  // handler's own default instead of reaching a store lookup or a render
+  // backend. `mode` accepts only a QUEUEABLE image backend: `external` renders
+  // through a remote SD-API that batch rendering rejects downstream anyway, and
+  // storing it would advertise a setting that always fails at dispatch.
+  if (isBibleUniverseId(raw.universeId)) {
+    clean.universeId = raw.universeId;
+    hasKeys = true;
+  }
+  if (BIBLE_HANDLER_SCOPES.includes(raw.scope)) {
+    clean.scope = raw.scope;
+    hasKeys = true;
+  }
+  if (BIBLE_HANDLER_DEPTHS.includes(raw.depth)) {
+    clean.depth = raw.depth;
+    hasKeys = true;
+  }
+  if (Number.isInteger(raw.maxEntries)
+      && raw.maxEntries >= BIBLE_HANDLER_MAX_ENTRIES.min
+      && raw.maxEntries <= BIBLE_HANDLER_MAX_ENTRIES.max) {
+    clean.maxEntries = raw.maxEntries;
+    hasKeys = true;
+  }
+  if (QUEUEABLE_IMAGE_MODES.includes(raw.mode)) {
+    clean.mode = raw.mode;
     hasKeys = true;
   }
   // Pipeline configuration is the one nested task-metadata shape. Keep only

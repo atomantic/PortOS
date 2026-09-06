@@ -744,6 +744,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             apps={apps}
             onTrigger={onTrigger}
             installWide={config.installWide}
+            programmatic={config.programmatic}
             // `updating` covers an in-flight pin write here, same race the card gates on.
             disabledReason={improvementDisabled ? IMPROVEMENT_DISABLED_TITLE : (updating ? SAVING_TITLE : '')}
           />
