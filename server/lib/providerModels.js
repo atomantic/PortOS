@@ -386,6 +386,7 @@ export function effortLevelsForProvider(provider, model = null) {
     if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;
     return perModel.length ? perModel : null;
   }
+  if (commandBasename(provider.command) === 'pi') return ['low', 'medium', 'high', 'xhigh', 'max'];
   if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
   if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   if (isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
@@ -438,7 +439,7 @@ export const CODEX_EFFORT_KEY = 'model_reasoning_effort';
 // provider args gets a SECOND, injected `--effort <level>` appended. Grok's
 // parser accepts the duplicate and takes the last one, so their explicit pin
 // would be silently overridden — the exact opposite of the contract below.
-const EFFORT_FLAG_NAMES = Object.freeze(['--effort', '--reasoning-effort']);
+const EFFORT_FLAG_NAMES = Object.freeze(['--effort', '--reasoning-effort', '--thinking']);
 
 /**
  * True when the user has already baked an effort override into the provider's
@@ -485,6 +486,7 @@ export function hasEffortFlag(args) {
 export function buildEffortArgs(effort, provider, existingArgs = [], model = null) {
   const effectiveEffort = resolveCliEffort(effort, provider, model);
   if (!effectiveEffort || hasEffortFlag(existingArgs)) return [];
+  if (commandBasename(provider?.command) === 'pi') return ['--thinking', effectiveEffort];
   if (isCursorProvider(provider)) return []; // rides `--model`, not a flag — see above
   return isCodexProvider(provider)
     ? ['-c', `${CODEX_EFFORT_KEY}=${effectiveEffort}`]

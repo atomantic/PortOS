@@ -1,6 +1,37 @@
 {
   "activeProvider": "claude-code-tui",
   "providers": {
+    "pi-cli": {
+      "id": "pi-cli",
+      "name": "Pi Coding Agent CLI",
+      "type": "cli",
+      "command": "pi",
+      "args": [
+        "--print",
+        "--approve"
+      ],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
+    "pi-tui": {
+      "id": "pi-tui",
+      "name": "Pi Coding Agent TUI",
+      "type": "tui",
+      "command": "pi",
+      "args": [
+        "--approve"
+      ],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
     "claude-code": {
       "id": "claude-code",
       "name": "Claude Code CLI",

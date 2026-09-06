@@ -1,3 +1,4 @@
+import { isPiCommand } from './pi.js';
 /**
  * The single per-vendor table behind model refresh.
  *
@@ -54,6 +55,10 @@ const displayName = (provider) => String(provider?.name || '').toLowerCase();
  * gemini) exactly as the old chain did.
  */
 export const MODEL_FETCHERS = [
+  {
+    key: 'pi', cliMatch: (p) => isPiCommand(p?.command),
+    tuiMatch: (p) => isPiCommand(p?.command), fetch: '_fetchPiModels',
+  },
   {
     key: 'ollama',
     // Not a command test: the marker can be `ollamaBacked`, an id, or an

@@ -1226,7 +1226,7 @@ describe('supportsModelRefresh', () => {
       // provider — nothing here can enumerate that, and Models → Harnesses
       // ("Refresh models") is where their catalog comes from instead.
       'opencode-zen',
-      'openrouter', 'orcarouter', 'slotstream',
+      'openrouter', 'orcarouter', 'pi-cli', 'pi-tui', 'slotstream',
     ]);
   });
 });

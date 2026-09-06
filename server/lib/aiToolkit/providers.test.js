@@ -23,6 +23,25 @@ describe('Provider Service', () => {
     if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
+  it.skipIf(process.platform === 'win32')('refreshes Pi models and distinguishes authentication from probe failure', async () => {
+    const command = join(TEST_DATA_DIR, 'pi');
+    const emit = async (text, code = 0) => {
+      await writeFile(command, `#!/usr/bin/env node\nif (process.argv[2] !== '--list-models') process.exit(9);\nconsole.log(${JSON.stringify(text)}); process.exit(${code});\n`);
+      await chmod(command, 0o755);
+    };
+    await emit('provider model context max-out thinking images\nexample model-a 200K 32K yes yes');
+    const provider = await providerService.createProvider({ name: 'Pi test', type: 'cli', command, models: [] });
+    const refreshed = await providerService.refreshProviderModels(provider.id);
+    expect(refreshed.models).toEqual(['example/model-a']);
+    await emit('Temporary transport failure', 1);
+    await expect(providerService.refreshProviderModels(provider.id)).rejects.toThrow('failed');
+    expect((await providerService.getProviderById(provider.id)).models).toEqual(['example/model-a']);
+    await emit('No models available. Use /login to authenticate.');
+    expect(await providerService._fetchPiModels({ command })).toEqual([]);
+    await emit('No models available. Use /login to authenticate.', 1);
+    expect(await providerService._fetchPiModels({ command })).toEqual([]);
+  });
+
   it('should create a provider', async () => {
     const provider = await providerService.createProvider({
       name: 'Test Provider',

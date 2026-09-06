@@ -1,3 +1,4 @@
+import { PI_COMMAND, parsePiModelList } from './internal/pi.js';
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, delimiter, isAbsolute } from 'path';
@@ -1321,11 +1322,13 @@ export function createProviderService(config = {}) {
      * @param {object} provider
      * @param {string} defaultBin - binary to use when the provider pins no command
      * @param {(stdout: string) => string[]} parse - vendor's stdout → ids parser
-     * @returns {Promise<string[]>} a non-empty id list
+     * @param {string[]} [listArgs] - catalog command arguments
+     * @param {(stdout: string) => boolean} [isEmptyCatalog] - explicit empty-catalog response
+     * @returns {Promise<string[]>} parsed ids; empty only when explicitly recognized
      */
-    async _execCliModelList(provider, defaultBin, parse) {
+    async _execCliModelList(provider, defaultBin, parse, listArgs = ['models'], isEmptyCatalog = () => false) {
       const bin = provider?.command || defaultBin;
-      const { command, args } = prepareWindowsSafeSpawn(bin, ['models']);
+      const { command, args } = prepareWindowsSafeSpawn(bin, listArgs);
       const pending = execFileAsync(command, args, {
         timeout: 15000,
         env: { ...process.env, ...provider?.envVars },
@@ -1340,14 +1343,21 @@ export function createProviderService(config = {}) {
       // or not a given binary has the behavior.
       pending.child?.stdin?.end();
       const { stdout } = await pending.catch((err) => {
+        const output = `${err.stdout || ''}\n${err.stderr || ''}`;
+        if (!err.killed && isEmptyCatalog(output)) return { stdout: output };
         throw new Error(`'${bin} models' failed: ${err?.message || 'could not run the binary'}`);
       });
 
       const listed = parse(stdout);
-      if (listed.length === 0) {
+      if (listed.length === 0 && !isEmptyCatalog(stdout)) {
         throw new Error(`'${bin} models' returned no model ids`);
       }
       return listed;
+    },
+
+    async _fetchPiModels(provider) {
+      return this._execCliModelList(provider, PI_COMMAND, parsePiModelList, ['--list-models'],
+        (stdout) => /No models available/i.test(stdout) && /\/login/.test(stdout));
     },
 
     /**

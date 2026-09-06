@@ -106,6 +106,7 @@ import {
   ensureCursorTuiArgs,
   ensureCursorHeadlessArgs,
 } from './cursor.js';
+import { PI_COMMAND, isPiCommand, ensurePiTuiArgs, ensurePiHeadlessArgs, preparePiPrompt } from './pi.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import {
   publicReviewPostureForProfile,
@@ -547,6 +548,33 @@ const GEMINI_LEGACY = {
   // is deliberately incomplete.
 };
 
+// Pi public review discards configured args and disables every tool/resource
+// discovery surface. --no-builtin-tools alone leaves extension tools enabled.
+const piCliArgs = (args, { model, effort }) => ensurePiHeadlessArgs(args, model, effort);
+const PI = {
+  id: 'pi',
+  idFragment: 'pi-',
+  inferredCommand: PI_COMMAND,
+  matchCommand: isPiCommand,
+  tuiArgs: ensurePiTuiArgs,
+  cliArgs: piCliArgs,
+  preparePrompt: preparePiPrompt,
+  spawnArgs: defaultSpawnArgs(piCliArgs, PI_COMMAND),
+  publicReview: {
+    [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
+      matchProvider: (provider) => isDirectBinaryProvider(provider) && isPiCommand(provider?.command),
+      spawnArgs: (provider, { effectiveModel, effort } = {}) => ({
+        command: provider.command,
+        args: ensurePiHeadlessArgs([
+          '--no-approve', '--no-tools', '--no-builtin-tools', '--no-extensions',
+          '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-session',
+        ], effectiveModel, effort),
+        stdinMode: 'prompt',
+      }),
+    },
+  },
+};
+
 // ─── claude (default fallback — MUST stay last) ────────────────────────────
 
 function claudeCliArgs(baseArgs, { model, effort, provider }) {
@@ -753,7 +781,7 @@ const CLAUDE = {
  * exclusive by construction (distinct binary basenames, or a provider-id
  * check that doesn't overlap with a command-basename check).
  */
-export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, CLAUDE];
+export const PROVIDER_VENDORS = [CODEX, ANTIGRAVITY, CURSOR, GEMINI_LEGACY, KIMI, GROK, OPENCODE, PI, CLAUDE];
 
 /**
  * A row's `matchCliProvider` may be absent when it's identical to

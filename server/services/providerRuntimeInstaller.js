@@ -95,6 +95,11 @@ const PROBE_TIMEOUT_MS = 15_000;
 /** One row per installable provider runtime, keyed by its vendor row. */
 const RUNTIME_ROWS = [
   {
+    vendor: 'pi', label: 'Pi Coding Agent CLI',
+    install: { kind: 'npm', package: '@earendil-works/pi-coding-agent@latest' },
+    selfUpdate: ['update'], modelsArgs: ['--list-models'], docsUrl: 'https://pi.dev/docs',
+  },
+  {
     vendor: 'claude',
     label: 'Claude Code CLI',
     install: { kind: 'npm', package: '@anthropic-ai/claude-code@latest' },

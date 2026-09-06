@@ -1,3 +1,4 @@
+import { parsePiModelList } from './aiToolkit/internal/pi.js';
 /**
  * Parsers for what a coding-agent HARNESS prints about itself — its version
  * banner and its model catalog.
@@ -112,6 +113,7 @@ const parseGrokModels = (lines) => lines
  * `providerRuntimeInstaller.test.js`.
  */
 const MODEL_PARSERS = {
+  pi: (lines) => parsePiModelList(lines.join('\n')),
   opencode: parseOpencodeModels,
   grok: parseGrokModels,
   // Delegated — these two vendors' stdout shapes are already owned elsewhere.
