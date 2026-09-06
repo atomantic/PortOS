@@ -191,10 +191,10 @@ const judgeFoundation = vi.fn(async () => ({
 const applyFoundationFix = vi.fn(async (_sId, dimension) => ({ dimension, applied: foundationFixApplied }));
 const snapshotFoundationState = vi.fn(async (seriesId) => ({ seriesId, marker: 'foundation-checkpoint' }));
 const restoreFoundationState = vi.fn(async () => ({ restored: true, episodesRestored: 0 }));
-// Objective blank-field count behind the character arm's tie-breaker. Default:
-// an unchanged cast (the checkpoint read and the post-repair read agree), so a
-// tie stays a tie unless a test says the repair actually filled fields.
-const readFoundationCharacterBlanks = vi.fn(async () => 0);
+// The two objective, LLM-free measures behind the character arm's tie-breaker.
+// Default: an unchanged cast (the checkpoint read and the post-repair read
+// agree), so a tie stays a tie unless a test says the repair moved one of them.
+const readFoundationCharacterProgress = vi.fn(async () => ({ blanks: 0, integrityFindings: 0 }));
 vi.mock('./foundationJudge.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -204,7 +204,7 @@ vi.mock('./foundationJudge.js', async (importOriginal) => {
     establishCharacterFoundation: (...args) => establishCharacterFoundation(...args),
     snapshotFoundationState: (...args) => snapshotFoundationState(...args),
     restoreFoundationState: (...args) => restoreFoundationState(...args),
-    readFoundationCharacterBlanks: (...args) => readFoundationCharacterBlanks(...args),
+    readFoundationCharacterProgress: (...args) => readFoundationCharacterProgress(...args),
   };
 });
 
@@ -2329,7 +2329,9 @@ describe('autopilot conductor', () => {
         },
       }));
     // 25 blank fields across the repairable cast before the repair, none after.
-    readFoundationCharacterBlanks.mockResolvedValueOnce(25).mockResolvedValueOnce(0);
+    readFoundationCharacterProgress
+      .mockResolvedValueOnce({ blanks: 25, integrityFindings: 4 })
+      .mockResolvedValueOnce({ blanks: 0, integrityFindings: 4 });
 
     const { seriesId } = await seedComplete();
     await autopilot.startSeriesAutopilot(seriesId, { maxFoundationRounds: 3 });
@@ -2338,6 +2340,46 @@ describe('autopilot conductor', () => {
     expect(restoreFoundationState).not.toHaveBeenCalled();
     expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
     expect(applyFoundationFix.mock.calls.map(([, dimension]) => dimension)).toEqual(['character', 'character']);
+  });
+
+  it('foundation gate: keeps a tied character repair that only closed cast-integrity gaps (#6415)', async () => {
+    // The psychology profile (#6414) is in none of the blank-counted field sets,
+    // so a repair that authored a lead's theory of control and its six drives
+    // used to register as literally zero objective progress and get rewound on a
+    // tied score. The deterministic cast-integrity count is the measure that
+    // sees it.
+    const snapshot = (weightedScore, worldbuilding) => ({
+      seriesId: 'ser-example', status: 'complete', weightedScore,
+      dimensions: {
+        worldbuilding: { score: worldbuilding, gap: 'External societies read as negotiation venues.', fix: 'Add daily practices.' },
+        character: { score: 5, gap: 'The lead states no theory of control.', fix: 'Author the control belief and drives.' },
+        structure: { score: 5, gap: 'The climax occurs in two places.', fix: 'Reconcile issue 11 and 12.' },
+        craft: { score: 8, gap: 'The exemplars are all one culture.', fix: 'Add an external-culture exemplar.' },
+      },
+    });
+    judgeFoundation
+      .mockImplementationOnce(async () => snapshot(6.5, 8))
+      .mockImplementationOnce(async () => snapshot(6.1, 7))
+      .mockImplementationOnce(async () => ({
+        seriesId: 'ser-example', status: 'complete', weightedScore: 8,
+        dimensions: {
+          worldbuilding: { score: 8, gap: 'g', fix: 'f' },
+          character: { score: 8, gap: 'g', fix: 'f' },
+          structure: { score: 8, gap: 'g', fix: 'f' },
+          craft: { score: 8, gap: 'g', fix: 'f' },
+        },
+      }));
+    // Blanks are UNCHANGED — only the integrity gaps closed.
+    readFoundationCharacterProgress
+      .mockResolvedValueOnce({ blanks: 12, integrityFindings: 7 })
+      .mockResolvedValueOnce({ blanks: 12, integrityFindings: 0 });
+
+    const { seriesId } = await seedComplete();
+    await autopilot.startSeriesAutopilot(seriesId, { maxFoundationRounds: 3 });
+    await waitFor(runFinished(seriesId));
+
+    expect(restoreFoundationState).not.toHaveBeenCalled();
+    expect(autopilot.__testing.runs.get(seriesId)?.lastPayload?.type).toBe('complete');
   });
 
   it('foundation gate: pauses only after repeated rejected repairs exhaust the same target', async () => {
