@@ -188,6 +188,21 @@ function addSpawningJob(jobId) {
   }, 5 * 60 * 1000));
 }
 
+/**
+ * Whether this custom job already has a fire in flight — an agent registered and
+ * running, or one handed to `spawningJobIds` whose agent has not registered yet.
+ *
+ * Exported because a quota burn asks the same question before queuing a job
+ * (`quotaBurnInvoke.js`), and asking only the running-agent half of it — which
+ * is all a caller outside this module can see, since `spawningJobIds` is
+ * process-local — leaves the whole spawn window open to a double-queue.
+ */
+export function isJobFireInFlight(jobId, state) {
+  if (spawningJobIds.has(jobId)) return true;
+  return Object.values(state?.agents || {})
+    .some((agent) => agent?.status === 'running' && agent?.metadata?.jobId === jobId);
+}
+
 export function clearSpawningJob(jobId) {
   spawningJobIds.delete(jobId);
   const timeout = spawningJobTimeouts.get(jobId);
@@ -338,15 +353,8 @@ export async function executeScheduledJob(jobId) {
       // Don't re-register the timer here — the job:spawned handler will do it
       // after recordJobExecution updates lastRun. Re-registering with stale
       // lastRun causes a 1-second re-fire loop.
-      if (spawningJobIds.has(jobId)) {
-        emitLog('debug', `Job ${job.name} skipped - already spawning`, { jobId });
-        return;
-      }
-      const agentAlreadyRunning = Object.values(state.agents).some(
-        a => a.status === 'running' && a.metadata?.jobId === jobId
-      );
-      if (agentAlreadyRunning) {
-        emitLog('debug', `Job ${job.name} skipped - agent already running`, { jobId });
+      if (isJobFireInFlight(jobId, state)) {
+        emitLog('debug', `Job ${job.name} skipped - a fire is already in flight`, { jobId });
         return;
       }
 

@@ -1,3 +1,4 @@
+vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})), updateSettingsWith: vi.fn() }));
 import { describe, expect, it, vi } from 'vitest';
 import {
   slugify,

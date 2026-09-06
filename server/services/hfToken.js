@@ -34,6 +34,7 @@ export async function getHfTokenInfo() {
   if (stored) return { token: stored, source: 'stored' };
   const envToken = (
     process.env.HF_TOKEN ||
+    process.env.HUGGINGFACE_TOKEN ||
     process.env.HUGGINGFACE_HUB_TOKEN ||
     process.env.HUGGINGFACEHUB_API_TOKEN ||
     null

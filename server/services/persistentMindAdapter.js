@@ -308,6 +308,10 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
       if (signal?.aborted) interrupt();
     },
   }).then((result) => {
+    if (!result.text?.trim() || result.text.trimStart().startsWith('OpenAI Codex v')
+      || result.text.includes('\n# Response contract\n')) {
+      throw new Error('Persistent Mind received an empty response or CLI transcript instead of an assistant response');
+    }
     if (screenshots.length > 0) assertVisionRunUsedImages(result, provider);
     return result;
   }).finally(async () => {
@@ -420,6 +424,10 @@ export function createPersistentMindTurnAdapter() {
           }),
         );
         parsed = persistentMindResponseSchema.parse(parseLLMJSON(result.text));
+        if (parsed.toolCalls.some((call) => call.name === 'catalog-name')
+          || parsed.message === 'The conversational reply. Required for a human message; optional for a self-directed wake.') {
+          throw new Error('Persistent Mind received response-contract placeholders instead of an assistant response');
+        }
         // Persist before semantic tools can erase the history these candidates
         // preserve. Keep one bounded, deduplicated set across provider rounds.
         for (const candidate of parsed.memoryCandidates) {

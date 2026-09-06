@@ -5,6 +5,7 @@
  * task complexity, thinking levels, and historical performance data.
  */
 
+import { MODEL_TIERS, resolveProviderModelTier } from '../lib/aiToolkit/constants.js';
 import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
 import { suggestModelTier } from './taskLearning.js';
 // Imported from the store submodule (not the mocked barrel) so the spawn-time key
@@ -70,10 +71,11 @@ export function extractTaskTypeKey(task) {
 export async function selectModelForRole(task, role, provider, agent = {}) {
   const assignment = ORCHESTRATION_ROLES.includes(role) ? roleAssignment(task, role) : null;
   if (assignment?.model) {
+    const isTier = Object.values(MODEL_TIERS).includes(assignment.model);
     console.log(`🎼 Orchestrated ${role} model: ${assignment.model}`);
     return {
-      model: assignment.model,
-      tier: 'user-specified',
+      model: isTier ? resolveProviderModelTier(provider, assignment.model) : assignment.model,
+      tier: isTier ? assignment.model : 'user-specified',
       reason: `orchestration-role-${role}`,
       orchestrationRole: role,
       userProvider: assignment.provider || task.metadata?.provider || null,
@@ -97,10 +99,11 @@ export async function selectModelForTask(task, provider, agent = {}) {
   const userProvider = task.metadata?.provider;
 
   if (userModel) {
+    const isTier = Object.values(MODEL_TIERS).includes(userModel);
     console.log(`👤 User specified model: ${userModel}`);
     return {
-      model: userModel,
-      tier: 'user-specified',
+      model: isTier ? resolveProviderModelTier(provider, userModel) : userModel,
+      tier: isTier ? userModel : 'user-specified',
       reason: 'user-preference',
       userProvider: userProvider || null
     };

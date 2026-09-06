@@ -1,3 +1,4 @@
+import { CREDENTIALS } from './credentialRegistry.js';
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap } from './zodCompat.js';
@@ -1917,4 +1918,7 @@ export const modelComparisonImportSchema = z.object({
 });
 
 export const modelComparisonDiscoverySchema = z.object({ providerId: z.string().min(1).max(200) }).strict();
+export const privateCredentialParamsSchema = z.object({ id: z.enum(CREDENTIALS.filter(entry => entry.privateStore).map(entry => entry.id)) });
+export const privateCredentialInputSchema = z.object({ value: z.string().trim().max(2000) }).strict();
+
 export const modelComparisonSyncSchema = z.object({ apiKey: z.string().min(1).max(200).optional() }).strict();

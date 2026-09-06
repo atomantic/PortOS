@@ -18,6 +18,11 @@ const state = {
   completionsUnreadable: false,
   settled: [],
   settleError: null,
+  invokePending: {},
+  invoked: [],
+  invokeResult: undefined,
+  catalog: { builtin: {}, custom: {} },
+  catalogReads: 0,
 };
 
 vi.mock('./providerUsage.js', () => ({
@@ -28,6 +33,19 @@ vi.mock('./quotaBurnStore.js', () => ({
   getQuotaBurnConfig: vi.fn(async () => state.config),
   getQuotaBurnRuns: vi.fn(async () => state.runs),
   recordQuotaBurnRun: vi.fn(async (entry) => { state.runs.unshift(entry); }),
+}));
+
+// The shared REFERENCE path. Doubled at the same altitude as the legacy
+// registry above, so this suite keeps testing the runner's own contract — which
+// lane a step takes, in what order, and what gets charged — rather than a second
+// copy of the invocation logic (`quotaBurnInvoke.test.js` owns that).
+vi.mock('./quotaBurnInvoke.js', () => ({
+  getQuotaBurnTaskCatalog: vi.fn(async () => { state.catalogReads += 1; return state.catalog; }),
+  countQuotaBurnStepPending: vi.fn(async ({ step }) => state.invokePending[step.id] ?? { count: 0, detail: 'nothing' }),
+  invokeQuotaBurnStep: vi.fn(async ({ step, family, candidate, force }) => {
+    state.invoked.push({ stepId: step.id, familyId: family.id, charge: candidate.charge, force });
+    return state.invokeResult ?? { dispatched: true, summary: `invoked ${step.id}` };
+  }),
 }));
 
 vi.mock('./quotaBurnJobs/index.js', () => ({
@@ -78,6 +96,7 @@ vi.mock('./quotaBurnCompletions.js', () => ({
 }));
 
 const { normalizeQuotaBurnConfig } = await import('../lib/quotaBurnConfig.js');
+const { countJobPending, runBurnJob } = await import('./quotaBurnJobs/index.js');
 const { getQuotaBurnStatus, runQuotaBurnCycle, rotatePlanAfter, __tickQuotaBurn, __onBurnAgentCompleted, __resetQuotaBurnRunner } = await import('./quotaBurnRunner.js');
 
 const card = (family, percentRemaining = 50) => ({
@@ -116,6 +135,11 @@ beforeEach(() => {
   state.settled = [];
   state.settleError = null;
   state.jobResult = undefined;
+  state.invokePending = {};
+  state.invoked = [];
+  state.invokeResult = undefined;
+  state.catalog = { builtin: {}, custom: {} };
+  state.catalogReads = 0;
   __resetQuotaBurnRunner();
 });
 
@@ -302,8 +326,11 @@ describe('runQuotaBurnCycle', () => {
 
 describe('getQuotaBurnStatus', () => {
   it('returns the config it loaded so the route need not re-read it', async () => {
+    // Value, not identity: availability is stamped onto a COPY on the way out
+    // (a fact about the catalog right now, never persisted). The contract is
+    // that the route gets the plan back without a second file read.
     const { config } = await getQuotaBurnStatus();
-    expect(config).toBe(state.config);
+    expect(config).toStrictEqual(state.config);
   });
 
   it('reports the live window and the reason a family would not burn', async () => {
@@ -754,5 +781,97 @@ describe('run-once jobs', () => {
     expect(grok.jobs).toEqual([{ id: 'once', ranAt, pending: null }]);
     expect(countJobPending).not.toHaveBeenCalled();
     expect(grok.skipReason).toBe('every enabled job has already run once');
+  });
+});
+
+// A step names its work in exactly one of two ways, and the runner has to send
+// each to the right executor: a `taskRef` step through the shared reference path
+// (canonical task generation + its gates), a legacy `jobType` step through the
+// frozen registry until #6381's migration converts it. Sending a reference to the
+// legacy registry would report "unknown job type" forever; sending a legacy step
+// to the reference path would report "waiting to be migrated" and strand every
+// un-upgraded install's plan.
+describe('reference steps route through the shared invocation path', () => {
+  const refPlan = (jobs) => normalizeQuotaBurnConfig({
+    enabled: true,
+    families: { grok: { enabled: true, resetWithinHours: 24, jobs } },
+  });
+
+  it('probes and runs a taskRef step through quotaBurnInvoke, not the legacy registry', async () => {
+    state.config = refPlan([{ id: 'ref', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }]);
+    state.invokePending = { ref: { count: 1, detail: 'ready' } };
+
+    const result = await runQuotaBurnCycle();
+
+    expect(result.dispatched).toBe(true);
+    expect(state.invoked).toEqual([{ stepId: 'ref', familyId: 'grok', charge: true, force: false }]);
+    expect(countJobPending).not.toHaveBeenCalled();
+    expect(runBurnJob).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy jobType steps on the legacy registry', async () => {
+    state.pending = { second: { count: 1 } };
+    await runQuotaBurnCycle();
+    expect(state.ran.map((entry) => entry.jobId)).toEqual(['second']);
+    expect(state.invoked).toHaveLength(0);
+  });
+
+  it('preserves first-enabled-with-pending-work selection across both lanes', async () => {
+    state.config = refPlan([
+      { id: 'legacy', enabled: true, jobType: 'agent-prompt', params: {} },
+      { id: 'ref', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } },
+    ]);
+    // The legacy step reports nothing to do, so the walk must fall through to the
+    // reference step rather than stopping at the first row.
+    state.pending = { legacy: { count: 0, detail: 'no pending work' } };
+    state.invokePending = { ref: { count: 1, detail: 'ready' } };
+
+    const result = await runQuotaBurnCycle();
+    expect(result.jobId).toBe('ref');
+    expect(state.ran).toHaveLength(0);
+  });
+
+  it('reads the scheduled-task catalog once per cycle, and not at all for a legacy-only plan', async () => {
+    state.config = refPlan([
+      { id: 'a', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } },
+      { id: 'b', enabled: true, taskRef: { kind: 'custom', jobId: 'job-a' } },
+    ]);
+    await runQuotaBurnCycle();
+    expect(state.catalogReads).toBe(1);
+
+    state.catalogReads = 0;
+    state.config = plan();
+    await runQuotaBurnCycle();
+    expect(state.catalogReads).toBe(0);
+  });
+
+  it('threads force through to the reference path so a targeted run skips the probe', async () => {
+    state.config = refPlan([{ id: 'ref', enabled: false, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }]);
+    await runQuotaBurnCycle({ trigger: 'manual', familyId: 'grok', jobId: 'ref', force: true });
+    expect(state.invoked).toEqual([{ stepId: 'ref', familyId: 'grok', charge: false, force: true }]);
+    // A forced run of a NAMED step bypasses the probe entirely — the click IS the
+    // selection — and comes back uncharged.
+    expect(state.recorded).toHaveLength(0);
+  });
+
+  it('does not charge the window when the reference path declines', async () => {
+    state.config = refPlan([{ id: 'ref', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }]);
+    state.invokePending = { ref: { count: 1 } };
+    state.invokeResult = { dispatched: false, reason: 'scheduled task "ux" is disabled' };
+
+    const result = await runQuotaBurnCycle();
+    expect(result.dispatched).toBe(false);
+    expect(result.reason).toContain('is disabled');
+    expect(state.recorded).toHaveLength(0);
+  });
+
+  it('probes reference steps for the status page through the same path', async () => {
+    state.config = refPlan([{ id: 'ref', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }]);
+    state.invokePending = { ref: { count: 1, detail: 'ready to run scheduled task "ux"' } };
+
+    const { status } = await getQuotaBurnStatus();
+    const grok = status.families.find((family) => family.id === 'grok');
+    expect(grok.jobs).toEqual([{ id: 'ref', ranAt: null, pending: { count: 1, detail: 'ready to run scheduled task "ux"' } }]);
+    expect(countJobPending).not.toHaveBeenCalled();
   });
 });

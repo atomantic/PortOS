@@ -62,6 +62,14 @@ beforeAll(() => {
 });
 
 describe('the server-owned namespace terminators', () => {
+  it('never serves the private API key store even when the file exists', async () => {
+    mkdirSync(join(tempRoot, 'private'), { recursive: true });
+    writeFileSync(join(tempRoot, 'private/api-keys.json'), '{"example":"example-secret"}');
+    const res = await request(app).get('/data/private/api-keys.json');
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain('example-secret');
+  });
+
   it('404s an extensionless /data path instead of answering with the SPA index', async () => {
     const res = await request(app).get('/data/image-to-3d/abc123/model');
     expect(res.status).toBe(404);

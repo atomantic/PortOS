@@ -477,3 +477,5 @@ export const updateGoalScorecardSettings = (partial) => request('/insights/goal-
 
 export const getEidoverseDestinations = (options) => request('/eidoverse/travel/destinations', options);
 export const departEidoverse = (peerId, options) => request('/eidoverse/travel/depart', { method: 'POST', body: JSON.stringify({ peerId }), ...options });
+
+export const saveCredential = (id, value, options) => request(`/settings/credentials/${encodeURIComponent(id)}`, { ...options, method: 'PUT', body: JSON.stringify({ value }) });

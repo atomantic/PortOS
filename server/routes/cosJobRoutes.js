@@ -12,6 +12,7 @@ import { getUserTimezone } from '../services/userTimezone.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createCosJobSchema, updateCosJobSchema } from '../lib/validation.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
+import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
 
 const router = Router();
 
@@ -192,30 +193,14 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
   // them an app-scoped job triggered manually would run in the PortOS root
   // (the scheduled path emits the full task object via task:ready and is unaffected).
   const taskResult = await cos.addTask({
-    description: task.description,
-    priority: task.priority,
+    // The generator's own field projection — the app scope, the git-workflow
+    // options, the provider/model/effort pins, the job:spawned markers and the
+    // no-change-success contract — so a manual trigger queues exactly what the
+    // scheduled path emits. Shared with the quota-burn lane
+    // (`quotaBurnInvoke.js`), which layers a different approval posture on top.
+    ...generatedJobTaskFields(task),
     context: `Manually triggered autonomous job: ${job.name}`,
-    approvalRequired: false,
-    app: task.metadata?.app,
-    useWorktree: task.metadata?.useWorktree,
-    openPR: task.metadata?.openPR,
-    simplify: task.metadata?.simplify,
-    // Forward the job's AI provider/model override so a manual trigger uses the
-    // same provider/model the scheduled path would (addTask maps these top-level
-    // keys onto metadata.provider/metadata.model). Effort follows the same path
-    // so a manual run cannot silently lose its saved reasoning override.
-    provider: task.metadata?.provider,
-    model: task.metadata?.model,
-    effort: task.metadata?.effort,
-    prompt: task.metadata?.prompt,
-    // Preserve the markers consumed by the job:spawned listener so Run now
-    // records the execution and re-registers the saved schedule.
-    autonomousJob: task.metadata?.autonomousJob,
-    jobId: task.metadata?.jobId,
-    // A marked audit may complete successfully with a verified empty branch;
-    // preserve that contract on the manually queued task as well as the
-    // scheduled task path.
-    noChangeSuccess: task.metadata?.noChangeSuccess
+    approvalRequired: false
   }, 'internal', { suppressDequeue: true });
 
   if (!taskResult?.id) {

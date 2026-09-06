@@ -56,6 +56,7 @@ export const ROUTE_MODEL_PINS = Object.freeze([
   'lightModel',
   'mediumModel',
   'heavyModel',
+  'ultraModel',
   'fallbackModel',
 ]);
 

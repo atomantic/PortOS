@@ -24,7 +24,7 @@ import { commandBasename, isCodexProvider } from '../lib/providerModels.js';
 import { buildPrompt, getStage } from './promptService.js';
 import { stagePinsIgnored } from '../lib/stagePinPolicy.js';
 import { createRun, patchRunMetadata } from './runner.js';
-import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from '../lib/aiToolkit/constants.js';
+import { resolveProviderModelTier, MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from '../lib/aiToolkit/constants.js';
 
 // Stage configs name a model by tier (PromptManager UI). Map each tier name
 // to the provider's per-tier model field; an unset tier falls through to
@@ -34,6 +34,9 @@ const TIER_TO_MODEL_KEY = Object.freeze({
   quick: 'lightModel',
   coding: 'mediumModel',
   heavy: 'heavyModel',
+  ultra: 'ultraModel',
+  light: 'lightModel',
+  medium: 'mediumModel',
 });
 
 const isTierName = (m) => typeof m === 'string' && m in TIER_TO_MODEL_KEY;
@@ -110,7 +113,7 @@ function normalizeTimeout(raw) {
 export function resolveModel(provider, modelHint) {
   if (!modelHint) return providerFallbackModel(provider);
   if (isTierName(modelHint)) {
-    return provider[TIER_TO_MODEL_KEY[modelHint]] || providerFallbackModel(provider);
+    return resolveProviderModelTier(provider, modelHint) || provider[TIER_TO_MODEL_KEY[modelHint]] || providerFallbackModel(provider);
   }
   return modelHint;
 }

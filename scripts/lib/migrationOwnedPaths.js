@@ -11,6 +11,7 @@
 
 /** Paths relative to `data/` (and to `data.reference/`), always posix-spelled. */
 export const MIGRATION_OWNED_PATHS = new Set([
+  'private/api-keys.json', // Derived from legacy integration settings; never seeded.
   'eidoverse/portos-world.json', // Per-install state and explicit aliases; never seed over it.
   // Migration 339 lifts the durable CoS config out of data/cos/state.json.
   // Absent, `loadConfig()` in server/services/cosState.js returns DEFAULT_CONFIG.

@@ -60,8 +60,13 @@ export function providerForFamily(providers, { familyId, providerId, prefer = 't
  *
  * The id substring stays as a fallback for a provider registered under a wrapper
  * script whose basename isn't the family name.
+ *
+ * Exported because `providerForFamily` deliberately honors an explicit
+ * `providerId` pin without re-checking it — a caller that must refuse an
+ * out-of-family pin (`quotaBurnInvoke.js`, where the pin would spend the wrong
+ * subscription) asks this directly rather than re-deriving the rule.
  */
-const matchesFamily = (provider, familyId) => {
+export const matchesFamily = (provider, familyId) => {
   const needle = String(familyId || '').toLowerCase();
   if (!needle) return false;
   return commandBasename(provider.command) === needle

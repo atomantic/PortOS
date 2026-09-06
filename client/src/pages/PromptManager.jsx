@@ -906,6 +906,7 @@ export default function PromptManager() {
                           <option value="quick">Quick</option>
                           <option value="coding">Coding</option>
                           <option value="heavy">Heavy</option>
+                          <option value="ultra">Ultra</option>
                         </select>
                       ) : (
                         <ProviderModelSelector
@@ -1357,6 +1358,7 @@ export default function PromptManager() {
                       <option value="quick">Quick</option>
                       <option value="coding">Coding</option>
                       <option value="heavy">Heavy</option>
+                          <option value="ultra">Ultra</option>
                     </select>
                   ) : (
                     <ProviderModelSelector

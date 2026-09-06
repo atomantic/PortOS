@@ -31,6 +31,7 @@ import {
   syncArtificialAnalysis,
 } from '../../services/apiModelComparison';
 import Modal from '../ui/Modal';
+import toast from '../ui/Toast';
 import ComparisonResearch from './ComparisonResearch';
 import { EFFORT_LADDER, withEstimatedCosts } from '../../lib/effortCostEstimate';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
@@ -279,25 +280,51 @@ export default function ModelComparison() {
   };
 
   const handleSyncAA = () => {
-    if (!syncKey.trim()) {
-      setSyncError('Please enter an Artificial Analysis API key.');
-      return;
-    }
     setSyncing(true);
     setSyncError('');
     setSyncStatus('Connecting to Artificial Analysis and syncing models…');
-    syncArtificialAnalysis({ apiKey: syncKey.trim() }, { silent: true })
+    syncArtificialAnalysis({ ...(syncKey.trim() ? { apiKey: syncKey.trim() } : {}) }, { silent: true })
       .then(res => {
-        setSyncStatus(`Sync successful! Updated ${res.observations} models (${res.total} total).`);
+        // The sync is done and the catalog is reloading behind it — the dialog
+        // has nothing left to ask for, so it closes itself and the result is
+        // reported as a toast instead of stranding the user on a dead modal.
+        setSyncKey('');
+        setSyncStatus('');
+        setSyncModalOpen(false);
+        toast.success(`Sync successful! Updated ${res.observations} models (${res.total} total).`);
         refreshView();
       })
       .catch(err => {
+        // A failed sync keeps the dialog open: a rejected key is re-entered here.
+        setSyncModalOpen(true);
         setSyncError(err.message || 'Sync failed.');
         setSyncStatus('');
       })
       .finally(() => {
         setSyncing(false);
       });
+  };
+
+  // Dismissing the prompt discards the typed key. Without this it survives in
+  // state, and the next click of a button that no longer opens the dialog would
+  // silently sync — and re-save — the key the user just backed out of.
+  const closeSyncModal = () => {
+    setSyncModalOpen(false);
+    setSyncKey('');
+    setSyncError('');
+    setSyncStatus('');
+  };
+
+  // A configured key makes the dialog a pure speed bump — sync straight away and
+  // only prompt when there is nothing stored to sync with.
+  const startSyncAA = () => {
+    if (catalog?.artificialAnalysisKeyConfigured) {
+      handleSyncAA();
+      return;
+    }
+    setSyncError('');
+    setSyncStatus('');
+    setSyncModalOpen(true);
   };
 
   if (!catalog) {
@@ -606,11 +633,12 @@ export default function ModelComparison() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-port-card border border-port-border rounded-lg hover:border-port-accent transition-colors"
-            onClick={() => setSyncModalOpen(true)}
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-port-card border border-port-border rounded-lg hover:border-port-accent disabled:opacity-50 transition-colors"
+            onClick={startSyncAA}
+            disabled={syncing}
           >
-            <CloudDownload size={14} aria-hidden="true" className="text-port-accent-text" />
-            Sync from Artificial Analysis
+            <CloudDownload size={14} aria-hidden="true" className={`text-port-accent-text ${syncing ? 'animate-pulse' : ''}`} />
+            {syncing ? 'Syncing…' : 'Sync from Artificial Analysis'}
           </button>
           <button
             type="button"
@@ -641,7 +669,7 @@ export default function ModelComparison() {
           are the caller's. Without them the dialog renders transparent. */}
       <Modal
         open={syncModalOpen}
-        onClose={() => setSyncModalOpen(false)}
+        onClose={closeSyncModal}
         size="sm"
         ariaLabelledBy="aa-sync-title"
       >
@@ -651,7 +679,10 @@ export default function ModelComparison() {
           </h3>
           <p className="text-xs text-port-text-muted leading-relaxed">
             Fetch the latest benchmark evaluations, pricing, response times, and reasoning effort measurements from the
-            Artificial Analysis Free API.
+            Artificial Analysis Free API. {catalog.artificialAnalysisKeyConfigured
+              ? 'The saved key did not work — enter a replacement below.'
+              : 'This install has no key yet, so enter one below.'} A key entered here is saved privately after
+            authentication succeeds, and later syncs run without asking. Manage it in Settings → Credentials.
           </p>
           <div className="space-y-1.5">
             <label htmlFor="aa-api-key" className="text-xs font-medium text-port-text-muted">
@@ -660,7 +691,7 @@ export default function ModelComparison() {
             <input
               id="aa-api-key"
               type="password"
-              placeholder="aa_..."
+              placeholder="aa-…"
               aria-label="Artificial Analysis API Key"
               className="w-full bg-port-bg text-port-text border border-port-border rounded-lg p-2.5 text-sm font-mono"
               value={syncKey}
@@ -674,7 +705,7 @@ export default function ModelComparison() {
             <button
               type="button"
               className="px-3 py-1.5 text-sm border border-port-border rounded-lg hover:bg-port-bg"
-              onClick={() => setSyncModalOpen(false)}
+              onClick={closeSyncModal}
               disabled={syncing}
             >
               Cancel
@@ -683,7 +714,7 @@ export default function ModelComparison() {
               type="button"
               className="px-4 py-1.5 text-sm bg-port-accent text-port-on-accent rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
               onClick={handleSyncAA}
-              disabled={syncing || !syncKey.trim()}
+              disabled={syncing || (!syncKey.trim() && !catalog.artificialAnalysisKeyConfigured)}
             >
               {syncing ? 'Syncing…' : 'Start Sync'}
             </button>

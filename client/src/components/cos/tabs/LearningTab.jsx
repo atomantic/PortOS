@@ -797,7 +797,7 @@ export default function LearningTab() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       {routing.tierOverview.map((tier, idx) => {
                         const tierLabels = {
-                          'light': 'Haiku', 'medium': 'Sonnet', 'heavy': 'Opus',
+                          'light': 'Light', 'medium': 'Medium', 'heavy': 'Heavy', 'ultra': 'Ultra',
                           'default': 'Default', 'user-specified': 'User'
                         };
                         return (

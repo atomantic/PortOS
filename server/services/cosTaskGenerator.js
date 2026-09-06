@@ -30,6 +30,7 @@ import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, 
 import { PATHS } from '../lib/fileUtils.js';
 import { MODEL_ABUSE_GUARD_ID, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { isPlainObject } from '../lib/objects.js';
+import { onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -861,7 +862,10 @@ async function spawnPriority0OnDemand(ctx) {
         // the on-demand lane (see perpetualRefillPlan in cos.js). BOTH on-demand
         // engines must stamp it — either may drain a given request. Stamped before
         // addTask so the blocked-revive branch inherits it via `task.metadata`.
-        task.metadata = { ...(task.metadata || {}), onDemand: true };
+        // `onDemandRequestMetadata` also carries the request's ORIGIN, which
+        // `perpetualRefillPlan` reads to decide whether the completed run may
+        // continue its drain — and a quota burn's provenance when it is one.
+        task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(request) };
         const persisted = await addTask(task, 'internal', { raw: true, suppressDequeue: true });
         if (!persisted?.duplicate) {
           await recordDeferredPerpetualDispatch(task, taskSchedule);

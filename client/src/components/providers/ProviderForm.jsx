@@ -64,6 +64,7 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
     lightModel: provider?.lightModel || '',
     mediumModel: provider?.mediumModel || '',
     heavyModel: provider?.heavyModel || '',
+    ultraModel: provider?.ultraModel || '',
     fallbackProvider: provider?.fallbackProvider || '',
     fallbackModel: provider?.fallbackModel || '',
     numCtx: provider?.numCtx ?? '',
@@ -131,6 +132,7 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
     formData.lightModel,
     formData.mediumModel,
     formData.heavyModel,
+    formData.ultraModel,
   ].filter((model) => model
     && !isEmbeddingModel(model)
     && !availableModels.includes(model)
@@ -327,7 +329,7 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
     // still spread into `data` and silently persisted on an unrelated edit.
     // Clear any embedding value that slipped through so the saved record matches
     // what the picker allows.
-    for (const field of ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'fallbackModel']) {
+    for (const field of ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel', 'fallbackModel']) {
       if (isEmbeddingModel(data[field])) data[field] = '';
     }
     // Effort is meaningful only for providers/models that expose an effort
@@ -749,7 +751,7 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
               {/* Model Tiers */}
               <div className="border-t border-port-border pt-4 mt-4">
                 <h4 className="text-sm font-medium text-gray-300 mb-3">Model Tiers</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <FormField labelClassName="block text-xs text-gray-400 mb-1" label={<>
                       <span className="inline-block w-2 h-2 rounded-full bg-port-success mr-1"></span>
                       Light (fast)
@@ -816,10 +818,32 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
                       />
                     )}
                   </FormField>
+                  <FormField labelClassName="block text-xs text-gray-400 mb-1" label={<>
+                      <span className="inline-block w-2 h-2 rounded-full bg-port-error mr-1"></span>
+                      Ultra (frontier)
+                    </>}>
+                    {availableModels.length > 0 ? (
+                      <select
+                        value={formData.ultraModel}
+                        onChange={(e) => setFormData(prev => ({ ...prev, ultraModel: e.target.value }))}
+                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
+                      >
+                        {modelSelectOptions}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={formData.ultraModel}
+                        onChange={(e) => setFormData(prev => ({ ...prev, ultraModel: e.target.value }))}
+                        placeholder="Fable or Astra model ID"
+                        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
+                      />
+                    )}
+                  </FormField>
                 </div>
                 <p className="text-xs text-gray-500 mt-2">
                   {availableModels.length > 0
-                    ? 'Used for intelligent model selection based on task requirements'
+                    ? 'Capability mappings for tasks and prompt stages. Ultra is explicit opt-in and falls back to Heavy when unset.'
                     : 'Save provider, then use Test or Refresh to fetch available models'}
                 </p>
               </div>

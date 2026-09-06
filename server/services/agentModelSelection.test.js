@@ -102,6 +102,14 @@ describe('selectModelForRole — orchestration profiles (#5992)', () => {
     expect(suggestModelTier).not.toHaveBeenCalled();
   });
 
+  it('resolves role capability independently from reasoning effort', async () => {
+    const result = await selectModelForRole(
+      orchestratedTask({ architect: { model: 'ultra', effort: 'low' } }),
+      'architect', { ...PROVIDER, ultraModel: 'frontier' },
+    );
+    expect(result).toMatchObject({ model: 'frontier', tier: 'ultra', orchestrationEffort: 'low' });
+  });
+
   it('falls through to selectModelForTask for a role the profile does not pin', async () => {
     suggestModelTier.mockResolvedValue(null);
     const task = orchestratedTask({ architect: { model: 'opus' } });
@@ -143,5 +151,16 @@ describe('selectModelForRole — orchestration profiles (#5992)', () => {
     );
     expect(result.model).toBe(PROVIDER.defaultModel);
     expect(result.orchestrationRole).toBeUndefined();
+  });
+});
+
+describe('explicit capability tiers', () => {
+  it('resolves Ultra on the selected provider and falls back on legacy providers', async () => {
+    const task = { description: 'plan', metadata: { model: 'ultra' } };
+    expect(await selectModelForTask(task, { ...PROVIDER, ultraModel: 'frontier-model' }))
+      .toMatchObject({ model: 'frontier-model', tier: 'ultra' });
+    expect(await selectModelForTask(task, PROVIDER)).toMatchObject({ model: 'heavy-model', tier: 'ultra' });
+    expect(await selectModelForTask({ ...task, metadata: { model: 'exact-model' } }, PROVIDER))
+      .toMatchObject({ model: 'exact-model', tier: 'user-specified' });
   });
 });

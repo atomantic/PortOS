@@ -86,7 +86,7 @@ export function computeProviderPatch(provider, installedIds, fallback, requested
   if (provider?.defaultModel === requestedModel || !installed.has(provider?.defaultModel)) {
     patch.defaultModel = fallback;
   }
-  for (const tier of ['lightModel', 'mediumModel', 'heavyModel']) {
+  for (const tier of ['lightModel', 'mediumModel', 'heavyModel', 'ultraModel']) {
     const v = provider?.[tier];
     if (v && !installed.has(v)) patch[tier] = fallback;
   }

@@ -157,6 +157,13 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.selectedModel).toBe('fb-model');
   });
 
+  it('falls back from an unavailable Ultra mapping to an offered Heavy model', async () => {
+    getActiveProvider.mockResolvedValue({ id: 'p1', type: 'cli', models: ['heavy'], ultraModel: 'unavailable', heavyModel: 'heavy' });
+    selectModelForTask.mockResolvedValue({ model: 'unavailable', tier: 'ultra', reason: 'user-preference' });
+    const result = await resolveAgentProviderAndModel(TASK);
+    expect(result.selectedModel).toBe('heavy');
+  });
+
   it('honors a user-specified provider and clears any fallback pin', async () => {
     const active = { id: 'p1', type: 'cli' };
     const chosen = { id: 'p-user', type: 'cli', models: ['m-default'] };

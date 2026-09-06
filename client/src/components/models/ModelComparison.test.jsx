@@ -120,7 +120,7 @@ it('connects reasoning effort points with line and allows toggling line style an
   expect(screen.getByRole('button', { name: 'Toggle gpt-5.6-sol' })).toHaveAttribute('aria-pressed', 'true');
 });
 
-it('opens the Artificial Analysis sync modal and syncs observations', async () => {
+it('prompts for a key when none is stored and closes the modal once the sync lands', async () => {
   api.syncArtificialAnalysis.mockResolvedValue({ success: true, observations: 636, total: 636 });
 
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
@@ -128,12 +128,52 @@ it('opens the Artificial Analysis sync modal and syncs observations', async () =
 
   fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
   expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Start Sync' })).toBeDisabled();
 
   fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'test-key-123' } });
   fireEvent.click(screen.getByRole('button', { name: 'Start Sync' }));
 
-  await screen.findByText(/Sync successful! Updated 636 models/);
-  expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({ apiKey: 'test-key-123' }, { silent: true });
+  await waitFor(() => expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({ apiKey: 'test-key-123' }, { silent: true }));
+  await waitFor(() => expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull());
+});
+
+it('syncs straight away without a key prompt when one is already configured', async () => {
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation], inventory: [], artificialAnalysisKeyConfigured: true });
+  api.syncArtificialAnalysis.mockResolvedValue({ success: true, observations: 636, total: 636 });
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+
+  await waitFor(() => expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({}, { silent: true }));
+  expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull();
+});
+
+it('discards a typed key when the prompt is cancelled', async () => {
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'abandoned-key' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toHaveValue('');
+  expect(api.syncArtificialAnalysis).not.toHaveBeenCalled();
+});
+
+it('falls back to the key prompt when a sync with the stored key is rejected', async () => {
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation], inventory: [], artificialAnalysisKeyConfigured: true });
+  api.syncArtificialAnalysis.mockRejectedValue(new Error('Artificial Analysis API failed (401): Unauthorized'));
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+
+  await screen.findByText(/Artificial Analysis API failed \(401\)/);
+  expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toBeTruthy();
 });
 
 it('opens on a log cost axis and scopes the chart to the providers models', async () => {

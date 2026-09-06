@@ -31,13 +31,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REFERENCE_PATH = resolve(__dirname, '../../../../data.reference/providers.json');
 const SAMPLE_PATH = resolve(__dirname, 'providers.sample.json');
 
-const MODEL_FIELDS = ['models', 'defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+const MODEL_FIELDS = ['models', 'defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel'];
 
 // `lmstudio` is the one documented divergence: PortOS's seed names a concrete
 // local model it ships guidance for, while the toolkit sample ships an empty
 // list because a generic install has no way to know what the user has pulled.
 const EXEMPT_IDS = new Set(['lmstudio']);
-const MODEL_PIN_FIELDS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+const MODEL_PIN_FIELDS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel', 'ultraModel'];
 const STATIC_CLI_PROVIDER_SENTINELS = new Map([
   // Codex's sentinel-only legacy records migrate to real defaults; its fresh
   // seeds intentionally point at selectable models instead.
