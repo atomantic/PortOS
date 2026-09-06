@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // contracts (URL gate, cancel) without a live store. The pure formatting and
 // parsing contracts moved to `lib/youtubeIngestFormat.test.js`, which needs
 // none of this.
+vi.mock('./apps.js', () => ({ getAppById: vi.fn(), PORTOS_APP_ID: 'portos-default' }));
 vi.mock('./brain.js', () => ({ createLinkFromUrl: vi.fn() }));
 vi.mock('./brainStorage.js', () => ({ getLinkByUrl: vi.fn() }));
 vi.mock('./brainJournal.js', () => ({ getSettings: vi.fn(async () => ({ obsidianVaultId: null })) }));
@@ -15,6 +16,7 @@ vi.mock('./videoGen/events.js', () => ({ videoGenEvents: { emit: vi.fn() } }));
 vi.mock('./videoDownload.js', () => ({ buildDownloadHistoryEntry: vi.fn() }));
 
 import {
+  startYoutubeIngest,
   YOUTUBE_INGEST_URL_RE,
   assertYoutubeIngestUrl,
   cancelYoutubeIngest,
@@ -81,5 +83,19 @@ describe('cancelYoutubeIngest', () => {
     vi.advanceTimersByTime(8000);
     expect(proc.kill).toHaveBeenCalledWith('SIGKILL');
     vi.useRealTimers();
+  });
+});
+
+// A stale target must fail before downloads or a CoS dispatch can start.
+describe('analysis app admission', () => {
+  it('rejects a missing or archived target instead of falling back to PortOS', async () => {
+    const { getAppById } = await import('./apps.js');
+    for (const app of [null, { id: 'example', repoPath: '/example', archived: true }]) {
+      getAppById.mockResolvedValue(app);
+      await expect(startYoutubeIngest({
+        url: 'https://youtu.be/oCnxnaVg0bY', agentPrompt: 'Improve search.', targetAppId: 'example',
+      })).rejects.toMatchObject({ code: 'APP_NOT_FOUND' });
+      expect(getAppById).toHaveBeenLastCalledWith('example');
+    }
   });
 });

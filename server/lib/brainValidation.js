@@ -793,7 +793,8 @@ export const songAttachmentUploadSchema = z.object({
 // an all-false request with NOTHING_TO_INGEST rather than silently doing work
 // the user didn't ask for. `agentPrompt` is what turns an ingest into a queued
 // CoS task; absent/empty means "just store it".
-export const youtubeIngestSchema = z.object({
+export const youtubeIngestSchema = repoIntakeSchema.pick({ targetAppId: true, providerId: true, model: true, effort: true }).extend({
+  workMode: z.enum(['issues', 'implement']).optional(),
   url: z.string().url().max(2048),
   captureTranscript: z.boolean().optional(),
   downloadVideo: z.boolean().optional(),

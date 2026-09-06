@@ -243,3 +243,19 @@ describe('formatTrackerInstructions — repo-study complete labels', () => {
     expect(jira).toContain('`area:<area>` + `model-<tier>` + `effort-<level>`');
   });
 });
+
+// The transcript dispatch must use the app's tracker without repo-study
+// provenance requirements (there is no source repository or license to inspect).
+describe('YouTube analysis tracker dispatch', () => {
+  it('keeps external filing and local PLAN work aligned with completion metadata', async () => {
+    const { resolveTrackerFilingBlock } = await import('./workTracker.js');
+    for (const tracker of ['github', 'gitlab', 'jira', 'plan']) {
+      const block = await resolveTrackerFilingBlock({ repoPath: '/example', workTracker: tracker }, 'youtube-analysis');
+      expect(block.workTracker).toBe(tracker);
+      expect(block.worktreeChangesExpected).toBe(tracker === 'plan');
+      expect(block.trackerInstructions).toContain('video');
+      expect(block.trackerInstructions).not.toContain('repo-study');
+      expect(block.trackerInstructions).not.toContain('license');
+    }
+  });
+});
