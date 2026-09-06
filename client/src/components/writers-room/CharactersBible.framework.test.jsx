@@ -36,8 +36,11 @@ const CHARACTER = {
   want: '',
   arcType: null,
   secrets: [],
+  sliders: { proactivity: null, likability: null, competence: null },
+  relationshipLinks: [],
   source: 'user',
 };
+const OTHER = { ...CHARACTER, id: 'wr-char-2', name: 'Ines Mbeki', ghost: '' };
 
 beforeEach(() => { vi.clearAllMocks(); });
 afterEach(() => { cleanup(); });
@@ -107,5 +110,97 @@ describe('CharactersBible — narrative framework editing (#6417)', () => {
     // A cleared select/list is `null` / `[]` — present and empty, which is how
     // the server tells a deliberate clear from an untouched field.
     expect(updateWritersRoomCharacter.mock.calls[1][2]).toMatchObject({ arcType: null, secrets: [] });
+  });
+});
+
+describe('CharactersBible — psychology, sliders and relationship links (#6417)', () => {
+  it('edits the theory of control and a drive, rates an axis, and shows both after a reload', async () => {
+    const BELIEF = 'If I stay useful, nobody leaves.';
+    const FEAR = 'To be set down.';
+    const saved = {
+      ...CHARACTER,
+      psychology: { theoryOfControl: BELIEF, drives: { connection: { fear: FEAR } } },
+      sliders: { proactivity: 8, likability: null, competence: null },
+    };
+    listWritersRoomCharacters.mockResolvedValue([CHARACTER]);
+    updateWritersRoomCharacter.mockResolvedValue(saved);
+
+    const { unmount } = render(<CharactersBible workId="wr-work-1" />);
+    await screen.findByText('Wren Calloway');
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Wren Calloway' }));
+
+    await userEvent.type(screen.getByLabelText(/^Theory of control/), BELIEF);
+    await userEvent.type(screen.getByLabelText('connection fear'), FEAR);
+    await userEvent.selectOptions(screen.getByLabelText('proactivity'), '8');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateWritersRoomCharacter).toHaveBeenCalled());
+    const payload = updateWritersRoomCharacter.mock.calls[0][2];
+    expect(payload.psychology).toMatchObject({
+      theoryOfControl: BELIEF,
+      drives: { connection: { fear: FEAR } },
+    });
+    expect(payload.sliders).toEqual({ proactivity: 8, likability: null, competence: null });
+
+    unmount();
+    listWritersRoomCharacters.mockResolvedValue([saved]);
+    render(<CharactersBible workId="wr-work-1" />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Wren Calloway' }));
+    expect(screen.getByLabelText(/^Theory of control/)).toHaveValue(BELIEF);
+    expect(screen.getByLabelText('connection fear')).toHaveValue(FEAR);
+    expect(screen.getByLabelText('proactivity')).toHaveValue('8');
+  });
+
+  it('clears the whole psychology profile with an explicit null', async () => {
+    const assessed = { ...CHARACTER, psychology: { theoryOfControl: 'Only the work is safe.' } };
+    listWritersRoomCharacters.mockResolvedValue([assessed]);
+    updateWritersRoomCharacter.mockImplementation(async (_w, _id, patch) => ({ ...assessed, ...patch }));
+
+    render(<CharactersBible workId="wr-work-1" />);
+    await screen.findByText('Wren Calloway');
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Wren Calloway' }));
+    await userEvent.click(screen.getByRole('button', { name: /Clear psychology profile/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateWritersRoomCharacter).toHaveBeenCalled());
+    expect(updateWritersRoomCharacter.mock.calls[0][2].psychology).toBeNull();
+  });
+
+  it('authors a relationship link against the sibling cast without the Universe picker', async () => {
+    listWritersRoomCharacters.mockResolvedValue([OTHER, CHARACTER]);
+    updateWritersRoomCharacter.mockImplementation(async (_w, _id, patch) => ({ ...CHARACTER, ...patch }));
+
+    render(<CharactersBible workId="wr-work-1" />);
+    await screen.findByText('Wren Calloway');
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Wren Calloway' }));
+
+    await userEvent.click(screen.getByRole('button', { name: /Add relationship/ }));
+    await userEvent.selectOptions(screen.getByLabelText('Type'), 'rival');
+    await userEvent.type(screen.getByLabelText('Description'), 'Same salvage claim.');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(updateWritersRoomCharacter).toHaveBeenCalled());
+    expect(updateWritersRoomCharacter.mock.calls[0][2].relationshipLinks).toEqual([
+      { targetCharacterId: 'wr-char-2', type: 'rival', description: 'Same salvage claim.' },
+    ]);
+  });
+
+  it('keeps a dangling link visible and removable instead of re-pointing it silently', async () => {
+    const dangling = {
+      ...CHARACTER,
+      relationshipLinks: [{ id: 'rel-1', targetCharacterId: 'wr-char-gone', type: 'rival', description: 'Old claim.' }],
+    };
+    listWritersRoomCharacters.mockResolvedValue([OTHER, dangling]);
+    updateWritersRoomCharacter.mockImplementation(async (_w, _id, patch) => ({ ...dangling, ...patch }));
+
+    render(<CharactersBible workId="wr-work-1" />);
+    await screen.findByText('Wren Calloway');
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Wren Calloway' }));
+    expect(screen.getByLabelText('Linked to')).toHaveValue('wr-char-gone');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Remove relationship 1' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateWritersRoomCharacter).toHaveBeenCalled());
+    expect(updateWritersRoomCharacter.mock.calls[0][2].relationshipLinks).toEqual([]);
   });
 });

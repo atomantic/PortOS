@@ -120,6 +120,12 @@ describe('promoteWorkToPipeline', () => {
       motivations: 'Keep the crew fed.',
       arcType: 'positive',
       secrets: ['Sold the license years ago'],
+      psychology: {
+        theoryOfControl: 'If I stay useful, nobody leaves.',
+        assessment: 'assessed',
+        drives: { connection: { desire: 'To be kept', fear: 'To be set down' } },
+      },
+      sliders: { proactivity: 8, competence: 6 },
       relationshipLinks: [{ targetCharacterId: ines.id, type: 'rival', description: 'Same salvage claim.' }],
     });
 
@@ -137,6 +143,9 @@ describe('promoteWorkToPipeline', () => {
       arcType: 'positive',
       secrets: ['Sold the license years ago'],
     });
+    expect(wren.psychology.theoryOfControl).toBe('If I stay useful, nobody leaves.');
+    expect(wren.psychology.drives.connection.fear).toBe('To be set down');
+    expect(wren.sliders).toEqual({ proactivity: 8, likability: null, competence: 6 });
     // Writers-room ids survive the copy, so the link still resolves to a
     // character that exists in the promoted universe.
     expect(wren.id).toMatch(/^wr-char-/);

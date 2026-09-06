@@ -1963,6 +1963,39 @@ describe('validation.js', () => {
     });
   });
 
+  describe('writersRoomCharacterUpdateSchema — psychology & sliders (#6417)', () => {
+    it('accepts a partial psychology profile, an explicit clear, and a rated axis', () => {
+      expect(writersRoomCharacterUpdateSchema.safeParse({
+        psychology: {
+          theoryOfControl: 'If I stay useful, nobody leaves.',
+          assessment: 'assessed',
+          drives: { connection: { desire: 'To be kept' } },
+        },
+        sliders: { proactivity: 8 },
+      }).success).toBe(true);
+      // Present-but-empty is the clear path the store relies on.
+      expect(writersRoomCharacterUpdateSchema.safeParse({
+        psychology: null,
+        sliders: { proactivity: null, likability: null, competence: null },
+      }).success).toBe(true);
+    });
+
+    it('rejects an unknown drive axis, an out-of-range slider, and a stray key', () => {
+      expect(writersRoomCharacterUpdateSchema.safeParse({
+        psychology: { drives: { ambition: { desire: 'more' } } },
+      }).success).toBe(false);
+      expect(writersRoomCharacterUpdateSchema.safeParse({
+        sliders: { proactivity: 11 },
+      }).success).toBe(false);
+      expect(writersRoomCharacterUpdateSchema.safeParse({
+        sliders: { proactivity: 4.5 },
+      }).success).toBe(false);
+      expect(writersRoomCharacterUpdateSchema.safeParse({
+        psychology: { theoryOfControl: 'ok', freudianSlip: 'nope' },
+      }).success).toBe(false);
+    });
+  });
+
   describe('writersRoomObjectUpdateSchema — attachments (#1288)', () => {
     it('accepts a well-formed attachment', () => {
       const result = writersRoomObjectUpdateSchema.safeParse({

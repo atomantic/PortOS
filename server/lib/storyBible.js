@@ -16,7 +16,13 @@ import { isPlainObject } from './objects.js';
 import { shortCanonPrimaryField } from './canonPrompt.js';
 import { trimTo } from './textUtils.js';
 import { BIBLE_LIMITS } from './bibleLimits.js';
-import { CHARACTER_ARC_TYPES } from './characterFramework.js';
+import {
+  CHARACTER_ARC_TYPES,
+  CHARACTER_SLIDER_AXES,
+  PSYCHOLOGY_ASSESSMENTS,
+  PSYCHOLOGY_DRIVE_AXES,
+  RELATIONSHIP_LINK_TYPES,
+} from './characterFramework.js';
 
 // Re-export so callers (writers-room domain files) can import a single
 // canonical normalizer when they need to match places by slugline.
@@ -71,15 +77,14 @@ export const BIBLE_KIND = Object.freeze({
 });
 
 // Structured relationship-link taxonomy (#1287). `type` is the dynamic
-// between two characters; `custom` lets the writer name one the list misses
-// (the free-text `description` carries the specifics). `opposition.axis`
-// tags a binary-force tension (hunter/prey, winner/loser…) the reader tracks
-// to see whether the roles ever reverse. Both default to `custom` on an
-// unrecognized value rather than dropping the link, so a legacy/peer payload
-// with a future type still round-trips (its prose description is preserved).
-export const RELATIONSHIP_LINK_TYPES = Object.freeze([
-  'ally', 'antagonist', 'rival', 'mentor', 'love-interest', 'family', 'custom',
-]);
+// between two characters and lives in the pure `characterFramework.js` leaf so
+// the browser bundle can render the picker; re-exported here for the existing
+// server-side callers. `opposition.axis` tags a binary-force tension
+// (hunter/prey, winner/loser…) the reader tracks to see whether the roles ever
+// reverse. Both default to `custom` on an unrecognized value rather than
+// dropping the link, so a legacy/peer payload with a future type still
+// round-trips (its prose description is preserved).
+export { RELATIONSHIP_LINK_TYPES };
 export const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
   'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
 ]);
@@ -121,14 +126,10 @@ const CHARACTER_ARC_TYPE_SET = new Set(CHARACTER_ARC_TYPES);
 // rather than be its literal opposite.
 //
 // The three drives are the pressures the theory is built to manage. `status`
-// means PERCEIVED VALUE TO A GROUP — not wealth, not dominance.
-export const PSYCHOLOGY_DRIVE_AXES = Object.freeze(['survival', 'connection', 'status']);
-// An author may rule the profile out rather than leave it blank: `unknown`
-// (not yet decided / deliberately opaque) and `not-applicable` (a hive, a
-// weather system, an unpersoned intelligence) both expect an explanation in
-// `assessmentNote`, which is what makes the entry read as ASSESSED instead of
-// unfilled. `assessed` is the ordinary authored case.
-export const PSYCHOLOGY_ASSESSMENTS = Object.freeze(['assessed', 'unknown', 'not-applicable']);
+// means PERCEIVED VALUE TO A GROUP — not wealth, not dominance. Both lists live
+// in the pure `characterFramework.js` leaf (the cast editors need them in the
+// browser bundle) and are re-exported here for every existing server caller.
+export { PSYCHOLOGY_DRIVE_AXES, PSYCHOLOGY_ASSESSMENTS };
 const PSYCHOLOGY_ASSESSMENT_SET = new Set(PSYCHOLOGY_ASSESSMENTS);
 
 const trimEnum = (raw, allowed) => {
@@ -914,11 +915,7 @@ function ensureSlider(raw) {
 // round-trip never strips it — mirrors the reveal-gating always-present pattern.
 function sanitizeCharacterSliders(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  return {
-    proactivity: ensureSlider(src.proactivity),
-    likability: ensureSlider(src.likability),
-    competence: ensureSlider(src.competence),
-  };
+  return Object.fromEntries(CHARACTER_SLIDER_AXES.map((axis) => [axis, ensureSlider(src[axis])]));
 }
 
 // Shared canon extras applied to every kind. Persists explicit `locked: true`

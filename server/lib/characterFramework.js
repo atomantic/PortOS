@@ -47,10 +47,13 @@ export const CHARACTER_FRAMEWORK_LIMITS = Object.freeze({
 
 // Every framework field a writer may author, prose + structured. `secrets` is
 // a plain string[]; `relationshipLinks` is the structured character↔character
-// link list (#1287); `arcType` is one of CHARACTER_ARC_TYPES or null.
+// link list (#1287); `arcType` is one of CHARACTER_ARC_TYPES or null;
+// `psychology` is the optional theory-of-control + drives profile (#6414),
+// absent until assessed; `sliders` is the always-present Three-Sliders object
+// (#2175) whose axes are null until rated.
 export const CHARACTER_FRAMEWORK_FIELDS = Object.freeze([
   ...CHARACTER_FRAMEWORK_TEXT_FIELDS,
-  'arcType', 'secrets', 'relationshipLinks',
+  'arcType', 'secrets', 'relationshipLinks', 'psychology', 'sliders',
 ]);
 
 // Projection used to hand an author-side review the framework it is supposed
@@ -89,3 +92,49 @@ export function pickCastFramework(characters) {
   if (!Array.isArray(characters)) return [];
   return characters.map(pickCharacterFramework).filter(Boolean);
 }
+
+// Optional structured psychology profile (#6414) — the character's operating
+// rule and the three drives it manages. Defined here, beside the rest of the
+// framework, so the Zod schemas, the Universe cast editor and the Writers Room
+// bible read one list instead of hand-mirroring the axes in each. `status`
+// means PERCEIVED VALUE TO A GROUP — not wealth, not dominance — which is why
+// the axis carries its own editor hint rather than relying on the label.
+export const PSYCHOLOGY_DRIVE_AXES = Object.freeze(['survival', 'connection', 'status']);
+
+// An author may rule the profile out rather than leave it blank: `unknown` and
+// `not-applicable` both expect an explanation in `assessmentNote`, which is
+// what makes the entry read as ASSESSED instead of unfilled.
+export const PSYCHOLOGY_ASSESSMENTS = Object.freeze(['assessed', 'unknown', 'not-applicable']);
+
+// The prose half of the profile, in authoring order. `assessmentNote` is NOT
+// here: it is the escape-hatch explanation, shown only for a non-`assessed`
+// assessment, and it is capped separately below.
+export const CHARACTER_PSYCHOLOGY_TEXT_FIELDS = Object.freeze([
+  'theoryOfControl', 'strategy', 'protectiveBenefit', 'presentCost',
+  'testingPressure', 'candidateChange',
+]);
+
+// Per-field caps for the profile. `assessmentNote` and `drive` (shared by every
+// drive `desire` / `fear` leaf) sit alongside the prose fields so a schema or an
+// editor can size every input from one map.
+export const CHARACTER_PSYCHOLOGY_LIMITS = Object.freeze({
+  theoryOfControl: BIBLE_LIMITS.THEORY_OF_CONTROL_MAX,
+  strategy: BIBLE_LIMITS.PSYCHOLOGY_STRATEGY_MAX,
+  protectiveBenefit: BIBLE_LIMITS.PSYCHOLOGY_PROTECTION_MAX,
+  presentCost: BIBLE_LIMITS.PSYCHOLOGY_COST_MAX,
+  testingPressure: BIBLE_LIMITS.PSYCHOLOGY_PRESSURE_MAX,
+  candidateChange: BIBLE_LIMITS.PSYCHOLOGY_CHANGE_MAX,
+  assessmentNote: BIBLE_LIMITS.PSYCHOLOGY_NOTE_MAX,
+  drive: BIBLE_LIMITS.PSYCHOLOGY_DRIVE_FIELD_MAX,
+});
+
+// The Three Sliders (#2175) — integers in [SLIDER_MIN, SLIDER_MAX], each null
+// when the axis was never rated (distinct from a deliberate low rating).
+export const CHARACTER_SLIDER_AXES = Object.freeze(['proactivity', 'likability', 'competence']);
+
+// Structured relationship-link archetypes (#1287). An unrecognized value
+// (legacy record, newer peer) coerces to `custom` in the sanitizer rather than
+// dropping the link, so this list bounds the EDITOR's choices, not the wire.
+export const RELATIONSHIP_LINK_TYPES = Object.freeze([
+  'ally', 'antagonist', 'rival', 'mentor', 'love-interest', 'family', 'custom',
+]);
