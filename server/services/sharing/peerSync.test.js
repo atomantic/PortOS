@@ -3683,17 +3683,17 @@ describe('peerSync', () => {
 
     describe('receiver — applyIncomingPush', () => {
       it('rejects when sender schemaVersions.universes is AHEAD of local code', async () => {
-        // Local code is at universes:10 (see server/lib/schemaVersions.js).
-        // A push from a sender on universes:11 must NOT touch local state.
+        // Local code is at universes:11 (see server/lib/schemaVersions.js).
+        // A push from a sender on universes:12 must NOT touch local state.
         const rejection = await applyIncomingPush({
           kind: 'universe',
           record: { id: 'u1', name: 'Foo' },
           assetManifest: [],
           sourceInstanceId: 'peer-a',
-          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 11 } },
+          portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 12 } },
         }).catch((err) => err);
         expect(rejection.code).toBe('PEER_SYNC_SCHEMA_VERSION_AHEAD');
-        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 11, receiverV: 10 }]);
+        expect(rejection.details.ahead).toEqual([{ category: 'universes', senderV: 12, receiverV: 11 }]);
         expect(rejection.details.senderPortosVersion).toBe('99.0.0');
         // Receiver MUST stamp its OWN PortOS version so the sender can show
         // the user "peer X is on PortOS vY" — without this, the sender would
@@ -3983,7 +3983,7 @@ describe('peerSync', () => {
         expect(call).toBeDefined();
         const body = JSON.parse(call[1].body);
         expect(body.portosMeta).toBeDefined();
-        expect(body.portosMeta.schemaVersions.universes).toBe(10);
+        expect(body.portosMeta.schemaVersions.universes).toBe(11);
         expect(typeof body.portosMeta.portosVersion).toBe('string');
       });
 

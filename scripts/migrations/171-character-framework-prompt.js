@@ -35,7 +35,7 @@ export const ACCEPTED_OLD_MD5 = {
 
 // Post-change shipped hash (character framework fields added).
 export const NEW_SHIPPED_MD5 = {
-  'universe-character-expand.md': '924fe8836f3014873d1789e98e997db2', // post-257 (complete expand fields)
+  'universe-character-expand.md': '961b73ba6e50df5d49f0cc76505e50bd', // post-257 (complete expand fields)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

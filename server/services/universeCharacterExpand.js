@@ -13,7 +13,7 @@
 
 import { buildStyleClause } from './universeCanon.js';
 import { runCanonEntryExpand } from './universeCanonExpandRunner.js';
-import { BIBLE_KIND, sanitizeBibleField } from '../lib/storyBible.js';
+import { BIBLE_KIND, sanitizeBibleField, PSYCHOLOGY_DRIVE_AXES } from '../lib/storyBible.js';
 import { BIBLE_EXPAND_FIELDS, bibleFieldIsBlank, SLIDER_AXES } from '../lib/universeBibleCompleteness.js';
 
 // Adding a new extended field on `sanitizeCharacter` requires adding it to
@@ -41,6 +41,13 @@ const peerForExpandPrompt = (entry) => ({
   visualNotes: entry.visualNotes || '',
   coreTheme: entry.coreTheme || '',
 });
+
+// The flat prose leaves of the psychology profile. `drives` and `assessment`
+// are merged separately below (nested object / author ruling).
+const PSYCHOLOGY_STRING_FIELDS = Object.freeze([
+  'theoryOfControl', 'strategy', 'protectiveBenefit', 'presentCost',
+  'testingPressure', 'candidateChange', 'assessmentNote',
+]);
 
 const isAbsent = (v) => v === undefined || v === null;
 // Exported so the vision-expand path can compute the same "which fields are
@@ -111,6 +118,47 @@ export function applyExpansion(target, content) {
     if (changed) {
       merged.sliders = nextSliders;
       updatedFields.push('sliders');
+    }
+  }
+  // psychology (#6414) — a nested profile merged LEAF by leaf, not wholesale.
+  // A partial proposal must never replace a populated leaf, and must never
+  // drop the leaves the author already wrote (which is what assigning the
+  // sanitized proposal directly would do). Same fill-blanks-only contract as
+  // the sliders above, one level deeper.
+  if (content.psychology && typeof content.psychology === 'object' && !Array.isArray(content.psychology)) {
+    const proposed = sanitizeBibleField('character', target, 'psychology', content.psychology);
+    if (proposed) {
+      const existing = (target.psychology && typeof target.psychology === 'object' && !Array.isArray(target.psychology))
+        ? target.psychology
+        : {};
+      const next = { ...existing };
+      let changed = false;
+      for (const field of PSYCHOLOGY_STRING_FIELDS) {
+        if (!isBlankString(existing[field]) || isBlankString(proposed[field])) continue;
+        next[field] = proposed[field];
+        changed = true;
+      }
+      // An `assessment` ruling is the author's call; only fill it when unset.
+      if (!existing.assessment && proposed.assessment) {
+        next.assessment = proposed.assessment;
+        changed = true;
+      }
+      const nextDrives = { ...(existing.drives && typeof existing.drives === 'object' ? existing.drives : {}) };
+      for (const axis of PSYCHOLOGY_DRIVE_AXES) {
+        const existingAxis = nextDrives[axis] && typeof nextDrives[axis] === 'object' ? nextDrives[axis] : {};
+        const proposedAxis = proposed.drives?.[axis] || {};
+        const mergedAxis = { ...existingAxis };
+        for (const leaf of ['desire', 'fear']) {
+          if (!isBlankString(existingAxis[leaf]) || isBlankString(proposedAxis[leaf])) continue;
+          mergedAxis[leaf] = proposedAxis[leaf];
+          changed = true;
+        }
+        nextDrives[axis] = mergedAxis;
+      }
+      if (changed) {
+        merged.psychology = { ...next, drives: nextDrives };
+        updatedFields.push('psychology');
+      }
     }
   }
   return { merged, updatedFields };

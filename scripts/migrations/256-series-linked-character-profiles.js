@@ -16,7 +16,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-character-foundation.md': 'b7d2bac347e11171606f4c6acfcd32e1',
+  'pipeline-character-foundation.md': 'c606061954b23a9957c68dd068b54dc4',
   'pipeline-judge-foundation.md': 'e44b6c50d741bbd21fc86f481684c410',
 };
 

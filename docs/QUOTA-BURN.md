@@ -252,7 +252,8 @@ The task's `depth` parameter picks what "described" means, per
   character-sheet expand prompt fills: the visual set (silhouette, posture,
   palette, props, expressions, hand gestures, wardrobes), the novelist set
   (likes, mannerisms, relationships, skills), and the Ghost → Wound → Lie → Want
-  → Need framework with its arc type and sliders. `full` is the default because
+  → Need framework with its arc type, sliders, and the optional psychology
+  profile (theory of control + survival / connection / status drives). `full` is the default because
   the job exists for the sheet — a cast member with a one-line description still
   renders inconsistently from panel to panel.
 

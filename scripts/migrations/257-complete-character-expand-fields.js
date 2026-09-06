@@ -13,7 +13,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'universe-character-expand.md': '924fe8836f3014873d1789e98e997db2',
+  'universe-character-expand.md': '961b73ba6e50df5d49f0cc76505e50bd',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

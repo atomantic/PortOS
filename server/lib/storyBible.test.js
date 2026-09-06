@@ -41,7 +41,7 @@ const {
   canonHasRevealGated,
   revealGatedCanonRows,
   characterIdentityPackReadiness,
-  preserveLegacyCharacterProductionPackages,
+  preserveLegacyCharacterFields,
 } = storyBible;
 
 const WORK_ID = 'wr-work-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -381,12 +381,44 @@ describe('storyBible — sanitizeCharacter', () => {
         identityPack: { assets: [{ role: 'neutral', imageRef: 'n.png', approved: true }] },
       }];
       const remote = [{ id: 'chr-1', name: 'A from peer' }];
-      expect(preserveLegacyCharacterProductionPackages(remote, local, 9)[0]).toMatchObject({
+      expect(preserveLegacyCharacterFields(remote, local, 9)[0]).toMatchObject({
         name: 'A from peer',
         voiceCanon: local[0].voiceCanon,
         identityPack: local[0].identityPack,
       });
-      expect(preserveLegacyCharacterProductionPackages(remote, local, 10)).toEqual(remote);
+      expect(preserveLegacyCharacterFields(remote, local, 10)).toEqual(remote);
+    });
+  });
+
+  describe('psychology profile (#6414)', () => {
+    it('preserves a profile from a pre-v11 peer but honors a v11 clear', () => {
+      const local = [{
+        id: 'chr-1', name: 'A',
+        psychology: { theoryOfControl: 'If I stay useful, nobody leaves.' },
+      }];
+      const remote = [{ id: 'chr-1', name: 'A from peer' }];
+      // A peer whose sanitizer has no psychology slot omitted it because it
+      // COULD NOT carry it — restoring is what stops its LWW write from
+      // deleting a profile it never saw.
+      expect(preserveLegacyCharacterFields(remote, local, 10)[0]).toMatchObject({
+        name: 'A from peer',
+        psychology: local[0].psychology,
+      });
+      // A v11-aware peer omitting it means the author cleared it.
+      expect(preserveLegacyCharacterFields(remote, local, 11)).toEqual(remote);
+    });
+
+    it('restores ONLY the fields the sender could not represent', () => {
+      const local = [{
+        id: 'chr-1', name: 'A',
+        voiceCanon: { version: 2, approved: true },
+        psychology: { theoryOfControl: 'Only the work is safe.' },
+      }];
+      // A v10 sender understands voiceCanon (so its omission is a clear) but
+      // not psychology (so its omission is a gap).
+      const restored = preserveLegacyCharacterFields([{ id: 'chr-1', name: 'A' }], local, 10)[0];
+      expect(restored.voiceCanon).toBeUndefined();
+      expect(restored.psychology).toEqual(local[0].psychology);
     });
   });
 

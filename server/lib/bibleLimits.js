@@ -50,6 +50,27 @@ export const BIBLE_LIMITS = Object.freeze({
   LIE_MAX: 600,
   WANT_MAX: 600,
   NEED_MAX: 600,
+  // Character psychology (#6414). OPTIONAL structured layer on top of the
+  // Ghost → Wound → Lie → Want → Need chain above: the character's operating
+  // rule ('theory of control'), the strategy it motivates, what it protects,
+  // what it costs now, and the survival / connection / status drives it
+  // serves. Absent on every pre-#6414 record — the sanitizer returns null when
+  // nothing is authored, so the legacy character shape round-trips unchanged.
+  // 'Status' here is perceived value to a group, not wealth or dominance.
+  THEORY_OF_CONTROL_MAX: 400,
+  PSYCHOLOGY_STRATEGY_MAX: 800,
+  PSYCHOLOGY_PROTECTION_MAX: 600,
+  PSYCHOLOGY_COST_MAX: 600,
+  // Anticipated pressure on the theory and the change it could produce. Kept
+  // in the PROFILE deliberately: a realized, story-specific progression is an
+  // authored arc (series.characterArcs), not a character-sheet field.
+  PSYCHOLOGY_PRESSURE_MAX: 800,
+  PSYCHOLOGY_CHANGE_MAX: 800,
+  // Author escape hatch: 'unknown' / 'not-applicable' with an explanation, so a
+  // deliberately opaque or nonhuman character reads as ASSESSED, not unfilled.
+  PSYCHOLOGY_NOTE_MAX: 800,
+  // Per-drive desire + fear.
+  PSYCHOLOGY_DRIVE_FIELD_MAX: 400,
   // Secrets the character keeps (≥2 encouraged in the prompt). Short prose
   // items, capped per-item and per-character like other string lists.
   SECRET_MAX: 600,

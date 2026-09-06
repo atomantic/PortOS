@@ -20,10 +20,11 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // deliberate two-file edit.
     // v6 = canon characters gained relationshipLinks[] (#1287); v7 = canon
     // objects gained attachments[] (#1288); v8 adds styleReferences[]; v9 adds
-    // moodBoardId (#4188); v10 adds character production packages (#5378).
+    // moodBoardId (#4188); v10 adds character production packages (#5378);
+    // v11 adds the optional character psychology profile (#6414).
     // These are additive + version-gated so an older peer
     // cannot strip-then-LWW them.
-    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(10);
+    expect(PORTOS_SCHEMA_VERSIONS.universes).toBe(11);
   });
 
   it('declares pipeline collection layout versions', () => {
@@ -58,14 +59,14 @@ describe('buildPortosMeta', () => {
   it('returns { portosVersion, schemaVersions } with the live registry', async () => {
     const meta = await buildPortosMeta();
     expect(meta.portosVersion).toMatch(/^\d+\.\d+\.\d+/);
-    expect(meta.schemaVersions.universes).toBe(10);
+    expect(meta.schemaVersions.universes).toBe(11);
     expect(meta.schemaVersions.pipelineIssues).toBe(3);
     expect(meta.schemaVersions.pipelineSeries).toBe(12);
   });
 
   it('overrides merge into schemaVersions', async () => {
     const meta = await buildPortosMeta({ schemaVersions: { future: 1 } });
-    expect(meta.schemaVersions.universes).toBe(10);
+    expect(meta.schemaVersions.universes).toBe(11);
     expect(meta.schemaVersions.future).toBe(1);
   });
 });

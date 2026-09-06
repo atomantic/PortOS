@@ -19,6 +19,14 @@ const describedCharacter = () => {
   for (const field of groups.lists) entry[field] = [{ name: 'x' }];
   entry.arcType = 'positive';
   entry.sliders = { proactivity: 7, likability: 6, competence: 8 };
+  entry.psychology = {
+    theoryOfControl: 'if I stay useful, nobody leaves',
+    drives: {
+      survival: { desire: 'a roof that is hers', fear: 'being turned out' },
+      connection: { desire: 'to be kept', fear: 'being easy to replace' },
+      status: { desire: 'to be counted on', fear: 'being seen as surplus' },
+    },
+  };
   return entry;
 };
 

@@ -381,3 +381,92 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     });
   });
 });
+
+describe('CharacterDetailEditor — Psychology (#6414)', () => {
+  const openPsychology = () => fireEvent.click(screen.getByRole('button', { name: /Psychology \(theory of control/i }));
+
+  it('reads as unassessed on a legacy character and offers no clear action', () => {
+    render(<CharacterDetailEditor entry={ARIA} characters={[ARIA]} onPatch={() => {}} />);
+    expect(screen.getByRole('button', { name: /Psychology \(theory of control/i })).toHaveTextContent(/unassessed/i);
+    openPsychology();
+    expect(screen.getByRole('button', { name: /Clear psychology profile/i })).toBeDisabled();
+  });
+
+  it('commits an authored theory of control without disturbing the rest of the profile', () => {
+    const onPatch = vi.fn();
+    const entry = { ...ARIA, psychology: { strategy: 'Takes every shift nobody wants.' } };
+    render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={onPatch} />);
+    openPsychology();
+    const field = screen.getByRole('textbox', { name: /Theory of control/i });
+    fireEvent.change(field, { target: { value: 'If I stay useful, nobody leaves.' } });
+    fireEvent.blur(field);
+    expect(onPatch).toHaveBeenCalledWith({
+      psychology: {
+        strategy: 'Takes every shift nobody wants.',
+        theoryOfControl: 'If I stay useful, nobody leaves.',
+      },
+    });
+  });
+
+  it('writes a drive leaf into the nested axis it belongs to', () => {
+    const onPatch = vi.fn();
+    const entry = {
+      ...ARIA,
+      psychology: { drives: { status: { desire: 'to be counted on' } } },
+    };
+    render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={onPatch} />);
+    openPsychology();
+    const fear = screen.getByRole('textbox', { name: /status fear/i });
+    fireEvent.change(fear, { target: { value: 'being read as surplus' } });
+    fireEvent.blur(fear);
+    expect(onPatch).toHaveBeenCalledWith({
+      psychology: {
+        drives: { status: { desire: 'to be counted on', fear: 'being read as surplus' } },
+      },
+    });
+  });
+
+  it('offers an existing Lie as legacy context, explicitly NOT as the same statement', () => {
+    const entry = { ...ARIA, lie: 'I only matter if I win.' };
+    render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={() => {}} />);
+    openPsychology();
+    expect(screen.getByText(/I only matter if I win\./)).toBeInTheDocument();
+    expect(screen.getByText(/suggested starting point only/i)).toBeInTheDocument();
+    expect(screen.getByText(/not the same sentence/i)).toBeInTheDocument();
+    // The theory of control is NOT pre-filled from the Lie.
+    expect(screen.getByRole('textbox', { name: /Theory of control/i })).toHaveValue('');
+  });
+
+  it('asks for an explanation only once the author rules the profile unknown', () => {
+    const onPatch = vi.fn();
+    const { rerender } = render(
+      <CharacterDetailEditor entry={ARIA} characters={[ARIA]} onPatch={onPatch} />,
+    );
+    openPsychology();
+    expect(screen.queryByRole('textbox', { name: /^Why$/i })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('combobox', { name: /Assessment/i }), {
+      target: { value: 'not-applicable' },
+    });
+    expect(onPatch).toHaveBeenCalledWith({ psychology: { assessment: 'not-applicable' } });
+    rerender(
+      <CharacterDetailEditor
+        entry={{ ...ARIA, psychology: { assessment: 'not-applicable' } }}
+        characters={[ARIA]}
+        onPatch={onPatch}
+      />,
+    );
+    expect(screen.getByRole('textbox', { name: /^Why$/i })).toBeInTheDocument();
+    // A ruling with no prose leaves is still an authored profile — the section
+    // must not fall back to "unassessed" and lock the clear action behind it.
+    expect(screen.getByRole('button', { name: /Clear psychology profile/i })).toBeEnabled();
+  });
+
+  it('clears the whole profile through a single explicit null patch', () => {
+    const onPatch = vi.fn();
+    const entry = { ...ARIA, psychology: { theoryOfControl: 'Only the work is safe.' } };
+    render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={onPatch} />);
+    openPsychology();
+    fireEvent.click(screen.getByRole('button', { name: /Clear psychology profile/i }));
+    expect(onPatch).toHaveBeenCalledWith({ psychology: null });
+  });
+});
