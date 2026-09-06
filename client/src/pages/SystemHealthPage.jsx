@@ -11,6 +11,8 @@ import StoragePanel from '../components/system-resources/StoragePanel.jsx';
 import QueuesPanel from '../components/system-resources/QueuesPanel.jsx';
 import MediaCapacityPanel from '../components/system-resources/MediaCapacityPanel.jsx';
 import BuildStampPanel from '../components/system-resources/BuildStampPanel.jsx';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 const HEALTH_STYLE = {
   healthy: { color: 'text-port-success', bg: 'bg-port-success/10', icon: CheckCircle, label: 'Healthy' },
@@ -51,14 +53,21 @@ function barTone(pct, warn, critical) {
   return 'bg-port-success';
 }
 
-// The downloaded-model inventory used to be a fourth tab here. It answered the
-// same question Models → Status answers, in a different section, so it folded
-// into that page (#4728); /system-resources/models redirects there.
-export const RESOURCE_TABS = [
-  { id: 'overview', label: 'Overview', icon: Activity },
-  { id: 'storage', label: 'Storage', icon: HardDrive },
-  { id: 'queues', label: 'Queues', icon: ListOrdered },
-];
+// Icon per tab id. The manifest (`tabGroup: 'system-resources'`) owns
+// id/label/order — this page owns only how each tab looks; the short page-local
+// labels (vs the manifest's "System Resources Overview"/"Storage Report"/
+// "Active Queues", which need the qualifier to be unambiguous in ⌘K) come from
+// the manifest's `tabLabel`. The downloaded-model inventory used to be a fourth
+// tab here. It answered the same question Models → Status answers, in a
+// different section, so it folded into that page (#4728);
+// /system-resources/models redirects there. Throws at import time on drift.
+const TAB_PRESENTATION = {
+  overview: { icon: Activity },
+  storage: { icon: HardDrive },
+  queues: { icon: ListOrdered },
+};
+
+export const RESOURCE_TABS = buildPageNavTabs(getPageNavTabs('system-resources'), TAB_PRESENTATION, 'System Resources');
 
 export default function SystemResourcesPage() {
   const { tab = 'overview' } = useParams();

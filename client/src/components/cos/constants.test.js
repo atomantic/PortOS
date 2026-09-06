@@ -21,8 +21,10 @@ import {
   fresherHealth,
   providerPinPatch,
   hasProviderPin,
-  providerPinDivergesFromSchedule
+  providerPinDivergesFromSchedule,
+  TABS
 } from './constants';
+import { expectPageNavTabs } from '../../test/pageNavTabAssertions.js';
 
 // These mirror the server's domainBudgets/domainAutonomy helpers so the UI's
 // "is a cap set?" / "what mode?" view never disagrees with enforcement.
@@ -373,5 +375,20 @@ describe('REVIEWER_OPTIONS derivation', () => {
       expect(option.label, option.value).toBeTruthy();
       expect(option.description, option.value).toBeTruthy();
     }
+  });
+});
+
+// CoS derives its tab bar from the nav manifest's `tabGroup: 'cos'` (#6383) —
+// this pins the id/label/order the page means to render, and that every manifest
+// tab has a presentation entry (icon) in constants.js, which would otherwise
+// only surface as a thrown import-time error.
+describe('CoS TABS ↔ nav manifest', () => {
+  it('renders the cos tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(TABS, [
+      'briefing:Briefing', 'tasks:Tasks', 'agents:Agents', 'jobs:System Tasks',
+      'runs:Runs', 'run-events:Run Events', 'schedule:Schedule', 'workflow:Timeline',
+      'digest:Digest', 'gsd:GSD', 'productivity:Productivity', 'learning:Learning',
+      'memory:Memory', 'mind:Mind', 'health:Health', 'config:Config',
+    ]);
   });
 });

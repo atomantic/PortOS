@@ -150,6 +150,7 @@ export * from './managedAppSources.js';
 export * from './metronome.js';
 export * from './mindThinkingPresets.js';
 export * from './navFeatures.js';
+export * from './pageNavTabs.js';
 export * from './midiChords.js';
 export * from './midiNotes.js';
 export * from './midiPlayback.js';

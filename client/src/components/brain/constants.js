@@ -1,25 +1,31 @@
 import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText, Music, Video } from 'lucide-react';
+import { getPageNavTabs } from '../../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
-// Main navigation tabs.
-// `fullBleed: true` marks a tab that fills the available height and owns its
-// own internal scroll — Brain renders these inside an overflow-hidden wrapper
-// with no padding (the rest scroll inside a padded wrapper). See issue #1177.
-export const TABS = [
-  { id: 'inbox', label: 'Inbox', icon: MessageSquare },
-  { id: 'ideas', label: 'Ideas', icon: Lightbulb },
-  { id: 'daily-log', label: 'Daily Log', icon: NotebookPen, fullBleed: true },
-  { id: 'links', label: 'Links', icon: Link2 },
-  { id: 'memory', label: 'Memory', icon: Database },
-  { id: 'notes', label: 'Notes', icon: FileText, fullBleed: true },
-  { id: 'graph', label: 'Graph', icon: Network, fullBleed: true },
-  { id: 'digest', label: 'Digest', icon: Calendar },
-  { id: 'feeds', label: 'Feeds', icon: Rss },
-  { id: 'trust', label: 'Trust', icon: Shield },
-  { id: 'import', label: 'Import', icon: Upload },
-  { id: 'spotify', label: 'Spotify', icon: Music },
-  { id: 'youtube', label: 'YouTube', icon: Video },
-  { id: 'config', label: 'Config', icon: Settings }
-];
+// Icon + layout per tab id. The manifest (`tabGroup: 'brain'`) owns id/label/
+// order — this file owns only how each tab looks. `fullBleed: true` marks a tab
+// that fills the available height and owns its own internal scroll: Brain
+// renders those inside an overflow-hidden wrapper with no padding (the rest
+// scroll inside a padded wrapper). See issue #1177. Throws at import time on
+// drift between the manifest and this map.
+const TAB_PRESENTATION = {
+  inbox: { icon: MessageSquare },
+  ideas: { icon: Lightbulb },
+  'daily-log': { icon: NotebookPen, fullBleed: true },
+  links: { icon: Link2 },
+  memory: { icon: Database },
+  notes: { icon: FileText, fullBleed: true },
+  graph: { icon: Network, fullBleed: true },
+  digest: { icon: Calendar },
+  feeds: { icon: Rss },
+  trust: { icon: Shield },
+  import: { icon: Upload },
+  spotify: { icon: Music },
+  youtube: { icon: Video },
+  config: { icon: Settings },
+};
+
+export const TABS = buildPageNavTabs(getPageNavTabs('brain'), TAB_PRESENTATION, 'Brain');
 
 // Tab ids that render full-bleed (derived from TABS so the list can't drift).
 export const FULL_BLEED_TAB_IDS = new Set(TABS.filter((t) => t.fullBleed).map((t) => t.id));

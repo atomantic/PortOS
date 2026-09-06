@@ -9,6 +9,7 @@ import TabPills from '../components/ui/TabPills';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { useValidTab } from '../hooks/useValidTab';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 const GoalsTreeView = lazy(() => import('../components/goals/GoalsTreeView'));
 
@@ -21,11 +22,7 @@ const TAB_PRESENTATION = {
   tree: { icon: TreePine },
 };
 
-export const TABS = getPageNavTabs('goals').map((tab) => {
-  const presentation = TAB_PRESENTATION[tab.id];
-  if (!presentation) throw new Error(`Goals: no tab presentation for manifest tab "${tab.id}"`);
-  return { ...tab, ...presentation };
-});
+export const TABS = buildPageNavTabs(getPageNavTabs('goals'), TAB_PRESENTATION, 'Goals');
 
 export default function Goals() {
   // `/goals/list/:goalId` carries no `:tab` segment, so `useValidTab` falls back to

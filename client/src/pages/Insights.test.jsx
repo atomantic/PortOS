@@ -28,14 +28,13 @@ import {
   refreshInsightNarrative,
 } from '../services/api';
 import { OverviewTab, TABS } from './Insights';
-import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
 describe('Insights TABS ↔ nav manifest', () => {
-  it('derives every tab, in order, from the "insights" tabGroup with a presentation entry', () => {
-    const manifestTabs = getPageNavTabs('insights');
-    expect(TABS.map((t) => t.id)).toEqual(manifestTabs.map((t) => t.id));
-    expect(TABS.map((t) => t.label)).toEqual(manifestTabs.map((t) => t.label));
-    expect(TABS.every((t) => typeof t.icon === 'function' || typeof t.icon === 'object')).toBe(true);
+  it('renders the insights tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(TABS, [
+      'overview:Overview', 'genome-health:Genome-Health', 'taste-identity:Taste & Identity', 'cross-domain:Cross-Domain Patterns', 'goal-scorecard:Goal Scorecard',
+    ]);
   });
 });
 

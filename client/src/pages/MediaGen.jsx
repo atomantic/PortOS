@@ -1,18 +1,27 @@
 import { useNavigate, useLocation, Outlet } from 'react-router';
 import { Layers, Image as ImageIcon, Film, History, Scissors, FolderOpen, Box, Pencil } from 'lucide-react';
 import TabPills from '../components/ui/TabPills';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
+// Icon per tab id. The manifest (`tabGroup: 'media'`) owns id/label/order —
+// this page owns only how each tab looks; the page-local "History"/"Three.js"
+// labels (vs the manifest's "Media History"/"Three.js Models", which need the
+// qualifier to be unambiguous in ⌘K) come from the manifest's `tabLabel`.
 // LoRAs, Training and Models moved to the Models section (#4728) — they manage
 // installed weights, while everything left here generates or browses output.
-export const TABS = [
-  { id: 'image', label: 'Image', icon: ImageIcon },
-  { id: 'video', label: 'Video', icon: Film },
-  { id: 'threejs', label: 'Three.js', icon: Box },
-  { id: 'annotate', label: 'Annotate', icon: Pencil },
-  { id: 'timeline', label: 'Timeline', icon: Scissors },
-  { id: 'history', label: 'History', icon: History },
-  { id: 'collections', label: 'Collections', icon: FolderOpen }
-];
+// Throws at import time on drift.
+const TAB_PRESENTATION = {
+  image: { icon: ImageIcon },
+  video: { icon: Film },
+  threejs: { icon: Box },
+  annotate: { icon: Pencil },
+  timeline: { icon: Scissors },
+  history: { icon: History },
+  collections: { icon: FolderOpen },
+};
+
+export const TABS = buildPageNavTabs(getPageNavTabs('media'), TAB_PRESENTATION, 'Media Gen');
 
 export default function MediaGen() {
   const navigate = useNavigate();

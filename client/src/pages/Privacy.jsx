@@ -15,6 +15,7 @@ import SubjectSwitcher from '../components/privacy/SubjectSwitcher';
 import SubjectsDrawer from '../components/privacy/SubjectsDrawer';
 import { SELF_SUBJECT_ID, privacyTabPath } from '../components/privacy/constants';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 // Icon per tab id. The manifest (`tabGroup: 'privacy'`) owns id/label/order —
 // this page owns only how each tab looks; the page-local "Overview" label
@@ -28,11 +29,7 @@ const TAB_PRESENTATION = {
   brokers: { icon: ShieldOff },
 };
 
-export const TABS = getPageNavTabs('privacy').map((tab) => {
-  const presentation = TAB_PRESENTATION[tab.id];
-  if (!presentation) throw new Error(`Privacy: no tab presentation for manifest tab "${tab.id}"`);
-  return { ...tab, ...presentation };
-});
+export const TABS = buildPageNavTabs(getPageNavTabs('privacy'), TAB_PRESENTATION, 'Privacy');
 
 export default function Privacy() {
   const navigate = useNavigate();

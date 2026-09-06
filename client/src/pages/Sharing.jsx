@@ -28,6 +28,8 @@ import {
   listShareInbox, promoteShareInboxItem, dismissShareInboxItem,
   listShareActivity, getSettings, updateSettings,
 } from '../services/api';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 const emptyForm = () => ({ name: '', path: '', mode: 'inbox', displayNameOverride: '', bioOverride: '' });
 
@@ -44,14 +46,19 @@ export function isLiveSubscription(item, now = Date.now()) {
   return (now - receivedMs) < SUBSCRIPTION_LIVE_WINDOW_MS;
 }
 
-// Top-level deep-linkable sections. Buckets is the bucket-management view;
-// Duplicates + Conflicts are the sync-hygiene review surfaces.
-// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
-export const SECTIONS = [
-  { id: 'buckets', label: 'Buckets', icon: Folder, path: '/sharing' },
-  { id: 'duplicates', label: 'Duplicates', icon: Copy, path: '/sharing/duplicates' },
-  { id: 'conflicts', label: 'Conflicts', icon: GitMerge, path: '/sharing/conflicts' },
-];
+// Icon per top-level section id. The manifest (`tabGroup: 'sharing'`) owns
+// id/label/order and the absolute path (`to`) — this page owns only how each
+// section looks; the page-local "Buckets" label (vs the manifest's page-level
+// "Sharing") comes from the manifest's `tabLabel`. Buckets is the
+// bucket-management view; Duplicates + Conflicts are the sync-hygiene review
+// surfaces. Throws at import time on drift.
+const SECTION_PRESENTATION = {
+  buckets: { icon: Folder },
+  duplicates: { icon: Copy },
+  conflicts: { icon: GitMerge },
+};
+
+export const SECTIONS = buildPageNavTabs(getPageNavTabs('sharing'), SECTION_PRESENTATION, 'Sharing');
 
 // Per-bucket detail sub-tabs. Held in the `?tab=` URL search param (not local
 // state) so the open view is deep-linkable, reload-safe, and stays in sync with
@@ -66,10 +73,10 @@ function SharingHeader({ active }) {
         <h1 className="text-2xl font-bold text-white">Sharing</h1>
       </div>
       <nav className="flex items-center gap-1 mb-6 border-b border-port-border">
-        {SECTIONS.map(({ id, label, icon: Icon, path }) => (
+        {SECTIONS.map(({ id, label, icon: Icon, to }) => (
           <Link
             key={id}
-            to={path}
+            to={to}
             className={`inline-flex items-center gap-2 px-3 py-2 text-sm border-b-2 -mb-px ${
               active === id
                 ? 'border-port-accent text-white'

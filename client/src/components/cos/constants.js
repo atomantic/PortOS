@@ -19,25 +19,31 @@ import {
 import { normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
 import { AVATAR_STYLE_LABELS } from '../../lib/avatarStyles';
 import { inPlaceClipName } from '../../utils/animationClips';
+import { getPageNavTabs } from '../../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
-export const TABS = [
-  { id: 'briefing', label: 'Briefing', icon: Newspaper },
-  { id: 'tasks', label: 'Tasks', icon: FileText },
-  { id: 'agents', label: 'Agents', icon: Cpu },
-  { id: 'jobs', label: 'System Tasks', icon: Bot },
-  { id: 'runs', label: 'Runs', icon: Play },
-  { id: 'run-events', label: 'Run Events', icon: ScrollText },
-  { id: 'schedule', label: 'Schedule', icon: Clock },
-  { id: 'workflow', label: 'Timeline', icon: ChartGantt },
-  { id: 'digest', label: 'Digest', icon: Calendar },
-  { id: 'gsd', label: 'GSD', icon: Compass },
-  { id: 'productivity', label: 'Productivity', icon: BarChart2 },
-  { id: 'learning', label: 'Learning', icon: GraduationCap },
-  { id: 'memory', label: 'Memory', icon: Brain },
-  { id: 'mind', label: 'Mind', icon: MessageCircle },
-  { id: 'health', label: 'Health', icon: Activity },
-  { id: 'config', label: 'Config', icon: Settings }
-];
+// Icon per tab id. The manifest (`tabGroup: 'cos'`) owns id/label/order — this
+// file owns only how each tab looks. Throws at import time on drift.
+const TAB_PRESENTATION = {
+  briefing: { icon: Newspaper },
+  tasks: { icon: FileText },
+  agents: { icon: Cpu },
+  jobs: { icon: Bot },
+  runs: { icon: Play },
+  'run-events': { icon: ScrollText },
+  schedule: { icon: Clock },
+  workflow: { icon: ChartGantt },
+  digest: { icon: Calendar },
+  gsd: { icon: Compass },
+  productivity: { icon: BarChart2 },
+  learning: { icon: GraduationCap },
+  memory: { icon: Brain },
+  mind: { icon: MessageCircle },
+  health: { icon: Activity },
+  config: { icon: Settings },
+};
+
+export const TABS = buildPageNavTabs(getPageNavTabs('cos'), TAB_PRESENTATION, 'CoS');
 
 // Intentional category-color enum (#1909/#1924 caution), NOT off-token theme
 // inconsistency: 9 files (CoSCharacter, CyberCoSAvatar, EsotericCoSAvatar,
