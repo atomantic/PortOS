@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { delimiter, join } from 'node:path';
 import {
   redactTcAddress,
   isValidTcAddress,
@@ -169,15 +170,25 @@ describe('tailcatPeer helpers', () => {
   });
 
   it('looks for tailcat in the GOBIN and Homebrew prefixes a server may not have on PATH', () => {
+    // Empty PATH so the injected env is the only source — the real PATH must not leak in.
     const bins = listCandidateTailcatBins({
-      env: { PATH: '', GOBIN: '/example/gobin', HOMEBREW_PREFIX: '/example/brew' },
-      home: '/example/home',
+      env: { PATH: '', GOBIN: join('/example', 'gobin'), HOMEBREW_PREFIX: join('/example', 'brew') },
+      home: join('/example', 'home'),
     });
-    expect(bins).toContain('/example/gobin/tailcat');
-    expect(bins).toContain('/example/brew/bin/tailcat');
-    expect(bins).toContain('/opt/homebrew/bin/tailcat');
-    expect(listCandidateTailcatBins({ env: { PATH: '', GOPATH: '/example/gopath' }, home: '/example/home' }))
-      .toContain('/example/gopath/bin/tailcat');
+    expect(bins).toEqual([
+      join('/example', 'gobin', 'tailcat'),
+      join('/example', 'gobin', 'tailcat.exe'),
+      join('/example', 'brew', 'bin', 'tailcat'),
+      join('/opt', 'homebrew', 'bin', 'tailcat'),
+      join('/usr', 'local', 'bin', 'tailcat'),
+    ]);
+    // No GOBIN → the first GOPATH entry's bin; no GOPATH at all → ~/go/bin.
+    expect(listCandidateTailcatBins({
+      env: { PATH: '', GOPATH: [join('/example', 'gopath'), join('/example', 'other')].join(delimiter) },
+      home: join('/example', 'home'),
+    })).toContain(join('/example', 'gopath', 'bin', 'tailcat'));
+    expect(listCandidateTailcatBins({ env: { PATH: '' }, home: join('/example', 'home') }))
+      .toContain(join('/example', 'home', 'go', 'bin', 'tailcat'));
   });
 
   it('allocateLocalPort prefers 15555 then walks upward when busy', async () => {

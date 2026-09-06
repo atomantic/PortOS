@@ -92,7 +92,7 @@ export function listCandidateTailcatBins({ env = process.env, home = homedir() }
   const goBinDir = env.GOBIN || join(goPath, 'bin');
   const brewPrefixes = [env.HOMEBREW_PREFIX, '/opt/homebrew', '/usr/local'].filter(Boolean);
   const candidates = [
-    findCommandOnPath('tailcat'),
+    findCommandOnPath('tailcat', { env }),
     join(goBinDir, 'tailcat'),
     join(goBinDir, 'tailcat.exe'),
     ...brewPrefixes.map((prefix) => join(prefix, 'bin', 'tailcat')),
