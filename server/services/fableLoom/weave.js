@@ -18,7 +18,7 @@ import { startAIOp } from '../aiStatusEvents.js';
 import { runStagedLLM } from '../stageRunner.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { resolveLlmRoutePin } from '../../lib/llmRoutePin.js';
-import { renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
+import { renderStoryCanonDigest } from '../../lib/universePromptRenderers.js';
 import { GRAPH_ISSUE_CODES, analyzeEpisodeGraph, describeGraphForPrompt } from '../../lib/fableLoomGraph.js';
 import {
   FABLELOOM_CAMERA_MOVEMENT_VALUES,
@@ -137,19 +137,20 @@ const playRouting = (loom, perCall) => resolveLlmRoutePin(loom.playSettings, per
 
 /**
  * Render the linked universe's canon as a prompt digest via the shared
- * renderer (field precedence, per-kind caps, and the "+ N more" truncation
- * footer every generative prompt gets). Empty string when the loom has no
- * universe — the stages treat it as optional.
+ * composer (field precedence, per-kind caps, the "+ N more" truncation footer,
+ * and the authored Ghost/Wound/Lie/Want/Need engines every generative prompt
+ * needs to make characters drive the plot). The bound protagonist is pinned so
+ * a large cast can't push the one character the story is about past the cap.
+ * Empty string when the loom has no universe — the stages treat it as optional.
+ *
+ * Reader-facing paths do NOT call this: `playTurn` never renders canon, and the
+ * cold-opening first-time-viewer review passes its own withheld placeholder.
  */
 export async function buildCanonDigest(loom) {
   if (!loom.universeId) return '';
   const universe = await getUniverse(loom.universeId).catch(() => null);
   if (!universe) return '';
-  const protagonist = universe.characters?.find((character) => character.id === loom.protagonistCharacterId);
-  return [
-    protagonist ? `Verified Universe protagonist: id=${protagonist.id}; name=${protagonist.name}.` : '',
-    renderCanonForPrompt(universe),
-  ].filter(Boolean).join('\n');
+  return renderStoryCanonDigest(universe, { protagonistCharacterId: loom.protagonistCharacterId });
 }
 
 const seriesPlanContext = (loom, episode) => {

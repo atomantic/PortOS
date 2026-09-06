@@ -17,7 +17,7 @@ import { describeStructure, recommendStructure } from '../../../lib/seasonStruct
 import { computeIssueTargets, DEFAULT_LENGTH_PROFILE, LENGTH_PROFILE_NAMES } from '../../../lib/issueLength.js';
 import { getUniverse } from '../../universeBuilder.js';
 import { getSeriesPlanningCanon, scopeCanonForSeries } from '../seriesCanon.js';
-import { renderCanonForPrompt, renderCategoriesForPrompt, renderCompositesForPrompt, renderEntitiesSummary } from '../../../lib/universePromptRenderers.js';
+import { CHARACTER_NARRATIVE_ARC_MAX, renderCanonForPrompt, renderCategoriesForPrompt, renderCharacterNarrativeContext, renderCompositesForPrompt, renderEntitiesSummary } from '../../../lib/universePromptRenderers.js';
 
 export const ERR_VALIDATION = 'PIPELINE_ARC_VALIDATION';
 
@@ -65,43 +65,18 @@ export function renderPriorSeason(s, priorIssues) {
 // to a near-duplicate phrasing.
 export const NO_LINKED_UNIVERSE_PLACEHOLDER = '(none — series has no linked Universe Builder world)';
 
-const CHARACTER_FOUNDATION_PROMPT_MAX = 6;
-const compactCharacterField = (value, max = 220) => {
-  const flat = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
-  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
-};
-
 // Character foundations are plot inputs, not merely visual canon. Keep a
 // compact top-six engine here so every arc-level prompt can reason from the
 // causal Lie/Want/Need chain without hauling the whole story bible twice.
+//
+// The ranking + field vocabulary now lives in the shared renderer
+// (`lib/universePromptRenderers.js`) so the arc planner, the FableLoom canon
+// digest and the series-concept seed all teach the LLM the same labels — this
+// stays as the arc planner's named entry point and its cap.
+const CHARACTER_FOUNDATION_PROMPT_MAX = CHARACTER_NARRATIVE_ARC_MAX;
+
 export function renderCharacterFoundationForArc(characters) {
-  const list = Array.isArray(characters) ? characters : [];
-  const ranked = list
-    .map((character, index) => ({
-      character,
-      index,
-      coreRole: /protagonist|lead|hero|antagonist|villain|deuteragonist|mentor/i.test(character?.role || ''),
-      depth: ['ghost', 'wound', 'lie', 'want', 'need', 'motivations', 'relationships']
-        .filter((field) => compactCharacterField(character?.[field])).length,
-    }))
-    .sort((a, b) => Number(b.coreRole) - Number(a.coreRole) || b.depth - a.depth || a.index - b.index)
-    .slice(0, CHARACTER_FOUNDATION_PROMPT_MAX)
-    .map(({ character }) => {
-      const fields = [
-        ['role', character?.role],
-        ['ghost', character?.ghost],
-        ['wound', character?.wound],
-        ['lie', character?.lie],
-        ['want', character?.want],
-        ['need', character?.need],
-        ['motives', character?.motivations],
-        ['relationships', character?.relationships],
-      ].map(([label, value]) => [label, compactCharacterField(value)])
-        .filter(([, value]) => value)
-        .map(([label, value]) => `${label}=${value}`);
-      return `- ${character?.name || 'Unnamed'}: ${fields.join(' | ') || '(framework not authored)'}`;
-    });
-  return ranked.join('\n');
+  return renderCharacterNarrativeContext(characters, { max: CHARACTER_FOUNDATION_PROMPT_MAX });
 }
 
 export function appendCharacterFirstArcGuidance(shapeGuidance, characterFoundationText, characterArcs) {

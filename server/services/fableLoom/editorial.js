@@ -30,7 +30,7 @@ import {
   FABLELOOM_PROTAGONIST_PRESENCE,
 } from '../../lib/fableLoomPlayback.js';
 import { trimTo } from '../../lib/storyBible.js';
-import { renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
+import { renderStoryCanonDigest } from '../../lib/universePromptRenderers.js';
 import { normalizeFableLoomCameraMovement } from '../../lib/fableLoomCameraMovements.js';
 import { startAIOp } from '../aiStatusEvents.js';
 import { buildPrompt } from '../promptService.js';
@@ -195,7 +195,12 @@ const loadEditorialDependencies = async (loom, {
   return {
     universe,
     voiceProfiles,
-    canonDigest: universe ? renderCanonForPrompt(universe) : '',
+    // Same composer the generation stages use, so the editor reviews a story
+    // against the SAME authored psychology the writer was given — a reviewer
+    // that can't see the Lie can't tell a broken arc from an intended one.
+    canonDigest: universe
+      ? renderStoryCanonDigest(universe, { protagonistCharacterId: loom.protagonistCharacterId })
+      : '',
   };
 };
 

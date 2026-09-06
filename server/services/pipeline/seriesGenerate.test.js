@@ -150,6 +150,44 @@ describe('generateSeriesConcepts (interactive / user pick)', () => {
     expect(call.variables.characters).toContain('Ash — survivor');
   });
 
+  it('feeds the authored character engines alongside the concise roster (#6416)', async () => {
+    getUniverse.mockResolvedValue({
+      ...baseUniverse,
+      characters: [
+        {
+          id: 'char-ash', name: 'Ash', role: 'survivor',
+          lie: 'Owing anyone is the same as being owned.',
+          want: 'Buy out the indenture before the smelt ends.',
+          need: 'Accept that the crew already paid for her.',
+        },
+        {
+          id: 'char-masked', name: 'The Assayer', role: 'antagonist', spoiler: true,
+          ghost: 'Signed the order that sank the shift.',
+        },
+      ],
+    });
+    mockGen([candidate()]);
+    await generateSeriesConcepts('uni-1', {});
+    const { variables } = runPromptRefineRaw.mock.calls[0][0];
+    // The roster keeps its orientation job...
+    expect(variables.characters).toContain('Ash — survivor');
+    // ...and the engines block adds the causal material a conflict engine
+    // has to be built out of.
+    expect(variables.characterFoundations).toContain('lie=Owing anyone is the same as being owned.');
+    expect(variables.characterFoundations).toContain('need=Accept that the crew already paid for her.');
+    // A concealed origin must not become the pitch.
+    expect(variables.characterFoundations).toContain('The Assayer: (reveal-gated');
+    expect(variables.characterFoundations).not.toContain('Signed the order that sank the shift.');
+  });
+
+  it('renders an explicit placeholder when no psychology is authored', async () => {
+    getUniverse.mockResolvedValue({ ...baseUniverse, characters: [] });
+    mockGen([candidate()]);
+    await generateSeriesConcepts('uni-1', {});
+    expect(runPromptRefineRaw.mock.calls[0][0].variables.characterFoundations)
+      .toBe('(none authored yet — invent the psychology each concept needs)');
+  });
+
   it('drops candidates with no name and clamps overlong fields', async () => {
     mockGen([
       { logline: 'no name here' },

@@ -694,3 +694,69 @@ describe('editorial generation guards', () => {
     );
   });
 });
+
+describe('editorial canon dependencies carry authored psychology (#6416)', () => {
+  // Obviously-fake placeholder canon — the authored causal chain the editor
+  // needs in order to tell a broken arc from an intended one.
+  const authoredUniverse = (over = {}) => ({
+    characters: [{
+      id: 'character-example',
+      name: 'Mara',
+      role: 'protagonist',
+      description: 'silver-eyed courier',
+      lie: 'Asking for help is how couriers get killed.',
+      want: 'Run the deep line alone and clear the debt.',
+      need: 'Let the harbour crew carry half the run.',
+    }],
+    places: [],
+    objects: [],
+    ...over,
+  });
+  const loomWithUniverse = () => ({
+    ...makeLoom(), universeId: 'universe-example', protagonistCharacterId: 'character-example',
+  });
+  const load = (universe) => __testing.loadEditorialDependencies(loomWithUniverse(), {
+    getUniverseFn: async () => universe,
+    listVoiceProfilesFn: async () => [],
+  });
+
+  it('renders the same engines block the generation stages receive', async () => {
+    const { canonDigest } = await load(authoredUniverse());
+    expect(canonDigest).toContain('Verified Universe protagonist: id=character-example; name=Mara.');
+    expect(canonDigest).toContain('lie=Asking for help is how couriers get killed.');
+    expect(canonDigest).toContain('want=Run the deep line alone and clear the debt.');
+    expect(canonDigest).toContain('need=Let the harbour crew carry half the run.');
+  });
+
+  it('reports the cast it could not fit instead of implying a complete review', async () => {
+    const crowd = Array.from({ length: 20 }, (_, index) => ({
+      id: `extra-${index}`, name: `Extra ${index}`, want: 'a berth off the dock',
+    }));
+    const { canonDigest } = await load(authoredUniverse({
+      characters: [...crowd, ...authoredUniverse().characters],
+    }));
+    expect(canonDigest).toContain('- Mara [protagonist]');
+    expect(canonDigest).toContain('more characters not shown');
+    expect(canonDigest).toContain('do not treat this cast list as complete');
+  });
+
+  it('invalidates an in-flight editorial result when a belief is edited mid-run', async () => {
+    const before = await load(authoredUniverse());
+    const edited = authoredUniverse();
+    edited.characters[0].lie = 'Debt is the only honest contract.';
+    const after = await load(edited);
+
+    expect(after.canonDigest).not.toBe(before.canonDigest);
+    expect(() => __testing.assertEditorialDependenciesUnchanged(
+      after,
+      __testing.editorialDependencyFingerprint(before),
+      { code: 'LOOM_DEPENDENCIES_CHANGED_DURING_GENERATION', message: 'Linked canon changed' },
+    )).toThrow(/linked canon changed/i);
+  });
+
+  it('counts the engines block against the single-editor context budget', async () => {
+    const { canonDigest } = await load(authoredUniverse());
+    expect(() => __testing.assertEditorialPromptBudget({ canonDigest }, canonDigest.length - 1))
+      .toThrow(/single-editor limit/i);
+  });
+});
