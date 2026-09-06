@@ -8,6 +8,7 @@ import TabPills from '../components/ui/TabPills';
 import { useValidTab } from '../hooks/useValidTab';
 import useUrlParams from '../hooks/useUrlParams';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 import AgendaTab from '../components/calendar/AgendaTab';
 import DayView from '../components/calendar/DayView';
@@ -33,11 +34,7 @@ const TAB_PRESENTATION = {
   config: { icon: Settings },
 };
 
-export const TABS = getPageNavTabs('calendar').map((tab) => {
-  const presentation = TAB_PRESENTATION[tab.id];
-  if (!presentation) throw new Error(`Calendar: no tab presentation for manifest tab "${tab.id}"`);
-  return { ...tab, ...presentation };
-});
+export const TABS = buildPageNavTabs(getPageNavTabs('calendar'), TAB_PRESENTATION, 'Calendar');
 
 export default function Calendar() {
   const navigate = useNavigate();

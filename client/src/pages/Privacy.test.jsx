@@ -73,14 +73,13 @@ vi.mock('../services/api', () => ({
 }));
 
 import Privacy, { TABS } from './Privacy';
-import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
 describe('Privacy TABS ↔ nav manifest', () => {
-  it('derives every tab, in order, from the "privacy" tabGroup with a presentation entry', () => {
-    const manifestTabs = getPageNavTabs('privacy');
-    expect(TABS.map((t) => t.id)).toEqual(manifestTabs.map((t) => t.id));
-    expect(TABS.map((t) => t.label)).toEqual(manifestTabs.map((t) => t.label));
-    expect(TABS.every((t) => typeof t.icon === 'function' || typeof t.icon === 'object')).toBe(true);
+  it('renders the privacy tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(TABS, [
+      'overview:Overview', 'vault:Vault', 'organizations:Organizations', 'changes:Changes', 'brokers:Brokers',
+    ]);
   });
 });
 import {

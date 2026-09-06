@@ -17,13 +17,22 @@ import AlbumsManager from '../components/music/AlbumsManager';
 import TracksManager from '../components/music/TracksManager';
 import MusicDesigner from '../components/music/MusicDesigner';
 import TabPills from '../components/ui/TabPills';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
-export const TABS = [
-  { id: 'generate', label: 'Generate', icon: Wand2 },
-  { id: 'artists', label: 'Artists', icon: Mic },
-  { id: 'albums', label: 'Albums', icon: Disc3 },
-  { id: 'tracks', label: 'Tracks', icon: AudioLines },
-];
+// Icon per tab id. The manifest (`tabGroup: 'music'`) owns id/label/order —
+// this page owns only how each tab looks; the short page-local labels (vs the
+// manifest's "Music Designer"/"Music Artists"/… , which need the "Music"
+// qualifier to be unambiguous in ⌘K) come from the manifest's `tabLabel`.
+// Throws at import time on drift.
+const TAB_PRESENTATION = {
+  generate: { icon: Wand2 },
+  artists: { icon: Mic },
+  albums: { icon: Disc3 },
+  tracks: { icon: AudioLines },
+};
+
+export const TABS = buildPageNavTabs(getPageNavTabs('music'), TAB_PRESENTATION, 'Music');
 
 const VALID = new Set(TABS.map((t) => t.id));
 

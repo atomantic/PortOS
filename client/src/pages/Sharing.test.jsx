@@ -19,7 +19,8 @@ vi.mock('../services/api', () => ({
   updateSettings: vi.fn(),
 }));
 
-import Sharing, { isLiveSubscription } from './Sharing';
+import Sharing, { SECTIONS, isLiveSubscription } from './Sharing';
+import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 import * as api from '../services/api';
 
 const NOW = Date.parse('2026-05-18T12:00:00Z');
@@ -117,5 +118,19 @@ describe('Sharing bucket detail tab (URL-derived)', () => {
     // Forward → Settings tab again.
     await act(async () => { await router.navigate(1); });
     await waitFor(() => expect(screen.getByText('Import mode')).toBeInTheDocument());
+  });
+});
+
+// Sharing derives its top section strip from the nav manifest's
+// `tabGroup: 'sharing'` (#6383) — this pins the id/label/order the page means to
+// render, and that every manifest section has a presentation entry (icon) in
+// Sharing.jsx, which would otherwise only surface as a thrown import-time error.
+// The page-local "Buckets" label comes from the manifest's `tabLabel`; ⌘K and
+// voice still show the page-level "Sharing" for the same `/sharing` route.
+describe('Sharing SECTIONS ↔ nav manifest', () => {
+  it('renders the sharing tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(SECTIONS, [
+      'buckets:Buckets', 'duplicates:Duplicates', 'conflicts:Conflicts',
+    ]);
   });
 });

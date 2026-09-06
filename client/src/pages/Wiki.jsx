@@ -12,6 +12,7 @@ import WikiSearchTab from '../components/wiki/tabs/SearchTab';
 import WikiGraphTab from '../components/wiki/tabs/GraphTab';
 import WikiLogTab from '../components/wiki/tabs/LogTab';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 // Icon per tab id. The manifest (`tabGroup: 'wiki'`) owns id/label/order —
 // this page owns only how each tab looks; the page-local "Overview" label
@@ -25,11 +26,7 @@ const TAB_PRESENTATION = {
   log: { icon: Activity },
 };
 
-export const TABS = getPageNavTabs('wiki').map((tab) => {
-  const presentation = TAB_PRESENTATION[tab.id];
-  if (!presentation) throw new Error(`Wiki: no tab presentation for manifest tab "${tab.id}"`);
-  return { ...tab, ...presentation };
-});
+export const TABS = buildPageNavTabs(getPageNavTabs('wiki'), TAB_PRESENTATION, 'Wiki');
 
 export default function Wiki() {
   const { tab } = useParams();

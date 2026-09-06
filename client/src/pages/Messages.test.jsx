@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'vitest';
 import { TABS } from './Messages';
-import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
 // Messages derives its tab bar from the nav manifest's `tabGroup: 'messages'`
 // (#6365) — this pins that TABS stays in sync (id, label, declaration order)
@@ -8,10 +8,9 @@ import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 // `fullBleed`/`needsAccounts` flags) in Messages.jsx, which would otherwise
 // only surface as a thrown import-time error.
 describe('Messages TABS ↔ nav manifest', () => {
-  it('derives every tab, in order, from the "messages" tabGroup with a presentation entry', () => {
-    const manifestTabs = getPageNavTabs('messages');
-    expect(TABS.map((t) => t.id)).toEqual(manifestTabs.map((t) => t.id));
-    expect(TABS.map((t) => t.label)).toEqual(manifestTabs.map((t) => t.label));
-    expect(TABS.every((t) => typeof t.icon === 'function' || typeof t.icon === 'object')).toBe(true);
+  it('renders the messages tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(TABS, [
+      'inbox:Inbox', 'drafts:Drafts', 'imessage:iMessage', 'signal:Signal', 'contacts:Contacts', 'sync:Sync', 'config:Config',
+    ]);
   });
 });

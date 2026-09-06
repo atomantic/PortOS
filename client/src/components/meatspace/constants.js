@@ -11,20 +11,28 @@ import {
   Stethoscope,
   FileText,
 } from 'lucide-react';
+import { getPageNavTabs } from '../../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
-export const TABS = [
-  { id: 'overview', label: 'Overview', icon: Activity },
-  { id: 'age', label: 'Age', icon: Clock },
-  { id: 'alcohol', label: 'Alcohol', icon: Beer },
-  { id: 'blood', label: 'Blood', icon: HeartPulse },
-  { id: 'body', label: 'Body', icon: Scale },
-  { id: 'export', label: 'Export', icon: FileText },
-  { id: 'genome', label: 'Genome', icon: Dna },
-  { id: 'health', label: 'Health', icon: Stethoscope },
-  { id: 'settings', label: 'Settings', icon: Settings },
-  { id: 'lifestyle', label: 'Lifestyle', icon: ClipboardList },
-  { id: 'nicotine', label: 'Nicotine', icon: Cigarette },
-];
+// Icon per tab id. The manifest (`tabGroup: 'meatspace'`) owns id/label/order —
+// this file owns only how each tab looks; the page-local "Health" label (vs the
+// manifest's "Body Health", which disambiguates it from CoS Health in ⌘K) comes
+// from the manifest's `tabLabel`. Throws at import time on drift.
+const TAB_PRESENTATION = {
+  overview: { icon: Activity },
+  age: { icon: Clock },
+  alcohol: { icon: Beer },
+  blood: { icon: HeartPulse },
+  body: { icon: Scale },
+  export: { icon: FileText },
+  genome: { icon: Dna },
+  health: { icon: Stethoscope },
+  settings: { icon: Settings },
+  lifestyle: { icon: ClipboardList },
+  nicotine: { icon: Cigarette },
+};
+
+export const TABS = buildPageNavTabs(getPageNavTabs('meatspace'), TAB_PRESENTATION, 'MeatSpace');
 
 // Lifestyle adjustment table for death clock
 export const LIFESTYLE_ADJUSTMENTS = {

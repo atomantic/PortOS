@@ -15,6 +15,7 @@ import IMessageTab from '../components/messages/IMessageTab';
 import SignalTab from '../components/messages/SignalTab';
 import ContactsTab from '../components/messages/ContactsTab';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 // Presentation per tab id. The manifest (`tabGroup: 'messages'`) owns
 // id/label/order — this page owns how each tab looks and behaves.
@@ -31,11 +32,7 @@ const TAB_PRESENTATION = {
   config: { icon: Settings, needsAccounts: true },
 };
 
-export const TABS = getPageNavTabs('messages').map((tab) => {
-  const presentation = TAB_PRESENTATION[tab.id];
-  if (!presentation) throw new Error(`Messages: no tab presentation for manifest tab "${tab.id}"`);
-  return { ...tab, ...presentation };
-});
+export const TABS = buildPageNavTabs(getPageNavTabs('messages'), TAB_PRESENTATION, 'Messages');
 
 const FULL_BLEED_TAB_IDS = new Set(TABS.filter((t) => t.fullBleed).map((t) => t.id));
 

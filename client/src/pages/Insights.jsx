@@ -20,6 +20,7 @@ import TabPills from '../components/ui/TabPills';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { timeAgo } from '../utils/formatters';
 import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 // Icon per tab id. The manifest (`tabGroup: 'insights'`) owns id/label/order —
 // this page owns only how each tab looks. Throws at import time on drift.
@@ -31,11 +32,7 @@ const TAB_PRESENTATION = {
   'goal-scorecard': { icon: Target },
 };
 
-export const TABS = getPageNavTabs('insights').map((tab) => {
-  const presentation = TAB_PRESENTATION[tab.id];
-  if (!presentation) throw new Error(`Insights: no tab presentation for manifest tab "${tab.id}"`);
-  return { ...tab, ...presentation };
-});
+export const TABS = buildPageNavTabs(getPageNavTabs('insights'), TAB_PRESENTATION, 'Insights');
 
 export function OverviewTab() {
   const navigate = useNavigate();
