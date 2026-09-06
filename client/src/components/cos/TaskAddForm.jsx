@@ -728,11 +728,14 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // Every breakpoint below is a CONTAINER query, not a viewport one: compact
   // mode renders inside a dashboard tile that can be ~250px wide on a 2560px
   // screen, where a viewport `sm:` kept the wide row and squeezed the textarea
-  // down to one character per line.
+  // down to one character per line. `@xl` (576px) is where the textarea, the
+  // 10rem app picker and the button each still get usable width — roughly the
+  // old 640px viewport threshold once page padding is subtracted, so a phone
+  // keeps the stacked form it had before.
   if (compact) {
     return (
       <div className="@container space-y-3">
-        <div className="flex flex-col @md:flex-row gap-2">
+        <div className="flex flex-col @xl:flex-row gap-2">
           <label htmlFor="compact-task-desc" className="sr-only">Task description (required)</label>
           <AutoSizeTextarea
             id="compact-task-desc"
@@ -745,11 +748,11 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 handleAddTask();
               }
             }}
-            className="w-full @md:flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+            className="w-full @xl:flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />
           <div className="flex gap-2">
-            <div className="flex-1 min-w-0 @md:w-40 @md:flex-none">
+            <div className="flex-1 min-w-0 @xl:w-40 @xl:flex-none">
               <AppContextPicker
                 apps={apps}
                 value={newTask.app}
@@ -1164,8 +1167,8 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             </div>
           </div>
         ) : (
-          <div className="flex flex-col @md:flex-row gap-3">
-            <div className="@md:w-40">
+          <div className="flex flex-col @lg:flex-row gap-3">
+            <div className="@lg:w-40">
               <label htmlFor="task-provider" className="sr-only">AI provider</label>
               <select
                 id="task-provider"
@@ -1220,7 +1223,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               model={effectiveModelFor(selectedProvider, newTask.model)}
               value={newTask.effort}
               onChange={effort => setNewTask(t => ({ ...t, effort }))}
-              className="@md:w-40 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+              className="@lg:w-40 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             />
           </div>
         )}
