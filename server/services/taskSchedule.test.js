@@ -2368,6 +2368,37 @@ describe('taskSchedule', () => {
         expect(await getNextTaskType()).toBeNull()
       })
 
+      it('continues only the completed cron drain after its initiating slot is consumed', async () => {
+        cronNotDueYet()
+        mockSchedule({
+          tasks: {
+            ...PAUSED_SHIPPED_DRAINS,
+            'claim-issue': { type: 'cron', cronExpression: '0 7 * * *', perpetual: true, enabled: true },
+            security: { type: 'cron', cronExpression: '0 7 * * *', enabled: true }
+          },
+          executions: { 'task:claim-issue': { lastRun: new Date().toISOString(), count: 1, perApp: {} } }
+        })
+        expect(await getNextTaskType()).toBeNull()
+        expect(await getNextTaskType(null, { continuingTaskType: 'security' })).toBeNull()
+        expect(await getNextTaskType(null, { continuingTaskType: 'claim-issue', perpetualOnly: true }))
+          .toEqual({ taskType: 'claim-issue', reason: 'perpetual-drain' })
+      })
+
+      it.each(['parkedUntil', 'failureParkedAt'])('keeps continuation behind %s', async (field) => {
+        cronNotDueYet()
+        mockSchedule({
+          tasks: {
+            ...PAUSED_SHIPPED_DRAINS,
+            'claim-issue': { type: 'cron', cronExpression: '0 7 * * *', perpetual: true, enabled: true }
+          },
+          executions: { 'task:claim-issue': {
+            lastRun: new Date().toISOString(), count: 1, perApp: {},
+            [field]: new Date(Date.now() + 3600000).toISOString()
+          } }
+        })
+        expect(await getNextTaskType(null, { continuingTaskType: 'claim-issue' })).toBeNull()
+      })
+
       it('an ELAPSED park makes a cron+perpetual task due immediately, without waiting for the next slot', async () => {
         cronNotDueYet()
         const past = new Date(Date.now() - 60 * 1000).toISOString()

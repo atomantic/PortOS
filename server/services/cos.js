@@ -1616,7 +1616,12 @@ async function refillPerpetualForCompletedAgent(agent) {
   // regenerates an identical first-line per app) is rejected as a duplicate of
   // the completing task and the drain stalls until the next scheduler tick.
   const cosTaskData = await getCosTasks();
-  await queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId: agent?.taskId, wakeAfterRecord: false });
+  await queueEligibleImprovementTasks(state, cosTaskData, {
+    ignoreTaskId: agent?.taskId,
+    wakeAfterRecord: false,
+    // Continue only this completed drain: its cron slot already initiated it.
+    perpetualContinuation: { taskType: agentScheduledType(agent), appId: agent?.metadata?.taskApp || null }
+  });
   // NOTE: the caller (the agent:completed handler) runs dequeueNextTask AFTER
   // this resolves, so the freshly-queued perpetual task is on the queue before
   // slots are filled. Do not dequeue here — that would re-introduce the ordering
