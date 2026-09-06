@@ -21,6 +21,8 @@ const state = {
   onDemandRequests: [],
   inFlightJobIds: [],
   agents: {},
+  improveEnabled: true,
+  cosStateReadable: true,
   triggered: [],
   triggerResult: null,
   added: [],
@@ -62,7 +64,8 @@ vi.mock('./providers.js', () => ({
 }));
 
 vi.mock('./cosState.js', () => ({
-  loadState: vi.fn(async () => ({ agents: state.agents })),
+  loadState: vi.fn(async () => (state.cosStateReadable ? { agents: state.agents } : null)),
+  isImprovementEnabled: vi.fn(() => state.improveEnabled),
 }));
 
 vi.mock('./cosTaskStore.js', () => ({
@@ -135,6 +138,8 @@ beforeEach(() => {
   state.onDemandRequests = [];
   state.inFlightJobIds = [];
   state.agents = {};
+  state.improveEnabled = true;
+  state.cosStateReadable = true;
   state.triggered = [];
   state.triggerResult = null;
   state.added = [];
@@ -296,6 +301,40 @@ describe('refusal paths', () => {
       catalog: {},
     });
     expect(result.reason).toContain('could not be read');
+    dispatchedNothing();
+  });
+
+  // Both the custom and the programmatic lane run WITHOUT reaching
+  // `triggerOnDemandTask`, which is where the built-in lane inherits this gate.
+  // Every other way those two fire is gated on it, so a burn that ignored it
+  // would be the one path that spends a subscription while the user has CoS
+  // improvement switched off.
+  it('refuses the custom and programmatic lanes while master Improve is off', async () => {
+    state.improveEnabled = false;
+    expect((await refuse({ taskRef: { kind: 'custom', jobId: 'job-a' } })).reason).toContain('Improvement is disabled');
+    expect((await refuse({ taskRef: { kind: 'builtin', taskType: 'universe-bible-images' } })).reason).toContain('Improvement is disabled');
+    dispatchedNothing();
+  });
+
+  it('fails closed when CoS state cannot be read at all', async () => {
+    state.cosStateReadable = false;
+    expect((await refuse({ taskRef: { kind: 'custom', jobId: 'job-a' } })).reason).toContain('could not be read');
+    dispatchedNothing();
+  });
+
+  // A forced run of a NAMED step skips the probe (the click IS the selection),
+  // so the duplicate checks have to live on the RUN path too. The built-in lane
+  // has no backstop at all — `triggerOnDemandTask` appends unconditionally — so
+  // without this two clicks queue the same task twice and charge the cap twice.
+  it('refuses a duplicate even under force, on both agent lanes', async () => {
+    state.onDemandRequests = [{ id: 'demand-0', taskType: 'ux', appId: 'app-1' }];
+    state.inFlightJobIds = ['job-a'];
+    const forced = (raw) => invokeQuotaBurnStep({ step: step(raw), family: grok, candidate, force: true });
+
+    expect((await forced({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } })).reason)
+      .toContain('already queued');
+    expect((await forced({ taskRef: { kind: 'custom', jobId: 'job-a' } })).reason)
+      .toContain('already in flight');
     dispatchedNothing();
   });
 

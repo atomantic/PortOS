@@ -73,4 +73,13 @@ describe('onDemandRequestMetadata', () => {
     expect(onDemandRequestMetadata({ id: 'demand-8', origin: 'quota-burn', burn: { family: 'grok' } }))
       .toEqual({ onDemand: true, onDemandOrigin: 'quota-burn' });
   });
+
+  it('adds no burn keys to a request that is not a burn, however well-formed its block', () => {
+    // `triggerOnDemandTask` refuses to persist a `burn` block on any other
+    // origin, so the two can only disagree in a hand-edited schedule — where
+    // stamping would make a human Run read as cooldown-exempt and credit its
+    // refusal to a family that never dispatched it.
+    expect(onDemandRequestMetadata({ id: 'demand-9', origin: 'user', burn: provenance() }))
+      .toEqual({ onDemand: true, onDemandOrigin: 'user' });
+  });
 });

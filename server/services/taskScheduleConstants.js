@@ -1,5 +1,7 @@
 /** Dependency-free task scheduling constants shared by registry and runtime modules. */
 
+import { QUOTA_BURN_REQUEST_ORIGIN } from '../lib/quotaBurnOrigin.js';
+
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
@@ -53,7 +55,7 @@ export const FAILURE_PARK_THRESHOLD = 5;
  *
  * A request written before `origin` existed carries none, which reads as USER.
  */
-export const ON_DEMAND_ORIGINS = { USER: 'user', REFILL: 'refill', QUOTA_BURN: 'quota-burn' };
+export const ON_DEMAND_ORIGINS = { USER: 'user', REFILL: 'refill', QUOTA_BURN: QUOTA_BURN_REQUEST_ORIGIN };
 export const isRefillRequest = (request) => request?.origin === ON_DEMAND_ORIGINS.REFILL;
 /**
  * Whether a human asked for this run. Absent origin reads as USER (see above),

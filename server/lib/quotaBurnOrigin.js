@@ -26,6 +26,14 @@
 
 import { isPlainObject } from './objects.js';
 
+/**
+ * The `origin` a quota-burn on-demand request carries. Declared here rather
+ * than in `taskScheduleConstants.js` so the stamp below can gate on it without
+ * importing upward out of `lib/`; that module re-exports it as
+ * `ON_DEMAND_ORIGINS.QUOTA_BURN`, so there is still exactly one literal.
+ */
+export const QUOTA_BURN_REQUEST_ORIGIN = 'quota-burn';
+
 const MAX_FIELD = 64;
 
 const trimmed = (value, max = MAX_FIELD) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
@@ -84,9 +92,18 @@ export function normalizeQuotaBurnProvenance(raw) {
  *
  * `null` origin means "not recorded", which every reader treats as a human Run:
  * that is what a request queued before the field existed is.
+ *
+ * The burn keys are gated on the ORIGIN, not merely on a `burn` block that
+ * parses. `triggerOnDemandTask` refuses to persist one on any other origin, so
+ * the two can only disagree in a hand-edited schedule — and stamping there would
+ * be the worst of both: `isCooldownExemptTask` would treat an ordinary human Run
+ * as burn-exempt and the denial ledger would credit its refusal to a family that
+ * never dispatched it, while the refill planner still drained it as a human Run.
  */
 export function onDemandRequestMetadata(request) {
-  const burn = normalizeQuotaBurnProvenance(request?.burn);
+  const burn = request?.origin === QUOTA_BURN_REQUEST_ORIGIN
+    ? normalizeQuotaBurnProvenance(request.burn)
+    : null;
   const requestId = trimmed(request?.id, 128);
   return {
     onDemand: true,

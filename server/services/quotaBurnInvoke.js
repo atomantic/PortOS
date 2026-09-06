@@ -38,10 +38,15 @@
  * than parked awaiting approval — parking one would consume the family's
  * dispatch budget for work that spends nothing.
  *
- * `force` reaches here already meaning "the user clicked ▶": it bypasses the
- * QUOTA gates in `quotaBurn.js#evaluateFamily`, and nothing else. Task
- * eligibility, approval, scope and enabled state all still hold — those are
- * facts about whether the work may run at all, not about this window's budget.
+ * `force` reaches here already meaning "the user clicked ▶". It bypasses the
+ * QUOTA gates in `quotaBurn.js#evaluateFamily`, and it is threaded into a
+ * programmatic handler so that handler can relax its OWN in-flight cooldown —
+ * which is the whole point of the button on a `universe-bible-images` row whose
+ * probe reports zero for entries that are merely already queued. What it never
+ * relaxes: task eligibility, approval, target scope, enabled state, the master
+ * Improve gate, and the duplicate checks below. Those are facts about whether
+ * the work may run at all, not about this window's budget — and a duplicate in
+ * particular is not "declined because of a gate", it is the same work twice.
  */
 
 import {
@@ -305,6 +310,25 @@ async function resolveStepProvider(effective, family) {
 }
 
 /**
+ * Why the master Improve switch forbids this dispatch, or null.
+ *
+ * The built-in lane inherits this gate from `triggerOnDemandTask`; the custom
+ * and programmatic lanes never reach it, so they ask here. Every OTHER way those
+ * two run — the scheduled custom-job fire, the programmatic on-demand drain —
+ * is gated on it, and a burn that ignored it would be the one path that spends a
+ * subscription while the user has CoS improvement switched off.
+ */
+async function improvementRefusal() {
+  const { isImprovementEnabled, loadState } = await import('./cosState.js');
+  const state = await loadState().catch(() => null);
+  // Unreadable state fails CLOSED: "we could not check" is not "it is on".
+  if (!state) return 'CoS state could not be read';
+  return isImprovementEnabled(state)
+    ? null
+    : 'Improvement is disabled — enable it in CoS → Config to run scheduled tasks';
+}
+
+/**
  * Why an unattended burn may not run this custom job, or null.
  *
  * `autonomyLevel` is the job's own statement about whether it may run without a
@@ -383,6 +407,9 @@ export async function invokeQuotaBurnStep({ step, family, candidate, context, fo
  * drained (see `scheduledHandlers/index.js`).
  */
 async function runProgrammaticStep({ resolved, family, context, force }) {
+  const improve = await improvementRefusal();
+  if (improve) return declined(improve);
+
   const { runScheduledHandler } = await import('./scheduledHandlers/index.js');
   return runScheduledHandler({
     taskType: resolved.ref.taskType,
@@ -404,6 +431,15 @@ async function runProgrammaticStep({ resolved, family, context, force }) {
  * schedule's gates are not quota gates.
  */
 async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
+  // Re-checked HERE, not left to the probe: a forced run of a named step skips
+  // the probe entirely (the click IS the selection), and `triggerOnDemandTask`
+  // appends unconditionally — so without this, two forced clicks queue the same
+  // task twice and charge the window's cap twice for one piece of work. The
+  // legacy executor never had this hole because `addTask` deduplicated one step
+  // further down; a request has no such backstop.
+  const queued = await queuedOnDemandReason(resolved.catalog?.queued, resolved.ref.taskType, resolved.ref.appId);
+  if (queued) return declined(queued);
+
   const picked = await resolveStepProvider(resolved.effective, family);
   if (picked.error) return declined(picked.error);
 
@@ -454,6 +490,12 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
 async function runCustomJobStep({ resolved, step, family, candidate }) {
   const approval = unattendedApprovalRefusal(resolved.job);
   if (approval) return declined(approval);
+  const improve = await improvementRefusal();
+  if (improve) return declined(improve);
+  // `addTask`'s duplicate detection catches an identical QUEUED twin below, but
+  // not one already mid-spawn — and a forced run reaches here with no probe.
+  const active = await activeCustomJobReason(resolved.job);
+  if (active) return declined(active);
   const picked = await resolveStepProvider(resolved.effective, family);
   if (picked.error) return declined(picked.error);
 
@@ -475,9 +517,12 @@ async function runCustomJobStep({ resolved, step, family, candidate }) {
     provider: picked.provider.id,
     model: resolved.effective.model || undefined,
     effort: resolved.effective.effort || undefined,
-    // Same provenance keys the built-in lane stamps via the request, so
+    // The attribution keys the built-in lane stamps via its request, so
     // `isCooldownExemptTask`, the completion continuation and the denial ledger
-    // cannot tell the two lanes apart.
+    // cannot tell the two lanes apart. There is deliberately no
+    // `quotaBurnRequestId`: this lane queues the task synchronously, so no
+    // request ever exists to name — that key records the ASYNC hop, and minting
+    // a fake one would make a join over it silently wrong.
     quotaBurnFamily: family.id,
     quotaBurnLimitingResetAt: candidate?.limitingResetAt ?? null,
     quotaBurnStepId: step.id,
