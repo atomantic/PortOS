@@ -12,13 +12,14 @@
  * preamble (see `digital-twin-context.js`), so the embodied twin shifts voice
  * per context without forking the underlying identity documents.
  *
- * Pure ESM, no Node-only deps — mirrored byte-for-byte to
- * `client/src/lib/personaTraitBlend.js` so the Personas UI can preview the same
- * directional wording. The server copy is authoritative; the matching server
- * test file (`personaTraitBlend.test.js`) is the contract.
+ * Pure ESM, no Node-only deps — `client/src/lib/personaTraitBlend.js` re-exports
+ * it so the Personas UI previews the same directional wording from the same
+ * code. `personaTraitBlend.test.js` is the contract.
  */
 
-import { clamp } from '../../client/src/utils/formatters.js';
+// Local rather than imported: this leaf is loaded by the browser bundle through
+// the client re-export, so it must not reach outside `server/lib`.
+const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 
 // communicationProfile.formality / .verbosity live on a 1..10 scale; a persona
 // nudges them with a relative integer delta in this range.

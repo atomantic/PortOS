@@ -12,15 +12,15 @@
  * `400 YOUTUBE_URL_INVALID` even though yt-dlp handles it and the other two
  * pipelines accepted it.
  *
- * `client/src/lib/youtubeUrl.js` is the browser mirror of this rule (Quick
- * Capture swaps its whole submit path on it); `youtubeUrl.mirror.test.js`
- * asserts the two agree on behavior, so port any change there verbatim.
+ * A pure leaf: `client/src/lib/youtubeUrl.js` re-exports it (Quick Capture swaps
+ * its whole submit path on the predicate), so this module must import no Node
+ * built-in and nothing outside `server/lib`. The throwing form lives in
+ * `youtubeUrlAssert.js` for that reason.
  *
  * Deliberately narrow: playlists, channels, and `/@handle` pages are NOT
  * matched — a paste that would have yt-dlp pull 300 videos must fail fast
  * rather than silently start a batch download.
  */
-import { ServerError } from './errorHandler.js';
 
 /**
  * Accepts every URL shape that carries exactly one video id, across the
@@ -49,7 +49,7 @@ export function youtubeVideoIdFromUrl(url) {
   return pathId ? pathId[1] : null;
 }
 
-/** Alias matching the client mirror's naming, so both layers read alike. */
+/** Alias kept for the call sites (and the client re-export) that read better with it. */
 export const youtubeVideoId = youtubeVideoIdFromUrl;
 
 /** True when `url` is a single-video YouTube URL the server will accept. */
@@ -60,16 +60,3 @@ export function isYoutubeVideoUrl(url) {
 /** Shared rejection copy, so the Zod schemas and the services name one rule. */
 export const YOUTUBE_URL_INVALID_MESSAGE =
   'Expected a single-video YouTube URL (watch, shorts, live, embed, music.youtube.com, or youtu.be) — playlists and channels are not supported';
-
-/**
- * Validate a URL and hand back the video id it carries — the id has to be
- * parsed to validate at all, so returning it keeps the caller from parsing the
- * same URL a second time (and from disagreeing about the answer).
- */
-export function assertYoutubeVideoUrl(url) {
-  const videoId = isYoutubeVideoUrl(url) ? youtubeVideoIdFromUrl(url) : null;
-  if (!videoId) {
-    throw new ServerError(YOUTUBE_URL_INVALID_MESSAGE, { status: 400, code: 'YOUTUBE_URL_INVALID' });
-  }
-  return videoId;
-}

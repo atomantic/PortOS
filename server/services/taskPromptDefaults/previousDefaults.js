@@ -9,7 +9,7 @@
 // PORTOS_API_URL is interpolated into the claim-issue-jira previous default below,
 // mirroring how prompts.js renders the current default (so a stored jira prompt on
 // this install resolves to the same string for auto-upgrade recognition).
-import { PORTOS_API_URL } from '../../lib/ports.js';
+import { PORTOS_API_URL } from '../../lib/portosUrls.js';
 
 // Known previous default prompts for legacy migration.
 // When a schedule has no promptVersion, we check if the stored prompt matches

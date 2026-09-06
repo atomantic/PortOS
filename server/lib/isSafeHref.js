@@ -6,9 +6,9 @@
  * A stored `javascript:`/`data:`/`vbscript:` URL turns into a stored-XSS
  * payload the moment it's rendered as an href — validating the scheme at
  * write time (Zod `.refine`) and re-checking at render time (client) closes
- * both the write and the read side. Mirrors `isHttpUrl` in
- * `client/src/utils/urlNormalize.js` (kept as two small copies — server and
- * client don't share a build step — so keep both in sync if this changes).
+ * both the write and the read side. `client/src/lib/isSafeHref.js` re-exports
+ * this module and `client/src/utils/urlNormalize.js` re-exports that as
+ * `isHttpUrl`, so all three names resolve to one rule.
  *
  * @param {string} url
  * @returns {boolean}

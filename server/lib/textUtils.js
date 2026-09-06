@@ -4,8 +4,8 @@
 // regexes (`server/services/writersRoom/local.js`, `server/lib/issueLength.js`,
 // and the client's `client/src/utils/formatters.js`). They all converge on the
 // same intent — count whitespace-delimited tokens — so this is the canonical
-// server-side home. The client copy (which cannot import from `server/`) mirrors
-// this exact semantics so client and server word counts always agree.
+// server-side home. `client/src/lib/textUtils.js` re-exports `escapeRegExp` from
+// here, so keep this module pure: no Node built-in, nothing outside `server/lib`.
 
 /**
  * Count whitespace-separated words in a string.

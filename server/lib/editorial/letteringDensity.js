@@ -35,7 +35,7 @@ export const DEFAULT_LETTERING_THRESHOLDS = Object.freeze({
 });
 
 // The severity ranks an overflow can scale to (high → low), most-severe first.
-// Local copy so this stays self-contained and the client mirror needs nothing
+// Local copy so this stays self-contained and the client re-export needs nothing
 // from checkRegistry.
 const LETTERING_SEVERITIES = ['high', 'medium', 'low'];
 

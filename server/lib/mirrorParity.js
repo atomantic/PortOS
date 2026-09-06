@@ -1,11 +1,17 @@
 /**
  * Shared source-comparison helpers for server↔client "mirror" parity tests.
  *
- * Several client modules are byte-for-byte mirrors of an authoritative server
- * module (see the "server mirrors" section of client/src/lib/README.md). Each
- * mirror is pinned by a `<name>.mirror.test.js` that extracts the mirrored
+ * A shared PURE module is imported, not copied — the client re-exports the
+ * `server/lib` leaf (see "One pure module, one definition" in
+ * client/src/lib/README.md), so it needs no parity test at all. What is left are
+ * the pairs that cannot be one module: a vocabulary restated in a React
+ * component's constants file, or a table a service and a page each own. Each of
+ * those is pinned by a `<name>.mirror.test.js` that extracts the mirrored
  * declarations from both files and diffs them with comments stripped, so
  * per-side commentary can diverge but logic cannot.
+ *
+ * Reach for this only when the two sides genuinely cannot be one module. If they
+ * can, move the logic into a pure `server/lib` leaf and delete the copy.
  *
  * Every such test needs the same two primitives, and hand-rolling them per
  * mirror means a bug in the brace-walker has to be found and fixed once per

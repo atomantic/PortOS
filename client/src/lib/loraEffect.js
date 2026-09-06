@@ -1,26 +1,14 @@
 /**
- * Client mirror of the LoRA adapter-effect report vocabulary in
- * `server/lib/loraEffect.js` (issue #4872).
+ * How the LoRA manager card renders an adapter-effect measurement (#4872).
  *
- * The server is the decision point — it measures the adapter, decides which
- * verdict blocks a render (`loraEffectIssue`: only `zero` does), and caches the
- * report in the LoRA sidecar. These helpers exist so the manager card can say
- * the same thing the render will, in the same words. `loraEffect.parity.test.js`
- * pins the status list against the server module; keep `formatLoraEffect` in
- * step with its server twin by hand, or a card and a render log will describe
- * one measurement two different ways.
- *
- * Same shape as `client/src/lib/loraTriggers.js` mirroring its server twin.
+ * The status vocabulary is re-exported from `server/lib/loraEffect.js` — the
+ * server measures and records the report, so a new verdict there reaches the
+ * badge table below without a second edit. The badge tones and
+ * `loraEffectDetail` are client-only: the server's `formatLoraEffect` always
+ * returns a sentence for its log line, while the card needs `null` when the
+ * badge already says everything (or it prints "Unreadable — unreadable").
  */
-
-// Mirrors LORA_EFFECT_STATUSES in server/lib/loraEffect.js.
-export const LORA_EFFECT_STATUSES = Object.freeze({
-  OK: 'ok',
-  ZERO: 'zero',
-  NONFINITE: 'nonfinite',
-  UNREADABLE: 'unreadable',
-  UNMEASURABLE: 'unmeasurable',
-});
+export { LORA_EFFECT_STATUSES } from '../../../server/lib/loraEffect.js';
 
 // Badge text + Tailwind tone per status. Presentation is legitimately
 // client-only, but it lives beside the mirrored status list so a new verdict
@@ -41,13 +29,13 @@ export const loraEffectBadge = (status) => LORA_EFFECT_BADGES[status]
   || { label: status || 'Unknown', tone: 'text-gray-400' };
 
 /**
- * One-line summary of a measurement — the mirror of `formatLoraEffect` in
- * server/lib/loraEffect.js, and deliberately the same wording.
+ * One-line detail line for a measurement, worded like the server’s
+ * `formatLoraEffect` log line but returning `null` where that returns a status.
  *
  * Returns `null` when there is nothing to add beyond the badge, so a caller can
  * omit the separator rather than printing "Unreadable — Unreadable".
  */
-export const formatLoraEffect = (report) => {
+export const loraEffectDetail = (report) => {
   if (!report) return null;
   // Both statistics, not just `measured`: the server nulls a non-finite value
   // while leaving `measured` intact, so a measured report can still arrive with

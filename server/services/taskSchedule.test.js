@@ -74,7 +74,7 @@ vi.mock('./instanceFeatures.js', () => ({
   isInstanceFeatureEnabled: vi.fn().mockResolvedValue(true),
 }))
 
-vi.mock('../lib/ports.js', () => ({
+vi.mock('../lib/portosUrls.js', () => ({
   PORTOS_UI_URL: 'http://localhost:5554',
   PORTOS_API_URL: 'http://localhost:5555'
 }))

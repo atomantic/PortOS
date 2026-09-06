@@ -9,8 +9,9 @@
  * agent options (malware scan / learn-from-repo) when it agrees with the server
  * about what counts as a repo.
  *
- * The client mirror is `client/src/lib/repoUrl.js`; parity is enforced by
- * `server/lib/repoUrl.mirror.test.js`. Port any change to both.
+ * A pure leaf: `client/src/lib/repoUrl.js` re-exports it, so the Brain capture
+ * boxes reveal the post-clone agent options for exactly the URLs the server will
+ * clone. Import no Node built-in here, and nothing outside `server/lib`.
  */
 
 // The host allowlist, and the two behaviors that actually differ between hosts.

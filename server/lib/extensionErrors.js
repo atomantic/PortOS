@@ -19,8 +19,8 @@
  * (`reject('Failed to connect to MetaMask')` carries no frames at all); see
  * EXTENSION_MESSAGE_RE below for the bar a new pattern has to clear.
  *
- * This module is MIRRORED at client/src/lib/extensionErrors.js. This server
- * copy is authoritative; parity is enforced by extensionErrors.mirror.test.js.
+ * A pure leaf: client/src/lib/extensionErrors.js re-exports it, so it must
+ * import no Node built-in and nothing outside `server/lib`.
  */
 
 // URL schemes an injected content script can run from. Provenance beats

@@ -23,7 +23,7 @@ import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useDownloadPreflightConfirm from '../hooks/useDownloadPreflightConfirm';
 import { formatBytes } from '../utils/formatters';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES, isVideoLoraFamily } from '../lib/runnerFamilies';
-import { LORA_EFFECT_STATUSES, formatLoraEffect, loraEffectBadge } from '../lib/loraEffect';
+import { LORA_EFFECT_STATUSES, loraEffectDetail, loraEffectBadge } from '../lib/loraEffect';
 import {
   listLorasFull,
   installLoraFromCivitai,
@@ -1220,13 +1220,13 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
   // entry, so the badge survives this card being unmounted by a filter change.
   const effect = lora.effectReport || null;
   const [checkingEffect, setCheckingEffect] = useState(false);
-  const effectSummary = formatLoraEffect(effect);
+  const effectSummary = loraEffectDetail(effect);
   const runEffectCheck = async () => {
     setCheckingEffect(true);
     await probeLoraEffect(lora.filename, { force: true, silent: true })
       .then((report) => {
         onMeasured?.(lora.filename, report);
-        const summary = formatLoraEffect(report);
+        const summary = loraEffectDetail(report);
         if (report?.status === LORA_EFFECT_STATUSES.ZERO) {
           toast.error(`${displayName} has no measurable effect — a render would look as if it were off`);
         } else if (report?.status === LORA_EFFECT_STATUSES.OK) {
@@ -1299,7 +1299,7 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
             <span className={`font-medium ${loraEffectBadge(effect.status).tone}`}>
               {loraEffectBadge(effect.status).label}
             </span>
-            {/* formatLoraEffect returns null when the badge already says
+            {/* loraEffectDetail returns null when the badge already says
                 everything, so a reason-less verdict doesn't render as
                 "Unreadable — Unreadable". */}
             {effectSummary && <span className="text-gray-500"> — {effectSummary}</span>}

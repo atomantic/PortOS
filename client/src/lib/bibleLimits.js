@@ -1,113 +1,15 @@
-// Client mirror of `server/lib/storyBible.js` `BIBLE_LIMITS`. Enforced by
-// `server/lib/storyBible.test.js` "client mirror" suite — if you update one
-// side, update the other and the drift test passes.
-export const BIBLE_LIMITS = Object.freeze({
-  NAME_MAX: 200,
-  ROLE_MAX: 200,
-  ALIAS_MAX: 100,
-  ALIASES_PER_ENTRY_MAX: 12,
-  PHYSICAL_DESCRIPTION_MAX: 2000,
-  PERSONALITY_MAX: 2000,
-  BACKGROUND_MAX: 2000,
-  NOTES_MAX: 4000,
-  IMAGE_REF_MAX: 500,
-  IMAGE_REFS_PER_ENTRY_MAX: 12,
-  PRONOUNS_MAX: 60,
-  AGE_MAX: 80,
-  CORE_THEME_MAX: 500,
-  SPEECH_ACCENT_MAX: 500,
-  SPEECH_PATTERN_MAX: 1000,
-  VISUAL_NOTES_MAX: 1000,
-  SILHOUETTE_NOTES_MAX: 2000,
-  POSTURE_NOTES_MAX: 1000,
-  SPECIAL_TRAITS_MAX: 2000,
-  VISUAL_IDENTITY_MAX: 1000,
-  MOTIVATIONS_MAX: 2000,
-  // Character framework (CWQE Phase 10, #2175).
-  GHOST_MAX: 1000,
-  WOUND_MAX: 1000,
-  LIE_MAX: 600,
-  WANT_MAX: 600,
-  NEED_MAX: 600,
-  SECRET_MAX: 600,
-  SECRETS_PER_CHARACTER_MAX: 12,
-  SLIDER_MIN: 1,
-  SLIDER_MAX: 10,
-  LIKES_MAX: 1500,
-  DISLIKES_MAX: 1500,
-  MANNERISMS_MAX: 1500,
-  RELATIONSHIPS_MAX: 2000,
-  RELATIONSHIP_TARGET_ID_MAX: 64,
-  RELATIONSHIP_TYPE_MAX: 60,
-  RELATIONSHIP_DESCRIPTION_MAX: 1000,
-  RELATIONSHIP_OPPOSITION_AXIS_MAX: 60,
-  RELATIONSHIP_OPPOSITION_ROLE_MAX: 120,
-  RELATIONSHIP_OPPOSITION_NOTE_MAX: 600,
-  RELATIONSHIP_LINKS_PER_CHARACTER_MAX: 40,
-  SKILLS_MAX: 2000,
-  STAT_LABEL_MAX: 80,
-  STAT_VALUE_MAX: 200,
-  STATS_PER_CHARACTER_MAX: 30,
-  COLOR_NAME_MAX: 80,
-  COLOR_HEX_MAX: 10,
-  COLOR_ROLE_MAX: 120,
-  COLORS_PER_PALETTE_MAX: 12,
-  PROP_NAME_MAX: 120,
-  PROP_PURPOSE_MAX: 400,
-  PROP_MATERIALS_MAX: 200,
-  PROP_NOTES_MAX: 600,
-  PROPS_PER_CHARACTER_MAX: 12,
-  EXPRESSION_NAME_MAX: 80,
-  EXPRESSION_DESC_MAX: 400,
-  EXPRESSIONS_PER_CHARACTER_MAX: 16,
-  GESTURE_NAME_MAX: 80,
-  GESTURE_DESC_MAX: 300,
-  GESTURES_PER_CHARACTER_MAX: 12,
-  WARDROBE_NAME_MAX: 120,
-  WARDROBE_DESCRIPTION_MAX: 800,
-  WARDROBES_PER_CHARACTER_MAX: 10,
-  EVIDENCE_ITEM_MAX: 500,
-  EVIDENCE_PER_ENTRY_MAX: 20,
-  SLUGLINE_MAX: 200,
-  PALETTE_MAX: 200,
-  ERA_MAX: 200,
-  WEATHER_MAX: 200,
-  RECURRING_DETAILS_MAX: 1000,
-  PLACE_DESCRIPTION_MAX: 2000,
-  OBJECT_DESCRIPTION_MAX: 2000,
-  SIGNIFICANCE_MAX: 1000,
-  ATTACHMENT_CHARACTER_ID_MAX: 64,
-  ATTACHMENT_EMOTION_MAX: 120,
-  ATTACHMENT_SIGNIFICANCE_MAX: 1000,
-  ATTACHMENT_ORIGIN_MAX: 1000,
-  ATTACHMENTS_PER_OBJECT_MAX: 40,
-  ENTRIES_PER_BIBLE_MAX: 200,
-  PROMPT_MAX: 2000,
-  TAG_MAX: 60,
-  TAGS_PER_ENTRY_MAX: 12,
-  SOURCE_SERIES_ID_MAX: 64,
-  VOICE_ID_MAX: 200,
-  VOICE_CANON_VERSION_MAX: 100000,
-  VOICE_CANON_DESCRIPTION_MAX: 1200,
-  VOICE_CANON_DELIVERY_MAX: 1200,
-  VOICE_CANON_RANGE_ITEM_MAX: 240,
-  VOICE_CANON_RANGE_MAX: 12,
-  VOICE_CANON_AVOID_ITEM_MAX: 240,
-  VOICE_CANON_AVOID_MAX: 12,
-  VOICE_CANON_PRONUNCIATION_TERM_MAX: 160,
-  VOICE_CANON_PRONUNCIATION_VALUE_MAX: 240,
-  VOICE_CANON_PRONUNCIATIONS_MAX: 24,
-  IDENTITY_PACK_ASSETS_MAX: 24,
-  IDENTITY_PACK_AVOID_ITEM_MAX: 240,
-  IDENTITY_PACK_AVOID_MAX: 12,
-  INGREDIENT_ID_MAX: 64,
-  // Reveal-gated canon / spoiler scoping (#2178).
-  SURFACE_DESCRIPTOR_MAX: 2000,
-  REVEAL_ISSUE_MAX: 100000,
-});
+/**
+ * Re-export of `BIBLE_LIMITS` from the pure server leaf `server/lib/bibleLimits.js`
+ * (the caps every canon sanitizer measures against), plus the client-only
+ * `capImageRefs` / `appendImageRefById` helpers the optimistic imageRefs-append
+ * paths use.
+ */
+import { BIBLE_LIMITS } from '../../../server/lib/bibleLimits.js';
 
-// Client-only helper (the cap *value* IMAGE_REFS_PER_ENTRY_MAX is mirrored from
-// the server; this convenience function is not). Trims an imageRefs list to that
+export { BIBLE_LIMITS };
+
+// Client-only helper (the cap *value* IMAGE_REFS_PER_ENTRY_MAX comes from the
+// server leaf above; this convenience function is client-only). Trims an imageRefs list to that
 // last-N cap, mirroring the server's `appendEntryImageRef` rotation. Shared by
 // the optimistic imageRefs-append paths in the universe/canon render surfaces so
 // a local stamp never grows past what the durable server append keeps.

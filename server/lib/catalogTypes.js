@@ -7,9 +7,9 @@
  * type guard, the `db.js` / init-db.sql CHECK constraint + FTS field set, and
  * the three client surfaces) now derives from this one list.
  *
- * Adding a new type becomes: one registry entry here (+ a mirrored client
- * entry in `client/src/lib/catalogTypes.js`), one editor field list, and one
- * migration that loosens the CHECK constraint. The validation enum, extraction
+ * Adding a new type becomes: one registry entry here, one editor layout in
+ * `client/src/lib/catalogTypes.js` (which PROJECTS its UI registry from this
+ * one), and one migration that loosens the CHECK constraint. The validation enum, extraction
  * prompt slot, ID prefix, and FTS field set all pick the new type up
  * automatically.
  *
@@ -30,7 +30,7 @@
  * version — this is the per-record payload-shape version.
  */
 
-import { BIBLE_LIMITS } from './storyBible.js';
+import { BIBLE_LIMITS } from './bibleLimits.js';
 
 // Structured array-field editors for the bible types. Each entry declares a
 // payload array key the Catalog detail editor renders as an inline structured
@@ -41,8 +41,8 @@ import { BIBLE_LIMITS } from './storyBible.js';
 //   'kv'           — StatListEditor ({ label, value } rows)
 // `itemMax`/`listMax` are the per-item char cap + per-list count cap, sourced
 // from BIBLE_LIMITS so the editor's "disable add at cap" matches the storyBible
-// sanitizer's silent drop. MIRRORED to client/src/lib/catalogTypes.js verbatim
-// (the parity test asserts they don't drift).
+// sanitizer's silent drop. The client registry carries these entries through
+// from here, so the caps cannot drift.
 const CHARACTER_EDITABLE_LIST_FIELDS = [
   { key: 'aliases', label: 'Aliases', kind: 'stringArray', itemMax: BIBLE_LIMITS.ALIAS_MAX, listMax: BIBLE_LIMITS.ALIASES_PER_ENTRY_MAX },
   { key: 'colorPalette', label: 'Color Palette', kind: 'colorPalette', itemMax: BIBLE_LIMITS.COLOR_NAME_MAX, listMax: BIBLE_LIMITS.COLORS_PER_PALETTE_MAX },
@@ -59,7 +59,7 @@ const OBJECT_EDITABLE_LIST_FIELDS = [
  *   label                  — human label (chips, badges, form options).
  *   idPrefix               — short token in `cat-<prefix>-<uuid>` ids.
  *   badgeColor             — Tailwind class string for the type chip/badge
- *                            (mirrored verbatim on the client).
+ *                            (the client registry projects it through).
  *   primaryContentKey      — payload key the inline "New" form writes the body
  *                            into (where the type's main prose lives).
  *   primaryContentLabel    — label for that field in the inline form.
@@ -216,7 +216,7 @@ export function getCatalogType(id) {
 }
 
 // Ordered union of every type's snippet keys — the unknown-type fallback so a
-// row whose type isn't in the registry still gets a snippet. Mirrors the client.
+// row whose type isn't in the registry still gets a snippet.
 const UNION_SNIPPET_KEYS = (() => {
   const out = [];
   for (const t of CATALOG_TYPES) {
@@ -231,9 +231,9 @@ const UNION_SNIPPET_KEYS = (() => {
  * First non-empty payload value along a type's `snippetFallbackKeys` chain,
  * trimmed/whitespace-collapsed and truncated to `max` (ellipsis on overflow).
  * Honors each type's primary content key — e.g. a character's body text lives
- * under `physicalDescription`, not `description`. Mirror of the client helper in
- * `client/src/lib/catalogTypes.js`; keep the two in sync. `resolveType` lets a
- * caller fold in user-defined types (defaults to the built-in registry).
+ * under `physicalDescription`, not `description`. Re-exported by
+ * `client/src/lib/catalogTypes.js`. `resolveType` lets a caller fold in
+ * user-defined types (defaults to the built-in registry).
  */
 export function payloadSnippet(payload, typeId, max = 120, resolveType = null) {
   if (!payload || typeof payload !== 'object') return '';
@@ -439,8 +439,8 @@ export function canonicalTagKey(label) {
  *
  * Drives the `catalog_ingredient_relations.kind` column (an app-layer enum, not
  * a DB CHECK — same loosening rationale as the type CHECK discussion above) and
- * the "Relations" panel on the ingredient detail page. Mirrored on the client
- * at `client/src/lib/catalogTypes.js` (drift asserted by the client test).
+ * the "Relations" panel on the ingredient detail page, which reads it through
+ * the re-export in `client/src/lib/catalogTypes.js`.
  *
  * Each entry:
  *   id      — the stored `kind` discriminator.
@@ -488,8 +488,8 @@ export function getRelationKind(id) {
  * the bytes are never duplicated into the catalog. `label` drives the attach
  * picker; `accept` is the file-input MIME filter for drag-and-drop. The
  * `portrait` kind is special-cased by `setPortraitMedia` (one active portrait
- * per ingredient; attaching a new one demotes the prior). Client mirror lives
- * in `client/src/lib/catalogTypes.js` (drift asserted by the type tests).
+ * per ingredient; attaching a new one demotes the prior). The attach picker
+ * reads it through the re-export in `client/src/lib/catalogTypes.js`.
  */
 const MEDIA_KIND_REGISTRY = [
   { id: 'portrait', label: 'Portrait', accept: 'image/*' },

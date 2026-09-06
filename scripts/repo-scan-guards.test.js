@@ -66,10 +66,6 @@ const STRUCTURALLY_SELECTED = new Map([
   // file" and forces the complete suite. The guard also rides the Windows
   // contract list.
   ['scripts/ps1-bom.test.js', 'unclassified-file full-suite trigger: *.ps1'],
-  // Walks both lib directories and diffs their README mirror catalogs against
-  // whichever test files exist; it names no file itself (#6363), so the
-  // basename lookup can't reach it either.
-  ['server/lib/mirrorCoverage.test.js', 'structuralTestsFor: server/lib/** or client/src/lib/** changed'],
 ]);
 
 /** A `git` invocation… */
@@ -181,7 +177,7 @@ describe('repo-scanning guards are reachable by CI selection (#5055)', () => {
   });
 
   it('finds the known unnamed cross-root readers', () => {
-    expect(crossRootReaders).toContain('server/lib/mirrorCoverage.test.js');
+    expect(crossRootReaders).toContain('scripts/agent-instructions-files.test.js');
   });
 
   it('registers every scanner and unnamed cross-root reader in ALWAYS_RUN_TESTS or names the selector that reaches it', () => {

@@ -10,7 +10,7 @@
  */
 
 // PORTOS_API_URL is interpolated into the jira-status-report default prompt below.
-import { PORTOS_API_URL } from '../../lib/ports.js';
+import { PORTOS_API_URL } from '../../lib/portosUrls.js';
 import {
   DISPATCH_HINT_FANOUT_GUIDANCE,
   EPIC_DECOMPOSED_LABEL,

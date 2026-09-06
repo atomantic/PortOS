@@ -20,6 +20,7 @@ export * from './appDeployFlags.js';
 export * from './apiContractSchemas.js';
 export * from './asyncApiSpec.js';
 export * from './avatarVariants.js';
+export * from './avatarStyles.js';
 export * as agentValidation from './agentValidation.js';
 export * as agentContextValidation from './agentContextValidation.js';
 export * as appleHealthValidation from './appleHealthValidation.js';
@@ -109,6 +110,8 @@ export * from './storyBuilderIntegrity.js';
 export * from './storyBuilderSteps.js';
 export * from './streamLines.js';
 export * from './taskDataInputCatalog.js';
+// The canon field caps storyBible.js sanitizes against, as a pure leaf.
+export * from './bibleLimits.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';
@@ -309,6 +312,7 @@ export * from './pythonSetup.js';
 export * from './vttTranscript.js';
 export * as youtubeIngestFormat from './youtubeIngestFormat.js';
 export * from './youtubeUrl.js';
+export * from './youtubeUrlAssert.js';
 export * from './ytdlp.js';
 
 // === Networking ===
@@ -449,6 +453,7 @@ export * from './pgTools.js';
 export * from './platform.js';
 export * from './systemCapabilities.js';
 export * from './ports.js';
+export * from './portosUrls.js';
 export * from './signalCrypto.js';
 export * from './timezone.js';
 export * from './tribeCadence.js';

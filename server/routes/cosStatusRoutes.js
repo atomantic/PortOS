@@ -12,10 +12,9 @@ import { validateRequest } from '../lib/validation.js';
 import { z } from 'zod';
 import { DOMAIN_IDS, DOMAIN_MODES } from '../lib/domainAutonomy.js';
 import { AVATAR_VARIANT_PATTERN, RIGGED_VARIANT_PREFIX } from '../lib/avatarVariants.js';
-// Single source of truth for the avatar-style vocabulary (#6253) — a
-// dependency-free leaf, safe to import from the server the way
-// `server/lib/personaTraitBlend.js` imports `clamp` from client `utils/formatters.js`.
-import { AVATAR_STYLE_IDS } from '../../client/src/lib/avatarStyles.js';
+// Single source of truth for the avatar-style vocabulary (#6253); the client
+// picker re-exports the same leaf.
+import { AVATAR_STYLE_IDS } from '../lib/avatarStyles.js';
 import { BUDGET_LIMIT_FIELDS } from '../lib/domainBudgets.js';
 import { persistentMindCapabilitiesSchema } from '../lib/persistentMindCapabilities.js';
 import { persistentMindProfileSchema } from '../lib/persistentMindProfile.js';
