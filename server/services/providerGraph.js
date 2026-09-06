@@ -11,6 +11,13 @@ import {
   toManagementGraphDto,
 } from '../lib/providerGraphRecords.js';
 import { resolveRouteModels } from '../lib/providerGraphPreview.js';
+import { effortLevelsForProvider } from '../lib/providerModels.js';
+import {
+  routeSettingsFor,
+  routeSettingsRevision,
+  unsupportedRouteSettings,
+} from '../lib/providerRouteSettings.js';
+import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import { requireToolkit } from '../lib/aiToolkitState.js';
 import {
   acknowledgeProjection,
@@ -164,11 +171,36 @@ export async function initProviderGraph() {
  */
 export const onProvidersSaved = () => reconcileProviderGraph('legacy-write');
 
+/**
+ * What one executable record contributes to its route's DTO: the overrides this
+ * mode carries, the effort ladder its harness really accepts, and — for a
+ * launchable TUI — the command line the Shell page would show.
+ *
+ * The command line is DISPLAY ONLY and its env half is dropped here: a launch
+ * goes through `shell:start { providerId }`, which re-resolves both server-side,
+ * so the provider's secret env never reaches a management payload.
+ */
+function describeRoute(provider) {
+  const settings = routeSettingsFor(provider);
+  return {
+    settings,
+    effortLevels: effortLevelsForProvider(provider, settings.defaultModel ?? null),
+    tuiCommandLine: buildTuiShellLaunch(provider)?.commandLine ?? null,
+  };
+}
+
 /** The sanitized `GET /api/providers/management` body. */
 export async function getManagementGraph() {
   requireGraph();
   const [graph, data] = await Promise.all([readGraph(), providerService().getAllProviders()]);
-  return toManagementGraphDto({ ...graph, activeProvider: data.activeProvider });
+  // Only the records the graph actually routes: an unmapped legacy provider has
+  // no row to decorate, and resolving a shell invocation for it would be work
+  // this response throws away.
+  const byId = new Map(data.providers.map((provider) => [provider.id, provider]));
+  const routeSettings = new Map(graph.routes
+    .filter((route) => byId.has(route.providerId))
+    .map((route) => [route.providerId, describeRoute(byId.get(route.providerId))]));
+  return toManagementGraphDto({ ...graph, activeProvider: data.activeProvider, routeSettings });
 }
 
 // --- link / unlink -----------------------------------------------------------
@@ -346,12 +378,27 @@ async function projectRoutes(providerIds, connection) {
   if (projections.length === 0) return [];
 
   await commitPendingProjection(projections);
-  reconciling = true;
-  const written = await providerService().applyProviderPatches(Object.fromEntries(
+  const written = await writeProviderPatches(Object.fromEntries(
     projections.map(({ providerId, owned }) => [providerId, projectionPatch(byId.get(providerId), owned)]),
-  )).finally(() => { reconciling = false; });
+  ));
   await acknowledgeProjection(written);
   return written;
+}
+
+/**
+ * Write `providers.json` from INSIDE a serialized graph pass.
+ *
+ * The latch is load-bearing, not defensive: the toolkit's post-save hook calls
+ * back into `reconcileProviderGraph`, which queues behind the pass currently
+ * awaiting this write. Holding `reconciling` makes that call return
+ * immediately, so the pass cannot wait on work that is waiting on the pass.
+ *
+ * @param {Record<string, object>} patches - provider id → partial update
+ * @returns {Promise<string[]>} the ids that existed and were written
+ */
+function writeProviderPatches(patches) {
+  reconciling = true;
+  return providerService().applyProviderPatches(patches).finally(() => { reconciling = false; });
 }
 
 /**
@@ -548,5 +595,81 @@ export function refreshConnectionCatalog(connectionId) {
     console.log(`🔗 Refreshed connection ${connection.id} catalog: ${catalog.state}, `
       + `${catalog.models.length} models across ${groups.length} probe groups (${failures.length} failed)`);
     return { connectionId: connection.id, catalog, probedGroups: groups.length, failedGroups: failures.length };
+  });
+}
+
+/**
+ * Edit ONE route's mode overrides — its args, timeout, effort and model pins.
+ *
+ * The counterpart to `updateConnectionSettings`: that one changes a value every
+ * harness on the backend shares, this one changes a value that belongs to a
+ * single execution mode. Both live on this screen so a human stops bouncing
+ * between a connection and three route editors to configure one backend.
+ *
+ * Three rules make it a genuine OVERRIDE rather than a second way to edit a
+ * provider:
+ *
+ *   - **No sibling fan-out.** The write goes through `applyProviderPatches`,
+ *     which names exactly this route. `updateProvider` would spread the edit
+ *     onto the record's sibling modes, and a CLI route's `--effort` is not the
+ *     TUI route's.
+ *   - **No connection-owned field is reachable.** The accepted key set is the
+ *     route-owned table in `providerRouteSettings.js`, so an endpoint or a
+ *     credential can never be retyped here and silently escape the projection
+ *     that keeps every other harness on the backend in step.
+ *   - **No execution consent.** `enabled` and the transport opt-ins are absent
+ *     from that table; granting them stays an explicit act on the route editor.
+ *
+ * The stale check is a fingerprint of the values as they are ON DISK, so an
+ * edit made in `/ai/edit/:providerId` while this panel was open is caught too —
+ * see `routeSettingsRevision`.
+ */
+export function updateRouteSettings({ providerId, expectedRevision, settings }) {
+  return serialize(async () => {
+    requireGraph();
+    const graph = await readGraph();
+    const route = graph.routes.find((candidate) => candidate.providerId === providerId);
+    if (!route) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
+    requireSettledRoutes([route]);
+
+    const { providers } = await providerService().getAllProviders();
+    const provider = providers.find((candidate) => candidate.id === providerId);
+    // A graph row whose record is gone is a reconciliation removal in flight.
+    // Reported as the same 404, because there is nothing left to override.
+    if (!provider) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
+
+    const current = routeSettingsFor(provider);
+    if (routeSettingsRevision(current) !== expectedRevision) throw stale("This route's settings");
+
+    const unsupported = unsupportedRouteSettings(route.mode, settings);
+    if (unsupported.length > 0) {
+      throw new ServerError(`A ${route.mode} route has no ${unsupported.join(', ')} setting`,
+        { status: 400, code: 'PROVIDER_ROUTE_SETTING_UNSUPPORTED' });
+    }
+
+    // Effort is a harness capability, not free text: a route whose program takes
+    // no `--effort` gets no control, and a level outside its ladder would be
+    // stored and then silently dropped at spawn time.
+    if (settings.effort != null) {
+      const levels = effortLevelsForProvider(provider, settings.defaultModel ?? current.defaultModel ?? null);
+      if (!levels || !levels.includes(settings.effort)) {
+        throw new ServerError(
+          levels
+            ? `This route accepts effort ${levels.join(', ')}`
+            : 'This route\'s harness takes no effort setting',
+          { status: 400, code: 'PROVIDER_ROUTE_EFFORT_UNSUPPORTED' });
+      }
+    }
+
+    const next = { ...current, ...settings };
+    const applied = await writeProviderPatches({ [providerId]: settings });
+    if (applied.length === 0) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
+
+    // No graph row is touched on purpose. These fields are route-owned, so the
+    // connection's `projected` snapshot still describes the record accurately
+    // and the binding must NOT be detached — the reconcile this write triggers
+    // is a documented no-op.
+    console.log(`🔗 Updated route ${providerId} overrides: ${Object.keys(settings).join(', ')}`);
+    return { providerId, settings: next, settingsRevision: routeSettingsRevision(next) };
   });
 }

@@ -126,3 +126,56 @@ export function catalogSummary(catalog) {
   }
   return { tone: 'muted', text: 'Not refreshed yet', detail: null };
 }
+
+// --- route mode overrides (#6369) --------------------------------------------
+//
+// A route's `settings` are the fields that belong to ONE execution mode: its
+// args, its timeout, its effort and its model pins. The server decides which
+// keys a mode publishes, so these two helpers never name a field — they walk
+// whatever the route was given, and a mode that gains or loses a setting needs
+// no client change.
+
+/** The draft an override form edits: every published setting as text. */
+export const routeOverrideDraft = (settings) => Object.fromEntries(
+  Object.entries(settings || {}).map(([key, value]) => [
+    key,
+    key === 'args' ? (Array.isArray(value) ? value : []).join('\n') : (value == null ? '' : String(value)),
+  ]),
+);
+
+/**
+ * The CHANGED keys between a route's saved settings and its draft.
+ *
+ * Only differences travel, so a save cannot rewrite a field the human never
+ * touched — which matters here because these values are also edited from the
+ * route editor and by model refresh.
+ *
+ * Two normalizations, both deliberate:
+ *
+ *   - a blank text field is `null` (unpinned), never `''`. The server reads an
+ *     empty pin as unset too, so treating them as different values would make
+ *     every form dirty on open.
+ *   - a blank `timeout` is NO CHANGE rather than a clear. The executable
+ *     record's schema has no null timeout, so clearing one is the route
+ *     editor's job; silently sending `null` here would break its next save.
+ */
+export function routeOverridePatch(settings, draft) {
+  const patch = {};
+  for (const [key, current] of Object.entries(settings || {})) {
+    const typed = draft?.[key] ?? '';
+    if (key === 'args') {
+      const next = String(typed).split('\n').map((line) => line.trim()).filter(Boolean);
+      const before = Array.isArray(current) ? current : [];
+      if (next.length !== before.length || next.some((arg, index) => arg !== before[index])) patch.args = next;
+      continue;
+    }
+    if (key === 'timeout') {
+      const next = Number(String(typed).trim());
+      if (String(typed).trim() !== '' && Number.isInteger(next) && next !== current) patch.timeout = next;
+      continue;
+    }
+    const next = String(typed).trim() === '' ? null : String(typed).trim();
+    if (next !== (current ?? null)) patch[key] = next;
+  }
+  return patch;
+}

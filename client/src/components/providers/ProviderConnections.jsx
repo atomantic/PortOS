@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router';
-import { Link2, Link2Off, RefreshCw, Star, Trash2 } from 'lucide-react';
+import { Link2, Link2Off, RefreshCw, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
 import EmptyState from '../EmptyState';
+import ProviderRouteRow from './ProviderRouteRow';
 import * as api from '../../services/api';
 import { harnessLabel } from '../../utils/providerHarnesses';
 import {
@@ -23,15 +23,18 @@ import {
  * Claude CLI route, a Claude TUI route and an OpenCode route pointed at the
  * same Ollama daemon share ONE connection row here, so its endpoint, its key
  * and its model catalog are typed, refreshed and narrowed in one place instead
- * of three that drift.
+ * of three that drift. Each route below then carries the settings that are its
+ * own — args, timeout, effort, model pins — so the whole backend is configured
+ * here rather than on a connection plus three separate route editors.
  *
  * Three rules the UI is built around, all of them server-enforced too:
  *
  *   - **Identity is never inferred.** Two connections are the same only when
  *     the server says they share an id. Linking is an explicit, previewed act.
  *   - **Nothing here grants execution.** Narrowing a catalog, renaming a
- *     binding and editing an endpoint change no route's enabled state and no
- *     mode's consent. Those stay on the route editor, one click away.
+ *     binding, editing an endpoint and tuning one mode's overrides change no
+ *     route's enabled state and no mode's consent. Those stay on the route
+ *     editor, one click away.
  *   - **A saved value is never hidden.** A pin the catalog no longer offers is
  *     shown as stale, not dropped.
  *
@@ -268,6 +271,17 @@ export default function ProviderConnections({
     if (done) toast.success(`${providerId} is now the system default route.`);
   }, [run]);
 
+  // Route-scoped, so the reload afterwards is the same one every other write
+  // here does: this mode's siblings are untouched and no other harness moves.
+  const saveRouteSettings = useCallback(async (route, settings) => {
+    const saved = await run('Saving the overrides', () => api.updateProviderRouteSettings(
+      route.providerId,
+      { expectedRevision: route.settingsRevision, settings },
+      { silent: true },
+    ));
+    if (saved) toast.success(`${route.providerId}: ${Object.keys(settings).length} setting(s) saved for this mode only.`);
+  }, [run]);
+
   return (
     <Drawer
       open={open}
@@ -410,24 +424,17 @@ export default function ProviderConnections({
                               </Banner>
                             )}
 
-                            <ul className="mb-3 space-y-1">
+                            <ul className="mb-3 space-y-2">
                               {routes.map((route) => (
-                                <li key={route.providerId} className="flex flex-wrap items-center gap-2 text-sm">
-                                  <span className="rounded bg-port-bg px-1.5 py-0.5 text-xs uppercase">{route.mode}</span>
-                                  <Link to={`/ai/edit/${route.providerId}`} className="text-port-accent hover:underline">
-                                    {route.providerId}
-                                  </Link>
-                                  {graph?.activeProvider === route.providerId ? (
-                                    <span className="flex items-center gap-1 text-xs text-port-success">
-                                      <Star size={12} aria-hidden="true" /> system default
-                                    </span>
-                                  ) : (
-                                    <button type="button" disabled={busy} onClick={() => makeDefault(route.providerId)}
-                                      className="text-xs text-port-muted hover:underline disabled:opacity-50">
-                                      Use as system default
-                                    </button>
-                                  )}
-                                </li>
+                                <ProviderRouteRow
+                                  key={route.providerId}
+                                  route={route}
+                                  isSystemDefault={graph?.activeProvider === route.providerId}
+                                  busy={busy}
+                                  blocked={binding.blocked}
+                                  onMakeDefault={makeDefault}
+                                  onSaveSettings={saveRouteSettings}
+                                />
                               ))}
                             </ul>
 

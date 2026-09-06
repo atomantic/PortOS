@@ -157,3 +157,17 @@ export const deleteProviderConnection = (connectionId, options) => request(
   `/providers/connections/${encodeURIComponent(connectionId)}`,
   { method: 'DELETE', ...options },
 );
+
+/**
+ * Edit ONE route's mode overrides — args, timeout, effort, model pins.
+ *
+ * `expectedRevision` is the route's `settingsRevision` from the management
+ * graph, a fingerprint of the values on disk: a 409 means somebody (or the
+ * route editor in another tab) changed them and the edit must be re-made
+ * against a fresh read. Connection-owned values and the `enabled` flag are not
+ * reachable here — those stay on the connection and the route editor.
+ */
+export const updateProviderRouteSettings = (providerId, body, options) => request(
+  `/providers/routes/${encodeURIComponent(providerId)}`,
+  { method: 'PATCH', body: JSON.stringify(body), ...options },
+);

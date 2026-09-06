@@ -7,6 +7,7 @@ import {
   buildProviderGraphPreview,
 } from './providerGraphPreview.js';
 import { PROVIDER_HARNESS_IDS, ROUTE_MODES, providerRouteMode } from './providerHarnesses.js';
+import { routeSettingsRevision, routeSettingsSchema } from './providerRouteSettings.js';
 
 // `PROVIDER_GRAPH_SCHEMA_VERSION` is deliberately NOT re-exported: it is one
 // wire version shared with the preview, and two flat `export *` modules in this
@@ -83,6 +84,20 @@ const routeDtoSchema = z.object({
   modelMap: z.record(z.string(), z.string()),
   // Presence only — the snapshots themselves can carry secrets.
   projectionPending: z.boolean(),
+  // This mode's own overrides, and the fingerprint a write must send back
+  // (#6369). Route-owned by construction: nothing here is connection state, so
+  // editing it moves no other harness.
+  settings: routeSettingsSchema,
+  settingsRevision: z.string().min(1),
+  // The effort ladder this route's harness actually accepts, or `null` for one
+  // that takes no effort flag at all. Published rather than re-derived in the
+  // browser so a renamed or path-configured binary still offers the right
+  // levels — and so "no control" stays distinct from "an empty list".
+  effortLevels: z.array(z.string()).nullable(),
+  // Display half of the Shell hand-off, present only on a launchable TUI route.
+  // The launch itself re-resolves this AND the provider's secret env server-side
+  // (`shell:start { providerId }`), so the command line is never the contract.
+  tuiCommandLine: z.string().optional(),
 }).strict();
 
 /** The full `GET /api/providers/management` body. */
@@ -101,8 +116,17 @@ export const managementGraphSchema = z.object({
  * browser is told only WHETHER a connection has credentials and whether a
  * route's projection is settled. Every identity decision was already made
  * server-side on real values.
+ *
+ * `routeSettings` carries the per-route mode overrides the service resolved
+ * from the live executable records (#6369). It arrives pre-resolved rather than
+ * being read here because the TUI command line it also carries needs the host's
+ * shell resolution, and this module stays pure. A route with no entry — a graph
+ * row whose record is mid-removal — publishes an empty override set rather than
+ * an absent field, so the client never has to branch on presence.
+ *
+ * @param {{routeSettings?: Map<string, object>}} input
  */
-export function toManagementGraphDto({ connections, bindings, routes, activeProvider = null }) {
+export function toManagementGraphDto({ connections, bindings, routes, activeProvider = null, routeSettings = new Map() }) {
   const blocked = new Set(routes.filter((route) => route.pending).map((route) => route.bindingId));
   return managementGraphSchema.parse({
     schemaVersion: PROVIDER_GRAPH_SCHEMA_VERSION,
@@ -119,9 +143,22 @@ export function toManagementGraphDto({ connections, bindings, routes, activeProv
     bindings: bindings.map(({ id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels }) => ({
       id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels, blocked: blocked.has(id),
     })),
-    routes: routes.map(({ providerId, bindingId, mode, modelMap, pending }) => ({
-      providerId, bindingId, mode, modelMap, projectionPending: Boolean(pending),
-    })),
+    routes: routes.map(({ providerId, bindingId, mode, modelMap, pending }) => {
+      const { settings = {}, effortLevels = null, tuiCommandLine = null } = routeSettings.get(providerId) || {};
+      return {
+        providerId,
+        bindingId,
+        mode,
+        modelMap,
+        projectionPending: Boolean(pending),
+        settings,
+        settingsRevision: routeSettingsRevision(settings),
+        effortLevels,
+        // Omitted rather than nulled: "not a launchable TUI" is the absence of
+        // the affordance, not an empty command.
+        ...(tuiCommandLine ? { tuiCommandLine } : {}),
+      };
+    }),
   });
 }
 

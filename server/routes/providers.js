@@ -9,6 +9,7 @@ import {
   unlinkBinding,
   updateBindingSettings,
   updateConnectionSettings,
+  updateRouteSettings,
 } from '../services/providerGraph.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -28,6 +29,7 @@ import {
   providerBindingUnlinkSchema,
   providerBindingUpdateSchema,
   providerConnectionUpdateSchema,
+  providerRouteSettingsUpdateSchema,
 } from '../lib/validation.js';
 import {
   getProviderRuntimeStatus,
@@ -383,6 +385,24 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.patch('/bindings/:id', asyncHandler(async (req, res) => {
     const input = validateRequest(providerBindingUpdateSchema, req.body ?? {});
     res.json(await updateBindingSettings({ bindingId: req.params.id, ...input }));
+  }));
+
+  /**
+   * Edit ONE route's mode overrides (#6369) — args, timeout, effort, model pins.
+   *
+   * The per-mode counterpart to the shared-backend edit above, so a whole
+   * backend is configurable from one screen instead of a connection plus three
+   * route editors. Route-owned only: an endpoint, a credential and the `enabled`
+   * flag are all unreachable here by construction, and `PATCH
+   * /api/providers/:id` remains the place execution consent is granted.
+   *
+   * `expectedRevision` is the route's `settingsRevision` from
+   * `GET /api/providers/management` — a fingerprint of the values on disk, so an
+   * edit made in the route editor while this panel was open is a 409 too.
+   */
+  router.patch('/routes/:providerId', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerRouteSettingsUpdateSchema, req.body ?? {});
+    res.json(await updateRouteSettings({ providerId: req.params.providerId, ...input }));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
