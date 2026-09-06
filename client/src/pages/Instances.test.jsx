@@ -71,10 +71,10 @@ describe('AddPeerForm tailcat path', () => {
 
   it('keeps classic host/port add working', async () => {
     render(<AddPeerForm onAdd={() => {}} />);
-    fireEvent.change(screen.getByLabelText('Peer address'), { target: { value: '100.64.1.2' } });
+    fireEvent.change(screen.getByLabelText('Peer address'), { target: { value: '192.0.2.10' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(addPeer).toHaveBeenCalledWith({
-      address: '100.64.1.2',
+      address: '192.0.2.10',
       port: DEFAULT_PEER_PORT,
     }));
     expect(addTailcatPeer).not.toHaveBeenCalled();
