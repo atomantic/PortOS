@@ -14,16 +14,25 @@ import PrivacyBrokersTab from '../components/privacy/PrivacyBrokersTab';
 import SubjectSwitcher from '../components/privacy/SubjectSwitcher';
 import SubjectsDrawer from '../components/privacy/SubjectsDrawer';
 import { SELF_SUBJECT_ID, privacyTabPath } from '../components/privacy/constants';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 
-// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
-// Each id maps to `/privacy/<id>` and needs a NAV_COMMANDS entry.
-export const TABS = [
-  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'vault', label: 'Vault', icon: KeyRound },
-  { id: 'organizations', label: 'Organizations', icon: Building2 },
-  { id: 'changes', label: 'Changes', icon: Repeat },
-  { id: 'brokers', label: 'Brokers', icon: ShieldOff },
-];
+// Icon per tab id. The manifest (`tabGroup: 'privacy'`) owns id/label/order —
+// this page owns only how each tab looks; the page-local "Overview" label
+// (vs. the manifest's "Privacy") comes from the manifest's `tabLabel`. Throws
+// at import time on drift.
+const TAB_PRESENTATION = {
+  overview: { icon: LayoutDashboard },
+  vault: { icon: KeyRound },
+  organizations: { icon: Building2 },
+  changes: { icon: Repeat },
+  brokers: { icon: ShieldOff },
+};
+
+export const TABS = getPageNavTabs('privacy').map((tab) => {
+  const presentation = TAB_PRESENTATION[tab.id];
+  if (!presentation) throw new Error(`Privacy: no tab presentation for manifest tab "${tab.id}"`);
+  return { ...tab, ...presentation };
+});
 
 export default function Privacy() {
   const navigate = useNavigate();

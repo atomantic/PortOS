@@ -19,15 +19,23 @@ import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { timeAgo } from '../utils/formatters';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 
-// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
-export const TABS = [
-  { id: 'overview', label: 'Overview', icon: Lightbulb },
-  { id: 'genome-health', label: 'Genome-Health', icon: Dna },
-  { id: 'taste-identity', label: 'Taste & Identity', icon: Palette },
-  { id: 'cross-domain', label: 'Cross-Domain Patterns', icon: Link2 },
-  { id: 'goal-scorecard', label: 'Goal Scorecard', icon: Target }
-];
+// Icon per tab id. The manifest (`tabGroup: 'insights'`) owns id/label/order —
+// this page owns only how each tab looks. Throws at import time on drift.
+const TAB_PRESENTATION = {
+  overview: { icon: Lightbulb },
+  'genome-health': { icon: Dna },
+  'taste-identity': { icon: Palette },
+  'cross-domain': { icon: Link2 },
+  'goal-scorecard': { icon: Target },
+};
+
+export const TABS = getPageNavTabs('insights').map((tab) => {
+  const presentation = TAB_PRESENTATION[tab.id];
+  if (!presentation) throw new Error(`Insights: no tab presentation for manifest tab "${tab.id}"`);
+  return { ...tab, ...presentation };
+});
 
 export function OverviewTab() {
   const navigate = useNavigate();

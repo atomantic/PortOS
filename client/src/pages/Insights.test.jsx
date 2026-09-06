@@ -27,7 +27,17 @@ import {
   refreshInsightThemes,
   refreshInsightNarrative,
 } from '../services/api';
-import { OverviewTab } from './Insights';
+import { OverviewTab, TABS } from './Insights';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+
+describe('Insights TABS ↔ nav manifest', () => {
+  it('derives every tab, in order, from the "insights" tabGroup with a presentation entry', () => {
+    const manifestTabs = getPageNavTabs('insights');
+    expect(TABS.map((t) => t.id)).toEqual(manifestTabs.map((t) => t.id));
+    expect(TABS.map((t) => t.label)).toEqual(manifestTabs.map((t) => t.label));
+    expect(TABS.every((t) => typeof t.icon === 'function' || typeof t.icon === 'object')).toBe(true);
+  });
+});
 
 const renderOverview = () => render(
   <MemoryRouter>

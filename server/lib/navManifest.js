@@ -1,6 +1,6 @@
 // Single source of truth for PortOS navigation. Consumed by the sidebar,
 // server/services/voice/tools.js#ui_navigate, and the Cmd+K palette.
-// Entry: { id, path, label, section, tabId?, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
+// Entry: { id, path, label, section, tabId?, tabGroup?, tabLabel?, aliases?, keywords?, previousPaths?, preservePreviousPathSuffix? }.
 // See AGENTS.md "Command Palette & Voice Nav" for the contract.
 //
 // `previousPaths` lists every path this page has ANSWERED TO BEFORE — including
@@ -106,14 +106,14 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.brain.songbook', path: '/songbook', label: 'SongBook', section: 'Brain', aliases: ['songbook', 'song-book', 'tabs', 'chords', 'guitar-tabs'], keywords: ['guitar', 'tab', 'tablature', 'chord chart', 'lyrics', 'sheet music', 'repertoire', 'autoscroll'] },
   { id: 'nav.brain.trust', path: '/brain/trust', label: 'Trust', section: 'Brain', aliases: ['brain-trust'] },
 
-  { id: 'nav.calendar.agenda', path: '/calendar/agenda', label: 'Agenda', section: 'Calendar', aliases: ['calendar', 'agenda'] },
-  { id: 'nav.calendar.config', path: '/calendar/config', label: 'Config', section: 'Calendar', aliases: ['calendar-config'] },
-  { id: 'nav.calendar.day', path: '/calendar/day', label: 'Day', section: 'Calendar', aliases: ['calendar-day'] },
-  { id: 'nav.calendar.week', path: '/calendar/week', label: 'Week', section: 'Calendar', aliases: ['calendar-week'] },
-  { id: 'nav.calendar.month', path: '/calendar/month', label: 'Month', section: 'Calendar', aliases: ['calendar-month'] },
-  { id: 'nav.calendar.lifetime', path: '/calendar/lifetime', label: 'Lifetime', section: 'Calendar', aliases: ['calendar-lifetime'] },
-  { id: 'nav.calendar.review', path: '/calendar/review', label: 'Review', section: 'Calendar', aliases: ['calendar-review'] },
-  { id: 'nav.calendar.sync', path: '/calendar/sync', label: 'Sync', section: 'Calendar', aliases: ['calendar-sync'] },
+  { id: 'nav.calendar.agenda', path: '/calendar/agenda', label: 'Agenda', section: 'Calendar', tabGroup: 'calendar', tabId: 'agenda', aliases: ['calendar', 'agenda'] },
+  { id: 'nav.calendar.day', path: '/calendar/day', label: 'Day', section: 'Calendar', tabGroup: 'calendar', tabId: 'day', aliases: ['calendar-day'] },
+  { id: 'nav.calendar.week', path: '/calendar/week', label: 'Week', section: 'Calendar', tabGroup: 'calendar', tabId: 'week', aliases: ['calendar-week'] },
+  { id: 'nav.calendar.month', path: '/calendar/month', label: 'Month', section: 'Calendar', tabGroup: 'calendar', tabId: 'month', aliases: ['calendar-month'] },
+  { id: 'nav.calendar.lifetime', path: '/calendar/lifetime', label: 'Lifetime', section: 'Calendar', tabGroup: 'calendar', tabId: 'lifetime', aliases: ['calendar-lifetime'] },
+  { id: 'nav.calendar.review', path: '/calendar/review', label: 'Review', section: 'Calendar', tabGroup: 'calendar', tabId: 'review', aliases: ['calendar-review'] },
+  { id: 'nav.calendar.sync', path: '/calendar/sync', label: 'Sync', section: 'Calendar', tabGroup: 'calendar', tabId: 'sync', aliases: ['calendar-sync'] },
+  { id: 'nav.calendar.config', path: '/calendar/config', label: 'Config', section: 'Calendar', tabGroup: 'calendar', tabId: 'config', aliases: ['calendar-config'] },
 
   { id: 'nav.cos.tasks', path: '/cos/tasks', label: 'Tasks', section: 'Chief of Staff', aliases: ['tasks', 'cos', 'cos-tasks', 'chief-of-staff'] },
   { id: 'nav.cos.agents', path: '/cos/agents', label: 'Agents', section: 'Chief of Staff', aliases: ['agents', 'cos-agents'] },
@@ -137,16 +137,16 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.cos.workflow', path: '/cos/workflow', label: 'Timeline', section: 'Chief of Staff', aliases: ['workflow', 'cos-workflow', 'cos-timeline', 'schedule-timeline'], keywords: ['timeline', 'schedule', 'launch order', 'run order', 'gantt', 'upcoming runs', 'overlap', 'dependencies'] },
   { id: 'nav.cos.productivity', path: '/cos/productivity', label: 'Productivity', section: 'Chief of Staff', aliases: ['cos-productivity', 'work-patterns', 'streaks'] },
 
-  { id: 'nav.messages.inbox', path: '/messages/inbox', label: 'Inbox', section: 'Comms', aliases: ['messages', 'comms', 'comms-inbox'], keywords: ['comms', 'email', 'inbox'] },
-  { id: 'nav.messages.drafts', path: '/messages/drafts', label: 'Drafts', section: 'Comms', aliases: ['drafts', 'comms-drafts'], keywords: ['comms'] },
-  { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', previousPaths: ['/imessage'], aliases: ['imessage', 'i-message', 'apple-messages', 'comms-imessage'], keywords: ['comms', 'imessage', 'sms', 'text messages', 'chat.db', 'blocklist', 'spam'] },
-  { id: 'nav.messages.signal', path: '/messages/signal', label: 'Signal', section: 'Comms', previousPaths: ['/settings/signal'], aliases: ['signal', 'signal-desktop', 'comms-signal', 'signal-settings'], keywords: ['comms', 'signal', 'signal desktop', 'messages', 'sqlcipher', 'chat', 'tribe', 'timeline', 'encrypted', 'keychain'] },
-  { id: 'nav.messages.contacts', path: '/messages/contacts', label: 'Contacts', section: 'Comms', previousPaths: ['/settings/contacts'], aliases: ['contacts', 'address-book', 'comms-contacts', 'settings-contacts'], keywords: ['comms', 'contacts', 'address book', 'phone', 'email', 'tribe', 'imessage', 'names', 'resolve'] },
+  { id: 'nav.messages.inbox', path: '/messages/inbox', label: 'Inbox', section: 'Comms', tabGroup: 'messages', tabId: 'inbox', aliases: ['messages', 'comms', 'comms-inbox'], keywords: ['comms', 'email', 'inbox'] },
+  { id: 'nav.messages.drafts', path: '/messages/drafts', label: 'Drafts', section: 'Comms', tabGroup: 'messages', tabId: 'drafts', aliases: ['drafts', 'comms-drafts'], keywords: ['comms'] },
+  { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', tabGroup: 'messages', tabId: 'imessage', previousPaths: ['/imessage'], aliases: ['imessage', 'i-message', 'apple-messages', 'comms-imessage'], keywords: ['comms', 'imessage', 'sms', 'text messages', 'chat.db', 'blocklist', 'spam'] },
+  { id: 'nav.messages.signal', path: '/messages/signal', label: 'Signal', section: 'Comms', tabGroup: 'messages', tabId: 'signal', previousPaths: ['/settings/signal'], aliases: ['signal', 'signal-desktop', 'comms-signal', 'signal-settings'], keywords: ['comms', 'signal', 'signal desktop', 'messages', 'sqlcipher', 'chat', 'tribe', 'timeline', 'encrypted', 'keychain'] },
+  { id: 'nav.messages.contacts', path: '/messages/contacts', label: 'Contacts', section: 'Comms', tabGroup: 'messages', tabId: 'contacts', previousPaths: ['/settings/contacts'], aliases: ['contacts', 'address-book', 'comms-contacts', 'settings-contacts'], keywords: ['comms', 'contacts', 'address book', 'phone', 'email', 'tribe', 'imessage', 'names', 'resolve'] },
   // Ingestion config is a drawer over the iMessage manager (?settings=1), not a
   // Settings page — the settings-* aliases stay so "open iMessage settings" still lands.
   { id: 'nav.messages.imessage-settings', path: '/messages/imessage?settings=1', label: 'iMessage Settings', section: 'Comms', aliases: ['settings-imessage', 'imessage-settings', 'imessage-sync'], keywords: ['imessage', 'sync', 'chat.db', 'sms', 'texts', 'tribe', 'timeline', 'full disk access'] },
-  { id: 'nav.messages.config', path: '/messages/config', label: 'Config', section: 'Comms', aliases: ['messages-config', 'comms-config'], keywords: ['comms'] },
-  { id: 'nav.messages.sync', path: '/messages/sync', label: 'Sync', section: 'Comms', aliases: ['messages-sync', 'comms-sync'], keywords: ['comms'] },
+  { id: 'nav.messages.sync', path: '/messages/sync', label: 'Sync', section: 'Comms', tabGroup: 'messages', tabId: 'sync', aliases: ['messages-sync', 'comms-sync'], keywords: ['comms'] },
+  { id: 'nav.messages.config', path: '/messages/config', label: 'Config', section: 'Comms', tabGroup: 'messages', tabId: 'config', aliases: ['messages-config', 'comms-config'], keywords: ['comms'] },
   { id: 'nav.stacker-news', path: '/stacker-news', label: 'Stacker News', section: 'Comms', aliases: ['stacker-news', 'stacker', 'sn'], keywords: ['comms', 'community', 'territory', 'moderation', 'stewardship'] },
   { id: 'nav.x', path: '/x', label: 'X', section: 'Comms', aliases: ['x', 'x-com', 'twitter', 'comms-x'], keywords: ['comms', 'social', 'reach', 'engagement', 'shadowban', 'diagnostics'] },
   { id: 'nav.timeline', path: '/timeline', label: 'Timeline', section: 'Brain', aliases: ['activity-timeline', 'activity', 'my-day', 'life-log', 'life-timeline'], keywords: ['human activity', 'life log', 'timeline', 'messages', 'calendar', 'history', 'what did i do', 'daily', 'import', 'backfill', 'whatsapp', 'spotify', 'discord', 'youtube'] },
@@ -191,16 +191,16 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.twin.enrich', path: '/digital-twin/enrich', label: 'Enrich', section: 'Identity', aliases: ['twin-enrich'], keywords: ['sources'] },
   { id: 'nav.twin.export', path: '/digital-twin/export', label: 'Export', section: 'Identity', aliases: ['twin-export'], keywords: ['legacy'] },
   { id: 'nav.twin.legacy', path: '/digital-twin/legacy', label: 'Legacy Bundle', section: 'Identity', aliases: ['twin-legacy', 'legacy-export', 'legacy-bundle', 'legacy'], keywords: ['legacy', 'bundle', 'backup', 'portable', 'pdf', 'archive', 'time capsule', 'export'] },
-  { id: 'nav.goals', path: '/goals/list', label: 'Goals', section: 'Goals', aliases: ['goals'] },
-  { id: 'nav.goals.tree', path: '/goals/tree', label: 'Goals Tree', section: 'Goals', aliases: ['goals-tree', 'goal-tree'], keywords: ['hierarchy', 'decomposition', 'subgoals', 'breakdown'] },
+  { id: 'nav.goals', path: '/goals/list', label: 'Goals', section: 'Goals', tabGroup: 'goals', tabId: 'list', tabLabel: 'List', aliases: ['goals'] },
+  { id: 'nav.goals.tree', path: '/goals/tree', label: 'Goals Tree', section: 'Goals', tabGroup: 'goals', tabId: 'tree', tabLabel: 'Tree', aliases: ['goals-tree', 'goal-tree'], keywords: ['hierarchy', 'decomposition', 'subgoals', 'breakdown'] },
   { id: 'nav.twin.goals', path: '/digital-twin/goals', label: 'Twin Goals', section: 'Identity', aliases: ['twin-goals'], keywords: ['profile'] },
   { id: 'nav.twin.identity', path: '/digital-twin/identity', label: 'Identity', section: 'Identity', aliases: ['twin-identity', 'identity'], keywords: ['profile'] },
   { id: 'nav.twin.import', path: '/digital-twin/import', label: 'Import', section: 'Identity', aliases: ['twin-import'], keywords: ['sources'] },
-  { id: 'nav.insights', path: '/insights/overview', label: 'Insights', section: 'Identity', aliases: ['insights'] },
-  { id: 'nav.insights.genome-health', path: '/insights/genome-health', label: 'Genome-Health', section: 'Identity', aliases: ['genome-health', 'insights-genome-health'], keywords: ['genome', 'dna', 'health', 'longevity', 'genetic'] },
-  { id: 'nav.insights.taste-identity', path: '/insights/taste-identity', label: 'Taste & Identity', section: 'Identity', aliases: ['taste-identity', 'insights-taste-identity'], keywords: ['taste', 'identity', 'preferences', 'aesthetic'] },
-  { id: 'nav.insights.cross-domain', path: '/insights/cross-domain', label: 'Cross-Domain Patterns', section: 'Identity', aliases: ['cross-domain', 'insights-cross-domain', 'cross-domain-patterns'], keywords: ['cross domain', 'patterns', 'correlations', 'connections'] },
-  { id: 'nav.insights.goal-scorecard', path: '/insights/goal-scorecard', label: 'Goal Scorecard', section: 'Identity', aliases: ['goal-scorecard', 'insights-goal-scorecard', 'scorecard'], keywords: ['goal', 'scorecard', 'time allocation', 'effectiveness', 'goal alignment', 'time vs goals'] },
+  { id: 'nav.insights', path: '/insights/overview', label: 'Insights', section: 'Identity', tabGroup: 'insights', tabId: 'overview', tabLabel: 'Overview', aliases: ['insights'] },
+  { id: 'nav.insights.genome-health', path: '/insights/genome-health', label: 'Genome-Health', section: 'Identity', tabGroup: 'insights', tabId: 'genome-health', aliases: ['genome-health', 'insights-genome-health'], keywords: ['genome', 'dna', 'health', 'longevity', 'genetic'] },
+  { id: 'nav.insights.taste-identity', path: '/insights/taste-identity', label: 'Taste & Identity', section: 'Identity', tabGroup: 'insights', tabId: 'taste-identity', aliases: ['taste-identity', 'insights-taste-identity'], keywords: ['taste', 'identity', 'preferences', 'aesthetic'] },
+  { id: 'nav.insights.cross-domain', path: '/insights/cross-domain', label: 'Cross-Domain Patterns', section: 'Identity', tabGroup: 'insights', tabId: 'cross-domain', aliases: ['cross-domain', 'insights-cross-domain', 'cross-domain-patterns'], keywords: ['cross domain', 'patterns', 'correlations', 'connections'] },
+  { id: 'nav.insights.goal-scorecard', path: '/insights/goal-scorecard', label: 'Goal Scorecard', section: 'Identity', tabGroup: 'insights', tabId: 'goal-scorecard', aliases: ['goal-scorecard', 'insights-goal-scorecard', 'scorecard'], keywords: ['goal', 'scorecard', 'time allocation', 'effectiveness', 'goal alignment', 'time vs goals'] },
   { id: 'nav.twin.interview', path: '/digital-twin/interview', label: 'Interview', section: 'Identity', aliases: ['twin-interview'], keywords: ['sources'] },
   { id: 'nav.twin.personality', path: '/digital-twin/personality', label: 'Personality', section: 'Identity', aliases: ['twin-personality', 'personality', 'model-personality'], keywords: ['assessment', 'llm', 'model', 'traits', 'radar', 'alignment', 'self-profile', 'compare', 'sycophancy'] },
   { id: 'nav.twin.personas', path: '/digital-twin/personas', label: 'Personas', section: 'Identity', aliases: ['twin-personas', 'personas', 'persona'], keywords: ['profile', 'context', 'professional', 'casual', 'voice', 'mode'] },
@@ -208,11 +208,11 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.twin.test', path: '/digital-twin/test', label: 'Test', section: 'Identity', aliases: ['twin-assessment', 'twin-test'], keywords: ['assessment'] },
   { id: 'nav.twin.time-capsule', path: '/digital-twin/time-capsule', label: 'Time Capsule', section: 'Identity', aliases: ['time-capsule', 'twin-time-capsule', 'capsule'], keywords: ['legacy', 'archive', 'snapshot'] },
   { id: 'nav.twin.voice', path: '/digital-twin/voice', label: 'Voice', section: 'Identity', aliases: ['twin-presence', 'twin-voice', 'voice-style', 'spoken-written'], keywords: ['presence', 'speech', 'spoken', 'written', 'transcript', 'style', 'comparison', 'communication'] },
-  { id: 'nav.identity.privacy-overview', path: '/privacy/overview', label: 'Privacy', section: 'Identity', aliases: ['privacy', 'privacy-center', 'my-data'], keywords: ['pii', 'privacy', 'personal data', 'identity facts', 'who has my data'] },
-  { id: 'nav.identity.privacy-vault', path: '/privacy/vault', label: 'Vault', section: 'Identity', aliases: ['vault', 'pii-vault', 'privacy-vault'], keywords: ['pii', 'vault', 'encrypted', 'ssn', 'address', 'passport', 'identity'] },
-  { id: 'nav.identity.privacy-organizations', path: '/privacy/organizations', label: 'Organizations', section: 'Identity', aliases: ['organizations', 'orgs', 'trusted-orgs'], keywords: ['organizations', 'banks', 'utilities', 'who holds my data', 'registry', 'holdings'] },
-  { id: 'nav.identity.privacy-changes', path: '/privacy/changes', label: 'Changes', section: 'Identity', aliases: ['changes', 'change-of-address', 'address-change', 'privacy-changes'], keywords: ['change of address', 'moved', 'update address', 'inventory', 'who needs updating', 'new phone', 'new email'] },
-  { id: 'nav.identity.privacy-brokers', path: '/privacy/brokers', label: 'Brokers', section: 'Identity', aliases: ['brokers', 'data brokers', 'opt out', 'remove my data', 'privacy-brokers'], keywords: ['data brokers', 'opt out', 'remove my data', 'people search', 'exposure', 'spokeo', 'whitepages', 'ccpa', 'delete my data'] },
+  { id: 'nav.identity.privacy-overview', path: '/privacy/overview', label: 'Privacy', section: 'Identity', tabGroup: 'privacy', tabId: 'overview', tabLabel: 'Overview', aliases: ['privacy', 'privacy-center', 'my-data'], keywords: ['pii', 'privacy', 'personal data', 'identity facts', 'who has my data'] },
+  { id: 'nav.identity.privacy-vault', path: '/privacy/vault', label: 'Vault', section: 'Identity', tabGroup: 'privacy', tabId: 'vault', aliases: ['vault', 'pii-vault', 'privacy-vault'], keywords: ['pii', 'vault', 'encrypted', 'ssn', 'address', 'passport', 'identity'] },
+  { id: 'nav.identity.privacy-organizations', path: '/privacy/organizations', label: 'Organizations', section: 'Identity', tabGroup: 'privacy', tabId: 'organizations', aliases: ['organizations', 'orgs', 'trusted-orgs'], keywords: ['organizations', 'banks', 'utilities', 'who holds my data', 'registry', 'holdings'] },
+  { id: 'nav.identity.privacy-changes', path: '/privacy/changes', label: 'Changes', section: 'Identity', tabGroup: 'privacy', tabId: 'changes', aliases: ['changes', 'change-of-address', 'address-change', 'privacy-changes'], keywords: ['change of address', 'moved', 'update address', 'inventory', 'who needs updating', 'new phone', 'new email'] },
+  { id: 'nav.identity.privacy-brokers', path: '/privacy/brokers', label: 'Brokers', section: 'Identity', tabGroup: 'privacy', tabId: 'brokers', aliases: ['brokers', 'data brokers', 'opt out', 'remove my data', 'privacy-brokers'], keywords: ['data brokers', 'opt out', 'remove my data', 'people search', 'exposure', 'spokeo', 'whitepages', 'ccpa', 'delete my data'] },
 
   { id: 'nav.meatspace.overview', path: '/meatspace/overview', label: 'Overview', section: 'Health', aliases: ['meatspace'] },
   { id: 'nav.meatspace.health', path: '/meatspace/health', label: 'Body Health', section: 'Health', aliases: ['meatspace-health', 'body-health'], keywords: ['health', 'vitals', 'wellbeing', 'biometrics'] },
@@ -317,11 +317,11 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.cos.jobs', path: '/cos/jobs', label: 'System Tasks', section: 'Chief of Staff', aliases: ['cos-jobs', 'system-tasks'] },
   { id: 'nav.uploads', path: '/uploads', label: 'Uploads', section: 'Dev Tools', aliases: ['uploads'] },
 
-  { id: 'nav.wiki.overview', path: '/wiki/overview', label: 'Wiki', section: 'Brain', aliases: ['wiki'] },
-  { id: 'nav.wiki.browse', path: '/wiki/browse', label: 'Browse', section: 'Brain', aliases: ['wiki-browse'] },
-  { id: 'nav.wiki.graph', path: '/wiki/graph', label: 'Graph', section: 'Brain', aliases: ['wiki-graph'] },
-  { id: 'nav.wiki.log', path: '/wiki/log', label: 'Log', section: 'Brain', aliases: ['wiki-log'] },
-  { id: 'nav.wiki.search', path: '/wiki/search', label: 'Search', section: 'Brain', aliases: ['wiki-search'] },
+  { id: 'nav.wiki.overview', path: '/wiki/overview', label: 'Wiki', section: 'Brain', tabGroup: 'wiki', tabId: 'overview', tabLabel: 'Overview', aliases: ['wiki'] },
+  { id: 'nav.wiki.browse', path: '/wiki/browse', label: 'Browse', section: 'Brain', tabGroup: 'wiki', tabId: 'browse', aliases: ['wiki-browse'] },
+  { id: 'nav.wiki.search', path: '/wiki/search', label: 'Search', section: 'Brain', tabGroup: 'wiki', tabId: 'search', aliases: ['wiki-search'] },
+  { id: 'nav.wiki.graph', path: '/wiki/graph', label: 'Graph', section: 'Brain', tabGroup: 'wiki', tabId: 'graph', aliases: ['wiki-graph'] },
+  { id: 'nav.wiki.log', path: '/wiki/log', label: 'Log', section: 'Brain', tabGroup: 'wiki', tabId: 'log', aliases: ['wiki-log'] },
 ];
 
 // A gated entry carries `feature`: the id of the optional instance feature it
@@ -348,11 +348,31 @@ export const NAV_COMMANDS = RAW_NAV_COMMANDS.map((cmd) => {
 // `tabId` are still valid navigation destinations, but are nested drill-downs
 // or workflow overlays rather than section-level tabs.
 export const getSectionNavTabs = (section) => NAV_COMMANDS
-  .filter((command) => command.section === section && command.tabId)
+  .filter((command) => command.section === section && command.tabId && !command.tabGroup)
   .sort((a, b) => a.label.localeCompare(b.label) || a.path.localeCompare(b.path))
   .map(({ tabId, label, path, feature }) => ({
     id: tabId,
     label,
+    to: path,
+    ...(feature ? { feature } : {}),
+  }));
+
+// `tabGroup` marks the destinations that make up ONE page's own local tab bar
+// (Calendar, Goals, Insights, Privacy, Messages, Wiki, …) — a different axis
+// from `tabId`'s section-level child nav above. A page can sit in any sidebar
+// section (Insights and Privacy both live under "Identity") without its tab
+// ids colliding with a sibling page's, because uniqueness below is scoped to
+// the group, not the section. Order is DECLARATION order, not alphabetical —
+// pages order their own tabs deliberately (e.g. Overview first, Settings
+// last), unlike the alphabetical section headers `getSectionNavTabs` builds.
+// The page pairs this with a local presentation map (icon, component, …)
+// keyed by `id`, and should throw at module load if a returned tab has no
+// matching presentation entry — see client/src/pages/Wiki.jsx for the pattern.
+export const getPageNavTabs = (group) => NAV_COMMANDS
+  .filter((command) => command.tabGroup === group)
+  .map(({ tabId, label, tabLabel, path, feature }) => ({
+    id: tabId,
+    label: tabLabel || label,
     to: path,
     ...(feature ? { feature } : {}),
   }));
@@ -373,7 +393,7 @@ const pathContainsNavRoute = (pathname, routePath) => (
 export const getNavSectionForPath = (pathname) => {
   const normalizedPath = normalizedNavPath(pathname);
   return NAV_COMMANDS
-    .filter((command) => command.tabId && pathContainsNavRoute(
+    .filter((command) => command.tabId && !command.tabGroup && pathContainsNavRoute(
       normalizedPath,
       normalizedNavPath(command.path),
     ))
@@ -394,19 +414,34 @@ for (const cmd of NAV_COMMANDS) {
   if (cmd.tabId !== undefined && (typeof cmd.tabId !== 'string' || !cmd.tabId.trim())) {
     throw new Error(`navManifest: tabId must be a non-empty string — got "${cmd.tabId}" for ${cmd.id}`);
   }
+  if (cmd.tabGroup !== undefined && (typeof cmd.tabGroup !== 'string' || !cmd.tabGroup.trim())) {
+    throw new Error(`navManifest: tabGroup must be a non-empty string — got "${cmd.tabGroup}" for ${cmd.id}`);
+  }
+  if (cmd.tabGroup !== undefined && !cmd.tabId) {
+    throw new Error(`navManifest: tabGroup requires tabId — ${cmd.id} declares tabGroup "${cmd.tabGroup}" with no tabId`);
+  }
+  if (cmd.tabLabel !== undefined && (typeof cmd.tabLabel !== 'string' || !cmd.tabLabel.trim())) {
+    throw new Error(`navManifest: tabLabel must be a non-empty string — got "${cmd.tabLabel}" for ${cmd.id}`);
+  }
   if (seenIds.has(cmd.id)) throw new Error(`navManifest: duplicate id ${cmd.id}`);
   seenIds.add(cmd.id);
 }
 
-const tabIdsBySection = new Map();
+// `tabId` uniqueness is scoped to whichever axis owns it: a page's `tabGroup`
+// when it has one (Insights and Privacy can both use id "overview" — they're
+// different groups sharing the "Identity" section), otherwise the legacy
+// per-section scope `getSectionNavTabs` relies on (Settings/Models).
+const tabIdScopes = new Map();
 for (const command of NAV_COMMANDS) {
   if (!command.tabId) continue;
-  const sectionIds = tabIdsBySection.get(command.section) || new Set();
-  if (sectionIds.has(command.tabId)) {
-    throw new Error(`navManifest: duplicate tabId "${command.tabId}" in section ${command.section}`);
+  const scopeKey = command.tabGroup ? `group:${command.tabGroup}` : `section:${command.section}`;
+  const scopedIds = tabIdScopes.get(scopeKey) || new Set();
+  if (scopedIds.has(command.tabId)) {
+    const scopeDesc = command.tabGroup ? `tabGroup "${command.tabGroup}"` : `section ${command.section}`;
+    throw new Error(`navManifest: duplicate tabId "${command.tabId}" in ${scopeDesc}`);
   }
-  sectionIds.add(command.tabId);
-  tabIdsBySection.set(command.section, sectionIds);
+  scopedIds.add(command.tabId);
+  tabIdScopes.set(scopeKey, scopedIds);
 }
 
 // Alias collisions resolve to the first-declared entry; ordering is load-bearing.
