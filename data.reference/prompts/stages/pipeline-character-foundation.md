@@ -40,6 +40,8 @@ You are the senior character architect for a long-form series. Build the human e
 
 - Preserve the `id`, name, physical identity, and established history of every supplied character. Existing canon is a constraint, not raw material to replace.
 - Make Ghost → Wound → Lie → Want → Need causal and specific. The Want must create external action; the Need must demand a costly contradiction of the Lie.
+- Optional structured psychology (`psychology`) layers on top of that chain — never replaces it. Author it only where the supplied data supports it. `theoryOfControl` is the character's operating rule in ONE sentence, stated as they hold it and never as a restatement of the `lie` (a `lie` judges a belief; the theory states the belief as the rule they run on). `strategy` is the behavior it motivates, `protectiveBenefit` what that genuinely protects, and `presentCost` what it charges now. `drives` carries `survival`, `connection`, and `status`, each with a `desire` and a `fear`; **`status` is perceived value to a GROUP** — respect, standing, being counted — not wealth or dominance, and a non-human character gets the three axes read in terms of its own form rather than a borrowed human interior. `testingPressure` and `candidateChange` are ANTICIPATED only: what would load the theory and how it might revise. The realized, story-specific progression belongs to `characterArcs`, so never put events, issue numbers, or a sequence in the psychology profile. When the data does not support a theory of control, set `assessment` to `"unknown"` — or to `"not-applicable"` for a character with no legible interior — give the one-sentence reason in `assessmentNote`, and omit the rest of the object. An honest ruling beats an invented interior.
+- The `need` is the internal alternative the Lie holds shut. It is often the Lie's direct opposite, but it may instead QUALIFY the belief; write whichever is true rather than forcing a mirror image.
 - Give each target character distinct values, contradictions, motivation, speech rhythm, secrets, and relationships that exert pressure in both directions. Fully author the bible profile: explicit pronouns; apparent age or age-status; speech accent or vocal quality; personality; relevant background; likes; dislikes; mannerisms; reciprocal relationships; and practical skills. "Unknown" may be a deliberate in-world age-status, but a blank is not a design choice.
 - Treat visual identity as canon, not decoration. `physicalDescription` must be 50–100 words of concrete, image-generation-ready detail; never use the character's name inside it. Specify apparent age range, scale/build or non-human form, surface/skin, hair and eyes when applicable, distinguishing marks, and signature attire/materials. Make `visualNotes`, `silhouetteNotes`, `postureNotes`, `visualIdentity`, and `colorPalette` mutually reinforcing and visibly distinct from every peer.
 - For the core cast, provide practical recurring `props`; provide `expressions`, `handGestures`, and `wardrobes` when the character's form supports them. Do not force human anatomy or clothing onto a non-human entity—use form-appropriate stats, poses, signal states, surface changes, or carried interfaces instead.
@@ -89,6 +91,21 @@ Return ONLY one valid JSON object. Omit `newCharacters` when no new role is nece
     "expressions": [{"name": "determined", "description": "visible expression cue"}],
     "handGestures": [{"name": "shared stop", "description": "visible gesture cue"}],
     "wardrobes": [{"name": "default fieldwear", "description": "image-generation-ready outfit", "purpose": "default"}],
+    "psychology": {
+      "theoryOfControl": "the operating rule in one sentence, held as true by the character",
+      "strategy": "the behavior the rule motivates",
+      "protectiveBenefit": "what that behavior genuinely protects",
+      "presentCost": "what it charges in the present",
+      "testingPressure": "anticipated load on the theory; never a scene or an issue number",
+      "candidateChange": "the revision the theory might undergo",
+      "assessment": "omit when authored; otherwise unknown | not-applicable",
+      "assessmentNote": "one-sentence reason, required when assessment is set",
+      "drives": {
+        "survival": {"desire": "string", "fear": "string"},
+        "connection": {"desire": "string", "fear": "string"},
+        "status": {"desire": "perceived value to a group", "fear": "string"}
+      }
+    },
     "arcType": "positive",
     "secrets": ["story-active secret"]
   }],
@@ -125,6 +142,21 @@ Return ONLY one valid JSON object. Omit `newCharacters` when no new role is nece
     "expressions": [{"name": "neutral", "description": "visible expression cue"}],
     "handGestures": [{"name": "resting pose", "description": "visible gesture cue"}],
     "wardrobes": [{"name": "default look", "description": "image-generation-ready outfit", "purpose": "default"}],
+    "psychology": {
+      "theoryOfControl": "the operating rule in one sentence, held as true by the character",
+      "strategy": "the behavior the rule motivates",
+      "protectiveBenefit": "what that behavior genuinely protects",
+      "presentCost": "what it charges in the present",
+      "testingPressure": "anticipated load on the theory; never a scene or an issue number",
+      "candidateChange": "the revision the theory might undergo",
+      "assessment": "omit when authored; otherwise unknown | not-applicable",
+      "assessmentNote": "one-sentence reason, required when assessment is set",
+      "drives": {
+        "survival": {"desire": "string", "fear": "string"},
+        "connection": {"desire": "string", "fear": "string"},
+        "status": {"desire": "perceived value to a group", "fear": "string"}
+      }
+    },
     "arcType": "positive",
     "secrets": ["story-active secret"]
   }],

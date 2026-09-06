@@ -73,7 +73,7 @@ export const NEW_SHIPPED_MD5 = {
   'pipeline-prose.md':            '4cb3ef48309f3673570cf80e4d544b54', // post-169 (cross-issue continuity)
   'pipeline-teleplay.md':         '2ea9974ac3803658b2314db1f5818b77', // post-128 (canonical scene list)
   'pipeline-comic-script.md':     '49af30c05f008b20f6998a0f113f7d87', // post-127 (scene markers)
-  'universe-character-expand.md': '924fe8836f3014873d1789e98e997db2', // post-257 (complete expand fields)
+  'universe-character-expand.md': '961b73ba6e50df5d49f0cc76505e50bd', // post-257 (complete expand fields)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

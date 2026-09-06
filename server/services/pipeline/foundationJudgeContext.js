@@ -10,6 +10,7 @@ import { composeStyleNotes } from '../../lib/styleGuide.js';
 import { renderCharacterArcsForPrompt } from '../../lib/seriesCharacterArc.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { isBlankString, isBlankArray } from '../universeCharacterExpand.js';
+import { PSYCHOLOGY_DRIVE_AXES } from '../../lib/storyBible.js';
 
 // The character-framework subset the character dimension scores (Ghost → Wound →
 // Lie → Want → Need chain + secrets + arc fields). Shared by the hash projection
@@ -30,11 +31,36 @@ export const VISUAL_FOUNDATION_STRING_FIELDS = Object.freeze([
 ]);
 export const VISUAL_FOUNDATION_LIST_FIELDS = Object.freeze(['colorPalette']);
 
+// The optional psychology profile (#6414). Projected ONLY when the character
+// actually carries one: including an empty husk would change the foundation
+// hash of every pre-#6414 character on this install and invalidate their
+// scores for a field nobody has authored yet.
+export function pickPsychologyFields(c) {
+  const p = c?.psychology;
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+  return {
+    theoryOfControl: p.theoryOfControl || '',
+    strategy: p.strategy || '',
+    protectiveBenefit: p.protectiveBenefit || '',
+    presentCost: p.presentCost || '',
+    testingPressure: p.testingPressure || '',
+    candidateChange: p.candidateChange || '',
+    assessment: p.assessment || '',
+    assessmentNote: p.assessmentNote || '',
+    drives: Object.fromEntries(PSYCHOLOGY_DRIVE_AXES.map((axis) => [axis, {
+      desire: p.drives?.[axis]?.desire || '',
+      fear: p.drives?.[axis]?.fear || '',
+    }])),
+  };
+}
+
 export function pickFrameworkFields(c) {
   const out = {};
   for (const f of FRAMEWORK_STRING_FIELDS) out[f] = c?.[f] || '';
   out.arcType = c?.arcType || '';
   out.secrets = Array.isArray(c?.secrets) ? c.secrets : [];
+  const psychology = pickPsychologyFields(c);
+  if (psychology) out.psychology = psychology;
   return out;
 }
 
@@ -260,7 +286,28 @@ export function renderCharacterLine(c, { core = false } = {}) {
     ...VISUAL_FOUNDATION_STRING_FIELDS.map((field) => `${field}: ${visualString(field)}`),
     ...VISUAL_FOUNDATION_LIST_FIELDS.map((field) => `${field}: ${visualList(field)}`),
   ].join(' | ');
-  return `- ${core ? '[CORE] ' : ''}**${c?.name || 'Unnamed'}**${role} — dramatic framework: ${framework} | profile: ${profile} | arcType: ${c?.arcType || '—'} | secrets: ${secrets || '—'} | visual foundation: ${visual}`;
+  // Optional psychology profile (#6414). Appended only when authored — an
+  // 'unassessed' marker on every legacy character would add a line of noise per
+  // cast member to a prompt this module works hard to keep inside its budget.
+  const psychology = pickPsychologyFields(c);
+  const drives = psychology
+    ? PSYCHOLOGY_DRIVE_AXES
+      .map((axis) => `${axis} desire: ${concise(psychology.drives[axis].desire, 120)}, fear: ${concise(psychology.drives[axis].fear, 120)}`)
+      .join(' | ')
+    : '';
+  const ruling = psychology?.assessment
+    ? ` | assessment: ${psychology.assessment} (${concise(psychology.assessmentNote, 200)})`
+    : '';
+  const control = psychology
+    ? [
+      `theory: ${concise(psychology.theoryOfControl, 240)}`,
+      `strategy: ${concise(psychology.strategy, 240)}`,
+      `protects: ${concise(psychology.protectiveBenefit, 200)}`,
+      `costs: ${concise(psychology.presentCost, 200)}`,
+      `drives: ${drives}`,
+    ].join(' | ')
+    : '';
+  return `- ${core ? '[CORE] ' : ''}**${c?.name || 'Unnamed'}**${role} — dramatic framework: ${framework} | profile: ${profile} | arcType: ${c?.arcType || '—'} | secrets: ${secrets || '—'}${control ? ` | control: ${control}` : ''}${ruling} | visual foundation: ${visual}`;
 }
 
 const joinedLength = (lines) => lines.reduce((total, line) => total + line.length + 1, 0);

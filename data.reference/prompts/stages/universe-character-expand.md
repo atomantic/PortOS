@@ -48,8 +48,16 @@ For every BLANK field in the character JSON above, propose a value that:
   - `ghost` — the past event that wounded the character (1–2 sentences). Must causally explain the Lie.
   - `wound` — the lasting emotional damage the Ghost left (1 sentence).
   - `lie` — the false belief the character holds because of the Wound. State it in ONE sentence ("I only matter if I win").
-  - `need` — the Truth that is the DIRECT OPPOSITE of the Lie ("I matter whether I win or lose").
+  - `need` — the internal alternative the Lie is holding shut ("I matter whether I win or lose"). Often the direct opposite of the Lie, but it may instead QUALIFY the belief ("winning matters, and it is not what makes me worth keeping") — write whichever is true for this character rather than forcing a mirror image.
   - `want` — the concrete external goal the character pursues, which usually conflicts with the Need.
+- **Psychology (`psychology`) — OPTIONAL.** A structured layer on top of the chain above, not a replacement for it. Ghost and Wound stay the origin history; Want and Need stay the conscious pursuit and the internal alternative. Propose it only for a character the universe genuinely centers, and only when the existing data supports it. Rules:
+  - `theoryOfControl` — the character's operating rule in ONE sentence, stated as they would hold it, WITHOUT calling it false ("if I stay useful, nobody leaves"). This is NOT a restatement of the `lie`. A `lie` is an optional judgment about a belief; the theory of control is the belief as the rule they actually run on. If a `lie` is already populated, treat it as a starting point — never copy it verbatim, and never assert the two are identical.
+  - `strategy` — the behavior the theory motivates.
+  - `protectiveBenefit` — what that behavior genuinely protects them from.
+  - `presentCost` — what it costs them NOW.
+  - `testingPressure` / `candidateChange` — what would put the theory under load, and the revision it might undergo. Anticipated only: the story-specific progression that actually gets dramatized belongs to an authored character arc, not to this profile. Do not write events, issue numbers, or a sequence here.
+  - `drives` — `survival`, `connection`, and `status`, each with a `desire` and a `fear`. **`status` means perceived value to a GROUP** — respect, standing, being counted — not wealth and not dominance. For a non-human character, interpret the three axes in terms of its own form (continuity, coupling, standing within whatever it belongs to) rather than forcing a human interior onto it.
+  - `assessment` — omit it for an ordinary authored profile. Use `"unknown"` when the supplied data does not support a theory of control, or `"not-applicable"` when the character has no legible interior at all (a hive, a weather front, an unpersoned system) — and in EITHER case put your one-sentence reason in `assessmentNote` and omit the rest of the object. An honest "unknown" beats an invented interior.
 - `arcType` — one of `positive` (overcomes the Lie, embraces the Truth), `negative` (consumed by the Lie), or `flat` (already knows the Truth; changes the world instead). Omit if unclear.
 - `sliders` — rate `proactivity`, `likability`, `competence` each 1–10. Rule: HIGH (≥7) on at least TWO, OR high on one with clear room to grow. All-low reads boring; all-high-from-the-start reads as a Mary Sue. Omit for a bit-player.
 - `secrets` — 2+ things this character hides (from others or themselves). Short prose items.
@@ -90,6 +98,21 @@ Return ONLY valid JSON, no markdown fence, no commentary. Include ONLY the keys 
   "lie": "string",
   "want": "string",
   "need": "string",
+  "psychology": {
+    "theoryOfControl": "string",
+    "strategy": "string",
+    "protectiveBenefit": "string",
+    "presentCost": "string",
+    "testingPressure": "string",
+    "candidateChange": "string",
+    "assessment": "assessed | unknown | not-applicable",
+    "assessmentNote": "string — required when assessment is unknown or not-applicable",
+    "drives": {
+      "survival": {"desire": "string", "fear": "string"},
+      "connection": {"desire": "string", "fear": "string"},
+      "status": {"desire": "string", "fear": "string"}
+    }
+  },
   "arcType": "positive | negative | flat",
   "sliders": {"proactivity": 1, "likability": 1, "competence": 1},
   "secrets": ["string"],

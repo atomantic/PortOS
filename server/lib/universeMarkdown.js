@@ -13,7 +13,7 @@ const CANON_ENTRY_FIELD_ORDER = Object.freeze({
     'speechPattern', 'visualNotes', 'physicalDescription', 'personality',
     'background', 'silhouetteNotes', 'postureNotes', 'specialTraits',
     'visualIdentity', 'motivations', 'ghost', 'wound', 'lie', 'want', 'need',
-    'arcType', 'sliders', 'secrets', 'likes', 'dislikes', 'mannerisms',
+    'psychology', 'arcType', 'sliders', 'secrets', 'likes', 'dislikes', 'mannerisms',
     'relationships', 'skills', 'stats', 'colorPalette', 'props',
     'expressions', 'handGestures', 'voiceId', 'wardrobes', 'tags', 'prompt',
     'notes', 'evidence', 'firstAppearance', 'imageRefs', 'primaryImageRef',

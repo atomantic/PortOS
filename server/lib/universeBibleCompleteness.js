@@ -24,7 +24,7 @@
  * scan, so the two are deliberately one list rather than two that agree today.
  */
 
-import { BIBLE_KEYS, isBlank } from './storyBible.js';
+import { BIBLE_KEYS, isBlank, PSYCHOLOGY_DRIVE_AXES } from './storyBible.js';
 
 /** Depth vocabulary. `core` = renderable at all; `full` = the whole sheet. */
 export const BIBLE_DESCRIBE_DEPTHS = Object.freeze(['core', 'full']);
@@ -67,7 +67,10 @@ export const BIBLE_EXPAND_FIELDS = Object.freeze({
       'wardrobes', 'secrets',
     ]),
     enums: Object.freeze(['arcType']),
-    objects: Object.freeze(['sliders']),
+    // `psychology` (#6414) — the optional theory-of-control + drives profile.
+    // Structured, so it merges leaf-by-leaf like `sliders` rather than as one
+    // opaque string; `characterPsychologyIsBlank` below is its filled rule.
+    objects: Object.freeze(['sliders', 'psychology']),
   }),
   place: Object.freeze({
     strings: Object.freeze(['description', 'palette', 'era', 'weather', 'recurringDetails']),
@@ -132,7 +135,30 @@ export function bibleFieldIsBlank(entry, field) {
   // rated, so plain presence would report it filled the moment the sanitizer
   // materialized it.
   if (field === 'sliders') return SLIDER_AXES.some((axis) => entry?.sliders?.[axis] == null);
+  // `psychology` is absent entirely until authored, and materializes all three
+  // drive slots the moment any leaf is filled — so it needs its own rule too.
+  if (field === 'psychology') return characterPsychologyIsBlank(entry?.psychology);
   return isBlank(entry?.[field]);
+}
+
+/**
+ * Whether a character's psychology profile (#6414) still counts as unassessed.
+ *
+ * Presence alone is not enough (same reason `sliders` needs a rule): the
+ * sanitizer materializes all three drive slots as soon as ANY leaf is authored.
+ * An explicit `unknown` / `not-applicable` ruling WITH the author's
+ * explanation is a real assessment, not a gap — that is what lets a
+ * deliberately opaque or nonhuman character be complete without inventing a
+ * human interior for it.
+ */
+export function characterPsychologyIsBlank(psychology) {
+  if (!psychology || typeof psychology !== 'object' || Array.isArray(psychology)) return true;
+  if (psychology.assessment === 'unknown' || psychology.assessment === 'not-applicable') {
+    return isBlank(psychology.assessmentNote);
+  }
+  if (isBlank(psychology.theoryOfControl)) return true;
+  return PSYCHOLOGY_DRIVE_AXES.some((axis) => isBlank(psychology.drives?.[axis]?.desire)
+    || isBlank(psychology.drives?.[axis]?.fear));
 }
 
 /** Normalize an untrusted depth param to a known depth, defaulting to `full`. */

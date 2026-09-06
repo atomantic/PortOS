@@ -110,6 +110,25 @@ const PLACE_TIME_OF_DAY_SET = new Set(PLACE_TIME_OF_DAY);
 export const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
 const CHARACTER_ARC_TYPE_SET = new Set(CHARACTER_ARC_TYPES);
 
+// Character psychology (#6414). An OPTIONAL layer over the existing framework:
+// Ghost/Wound stay the origin history, Want/Need stay the conscious pursuit and
+// the internal alternative, and the Lie stays an optional JUDGMENT about a
+// belief. `theoryOfControl` is something else — the character's operating rule
+// ('if I stay useful, nobody leaves'), stated without calling it false. The two
+// are related but never asserted identical, and the Need may qualify a belief
+// rather than be its literal opposite.
+//
+// The three drives are the pressures the theory is built to manage. `status`
+// means PERCEIVED VALUE TO A GROUP — not wealth, not dominance.
+export const PSYCHOLOGY_DRIVE_AXES = Object.freeze(['survival', 'connection', 'status']);
+// An author may rule the profile out rather than leave it blank: `unknown`
+// (not yet decided / deliberately opaque) and `not-applicable` (a hive, a
+// weather system, an unpersoned intelligence) both expect an explanation in
+// `assessmentNote`, which is what makes the entry read as ASSESSED instead of
+// unfilled. `assessed` is the ordinary authored case.
+export const PSYCHOLOGY_ASSESSMENTS = Object.freeze(['assessed', 'unknown', 'not-applicable']);
+const PSYCHOLOGY_ASSESSMENT_SET = new Set(PSYCHOLOGY_ASSESSMENTS);
+
 const trimEnum = (raw, allowed) => {
   if (typeof raw !== 'string') return null;
   const trimmed = raw.trim();
@@ -142,7 +161,7 @@ export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 // `existing<X>Json` prompt variable (bibleExtractor) and into the script
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'ghost', 'wound', 'lie', 'want', 'need', 'arcType', 'sliders', 'secrets', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
+  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'ghost', 'wound', 'lie', 'want', 'need', 'psychology', 'arcType', 'sliders', 'secrets', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
   [BIBLE_KIND.PLACE]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
   [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
@@ -406,6 +425,48 @@ function sanitizeVoiceCanon(raw) {
   };
 }
 
+/**
+ * Optional structured psychology profile (#6414). Returns null when nothing is
+ * authored so a pre-#6414 character round-trips with no `psychology` key at
+ * all — which is also how an explicit CLEAR works: a PATCH carrying
+ * `psychology: null` (or an all-blank object) drops the field rather than
+ * persisting an empty husk that would read as 'assessed'.
+ *
+ * `drives` is always materialized with all three axes so a partial fill has a
+ * stable slot to write into; the whole object still collapses to null when
+ * every leaf is blank.
+ */
+function sanitizeCharacterPsychology(raw) {
+  if (!isPlainObject(raw)) return null;
+  const rawDrives = isPlainObject(raw.drives) ? raw.drives : {};
+  const drives = {};
+  let anyDrive = false;
+  for (const axis of PSYCHOLOGY_DRIVE_AXES) {
+    const row = isPlainObject(rawDrives[axis]) ? rawDrives[axis] : {};
+    const desire = trimTo(row.desire, BIBLE_LIMITS.PSYCHOLOGY_DRIVE_FIELD_MAX);
+    const fear = trimTo(row.fear, BIBLE_LIMITS.PSYCHOLOGY_DRIVE_FIELD_MAX);
+    if (desire || fear) anyDrive = true;
+    drives[axis] = { desire, fear };
+  }
+  const out = {
+    theoryOfControl: trimTo(raw.theoryOfControl, BIBLE_LIMITS.THEORY_OF_CONTROL_MAX),
+    strategy: trimTo(raw.strategy, BIBLE_LIMITS.PSYCHOLOGY_STRATEGY_MAX),
+    protectiveBenefit: trimTo(raw.protectiveBenefit, BIBLE_LIMITS.PSYCHOLOGY_PROTECTION_MAX),
+    presentCost: trimTo(raw.presentCost, BIBLE_LIMITS.PSYCHOLOGY_COST_MAX),
+    // Anticipated, not realized: what would test the theory and what it could
+    // become. The delivered progression belongs to an authored arc.
+    testingPressure: trimTo(raw.testingPressure, BIBLE_LIMITS.PSYCHOLOGY_PRESSURE_MAX),
+    candidateChange: trimTo(raw.candidateChange, BIBLE_LIMITS.PSYCHOLOGY_CHANGE_MAX),
+    assessment: trimEnum(raw.assessment, PSYCHOLOGY_ASSESSMENT_SET),
+    assessmentNote: trimTo(raw.assessmentNote, BIBLE_LIMITS.PSYCHOLOGY_NOTE_MAX),
+    drives,
+  };
+  const anyText = out.theoryOfControl || out.strategy || out.protectiveBenefit
+    || out.presentCost || out.testingPressure || out.candidateChange
+    || out.assessmentNote;
+  return anyText || anyDrive || out.assessment ? out : null;
+}
+
 function sanitizeIdentityPack(raw, imageRefs) {
   if (!isPlainObject(raw)) return null;
   const seen = new Set();
@@ -453,13 +514,30 @@ export function characterIdentityPackReadiness(character) {
   };
 }
 
+// Additive character fields an older peer's sanitizer cannot represent, keyed
+// by the `universes` wire version that introduced each one. A sender AT or
+// ABOVE that version omitting the field means the author cleared it; a sender
+// BELOW it omitted the field only because its code has no slot for it.
+const ADDITIVE_CHARACTER_FIELD_VERSIONS = Object.freeze({
+  // v10 — portable production canon (#5378).
+  voiceCanon: 10,
+  identityPack: 10,
+  // v11 — optional structured psychology profile (#6414).
+  psychology: 11,
+});
+
 /**
- * Preserve v10 character production fields when an older peer wins LWW with
- * a character shape that could not represent them. A v10-aware sender's
- * omission is an intentional clear and must pass through unchanged.
+ * Preserve additive character fields when an older peer wins LWW with a
+ * character shape that could not represent them. Each field is restored ONLY
+ * from a sender behind the version that introduced it — a version-aware
+ * sender's omission is an intentional clear and must pass through unchanged.
  */
-export function preserveLegacyCharacterProductionPackages(remoteCharacters, localCharacters, senderUniversesVersion) {
-  if ((Number(senderUniversesVersion) || 0) >= 10
+export function preserveLegacyCharacterFields(remoteCharacters, localCharacters, senderUniversesVersion) {
+  const sender = Number(senderUniversesVersion) || 0;
+  const unrepresentable = Object.entries(ADDITIVE_CHARACTER_FIELD_VERSIONS)
+    .filter(([, since]) => sender < since)
+    .map(([field]) => field);
+  if (unrepresentable.length === 0
     || !Array.isArray(remoteCharacters)
     || !Array.isArray(localCharacters)) return remoteCharacters;
   const localById = new Map(
@@ -468,11 +546,11 @@ export function preserveLegacyCharacterProductionPackages(remoteCharacters, loca
   return remoteCharacters.map((character) => {
     const localCharacter = localById.get(character?.id);
     if (!localCharacter) return character;
-    return {
-      ...character,
-      ...(!character.voiceCanon && localCharacter.voiceCanon ? { voiceCanon: localCharacter.voiceCanon } : {}),
-      ...(!character.identityPack && localCharacter.identityPack ? { identityPack: localCharacter.identityPack } : {}),
-    };
+    const restored = {};
+    for (const field of unrepresentable) {
+      if (!character?.[field] && localCharacter[field]) restored[field] = localCharacter[field];
+    }
+    return Object.keys(restored).length ? { ...character, ...restored } : character;
   });
 }
 
@@ -931,6 +1009,7 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
   const imageRefs = cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX);
   const voiceCanon = sanitizeVoiceCanon(raw.voiceCanon);
   const identityPack = sanitizeIdentityPack(raw.identityPack, imageRefs);
+  const psychology = sanitizeCharacterPsychology(raw.psychology);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -972,6 +1051,12 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     lie: trimTo(raw.lie, BIBLE_LIMITS.LIE_MAX),
     want: trimTo(raw.want, BIBLE_LIMITS.WANT_MAX),
     need: trimTo(raw.need, BIBLE_LIMITS.NEED_MAX),
+    // Optional structured psychology (#6414). Layered on the chain above, not
+    // a replacement for it: Ghost/Wound remain the origin history and
+    // Want/Need the conscious pursuit + internal alternative. Absent (no key)
+    // on every record that has not been assessed, so legacy characters stay
+    // valid and visibly unfilled rather than silently inheriting a profile.
+    ...(psychology ? { psychology } : {}),
     // Declared arc type — null (unset) unless it's one of the three known
     // values, so a legacy record with no arc type stays absent.
     arcType: trimEnum(raw.arcType, CHARACTER_ARC_TYPE_SET),
@@ -1348,6 +1433,10 @@ const MERGE_CONFIG = Object.freeze({
       'stats', 'colorPalette', 'props', 'expressions', 'handGestures',
       // Character framework (CWQE Phase 10, #2175) — fill only when blank.
       'ghost', 'wound', 'lie', 'want', 'need', 'arcType', 'secrets',
+      // Optional psychology profile (#6414). Whole-object granularity, like
+      // `wardrobes`: the extractor may author one on a character that has none,
+      // and never touches a profile the writer has already started.
+      'psychology',
     ],
     keyFields: [
       { field: 'name', normalize: normalizeBibleName },

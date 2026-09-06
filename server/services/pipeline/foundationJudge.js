@@ -532,6 +532,11 @@ const REPAIRABLE_CHARACTER_FIELDS = Object.freeze([
   ...VISUAL_FOUNDATION_LIST_FIELDS,
   'arcType',
   'secrets',
+  // Optional structured psychology (#6414). Allowlisted so a repair proposal
+  // that authors one is applied rather than silently dropped; it is NOT part
+  // of `hasCompleteFramework` below, so its absence never by itself makes an
+  // existing cast read as incomplete and schedule a repair run.
+  'psychology',
   'personality',
   'background',
   'relationships',
@@ -943,7 +948,13 @@ async function repairCharacters(series, issues, universe, finding, options) {
       const next = { ...character };
       for (const field of REPAIRABLE_CHARACTER_FIELDS) {
         const value = sanitized[field];
-        const authored = Array.isArray(value) ? value.length > 0 : !isBlankString(value);
+        // Object-valued fields (`psychology`) are authored when the sanitizer
+        // returned one at all — it collapses an empty proposal to null/absent.
+        const authored = Array.isArray(value)
+          ? value.length > 0
+          : (value && typeof value === 'object')
+            ? Object.keys(value).length > 0
+            : !isBlankString(value);
         if (!authored || JSON.stringify(value) === JSON.stringify(character[field])) continue;
         next[field] = value;
         updatedFields.add(field);

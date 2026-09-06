@@ -70,7 +70,14 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v10 = character `voiceCanon` and `identityPack` added (#5378). These are
   // portable, federated production-canon fields; a ≤v9 peer would sanitize
   // them away and LWW the loss back after an unrelated Universe edit.
-  universes: 10,
+  // v11 = character `psychology` added (#6414) — the optional structured
+  // theory-of-control + survival/connection/status drive profile. Additive and
+  // gracefully degrading, but version-gated for the same reason as v6–v10: a
+  // ≤v10 peer that re-sanitizes a universe through its psychology-unaware
+  // `sanitizeCharacter` would strip the profile and last-writer-wins the loss
+  // back onto the newer peer. Per-category gate → only universe sync pauses
+  // with old peers.
+  universes: 11,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
