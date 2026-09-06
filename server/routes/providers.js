@@ -1,4 +1,5 @@
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
+import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/providerGraphPreview.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
@@ -268,6 +269,25 @@ export function createPortOSProviderRoutes(aiToolkit) {
       throw new ServerError('Provider not found', { status: 404 });
     }
     res.json(presentProvider(provider, await detectSystemCapabilities()));
+  }));
+
+  /**
+   * READ-ONLY preview of the provider connection graph (#6366) — what an
+   * import WOULD create from the records this install already runs, and which
+   * records it would leave isolated, with reasons.
+   *
+   * Nothing is persisted, no provider is written, and no AI provider is
+   * contacted: this is a pure projection of `providers.json` and must stay one,
+   * because it is meant to be safe to open from a configuration screen. The
+   * flat `GET /api/providers` shape is untouched and remains the execution
+   * contract; `activeProvider` here is the same executable provider id string.
+   *
+   * A client talking to a server without this endpoint gets a 404 and falls
+   * back to the flat list — an explicit unsupported answer, not a guess.
+   */
+  router.get('/management/preview', asyncHandler(async (_req, res) => {
+    const data = await providerService.getAllProviders();
+    res.set('Cache-Control', 'no-store').json(toManagementPreviewDto(buildProviderGraphPreview(data)));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
