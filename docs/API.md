@@ -688,7 +688,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/openclaw` | OpenClaw operator chat |
 | `/api/rounds` | Rounds (music + Morse training) |
 | `/api/ask` | Ask (LLM Q&A) |
-| `/api/quota-burn` | Quota-burn plan, catalog, and runs |
+| `/api/quota-burn` | Quota-burn plan (ordered scheduled-task references + per-invocation overrides), its live status, the app/provider catalog its pickers read, manual runs, and re-arm. The referenced work itself is read from — and only ever edited through — `/api/cos/schedule` and `/api/cos/jobs`. |
 | `/api/timeline` | Human-activity timeline (day + events) |
 | `/api/games` | Game projects |
 | `/api/sprites` | Sprite catalog / export |

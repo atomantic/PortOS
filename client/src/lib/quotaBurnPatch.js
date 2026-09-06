@@ -28,48 +28,6 @@ export function mergeQuotaBurnPatch(base, patch) {
 }
 
 /**
- * Apply a catalog preset to a burn job, returning the next job.
- *
- * A preset is a TEMPLATE: its prompt and recommended flags are copied in, and
- * from then on the job owns them. Two things are deliberately preserved rather
- * than overwritten, because they are choices the preset cannot make:
- *   - `label` — only filled when blank, so applying a preset to a step the user
- *     named does not rename it.
- *   - `params.appId` — which managed app the work targets. Wiping it would turn
- *     "make this step a UX audit" into a silently unrunnable job whose only
- *     symptom is a status line at the bottom of the row.
- *   - `runOnce` — whether this is one-shot or standing work. The presets are
- *     standing audits, but the user may have marked a step "run once" for their
- *     own reasons, and re-picking a preset must not quietly put it back into the
- *     rotation to spend quota on every lap.
- */
-export function applyQuotaBurnPreset(job, preset) {
-  if (!preset) return job;
-  const { appId } = job?.params || {};
-  return {
-    ...job,
-    label: job?.label?.trim() ? job.label : preset.label,
-    jobType: preset.jobType || job?.jobType,
-    params: { ...(job?.params || {}), ...(preset.params || {}), ...(appId ? { appId } : {}) },
-  };
-}
-
-/**
- * A brand-new job seeded from a preset. `id` is passed in rather than minted
- * here so this stays pure (and so the caller keeps using whatever id scheme the
- * rest of its list uses).
- */
-export function jobFromPreset(preset, { id, appId = null } = {}) {
-  return applyQuotaBurnPreset({
-    id, enabled: true, label: '', jobType: preset.jobType, model: null, providerId: null, effort: null,
-    // Standing work, matching a hand-added step: an audit dimension is worth
-    // re-running as the code changes.
-    runOnce: false,
-    params: appId ? { appId } : {},
-  }, preset);
-}
-
-/**
  * Whether a step has already had its one dispatch — the client's mirror of the
  * server's `jobIsSpent`, taking the row's `ranAt` from the status feed instead
  * of the whole keyed ledger.
@@ -85,30 +43,6 @@ export function jobFromPreset(preset, { id, appId = null } = {}) {
  * time either changes.
  */
 export const quotaBurnJobIsSpent = (job, ranAt) => Boolean(job?.runOnce && ranAt);
-
-/**
- * Whether a preset is already represented in a family's jobs list.
- * Matched by comparing the trimmed prompt text (or jobType + label for non-prompt presets).
- */
-export function isPresetInJobs(preset, jobs = []) {
-  if (!preset) return false;
-  const presetPrompt = String(preset.params?.prompt || '').trim();
-  if (presetPrompt) {
-    return (jobs || []).some(
-      (job) => String(job?.params?.prompt || '').trim() === presetPrompt,
-    );
-  }
-  return (jobs || []).some(
-    (job) => job?.jobType === preset.jobType && job?.label === preset.label,
-  );
-}
-
-/**
- * Filter catalog presets to only those not currently in the given jobs list.
- */
-export function getAvailablePresetsForJobs(presets = [], jobs = []) {
-  return (presets || []).filter((preset) => !isPresetInJobs(preset, jobs));
-}
 
 /**
  * `QUOTA_BURN_UNLIMITED_DISPATCHES` in `server/lib/quotaBurnConfig.js`: the

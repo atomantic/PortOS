@@ -8,17 +8,19 @@
  */
 
 import { useState } from 'react';
-import { AlertTriangle, Ban, ChevronDown, ChevronRight, Flame, Plus, RotateCcw } from 'lucide-react';
+import { Link } from 'react-router';
+import { AlertTriangle, Ban, ChevronDown, ChevronRight, Flame, RotateCcw } from 'lucide-react';
 import Banner from '../ui/Banner';
 import BrailleSpinner from '../BrailleSpinner';
 import JobRow from './JobRow';
-import PresetPicker from './PresetPicker';
-import { dispatchCapInput, getAvailablePresetsForJobs, isUnlimitedDispatchCap, jobFromPreset, quotaBurnJobIsSpent, UNLIMITED_DISPATCHES } from '../../lib/quotaBurnPatch';
+import TaskRefPicker from './TaskRefPicker';
+import { dispatchCapInput, isUnlimitedDispatchCap, quotaBurnJobIsSpent, UNLIMITED_DISPATCHES } from '../../lib/quotaBurnPatch';
+import { CREATE_TASK_HREF, flattenTaskCatalog, quotaBurnStepPayload, stepFromTaskEntry, taskEntryNeedsApp } from '../../lib/quotaBurnTasks';
 import { formatDateTime } from '../../utils/formatters';
 import { NumberField } from './fields';
 
 export default function FamilyCard({
-  familyId, config, status, catalog, catalogError, catalogRetrying, expanded, actionsBusy,
+  familyId, config, status, catalog, taskGroups, catalogError, catalogRetrying, expanded, actionsBusy,
   onToggleExpand, onPatch, onRunFamily, onRunJob, onRearm, onRetryCatalog,
 }) {
   const jobs = config.jobs || [];
@@ -35,7 +37,12 @@ export default function FamilyCard({
   const statusById = new Map((status?.jobs || []).map((row) => [row.id, row]));
   const spentCount = jobs.filter((job) => quotaBurnJobIsSpent(job, statusById.get(job.id)?.ranAt)).length;
 
-  const patchJobs = (next) => onPatch({ jobs: next });
+  // Serialized on the way OUT, in one place, because the PUT's job schema is
+  // strict and the GET hands back more than it accepts as input — including the
+  // top-level override mirrors, which outrank the `overrides` bag by presence.
+  // Doing it here rather than per call site is what keeps a reorder, an edit and
+  // a removal all sending the same shape.
+  const patchJobs = (next) => onPatch({ jobs: next.map(quotaBurnStepPayload) });
   const changeJob = (index, next) => patchJobs(jobs.map((job, i) => (i === index ? next : job)));
   const moveJob = (index, delta) => {
     const next = [...jobs];
@@ -43,17 +50,11 @@ export default function FamilyCard({
     next.splice(index + delta, 0, moved);
     patchJobs(next);
   };
-  // Without a catalog there is no job type to mint, and a job with
-  // `jobType: undefined` is dropped by JSON.stringify and rejected by the
-  // strict PUT schema — poisoning every later save for this family until the
-  // page is reloaded. The catalog fetch is best-effort (the page still renders
-  // without it), so gate on it rather than minting an unsavable row.
-  const canAddJob = catalog.jobTypes.length > 0;
   // Ids key the React list AND pair each job with its server-side pending count,
   // so a duplicate is a real defect, not a cosmetic one. `Date.now()` alone can
-  // repeat within the same millisecond (two adds from one handler, a preset add
-  // immediately following a blank add), so disambiguate against the ids already
-  // in the plan rather than trusting the clock to have ticked.
+  // repeat within the same millisecond (two picks in quick succession from the
+  // Add a step control), so disambiguate against the ids already in the plan
+  // rather than trusting the clock to have ticked.
   const nextJobId = () => {
     const taken = new Set(jobs.map((job) => job.id));
     const base = `job-${Date.now().toString(36)}`;
@@ -62,31 +63,16 @@ export default function FamilyCard({
     while (taken.has(`${base}-${suffix}`)) suffix += 1;
     return `${base}-${suffix}`;
   };
-  const addJob = () => {
+  // A new step inherits the app the plan is already pointed at, when the plan is
+  // unambiguous about it — otherwise a one-click "add the UX audit" lands as a
+  // step that cannot run until the user notices the unset target picker. Derived
+  // at click time, not per render: the page polls while any family is pending.
+  const addStep = (entry) => {
+    const targeted = [...new Set(jobs.map((job) => job.taskRef?.appId).filter(Boolean))];
     const id = nextJobId();
-    patchJobs([...jobs, {
+    patchJobs([...jobs, stepFromTaskEntry(entry, {
       id,
-      enabled: true,
-      label: '',
-      jobType: catalog.jobTypes[0].id,
-      model: null,
-      providerId: null,
-      effort: null,
-      runOnce: false,
-      params: {},
-    }]);
-    setExpandedJobIds((prev) => new Set(prev).add(id));
-  };
-  // A preset job inherits the app the plan is already pointed at, when the plan
-  // is unambiguous about it — otherwise a one-click "add a UX audit" lands as a
-  // step that cannot run until the user notices the unset app picker. Derived at
-  // click time, not per render: the page polls while any family is pending.
-  const addPresetJob = (preset) => {
-    const targetedAppIds = [...new Set(jobs.map((job) => job.params?.appId).filter(Boolean))];
-    const id = nextJobId();
-    patchJobs([...jobs, jobFromPreset(preset, {
-      id,
-      appId: targetedAppIds.length === 1 ? targetedAppIds[0] : null,
+      appId: taskEntryNeedsApp(entry) && targeted.length === 1 ? targeted[0] : null,
     })]);
     setExpandedJobIds((prev) => new Set(prev).add(id));
   };
@@ -108,7 +94,7 @@ export default function FamilyCard({
     });
   };
 
-  const availablePresets = getAvailablePresetsForJobs(catalog.presets, jobs);
+  const hasTasks = flattenTaskCatalog(taskGroups).length > 0;
 
   return (
     <div className="rounded border border-port-border bg-port-card/40">
@@ -197,11 +183,11 @@ export default function FamilyCard({
 
       {expanded && (
         <div className="border-t border-port-border/60 p-3 space-y-4">
-          {/* Every choice this section offers — job type, app, universe, image
-              mode, and the preset picker — comes from the catalog, so a failed
-              catalog read empties them all and hides the picker outright. Say
-              so where the empty controls are, and offer the re-read here rather
-              than making a browser reload the only way back. */}
+          {/* Every choice this section offers — which scheduled task, which app,
+              which provider/model — comes from the catalog reads, so a failure
+              empties them all. Say so where the empty controls are, and offer
+              the re-read here rather than making a browser reload the only way
+              back. */}
           {catalogError && (
             <Banner
               tone="warning"
@@ -229,8 +215,7 @@ export default function FamilyCard({
                   reads as one mangled sentence half the time. */}
               <p className="mt-0.5 break-words">{catalogError}</p>
               <p className="mt-1">
-                Job types, apps, universes, and presets are unavailable — editing a step now would save an empty job type
-                and be rejected.
+                Scheduled tasks, apps, and providers are unavailable — a step added now would have no task to reference.
               </p>
             </Banner>
           )}
@@ -271,28 +256,31 @@ export default function FamilyCard({
                     <RotateCcw size={13} /> Re-arm all ({spentCount})
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-port-accent hover:underline disabled:opacity-40"
-                  disabled={!canAddJob}
-                  title={canAddJob ? 'Add a job to this plan' : 'Job catalog unavailable — retry the catalog load above'}
-                  onClick={addJob}
-                >
-                  <Plus size={13} /> Add job
-                </button>
               </div>
             </div>
             <div className="sm:max-w-md">
-              <PresetPicker
-                id={`burn-${familyId}-preset`}
-                label="Add a preset job"
-                presets={availablePresets}
-                onPick={addPresetJob}
-                hint="Single-focus audits that read the code, file GitHub issues, and change nothing — safe work for an unattended window."
+              <TaskRefPicker
+                id={`burn-${familyId}-add-step`}
+                label="Add a step"
+                groups={taskGroups}
+                onPick={addStep}
+                placeholder={hasTasks ? 'Add a scheduled task to this plan…' : 'No scheduled tasks available'}
+                hint="Every step runs an existing scheduled task with this family's quota. Overrides apply to the burn only."
               />
+              {/* Creating work happens in Scheduled Tasks, not here — that is
+                  what keeps one automation catalog instead of two. A plan with
+                  nothing to reference needs this link more than anything else on
+                  the card, so it is stated rather than implied. */}
+              <p className="mt-1 text-[11px] text-gray-500">
+                Need work that does not exist yet?{' '}
+                <Link to={CREATE_TASK_HREF} className="text-port-accent hover:underline">
+                  Create an on-demand scheduled task
+                </Link>
+                , then add it here.
+              </p>
             </div>
             {!jobs.length && (
-              <p className="text-xs text-gray-500">No jobs yet — this family will never burn until one is added.</p>
+              <p className="text-xs text-gray-500">No steps yet — this family will never burn until one is added.</p>
             )}
             {jobs.map((job, index) => (
               <JobRow
@@ -302,6 +290,7 @@ export default function FamilyCard({
                 index={index}
                 total={jobs.length}
                 catalog={catalog}
+                taskGroups={taskGroups}
                 pending={statusById.get(job.id)?.pending ?? null}
                 ranAt={statusById.get(job.id)?.ranAt ?? null}
                 actionsBusy={actionsBusy}
