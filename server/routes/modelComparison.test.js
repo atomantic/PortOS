@@ -90,6 +90,19 @@ it('imports an observation when reasoning pricing is its only known metric', asy
   expect(stored).toEqual(row);
 });
 
+// The comparison page skips its key prompt on this flag, so presence has to be
+// reported — and the key itself must never ride along with it.
+it('reports Artificial Analysis key presence without exposing the key', async () => {
+  const { getSettings } = await import('../services/settings.js');
+  delete process.env.ARTIFICIAL_ANALYSIS_API_KEY;
+  expect((await request(app).get('/comparison')).body.artificialAnalysisKeyConfigured).toBe(false);
+
+  getSettings.mockResolvedValueOnce({ secrets: { artificialAnalysis: { apiKey: 'mock-stored-key' } } });
+  const configured = (await request(app).get('/comparison')).body;
+  expect(configured.artificialAnalysisKeyConfigured).toBe(true);
+  expect(JSON.stringify(configured)).not.toContain('mock-stored-key');
+});
+
 it('rejects sync-aa when no API key is provided and syncs successfully when mocked', async () => {
   delete process.env.ARTIFICIAL_ANALYSIS_API_KEY;
   const noKey = await request(app).post('/comparison/sync-aa').send({});
