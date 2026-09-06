@@ -52,6 +52,7 @@
 import {
   QUOTA_BURN_TASK_REF_KIND,
   QUOTA_BURN_UNAVAILABLE,
+  enabledAppIdsByTaskType,
   resolveQuotaBurnStepAvailability,
 } from '../lib/quotaBurnTaskRef.js';
 import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
@@ -69,12 +70,15 @@ const entryOf = (map, key) => (map && Object.hasOwn(map, key) ? map[key] : null)
 
 /**
  * The live task catalog `resolveQuotaBurnStepAvailability` resolves a reference
- * against: `{ builtin: { [taskType]: { enabled, eligible, appIds } },
- * custom: { [jobId]: { enabled, eligible, appId } } }`.
+ * against: `{ builtin: { [taskType]: { enabled, featureEnabled, feature,
+ * eligible, appIds } }, custom: { [jobId]: { enabled, eligible, appId } },
+ * improvementEnabled }`.
  *
- * `enabled` folds the instance-FEATURE gate in with the user's switch, because a
- * feature-off task is equally un-runnable and the reason codes carry no separate
- * verdict for it; the invocation path re-checks both and reports the precise one.
+ * The built-in entry is exactly the `entry` shape `evaluateOnDemandEligibility`
+ * reads, so the page's verdict is produced by the same ladder that decides the
+ * dispatch — every rung is filled here and judged there, never re-derived. That
+ * is why the instance-FEATURE gate is a field of its own rather than folded into
+ * `enabled`: the ladder can then say which of the two switches is off.
  * `eligible` is the picker restriction: a type another automation owns
  * (`userInvokable: false`) and a custom job that is not an agent job — a shell
  * command or a built-in script handler — are not things a burn may invoke.
@@ -82,6 +86,10 @@ const entryOf = (map, key) => (map && Object.hasOwn(map, key) ? map[key] : null)
  * `appIds` per built-in type is the set of ACTIVE managed apps that have the
  * type switched on, so a reference to an app that was removed (or had the type
  * turned off) resolves as wrong-scope instead of silently dispatching nothing.
+ *
+ * `improvementEnabled` is the master CoS Improve switch, `null` when the state
+ * could not be read — which fails CLOSED, because "we could not check" is not
+ * "it is on".
  *
  * Each entry also carries the record it was derived from — the task's schedule
  * config, the custom job — and the catalog carries the `queued` set of on-demand
@@ -92,19 +100,21 @@ const entryOf = (map, key) => (map && Object.hasOwn(map, key) ? map[key] : null)
  * key it does not know.
  */
 export async function getQuotaBurnTaskCatalog() {
-  const [{ loadSchedule }, { getTaskTypeInvocation }, { getActiveApps }, { createFeatureGate }, { getAllJobs }] =
+  const [{ loadSchedule }, { getTaskTypeInvocation }, { getActiveApps }, { createFeatureGate }, { getAllJobs }, { isImprovementEnabled, loadState }] =
     await Promise.all([
       import('./taskScheduleStore.js'),
       import('./taskScheduleRegistry.js'),
       import('./apps.js'),
       import('./taskSchedule.js'),
       import('./autonomousJobs.js'),
+      import('./cosState.js'),
     ]);
 
-  const [schedule, apps, jobs] = await Promise.all([
+  const [schedule, apps, jobs, state] = await Promise.all([
     loadSchedule(),
     getActiveApps().catch(() => []),
     getAllJobs().catch(() => []),
+    loadState().catch(() => null),
   ]);
 
   // The overrides come off the app records `getActiveApps` already returned.
@@ -112,23 +122,18 @@ export async function getQuotaBurnTaskCatalog() {
   // produce the same answer for this filter — the legacy migration it also runs
   // only ever synthesizes `{ enabled: false }` entries, which are exactly what
   // gets discarded here. Other callers still perform that migration.
-  const appIdsByTaskType = new Map();
-  for (const app of apps) {
-    for (const [taskType, override] of Object.entries(app.taskTypeOverrides || {})) {
-      if (override?.enabled !== true) continue;
-      if (!appIdsByTaskType.has(taskType)) appIdsByTaskType.set(taskType, []);
-      appIdsByTaskType.get(taskType).push(app.id);
-    }
-  }
+  const appIdsByTaskType = enabledAppIdsByTaskType(apps);
 
   // The schedule's own memoized gate, not a second copy: the burn catalog's
-  // `enabled` verdict has to agree with the one `triggerOnDemandTask` applies,
+  // feature verdict has to agree with the one `triggerOnDemandTask` applies,
   // and two implementations of one rule drift silently.
   const featureEnabled = createFeatureGate();
   const builtin = {};
   await Promise.all(Object.entries(schedule?.tasks || {}).map(async ([taskType, config]) => {
     builtin[taskType] = {
-      enabled: config?.enabled === true && await featureEnabled(config),
+      enabled: config?.enabled === true,
+      featureEnabled: await featureEnabled(config),
+      feature: config?.feature || null,
       eligible: getTaskTypeInvocation(taskType).userInvokable !== false,
       appIds: appIdsByTaskType.get(taskType) || [],
       config,
@@ -142,7 +147,12 @@ export async function getQuotaBurnTaskCatalog() {
     job,
   }]));
 
-  return { builtin, custom, queued: queuedOnDemandKeys(schedule) };
+  return {
+    builtin,
+    custom,
+    improvementEnabled: state ? isImprovementEnabled(state) : null,
+    queued: queuedOnDemandKeys(schedule),
+  };
 }
 
 /** `taskType` + app scope of every on-demand request already waiting to drain. */
@@ -310,25 +320,6 @@ async function resolveStepProvider(effective, family) {
 }
 
 /**
- * Why the master Improve switch forbids this dispatch, or null.
- *
- * The built-in lane inherits this gate from `triggerOnDemandTask`; the custom
- * and programmatic lanes never reach it, so they ask here. Every OTHER way those
- * two run — the scheduled custom-job fire, the programmatic on-demand drain —
- * is gated on it, and a burn that ignored it would be the one path that spends a
- * subscription while the user has CoS improvement switched off.
- */
-async function improvementRefusal() {
-  const { isImprovementEnabled, loadState } = await import('./cosState.js');
-  const state = await loadState().catch(() => null);
-  // Unreadable state fails CLOSED: "we could not check" is not "it is on".
-  if (!state) return 'CoS state could not be read';
-  return isImprovementEnabled(state)
-    ? null
-    : 'Improvement is disabled — enable it in CoS → Config to run scheduled tasks';
-}
-
-/**
  * Why an unattended burn may not run this custom job, or null.
  *
  * `autonomyLevel` is the job's own statement about whether it may run without a
@@ -390,6 +381,11 @@ async function queuedOnDemandReason(queued, taskType, appId) {
  *
  * A decline is reported, never thrown: work that failed to start must not
  * charge the window's cap.
+ *
+ * The master Improve switch is refused HERE, in the shared resolution, for all
+ * three lanes: the catalog carries the switch, so the page reports it on the
+ * same step the dispatch would refuse — and a burn cannot be the one path that
+ * spends a subscription while the user has CoS improvement switched off.
  */
 export async function invokeQuotaBurnStep({ step, family, candidate, context, force = false, catalog = null } = {}) {
   const resolved = await resolveQuotaBurnStep(step, catalog);
@@ -407,9 +403,6 @@ export async function invokeQuotaBurnStep({ step, family, candidate, context, fo
  * drained (see `scheduledHandlers/index.js`).
  */
 async function runProgrammaticStep({ resolved, family, context, force }) {
-  const improve = await improvementRefusal();
-  if (improve) return declined(improve);
-
   const { runScheduledHandler } = await import('./scheduledHandlers/index.js');
   return runScheduledHandler({
     taskType: resolved.ref.taskType,
@@ -423,9 +416,11 @@ async function runProgrammaticStep({ resolved, family, context, force }) {
 
 /**
  * A built-in agent task goes through the schedule's own on-demand lane, so the
- * master Improve gate, the enabled + instance-feature gates, target scope and
- * invocation eligibility are all enforced by `triggerOnDemandTask` itself rather
- * than restated here — one ladder, not two.
+ * master Improve gate, the enabled + instance-feature gates, target scope, the
+ * per-app switch and invocation eligibility are all enforced by
+ * `triggerOnDemandTask` itself rather than restated here — and it reaches them
+ * through `evaluateOnDemandEligibility`, the same ladder `resolveQuotaBurnStep`
+ * already ran against the catalog. One ladder, two consumers.
  *
  * `force` is NOT passed through: it means "past the quota gates", and the
  * schedule's gates are not quota gates.
@@ -490,8 +485,6 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
 async function runCustomJobStep({ resolved, step, family, candidate }) {
   const approval = unattendedApprovalRefusal(resolved.job);
   if (approval) return declined(approval);
-  const improve = await improvementRefusal();
-  if (improve) return declined(improve);
   // `addTask`'s duplicate detection catches an identical QUEUED twin below, but
   // not one already mid-spawn — and a forced run reaches here with no probe.
   const active = await activeCustomJobReason(resolved.job);

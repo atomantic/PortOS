@@ -44,7 +44,6 @@ import {
   getTaskTypeDescription,
   getTaskTypeInvocation,
   getTaskTypePromptInfo,
-  requiresManagedAppTarget,
   requiresInstallWideTarget,
   isProgrammaticScheduledTaskType,
   enforceBranchReconcileBatch,
@@ -55,6 +54,7 @@ import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { recordUserAction } from './userActions.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import { normalizeQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { enabledAppIdsByTaskType, evaluateOnDemandEligibility } from '../lib/quotaBurnTaskRef.js';
 import {
   clearFailureLedgerFields,
   clearTaskTypeFailurePark,
@@ -1121,37 +1121,40 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   // the schedule interval and the app's own per-app override.
   const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
   const request = await updateSchedule(async (schedule) => {
-    // Cheap per-task-type check first; the master-flag check pays a state.json read.
     const tasks = schedule.tasks || {};
-    if (!Object.prototype.hasOwnProperty.call(tasks, taskType)) {
-      return { result: { error: `Unknown task type '${taskType}'` }, changed: false };
-    }
-    if (!tasks[taskType].enabled) {
-      return { result: { error: `Task type '${taskType}' is disabled` }, changed: false };
-    }
-    if (!(await createFeatureGate()(tasks[taskType]))) {
-      return { result: { error: `Task type '${taskType}' requires the '${tasks[taskType].feature}' feature` }, changed: false };
-    }
-    const invocation = getTaskTypeInvocation(taskType);
-    // A quota burn faces this gate alongside a human Run: a type owned by
-    // another automation is not something an unattended burn may commandeer
-    // either. Only the drain's own REFILL is exempt — it is that automation
-    // re-issuing itself.
-    if (origin !== ON_DEMAND_ORIGINS.REFILL && !invocation.userInvokable) {
-      return { result: { error: `Task type '${taskType}' is managed by another automation and cannot be invoked on demand` }, changed: false };
-    }
-    if (requiresManagedAppTarget(taskType) && !appId) {
-      return { result: { error: `Task type '${taskType}' requires a managed app target` }, changed: false };
-    }
-    if (appId && requiresInstallWideTarget(taskType)) {
-      return { result: { error: `Task type '${taskType}' requires an install-wide target (no app)` }, changed: false };
-    }
+    const config = Object.prototype.hasOwnProperty.call(tasks, taskType) ? tasks[taskType] : null;
+    const entry = config ? {
+      enabled: config.enabled === true,
+      featureEnabled: await createFeatureGate()(config),
+      feature: config.feature || null,
+      // A quota burn faces this gate alongside a human Run: a type owned by
+      // another automation is not something an unattended burn may commandeer
+      // either. Only the drain's own REFILL is exempt — it is that automation
+      // re-issuing itself.
+      eligible: origin === ON_DEMAND_ORIGINS.REFILL || getTaskTypeInvocation(taskType).userInvokable !== false,
+      // Per-app enablement is a rung for an UNATTENDED origin only. A human
+      // pressing Run is deliberately overriding the app's cadence switch — the
+      // drain's applyOnDemandRunResets exists for exactly that — while a burn
+      // picks its own step and must respect the switch the user set. Omitted,
+      // the ladder skips the rung.
+      appIds: origin === ON_DEMAND_ORIGINS.QUOTA_BURN
+        ? enabledAppIdsByTaskType(await getActiveApps().catch(() => [])).get(taskType) || []
+        : undefined,
+    } : null;
 
-    // Reject if the master Improve toggle is off — request would be silently dropped downstream
-    const state = await loadState();
-    if (!isImprovementEnabled(state)) {
-      return { result: { error: 'Improvement is disabled — enable it in CoS → Config to run on-demand tasks' }, changed: false };
-    }
+    // The ladder itself lives in lib/quotaBurnTaskRef.js so the Quota Burn page
+    // renders exactly the verdict this dispatch would produce (#6405).
+    const gate = evaluateOnDemandEligibility({ taskType, appId, entry });
+    if (gate) return { result: { error: gate.reason }, changed: false };
+
+    // The master Improve switch is the one ladder input that pays a state.json
+    // read, so it is resolved only once the cheap rungs pass and then fed back
+    // through the SAME ladder — the rung is never restated here. Rejecting on it
+    // matters: the request would be silently dropped downstream.
+    const improvement = evaluateOnDemandEligibility({
+      taskType, appId, entry, improvementEnabled: isImprovementEnabled(await loadState()),
+    });
+    if (improvement) return { result: { error: improvement.reason }, changed: false };
 
     if (!schedule.onDemandRequests) {
       schedule.onDemandRequests = [];
