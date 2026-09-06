@@ -23,6 +23,29 @@ describe('Provider Service', () => {
     if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
+  it('shares mode enablement and models while preserving mode-specific arguments, defaults and IDs', async () => {
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example-tui', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: false, models: ['a'], args: ['--print'], defaultModel: 'a' },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['b'], args: [], defaultModel: 'b' },
+      remote: { id: 'remote', type: 'api', enabled: false, models: ['remote'] },
+    } }));
+    expect((await providerService.getProviderById('example')).enabled).toBe(true);
+    expect((await providerService.getActiveProvider()).id).toBe('example-tui');
+    await providerService.updateProvider('example-tui', { enabled: false, models: ['c'], args: ['--interactive'], defaultModel: 'c' });
+    expect(await providerService.getProviderById('example')).toMatchObject({ enabled: false, models: ['c'], args: ['--print'], defaultModel: 'a' });
+    expect(await providerService.getProviderById('remote')).toMatchObject({ enabled: false, models: ['remote'] });
+    const catalog = vi.spyOn(providerService, 'fetchProviderModelCatalog').mockResolvedValue({ models: ['fresh'], contextWindows: { fresh: 8192 } });
+    await providerService.refreshProviderModelsBatch(['example-tui']);
+    expect((await providerService.getProviderById('example')).models).toEqual(['fresh']);
+    expect((await providerService.getProviderById('example-tui')).models).toEqual(['fresh']);
+    catalog.mockRestore();
+    await providerService.setActiveProvider('example');
+    expect((await providerService.getActiveProvider()).type).toBe('cli');
+    await providerService.deleteProvider('example-tui');
+    expect(await providerService.getProviderById('example')).toBeNull();
+    expect((await providerService.getActiveProvider()).id).toBe('remote');
+  });
+
   it.skipIf(process.platform === 'win32')('refreshes Pi models and distinguishes authentication from probe failure', async () => {
     const command = join(TEST_DATA_DIR, 'pi');
     const emit = async (text, code = 0) => {
