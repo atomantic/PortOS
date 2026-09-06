@@ -433,6 +433,18 @@ export function hasProviderPin(override) {
   return !!(override?.providerId || override?.model);
 }
 
+// Whether an app's per-task provider pin NAMES A DIFFERENT PROVIDER than the
+// task's own Schedule pin. The app pin always wins at spawn (#4783), so this is
+// the "silently overrides what the Schedule page shows" case worth flagging —
+// not merely "an override exists" (hasProviderPin above): an app pin that
+// happens to match the schedule, or a schedule with no pin of its own, isn't a
+// surprise. Both sides must actually name a provider; an unset schedule pin
+// (any override "diverges" from nothing) or an unset app pin (nothing to
+// diverge) are not divergence.
+export function providerPinDivergesFromSchedule(override, globalConfig) {
+  return !!(override?.providerId && globalConfig?.providerId && override.providerId !== globalConfig.providerId);
+}
+
 // Compute new taskMetadata after toggling a field in a per-app override.
 // Returns null when all overrides are cleared (inherit everything).
 // Enforces invariant: openPR implies useWorktree (turning on openPR forces

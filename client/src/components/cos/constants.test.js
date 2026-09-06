@@ -20,7 +20,8 @@ import {
   healthIssueTone,
   fresherHealth,
   providerPinPatch,
-  hasProviderPin
+  hasProviderPin,
+  providerPinDivergesFromSchedule
 } from './constants';
 
 // These mirror the server's domainBudgets/domainAutonomy helpers so the UI's
@@ -330,6 +331,28 @@ describe('hasProviderPin', () => {
     expect(hasProviderPin({ model: 'opus' })).toBe(true);
     expect(hasProviderPin({ providerId: '', model: null })).toBe(false);
     expect(hasProviderPin(undefined)).toBe(false);
+  });
+});
+
+describe('providerPinDivergesFromSchedule', () => {
+  it('is true only when both sides name a provider AND they differ', () => {
+    expect(providerPinDivergesFromSchedule(
+      { providerId: 'claude-ollama-tui' }, { providerId: 'fleet-gpu---opencode-tui' }
+    )).toBe(true);
+  });
+
+  it('is false when the app pin matches the schedule pin', () => {
+    expect(providerPinDivergesFromSchedule({ providerId: 'claude-cli' }, { providerId: 'claude-cli' })).toBe(false);
+  });
+
+  it('is false when the app has no pin of its own', () => {
+    expect(providerPinDivergesFromSchedule({}, { providerId: 'claude-cli' })).toBe(false);
+    expect(providerPinDivergesFromSchedule(undefined, { providerId: 'claude-cli' })).toBe(false);
+  });
+
+  it('is false when the schedule has no pin to diverge from', () => {
+    expect(providerPinDivergesFromSchedule({ providerId: 'claude-cli' }, {})).toBe(false);
+    expect(providerPinDivergesFromSchedule({ providerId: 'claude-cli' }, undefined)).toBe(false);
   });
 });
 
