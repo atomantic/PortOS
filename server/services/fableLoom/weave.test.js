@@ -1068,6 +1068,27 @@ describe('reformatEpisodeScenes', () => {
   });
 });
 
+// A synthetic authored cast used by the canon-digest boundary tests: the
+// causal Ghost/Wound/Lie/Want/Need chain the renderer used to drop entirely
+// (#6416). Obviously-fake placeholder content only.
+const authoredCanonUniverse = (over = {}) => ({
+  characters: [{
+    id: 'character-example',
+    name: 'Mara',
+    role: 'protagonist',
+    description: 'silver-eyed courier',
+    lie: 'Asking for help is how couriers get killed.',
+    want: 'Run the deep line alone and clear the debt.',
+    need: 'Let the harbour crew carry half the run.',
+    motivations: 'Clear the debt before the season closes.',
+    relationships: 'Owes the harbourmaster more than money.',
+    arcType: 'positive',
+  }],
+  places: [{ name: 'The Hollow' }],
+  objects: [],
+  ...over,
+});
+
 describe('buildCanonDigest', () => {
   it('renders linked-universe canon via the shared renderer and returns empty for unlinked looms', async () => {
     getUniverseMock.mockResolvedValue({
@@ -1083,6 +1104,100 @@ describe('buildCanonDigest', () => {
     expect(digest).not.toContain('objects:');
 
     expect(await buildCanonDigest({ universeId: null })).toBe('');
+  });
+
+  it('carries the authored belief, goal and internal alternative the old digest dropped', async () => {
+    getUniverseMock.mockResolvedValue(authoredCanonUniverse());
+    const digest = await buildCanonDigest({ universeId: 'uni-1', protagonistCharacterId: 'character-example' });
+    expect(digest).toContain('lie=Asking for help is how couriers get killed.');
+    expect(digest).toContain('want=Run the deep line alone and clear the debt.');
+    expect(digest).toContain('need=Let the harbour crew carry half the run.');
+    expect(digest).toContain('relationships=Owes the harbourmaster more than money.');
+  });
+
+  it('keeps a bound protagonist past the per-kind cast cap', async () => {
+    const crowd = Array.from({ length: 60 }, (_, index) => ({
+      id: `extra-${index}`, name: `Extra ${index}`, description: 'a face on the dock',
+    }));
+    getUniverseMock.mockResolvedValue(authoredCanonUniverse({
+      characters: [...crowd, ...authoredCanonUniverse().characters],
+    }));
+    const digest = await buildCanonDigest({ universeId: 'uni-1', protagonistCharacterId: 'character-example' });
+    expect(digest).toContain('- Mara [protagonist]');
+    expect(digest).toContain('lie=Asking for help is how couriers get killed.');
+    // The model is told the roster is incomplete rather than being left to
+    // assume it saw the whole ensemble.
+    expect(digest).toContain('not shown — prompt budget reached');
+  });
+
+  it('withholds a reveal-gated character\'s psychology from the generation digest', async () => {
+    getUniverseMock.mockResolvedValue(authoredCanonUniverse({
+      characters: [{
+        id: 'character-masked', name: 'The Auditor', role: 'antagonist', spoiler: true,
+        surfaceDescriptor: 'a clerk with a ledger',
+        lie: 'The ledger is the only honest thing left.',
+        ghost: 'Signed off on the collapse.',
+      }],
+    }));
+    const digest = await buildCanonDigest({ universeId: 'uni-1' });
+    expect(digest).toContain('The Auditor: (reveal-gated');
+    expect(digest).not.toContain('Signed off on the collapse.');
+    expect(digest).not.toContain('The ledger is the only honest thing left.');
+  });
+});
+
+describe('authored psychology at the FableLoom prompt boundary (#6416)', () => {
+  it('reaches the outline and expansion stage variables', async () => {
+    const { loomId, episodeId } = await setup();
+    getUniverseMock.mockResolvedValue(authoredCanonUniverse());
+    await updateLoom(loomId, { protagonistCharacterId: 'character-example' });
+
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    const outlineVars = runStagedLLM.mock.calls[0][1];
+    expect(outlineVars.canonDigest).toContain('lie=Asking for help is how couriers get killed.');
+    expect(outlineVars.canonDigest).toContain('want=Run the deep line alone and clear the debt.');
+    expect(outlineVars.canonDigest).toContain('need=Let the harbour crew carry half the run.');
+
+    await validateEpisodeOutline(loomId, episodeId);
+    runStagedLLM.mockClear();
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraphFromOutline(), runId: 'expand-run' });
+    await weaveEpisode(loomId, episodeId, { expandFromOutline: true });
+    expect(runStagedLLM.mock.calls[0][1].canonDigest).toContain('need=Let the harbour crew carry half the run.');
+  });
+
+  it('still withholds every canon fact from the first-time-viewer cold read', async () => {
+    const { loomId, episodeId } = await setup();
+    getUniverseMock.mockResolvedValue(authoredCanonUniverse());
+    await updateLoom(loomId, { protagonistCharacterId: 'character-example' });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    runStagedLLM.mockClear();
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'No personal goal is shown.', risks: ['Show what she wants.'] }, runId: 'cold-review' });
+
+    await reviewEpisodeOutline(loomId, episodeId, {});
+
+    const prompt = JSON.stringify(runStagedLLM.mock.calls[0]);
+    expect(prompt).toContain('(withheld for first-time-viewer review)');
+    expect(prompt).not.toContain('Asking for help is how couriers get killed.');
+    expect(prompt).not.toContain('character engines');
+  });
+
+  it('never renders canon into a reader-facing play turn', async () => {
+    const { loomId, episodeId } = await setup();
+    getUniverseMock.mockResolvedValue(authoredCanonUniverse());
+    await updateLoom(loomId, { protagonistCharacterId: 'character-example', participationMode: 'protagonist' });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'weave-run' });
+    const woven = await weaveEpisode(loomId, episodeId, {});
+    const startNode = woven.loom.episodes[0].nodes.find((node) => node.id === woven.loom.episodes[0].startNodeId);
+    runStagedLLM.mockClear();
+    runStagedLLM.mockResolvedValueOnce({ content: { action: 'stay', narration: 'You wait.' }, runId: 'play-run' });
+
+    await playTurn(loomId, episodeId, { nodeId: startNode.id, message: 'look around' });
+
+    const prompt = JSON.stringify(runStagedLLM.mock.calls[0]);
+    expect(prompt).not.toContain('Asking for help is how couriers get killed.');
+    expect(prompt).not.toContain('character engines');
   });
 });
 

@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   renderEntitiesSummary,
+  renderCharacterNarrativeContext,
+  renderStoryCanonDigest,
+  CANON_PROMPT_ENTRIES_PER_KIND_MAX,
+  CHARACTER_NARRATIVE_FIELD_MAX,
   ENTITIES_SUMMARY_MAX_PER_KIND,
   ENTITIES_SUMMARY_DESCRIPTOR_MAX,
 } from './universePromptRenderers.js';
@@ -137,5 +141,107 @@ describe('renderEntitiesSummary', () => {
       characters: [{ name: 'Jonas', personality: 'fierce\n\nrelentless' }],
     });
     expect(out).toContain('Jonas (fierce relentless)');
+  });
+});
+
+describe('renderCharacterNarrativeContext (#6416)', () => {
+  const authored = {
+    id: 'char-1',
+    name: 'Example Character',
+    role: 'protagonist',
+    ghost: 'Left a crew behind in the collapse.',
+    wound: 'Trusts no one with a shared route.',
+    lie: 'Needing anyone is what gets people killed.',
+    want: 'Buy the solo charter and run the deep line alone.',
+    need: 'Let a partner carry half the risk.',
+    motivations: 'Pay off the debt before the season closes.',
+    relationships: 'Owes the harbourmaster more than money.',
+    arcType: 'positive',
+  };
+
+  it('renders the authored causal chain a descriptive canon line drops', () => {
+    const out = renderCharacterNarrativeContext([authored]);
+    expect(out).toContain('lie=Needing anyone is what gets people killed.');
+    expect(out).toContain('want=Buy the solo charter and run the deep line alone.');
+    expect(out).toContain('need=Let a partner carry half the risk.');
+    expect(out).toContain('motives=Pay off the debt before the season closes.');
+    expect(out).toContain('relationships=Owes the harbourmaster more than money.');
+    expect(out).toContain('arc intent=positive');
+  });
+
+  it('marks a name-only character rather than emitting a bare bullet', () => {
+    expect(renderCharacterNarrativeContext([{ name: 'Walk-on' }]))
+      .toBe('- Walk-on: (framework not authored)');
+    expect(renderCharacterNarrativeContext([])).toBe('');
+    expect(renderCharacterNarrativeContext(null)).toBe('');
+  });
+
+  it('pins the caller-bound character ahead of the cap and reports what it withheld', () => {
+    const filler = Array.from({ length: 30 }, (_, i) => ({
+      id: `filler-${i}`, name: `Filler ${i}`, want: 'a thing', need: 'another thing',
+    }));
+    const out = renderCharacterNarrativeContext([...filler, authored], {
+      max: 3, priorityIds: ['char-1'], reportOmitted: true,
+    });
+    expect(out.split('\n')[0]).toContain('Example Character');
+    expect(out).toContain('+ 28 more characters not shown');
+    expect(out).toContain('do not treat this cast list as complete');
+  });
+
+  it('withholds authored psychology for a reveal-gated character when asked to', () => {
+    const gated = { ...authored, id: 'char-2', name: 'Masked', spoiler: true };
+    const guarded = renderCharacterNarrativeContext([gated], { respectRevealGates: true });
+    expect(guarded).toBe('- Masked: (reveal-gated — authored psychology withheld until the story earns it)');
+    expect(guarded).not.toContain('Needing anyone');
+    // A numeric reveal gate counts too, and author-side planning surfaces that
+    // reason over the whole bible still opt out.
+    expect(renderCharacterNarrativeContext([{ ...gated, spoiler: false, revealIssue: 4 }], { respectRevealGates: true }))
+      .toContain('reveal-gated');
+    expect(renderCharacterNarrativeContext([gated])).toContain('Needing anyone');
+  });
+
+  it('compacts a runaway field instead of letting one character own the prompt', () => {
+    const out = renderCharacterNarrativeContext([{ name: 'Verbose', lie: `x${'y'.repeat(5000)}` }]);
+    expect(out.length).toBeLessThan(CHARACTER_NARRATIVE_FIELD_MAX + 60);
+    expect(out.endsWith('…')).toBe(true);
+  });
+});
+
+describe('renderStoryCanonDigest (#6416)', () => {
+  const universe = (over = {}) => ({
+    characters: [{
+      id: 'char-lead', name: 'Example Lead', role: 'protagonist',
+      physicalDescription: 'weather-burned', lie: 'Asking for help is surrender.',
+      want: 'Finish the crossing alone.', need: 'Accept the escort.',
+    }],
+    places: [{ name: 'Example Harbour' }],
+    objects: [],
+    ...over,
+  });
+
+  it('carries both the descriptive canon and the authored engines', () => {
+    const digest = renderStoryCanonDigest(universe(), { protagonistCharacterId: 'char-lead' });
+    expect(digest).toContain('Verified Universe protagonist: id=char-lead; name=Example Lead.');
+    expect(digest).toContain('characters:\n  - Example Lead [protagonist]: weather-burned');
+    expect(digest).toContain('character engines (author-only canon');
+    expect(digest).toContain('lie=Asking for help is surrender.');
+    expect(digest).toContain('do not have characters recite them as exposition');
+  });
+
+  it('keeps a bound protagonist in the descriptive canon past the per-kind cap', () => {
+    const filler = Array.from({ length: CANON_PROMPT_ENTRIES_PER_KIND_MAX + 5 }, (_, i) => ({
+      id: `extra-${i}`, name: `Extra ${i}`, physicalDescription: 'a face in the crowd',
+    }));
+    const digest = renderStoryCanonDigest(
+      universe({ characters: [...filler, universe().characters[0]] }),
+      { protagonistCharacterId: 'char-lead' },
+    );
+    expect(digest).toContain('- Example Lead [protagonist]');
+    expect(digest).toContain('not shown — prompt budget reached');
+  });
+
+  it('returns empty for a missing universe', () => {
+    expect(renderStoryCanonDigest(null)).toBe('');
+    expect(renderStoryCanonDigest('nope')).toBe('');
   });
 });

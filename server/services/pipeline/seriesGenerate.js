@@ -43,11 +43,16 @@ import { getUniverse, joinInfluenceList, ERR_NOT_FOUND as UNIVERSE_ERR_NOT_FOUND
 import { listSeries, NAME_MAX, LOGLINE_MAX, PREMISE_MAX } from './series.js';
 import { ARC_SHAPES, ARC_SHAPE_IDS } from '../../lib/storyArc.js';
 import { runPromptRefineRaw } from './refineHelpers.js';
+import { renderCharacterNarrativeContext } from '../../lib/universePromptRenderers.js';
 import { runStagedLLM, resolveJudgeForStage } from '../stageRunner.js';
 import { getStage } from '../promptService.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 const CANON_LIST_MAX = 24; // cap per canon kind in the brief — keeps the prompt tight
+// Cap on the authored-psychology block. The roster above stays a scannable
+// name/role list; this is the smaller set of characters whose Lie/Want/Need
+// chain the concept generator can actually build a series spine out of.
+const CHARACTER_FOUNDATION_MAX = 8;
 const EXISTING_SERIES_MAX = 30;
 const FACET_MAX = 1000; // per-facet char cap (hook / world / conflictEngine / cost / tension / theme)
 
@@ -159,6 +164,16 @@ function buildContext(universe, existingSeries) {
       avoid: joinInfluenceList(universe.influences?.avoid) || '(none)',
     },
     characters: renderCanonList(universe.characters),
+    // Concept generation is a character-dependent story decision — a conflict
+    // engine invented from a name/role roster alone has nothing to be ABOUT.
+    // The concise roster above keeps its orientation job; this adds the causal
+    // material. Reveal-gated cast render as placeholders so a concealed origin
+    // can't become the pitch (#6416).
+    characterFoundations: renderCharacterNarrativeContext(universe.characters, {
+      max: CHARACTER_FOUNDATION_MAX,
+      respectRevealGates: true,
+      reportOmitted: true,
+    }) || '(none authored yet — invent the psychology each concept needs)',
     places: renderCanonList(universe.places),
     objects: renderCanonList(universe.objects),
     shapes: SHAPES_BLOCK,

@@ -27,9 +27,13 @@ export const ACCEPTED_OLD_MD5 = {
   'pipeline-series-generate.md': ['bc72731124a2bd6304362f4402c6305d'],
 };
 
-// Post-change shipped hash (multi-concept + banlist + facets).
+// Post-change shipped hash — re-pointed to the LIVE shipped body, not the one
+// this migration originally introduced. An earlier migration that keeps naming a
+// superseded hash classifies today's shipped prompt as "customized" and silently
+// skips the upgrade on a fresh install (#3817). Last re-point: #6416 added the
+// {{characterFoundations}} section (migration 361).
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-series-generate.md': '21352c21ed6d4edb7a4b7c32704eff55',
+  'pipeline-series-generate.md': '136a21435aba2b2b212883750040b986',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
