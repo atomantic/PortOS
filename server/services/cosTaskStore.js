@@ -26,6 +26,7 @@ import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
 import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { splitTaskPromptFields } from '../lib/cosTaskPrompt.js';
+import { quotaBurnProvenance, quotaBurnTaskMetadata } from '../lib/quotaBurnOrigin.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
@@ -527,23 +528,16 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (taskData.liProposal && typeof taskData.liProposal === 'object' && !Array.isArray(taskData.liProposal)) {
       metadata.liProposal = taskData.liProposal;
     }
-    // Which provider family's window this burn task is spending. Read by
-    // `isCooldownExemptTask` (cosTaskGenerator.js, which owns the why) and by
-    // quotaBurnRunner's completion continuation.
-    if (taskData.quotaBurnFamily) metadata.quotaBurnFamily = taskData.quotaBurnFamily;
-    // The reset of the SHORT rolling window that will refuse first, so a run the
-    // provider refuses can block that family until the window rolls rather than
-    // letting the continuation re-dispatch into the same wall (the weekly card
-    // it gates on still reads healthy). See quotaBurnDenials.js.
-    if (Number.isFinite(taskData.quotaBurnLimitingResetAt)) {
-      metadata.quotaBurnLimitingResetAt = taskData.quotaBurnLimitingResetAt;
-    }
-    // Which STEP of the plan asked. The built-in lane stamps this (and the
-    // request id) straight onto the generated task's metadata via
-    // `lib/quotaBurnOrigin.js`; a custom-job burn reaches disk through this
-    // non-raw path instead, so the key has to be mapped here or the two lanes
-    // would carry different provenance for the same feature.
-    if (taskData.quotaBurnStepId) metadata.quotaBurnStepId = taskData.quotaBurnStepId;
+    // Quota-burn provenance — which family's window this task spends, which
+    // window will refuse first, which burn step asked, and which on-demand
+    // request (if any) it was generated for. The built-in lane stamps these onto
+    // the generated task's metadata via `lib/quotaBurnOrigin.js` and reaches disk
+    // through the RAW path above; a custom-job burn reaches disk through this
+    // non-raw path instead. Both spread the SAME block so the two lanes cannot
+    // carry different provenance for the same feature — mapping the keys one at
+    // a time here is how `quotaBurnStepId` came to reach disk without ever
+    // reaching the agent (#6406). `quotaBurnOrigin.js` owns the why of each field.
+    Object.assign(metadata, quotaBurnTaskMetadata(quotaBurnProvenance(taskData)));
     if (planOnly) {
       // Plan-and-file is a single bounded CoS action. The bundled plan-task
       // command is already issue-only, so pass its supported `--yes` flag to

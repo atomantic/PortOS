@@ -17,11 +17,12 @@
  * (server/AGENTS.md, "Import scoping"). That is also why `onDemandOrigin` below
  * is copied through as an opaque string rather than validated against the enum.
  *
- * The two long-lived keys — `quotaBurnFamily` and `quotaBurnLimitingResetAt` —
- * are the SAME ones the legacy `quotaBurnJobs/agentPrompt.js` executor stamps,
- * on purpose: `cosTaskGenerator.js#isCooldownExemptTask`, the runner's completion
- * continuation, and `quotaBurnDenials.js` all read them off the finished agent,
- * and a reference-dispatched burn must be indistinguishable to those readers.
+ * The provenance keys are the SAME ones the legacy `quotaBurnJobs/agentPrompt.js`
+ * executor stamps, on purpose: `cosTaskGenerator.js#isCooldownExemptTask`, the
+ * runner's completion continuation, and `quotaBurnDenials.js` all read them off
+ * the finished agent, and a reference-dispatched burn must be indistinguishable
+ * to those readers. `QUOTA_BURN_PROVENANCE_FIELDS` below is the one place they
+ * are named.
  */
 
 import { isPlainObject } from './objects.js';
@@ -35,6 +36,100 @@ import { isPlainObject } from './objects.js';
 export const QUOTA_BURN_REQUEST_ORIGIN = 'quota-burn';
 
 const MAX_FIELD = 64;
+
+/**
+ * THE quota-burn provenance block: the facts that say which burn a task is, in
+ * one place. Every hop that persists or projects them derives from this table
+ * rather than naming keys, so a fifth fact is one row here instead of four
+ * hand-written lines that can each be forgotten independently — which is exactly
+ * how `quotaBurnStepId` came to reach disk but never reach the agent (#6406).
+ *
+ * The three hops:
+ *   - `onDemandRequestMetadata` below (raw path — the on-demand engines).
+ *   - `cosTaskStore.js#addTask` (non-raw path — the synchronous custom-job lane).
+ *   - `agentLifecycle.js` (the agent projection the runner and the denial
+ *     ledger read a finished run back out of).
+ *
+ * The PERSISTED and cross-peer shape stays FLAT (`quotaBurnFamily`, …), not a
+ * nested `quotaBurn` object. CoS tasks federate as markdown replicated between
+ * peers that upgrade independently (`cosTaskMerge.js`), and `metadata.quotaBurnFamily`
+ * is what makes a burn cooldown-exempt and what credits a refusal to a family —
+ * so a nested-only write would make a burn queued on a new peer read as an
+ * ordinary task on an older one, for no functional gain. `quotaBurnProvenance`
+ * still ACCEPTS a nested block, so a producer may hand its provenance over as a
+ * unit and a task that ever arrives in that shape resolves identically.
+ *
+ * Readers coerce, because a COS-TASKS.md round-trip hands every scalar back as a
+ * string: a task written by a previous release must still read as burn-provenanced.
+ */
+const asId = (value) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
+const asEpochMs = (value) => {
+  const numeric = typeof value === 'number' ? value : (asId(value) === undefined ? NaN : Number(value));
+  return Number.isFinite(numeric) ? numeric : undefined;
+};
+
+export const QUOTA_BURN_PROVENANCE_FIELDS = Object.freeze([
+  // Which provider family's window this run is spending. The one field a burn
+  // cannot be attributed without — `isCooldownExemptTask` and the denial ledger
+  // both key on it.
+  { field: 'family', taskKey: 'quotaBurnFamily', agentKey: 'taskQuotaBurnFamily', read: asId },
+  // The reset of the SHORT rolling window that will refuse first, so a refused
+  // run blocks the family until that window rolls rather than re-dispatching
+  // into the same wall. See quotaBurnDenials.js.
+  { field: 'limitingResetAt', taskKey: 'quotaBurnLimitingResetAt', agentKey: 'taskQuotaBurnLimitingResetAt', read: asEpochMs },
+  // Which STEP of the burn plan asked.
+  { field: 'stepId', taskKey: 'quotaBurnStepId', agentKey: 'taskQuotaBurnStepId', read: asId },
+  // The on-demand REQUEST this task was generated for. Absent — never null, never
+  // synthesized — on the synchronous custom-job lane, which queues the task itself
+  // and has no request to name; a fake id would make a join over it silently wrong.
+  { field: 'requestId', taskKey: 'quotaBurnRequestId', agentKey: 'taskQuotaBurnRequestId', read: asId },
+].map(Object.freeze));
+
+/**
+ * Read the provenance block off anything carrying it — task metadata, an
+ * `addTask` payload, or a producer's own `quotaBurn` block. A field the source
+ * does not carry (or carries unreadably) is ABSENT from the result, so callers
+ * can tell "not recorded" from a legitimate value without a sentinel of their own.
+ */
+export function quotaBurnProvenance(source) {
+  const block = {};
+  if (!isPlainObject(source)) return block;
+  const nested = isPlainObject(source.quotaBurn) ? source.quotaBurn : null;
+  for (const { field, taskKey, read } of QUOTA_BURN_PROVENANCE_FIELDS) {
+    const value = read(nested?.[field] ?? source[taskKey]);
+    if (value !== undefined) block[field] = value;
+  }
+  return block;
+}
+
+/** The flat metadata keys a block persists as. Absent fields stay absent. */
+export function quotaBurnTaskMetadata(block) {
+  const metadata = {};
+  if (!isPlainObject(block)) return metadata;
+  for (const { field, taskKey, read } of QUOTA_BURN_PROVENANCE_FIELDS) {
+    const value = read(block[field]);
+    if (value !== undefined) metadata[taskKey] = value;
+  }
+  return metadata;
+}
+
+/**
+ * The provenance projection `agentLifecycle` stamps onto the agent record.
+ * agent.metadata is a hand-picked projection of task.metadata, so EVERY
+ * persisted field is listed here by construction — a field that reaches disk
+ * cannot fail to reach the runner's completion continuation or the denial ledger.
+ * `null` (not absent) for a field the task never carried, matching the rest of
+ * that projection's "not recorded" convention.
+ */
+export function quotaBurnAgentMetadata(taskMetadata) {
+  const block = quotaBurnProvenance(taskMetadata);
+  return Object.fromEntries(
+    QUOTA_BURN_PROVENANCE_FIELDS.map(({ field, agentKey }) => [agentKey, block[field] ?? null]),
+  );
+}
+
+/** Whether a task carries attributable burn provenance at all. */
+export const hasQuotaBurnProvenance = (taskMetadata) => Boolean(quotaBurnProvenance(taskMetadata).family);
 
 const trimmed = (value, max = MAX_FIELD) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 const nullable = (value, max = MAX_FIELD) => trimmed(value, max) || null;
@@ -109,13 +204,11 @@ export function onDemandRequestMetadata(request) {
     onDemand: true,
     onDemandOrigin: nullable(request?.origin),
     ...(burn ? {
-      quotaBurnFamily: burn.family,
-      // Omitted rather than nulled when unreadable: `cosTaskStore` only persists
-      // a FINITE value, so writing an explicit null here would make the raw-task
-      // path disagree with the mapped one.
-      ...(burn.limitingResetAt === null ? {} : { quotaBurnLimitingResetAt: burn.limitingResetAt }),
-      quotaBurnStepId: burn.stepId,
-      ...(requestId ? { quotaBurnRequestId: requestId } : {}),
+      // One spread of the shared block, so this path cannot carry a different
+      // set of provenance keys than the non-raw `addTask` mapping does. An
+      // unreadable reset (and an unnamed request) drops out rather than being
+      // written as null — see QUOTA_BURN_PROVENANCE_FIELDS.
+      ...quotaBurnTaskMetadata({ ...burn, requestId }),
       ...(burn.overrides.providerId ? { provider: burn.overrides.providerId } : {}),
       ...(burn.overrides.model ? { model: burn.overrides.model } : {}),
       ...(burn.overrides.effort ? { effort: burn.overrides.effort } : {}),

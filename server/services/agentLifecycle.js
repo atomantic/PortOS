@@ -58,6 +58,7 @@ import { buildAgentPrompt, getAppWorkspace, inlinePrLifecycleSection, isClaimFlo
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
 import { prClaimWasVerified } from '../lib/prDisposition.js';
+import { quotaBurnAgentMetadata } from '../lib/quotaBurnOrigin.js';
 import { composeProviderEnv } from '../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
@@ -855,14 +856,13 @@ async function runAgentSpawn(task) {
       // `taskLiProposal`: the runner listens for `agent:completed` and dispatches
       // the NEXT job in this family's burn plan when the previous one finishes,
       // so it must be able to tell a burn run from any other agent from the
-      // agent record alone.
-      taskQuotaBurnFamily: task.metadata?.quotaBurnFamily || null,
-      // The reset of the short rolling window that refuses first, carried for the
-      // same reason: when this run is REFUSED, the continuation blocks the family
-      // until that window rolls instead of re-dispatching into the same wall
-      // (see quotaBurnDenials.js). A COS-TASKS.md round-trip can hand it back as
-      // a string, so coerce rather than projecting whatever arrived.
-      taskQuotaBurnLimitingResetAt: Number(task.metadata?.quotaBurnLimitingResetAt) || null,
+      // agent record alone. Spread from the ONE block definition
+      // (`lib/quotaBurnOrigin.js`) so every field that reaches disk reaches the
+      // runner's continuation and the denial ledger — naming them here one at a
+      // time is how `quotaBurnStepId` ended up persisted but unprojected (#6406).
+      // Values are coerced on the way through: a COS-TASKS.md round-trip hands
+      // every scalar back as a string.
+      ...quotaBurnAgentMetadata(task.metadata),
       // Same reason as taskLiProposal — a hand-picked projection, so this must be
       // listed explicitly. `declaresNoCommitCriterion` (taskTypeHooks.js) reads it
       // to decide whether a run declared a commit criterion at all,

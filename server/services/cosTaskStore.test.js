@@ -732,17 +732,44 @@ describe('cosTaskStore.addTask', () => {
     expect(created.metadata.investigationFingerprint).toBeUndefined();
   });
 
-  it('persists quota-burn provenance and omits it for every other task', async () => {
+  it('persists the whole quota-burn provenance block and omits it for every other task', async () => {
     // `metadata` is an allowlist, so an unlisted key is silently dropped — and a
     // dropped `quotaBurnFamily` makes the queued burn indistinguishable from any
     // other system task at the cooldown gate and the completion continuation.
+    // Every field of the block reaches disk together (#6406): mapping them one
+    // at a time is how `quotaBurnRequestId` came to reach disk on the raw path
+    // only, so the two burn lanes carried different provenance.
     const burn = await addTask(
-      { description: '[Quota burn: agy] Perf', app: 'portos', quotaBurnFamily: 'agy' },
+      {
+        description: '[Quota burn: agy] Perf',
+        app: 'portos',
+        quotaBurnFamily: 'agy',
+        quotaBurnLimitingResetAt: 1700000000000,
+        quotaBurnStepId: 'step-1',
+        quotaBurnRequestId: 'demand-7',
+      },
       'internal',
     );
-    expect(burn.metadata.quotaBurnFamily).toBe('agy');
+    expect(burn.metadata).toMatchObject({
+      quotaBurnFamily: 'agy',
+      quotaBurnLimitingResetAt: 1700000000000,
+      quotaBurnStepId: 'step-1',
+      quotaBurnRequestId: 'demand-7',
+    });
     const ordinary = await addTask({ description: 'not a burn' }, 'user');
     expect(ordinary.metadata.quotaBurnFamily).toBeUndefined();
+  });
+
+  it('leaves the request id ABSENT on the synchronous custom-job burn lane', async () => {
+    // That lane queues the task itself, so there is no on-demand request to name
+    // and a synthesized (or null) id would make a join over it silently wrong.
+    const burn = await addTask(
+      { description: '[Quota burn: agy] Custom job', app: 'portos', quotaBurnFamily: 'agy', quotaBurnStepId: 'step-2' },
+      'internal',
+    );
+    expect(burn.metadata).not.toHaveProperty('quotaBurnRequestId');
+    const { tasks } = await getCosTasks();
+    expect(tasks.find(t => t.id === burn.id).metadata).not.toHaveProperty('quotaBurnRequestId');
   });
 
   it('omits diagnostics metadata when none is supplied and ignores a non-object / array value', async () => {

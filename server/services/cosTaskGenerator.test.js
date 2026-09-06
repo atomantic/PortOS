@@ -454,6 +454,13 @@ describe('isCooldownExemptTask', () => {
   it('exempts a quota-burn task so a busy app cannot starve it', () => {
     expect(isCooldownExemptTask({ metadata: { app: 'app-1', quotaBurnFamily: 'agy' } })).toBe(true);
   });
+  // Both provenance shapes, because installs upgrade independently: the flat key
+  // is what every task written by a previous release (and every task migration
+  // 225 back-filled) carries, and the block is what a producer may hand over as
+  // a unit. Neither may fall out of the exempt set. See lib/quotaBurnOrigin.js.
+  it('exempts a burn whose provenance arrives as one block', () => {
+    expect(isCooldownExemptTask({ metadata: { app: 'app-1', quotaBurn: { family: 'agy', stepId: 'step-1' } } })).toBe(true);
+  });
   // Deliberately metadata-only — a task queued before the stamp existed is
   // back-filled by scripts/migrations/225-quota-burn-task-provenance.js, not
   // recognised here by sniffing its description. That keeps a user-visible

@@ -919,3 +919,17 @@ describe('runAgentSpawn source — local prompt/prefill budget (#6117)', () => {
     expect(metaSlice).toMatch(/\blocalPromptBudget,/);
   });
 });
+
+// Source-level assertion (#6406): agent.metadata is a hand-picked projection of
+// task.metadata, so a provenance key the projection forgets is a field that
+// reaches disk and never reaches the runner's completion continuation or the
+// denial ledger — exactly what happened to `quotaBurnStepId`. The projection has
+// to derive from the one block definition in lib/quotaBurnOrigin.js (whose own
+// test pins that the block covers every persisted field), which means naming a
+// `taskQuotaBurn*` key by hand here is the regression.
+describe('runAgentSpawn source — quota-burn provenance projection (#6406)', () => {
+  it('spreads the shared provenance block instead of naming its keys', () => {
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/\.\.\.quotaBurnAgentMetadata\(task\.metadata\)/);
+    expect(AGENT_LIFECYCLE_SRC.match(/^\s*taskQuotaBurn\w*\s*:/gm) || []).toEqual([]);
+  });
+});
