@@ -257,7 +257,7 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {})
   // atomicWrite (temp-file + rename) so a mid-write crash never truncates
   // settings.json. Pass a pre-stringified string to preserve the trailing
   // newline; atomicWrite's own JSON.stringify omits it.
-  await atomicWrite(SETTINGS_FILE, JSON.stringify(await persistPrivateKeys(cleaned, PATHS.data), null, 2) + '\n');
+  await atomicWrite(SETTINGS_FILE, JSON.stringify(await persistPrivateKeys(cleaned, PATHS.data, { previousSettings: prev }), null, 2) + '\n');
   await hydratePrivateKeys(cleaned, PATHS.data);
   // Warn AFTER the successful write so a thrown write never produces
   // a misleading "stripped" log line for a write that didn't happen.

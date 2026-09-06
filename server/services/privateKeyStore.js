@@ -46,12 +46,16 @@ export async function hydratePrivateKeys(settings, dataDir) {
   return settings;
 }
 
-export async function persistPrivateKeys(settings, dataDir, { preserveExisting = false } = {}) {
+export async function persistPrivateKeys(settings, dataDir, { preserveExisting = false, previousSettings } = {}) {
   const keys = await readPrivateKeys(dataDir);
   const publicSettings = structuredClone(settings);
   let changed = false;
   for (const entry of PRIVATE_CREDENTIALS) {
-    const value = credentialValue(settings, entry);
+    // Existing integration clear actions delete the field rather than writing ''.
+    // Compare the queued pre-image so omission in an unrelated PATCH is preserved
+    // by settings' merge, while an intentional removal becomes a tombstone.
+    const value = credentialValue(settings, entry)
+      ?? (typeof credentialValue(previousSettings, entry) === 'string' ? '' : undefined);
     if (typeof value !== 'string') continue;
     if (!preserveExisting || !Object.hasOwn(keys, entry.id)) {
       const normalized = value.trim(); // Empty is a tombstone: legacy values cannot reappear.

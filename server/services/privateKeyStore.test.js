@@ -43,6 +43,13 @@ it('moves legacy keys out of settings, preserves unrelated data, and resolves af
   settings.__resetSettingsCache();
   expect((await settings.getSettings()).civitai.apiKey).toBe('');
   expect((await settings.getSettings()).videoGen.fal.apiKey).toBe('example-fal');
+  await settings.updateSettingsWith(current => {
+    delete current.imageGen.hfToken;
+    return current;
+  });
+  settings.__resetSettingsCache();
+  expect((await settings.getSettings()).imageGen.hfToken).toBe('');
+  expect((await settings.getSettings()).videoGen.fal.apiKey).toBe('example-fal');
 });
 
 it('persists a successful Artificial Analysis key and reuses it without a request key', async () => {
