@@ -9027,6 +9027,14 @@
     },
     {
       "method": "POST",
+      "path": "/api/local-llm/llama-server/download-model/remove",
+      "mountPath": "/api/local-llm",
+      "sources": [
+        "server/routes/localLlm.js"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/local-llm/llama-server/install",
       "mountPath": "/api/local-llm",
       "sources": [
@@ -17924,8 +17932,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2220,
-    "declarations": 2228,
+    "operations": 2221,
+    "declarations": 2229,
     "sourceFiles": 233
   }
 }

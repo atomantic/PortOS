@@ -55,7 +55,7 @@ import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopS
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
-import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload } from '../services/specDecodeModels.js'
+import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload, removeSpecDecodeModel } from '../services/specDecodeModels.js'
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/providerReadiness.js'
 import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
@@ -751,6 +751,17 @@ router.post('/llama-server/download-model/cancel', asyncHandler(async (req, res)
   const { presetId, role } = validateRequest(localLlmSpecModelDownloadSchema, req.body)
   const cancelled = cancelSpecDecodeModelDownload({ presetId, role })
   res.json({ success: true, cancelled })
+}))
+
+// POST /api/local-llm/llama-server/download-model/remove — delete an already
+// downloaded preset GGUF to free disk space for a method the user has decided
+// not to use. removeSpecDecodeModel refuses on its own while llama-server is
+// running that exact file, so unloading can't unlink weights out from under
+// an active launch.
+router.post('/llama-server/download-model/remove', asyncHandler(async (req, res) => {
+  const { presetId, role } = validateRequest(localLlmSpecModelDownloadSchema, req.body)
+  const result = await removeSpecDecodeModel({ presetId, role })
+  res.json(result)
 }))
 
 // Each of the three actions below changes exactly what the provider-readiness
