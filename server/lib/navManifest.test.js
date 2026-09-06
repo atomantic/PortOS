@@ -39,12 +39,11 @@ const TABBED_PAGES = [
   { prefix: '/cos', file: 'client/src/components/cos/constants.js', kind: 'ids', constName: 'TABS' },
   { prefix: '/digital-twin', file: 'client/src/components/digital-twin/constants.js', kind: 'ids', constName: 'TABS' },
   { prefix: '/meatspace', file: 'client/src/components/meatspace/constants.js', kind: 'ids', constName: 'TABS' },
-  { prefix: '/calendar', file: 'client/src/pages/Calendar.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/goals', file: 'client/src/pages/Goals.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/insights', file: 'client/src/pages/Insights.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/privacy', file: 'client/src/pages/Privacy.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/messages', file: 'client/src/pages/Messages.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
+  // Calendar, Goals, Insights, Privacy, Messages and Wiki derive their TABS from
+  // `getPageNavTabs(group)` (#6365) — the manifest is the one registry for
+  // those six now, so they no longer need a source-shape scraper here. Each
+  // page's own test file asserts its presentation map covers every manifest
+  // tab in its `tabGroup` instead.
   { prefix: '/settings', section: 'Settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'section', constName: 'TABS' },
   { prefix: '/models', section: 'Models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'section', constName: 'TABS',
     nestedIdSources: [

@@ -72,7 +72,17 @@ vi.mock('../services/api', () => ({
   draftChangeUpdateEmail: vi.fn(),
 }));
 
-import Privacy from './Privacy';
+import Privacy, { TABS } from './Privacy';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+
+describe('Privacy TABS ↔ nav manifest', () => {
+  it('derives every tab, in order, from the "privacy" tabGroup with a presentation entry', () => {
+    const manifestTabs = getPageNavTabs('privacy');
+    expect(TABS.map((t) => t.id)).toEqual(manifestTabs.map((t) => t.id));
+    expect(TABS.map((t) => t.label)).toEqual(manifestTabs.map((t) => t.label));
+    expect(TABS.every((t) => typeof t.icon === 'function' || typeof t.icon === 'object')).toBe(true);
+  });
+});
 import {
   revealVaultRecord, getVaultRecords, getPrivacyStatus, getPrivacySubjects,
 } from '../services/api';

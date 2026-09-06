@@ -14,19 +14,28 @@ import SyncTab from '../components/messages/SyncTab';
 import IMessageTab from '../components/messages/IMessageTab';
 import SignalTab from '../components/messages/SignalTab';
 import ContactsTab from '../components/messages/ContactsTab';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 
-// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
+// Presentation per tab id. The manifest (`tabGroup: 'messages'`) owns
+// id/label/order — this page owns how each tab looks and behaves.
 // `fullBleed: true` — tab owns internal scroll/height; Messages skips padded overflow wrapper.
 // `needsAccounts: true` — tab renders the account list, so it waits for that fetch.
-export const TABS = [
-  { id: 'inbox', label: 'Inbox', icon: Mail, needsAccounts: true },
-  { id: 'drafts', label: 'Drafts', icon: Mail, needsAccounts: true },
-  { id: 'imessage', label: 'iMessage', icon: MessageSquare, fullBleed: true },
-  { id: 'signal', label: 'Signal', icon: MessageSquare },
-  { id: 'contacts', label: 'Contacts', icon: Users },
-  { id: 'sync', label: 'Sync', icon: RefreshCw, needsAccounts: true },
-  { id: 'config', label: 'Config', icon: Settings, needsAccounts: true },
-];
+// Throws at import time if the manifest and this map drift.
+const TAB_PRESENTATION = {
+  inbox: { icon: Mail, needsAccounts: true },
+  drafts: { icon: Mail, needsAccounts: true },
+  imessage: { icon: MessageSquare, fullBleed: true },
+  signal: { icon: MessageSquare },
+  contacts: { icon: Users },
+  sync: { icon: RefreshCw, needsAccounts: true },
+  config: { icon: Settings, needsAccounts: true },
+};
+
+export const TABS = getPageNavTabs('messages').map((tab) => {
+  const presentation = TAB_PRESENTATION[tab.id];
+  if (!presentation) throw new Error(`Messages: no tab presentation for manifest tab "${tab.id}"`);
+  return { ...tab, ...presentation };
+});
 
 const FULL_BLEED_TAB_IDS = new Set(TABS.filter((t) => t.fullBleed).map((t) => t.id));
 

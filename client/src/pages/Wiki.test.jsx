@@ -16,8 +16,18 @@ vi.mock('../components/wiki/tabs/SearchTab', () => ({ default: () => <div>search
 vi.mock('../components/wiki/tabs/GraphTab', () => ({ default: () => <div>graph</div> }));
 vi.mock('../components/wiki/tabs/LogTab', () => ({ default: () => <div>log</div> }));
 
-import Wiki from './Wiki';
+import Wiki, { TABS } from './Wiki';
 import { getNotesVaults, scanNotesVault } from '../services/api';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+
+describe('Wiki TABS ↔ nav manifest', () => {
+  it('derives every tab, in order, from the "wiki" tabGroup with a presentation entry', () => {
+    const manifestTabs = getPageNavTabs('wiki');
+    expect(TABS.map((t) => t.id)).toEqual(manifestTabs.map((t) => t.id));
+    expect(TABS.map((t) => t.label)).toEqual(manifestTabs.map((t) => t.label));
+    expect(TABS.every((t) => typeof t.icon === 'function' || typeof t.icon === 'object')).toBe(true);
+  });
+});
 
 function LocationProbe() {
   const loc = useLocation();

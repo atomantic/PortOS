@@ -11,15 +11,25 @@ import WikiBrowseTab from '../components/wiki/tabs/BrowseTab';
 import WikiSearchTab from '../components/wiki/tabs/SearchTab';
 import WikiGraphTab from '../components/wiki/tabs/GraphTab';
 import WikiLogTab from '../components/wiki/tabs/LogTab';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
 
-// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
-export const TABS = [
-  { id: 'overview', label: 'Overview', icon: BarChart3 },
-  { id: 'browse', label: 'Browse', icon: FileText },
-  { id: 'search', label: 'Search', icon: Search },
-  { id: 'graph', label: 'Graph', icon: Network },
-  { id: 'log', label: 'Log', icon: Activity }
-];
+// Icon per tab id. The manifest (`tabGroup: 'wiki'`) owns id/label/order —
+// this page owns only how each tab looks; the page-local "Overview" label
+// (vs. the manifest's "Wiki") comes from the manifest's `tabLabel`. Throws at
+// import time on drift.
+const TAB_PRESENTATION = {
+  overview: { icon: BarChart3 },
+  browse: { icon: FileText },
+  search: { icon: Search },
+  graph: { icon: Network },
+  log: { icon: Activity },
+};
+
+export const TABS = getPageNavTabs('wiki').map((tab) => {
+  const presentation = TAB_PRESENTATION[tab.id];
+  if (!presentation) throw new Error(`Wiki: no tab presentation for manifest tab "${tab.id}"`);
+  return { ...tab, ...presentation };
+});
 
 export default function Wiki() {
   const { tab } = useParams();
