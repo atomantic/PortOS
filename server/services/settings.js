@@ -1,3 +1,4 @@
+import { hydratePrivateKeys, persistPrivateKeys } from './privateKeyStore.js';
 import { join } from 'path';
 import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS, atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
@@ -71,7 +72,7 @@ settingsEvents.setMaxListeners(50);
 //   write resolves.
 const loadRaw = async () => {
   const raw = await tryReadFile(SETTINGS_FILE);
-  return safeJSONParse(raw ?? '{}', {});
+  return hydratePrivateKeys(safeJSONParse(raw ?? '{}', {}), PATHS.data);
 };
 
 /**
@@ -171,7 +172,7 @@ export const reloadSettings = async () => {
     settingsEvents.emit('settings:invalidated');
     return {};
   }
-  const cleaned = stripStoreKeys(settings);
+  const cleaned = stripStoreKeys(await hydratePrivateKeys(settings, PATHS.data));
   settingsEvents.emit('settings:updated', cleaned);
   return cleaned;
 };
@@ -256,7 +257,8 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {})
   // atomicWrite (temp-file + rename) so a mid-write crash never truncates
   // settings.json. Pass a pre-stringified string to preserve the trailing
   // newline; atomicWrite's own JSON.stringify omits it.
-  await atomicWrite(SETTINGS_FILE, JSON.stringify(cleaned, null, 2) + '\n');
+  await atomicWrite(SETTINGS_FILE, JSON.stringify(await persistPrivateKeys(cleaned, PATHS.data), null, 2) + '\n');
+  await hydratePrivateKeys(cleaned, PATHS.data);
   // Warn AFTER the successful write so a thrown write never produces
   // a misleading "stripped" log line for a write that didn't happen.
   if (isPlainObject(settings)) {
@@ -314,7 +316,7 @@ export const getSettingsWithStatus = async () => {
     // covers BOTH failure modes (malformed content and an unreadable-but-present
     // file); only a genuinely ABSENT file (fresh install) caches `{}`.
     const { corrupt, settings } = await readSettingsStrict();
-    const loaded = stripStoreKeys(settings);
+    const loaded = stripStoreKeys(await hydratePrivateKeys(settings, PATHS.data));
     // A save()/reloadSettings() may have populated the cache via the
     // settings:updated listener while this cold read was awaiting the disk read.
     // Prefer that fresher in-memory value over our (older) on-disk snapshot.

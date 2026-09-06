@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { readFileSync } from 'fs';
+import { readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
@@ -29,6 +29,8 @@ const { writeSettingsFile } = bindSettingsFile(tempRoot);
 
 const seedSettings = (settings) => writeSettingsFile(settings);
 
+const readPrivateKeys = () => JSON.parse(readFileSync(join(tempRoot, 'private/api-keys.json'), 'utf8')).keys;
+
 const readSettingsFile = () => {
   const raw = readFileSync(join(tempRoot, 'settings.json'), 'utf8');
   return JSON.parse(raw);
@@ -44,6 +46,7 @@ const buildApp = async () => {
 };
 
 beforeEach(async () => {
+  rmSync(join(tempRoot, 'private'), { recursive: true, force: true });
   await seedSettings({});
 });
 
@@ -151,8 +154,10 @@ describe('GET /api/settings — external token redaction', () => {
     expect(res.body.imageGen?.defaultModel).toBe('flux');
     // On-disk values survive the redaction.
     const persisted = readSettingsFile();
-    expect(persisted.imageGen?.hfToken).toBe('hf_secret123');
-    expect(persisted.civitai?.apiKey).toBe('civ_secret456');
+    expect(persisted.imageGen?.hfToken).toBeUndefined();
+    expect(readPrivateKeys().huggingface).toBe('hf_secret123');
+    expect(persisted.civitai?.apiKey).toBeUndefined();
+    expect(readPrivateKeys().civitai).toBe('civ_secret456');
   });
 
   // Because GET no longer returns the tokens, a client that rebuilds a full
@@ -168,7 +173,8 @@ describe('GET /api/settings — external token redaction', () => {
       .send({ imageGen: { mode: 'external', local: { pythonPath: '/usr/bin/python3' } } });
     expect(res.status).toBe(200);
     const persisted = readSettingsFile();
-    expect(persisted.imageGen?.hfToken).toBe('hf_keepme');
+    expect(persisted.imageGen?.hfToken).toBeUndefined();
+    expect(readPrivateKeys().huggingface).toBe('hf_keepme');
     expect(persisted.imageGen?.mode).toBe('external');
     expect(persisted.imageGen?.local?.pythonPath).toBe('/usr/bin/python3');
     // And the save response still doesn't echo the preserved token.
@@ -183,7 +189,8 @@ describe('GET /api/settings — external token redaction', () => {
       .send({ civitai: { autoDownload: false } });
     expect(res.status).toBe(200);
     const persisted = readSettingsFile();
-    expect(persisted.civitai?.apiKey).toBe('civ_keepme');
+    expect(persisted.civitai?.apiKey).toBeUndefined();
+    expect(readPrivateKeys().civitai).toBe('civ_keepme');
     expect(persisted.civitai?.autoDownload).toBe(false);
   });
 
@@ -193,7 +200,8 @@ describe('GET /api/settings — external token redaction', () => {
     const res = await request(app).put('/api/settings').send({ timezone: 'America/Los_Angeles' });
     expect(res.status).toBe(200);
     const persisted = readSettingsFile();
-    expect(persisted.imageGen?.hfToken).toBe('hf_keepme');
+    expect(persisted.imageGen?.hfToken).toBeUndefined();
+    expect(readPrivateKeys().huggingface).toBe('hf_keepme');
     expect(persisted.timezone).toBe('America/Los_Angeles');
   });
 });

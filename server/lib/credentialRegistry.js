@@ -6,8 +6,8 @@
 //
 // Ordered most-value-first. Adding a credential:
 //   1. add a descriptor here;
-//   2. point `configurePath` at the existing per-integration tab (this page
-//      never collects a secret);
+//   2. point `configurePath` at the integration tab; `privateStore: true` enables
+//      write-only management here for keys resolved through settings.js;
 //   3. tag `feature` when an instance-feature id from instanceFeatureRegistry
 //      stays dark without it.
 // Presence and source only. Never the value, and not a masked prefix either.
@@ -17,6 +17,7 @@ export const CREDENTIAL_TIERS = Object.freeze(['free', 'metered', 'none']);
 export const CREDENTIALS = Object.freeze([
   Object.freeze({
     id: 'huggingface',
+    privateStore: true,
     label: 'Hugging Face',
     unlocks: 'Authenticated model, LoRA, and 3D-asset downloads (FLUX, LTX, Trellis, and gated Hub repos).',
     tier: 'free',
@@ -24,6 +25,24 @@ export const CREDENTIALS = Object.freeze([
     envVars: Object.freeze(['HF_TOKEN', 'HUGGINGFACE_HUB_TOKEN', 'HUGGINGFACEHUB_API_TOKEN', 'HUGGINGFACE_TOKEN']),
     settingsPath: 'imageGen.hfToken',
     configurePath: '/media/image?settings=1',
+  }),
+  Object.freeze({
+    id: 'artificial-analysis', label: 'Artificial Analysis', privateStore: true,
+    unlocks: 'Model benchmark and pricing sync.', tier: 'free',
+    getUrl: 'https://artificialanalysis.ai/', envVars: Object.freeze(['ARTIFICIAL_ANALYSIS_API_KEY']),
+    settingsPath: 'secrets.artificialAnalysis.apiKey', configurePath: '/settings/credentials',
+  }),
+  Object.freeze({
+    id: 'fal', label: 'fal.ai', privateStore: true,
+    unlocks: 'Video generation through fal.ai.', tier: 'metered',
+    getUrl: 'https://fal.ai/dashboard/keys', envVars: Object.freeze(['FAL_KEY']),
+    settingsPath: 'videoGen.fal.apiKey', configurePath: '/settings/credentials',
+  }),
+  Object.freeze({
+    id: 'reactor', label: 'reactor.inc', privateStore: true,
+    unlocks: 'Video generation through reactor.inc.', tier: 'metered',
+    getUrl: 'https://reactor.inc/', envVars: Object.freeze(['REACTOR_API_KEY']),
+    settingsPath: 'videoGen.reactor.apiKey', configurePath: '/settings/credentials',
   }),
   Object.freeze({
     id: 'github',
@@ -77,6 +96,7 @@ export const CREDENTIALS = Object.freeze([
   }),
   Object.freeze({
     id: 'civitai',
+    privateStore: true,
     label: 'CivitAI',
     unlocks: 'LoRA and checkpoint downloads from civitai.com.',
     tier: 'free',

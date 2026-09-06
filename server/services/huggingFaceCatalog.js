@@ -1,3 +1,4 @@
+import { getHfToken } from './hfToken.js';
 import { formatBytes as formatBytesRaw } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
@@ -719,9 +720,9 @@ function toResult(model, backend, requestedCategory, installedIds, installedAudi
   return result
 }
 
-function hfHeaders() {
+async function hfHeaders() {
   const headers = { Accept: 'application/json' }
-  const token = process.env.HUGGINGFACE_TOKEN || process.env.HF_TOKEN
+  const token = await getHfToken()
   if (token) headers.Authorization = `Bearer ${token}`
   return headers
 }
@@ -773,7 +774,7 @@ function hfFetch(url) {
   return hfGate.run(async () => {
     const res = await fetchWithTimeout(
       url,
-      { headers: hfHeaders() },
+      { headers: await hfHeaders() },
       HF_TIMEOUT_MS,
       { retries: 1, retryDelayMs: HF_RETRY_DELAY_MS, shouldRetry: isReplayableConnectionError }
     // Both attempts lost the connection. undici's own message is a bare `fetch

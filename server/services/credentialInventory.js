@@ -153,6 +153,7 @@ const publicRow = (entry, resolution, featuresById) => {
     : [];
   return {
     id: entry.id,
+    editable: entry.privateStore === true,
     label: entry.label,
     unlocks: entry.unlocks,
     tier: entry.tier,

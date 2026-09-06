@@ -350,3 +350,12 @@ it('keeps exact Zen IDs in available coverage and plots free prices without inve
   expect(screen.queryByTestId('scatter-example-free')).toBeNull();
   expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
 });
+
+it('syncs with the saved server key when the key input is blank', async () => {
+  api.syncArtificialAnalysis.mockResolvedValue({ success: true, observations: 1, total: 1 });
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: /Sync from Artificial Analysis/i }));
+  fireEvent.click(screen.getByRole('button', { name: 'Start Sync' }));
+  await screen.findByText(/Sync successful!/);
+  expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({}, { silent: true });
+});

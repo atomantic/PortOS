@@ -1,3 +1,4 @@
+vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})), updateSettingsWith: vi.fn() }));
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import express from 'express';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
