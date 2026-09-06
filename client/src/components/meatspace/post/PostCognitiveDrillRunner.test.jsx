@@ -466,6 +466,48 @@ describe('NBackRunner stimulus timeouts', () => {
   });
 });
 
+describe('DigitSpanRunner recall focus', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    markDrillTutorialSeen('digit-span');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // The recall input appears on its own timer (after the digits finish
+  // flashing), not from a user action — so nothing else would land focus on
+  // it. A user who has just watched the sequence and looked up to type
+  // shouldn't have to click the field first.
+  it('auto-focuses the recall input once the digit sequence finishes flashing', () => {
+    const drill = {
+      type: 'digit-span',
+      config: { direction: 'forward', showMs: 400 },
+      sequences: [{ digits: [7], length: 1 }],
+    };
+    render(
+      <PostCognitiveDrillRunner
+        drill={drill}
+        drillIndex={0}
+        drillCount={1}
+        onComplete={vi.fn()}
+        isTraining={false}
+      />,
+    );
+
+    expect(screen.queryByRole('textbox', { name: 'Your answer' })).not.toBeInTheDocument();
+
+    // 600ms pre-roll + 400ms shown + 200ms gap before the recall phase arms.
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+
+    const input = screen.getByRole('textbox', { name: 'Your answer' });
+    expect(input).toHaveFocus();
+  });
+});
+
 // Regression coverage for the reaction-time runner's timer/re-entrancy guards
 // (dual armTimeoutRef/advanceTimeoutRef + advancingRef). These are documented
 // in-code as deliberate race-condition mitigations but had no test coverage:
