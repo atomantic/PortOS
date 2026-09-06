@@ -1,4 +1,5 @@
-// Server-side mirror of `client/src/lib/musicDuration.js`. MiniMax Music 3
+// The authoritative copy, re-exported by `client/src/lib/musicDuration.js`
+// (keep it pure: no Node built-in, nothing outside `server/lib`). MiniMax Music 3
 // treats audio_duration as a ceiling, so auto mode sizes that ceiling from the
 // lyric structure and leaves room for the composition to resolve.
 

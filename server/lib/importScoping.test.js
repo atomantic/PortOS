@@ -198,6 +198,13 @@ describe('deferred imports stay deferred (#6156)', () => {
 // a zero-import leaf (its time units are declared locally precisely so it drags
 // nothing); the alternative is re-declaring the cadence list at the Zod boundary,
 // which is the drift that issue exists to close. Fits inside the allowance above.
+//
+// #6364 retires the server/client copy convention, splitting four pure leaves
+// out of modules the client now imports (`bibleLimits.js` out of `storyBible.js`,
+// `portosUrls.js` out of `ports.js`, `youtubeUrlAssert.js` out of `youtubeUrl.js`,
+// `avatarStyles.js` in from the client tree). Each is one extra NODE on a path
+// that already existed — a flatter graph, not a new eager edge into a heavy
+// subtree. Fits inside the allowance above.
 const MAX_STATIC_INSTANTIATIONS = 91400;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

@@ -52,7 +52,8 @@ import { vttToPlainText } from '../lib/vttTranscript.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { downloadAudioToTempMp3 } from './ytdlpAudioImport.js';
 import { downloadVideoIntoLibrary } from './videoDownload.js';
-import { assertYoutubeVideoUrl, YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
+import { YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
+import { assertYoutubeVideoUrl } from '../lib/youtubeUrlAssert.js';
 // The pure half of the ingest — yt-dlp metadata normalization, the Obsidian
 // note body, the CoS agent prompt, and the index's Obsidian-pointer rule — lives
 // in lib/ so it is unit-testable without this module's spawn/store graph (#6015).

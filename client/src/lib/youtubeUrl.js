@@ -1,35 +1,15 @@
 /**
- * Single-video YouTube URL detection — MIRROR of `YOUTUBE_VIDEO_URL_RE` in
- * `server/lib/youtubeUrl.js` (authoritative there).
+ * The YouTube ingest options Quick Capture offers, over the canonical
+ * single-video URL rule in `server/lib/youtubeUrl.js`.
  *
- * The Quick Capture box swaps its whole submit path (brain capture → YouTube
- * ingest) based on this predicate, and reveals the ingest options panel from it,
- * so a looser client answer would offer options for a URL the server refuses.
- * Port any change from the server copy verbatim.
- *
- * Deliberately narrow: playlists, channels, and `/@handle` pages are NOT
- * matched — a paste that would have yt-dlp pull 300 videos should fall through
- * to normal link capture, not silently start a batch download.
+ * `isYoutubeVideoUrl` / `youtubeVideoId` are re-exported from that leaf rather
+ * than copied. Quick Capture swaps its whole submit path (brain capture →
+ * YouTube ingest) on the predicate and reveals the options panel from it, so a
+ * looser client answer would offer options for a URL the server refuses. The
+ * throwing form the routes use lives in `server/lib/youtubeUrlAssert.js`, which
+ * this deliberately does not reach for.
  */
-
-const SINGLE_VIDEO_RE =
-  /^https?:\/\/(www\.|m\.|music\.)?(youtube\.com\/(watch\?[^\s#]*\bv=[\w-]{6,}|shorts\/[\w-]{6,}|live\/[\w-]{6,}|embed\/[\w-]{6,})|youtu\.be\/[\w-]{6,})/i;
-
-/** The video id in a YouTube URL, or null. Mirrors `youtubeVideoIdFromUrl` in `server/lib/youtubeUrl.js`. */
-export function youtubeVideoId(url) {
-  if (!url) return null;
-  const s = String(url).trim();
-  const vParam = /[?&]v=([A-Za-z0-9_-]{6,20})/.exec(s);
-  if (vParam) return vParam[1];
-  const pathId = /(?:youtu\.be\/|\/shorts\/|\/embed\/|\/live\/|\/v\/)([A-Za-z0-9_-]{6,20})/.exec(s);
-  return pathId ? pathId[1] : null;
-}
-
-/** True when `text` is a single-video YouTube URL the ingest endpoint accepts. */
-export function isYoutubeVideoUrl(text) {
-  const trimmed = (text ?? '').trim();
-  return SINGLE_VIDEO_RE.test(trimmed) && !!youtubeVideoId(trimmed);
-}
+export { isYoutubeVideoUrl, youtubeVideoId } from '../../../server/lib/youtubeUrl.js';
 
 /**
  * The three artifacts an ingest can produce, as ONE table.

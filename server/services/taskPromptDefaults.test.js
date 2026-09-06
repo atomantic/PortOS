@@ -140,7 +140,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
 
     const [freshDefaults, { PORTOS_API_URL }] = await Promise.all([
       import('./taskPromptDefaults.js'),
-      import('../lib/ports.js'),
+      import('../lib/portosUrls.js'),
     ]);
     // Guard the guard: if the stub stopped taking effect this case would pass
     // vacuously by re-running the ambient-environment assertions above.

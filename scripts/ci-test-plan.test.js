@@ -464,37 +464,23 @@ describe('CI test impact planner', () => {
   it('reaches a mirror-parity test from either side of the mirror by basename (#6363)', () => {
     const tracked = [
       ...TRACKED,
-      'server/lib/seasonStructure.js',
-      'server/lib/seasonStructure.mirror.test.js',
-      'client/src/lib/seasonStructure.js',
+      'server/lib/eidoverseWorldReset.js',
+      'server/lib/eidoverseWorldReset.parity.test.js',
+      'client/src/lib/eidoverseWorldReset.js',
     ];
     // Both copies share one basename, and the mirror test names the OTHER copy
     // only by that basename — a mirror test living in server/lib is what a
     // change to either side must select.
     const pathContractTests = {
-      'server/lib/seasonStructure.js': ['server/lib/seasonStructure.mirror.test.js'],
-      'client/src/lib/seasonStructure.js': ['server/lib/seasonStructure.mirror.test.js'],
+      'server/lib/eidoverseWorldReset.js': ['server/lib/eidoverseWorldReset.parity.test.js'],
+      'client/src/lib/eidoverseWorldReset.js': ['server/lib/eidoverseWorldReset.parity.test.js'],
     };
 
-    const serverSide = buildCiTestPlan(['server/lib/seasonStructure.js'], { trackedFiles: tracked, pathContractTests });
-    expect(serverSide.server.files).toContain('server/lib/seasonStructure.mirror.test.js');
+    const serverSide = buildCiTestPlan(['server/lib/eidoverseWorldReset.js'], { trackedFiles: tracked, pathContractTests });
+    expect(serverSide.server.files).toContain('server/lib/eidoverseWorldReset.parity.test.js');
 
-    const clientSide = buildCiTestPlan(['client/src/lib/seasonStructure.js'], { trackedFiles: tracked, pathContractTests });
-    expect(clientSide.server.files).toContain('server/lib/seasonStructure.mirror.test.js');
-  });
-
-  it('runs mirrorCoverage.test.js whenever a mirrored directory changes, since it names no file (#6363)', () => {
-    const tracked = [...TRACKED, 'server/lib/mirrorCoverage.test.js'];
-
-    const serverLib = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: tracked });
-    expect(serverLib.server.files).toContain('server/lib/mirrorCoverage.test.js');
-
-    const clientLib = buildCiTestPlan(['client/src/lib/catalogLinks.js'], { trackedFiles: tracked });
-    expect(clientLib.server.files).toContain('server/lib/mirrorCoverage.test.js');
-
-    // Unrelated directories don't force it.
-    const unrelated = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: tracked });
-    expect(unrelated.server.files).not.toContain('server/lib/mirrorCoverage.test.js');
+    const clientSide = buildCiTestPlan(['client/src/lib/eidoverseWorldReset.js'], { trackedFiles: tracked, pathContractTests });
+    expect(clientSide.server.files).toContain('server/lib/eidoverseWorldReset.parity.test.js');
   });
 
   it('runs the generated-manifest drift tests whenever a server source changes', () => {

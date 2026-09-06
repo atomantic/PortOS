@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { clampToCharLimit, countWords, escapeRegExp, trimTo } from './textUtils.js';
-import { readFileSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { collectClientSources, collectServerSources, readClientSource, readServerSource } from './testHelper.js';
-import { compareDeclaration } from './mirrorParity.js';
 
 describe('countWords', () => {
   it('counts whitespace-separated tokens', () => {
@@ -123,12 +119,6 @@ const ESCAPE_IDIOMS = [
   /(?:^|[^\w$.])(?:const|let|var|function)\s+escapeRegExp\b/,
 ];
 
-// The client mirror. It is the ONE file on that side allowed to spell the escape,
-// exactly as `lib/textUtils.js` is on this one — every other client caller imports
-// it. There is no third exemption, and the scenePrompt holdout that used to sit
-// here is gone: the client mirror is what let `lib/scenePrompt.js` migrate (#5790).
-const CLIENT_OWNER = 'lib/textUtils.js';
-
 const escapeIdiomCount = (source) => ESCAPE_IDIOMS
   .map((idiom) => source.match(new RegExp(idiom.source, 'g'))?.length ?? 0)
   .reduce((most, count) => Math.max(most, count), 0);
@@ -144,13 +134,14 @@ describe('no private escapeRegExp', () => {
     ).toEqual([]);
   });
 
-  // The client half of the same guard. The browser cannot import `server/lib`, so
-  // for as long as this side had no home for the escape every new client caller
-  // copied the nearest one — five product modules and a test had done so by #5790.
-  // `collectClientSources` counts `.jsx` and client TESTS too; see its docstring.
-  it('leaves client/src/lib/textUtils.js as the only RegExp-escape implementation under client/src/', () => {
+  // The client half of the same guard, and it now allows NO exemption: since #6364
+  // `client/src/lib/textUtils.js` re-exports this module rather than copying it, so
+  // no file under `client/src/` spells the escape at all. Before that, every new
+  // client caller copied the nearest one — five product modules and a test had done
+  // so by #5790. `collectClientSources` counts `.jsx` and client TESTS too; see its
+  // docstring.
+  it('leaves no RegExp-escape implementation anywhere under client/src/', () => {
     const offenders = collectClientSources()
-      .filter((rel) => rel !== CLIENT_OWNER)
       .filter((rel) => escapeIdiomCount(readClientSource(rel)) > 0);
     expect(
       offenders,
@@ -162,24 +153,11 @@ describe('no private escapeRegExp', () => {
   // offender list is equally what a walk returning nothing produces.
   it('detects a re-inlined copy under any of its spellings', () => {
     expect(escapeIdiomCount(readServerSource('lib/textUtils.js'))).toBeGreaterThan(0);
-    expect(escapeIdiomCount(readClientSource(CLIENT_OWNER))).toBeGreaterThan(0);
+    // The client walk has no exempt file left to prove itself against, so pin it
+    // on a synthetic copy instead — an empty offender list must mean "nobody
+    // spells it", not "the walk read nothing".
+    expect(collectClientSources().length).toBeGreaterThan(100);
+    expect(escapeIdiomCount("const escapeRegExp = (s) => s;")).toBeGreaterThan(0);
     expect(escapeIdiomCount('const x = 1;')).toBe(0);
-  });
-});
-
-// The client copy is a declared mirror (`client/src/lib/README.md`), so
-// `mirrorCoverage.test.js` requires a test that reads BOTH files — this is it.
-// It is a PARTIAL mirror: only `escapeRegExp` crosses, because it is the only
-// member the bundle has a caller for.
-describe('escapeRegExp — server/client mirror parity', () => {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const CLIENT_COPY = join(here, '../../client/src/lib/textUtils.js');
-
-  it('keeps escapeRegExp identical', () => {
-    const server = readFileSync(join(here, 'textUtils.js'), 'utf8');
-    const client = readFileSync(CLIENT_COPY, 'utf8');
-    const { clientDecl, serverNorm, clientNorm } = compareDeclaration(server, client, 'escapeRegExp');
-    expect(clientDecl, 'client/src/lib/textUtils.js is missing escapeRegExp').not.toBeNull();
-    expect(clientNorm).toBe(serverNorm);
   });
 });

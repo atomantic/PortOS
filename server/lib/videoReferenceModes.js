@@ -20,9 +20,9 @@
  * boundary rejects instead (`i2vReferenceModeViolation` below), and the LTX
  * helper fails loudly rather than downgrading mid-render.
  *
- * PURE and MIRRORED to `client/src/lib/videoReferenceModes.js` (byte-for-byte;
- * `videoReferenceModes.mirror.test.js` is the contract) — so it must not import
- * `ServerError` or anything else server-side. Callers translate the returned
+ * A pure leaf re-exported by `client/src/lib/videoReferenceModes.js` — so it
+ * must not import `ServerError`, any Node built-in, or anything outside
+ * `server/lib`. Callers translate the returned
  * `{ code, message }` into whatever their layer throws:
  * `videoReferenceModeError()` in services/videoGen/modeContract.js does that
  * for the route + render boundaries.

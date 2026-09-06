@@ -9,7 +9,7 @@
  * pure data leaf, and this is tooling for the snapshot rather than prompt data.
  */
 import { createHash } from 'crypto';
-import { PORTOS_API_URL } from '../../lib/ports.js';
+import { PORTOS_API_URL } from '../../lib/portosUrls.js';
 
 const API_URL_PLACEHOLDER = '{{PORTOS_API_URL}}';
 

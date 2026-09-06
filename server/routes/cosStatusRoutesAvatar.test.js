@@ -10,7 +10,7 @@ vi.mock('../services/taskWatcher.js', () => ({}));
 vi.mock('../services/memoryEmbeddings.js', () => ({ reinitialize: vi.fn() }));
 
 import { cosConfigSchema } from './cosStatusRoutes.js';
-import { AVATAR_STYLE_IDS } from '../../client/src/lib/avatarStyles.js';
+import { AVATAR_STYLE_IDS } from '../lib/avatarStyles.js';
 
 describe('cosConfigSchema avatarStyle', () => {
   it('accepts every style in the shared registry, so a style added there is never a settings 400', () => {

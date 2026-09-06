@@ -12,9 +12,9 @@
  * URL. A bare host therefore needs a plausible TLD, and only http/https/git@ are
  * accepted (no `javascript:`/`data:`/`file:`).
  *
- * AUTHORITATIVE COPY — mirrored to `client/src/lib/bareUrl.js` so the capture
- * boxes can preview this exact decision. Parity is enforced by
- * `bareUrl.mirror.test.js`; port any change to both.
+ * A pure leaf: `client/src/lib/bareUrl.js` re-exports it so the capture boxes
+ * preview this exact decision. Import no Node built-in here, and nothing outside
+ * `server/lib`.
  */
 
 // Explicit http(s) scheme — the URL constructor does the real validation below.

@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import path from 'path';
-import { PORTS, resolvePostgresPort } from './ports.js';
+import { DEFAULT_PEER_PORT, PORTS, resolvePostgresPort } from './ports.js';
 
 // `ecosystem.config.cjs` is the source of truth for port numbers; `ports.js` is a
 // hand-maintained ESM mirror of it (the ESM server can't require() the CJS
@@ -55,6 +55,10 @@ describe('PORTS mirror of ecosystem.config.cjs', () => {
     expect(branches).toBeTruthy();
     expect(Number(branches[1])).toBe(PORTS.POSTGRES_NATIVE);
     expect(Number(branches[2])).toBe(PORTS.POSTGRES_DOCKER);
+  });
+
+  it('defaults a new peer to the API port', () => {
+    expect(DEFAULT_PEER_PORT).toBe(ECOSYSTEM_PORTS.API);
   });
 });
 

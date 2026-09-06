@@ -195,10 +195,15 @@ export const ALWAYS_RUN_TESTS = [
   // The union-merged catalogs are `.md` to the planner — documentation-only —
   // so a rebase that doubled a row would otherwise never be re-checked.
   'scripts/catalog-merge-union.test.js',
+  // Walks the client→server/lib import graph; any server/lib file can add a
+  // Node-only import and break the client build with no edge back to here.
+  'scripts/client-server-import-purity.test.js',
   'scripts/direct-invocation-drift.test.js',
   'scripts/ensure-deps.test.js',
   'scripts/node-version-drift.test.js',
   'scripts/repo-scan-guards.test.js',
+  // Whole-tree scanner: any server file can add an import of client source.
+  'scripts/server-imports-no-client.test.js',
   'scripts/tailnet-identity-leak.test.js',
   'server/dependency-overrides.test.js',
   // Whole-tree scanner: any server file can add a `process.env` read, and
@@ -361,13 +366,6 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
   }
   if (changedFiles.some((path) => /^client\/src\/lib\//.test(path))) {
     add('client/src/lib/index.test.js');
-  }
-  // mirrorCoverage.test.js walks both directories and diffs their README mirror
-  // catalogs against the actual test files present; it names no file itself, so
-  // no import edge or basename `git grep` (pathContractTests, see rule 1 above)
-  // can reach it either.
-  if (changedFiles.some((path) => /^(?:server|client\/src)\/lib\//.test(path))) {
-    add('server/lib/mirrorCoverage.test.js');
   }
   if (changedFiles.some((path) => /^client\/src\/hooks\//.test(path))) {
     add('client/src/hooks/index.test.js');

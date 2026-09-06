@@ -39,4 +39,15 @@ describe('isSafeHref', () => {
   it('rejects a garbage non-URL string', () => {
     expect(isSafeHref('not a url at all')).toBe(false);
   });
+  // The scheme-only spellings a URL parser still reads as http(s) (#6303). These
+  // used to be the drift between this rule and a hand-maintained client copy —
+  // the client now imports this module, so they are pinned once, here.
+  it.each([
+    ['https:foo', true],
+    ['https:/host', true],
+    ['https:///host', true],
+    ['//host', false],
+  ])('reads %p as %p', (input, expected) => {
+    expect(isSafeHref(input)).toBe(expected);
+  });
 });

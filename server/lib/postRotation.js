@@ -8,10 +8,10 @@
  * the choice varies across days while staying repeatable for the same day and
  * the same inputs (no randomness — the daily routine must be reproducible).
  *
- * Pure, dependency-free, and MIRRORED to `client/src/lib/postRotation.js` so the
- * server's recommendation tiers and the client's Quick-session domain picks
- * rotate identically. Keep the two files in sync — `postRotation.mirror.test.js`
- * fails when their code diverges.
+ * Pure and dependency-free: `client/src/lib/postRotation.js` re-exports it, so
+ * the server's recommendation tiers and the client's Quick-session domain picks
+ * rotate identically because they run the same code. Import no Node built-in
+ * here, and nothing outside `server/lib`.
  */
 
 /**

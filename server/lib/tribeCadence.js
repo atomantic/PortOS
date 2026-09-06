@@ -1,11 +1,10 @@
 // Authoritative, pure cadence rules for the Tribe care system — the single
 // source of truth for "who needs care." Consumed on the server by
 // `personCadenceStatus` / `getCareSummary` (server/services/tribe.js → the
-// proactive-alerts check + the Tribe Care dashboard widget) and mirrored to
+// proactive-alerts check + the Tribe Care dashboard widget) and re-exported by
 // `client/src/lib/tribeCadence.js` for the client bundle (Tribe page + circle
-// map). The mirror must produce IDENTICAL output; the cross-boundary contract
-// test (client/src/lib/tribeCadence.contract.test.js) imports both copies and
-// asserts they never drift. No Node-only deps — keep this file pure.
+// map), so both sides run this code rather than two copies of it. Keep it pure:
+// no Node built-in, nothing outside `server/lib`.
 
 // The four inner rings owe a care cadence; `external` (former contacts, a
 // nemesis) is outside the tribe and is never nagged.

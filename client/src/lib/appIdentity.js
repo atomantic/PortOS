@@ -1,18 +1,8 @@
 /**
- * The managed-apps registry's baseline identity — PortOS itself. Mirrors
- * `server/lib/appIdentity.js`.
+ * The product name/tagline every surface prints.
  *
- * Split out of `services/apiCore.js` for the same reason the server split it out
- * of `services/apps.js`: a module that only needs to SAY "this record is PortOS"
- * shouldn't have to import the API client — which pulls in `ui/Toast` and
- * therefore React. `client/src/components/apps/constants.js` is imported by a
- * node-env SERVER test (`server/services/streamingDetect.test.js`, the
- * DESKTOP_TYPES parity check), where that React import fails to resolve.
- * `apiCore.js` re-exports the constant, so every existing
- * `import { PORTOS_APP_ID } from '../services/api'` is unchanged.
- *
- * Data only, no dependencies — keep it that way.
+ * Re-export of `server/lib/appIdentity.js` — the one definition of this rule,
+ * imported rather than copied so the two runtimes cannot drift. The file stays
+ * so every `lib/appIdentity` import path in the client is unchanged.
  */
-
-/** Stable id of the baseline PortOS app — always present, never deletable. */
-export const PORTOS_APP_ID = 'portos-default';
+export { PORTOS_APP_ID } from '../../../server/lib/appIdentity.js';
