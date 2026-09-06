@@ -25,6 +25,8 @@ import {
 } from '../../lib/fableLoomPlaytest.js';
 import { computeTopologicalNodeOrder } from '../../lib/fableLoomProduction.js';
 import { CHARS_PER_TOKEN, usableInputTokens } from '../../lib/contextBudget.js';
+import { buildCastIntegrityReport } from '../../lib/characterIntegrity.js';
+import { renderCastIntegrity } from '../../lib/castIntegrityPrompt.js';
 import {
   isFableLoomPlaybackMode,
   FABLELOOM_PROTAGONIST_PRESENCE,
@@ -50,6 +52,12 @@ const REVIEW_CATEGORIES = new Set([
 const AUTOPILOT_QUALITY_THRESHOLD = 8;
 const EDITORIAL_PROMPT_HARD_MAX_CHARS = 1_000_000;
 const EDITORIAL_OUTPUT_RESERVE_TOKENS = 8_000;
+// The cast-integrity block is CARVED OUT of the editorial prompt budget, never
+// added beside it (#6415): whatever it uses is subtracted from what the
+// playthrough digest is offered, so the total rendered prompt is bounded
+// exactly as it was before. One short line per cast member is all it needs.
+const EDITORIAL_CAST_INTEGRITY_BUDGET_SHARE = 0.02;
+const EDITORIAL_CAST_INTEGRITY_MIN_CHARS = 400;
 const INSTRUCTION_PLACEHOLDER_VALUES = new Set([
   'concise whole-series editorial assessment',
   'episode_id_from_input',
@@ -324,6 +332,65 @@ const resolveEditorialPromptBudgetChars = async (stage, route, source) => {
   return editorialPromptBudgetChars(contextWindow);
 };
 
+// ---------- cast integrity (#6415) ----------
+
+/**
+ * The characters this story actually stages: the canonical protagonist, every
+ * scene visual binding, and every interaction-window speaker.
+ *
+ * Scoping matters because the integrity block is BINDING on the editor. A
+ * universe holds every character its author ever wrote; measuring all of them
+ * would hand the editor rulings about people this loom never puts on screen,
+ * and spend the block's budget saying so.
+ */
+const loomCastCharacterIds = (loom) => {
+  const ids = new Set();
+  if (hasText(loom?.protagonistCharacterId)) ids.add(loom.protagonistCharacterId);
+  for (const episode of asArray(loom?.episodes)) {
+    for (const node of asArray(episode.nodes)) {
+      for (const appearance of asArray(node.visualCanon?.characterAppearances)) {
+        if (hasText(appearance?.characterId)) ids.add(appearance.characterId);
+      }
+      if (hasText(node.interactionWindow?.protagonistCharacterId)) {
+        ids.add(node.interactionWindow.protagonistCharacterId);
+      }
+    }
+  }
+  return ids;
+};
+
+/**
+ * The deterministic cast-integrity report for this loom. ZERO provider calls —
+ * it runs wherever the other deterministic diagnostics do.
+ *
+ * A loom with no visual bindings yet stages nobody, and reporting "(no cast)"
+ * there would silently exempt exactly the early stories that most need the
+ * ruling. So an unbound loom falls back to the linked universe's cast: it is
+ * the only cast the story can be about, and the editor already receives that
+ * same canon in full.
+ */
+const loomCastIntegrityReport = (loom, universe) => {
+  const cast = asArray(universe?.characters);
+  const staged = loomCastCharacterIds(loom);
+  const scoped = cast.filter((character) => staged.has(character?.id));
+  return buildCastIntegrityReport(scoped.length ? scoped : cast);
+};
+
+const castIntegrityBudgetChars = (maxPromptChars) => Math.min(
+  maxPromptChars,
+  Math.max(
+    EDITORIAL_CAST_INTEGRITY_MIN_CHARS,
+    Math.floor(maxPromptChars * EDITORIAL_CAST_INTEGRITY_BUDGET_SHARE),
+  ),
+);
+
+/** The prompt block, in the editor's own budget terms. */
+const renderLoomCastIntegrity = (report, maxPromptChars) => renderCastIntegrity(report, {
+  maxChars: castIntegrityBudgetChars(maxPromptChars),
+  castLabel: 'story-linked',
+  budgetLabel: 'editorial prompt budget',
+});
+
 /** Assemble every deterministic series-level authoring/playthrough signal. */
 export async function collectFableLoomEditorialDiagnostics(
   loom,
@@ -364,6 +431,10 @@ export async function collectFableLoomEditorialDiagnostics(
   const playthroughErrors = episodes.reduce((total, episode) => (
     total + (episode.playtest?.stats.errorCount || 0)
   ), 0);
+  // Deterministic, zero-provider, and measured off the SAME universe snapshot
+  // the continuity pass reads — so a depth ruling the editor is told is binding
+  // always names a character the canon digest actually describes.
+  const castIntegrity = loomCastIntegrityReport(loom, universe);
   const stats = {
     outlineErrors: outline.stats.errorCount,
     outlineWarnings: outline.stats.warningCount,
@@ -377,6 +448,8 @@ export async function collectFableLoomEditorialDiagnostics(
     endingVariationCount: playthrough.stats.endingVariationCount,
     visitedTransitionCount: playthrough.stats.visitedTransitionCount,
     transitionCount: playthrough.stats.transitionCount,
+    castCharacterCount: castIntegrity.castCount,
+    castIntegrityFindings: castIntegrity.findings.length,
   };
   return {
     passed: outline.stats.ready
@@ -387,6 +460,10 @@ export async function collectFableLoomEditorialDiagnostics(
     outline,
     playthrough,
     episodes,
+    // Reported, never gating: a thin spear-carrier must not block a FableLoom
+    // autopilot run the way a broken graph does. The editor is told about it;
+    // the pass/fail contract is unchanged.
+    castIntegrity,
     stats,
   };
 }
@@ -956,13 +1033,18 @@ export async function evaluateAndRemediateFableLoom(loomId, {
     { providerId, model, effort },
     'fableloom-editorial-remediate',
   );
+  const castIntegrity = renderLoomCastIntegrity(diagnostics.castIntegrity, maxPromptChars);
   const variables = withCompletePlaythroughDigest({
     loom,
     report: diagnostics.playthrough,
-    maxPromptChars,
+    // Carved out, not added beside: the playthrough digest is offered what the
+    // integrity block did not spend, so the editorial prompt total is bounded
+    // exactly as it was before this block existed.
+    maxPromptChars: Math.max(0, maxPromptChars - castIntegrity.length),
     variables: {
       storyContext: storyContext(loom),
       canonDigest: dependencies.canonDigest || '(none)',
+      castIntegrity,
       seriesPlanJson: seriesPlanDigest(loom),
       teleplayDigest: teleplayDigest(loom),
       deterministicDigest: diagnosticLines(diagnostics),
@@ -1138,6 +1220,7 @@ export const __testing = {
   assertEditorialDependenciesUnchanged,
   assertEditorialPromptBudget,
   assertEditorialSnapshotUnchanged,
+  castIntegrityBudgetChars,
   compactEditorialDiagnostics,
   diagnosticLines,
   editorialDependencyFingerprint,
@@ -1147,7 +1230,10 @@ export const __testing = {
   exactGraphIdContract,
   finalizeEditorialOperation,
   loadEditorialDependencies,
+  loomCastCharacterIds,
+  loomCastIntegrityReport,
   renderEditorialPrompt,
+  renderLoomCastIntegrity,
   sanitizeEvaluation,
   sanitizePlaythroughReview,
   seriesPlanDigest,
