@@ -1817,7 +1817,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(
       fnBody,
       'queue path must constrain the pick to perpetual when on cooldown (perpetualOnly gated on cooldown)'
-    ).toMatch(/getNextTaskType\([^)]*\{\s*perpetualOnly:\s*onCooldown\s*\}/);
+    ).toMatch(/getNextTaskType\([^)]*\{\s*perpetualOnly:\s*onCooldown\s*[,}]/);
   });
 
   it('generateManagedAppImprovementTaskForType defers updateAppActivity until after gates', () => {

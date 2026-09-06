@@ -790,9 +790,11 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
 }
 
 /**
- * Check if a task type should run for a specific app (or globally)
+ * Check if a task type should run for a specific app (or globally).
+ * Successful completion may continue its perpetual drain past the initiating
+ * cron slot; all eligibility and park gates still apply.
  */
-export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
+export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate(), continuePerpetual = false } = {}) {
   if (appId && requiresInstallWideTarget(taskType)) {
     return { shouldRun: false, reason: 'requires-install-wide-target' };
   }
@@ -906,6 +908,10 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
       if (isPerpetual) {
         const parked = perpetualParkResult();
         if (parked) { result = parked; break; }
+        if (continuePerpetual) {
+          result = { shouldRun: true, reason: 'perpetual-drain' };
+          break;
+        }
         // Unparked: the cron evaluation below decides whether to INITIATE a
         // drain. Once one is running, the completion-refill lane keeps it going
         // back-to-back regardless of subsequent ticks.
@@ -1015,7 +1021,7 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
 /**
  * Get all enabled task types that are due to run (optionally for a specific app)
  */
-export async function getDueTasks(appId = null) {
+export async function getDueTasks(appId = null, { continuingTaskType = null } = {}) {
   const schedule = await loadSchedule();
   const due = [];
   const featureEnabled = createFeatureGate();
@@ -1023,7 +1029,7 @@ export async function getDueTasks(appId = null) {
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!interval.enabled) continue;
 
-    const check = await shouldRunTask(taskType, appId, { featureEnabled });
+    const check = await shouldRunTask(taskType, appId, { featureEnabled, continuePerpetual: taskType === continuingTaskType });
     if (check.shouldRun) {
       due.push({ taskType, reason: check.reason, interval });
     }
@@ -1035,8 +1041,8 @@ export async function getDueTasks(appId = null) {
 /**
  * Get the next task type to run (optionally for a specific app)
  */
-export async function getNextTaskType(appId = null, { perpetualOnly = false } = {}) {
-  const dueTasks = await getDueTasks(appId);
+export async function getNextTaskType(appId = null, { perpetualOnly = false, continuingTaskType = null } = {}) {
+  const dueTasks = await getDueTasks(appId, { continuingTaskType });
 
   // `perpetualOnly` constrains the pick to a due perpetual (drain-until-done)
   // task, skipping every other schedule type. Callers set this when the app is

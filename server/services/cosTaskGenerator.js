@@ -1514,7 +1514,7 @@ export async function queueDueInstallWideImprovementTasks({
  * Called during every evaluation to ensure system tasks are queued even when user tasks exist
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
-export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null, wakeAfterRecord = true } = {}) {
+export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null, wakeAfterRecord = true, perpetualContinuation = null } = {}) {
   const taskSchedule = await import('./taskSchedule.js');
   const { getDueTasks, getNextTaskType, recordExecution } = taskSchedule;
 
@@ -1598,7 +1598,10 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // alone). When NOT on cooldown, the normal full-priority pick runs.
     const onCooldown = isAppActivityOnCooldown(appActivity, state.config.appReviewCooldownMs);
 
-    const nextTypeResult = await getNextTaskType(app.id, { perpetualOnly: onCooldown }).catch(() => null);
+    const nextTypeResult = await getNextTaskType(app.id, {
+      perpetualOnly: onCooldown,
+      continuingTaskType: perpetualContinuation?.appId === app.id ? perpetualContinuation.taskType : null
+    }).catch(() => null);
     if (!nextTypeResult) continue;
     const nextType = nextTypeResult.taskType;
 
