@@ -202,3 +202,112 @@ describe('SyncedReview', () => {
     expect(await screen.findByText(/run .*Adapt/i)).toBeTruthy();
   });
 });
+
+// ---- cast pane (#6415 / #6417) ----
+
+function castPayload(overrides = {}) {
+  const base = payload();
+  return payload({
+    prose: {
+      segments: base.prose.segments.map((seg, i) => ({ ...seg, castCharacterIds: i === 0 ? ['wr-char-hero'] : [] })),
+    },
+    script: { ...base.script, scenes: base.script.scenes.map((sc) => ({ ...sc, castCharacterIds: ['wr-char-hero'] })) },
+    cast: {
+      available: true,
+      castCount: 2,
+      reviewedCount: 2,
+      semanticReviewedCount: 0,
+      passed: false,
+      findings: [
+        {
+          id: 'wr-char-hero::missing::lie', characterId: 'wr-char-hero', characterName: 'Hero',
+          kind: 'missing', field: 'psychology.drives.status.fear', dimension: null,
+          evidence: 'The status drive has no fear.', suggestion: '',
+        },
+      ],
+      coverage: [
+        {
+          characterId: 'wr-char-hero', characterName: 'Hero', depth: 'full', status: 'findings',
+          findingCount: 1, semanticReviewed: false, staged: true,
+          scriptSceneIds: ['scene-01'], proseSegmentIds: ['seg-001'],
+        },
+        {
+          characterId: 'wr-char-aunt', characterName: 'Offstage Aunt', depth: 'light', status: 'passed',
+          findingCount: 0, semanticReviewed: false, staged: false,
+          scriptSceneIds: [], proseSegmentIds: [],
+        },
+      ],
+      staging: {
+        available: true, stale: false, stagedCount: 1, unstagedCount: 1,
+        unmatchedNames: ['The Ferryman'],
+      },
+      ...overrides,
+    },
+  });
+}
+
+describe('SyncedReview — cast pane', () => {
+  it('opens the cast pane from the toolbar gap chip and lists findings by field path', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload());
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    expect(await screen.findByText('Hero')).toBeTruthy();
+    expect(screen.getByText(/Psychology › Drives › Status › Fear/)).toBeTruthy();
+    expect(screen.getByText(/The status drive has no fear/)).toBeTruthy();
+  });
+
+  it('never presents the deterministic sweep as a clean bill of health', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload({ findings: [], coverage: [] }));
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/cast fields filled/));
+    expect(await screen.findByText(/no model has read this cast/i)).toBeTruthy();
+  });
+
+  it('keeps the cold read separate from author knowledge', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload());
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    // A script-only name is reported as such, never as a finding.
+    expect(await screen.findByText(/Named only in the script/)).toBeTruthy();
+    expect(screen.getByText('The Ferryman')).toBeTruthy();
+    // An unstaged authored character is a fact, not a defect.
+    expect(screen.getByText(/not staged in the script/)).toBeTruthy();
+    expect(screen.getByText('Offstage Aunt')).toBeTruthy();
+  });
+
+  it('cross-links a character to the scenes and prose segments that stage them', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload());
+    const { container } = render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    const card = (pane, syncId) => container.querySelector(`[data-pane="${pane}"] [data-sync-id="${syncId}"]`);
+    fireEvent.click(await screen.findByText('Hero'));
+    await waitFor(() => expect(card('cast', 'wr-char-hero').getAttribute('aria-pressed')).toBe('true'));
+    expect(card('script', 'scene-01').className).toMatch(/border-port-accent\/50/);
+    expect(card('prose', 'seg-001').className).toMatch(/border-port-accent\/50/);
+    // Selecting the prose segment highlights the character it stages.
+    fireEvent.click(card('prose', 'seg-001'));
+    await waitFor(() => expect(card('cast', 'wr-char-hero').className).toMatch(/border-port-accent\/50/));
+  });
+
+  it('says staging is unknown rather than absent when no script has run', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload({
+      staging: { available: false, stale: false, stagedCount: 0, unstagedCount: 2, unmatchedNames: [] },
+      coverage: [{
+        characterId: 'wr-char-hero', characterName: 'Hero', depth: 'full', status: 'passed',
+        findingCount: 0, semanticReviewed: false, staged: false, scriptSceneIds: [], proseSegmentIds: [],
+      }],
+      findings: [],
+    }));
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/cast fields filled/));
+    expect(await screen.findByText(/staging unknown/)).toBeTruthy();
+  });
+
+  it('hides the cast chip entirely for a work with no character bible', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(payload());
+    render(<SyncedReview work={work} />);
+    await screen.findByText('The hero wakes.');
+    expect(screen.queryByText(/cast gap/)).toBeNull();
+    expect(screen.queryByText(/cast fields filled/)).toBeNull();
+  });
+});

@@ -91,3 +91,12 @@ export const castIntegrityPassed = (report) => {
 /** Coverage rows that keep the report from being a clean pass, for the summary line. */
 export const incompleteCoverage = (report) =>
   (report?.coverage || []).filter((c) => INCOMPLETE_REVIEW_STATUSES.includes(c.status));
+
+/**
+ * `psychology.drives.status.fear` → `Psychology › Drives › Status › Fear`.
+ * Shared so every surface that lists findings names a field path the same way.
+ */
+export const humanizeIntegrityField = (field) => String(field || '')
+  .split('.')
+  .map((part) => part.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim())
+  .join(' › ');
