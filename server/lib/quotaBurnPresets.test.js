@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AUDIT_CONTRACT_HEADING,
   QUOTA_BURN_PROMPT_PRESETS,
+  matchStoredAuditPreset,
   findQuotaBurnPreset,
   upgradeStoredAuditPrompt,
 } from './quotaBurnPresets.js';
@@ -197,6 +198,35 @@ describe('upgradeStoredAuditPrompt', () => {
     expect(upgradeStoredAuditPrompt('Refactor the billing module and open a PR.')).toBeNull();
     expect(upgradeStoredAuditPrompt(undefined)).toBeNull();
     expect(upgradeStoredAuditPrompt(null)).toBeNull();
+  });
+});
+
+describe('matchStoredAuditPreset', () => {
+  // The recognition half of the refresh above, now also the input to #6381's
+  // conversion — the same rule decides whether a stored prompt may be replaced
+  // and whether it may be mapped onto a shipped scheduled task. A prompt the
+  // user edited must fail BOTH, or the conversion trades their text for a
+  // shipped audit that runs something else with their quota.
+  const preset = QUOTA_BURN_PROMPT_PRESETS[0];
+  const current = preset.params.prompt;
+  const mission = current.slice(0, current.indexOf(AUDIT_CONTRACT_HEADING));
+
+  it('names the preset a stored render still is, across contract revisions', () => {
+    expect(matchStoredAuditPreset(current)).toBe(preset);
+    const stale = `${mission}${AUDIT_CONTRACT_HEADING}
+1. **Pick a bounded slice and say so first.** Audit one area.
+2. \`gh issue create --title "..."\`. Suggested labels: \`ux\`, \`plan\`.
+3. **Change no code.**
+4. **Report at the end**: each issue number.
+`;
+    expect(matchStoredAuditPreset(stale)).toBe(preset);
+  });
+
+  it('refuses an edited mission, an edited contract, and a prompt of the user\'s own', () => {
+    expect(matchStoredAuditPreset(current.replace(mission, `${mission}Also check the billing module.\n\n`))).toBeNull();
+    expect(matchStoredAuditPreset(`${mission}${AUDIT_CONTRACT_HEADING}\n\nJust report findings in chat.\n`)).toBeNull();
+    expect(matchStoredAuditPreset('Refactor the billing module and open a PR.')).toBeNull();
+    expect(matchStoredAuditPreset(null)).toBeNull();
   });
 });
 

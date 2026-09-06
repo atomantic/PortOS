@@ -474,6 +474,17 @@ export const createCosJobSchema = z.object({
     // useWorktree/openPR/simplify keys above. Zod strips unknown keys, so
     // without this row the flag never survives a job create/update.
     fileIssues: z.boolean().optional(),
+    // The two "lands no code" postures, which are NOT the same. `noCodeOutput`
+    // = the deliverable is something the agent DOES during the run (files an
+    // issue, calls an endpoint), so there is no branch and every commit/push/PR
+    // instruction is stripped from the prompt. `discardWorktree` = it wants a
+    // scratch checkout but nothing in it may land — without which
+    // `useWorktree` + `openPR: false` is the AUTO-MERGE posture. Both are
+    // carried by a job converted from a legacy quota-burn step (#6381), and Zod
+    // strips unknown keys, so without these rows the posture would silently
+    // vanish the first time the user saved that job.
+    noCodeOutput: z.boolean().optional(),
+    discardWorktree: z.boolean().optional(),
   }).optional(),
 });
 

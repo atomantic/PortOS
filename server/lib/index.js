@@ -191,6 +191,7 @@ export * from './providerTranscriptUsage.js';
 // duplicate-identifier collision check.
 export * as reviewerConfig from './reviewerConfig.js';
 export * from './quotaBurnConfig.js';
+export * from './quotaBurnLegacyConversion.js';
 export * from './quotaBurnOrigin.js';
 export * from './quotaBurnPresets.js';
 export * from './auditCatalog.js';

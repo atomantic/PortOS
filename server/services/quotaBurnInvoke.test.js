@@ -372,7 +372,10 @@ describe('built-in agent task invocation', () => {
           limitingResetAt: candidate.limitingResetAt,
           // The RESOLVED provider, and the family's TUI at that — an unpinned
           // step must not fall through to whatever the daemon is running.
-          overrides: { providerId: 'grok-tui', model: 'saved-model', effort: 'high' },
+          // The step's effective run params ride along too: they have to reach
+          // the PROMPT, so the engines hand them to the generator as
+          // `runOverrides` before the mode banner is chosen (#6381).
+          overrides: { providerId: 'grok-tui', model: 'saved-model', effort: 'high', params: { fileIssues: true, depth: 'full' } },
         },
       },
     }]);

@@ -12,15 +12,15 @@ vi.mock('../services/quotaBurnRunner.js', () => ({
   runQuotaBurnCycle: vi.fn(),
 }));
 vi.mock('../services/quotaBurnCompletions.js', () => ({ clearQuotaBurnJobCompletion: vi.fn() }));
+vi.mock('../services/quotaBurnConversion.js', () => ({ convertLegacyQuotaBurnPatch: vi.fn(async (patch) => patch) }));
 vi.mock('../services/apps.js', () => ({ getActiveApps: vi.fn() }));
-vi.mock('../services/universeBuilder.js', () => ({ listUniverseNames: vi.fn() }));
 vi.mock('../services/providers.js', () => ({ listProviders: vi.fn() }));
 
 import { clearQuotaBurnJobCompletion } from '../services/quotaBurnCompletions.js';
+import { convertLegacyQuotaBurnPatch } from '../services/quotaBurnConversion.js';
 import { getQuotaBurnConfig, saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
-import { listUniverseNames } from '../services/universeBuilder.js';
 import { listProviders } from '../services/providers.js';
 import quotaBurnRoutes from './quotaBurn.js';
 
@@ -39,7 +39,6 @@ beforeEach(() => {
     status: { running: false, families: [], runs: [] },
   });
   getActiveApps.mockResolvedValue([{ id: 'a1', name: 'App One', secret: 'do-not-leak' }]);
-  listUniverseNames.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
   listProviders.mockResolvedValue([{ id: 'claude-code', name: 'Claude Code', type: 'cli' }]);
 });
 
@@ -63,34 +62,55 @@ describe('GET /api/quota-burn', () => {
 });
 
 describe('GET /api/quota-burn/catalog', () => {
-  it('projects apps, universes, and providers', async () => {
+  it('projects apps and providers, and nothing an app record should not leak', async () => {
     const res = await request(buildApp()).get('/api/quota-burn/catalog');
     expect(res.status).toBe(200);
-    expect(res.body.apps).toEqual([{ id: 'a1', name: 'App One' }]);
-    expect(res.body.universes).toEqual([{ id: 'u1', name: 'Example Universe' }]);
-    expect(res.body.providers).toEqual([{ id: 'claude-code', name: 'Claude Code', type: 'cli' }]);
-    expect(res.body.jobTypes.map((type) => type.id)).toContain('universe-bible-images');
+    expect(res.body).toEqual({
+      apps: [{ id: 'a1', name: 'App One' }],
+      providers: [{ id: 'claude-code', name: 'Claude Code', type: 'cli' }],
+    });
   });
 
-  it('still renders when the universe store is unavailable', async () => {
-    // The universe job simply has nothing to pick from — that must not 500 the
-    // whole config page.
-    listUniverseNames.mockRejectedValue(new Error('store down'));
+  it('no longer serves the legacy job catalog or the prompt presets', async () => {
+    // #6381 froze both as compatibility-and-migration inputs. Serving them would
+    // invite a client to author work that has no executor any more.
+    const res = await request(buildApp()).get('/api/quota-burn/catalog');
+    expect(res.body.jobTypes).toBeUndefined();
+    expect(res.body.presets).toBeUndefined();
+  });
+
+  it('still renders when the provider list is unavailable', async () => {
+    listProviders.mockRejectedValue(new Error('store down'));
     const res = await request(buildApp()).get('/api/quota-burn/catalog');
     expect(res.status).toBe(200);
-    expect(res.body.universes).toEqual([]);
+    expect(res.body.providers).toEqual([]);
   });
 });
 
 describe('PUT /api/quota-burn', () => {
   it('saves a partial plan', async () => {
     saveQuotaBurnConfig.mockResolvedValue({ enabled: true });
+    const jobs = [{ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' } }];
     const res = await request(buildApp()).put('/api/quota-burn')
-      .send({ families: { grok: { enabled: true, jobs: [{ jobType: 'agent-prompt', params: { appId: 'a1' } }] } } });
+      .send({ families: { grok: { enabled: true, jobs } } });
     expect(res.status).toBe(200);
-    expect(saveQuotaBurnConfig).toHaveBeenCalledWith({
-      families: { grok: { enabled: true, jobs: [{ jobType: 'agent-prompt', params: { appId: 'a1' } }] } },
-    });
+    expect(saveQuotaBurnConfig).toHaveBeenCalledWith({ families: { grok: { enabled: true, jobs } } });
+  });
+
+  it('runs a legacy body through the conversion service before it reaches disk', async () => {
+    // The compat door: an old client can still PUT a `jobType` step, and it must
+    // be converted through the SAME service the migration used rather than
+    // persisted as an un-migrated step the runner can only refuse.
+    saveQuotaBurnConfig.mockResolvedValue({ enabled: true });
+    const legacy = { families: { grok: { enabled: true, jobs: [{ jobType: 'agent-prompt', params: { appId: 'a1' } }] } } };
+    const converted = { families: { grok: { enabled: true, jobs: [{ taskRef: { kind: 'custom', jobId: 'job-burn-grok-job-1' } }] } } };
+    convertLegacyQuotaBurnPatch.mockResolvedValueOnce(converted);
+
+    const res = await request(buildApp()).put('/api/quota-burn').send(legacy);
+
+    expect(res.status).toBe(200);
+    expect(convertLegacyQuotaBurnPatch).toHaveBeenCalledWith(legacy);
+    expect(saveQuotaBurnConfig).toHaveBeenCalledWith(converted);
   });
 
   it('accepts the unlimited dispatch cap, which sits below the field\'s own minimum', async () => {

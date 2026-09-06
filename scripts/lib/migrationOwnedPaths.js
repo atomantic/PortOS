@@ -21,4 +21,11 @@ export const MIGRATION_OWNED_PATHS = new Set([
   // to it. Derived from the user's records; a shipped seed would masquerade as
   // their pre-graph configuration and destroy the recovery path.
   'private/providers.pre-graph.json',
+  // Migration 359 rewrites the install's own burn plan into scheduled-task
+  // references, and parks the pre-conversion copy beside it. Both are derived
+  // from the user's records; a shipped seed would be converted in place of
+  // their plan (setup-data runs first) and would masquerade as the recovery
+  // copy of a plan they never had.
+  'cos/quota-burn.json',
+  'cos/quota-burn.pre-359.json',
 ]);

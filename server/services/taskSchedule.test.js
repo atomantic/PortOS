@@ -2258,7 +2258,10 @@ describe('taskSchedule', () => {
     // asynchronous, so nothing else can reconstruct it — and it must face the
     // same invocation-eligibility gate a human Run does.
     describe('quota-burn origin', () => {
-      const burn = { family: 'grok', stepId: 'step-1', limitingResetAt: 1700000000000, overrides: { providerId: 'grok-tui', model: null, effort: null } }
+      // `overrides.params` rides along because a migrated issues-only step pins
+      // `fileIssues` there, and the generator has to see it BEFORE it renders the
+      // prompt (#6381).
+      const burn = { family: 'grok', stepId: 'step-1', limitingResetAt: 1700000000000, overrides: { providerId: 'grok-tui', model: null, effort: null, params: { fileIssues: true } } }
       const trigger = (options) => triggerOnDemandTask('security', null, { emit: false, origin: ON_DEMAND_ORIGINS.QUOTA_BURN, ...options })
 
       it('persists the burn provenance on the queued request', async () => {

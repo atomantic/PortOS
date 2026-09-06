@@ -138,7 +138,7 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // own buttons call. Install-wide (a universe is not a managed app's repo —
   // see `requiresInstallWideTarget`) and ON_DEMAND with no interval, so they are
   // never clock-due and a fresh install spends nothing until the user runs one.
-  // Quota Burn reaches the SAME handlers through `quotaBurnJobs/index.js`; there
+  // Quota Burn reaches the SAME handlers through `quotaBurnInvoke.js`; there
   // is one implementation, not two.
   ...PROGRAMMATIC_SCHEDULED_TASK_TYPES,
   // NOTE: `quota-burn` used to live here as a per-app perpetual task type. It is

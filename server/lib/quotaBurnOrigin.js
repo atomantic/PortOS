@@ -17,15 +17,16 @@
  * (server/AGENTS.md, "Import scoping"). That is also why `onDemandOrigin` below
  * is copied through as an opaque string rather than validated against the enum.
  *
- * The provenance keys are the SAME ones the legacy `quotaBurnJobs/agentPrompt.js`
- * executor stamps, on purpose: `cosTaskGenerator.js#isCooldownExemptTask`, the
+ * These are the same provenance keys the retired `quotaBurnJobs/agentPrompt.js`
+ * executor stamped, on purpose: `cosTaskGenerator.js#isCooldownExemptTask`, the
  * runner's completion continuation, and `quotaBurnDenials.js` all read them off
- * the finished agent, and a reference-dispatched burn must be indistinguishable
- * to those readers. `QUOTA_BURN_PROVENANCE_FIELDS` below is the one place they
+ * the finished agent, and they had to keep arriving unchanged when the burn's
+ * origin moved (#6381) or a burn would have stopped being cooldown-exempt and a
+ * refusal would have been credited to nobody. `QUOTA_BURN_PROVENANCE_FIELDS` below is the one place they
  * are named.
  */
 
-import { isPlainObject } from './objects.js';
+import { isPlainObject, POLLUTING_KEYS } from './objects.js';
 
 /**
  * The `origin` a quota-burn on-demand request carries. Declared here rather
@@ -134,6 +135,17 @@ export const hasQuotaBurnProvenance = (taskMetadata) => Boolean(quotaBurnProvena
 const trimmed = (value, max = MAX_FIELD) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 const nullable = (value, max = MAX_FIELD) => trimmed(value, max) || null;
 
+const scalarParams = (raw) => {
+  if (!isPlainObject(raw)) return {};
+  const clean = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (POLLUTING_KEYS.has(key)) continue;
+    if (typeof value === 'string' || typeof value === 'boolean' || value === null) clean[key] = value;
+    else if (typeof value === 'number' && Number.isFinite(value)) clean[key] = value;
+  }
+  return clean;
+};
+
 /**
  * Normalize the `burn` block of an on-demand request. Returns `null` unless it
  * names BOTH the family whose window is being spent and the burn step that asked
@@ -142,14 +154,26 @@ const nullable = (value, max = MAX_FIELD) => trimmed(value, max) || null;
  * an ordinary task as burn-exempt, and the denial ledger would credit a refusal
  * to the wrong family.
  *
- * `overrides` carries only the three per-invocation settings the generated task
- * can absorb AFTER generation — the provider, model and reasoning effort the
- * spawner reads straight off `task.metadata`. A step's run `params` are NOT here:
- * they have to reach the PROMPT, which means the generator itself must overlay
- * them onto the task's saved `taskMetadata`, and that plumbing belongs with the
- * audit-mode contract that needs it (#6380). Paths that consume params directly
- * — the programmatic scheduled handlers and custom-job generation — read them
- * from the step, and never travel through a request at all.
+ * `overrides` carries the three per-invocation settings the generated task can
+ * absorb AFTER generation — the provider, model and reasoning effort the spawner
+ * reads straight off `task.metadata` — plus the step's run `params`.
+ *
+ * The params are here for a reason the other three are not: they have to reach
+ * the PROMPT, so they cannot ride the post-generation
+ * `onDemandRequestMetadata` stamp below. Both on-demand engines pull them off
+ * the request and hand them to `generateManagedAppImprovementTaskForType` as
+ * `runOverrides`, which layers them over the task's saved `taskMetadata` BEFORE
+ * the mode banner is chosen and the prompt is rendered. That is what lets a step
+ * migrated from an issues-only burn preset pin `fileIssues: true` explicitly and
+ * keep filing even against an audit type whose shipped scheduled default is
+ * `false` (#6381) — without it a migrated burn would silently run the task's
+ * saved mode and start writing code.
+ *
+ * Shallow scalars only, and validated for real one hop later: the generator
+ * sanitizes them through `sanitizeTaskMetadata`'s allowlist, the same door a
+ * stored override passes. Copied here rather than imported from
+ * `quotaBurnTaskRef.js` so this module keeps its one-import budget — it is
+ * reached by a large share of the server suite.
  */
 export function normalizeQuotaBurnProvenance(raw) {
   if (!isPlainObject(raw)) return null;
@@ -166,6 +190,7 @@ export function normalizeQuotaBurnProvenance(raw) {
       providerId: nullable(overrides.providerId),
       model: nullable(overrides.model),
       effort: nullable(overrides.effort),
+      params: scalarParams(overrides.params),
     },
   };
 }
