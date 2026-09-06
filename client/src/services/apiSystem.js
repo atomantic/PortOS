@@ -339,6 +339,11 @@ export const getAssignableInstances = (options) => request('/instances/assignabl
 export const updateSelfInstance = (data) => request('/instances/self', { method: 'PUT', body: JSON.stringify(data) });
 export const addPeer = (data) => request('/instances/peers', { method: 'POST', body: JSON.stringify(data) });
 export const addTailcatPeer = (data) => request('/instances/peers/tailcat', { method: 'POST', body: JSON.stringify(data) });
+// Saved tailcat forwards. Rows never carry the tc address — only its redacted
+// form — so a failed forward can be retried without re-pasting the capability.
+export const getTailcatForwards = (options) => request('/instances/peers/tailcat/forwards', options);
+export const retryTailcatForward = (id) => request(`/instances/peers/tailcat/forwards/${id}/retry`, { method: 'POST' });
+export const forgetTailcatForward = (id) => request(`/instances/peers/tailcat/forwards/${id}`, { method: 'DELETE' });
 export const updatePeer = (id, data) => request(`/instances/peers/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const removePeer = (id) => request(`/instances/peers/${id}`, { method: 'DELETE' });
 export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { method: 'POST' });

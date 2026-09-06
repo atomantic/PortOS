@@ -31,8 +31,16 @@ import { getTailscaleStatus } from '../lib/tailscale.js';
 vi.mock('../services/tailcatPeer.js', async (original) => ({
   ...(await original()),
   addPeerViaTailcat: vi.fn(),
+  listTailcatForwards: vi.fn(),
+  retryTailcatForward: vi.fn(),
+  forgetTailcatForward: vi.fn(),
 }));
-import { addPeerViaTailcat } from '../services/tailcatPeer.js';
+import {
+  addPeerViaTailcat,
+  listTailcatForwards,
+  retryTailcatForward,
+  forgetTailcatForward,
+} from '../services/tailcatPeer.js';
 import instancesRoutes from './instances.js';
 
 const buildApp = () => {
@@ -229,5 +237,34 @@ describe('POST /api/instances/peers/tailcat', () => {
     expect(res.status).toBe(400);
     expect(instances.addPeer).not.toHaveBeenCalled();
     expect(addPeerViaTailcat).not.toHaveBeenCalled();
+  });
+});
+
+describe('saved tailcat forward routes', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('lists saved forwards ahead of the /peers/:id patterns', async () => {
+    const rows = [{ id: 'fwd_1', tcAddress: 'tcEX…wxyz', status: 'failed', lastError: 'startup timed out' }];
+    listTailcatForwards.mockResolvedValue(rows);
+    const res = await request(buildApp()).get('/api/instances/peers/tailcat/forwards');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ forwards: rows });
+  });
+
+  it('retries a saved forward and sanitizes the resulting peer', async () => {
+    const peer = { id: 'peer-example', transport: 'tailcat', address: '127.0.0.1', port: 15556 };
+    retryTailcatForward.mockResolvedValue(peer);
+    const res = await request(buildApp()).post('/api/instances/peers/tailcat/forwards/fwd_1/retry');
+    expect(res.status).toBe(200);
+    expect(retryTailcatForward).toHaveBeenCalledWith('fwd_1');
+    expect(instances.sanitizePeerForClient).toHaveBeenCalledWith(peer);
+  });
+
+  it('forgets a saved forward', async () => {
+    forgetTailcatForward.mockResolvedValue({ id: 'fwd_1', peerId: 'peer-example' });
+    const res = await request(buildApp()).delete('/api/instances/peers/tailcat/forwards/fwd_1');
+    expect(res.status).toBe(200);
+    expect(forgetTailcatForward).toHaveBeenCalledWith('fwd_1');
+    expect(res.body).toEqual({ id: 'fwd_1', peerId: 'peer-example' });
   });
 });

@@ -8514,6 +8514,30 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/instances/peers/tailcat/forwards",
+      "mountPath": "/api/instances",
+      "sources": [
+        "server/routes/instances.js"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/instances/peers/tailcat/forwards/:id",
+      "mountPath": "/api/instances",
+      "sources": [
+        "server/routes/instances.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/instances/peers/tailcat/forwards/:id/retry",
+      "mountPath": "/api/instances",
+      "sources": [
+        "server/routes/instances.js"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/instances/provision-cert",
       "mountPath": "/api/instances",
@@ -17948,8 +17972,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2223,
-    "declarations": 2231,
+    "operations": 2226,
+    "declarations": 2234,
     "sourceFiles": 233
   }
 }

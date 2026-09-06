@@ -28,6 +28,7 @@ export const DEFAULT_PROBE_HOSTS = [
 ];
 
 export const DEFAULT_PROBE_TIMEOUT_MS = 3000;
+export const DEFAULT_PORT_PROBE_TIMEOUT_MS = 500;
 
 // Resolve when a single host connects; reject when it errors or times out.
 // Always tears the socket down (listeners + fd) on every terminal path. The
@@ -64,4 +65,19 @@ export function isMachineOnline({ timeoutMs = DEFAULT_PROBE_TIMEOUT_MS, hosts = 
   // only when every probe fails — exactly the "true on first connect, false only
   // after all fail" contract. The reject handler swallows it so we never throw.
   return Promise.any(hosts.map((h) => probeHost(h, timeoutMs))).then(() => true, () => false);
+}
+
+/**
+ * Is anything listening on `host:port`? A bare TCP connect, resolving `true` on
+ * connect and `false` on error/timeout, never rejecting — the same primitive
+ * `isMachineOnline` uses, pointed at one address instead of the internet.
+ *
+ * Prefer this over a *bind* probe when something else is expected to own the
+ * port: a bind holds the address for as long as the probe is open, so polling a
+ * port while another process is still starting can lose it the race and make
+ * that process die with `EADDRINUSE`. A connect only observes.
+ */
+export function isPortReachable({ host = '127.0.0.1', port, timeoutMs = DEFAULT_PORT_PROBE_TIMEOUT_MS } = {}) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return Promise.resolve(false);
+  return probeHost({ host, port }, timeoutMs).then(() => true, () => false);
 }
