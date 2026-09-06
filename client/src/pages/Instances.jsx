@@ -30,6 +30,7 @@ import UnattendedRenderRouting from '../components/instances/UnattendedRenderRou
 import BrainParityPanel from '../components/instances/BrainParityPanel';
 import BrainParitySchedule from '../components/instances/BrainParitySchedule';
 import TailnetHelpBanner from '../components/instances/TailnetHelpBanner';
+import TailcatForwardsPanel from '../components/instances/TailcatForwardsPanel';
 import { timeAgo, timeUntil } from '../utils/formatters';
 import { directionalCounts, describeDirectional } from '../lib/syncCounts';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -1429,6 +1430,10 @@ export default function Instances() {
           component renders nothing when there is neither an option nor a saved
           route. */}
       <UnattendedRenderRouting peers={peers} />
+
+      {/* Also outside the peer-count guard: a tailcat forward whose start failed
+          never registered a peer, so this is the only surface that can retry it. */}
+      <TailcatForwardsPanel onChange={fetchData} />
 
       {peers.length > 0 && (
         <div>

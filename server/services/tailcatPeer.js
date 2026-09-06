@@ -2,38 +2,53 @@
  * Tailcat federated peers — connect to a remote PortOS over
  * [tailcat](https://github.com/tailscale/tailcat) without a Tailscale account.
  *
- * Flow: ensure the `tailcat` CLI is installed → start
- * `tailcat forward <tcADDR> LOCAL:5555` (preferred LOCAL=15555) → register a
- * normal peer at `127.0.0.1:LOCAL` over HTTP or explicitly selected HTTPS.
+ * Flow: ensure the `tailcat` CLI is installed → pre-warm the DERP map cache →
+ * start `tailcat forward <tcADDR> LOCAL:5555` (preferred LOCAL=15555) → register
+ * a normal peer at `127.0.0.1:LOCAL` over HTTP or explicitly selected HTTPS.
  *
  * The tc address is a bearer capability. Persist it only in the machine-local
- * forwards file for restart; never log the full value, never put it on the peer
- * record that clients or peers can scrape, and never ship it in docs/tests.
+ * forwards file for restart and retry; never log the full value, never put it on
+ * the peer record that clients or peers can scrape, never return it from an API
+ * response, and never ship it in docs/tests.
  */
 
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
+import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
-import { createLineReader } from '../lib/streamLines.js';
 import { commandExists } from '../lib/commandExists.js';
 import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
 import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { isPortReachable } from '../lib/connectivity.js';
+import { isTestRunner } from '../lib/runtimeEnv.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import {
   DEFAULT_TAILCAT_LOCAL_PORT,
   DEFAULT_TAILCAT_REMOTE_PORT,
 } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { addPeer, getPeers, removePeer as removeInstancePeer } from './instances.js';
+import {
+  addPeer,
+  getPeers,
+  removePeer as removeInstancePeer,
+  setTailcatPeerPort,
+} from './instances.js';
 
 const FORWARDS_FILE = dataPath('tailcat-forwards.json');
 const GO_INSTALL_PKG = 'github.com/tailscale/tailcat/cmd/tailcat@latest';
 const BREW_FORMULA = 'tailcat';
 const RELEASES_URL = 'https://github.com/tailscale/tailcat/releases';
+const DEFAULT_DERP_MAP_URL = 'https://tailcat.dev/derpmap.json';
 const INSTALL_TIMEOUT_MS = 180_000;
 const FORWARD_READY_MS = 8_000;
+const FORWARD_PROBE_INTERVAL_MS = 150;
+const DERP_MAP_FRESH_MS = 6 * 60 * 60 * 1000;
+const DERP_MAP_FETCH_TIMEOUT_MS = 15_000;
+const DIAGNOSTIC_TAIL_CHARS = 4096;
+const DIAGNOSTIC_MAX_CHARS = 320;
 const PORT_SCAN_LIMIT = 32;
 const DEFAULT_DATA = { version: 1, forwards: [] };
 
@@ -66,6 +81,24 @@ export function isValidTcAddress(tc) {
   return /^tc[A-Za-z0-9_+\/=-]+$/.test(raw);
 }
 
+/**
+ * Strip every capability-shaped token out of tailcat's own diagnostics, then
+ * bound them, so a startup failure can finally be *reported* to the operator
+ * instead of collapsing into an opaque "startup timed out". Redaction runs over
+ * the whole buffered tail at once, never per chunk, so an address split across
+ * reads is still caught after reassembly.
+ */
+export function redactTailcatDiagnostics(text) {
+  const lines = String(text || '')
+    // 8+ payload chars, so even a tail-truncated address fragment is scrubbed.
+    .replace(/tc[A-Za-z0-9_+\/=-]{8,}/g, 'tc…')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const joined = lines.slice(-3).join(' | ');
+  return joined.length > DIAGNOSTIC_MAX_CHARS ? `${joined.slice(0, DIAGNOSTIC_MAX_CHARS)}…` : joined;
+}
+
 async function loadForwards() {
   const data = await readJSONFile(FORWARDS_FILE, DEFAULT_DATA, { strict: true, logError: false })
     .catch(() => { throw new ServerError('Could not read tailcat forward storage', { status: 503 }); });
@@ -75,9 +108,107 @@ async function loadForwards() {
   return data;
 }
 
-async function saveForwards(data) {
+async function saveForwards(entries) {
   await ensureDir(PATHS.data);
-  await atomicWrite(FORWARDS_FILE, data);
+  await atomicWrite(FORWARDS_FILE, { version: 1, forwards: entries });
+}
+
+/**
+ * Normalize a stored entry. Installs written before retry support keyed entries
+ * by `peerId` alone with no `id`/`status`, so derive both rather than dropping
+ * a working forward. An entry without a usable capability is unusable — drop it.
+ */
+function normalizeForwardEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  if (!isValidTcAddress(entry.tcAddress)) return null;
+  const peerId = typeof entry.peerId === 'string' && entry.peerId ? entry.peerId : null;
+  const status = ['active', 'failed', 'pending'].includes(entry.status)
+    ? entry.status
+    // A pre-retry entry only ever existed once its peer was registered.
+    : 'active';
+  return {
+    id: typeof entry.id === 'string' && entry.id ? entry.id : `fwd_${peerId || randomUUID()}`,
+    peerId,
+    tcAddress: entry.tcAddress,
+    localPort: Number.isInteger(entry.localPort) ? entry.localPort : null,
+    remotePort: Number.isInteger(entry.remotePort) ? entry.remotePort : DEFAULT_TAILCAT_REMOTE_PORT,
+    name: typeof entry.name === 'string' && entry.name ? entry.name : null,
+    protocol: entry.protocol === 'https' ? 'https' : 'http',
+    // Kept beside the capability so a retry can re-register a password-gated
+    // peer without the operator re-entering anything. Machine-local only.
+    auth: entry.auth && typeof entry.auth === 'object' ? entry.auth : null,
+    status,
+    lastError: typeof entry.lastError === 'string' ? entry.lastError : null,
+    lastErrorAt: typeof entry.lastErrorAt === 'string' ? entry.lastErrorAt : null,
+    createdAt: typeof entry.createdAt === 'string' ? entry.createdAt : new Date().toISOString(),
+  };
+}
+
+/** Read every stored forward, normalized. Internal — these carry the capability. */
+async function readForwards() {
+  const data = await loadForwards();
+  return data.forwards.map(normalizeForwardEntry).filter(Boolean);
+}
+
+async function upsertForward(entry) {
+  await withLock(async () => {
+    const entries = await readForwards();
+    await saveForwards([...entries.filter((f) => f.id !== entry.id), entry]);
+  });
+}
+
+/** Merge fields into one stored entry. No-op when the entry is already gone. */
+async function patchForward(id, patch) {
+  return withLock(async () => {
+    const entries = await readForwards();
+    const found = entries.find((f) => f.id === id);
+    if (!found) return null;
+    const next = { ...found, ...patch };
+    await saveForwards([...entries.filter((f) => f.id !== id), next]);
+    return next;
+  });
+}
+
+async function deleteForward(id) {
+  await withLock(async () => {
+    const entries = await readForwards();
+    await saveForwards(entries.filter((f) => f.id !== id));
+  });
+}
+
+/** Record why a forward is not running, so the next session can act on it. */
+async function markForwardFailed(id, error, patchFn = patchForward) {
+  const detail = redactTailcatDiagnostics(error?.message || String(error || 'unknown error'));
+  await patchFn(id, {
+    status: 'failed',
+    lastError: detail || 'unknown error',
+    lastErrorAt: new Date().toISOString(),
+  }).catch(() => null); // never mask the original failure with a bookkeeping one
+}
+
+/**
+ * Operator-facing view of the saved forwards: enough to see *which* peer cannot
+ * start and why, with the bearer capability replaced by its redacted form. This
+ * is what makes a failed add recoverable — the address stays on disk, so a retry
+ * never asks the operator for it again.
+ */
+export async function listTailcatForwards() {
+  const entries = await readForwards();
+  return entries.map((entry) => ({
+    id: entry.id,
+    peerId: entry.peerId,
+    tcAddress: redactTcAddress(entry.tcAddress),
+    localPort: entry.localPort,
+    remotePort: entry.remotePort,
+    name: entry.name,
+    protocol: entry.protocol,
+    hasAuth: !!entry.auth,
+    status: entry.status,
+    lastError: entry.lastError,
+    lastErrorAt: entry.lastErrorAt,
+    createdAt: entry.createdAt,
+    live: liveForwards.has(entry.id),
+  }));
 }
 
 /**
@@ -223,6 +354,82 @@ async function runInstallCommand(bin, args, extraEnv = {}) {
     : spawnFailureDetail(result, `exit ${result.code}`));
 }
 
+/** Go's `url.QueryEscape`, which is what names tailcat's DERP map cache files. */
+function goQueryEscape(value) {
+  return String(value).replace(/[^A-Za-z0-9\-_.~]/g, (char) => (char === ' '
+    ? '+'
+    : [...Buffer.from(char, 'utf8')].map((byte) => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`).join('')));
+}
+
+/** The DERP map URL tailcat will use, honoring the env override it reads itself. */
+function derpMapUrl(env = process.env) {
+  return env.TAILCAT_DERPMAP_URL || DEFAULT_DERP_MAP_URL;
+}
+
+/**
+ * tailcat's own on-disk DERP map cache: `<user cache dir>/tailcat/derpmap-<escaped URL>.json`,
+ * whose mtime is the stored-at time. Mirrors Go's `os.UserCacheDir()` per platform.
+ */
+export function derpMapCachePath({
+  url = derpMapUrl(),
+  env = process.env,
+  home = homedir(),
+  platform = process.platform,
+} = {}) {
+  const base = platform === 'darwin' ? join(home, 'Library', 'Caches')
+    : platform === 'win32' ? (env.LOCALAPPDATA || join(home, 'AppData', 'Local'))
+      : (env.XDG_CACHE_HOME || join(home, '.cache'));
+  return join(base, 'tailcat', `derpmap-${goQueryEscape(url)}.json`);
+}
+
+/**
+ * Pre-warm tailcat's DERP map cache using PortOS's own HTTP stack.
+ *
+ * tailcat resolves a tc address's relay region by fetching that map with Go's
+ * HTTP client. On a host where a local network filter permits Node and curl but
+ * blocks Go's dialer, the fetch fails (`context deadline exceeded`, or the same
+ * `connect: bad file descriptor` that breaks `go install`) and **every** tailcat
+ * command dies before it can serve or dial — while PortOS reaches the identical
+ * URL fine. Writing the map into the cache tailcat already reads makes the CLI
+ * work without needing the network itself.
+ *
+ * Strictly best-effort and never fatal: any failure just leaves tailcat to fetch
+ * the map the way it normally would. `fetchFn` defaults to null under the test
+ * runner so a suite can never reach the network by forgetting to inject it.
+ */
+export async function primeDerpMapCache({
+  url = derpMapUrl(),
+  cachePath = derpMapCachePath(),
+  fetchFn = isTestRunner() ? null : fetch,
+  statFn = stat,
+  writeFn = atomicWrite,
+  freshMs = DERP_MAP_FRESH_MS,
+  now = Date.now(),
+} = {}) {
+  if (!fetchFn) return { primed: false, reason: 'no-fetch' };
+  const cachedAt = await statFn(cachePath).then((info) => info.mtimeMs, () => null);
+  if (cachedAt !== null && now - cachedAt < freshMs) return { primed: false, reason: 'fresh' };
+
+  const body = await fetchFn(url, { signal: AbortSignal.timeout(DERP_MAP_FETCH_TIMEOUT_MS) })
+    .then((res) => (res.ok ? res.text() : null))
+    .catch(() => null);
+  // Only a parseable map goes in — never poison the cache with an error page.
+  if (!safeParseJson(body)) return { primed: false, reason: 'unavailable' };
+
+  const written = await writeFn(cachePath, body).then(() => true, () => false);
+  if (written) console.log(`🐈 Primed tailcat DERP map cache (${body.length} bytes) for ${url}`);
+  return { primed: written, reason: written ? 'written' : 'write-failed' };
+}
+
+function safeParseJson(text) {
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' ? value : null;
+  } catch {
+    return null; // an error page or truncated body is not a DERP map
+  }
+}
+
 /** True when nothing is listening on 127.0.0.1:port (or bind fails for other reasons → busy). */
 export function isLocalPortFree(port, { createServerFn = createServer } = {}) {
   return new Promise((resolve) => {
@@ -261,7 +468,15 @@ export async function allocateLocalPort({
 
 /**
  * Start `tailcat forward <tc> local:remote`. Injected `spawnFn` for tests.
- * Resolves only after the CLI confirms that the requested listener is bound.
+ * Resolves only once the requested local listener is actually bound.
+ *
+ * Readiness has two independent signals, because relying on the log line alone
+ * silently broke against a released CLI: tailcat ≤0.5.0 emits `forwarding …`
+ * through its verbose-only logger, so an add against that build timed out after
+ * 8s even though the listener was up and healthy. `--verbose` restores the line
+ * on those builds (and is what surfaces per-connection dial failures at all),
+ * while the connect probe confirms the same fact without depending on any log
+ * wording, so a future CLI reword cannot regress this again.
  */
 export async function startForwardProcess({
   bin,
@@ -270,6 +485,10 @@ export async function startForwardProcess({
   remotePort = DEFAULT_TAILCAT_REMOTE_PORT,
   spawnFn = spawn,
   readyMs = FORWARD_READY_MS,
+  // A connect probe, never a bind: a bind would hold the port while tailcat is
+  // still trying to claim it and could kill the CLI with EADDRINUSE.
+  isListening = (port) => isPortReachable({ port }),
+  probeMs = FORWARD_PROBE_INTERVAL_MS,
 } = {}) {
   if (!isValidTcAddress(tcAddress)) {
     throw new ServerError('Invalid tailcat address — paste a tc… address from the peer', {
@@ -277,30 +496,45 @@ export async function startForwardProcess({
     });
   }
   if (shuttingDown) throw new Error('PortOS is shutting down');
-  const child = spawnFn(bin, ['forward', '--bind=127.0.0.1', tcAddress.trim(), `${localPort}:${remotePort}`],
+  const child = spawnFn(bin, ['forward', '--verbose', '--bind=127.0.0.1', tcAddress.trim(), `${localPort}:${remotePort}`],
     safeChildProcessOptions({ env: safeChildProcessEnv(), stdio: ['ignore', 'pipe', 'pipe'] }));
   ownedChildren.add(child);
   child.stdout?.on('data', () => {});
+
+  // tailcat's own diagnostics can contain the bearer capability, so the raw tail
+  // is bounded, redacted on the way into an error, and no longer accumulated once
+  // we are past startup — it is never retained and never surfaced unredacted.
+  let tail = '';
+  let settled = false;
+  const readyPattern = new RegExp(`forwarding 127\\.0\\.0\\.1:${localPort} -> remote localhost:${remotePort}(?![0-9])`);
+
   await new Promise((resolve, reject) => {
-    let settled = false;
-    let reader;
     const finish = (error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      reader = null;
-      // Diagnostics can contain the bearer capability, including across chunks.
-      // Drain them, but never expose them in errors or retain them after startup.
+      clearInterval(poller);
+      const diagnostics = error ? redactTailcatDiagnostics(tail) : '';
+      tail = '';
       if (error) {
+        if (diagnostics) error.message = `${error.message} — tailcat said: ${diagnostics}`;
         try { child.kill('SIGTERM'); } catch { /* process event boundary */ }
         reject(error);
       } else resolve();
     };
     const timer = setTimeout(() => finish(new Error('tailcat listener startup timed out')), readyMs);
-    reader = createLineReader((line) => {
-      if (line.endsWith(`forwarding 127.0.0.1:${localPort} -> remote localhost:${remotePort}`)) finish();
-    }, { maxCarry: 4096 });
-    child.stderr?.on('data', (chunk) => reader?.push(chunk));
+    // The connect probe is the version-independent half: a loopback port that
+    // accepts a connection is a port tailcat is listening on, whatever it logged.
+    const poller = setInterval(() => {
+      isListening(localPort).then((listening) => { if (listening) finish(); }, () => {});
+    }, probeMs);
+    // Stays attached past startup so the pipe keeps draining, but stops
+    // accumulating: settled means the capability bytes are no longer kept.
+    child.stderr?.on('data', (chunk) => {
+      if (settled) return;
+      tail = (tail + String(chunk)).slice(-DIAGNOSTIC_TAIL_CHARS);
+      if (readyPattern.test(tail)) finish();
+    });
     child.on('error', () => finish(new Error('tailcat forward process failed')));
     child.once('exit', (code, signal) => {
       ownedChildren.delete(child);
@@ -315,29 +549,35 @@ export async function startForwardProcess({
   return child;
 }
 
-async function persistForward(entry) {
-  await withLock(async () => {
-    const data = await loadForwards();
-    const forwards = Array.isArray(data.forwards) ? data.forwards.filter((f) => f.peerId !== entry.peerId) : [];
-    forwards.push(entry);
-    await saveForwards({ version: 1, forwards });
-  });
-}
-
-async function forgetForward(peerId) {
-  await withLock(async () => {
-    const data = await loadForwards();
-    const forwards = (Array.isArray(data.forwards) ? data.forwards : []).filter((f) => f.peerId !== peerId);
-    await saveForwards({ version: 1, forwards });
-  });
-}
-
 export function stopForwardForPeer(peerId) {
-  return withLifecycle(() => stopForward(peerId));
+  return withLifecycle(async () => {
+    const entries = await readForwards();
+    const entry = entries.find((f) => f.peerId === peerId);
+    if (!entry) return;
+    killLiveForward(entry.id);
+    await deleteForward(entry.id);
+  });
 }
 
-async function stopForward(peerId) {
-  const live = liveForwards.get(peerId);
+/** Forget a saved forward outright — stops it and drops its stored capability. */
+export function forgetTailcatForward(id, { removePeerFn = removeInstancePeer } = {}) {
+  return withLifecycle(async () => {
+    const entries = await readForwards();
+    const entry = entries.find((f) => f.id === id);
+    if (!entry) throw new ServerError('Tailcat forward not found', { status: 404 });
+    killLiveForward(id);
+    await deleteForward(id);
+    if (entry.peerId) {
+      // stopTransport:false — this lifecycle operation already owns the child
+      // and just dropped the metadata, so re-entering it would deadlock.
+      await removePeerFn(entry.peerId, { stopTransport: false });
+    }
+    return { id, peerId: entry.peerId };
+  });
+}
+
+function killLiveForward(id) {
+  const live = liveForwards.get(id);
   if (live?.child && !live.child.killed) {
     try {
       live.child.kill('SIGTERM');
@@ -345,8 +585,15 @@ async function stopForward(peerId) {
       // best-effort
     }
   }
-  await forgetForward(peerId);
-  liveForwards.delete(peerId);
+  liveForwards.delete(id);
+}
+
+/** Track a started child so shutdown and retry can find it again. */
+function trackForward(id, child, localPort, remotePort) {
+  liveForwards.set(id, { child, localPort, remotePort });
+  child.on('exit', () => {
+    if (liveForwards.get(id)?.child === child) liveForwards.delete(id);
+  });
 }
 
 /**
@@ -364,10 +611,12 @@ async function addTailcatPeer({
   auth,
   protocol = 'http',
   ensureInstalled = ensureTailcatInstalled,
+  primeDerpMap = primeDerpMapCache,
   allocatePort = allocateLocalPort,
   startForward = startForwardProcess,
   addPeerFn = addPeer,
-  persistForwardEntry = persistForward,
+  persistForwardEntry = upsertForward,
+  patchForwardEntry = patchForward,
   removePeerFn = removeInstancePeer,
 } = {}) {
   const trimmed = String(tcAddress || '').trim();
@@ -379,13 +628,69 @@ async function addTailcatPeer({
   }
 
   if (shuttingDown) throw new Error('PortOS is shutting down');
+
+  // Save the capability BEFORE anything can fail. A forward that never starts
+  // then stays retryable from the UI instead of throwing the operator's pasted
+  // address away and making them fetch it from the remote a second time.
+  const entry = {
+    id: `fwd_${randomUUID()}`,
+    peerId: null,
+    tcAddress: trimmed,
+    localPort: null,
+    remotePort: DEFAULT_TAILCAT_REMOTE_PORT,
+    name: name || null,
+    protocol: protocol === 'https' ? 'https' : 'http',
+    auth: auth && typeof auth === 'object' ? auth : null,
+    status: 'pending',
+    lastError: null,
+    lastErrorAt: null,
+    createdAt: new Date().toISOString(),
+  };
+  await persistForwardEntry(entry).catch(() => {
+    throw new ServerError('Could not save tailcat forward; nothing was started', {
+      status: 503, code: 'TAILCAT_PERSIST_FAILED',
+    });
+  });
+
+  const peer = await startAndRegister({
+    entry, ensureInstalled, primeDerpMap, allocatePort, startForward, addPeerFn,
+    patchForwardEntry, removePeerFn,
+  }).catch(async (err) => {
+    await markForwardFailed(entry.id, err, patchForwardEntry);
+    throw err;
+  });
+  return peer;
+}
+
+/**
+ * Shared body of add and retry: bring the forward up, make sure a peer points at
+ * it, and record the outcome. Callers own the failure bookkeeping.
+ */
+async function startAndRegister({
+  entry,
+  existingPeer = null,
+  ensureInstalled,
+  primeDerpMap,
+  allocatePort,
+  startForward,
+  addPeerFn,
+  patchForwardEntry,
+  removePeerFn,
+  setPeerPortFn = setTailcatPeerPort,
+}) {
   const { bin } = await ensureInstalled();
-  const localPort = await allocatePort();
+  // Best-effort, and deliberately before the spawn: on a host whose filter
+  // blocks Go's dialer this is the difference between a working tunnel and a
+  // CLI that cannot resolve its own relay.
+  // Promise.resolve().then defers the call so a synchronous throw is caught here
+  // too, the same guard ensureTailcatInstalled documents for its installers.
+  await Promise.resolve().then(primeDerpMap).catch(() => null);
   const remotePort = DEFAULT_TAILCAT_REMOTE_PORT;
+  const localPort = await allocatePort({ preferred: entry.localPort || DEFAULT_TAILCAT_LOCAL_PORT });
 
   let child;
   try {
-    child = await startForward({ bin, tcAddress: trimmed, localPort, remotePort });
+    child = await startForward({ bin, tcAddress: entry.tcAddress, localPort, remotePort });
   } catch (err) {
     throw new ServerError(
       `Could not start tailcat forward: ${err.message}`,
@@ -394,47 +699,108 @@ async function addTailcatPeer({
   }
 
   ownedChildren.add(child);
-  child.once('exit', () => ownedChildren.delete(child));
-  let peer;
+  let peer = existingPeer;
   try {
     if (shuttingDown) throw new Error('PortOS is shutting down');
-    peer = await addPeerFn({
-      address: '127.0.0.1',
-      port: localPort,
-      name: name || `tailcat:${redactTcAddress(trimmed)}`,
-      auth,
-      transport: 'tailcat',
-      protocol,
-    });
+    if (peer) {
+      // A reallocated port has to reach the peer record too, or every request
+      // would keep dialing the port the dead forward used to hold. A null result
+      // means the record is gone or is no longer a tailcat peer — failing here is
+      // the point: falling back to the stale object would report success while the
+      // peer kept pointing at the dead port.
+      if (peer.port !== localPort) {
+        peer = await setPeerPortFn(peer.id, localPort);
+        if (!peer) throw new ServerError(
+          `Could not repoint peer ${existingPeer.id} at 127.0.0.1:${localPort}`,
+          { status: 409, code: 'TAILCAT_PEER_REPOINT_FAILED' }
+        );
+      }
+    } else {
+      peer = await addPeerFn({
+        address: '127.0.0.1',
+        port: localPort,
+        name: entry.name || `tailcat:${redactTcAddress(entry.tcAddress)}`,
+        auth: entry.auth || undefined,
+        transport: 'tailcat',
+        protocol: entry.protocol,
+      });
+    }
   } catch (err) {
     try { child.kill('SIGTERM'); } catch { /* ignore */ }
     throw err;
   }
 
-  await persistForwardEntry({
+  // A vanished entry (null) counts as a failed save: the restart mapping is the
+  // thing being persisted, and a peer without one cannot come back after a boot.
+  const patched = await patchForwardEntry(entry.id, {
     peerId: peer.id,
-    tcAddress: trimmed,
     localPort,
     remotePort,
-    createdAt: new Date().toISOString(),
-  }).then(() => {
-    if (shuttingDown) throw new Error('PortOS is shutting down');
-  }).catch(async () => {
+    status: 'active',
+    lastError: null,
+    lastErrorAt: null,
+  }).then((result) => result !== null, () => false);
+  if (!patched || shuttingDown) {
     child.kill('SIGTERM');
-    // removePeer skips transport cleanup here: this lifecycle operation already
-    // owns the child and the queue, so re-entering it would deadlock.
-    await removePeerFn(peer.id, { stopTransport: false });
+    if (!existingPeer) {
+      // removePeer skips transport cleanup here: this lifecycle operation already
+      // owns the child and the queue, so re-entering it would deadlock.
+      await removePeerFn(peer.id, { stopTransport: false });
+    }
     throw new ServerError('Could not save tailcat forward; peer creation rolled back', {
       status: 503, code: 'TAILCAT_PERSIST_FAILED',
     });
-  });
+  }
 
-  liveForwards.set(peer.id, { child, localPort, remotePort });
+  trackForward(entry.id, child, localPort, remotePort);
   child.on('exit', () => {
-    if (liveForwards.get(peer.id)?.child === child) liveForwards.delete(peer.id);
-    console.log(`🐈 tailcat forward stopped for peer ${peer.id} (${redactTcAddress(trimmed)})`);
+    console.log(`🐈 tailcat forward stopped for peer ${peer.id} (${redactTcAddress(entry.tcAddress)})`);
   });
+  return peer;
+}
 
+/**
+ * Retry a saved forward using the capability already on disk. This is the whole
+ * point of persisting it: an operator (or an agent debugging the install) can
+ * bring a failed peer up without ever handling the tc address again.
+ */
+export function retryTailcatForward(id, options = {}) {
+  return withLifecycle(() => retryForward(id, options));
+}
+
+async function retryForward(id, {
+  ensureInstalled = ensureTailcatInstalled,
+  primeDerpMap = primeDerpMapCache,
+  allocatePort = allocateLocalPort,
+  startForward = startForwardProcess,
+  addPeerFn = addPeer,
+  patchForwardEntry = patchForward,
+  removePeerFn = removeInstancePeer,
+  getPeersFn = getPeers,
+  setPeerPortFn = setTailcatPeerPort,
+} = {}) {
+  if (shuttingDown) throw new Error('PortOS is shutting down');
+  const entries = await readForwards();
+  const entry = entries.find((f) => f.id === id);
+  if (!entry) throw new ServerError('Tailcat forward not found', { status: 404 });
+
+  // A live child on a stale mapping would keep the port and mask the retry.
+  killLiveForward(entry.id);
+
+  const peers = await getPeersFn();
+  // Match the transport too, exactly as the boot-time restore does: a stale entry
+  // whose peerId now names a classic peer must register a fresh one, never adopt it.
+  const existingPeer = entry.peerId
+    ? peers.find((p) => p.id === entry.peerId && p.transport === 'tailcat') || null
+    : null;
+  const peer = await startAndRegister({
+    entry, existingPeer, ensureInstalled, primeDerpMap, allocatePort, startForward,
+    addPeerFn, patchForwardEntry, removePeerFn, setPeerPortFn,
+  }).catch(async (err) => {
+    await markForwardFailed(entry.id, err, patchForwardEntry);
+    throw err;
+  });
+  console.log(`🐈 tailcat forward retried for peer ${peer.id} (${redactTcAddress(entry.tcAddress)})`);
   return peer;
 }
 
@@ -445,12 +811,12 @@ export function restoreForwards(options = {}) {
 
 async function restoreTailcatForwards({
   ensureInstalled = ensureTailcatInstalled,
+  primeDerpMap = primeDerpMapCache,
   startForward = startForwardProcess,
   getPeersFn = getPeers,
 } = {}) {
   if (shuttingDown) return { restored: 0 };
-  const data = await loadForwards();
-  const forwards = Array.isArray(data.forwards) ? data.forwards : [];
+  const forwards = await readForwards();
   if (forwards.length === 0) return { restored: 0 };
 
   let bin;
@@ -460,36 +826,33 @@ async function restoreTailcatForwards({
     console.log(`⚠️ tailcat restore skipped — ${err.message}`);
     return { restored: 0, error: err.message };
   }
+  await Promise.resolve().then(primeDerpMap).catch(() => null);
 
   const peers = await getPeersFn();
   let restored = 0;
   for (const entry of forwards) {
     if (shuttingDown) break;
-    if (!entry?.peerId || !isValidTcAddress(entry.tcAddress)) continue;
     // A stale entry must never resurrect a removed peer or reuse another route.
-    if (!peers.some((peer) => peer.id === entry.peerId && peer.transport === 'tailcat'
+    if (!entry.peerId || !peers.some((peer) => peer.id === entry.peerId && peer.transport === 'tailcat'
       && peer.address === '127.0.0.1' && peer.port === entry.localPort)) continue;
     if (!Number.isInteger(entry.localPort) || entry.localPort < 1024 || entry.localPort > 65535
       || entry.remotePort !== DEFAULT_TAILCAT_REMOTE_PORT) continue;
-    if (liveForwards.has(entry.peerId)) continue;
+    if (liveForwards.has(entry.id)) continue;
     try {
       const child = await startForward({
         bin,
         tcAddress: entry.tcAddress,
-        localPort: entry.localPort || DEFAULT_TAILCAT_LOCAL_PORT,
-        remotePort: entry.remotePort || DEFAULT_TAILCAT_REMOTE_PORT,
-      });
-      liveForwards.set(entry.peerId, {
-        child,
         localPort: entry.localPort,
-        remotePort: entry.remotePort || DEFAULT_TAILCAT_REMOTE_PORT,
+        remotePort: entry.remotePort,
       });
-      child.on('exit', () => {
-        if (liveForwards.get(entry.peerId)?.child === child) liveForwards.delete(entry.peerId);
-      });
+      trackForward(entry.id, child, entry.localPort, entry.remotePort);
+      await patchForward(entry.id, { status: 'active', lastError: null, lastErrorAt: null }).catch(() => null);
       restored += 1;
     } catch (err) {
-      console.log(`⚠️ tailcat restore failed for peer ${entry.peerId}`);
+      // Keep the reason on the entry: a boot-time failure is exactly the case
+      // nobody is watching, and the retry UI is the only place it resurfaces.
+      console.log(`⚠️ tailcat restore failed for peer ${entry.peerId} — ${redactTailcatDiagnostics(err.message)}`);
+      await markForwardFailed(entry.id, err);
     }
   }
   if (restored > 0) console.log(`🐈 Restored ${restored} tailcat forward(s)`);
@@ -516,4 +879,3 @@ export function _resetLiveForwardsForTests() {
 export function _liveForwardCountForTests() {
   return liveForwards.size;
 }
-

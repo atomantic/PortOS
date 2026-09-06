@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import net from 'net';
-import { isMachineOnline } from './connectivity.js';
+import { isMachineOnline, isPortReachable } from './connectivity.js';
 
 // Spin up a real loopback TCP server so the "connects" path is exercised
 // without hitting the public internet; a closed loopback port gives a fast,
@@ -63,5 +63,20 @@ describe('isMachineOnline', () => {
     const online = await isMachineOnline({ hosts: [{ host: '192.0.2.1', port: 443 }], timeoutMs: 300 });
     expect(online).toBe(false);
     expect(Date.now() - start).toBeLessThan(3000);
+  });
+});
+
+describe('isPortReachable', () => {
+  it('resolves true only while something is actually listening on the port', async () => {
+    const { server, port } = await listenOnEphemeralPort();
+    await expect(isPortReachable({ port })).resolves.toBe(true);
+    await new Promise((resolve) => server.close(resolve));
+    await expect(isPortReachable({ port })).resolves.toBe(false);
+  });
+
+  it('never rejects, and refuses an out-of-range port without dialing', async () => {
+    await expect(isPortReachable({ port: 0 })).resolves.toBe(false);
+    await expect(isPortReachable({ port: 70_000 })).resolves.toBe(false);
+    await expect(isPortReachable()).resolves.toBe(false);
   });
 });

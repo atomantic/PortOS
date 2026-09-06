@@ -56,13 +56,81 @@ HTTP is the default; HTTPS runs through the same loopback tunnel. Remote
 announcements cannot replace the managed local host or forwarding port.
 
 Forwards are persisted in machine-local `data/tailcat-forwards.json` so PortOS
-can restart them on boot. Startup waits for the CLI to confirm its local listener;
-this confirms the tunnel listener, not the remote PortOS health. A failed metadata
-write rolls back the new peer. Graceful shutdown stops forwards while retaining
-their restart metadata. The full `tc…` string is a bearer capability — it is
-**never** logged in full, never placed on the peer record returned to the UI or
-to other peers, and must never appear in commits, PR bodies, docs, or tests.
-Use placeholders such as `<tcADDR>` or `tcEXAMPLE…` only.
+can restart them on boot **and retry one that failed to start**. Graceful
+shutdown stops forwards while retaining their restart metadata. The full `tc…`
+string is a bearer capability — it is **never** logged in full, never placed on
+the peer record returned to the UI or to other peers, never returned by an API
+response, and must never appear in commits, PR bodies, docs, or tests. Use
+placeholders such as `<tcADDR>` or `tcEXAMPLE…` only.
+
+### The saved address is what makes a failed add recoverable
+
+The row is written **before** the forward is attempted. That ordering is the
+point: the `tc…` address arrives out of band and only ever existed in the Add
+Peer field, so an add that died on the way up used to throw the capability away
+and force the operator back to the remote for a fresh one before anyone could
+even retry.
+
+| Surface | What it does |
+| --- | --- |
+| `GET /api/instances/peers/tailcat/forwards` | Every saved forward: status (`pending`/`active`/`failed`), whether it is running, the local↔remote ports, and the last **redacted** startup error. `tcAddress` is the redacted form; the credential is reported as `hasAuth` only. |
+| `POST …/forwards/:id/retry` | Restarts from the stored capability, registering the peer if the original add never got that far, and repointing an existing peer when a retry has to bind a different local port. |
+| `DELETE …/forwards/:id` | Stops the forward, deletes the stored capability, and removes its peer. |
+
+The Instances page renders these as **Tailcat forwards**, with Retry and Forget
+per row. A boot-time restore failure lands on the same row, so the one case
+nobody is watching still surfaces somewhere actionable.
+
+### Startup readiness has two independent signals
+
+`startForwardProcess` spawns `tailcat forward --verbose …` and resolves when
+*either* the CLI logs `forwarding 127.0.0.1:<local> -> remote localhost:<remote>`
+*or* the local port stops accepting a bind (something is listening on it). It
+confirms the tunnel listener, not the remote PortOS health.
+
+`--verbose` and the bind probe are both there because of a real failure. tailcat
+**≤0.5.0** — the version Homebrew installs — emits that `forwarding …` line
+through its verbose-only logger, and PortOS spawned without `--verbose`: every
+add against that build failed with `tailcat listener startup timed out` after 8s
+while the listener was up and perfectly healthy (v0.6.0 promoted the line to an
+unconditional print). So `--verbose` restores the line on released builds, and it
+is also the only way per-connection `dial remote target …` failures are logged at
+all. The bind probe then makes readiness independent of any log wording, so the
+next CLI reword cannot regress this the same way.
+
+On failure, tailcat's own diagnostics now reach the operator — capability-shaped
+tokens scrubbed, last few lines only. An opaque "startup timed out" with the real
+reason discarded is what made this take three passes to diagnose.
+
+A failed metadata write rolls back the new peer.
+
+### The DERP map has to be reachable — by Go
+
+tailcat resolves a `tc…` address's relay region by fetching its DERP map
+(`https://tailcat.dev/derpmap.json`, override with `TAILCAT_DERPMAP_URL`) using
+Go's own HTTP client. On a host where a local network filter permits Node and
+curl but blocks Go's dialer, that fetch fails and **every** tailcat command dies
+before it can serve or dial:
+
+```
+Expand: fetching DERPMap for region -1: Get "https://tailcat.dev/derpmap.json": context deadline exceeded
+```
+
+This is the same host condition that makes `go install` fail with
+`connect: bad file descriptor` — and it is why Homebrew is tried first for the
+install. PortOS reaches that identical URL fine, so before spawning tailcat it
+pre-warms the cache the CLI already reads
+(`<user cache dir>/tailcat/derpmap-<escaped URL>.json`, refreshed at most every
+6h). Strictly best-effort: if the write or the fetch fails, tailcat just fetches
+the map the way it normally would.
+
+On the **serve** side there is no PortOS process to do that, so a sandbox on such
+a host should hand out a `--full-address`, which embeds the relay info and needs
+no map fetch on either end:
+
+```bash
+tailcat serve --full-address --key=new 5555
+```
 
 ## Privacy
 

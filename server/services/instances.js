@@ -525,6 +525,31 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
   return peer;
 }
 
+/**
+ * Repoint a tailcat peer at a new loopback port.
+ *
+ * The public updatePeer deliberately owns no `port` field — a peer's address is
+ * how the operator reached it, not something the server rewrites. A managed
+ * tailcat forward is the exception: PortOS chose that loopback port itself, so
+ * when a retry has to bind a different one (the old port got taken while the
+ * forward was down) the peer record has to follow or every request keeps dialing
+ * a dead port. Restricted to `transport: 'tailcat'` for exactly that reason.
+ */
+export async function setTailcatPeerPort(id, port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  const updated = await withData(async (data) => {
+    const peer = data.peers.find(p => p.id === id && p.transport === 'tailcat');
+    if (!peer || peer.port === port) return peer || null;
+    peer.port = port;
+    console.log(`🐈 Tailcat peer ${peer.name} repointed to 127.0.0.1:${port}`);
+    instanceEvents.emit('peers:updated', data.peers);
+    return peer;
+  });
+  // The relay pins the peer URL at connect time, so it has to redial the new port.
+  if (updated) disconnectFromPeer(id);
+  return updated;
+}
+
 export async function removePeer(id, { stopTransport = true } = {}) {
   disconnectFromPeer(id);
   // Retire the transport outside the data lock: its lifecycle may itself need

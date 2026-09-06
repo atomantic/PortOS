@@ -267,6 +267,28 @@ router.post('/peers/tailcat', asyncHandler(async (req, res) => {
   res.status(201).json(instances.sanitizePeerForClient(peer));
 }));
 
+// GET /api/instances/peers/tailcat/forwards — saved tailcat forwards.
+// The tc address is a bearer capability, so rows carry only its redacted form;
+// what they DO carry is which forward is down and why, so a failed add can be
+// retried without the operator producing the address again.
+router.get('/peers/tailcat/forwards', asyncHandler(async (_req, res) => {
+  res.json({ forwards: await tailcatPeer.listTailcatForwards() });
+}));
+
+// POST /api/instances/peers/tailcat/forwards/:id/retry — restart a saved forward
+// using the stored capability, registering its peer if the original add never got
+// that far.
+router.post('/peers/tailcat/forwards/:id/retry', asyncHandler(async (req, res) => {
+  const peer = await tailcatPeer.retryTailcatForward(req.params.id);
+  res.json(instances.sanitizePeerForClient(peer));
+}));
+
+// DELETE /api/instances/peers/tailcat/forwards/:id — stop the forward, drop the
+// stored capability, and remove its peer if one was registered.
+router.delete('/peers/tailcat/forwards/:id', asyncHandler(async (req, res) => {
+  res.json(await tailcatPeer.forgetTailcatForward(req.params.id));
+}));
+
 // POST /api/instances/peers — add a peer
 router.post('/peers', asyncHandler(async (req, res) => {
   const data = validateRequest(addPeerSchema, req.body);
