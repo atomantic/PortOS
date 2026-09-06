@@ -17,7 +17,15 @@ import {
   BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES,
   ATTACHMENT_ROLES, VOICE_CANON_SOURCE_POLICIES, IDENTITY_ASSET_ROLES,
 } from './storyBible.js';
-import { CHARACTER_ARC_TYPES, CHARACTER_FRAMEWORK_LIMITS } from './characterFramework.js';
+import {
+  CHARACTER_ARC_TYPES,
+  CHARACTER_FRAMEWORK_LIMITS,
+  CHARACTER_PSYCHOLOGY_LIMITS,
+  CHARACTER_PSYCHOLOGY_TEXT_FIELDS,
+  CHARACTER_SLIDER_AXES,
+  PSYCHOLOGY_ASSESSMENTS,
+  PSYCHOLOGY_DRIVE_AXES,
+} from './characterFramework.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkInfra/taxonomy.js';
@@ -481,6 +489,31 @@ const wrRelationshipLinksField = z.array(z.object({
   opposition: wrOppositionField.nullable().optional(),
   locked: z.boolean().optional(),
 }).strict()).max(BIBLE_LIMITS.RELATIONSHIP_LINKS_PER_CHARACTER_MAX);
+// Optional psychology profile (#6414) and the Three Sliders (#2175) — the two
+// structured surfaces the Universe cast editor already authors. Both are
+// clearable: `psychology: null` (or an all-blank object) drops the profile so a
+// character reads as unassessed again rather than keeping an empty husk, and a
+// slider axis set to null un-rates it without disturbing the other two.
+const wrPsychologyDriveField = z.object({
+  desire: z.string().max(CHARACTER_PSYCHOLOGY_LIMITS.drive).nullable().optional(),
+  fear: z.string().max(CHARACTER_PSYCHOLOGY_LIMITS.drive).nullable().optional(),
+}).strict();
+const wrPsychologyField = z.object({
+  ...Object.fromEntries(CHARACTER_PSYCHOLOGY_TEXT_FIELDS.map((field) => [
+    field, z.string().max(CHARACTER_PSYCHOLOGY_LIMITS[field]).nullable().optional(),
+  ])),
+  // '' and null both unset the assessment; the sanitizer's trimEnum maps an
+  // unrecognized token to null rather than rejecting it.
+  assessment: z.enum(PSYCHOLOGY_ASSESSMENTS).or(z.literal('')).nullable().optional(),
+  assessmentNote: z.string().max(CHARACTER_PSYCHOLOGY_LIMITS.assessmentNote).nullable().optional(),
+  drives: z.object(Object.fromEntries(
+    PSYCHOLOGY_DRIVE_AXES.map((axis) => [axis, wrPsychologyDriveField.nullable().optional()]),
+  )).strict().nullable().optional(),
+}).strict();
+const wrSlidersField = z.object(Object.fromEntries(CHARACTER_SLIDER_AXES.map((axis) => [
+  axis,
+  z.number().int().min(BIBLE_LIMITS.SLIDER_MIN).max(BIBLE_LIMITS.SLIDER_MAX).nullable().optional(),
+]))).strict();
 // Narrative character framework (#6417) — parity with what the Universe cast
 // editor already authors and `sanitizeCharacter` already persists. Every field
 // is optional AND tolerates its empty value ('' / [] / null) so a writer can
@@ -498,6 +531,8 @@ const wrCharFrameworkFields = Object.freeze({
   arcType: z.enum(CHARACTER_ARC_TYPES).or(z.literal('')).nullable().optional(),
   secrets: z.array(z.string().trim().min(1).max(BIBLE_LIMITS.SECRET_MAX))
     .max(BIBLE_LIMITS.SECRETS_PER_CHARACTER_MAX).optional(),
+  psychology: wrPsychologyField.nullable().optional(),
+  sliders: wrSlidersField.nullable().optional(),
 });
 // Shared between create and update — the two differ only in whether `name` is
 // required, and drifting them apart is how `relationshipLinks` ended up

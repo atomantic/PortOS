@@ -267,3 +267,90 @@ describe('writers room — character narrative framework (#6417)', () => {
     expect(refreshed.secrets).toEqual(['Sold the license']);
   });
 });
+
+describe('writers room — psychology, sliders and links (#6417)', () => {
+  it('creates, patches and clears the psychology profile and the Three Sliders', async () => {
+    const id = await newWork();
+    const created = await createCharacter(id, {
+      name: 'Wren Calloway',
+      psychology: {
+        theoryOfControl: 'If I stay useful, nobody leaves.',
+        strategy: 'Takes on everyone else’s work and never asks for anything.',
+        drives: { connection: { desire: 'To be kept', fear: 'To be set down' } },
+      },
+      sliders: { proactivity: 8, competence: 6 },
+    });
+    expect(created.psychology.theoryOfControl).toBe('If I stay useful, nobody leaves.');
+    expect(created.psychology.drives.connection.fear).toBe('To be set down');
+    // Unfilled axes materialize as blank leaves, never as an absent slot.
+    expect(created.psychology.drives.survival).toEqual({ desire: '', fear: '' });
+    expect(created.sliders).toEqual({ proactivity: 8, likability: null, competence: 6 });
+
+    // Patch one leaf; the rest of the profile and the sliders are untouched.
+    const patched = await updateCharacter(id, created.id, {
+      psychology: { ...created.psychology, presentCost: 'Never says what she wants.' },
+    });
+    expect(patched.psychology.presentCost).toBe('Never says what she wants.');
+    expect(patched.psychology.theoryOfControl).toBe('If I stay useful, nobody leaves.');
+    expect(patched.sliders.proactivity).toBe(8);
+
+    // An assessment alone keeps the profile: the author ruled the interior out
+    // rather than leaving it unfilled, and that is a real answer.
+    const ruledOut = await updateCharacter(id, created.id, {
+      psychology: { assessment: 'not-applicable', assessmentNote: 'A weather front, not a person.' },
+    });
+    expect(ruledOut.psychology.assessment).toBe('not-applicable');
+    expect(ruledOut.psychology.theoryOfControl).toBe('');
+
+    // Present-but-empty is a real clear; an absent key would have preserved it.
+    const cleared = await updateCharacter(id, created.id, {
+      psychology: null,
+      sliders: { proactivity: null, likability: null, competence: null },
+    });
+    expect(cleared.psychology).toBeUndefined();
+    expect(cleared.sliders).toEqual({ proactivity: null, likability: null, competence: null });
+
+    const [reloaded] = await listCharacters(id);
+    expect(reloaded.psychology).toBeUndefined();
+    expect(reloaded.sliders.proactivity).toBeNull();
+  });
+
+  it('keeps an authored psychology profile when extraction proposes another', async () => {
+    const id = await newWork();
+    const authored = await createCharacter(id, {
+      name: 'Wren Calloway',
+      psychology: { theoryOfControl: 'AUTHORED — if I stay useful, nobody leaves.' },
+    });
+    const merged = await mergeExtractedCharacters(id, [{
+      name: 'wren calloway',
+      psychology: { theoryOfControl: 'EXTRACTED — she fears the dark.' },
+    }]);
+    const refreshed = merged.find((x) => x.id === authored.id);
+    expect(refreshed.psychology.theoryOfControl).toBe('AUTHORED — if I stay useful, nobody leaves.');
+  });
+
+  it('patches a relationship link without dropping its opposing-force tag', async () => {
+    // The Writers Room row editor authors target/type/description only; an
+    // `opposition` block tagged in the Universe cast editor rides through.
+    const id = await newWork();
+    const other = await createCharacter(id, { name: 'Ines Mbeki' });
+    const c = await createCharacter(id, {
+      name: 'Wren Calloway',
+      relationshipLinks: [{
+        targetCharacterId: other.id,
+        type: 'rival',
+        description: 'Same salvage claim.',
+        opposition: { axis: 'winner/loser', thisRole: 'challenger', targetRole: 'holder' },
+      }],
+    });
+    const link = c.relationshipLinks[0];
+    const patched = await updateCharacter(id, c.id, {
+      relationshipLinks: [{ ...link, type: 'antagonist', description: 'Same claim, now in court.' }],
+    });
+    expect(patched.relationshipLinks[0].type).toBe('antagonist');
+    expect(patched.relationshipLinks[0].opposition.axis).toBe('winner/loser');
+
+    const emptied = await updateCharacter(id, c.id, { relationshipLinks: [] });
+    expect(emptied.relationshipLinks).toEqual([]);
+  });
+});

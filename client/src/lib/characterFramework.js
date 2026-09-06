@@ -17,6 +17,11 @@ import {
   CHARACTER_FRAMEWORK_FIELDS,
   CHARACTER_FRAMEWORK_LIMITS,
   CHARACTER_FRAMEWORK_TEXT_FIELDS,
+  CHARACTER_PSYCHOLOGY_LIMITS,
+  CHARACTER_SLIDER_AXES,
+  PSYCHOLOGY_ASSESSMENTS,
+  PSYCHOLOGY_DRIVE_AXES,
+  RELATIONSHIP_LINK_TYPES,
 } from '../../../server/lib/characterFramework.js';
 import { BIBLE_LIMITS } from './bibleLimits.js';
 
@@ -25,11 +30,17 @@ export {
   CHARACTER_FRAMEWORK_FIELDS,
   CHARACTER_FRAMEWORK_LIMITS,
   CHARACTER_FRAMEWORK_TEXT_FIELDS,
+  CHARACTER_PSYCHOLOGY_LIMITS,
+  // The Three Sliders axes (#2175) — an unset axis is null, never 0.
+  CHARACTER_SLIDER_AXES,
+  PSYCHOLOGY_ASSESSMENTS,
+  PSYCHOLOGY_DRIVE_AXES,
+  RELATIONSHIP_LINK_TYPES,
 };
 
-// The Three Sliders axes (#2175). Mirrors `sanitizeCharacterSliders` in
-// server/lib/storyBible.js — an unset axis is null, never 0.
-export const CHARACTER_SLIDER_AXES = Object.freeze(['proactivity', 'likability', 'competence']);
+// Slider bounds, so an editor can build its control without restating 1–10.
+export const CHARACTER_SLIDER_MIN = BIBLE_LIMITS.SLIDER_MIN;
+export const CHARACTER_SLIDER_MAX = BIBLE_LIMITS.SLIDER_MAX;
 
 // What the writer WANTS and fears losing. Authored beside the framework but
 // stored as its own long-form field; the Universe editor renders it in its
@@ -60,4 +71,32 @@ export const CHARACTER_SECRETS_FIELD = Object.freeze({
   placeholder: 'something they hide from others or themselves',
   max: BIBLE_LIMITS.SECRET_MAX,
   maxItems: BIBLE_LIMITS.SECRETS_PER_CHARACTER_MAX,
+});
+
+// Psychology profile editor descriptors (#6414), in authoring order — the same
+// copy both cast editors render. `status` carries its own hint because the
+// label alone reads as wealth or dominance, which it is not.
+export const CHARACTER_PSYCHOLOGY_EDITOR_FIELDS = Object.freeze([
+  { name: 'theoryOfControl', label: 'Theory of control (one sentence)', placeholder: 'the rule they operate by — "if I stay useful, nobody leaves"', max: CHARACTER_PSYCHOLOGY_LIMITS.theoryOfControl },
+  { name: 'strategy', label: 'Strategy it motivates', placeholder: "the behavior the theory produces — \"takes on everyone else's work, never asks for anything\"", max: CHARACTER_PSYCHOLOGY_LIMITS.strategy },
+  { name: 'protectiveBenefit', label: 'What it protects', placeholder: 'the real thing it keeps them from feeling or losing', max: CHARACTER_PSYCHOLOGY_LIMITS.protectiveBenefit },
+  { name: 'presentCost', label: 'What it costs now', placeholder: 'the price the strategy charges in the present', max: CHARACTER_PSYCHOLOGY_LIMITS.presentCost },
+  { name: 'testingPressure', label: 'Anticipated testing pressure', placeholder: 'what would put the theory under load — anticipated, not yet dramatized', max: CHARACTER_PSYCHOLOGY_LIMITS.testingPressure },
+  { name: 'candidateChange', label: 'Candidate change', placeholder: 'the revision the theory might undergo if the pressure lands', max: CHARACTER_PSYCHOLOGY_LIMITS.candidateChange },
+]);
+
+// The escape-hatch explanation shown only for a non-`assessed` assessment: a
+// hive, a weather front, or a deliberately opaque character is a legitimate
+// answer, said out loud rather than by leaving the form blank.
+export const CHARACTER_PSYCHOLOGY_NOTE_FIELD = Object.freeze({
+  name: 'assessmentNote',
+  label: 'Why',
+  placeholder: 'why this character has no legible theory of control, or how to read one for a nonhuman',
+  max: CHARACTER_PSYCHOLOGY_LIMITS.assessmentNote,
+});
+
+export const CHARACTER_PSYCHOLOGY_DRIVE_HINTS = Object.freeze({
+  survival: 'staying safe, fed, intact — physical or existential continuity',
+  connection: 'being known, kept, belonged to',
+  status: 'perceived value to a group — respect, standing, being counted; NOT wealth or dominance',
 });

@@ -6,6 +6,17 @@ import {
   CHARACTER_SECRETS_FIELD,
 } from '../../lib/characterFramework';
 import {
+  PsychologyFields,
+  RelationshipLinkRows,
+  SliderFields,
+  marshalPsychology,
+  marshalRelationshipLinks,
+  marshalSliders,
+  seedPsychology,
+  seedRelationshipLinks,
+  seedSliders,
+} from './CharacterFrameworkEditors';
+import {
   listWritersRoomCharacters,
   createWritersRoomCharacter,
   updateWritersRoomCharacter,
@@ -32,6 +43,33 @@ const FRAMEWORK_FIELDS = [
     options: CHARACTER_ARC_TYPES.map((value) => ({ value, label: ARC_TYPE_HINTS[value] || value })),
   },
   { key: CHARACTER_SECRETS_FIELD.name, label: `${CHARACTER_SECRETS_FIELD.label} (one per line)`, placeholder: CHARACTER_SECRETS_FIELD.placeholder, kind: 'lines', rows: 3 },
+  // The three structured surfaces, each rendered by its own editor rather than
+  // by BibleSection's flat text/select controls. Same descriptors the Universe
+  // cast editor uses; see CharacterFrameworkEditors.jsx.
+  {
+    key: 'sliders',
+    kind: 'custom',
+    heading: 'Three sliders (proactivity · likability · competence)',
+    seed: seedSliders,
+    marshal: marshalSliders,
+    Component: SliderFields,
+  },
+  {
+    key: 'psychology',
+    kind: 'custom',
+    heading: 'Psychology — theory of control & drives',
+    seed: seedPsychology,
+    marshal: marshalPsychology,
+    Component: PsychologyFields,
+  },
+  {
+    key: 'relationshipLinks',
+    kind: 'custom',
+    heading: 'Relationships',
+    seed: seedRelationshipLinks,
+    marshal: marshalRelationshipLinks,
+    Component: RelationshipLinkRows,
+  },
 ];
 // The framework is optional by design — a character with no Ghost isn't
 // incomplete — so it stays out of the row's "Missing: …" warning, which

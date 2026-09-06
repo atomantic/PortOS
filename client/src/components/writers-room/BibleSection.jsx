@@ -26,7 +26,12 @@ import useMounted from '../../hooks/useMounted';
 //     → string[]) | 'lines' (one entry per line → string[], for a list the
 //     entries are long enough to want their own row) | 'select' (a <select>
 //     over `options: [{ value, label }]`, persisting '' as null so the field
-//     can be cleared). `heading` renders a small group label above the field.
+//     can be cleared) | 'custom' (a structured value — a nested object, a
+//     numeric axis set, a row list — supplied as
+//     `{ seed(item), marshal(value), Component }`. The Component owns its own
+//     labels and its own emptiness, so both the shared `<label>` wrapper and
+//     the row's "Missing: …" check skip it and no `label` is needed).
+//     `heading` renders a small group label above the field.
 //   bodyField, bodyEmptyText           — the row's primary description line
 //   detailBlocks: [{ key, label, marginClass }] — extra "Label: value" lines
 //   blanksExcludeKeys                  — fields skipped by the "Missing: …" warning
@@ -113,6 +118,7 @@ export default function BibleSection({ workId, items: itemsProp, onItemsChange, 
         <BibleEditor
           workId={workId}
           item={null}
+          items={items}
           config={config}
           onSaved={(record) => { upsert(record); setCreating(false); }}
           onCancel={() => setCreating(false)}
@@ -128,6 +134,7 @@ export default function BibleSection({ workId, items: itemsProp, onItemsChange, 
                 <BibleEditor
                   workId={workId}
                   item={item}
+                  items={items}
                   config={config}
                   onSaved={(updated) => { upsert(updated); setEditingId(null); }}
                   onDeleted={() => { removeOne(item.id); setEditingId(null); }}
@@ -159,7 +166,7 @@ function BibleRow({ item, config, onEdit, readingTheme }) {
   const light = readingTheme === 'light';
   const Icon = config.icon;
   const blanks = config.fields.filter((f) => {
-    if (config.blanksExcludeKeys.includes(f.key)) return false;
+    if (f.kind === 'custom' || config.blanksExcludeKeys.includes(f.key)) return false;
     return !String(item[f.key] || '').trim();
   });
   return (
@@ -209,7 +216,7 @@ function BibleRow({ item, config, onEdit, readingTheme }) {
   );
 }
 
-function BibleEditor({ workId, item, config, onSaved, onDeleted, onCancel }) {
+function BibleEditor({ workId, item, items = [], config, onSaved, onDeleted, onCancel }) {
   const isCreate = !item;
   const { primary, fields } = config;
   const [draft, setDraft] = useState(() => {
@@ -217,6 +224,9 @@ function BibleEditor({ workId, item, config, onSaved, onDeleted, onCancel }) {
     for (const f of fields) {
       if (f.kind === 'csv') seed[f.key] = (item?.[f.key] || []).join(', ');
       else if (f.kind === 'lines') seed[f.key] = (item?.[f.key] || []).join('\n');
+      // A structured field seeds from the stored value verbatim (never ''), so
+      // reopening an untouched record and saving round-trips it unchanged.
+      else if (f.kind === 'custom') seed[f.key] = f.seed(item);
       else seed[f.key] = item?.[f.key] || '';
     }
     return seed;
@@ -240,6 +250,7 @@ function BibleEditor({ workId, item, config, onSaved, onDeleted, onCancel }) {
       if (f.kind === 'csv') payload[f.key] = splitEntries(draft[f.key], ',');
       else if (f.kind === 'lines') payload[f.key] = splitEntries(draft[f.key], '\n');
       else if (f.kind === 'select') payload[f.key] = draft[f.key] || null;
+      else if (f.kind === 'custom') payload[f.key] = f.marshal(draft[f.key]);
       else payload[f.key] = f.trim ? draft[f.key].trim() : draft[f.key];
     }
     const result = await (isCreate
@@ -300,19 +311,29 @@ function BibleEditor({ workId, item, config, onSaved, onDeleted, onCancel }) {
               {f.heading}
             </div>
           )}
-          <label htmlFor={`bible-field-${f.key}`} className="block">
-            <span className="text-[9px] uppercase tracking-wider text-gray-500">{f.label}</span>
-            {f.kind === 'multiline' || f.kind === 'lines' ? (
-              <textarea id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} rows={f.rows || 2} className={`${inputCls} font-sans resize-y`} />
-            ) : f.kind === 'select' ? (
-              <select id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} className={inputCls}>
-                <option value="">{f.placeholder || '—'}</option>
-                {(f.options || []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            ) : (
-              <input id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} className={inputCls} />
-            )}
-          </label>
+          {f.kind === 'custom' ? (
+            <f.Component
+              value={draft[f.key]}
+              onChange={(next) => setDraft((d) => ({ ...d, [f.key]: next }))}
+              siblings={items.filter((it) => it.id && it.id !== item?.id)}
+              idPrefix={`bible-field-${f.key}`}
+              inputCls={inputCls}
+            />
+          ) : (
+            <label htmlFor={`bible-field-${f.key}`} className="block">
+              <span className="text-[9px] uppercase tracking-wider text-gray-500">{f.label}</span>
+              {f.kind === 'multiline' || f.kind === 'lines' ? (
+                <textarea id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} rows={f.rows || 2} className={`${inputCls} font-sans resize-y`} />
+              ) : f.kind === 'select' ? (
+                <select id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} className={inputCls}>
+                  <option value="">{f.placeholder || '—'}</option>
+                  {(f.options || []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              ) : (
+                <input id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} className={inputCls} />
+              )}
+            </label>
+          )}
         </div>
       ))}
       <div className="flex items-center justify-between pt-1">
