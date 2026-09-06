@@ -129,15 +129,17 @@ describe('runSync cursor/persistence contract', () => {
 
   it('shares one in-flight pass across concurrent callers (re-entrancy guard)', async () => {
     let release;
+    const { promise: persistenceStarted, resolve: markPersistenceStarted } = Promise.withResolvers();
     recordEventsMock.mockImplementation(() => new Promise((resolve) => {
       release = () => resolve({ recorded: 2, skipped: 0 });
+      markPersistenceStarted();
     }));
     autoLogTouchpointsMock.mockResolvedValue({ created: 0, matched: 0 });
 
     const first = runSync();
     const second = runSync(); // while the first is still awaiting persistence
-    // Give the first call time to reach the pending recordEvents await.
-    await new Promise((r) => setTimeout(r, 20));
+    // Wait for persistence itself; fixture I/O can exceed a fixed sleep on CI.
+    await persistenceStarted;
     release();
     const [a, b] = await Promise.all([first, second]);
     expect(a).toBe(b); // same result object — the pass ran once

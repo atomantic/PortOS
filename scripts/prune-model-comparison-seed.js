@@ -45,6 +45,14 @@ export async function inScopeModels() {
     models: filterSelectableModels((provider.models || []).map(model => (typeof model === 'string' ? model : model?.id))),
   }));
   const scope = providerCatalogSlugs(inventory);
+  // Endpoint pricing belongs to the exact serving tier, including stealth IDs
+  // that deliberately cannot resolve to a public benchmark model.
+  for (const { models } of inventory) {
+    for (const model of models) {
+      scope.add(model);
+      if (model.startsWith('opencode/')) scope.add(model.slice('opencode/'.length));
+    }
+  }
   for (const model of FRONTIER_ANCHORS) scope.add(model);
   return scope;
 }
