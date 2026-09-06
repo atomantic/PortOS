@@ -46,6 +46,7 @@ import {
   getTaskTypePromptInfo,
   requiresManagedAppTarget,
   requiresInstallWideTarget,
+  isProgrammaticScheduledTaskType,
   enforceBranchReconcileBatch,
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
@@ -70,6 +71,7 @@ export {
   MANAGED_AGENT_OPTIONS, PERPETUAL_DRAIN_DISPATCH_CAP, SELF_IMPROVEMENT_TASK_TYPES,
   TASK_TYPE_DESCRIPTIONS, TASK_TYPE_INVOCATION, TASK_TYPE_PROMPT_INFO,
   getTaskTypeInvocation, getTaskTypePromptInfo, requiresManagedAppTarget, requiresInstallWideTarget,
+  isProgrammaticScheduledTaskType, PROGRAMMATIC_SCHEDULED_TASK_TYPES,
   stripManagedAgentOptionsFromOverride
 } from './taskScheduleRegistry.js';
 export { loadSchedule } from './taskScheduleStore.js';
@@ -1287,7 +1289,14 @@ export async function getScheduleStatus() {
       // managed app in one dispatch). Served from the server registry rather than
       // mirrored in client constants, so the UI cannot drift from the set the
       // dispatch engines actually treat as install-wide.
-      installWide: INSTALL_WIDE_TASK_TYPES.has(taskType)
+      installWide: INSTALL_WIDE_TASK_TYPES.has(taskType),
+      // Whether PortOS executes this type ITSELF (services/scheduledHandlers/)
+      // rather than dispatching an agent. Served from the registry rather than
+      // mirrored in client constants for the same reason as `installWide`: the
+      // UI must not drift from the set the dispatch engines actually treat as
+      // programmatic. It drives the Run Now affordance (no app picker — these
+      // never target a managed app) and the prompt panel (there is no prompt).
+      programmatic: isProgrammaticScheduledTaskType(taskType)
     };
 
     // Include default stage prompts for pipeline tasks so UI can display them

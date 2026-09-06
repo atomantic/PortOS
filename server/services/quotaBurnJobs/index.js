@@ -24,18 +24,27 @@
  * store + media job queue, and `agentPrompt` the CoS task store, so a status
  * read for an install with no jobs configured should not load either.
  *
- * Adding a job type is three edits: a `QUOTA_BURN_JOB_TYPE` entry + catalog row
- * in `lib/quotaBurnConfig.js` (that's what the config page renders), a module
- * here, and one line in `JOB_MODULES`. The client needs no change unless the
+ * The two PROGRAMMATIC job types are no longer implemented here. They are
+ * ordinary on-demand SCHEDULED TASKS (`services/scheduledHandlers/`) that the
+ * user can also run from CoS → Schedule; this registry keeps their entries and
+ * points them at that shared handler, passing the burning `family` so a burn
+ * stays pinned to the subscription it is draining. There is one implementation,
+ * not two. Retiring this registry in favour of scheduled-task references is
+ * #6381's job.
+ *
+ * Adding a burn job type is three edits: a `QUOTA_BURN_JOB_TYPE` entry + catalog
+ * row in `lib/quotaBurnConfig.js` (that's what the config page renders), a
+ * module, and one line in `JOB_MODULES`. The client needs no change unless the
  * job introduces a param kind the form doesn't render yet.
  */
 
 import { QUOTA_BURN_JOB_TYPE } from '../../lib/quotaBurnConfig.js';
+import { SCHEDULED_HANDLER_MODULES } from '../scheduledHandlers/index.js';
 
 export const JOB_MODULES = {
   [QUOTA_BURN_JOB_TYPE.AGENT_PROMPT]: () => import('./agentPrompt.js'),
-  [QUOTA_BURN_JOB_TYPE.UNIVERSE_BIBLE_DESCRIBE]: () => import('./universeBibleDescribe.js'),
-  [QUOTA_BURN_JOB_TYPE.UNIVERSE_BIBLE_IMAGES]: () => import('./universeBibleImages.js'),
+  [QUOTA_BURN_JOB_TYPE.UNIVERSE_BIBLE_DESCRIBE]: SCHEDULED_HANDLER_MODULES['universe-bible-describe'],
+  [QUOTA_BURN_JOB_TYPE.UNIVERSE_BIBLE_IMAGES]: SCHEDULED_HANDLER_MODULES['universe-bible-images'],
 };
 
 // `Object.hasOwn`, not a truthiness check, so an inherited key like

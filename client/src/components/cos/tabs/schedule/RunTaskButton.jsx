@@ -16,7 +16,7 @@ const MENU_WIDTH = 256; // w-64
 // A named boolean per reason would mean every new reason edits this component,
 // and — as the pin-saving gate showed — reaching only whichever call site the
 // author had in mind.
-export default function RunTaskButton({ taskType, apps, onTrigger, installWide = false, disabledReason = '' }) {
+export default function RunTaskButton({ taskType, apps, onTrigger, installWide = false, programmatic = false, disabledReason = '' }) {
   const [open, setOpen] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [lastRequest, setLastRequest] = useState('');
@@ -101,7 +101,10 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
   // run is the app-less one. Without this the picker would be the only way to
   // start it on any install that has apps, and every click would send an appId —
   // silently reducing an install-wide sweep to a single repo.
-  if (activeApps.length === 0 || installWide) {
+  // A PROGRAMMATIC task (universe bible descriptions/images) acts on PortOS's
+  // own records, never a managed app's checkout — the server rejects a request
+  // that names one — so it gets the plain button, not the app picker.
+  if (activeApps.length === 0 || installWide || programmatic) {
     return (
       <span className="inline-flex min-w-0 flex-col items-start">
         <span

@@ -48,6 +48,20 @@ describe('RunTaskButton', () => {
     expect(screen.queryByText('Example App')).toBeNull();
   });
 
+  it('runs a programmatic task with NO app, and without the all-apps label', async () => {
+    // A programmatic handler acts on PortOS's own records; the server rejects
+    // a request that names a managed app, so the picker would produce a dead
+    // button on any install that has apps. It is not an install-wide SWEEP
+    // either, so it must not claim to run on all of them.
+    const user = userEvent.setup();
+    const onTrigger = vi.fn();
+    render(<RunTaskButton taskType="universe-bible-images" apps={APPS} onTrigger={onTrigger} programmatic />);
+    expect(screen.queryByRole('button', { name: /Run on All Apps/i })).toBeNull();
+    await user.click(screen.getByRole('button', { name: /Run Now/i }));
+    expect(onTrigger).toHaveBeenCalledWith('universe-bible-images');
+    expect(onTrigger.mock.calls[0]).toHaveLength(1);
+  });
+
   it('lists only active apps and runs the task on the picked one', async () => {
     const user = userEvent.setup();
     const onTrigger = vi.fn();

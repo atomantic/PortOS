@@ -12,6 +12,22 @@ export default function PromptEditor({ config, promptValue, setPromptValue, edit
   }, [stages?.length, activeTab]);
 
   if (!hasPipeline) {
+    // A PROGRAMMATIC task has no prompt at all — PortOS performs the work
+    // itself. Distinct from 'runtime-generated' (a hook renders a real prompt
+    // for a real agent), so it must not offer to show one.
+    if (config.promptMode === 'programmatic') {
+      return (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-400">Task Prompt</span>
+            <span className="text-[10px] px-1.5 py-0.5 bg-port-accent/10 text-port-accent rounded">No prompt — PortOS runs this itself</span>
+          </div>
+          <div className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-400">
+            {config.promptDescription || 'This task is performed by PortOS directly, with no agent and no prompt.'}
+          </div>
+        </div>
+      );
+    }
     if (config.promptMode === 'runtime-generated') {
       return (
         <div className="space-y-2">

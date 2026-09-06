@@ -119,6 +119,15 @@ its own type, optional model/provider pin, and type-specific params.
 | `universe-bible-describe` | **Programmatic** — no agent. Sends one headless expand prompt per under-described bible entry, pinned to the burning family's own CLI/TUI provider. |
 | `universe-bible-images` | **Programmatic** — no agent. Enqueues renders for universe bible entries whose `imageRefs[]` is empty. Render backend defaults to the burning family's own image mode, so a codex burn spends codex's image quota. |
 
+Both programmatic types are also ordinary **on-demand scheduled tasks** — they
+appear in CoS → Schedule with their own settings and a Run Now button, and a burn
+step and a manual run go through the same handler
+(`server/services/scheduledHandlers/`). They are never clock-due: a fresh install
+spends nothing on them until someone presses Run or adds one to a burn plan.
+Passing the burning `family` is what pins the provider / render backend to the
+subscription being drained; a manual run has no family and resolves the way any
+other scheduled task does.
+
 ### Describe before you render
 
 `universe-bible-describe` is the step that belongs **before** `universe-bible-images`
@@ -151,7 +160,7 @@ Locked entries are never picked, and every attempted entry is stamped into the
 shared in-flight ledger for its 6-hour TTL. Why picks are ranked by blank
 *fraction* rather than raw gap count, and why the stamp covers entries the model
 declined to fill, are argued at the code site
-(`server/services/quotaBurnJobs/universeBibleDescribe.js`).
+(`server/services/scheduledHandlers/universeBibleDescribe.js`).
 
 The image job's opt-in `requireDescribed` is the other half of the pairing: with
 it on, canon entries with no `core` description are held out of the render
@@ -216,10 +225,23 @@ accord instead of looping.
   dispatches nothing — the next cycle still faces every gate.
 
 Adding a job type is three edits: a `QUOTA_BURN_JOB_TYPE` entry + catalog row in
-`server/lib/quotaBurnConfig.js`, a module in `server/services/quotaBurnJobs/`, and
-one line in that directory's `JOB_MODULES`. The config page builds its form from
-the catalog, so no client change is needed unless the job introduces a param kind
-the form doesn't render yet.
+`server/lib/quotaBurnConfig.js`, a module, and one line in
+`server/services/quotaBurnJobs/index.js`'s `JOB_MODULES`. The config page builds
+its form from the catalog, so no client change is needed unless the job
+introduces a param kind the form doesn't render yet.
+
+**A PROGRAMMATIC job's module lives in `server/services/scheduledHandlers/`, not
+in `quotaBurnJobs/`.** The two universe-bible actions are ordinary **on-demand
+scheduled tasks** (CoS → Schedule → Run Now) that Quota Burn also dispatches;
+`JOB_MODULES` points at the same handler, so there is one implementation rather
+than a quota-only copy that drifts. A new burn action that PortOS performs itself
+belongs there too — register it in `SCHEDULED_HANDLER_MODULES`, add its task type
+to `PROGRAMMATIC_SCHEDULED_TASK_TYPES` + `DEFAULT_TASK_INTERVALS` in
+`server/services/taskScheduleRegistry.js` (enabled, `ON_DEMAND`, no interval), and
+allow-list its params in `sanitizeTaskMetadata`. The scheduled task's saved
+`taskMetadata` is the params bag; a burn step passes its own `params` plus the
+burning `family`, which is what pins the provider/render backend to that
+subscription. Listing or probing must spend nothing.
 
 Each job module exports `countPending` (side-effect free — the page calls it on
 every load) and `run` (the only thing that may spend quota). `countPending` may
@@ -360,7 +382,8 @@ folds those overrides into the single plan (each app's family prompt becomes an
 | `server/services/quotaBurn.js` | `evaluateFamily` — the one gate ladder both selection and the page's skip reasons read — plus the dispatch ledger |
 | `server/services/quotaBurnCompletions.js` | The `run once` completion ledger and its re-arm |
 | `server/services/quotaBurnDenials.js` | The observed-refusal ledger and its `agent:completed` subscriber |
-| `server/services/quotaBurnJobs/` | The job registry and its modules |
+| `server/services/quotaBurnJobs/` | The burn job registry and the `agent-prompt` executor |
+| `server/services/scheduledHandlers/` | The programmatic handlers (universe bible descriptions/images) — shared by Scheduled Tasks and Quota Burn |
 | `server/services/quotaBurnRunner.js` | The loop, the cycle, and the status feed |
 | `server/routes/quotaBurn.js` | `/api/quota-burn` |
 | `client/src/pages/QuotaBurn.jsx` | The config page |

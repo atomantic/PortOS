@@ -13,7 +13,7 @@
 
 import { addTask } from '../cosTaskStore.js';
 import { getAppById } from '../apps.js';
-import { noProviderReason, resolveBurnProvider } from './providerPick.js';
+import { noProviderReason, resolveBurnProvider } from '../scheduledHandlers/providerPick.js';
 import { burnTaskDescription, isUnlimitedDispatchCap } from '../../lib/quotaBurnConfig.js';
 import { windowLabelOf } from '../../lib/quotaWindows.js';
 

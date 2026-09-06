@@ -1,5 +1,26 @@
-import { describe, expect, it } from 'vitest';
-import { buildRenderSelection, countPending, findMissingImageEntries, inFlightKey, resolveRenderMode } from './universeBibleImages.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const listUniverses = vi.fn();
+const getUniverse = vi.fn();
+const renderUniverseJobs = vi.fn();
+const getQuotaBurnInFlight = vi.fn(async () => new Set());
+const recordQuotaBurnInFlight = vi.fn(async () => {});
+
+vi.mock('../universeBuilder.js', () => ({
+  listUniverses: (...args) => listUniverses(...args),
+  getUniverse: (...args) => getUniverse(...args),
+}));
+vi.mock('../universeBuilderRender.js', () => ({
+  renderUniverseJobs: (...args) => renderUniverseJobs(...args),
+}));
+vi.mock('../quotaBurnStore.js', () => ({
+  getQuotaBurnInFlight: (...args) => getQuotaBurnInFlight(...args),
+  recordQuotaBurnInFlight: (...args) => recordQuotaBurnInFlight(...args),
+}));
+
+const {
+  buildRenderSelection, countPending, findMissingImageEntries, inFlightKey, resolveRenderMode, run,
+} = await import('./universeBibleImages.js');
 
 const universe = {
   id: 'u1',
@@ -84,10 +105,20 @@ describe('resolveRenderMode', () => {
     // `claude` renders no images. Falling through would spend a DIFFERENT
     // provider's image quota while claude's window expires unused — and charge
     // claude's dispatch cap for it, the exact inversion the pin exists to stop.
-    expect(resolveRenderMode({ family: { id: 'claude' }, params: {} })).toBeNull();
-    expect(resolveRenderMode({ family: { id: 'codex' }, params: {} })).toBe('codex');
+    expect(resolveRenderMode({ family: { id: 'claude' }, params: {} }))
+      .toMatchObject({ mode: null, reason: expect.stringContaining('renders no images') });
+    expect(resolveRenderMode({ family: { id: 'codex' }, params: {} })).toEqual({ mode: 'codex' });
     // An explicit pin on the job always wins.
-    expect(resolveRenderMode({ family: { id: 'claude' }, params: { mode: 'grok' } })).toBe('grok');
+    expect(resolveRenderMode({ family: { id: 'claude' }, params: { mode: 'grok' } })).toEqual({ mode: 'grok' });
+  });
+
+  it('lets the render-target ladder decide when there is no burning family', () => {
+    // An ordinary scheduled run has no window to protect, so an unset backend
+    // must resolve to "let renderUniverseJobs pick" (mode undefined) rather than
+    // to the family refusal — the two are opposite outcomes, which is why the
+    // helper returns an object instead of a single falsy value.
+    expect(resolveRenderMode({ params: {} })).toEqual({ mode: undefined });
+    expect(resolveRenderMode({ params: { mode: 'codex' } })).toEqual({ mode: 'codex' });
   });
 });
 
@@ -119,5 +150,41 @@ describe('label deduping', () => {
     const row = (label) => ({ kind: 'variation', categoryKey: 'vehicles', label });
     expect(inFlightKey('u2', row('Skiff'))).toBe(inFlightKey('u2', row('skiff')));
     expect(inFlightKey('u2', row('Skiff'))).not.toBe(inFlightKey('u2', row('Barge')));
+  });
+});
+
+describe('probe → run context handoff', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getQuotaBurnInFlight.mockResolvedValue(new Set());
+    listUniverses.mockResolvedValue([universe]);
+    renderUniverseJobs.mockResolvedValue({ runId: 'run-1', jobIds: ['j1'], promptCount: 2, mode: 'codex' });
+  });
+
+  it('reuses the probe\'s scan instead of walking every universe again', async () => {
+    const probe = await countPending({ params: { maxEntries: 2 }, family: { id: 'codex' } });
+    listUniverses.mockClear();
+
+    const result = await run({ params: { maxEntries: 2 }, job: {}, family: { id: 'codex' }, context: probe.context });
+
+    expect(result.dispatched).toBe(true);
+    expect(listUniverses).not.toHaveBeenCalled();
+  });
+
+  it('still runs when there is no probe context — the manual/force path', async () => {
+    const result = await run({ params: { maxEntries: 2 }, job: {}, family: { id: 'codex' }, context: undefined });
+    expect(result.dispatched).toBe(true);
+    expect(listUniverses).toHaveBeenCalled();
+  });
+
+  it('probes without writing, enqueueing, or calling a provider', async () => {
+    await countPending({ params: {}, family: { id: 'codex' } });
+    expect(renderUniverseJobs).not.toHaveBeenCalled();
+    expect(recordQuotaBurnInFlight).not.toHaveBeenCalled();
+  });
+
+  it('leaves the render backend to the ladder on an ordinary scheduled run', async () => {
+    await run({ params: { maxEntries: 2 }, job: {} });
+    expect(renderUniverseJobs).toHaveBeenCalledWith('u1', expect.objectContaining({ mode: undefined }), expect.any(Function));
   });
 });

@@ -173,3 +173,58 @@ describe('run', () => {
     expect(expandUniverseCharacter).toHaveBeenCalledWith('u1', 'c1', { providerId: 'codex-tui', model: 'gpt-5' });
   });
 });
+
+describe('probe → run context handoff', () => {
+  it('reuses the probe\'s scan instead of walking every universe again', async () => {
+    // The contract in scheduledHandlers/index.js: an expensive probe hands its
+    // result to the run. Counting the universe walk is the only way to see it —
+    // a run that re-scanned would produce the same output and cost twice.
+    const probe = await countPending({ params: { maxEntries: 2 }, family: { id: 'codex' } });
+    listUniverses.mockClear();
+    getAllProviders.mockClear();
+
+    const result = await run({ params: { maxEntries: 2 }, job: {}, family: { id: 'codex' }, context: probe.context });
+
+    expect(result.dispatched).toBe(true);
+    expect(listUniverses).not.toHaveBeenCalled();
+    expect(getAllProviders).not.toHaveBeenCalled();
+  });
+
+  it('still runs when there is no probe context — the manual/force path', async () => {
+    const result = await run({ params: { maxEntries: 2 }, job: {}, family: { id: 'codex' }, context: undefined });
+    expect(result.dispatched).toBe(true);
+    expect(listUniverses).toHaveBeenCalled();
+  });
+
+  it('probes without writing, enqueueing, or calling a provider', async () => {
+    // Listing/probing must spend nothing: the Quota Burn page probes every
+    // configured job on every load (AGENTS.md — no cold-bootstrap LLM calls).
+    await countPending({ params: {}, family: { id: 'codex' } });
+    expect(expandUniverseCharacter).not.toHaveBeenCalled();
+    expect(expandUniverseCanonEntry).not.toHaveBeenCalled();
+    expect(recordQuotaBurnInFlight).not.toHaveBeenCalled();
+  });
+});
+
+describe('ordinary scheduled run (no burning family)', () => {
+  it('probes without refusing when nothing is pinned', async () => {
+    // There is no window to protect, so "no pin" is a valid configuration —
+    // reporting the family refusal here would make Run Now permanently dead.
+    getAllProviders.mockResolvedValue([]);
+    const result = await countPending({ params: { maxEntries: 2 }, job: {} });
+    expect(result.count).toBe(4);
+    expect(result.detail).toContain('2 queued next');
+  });
+
+  it('leaves the provider unset so the stage runner resolves the active one', async () => {
+    const result = await run({ params: { maxEntries: 1 }, job: {} });
+    expect(result.dispatched).toBe(true);
+    expect(expandUniverseCharacter).toHaveBeenCalledWith('u1', 'c1', { providerId: undefined, model: undefined });
+    expect(result.detail.providerId).toBeNull();
+  });
+
+  it('honors the scheduled task\'s own provider and model pin', async () => {
+    await run({ params: { maxEntries: 1 }, job: { providerId: 'codex-tui', model: 'gpt-5' } });
+    expect(expandUniverseCharacter).toHaveBeenCalledWith('u1', 'c1', { providerId: 'codex-tui', model: 'gpt-5' });
+  });
+});
