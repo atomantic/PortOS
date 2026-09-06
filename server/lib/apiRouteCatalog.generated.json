@@ -13881,6 +13881,14 @@
       ]
     },
     {
+      "method": "PATCH",
+      "path": "/api/providers/bindings/:id",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/providers/bindings/:id/link",
       "mountPath": "/api/providers",
@@ -13979,6 +13987,22 @@
     {
       "method": "DELETE",
       "path": "/api/providers/connections/:id",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/providers/connections/:id",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/connections/:id/refresh-models",
       "mountPath": "/api/providers",
       "sources": [
         "server/routes/providers.js"
@@ -17900,8 +17924,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2217,
-    "declarations": 2225,
+    "operations": 2220,
+    "declarations": 2228,
     "sourceFiles": 233
   }
 }

@@ -218,7 +218,7 @@ export function routeModeEligibility(provider, { allowedModes = ROUTE_MODES } = 
  * can never claim one canonical name: `modelMap` is keyed by canonical, so a
  * literal duplicate collapses and nothing else can collide.
  */
-function resolveRouteModels(provider) {
+export function resolveRouteModels(provider) {
   const stored = Array.isArray(provider?.models) ? provider.models : [];
   const modelMap = {};
   const unresolvedModels = [];

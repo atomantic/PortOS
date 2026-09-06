@@ -89,3 +89,71 @@ export const getFleetLlmHost = (options) => request('/providers/fleet-host', opt
 export const revealFleetLlmHostKey = (options) => request('/providers/fleet-host/key', { method: 'POST', ...options });
 export const getFleetPeerHosts = (options) => request('/providers/fleet-peer-hosts', options);
 export const revealFleetPeerHostKey = (peerId, options) => request(`/providers/fleet-peer-hosts/${encodeURIComponent(peerId)}/key`, { method: 'POST', ...options });
+
+// --- provider connection graph management (#6369) ----------------------------
+// The MANAGEMENT surface, separate from the flat `/providers` execution list
+// above. Every response here is credential-free: a connection reports whether
+// it `hasCredentials`, never the secret, and no projection snapshot is exposed.
+
+/**
+ * Whether a failed management call means "this server has no management API"
+ * rather than "the call failed".
+ *
+ * Only two answers count, and both are the server saying so explicitly: a 404
+ * (an older build with no such route) and the graph's own
+ * `PROVIDER_GRAPH_UNAVAILABLE` 503. A timeout, a 500 or an offline server is
+ * NOT an unsupported server — treating it as one would quietly downgrade a
+ * working install to the legacy view and hide a real outage.
+ */
+export const isManagementUnsupported = (error) =>
+  error?.status === 404 || error?.code === 'PROVIDER_GRAPH_UNAVAILABLE';
+
+/** The durable graph: connections, harness bindings and executable routes. */
+export const getProviderManagementGraph = (options) => request('/providers/management', options);
+
+/** What linking this binding onto another connection would change. Read-only. */
+export const previewProviderBindingLink = (bindingId, body, options) => request(
+  `/providers/bindings/${encodeURIComponent(bindingId)}/link/preview`,
+  { method: 'POST', body: JSON.stringify(body), ...options },
+);
+
+/** Apply a reviewed link. Every revision named in `body` is re-checked server-side. */
+export const linkProviderBinding = (bindingId, body, options) => request(
+  `/providers/bindings/${encodeURIComponent(bindingId)}/link`,
+  { method: 'POST', body: JSON.stringify(body), ...options },
+);
+
+/** Give this binding its own copy of the connection it shares. Route ids are kept. */
+export const unlinkProviderBinding = (bindingId, body, options) => request(
+  `/providers/bindings/${encodeURIComponent(bindingId)}/unlink`,
+  { method: 'POST', body: JSON.stringify(body ?? {}), ...options },
+);
+
+/**
+ * Edit one shared backend. `expectedRevision` is required; a 409
+ * `PROVIDER_GRAPH_STALE_REVISION` means the row moved and the edit must be
+ * re-made against a fresh read. Omit a credential key to preserve it, send
+ * `null` to clear it — never send back the redacted placeholder.
+ */
+export const updateProviderConnection = (connectionId, body, options) => request(
+  `/providers/connections/${encodeURIComponent(connectionId)}`,
+  { method: 'PATCH', body: JSON.stringify(body), ...options },
+);
+
+/** Probe the shared model catalog once for every harness on this connection. */
+export const refreshProviderConnectionModels = (connectionId, options) => request(
+  `/providers/connections/${encodeURIComponent(connectionId)}/refresh-models`,
+  { method: 'POST', ...options },
+);
+
+/** Edit a binding's label and the subset of the shared catalog it offers. */
+export const updateProviderBinding = (bindingId, body, options) => request(
+  `/providers/bindings/${encodeURIComponent(bindingId)}`,
+  { method: 'PATCH', body: JSON.stringify(body), ...options },
+);
+
+/** Delete a connection no binding uses. Refused with a 409 while one still does. */
+export const deleteProviderConnection = (connectionId, options) => request(
+  `/providers/connections/${encodeURIComponent(connectionId)}`,
+  { method: 'DELETE', ...options },
+);

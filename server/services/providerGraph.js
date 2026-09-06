@@ -3,10 +3,14 @@ import { ServerError } from '../lib/errorHandler.js';
 import { compareBackendEndpoints, withConnectionOwnedFields } from '../lib/providerConnections.js';
 import {
   connectionOwnedSnapshot,
+  mergeConnectionCredentials,
+  nextConnectionCatalog,
   planGraphReconciliation,
   reconciliationIsNoop,
+  sanitizeCatalogError,
   toManagementGraphDto,
 } from '../lib/providerGraphRecords.js';
+import { resolveRouteModels } from '../lib/providerGraphPreview.js';
 import { requireToolkit } from '../lib/aiToolkitState.js';
 import {
   acknowledgeProjection,
@@ -16,6 +20,9 @@ import {
   detachBindingToConnection,
   readGraph,
   relinkBinding,
+  saveBindingSettings,
+  saveConnectionSettings,
+  saveRouteModelMap,
 } from './providerGraphStore.js';
 
 /**
@@ -372,4 +379,174 @@ function ownedFromConnection(provider, connection) {
     if (url) envVars[name] = url;
   }
   return { fields, envVars, hasEnvVars: owned.hasEnvVars };
+}
+
+// --- explicit management edits (#6369) ---------------------------------------
+//
+// The three edits a human makes to a SHARED backend, as opposed to the link and
+// unlink above which change which backend a harness reaches:
+//
+//   1. edit the connection once and have every attached route follow it,
+//   2. refresh its model catalog once for every harness on it,
+//   3. choose the subset of that catalog a harness offers.
+//
+// All three are revision-checked against exactly what the human was looking at,
+// all three run on the same serialization queue as reconciliation, and none of
+// them contacts an AI provider except (3)'s explicitly requested model list.
+
+/** Locate a row the caller named, or 404. Never a partial match on a label. */
+function requireRow(rows, id, what, code) {
+  const row = rows.find((candidate) => candidate.id === id);
+  if (!row) throw new ServerError(`${what} not found`, { status: 404, code });
+  return row;
+}
+
+/**
+ * Refuse a mutation while any of these routes is mid-projection.
+ *
+ * That state is precisely where the graph and `providers.json` disagree, so an
+ * edit decided against it would be decided against unknown values. Same guard
+ * `resolveLink` applies, applied to the connection's whole route set.
+ */
+function requireSettledRoutes(routes) {
+  if (routes.some((route) => route.pending)) {
+    throw new ServerError('This connection has an unresolved projection and cannot be changed yet',
+      { status: 409, code: 'PROVIDER_GRAPH_BINDING_BLOCKED' });
+  }
+}
+
+/** Every binding on a connection, and the executable routes those bindings own. */
+function connectionFanout(graph, connectionId) {
+  const bindings = graph.bindings.filter((binding) => binding.connectionId === connectionId);
+  const bindingIds = new Set(bindings.map((binding) => binding.id));
+  return { bindings, routes: graph.routes.filter((route) => bindingIds.has(route.bindingId)) };
+}
+
+/**
+ * Edit one shared backend: its label, its transports, its credentials.
+ *
+ * This is the whole point of the graph — the endpoint and secret a human
+ * changes here are materialized into EVERY route on the connection in one
+ * projection, instead of being retyped per harness and drifting. Route ids,
+ * mode settings, pins, `activeProvider` and fallback references are untouched.
+ *
+ * A stale `expectedRevision` is a 409, not a last-writer merge: the human was
+ * editing values they had read, and a moved row means they were not.
+ *
+ * `transports` replaces the map WHOLESALE rather than merging into it, so
+ * dropping a protocol is expressible. That is why the editor renders one field
+ * per declared transport and sends them all back: a client that sends a partial
+ * map is asking to remove the rest.
+ */
+export function updateConnectionSettings({ connectionId, expectedRevision, label, transports, credentials }) {
+  return serialize(async () => {
+    requireGraph();
+    const graph = await readGraph();
+    const connection = requireRow(graph.connections, connectionId, 'Connection', 'CONNECTION_NOT_FOUND');
+    if (connection.revision !== expectedRevision) throw stale('The connection');
+    const { routes } = connectionFanout(graph, connection.id);
+    requireSettledRoutes(routes);
+
+    const merged = mergeConnectionCredentials(connection.credentials, credentials);
+    if (merged.rejected.length > 0) {
+      throw new ServerError(
+        `Send the real value or null for ${merged.rejected.join(', ')} — a redacted placeholder is not a credential`,
+        { status: 400, code: 'PROVIDER_GRAPH_REDACTED_CREDENTIAL' });
+    }
+
+    const next = {
+      ...connection,
+      label: label ?? connection.label,
+      transports: transports ?? connection.transports,
+      credentials: merged.credentials,
+    };
+    const revision = await saveConnectionSettings(next);
+    const applied = await projectRoutes(routes.map((route) => route.providerId), next);
+    console.log(`🔗 Updated connection ${connection.id} (${applied.length} routes projected)`);
+    return { connectionId: connection.id, revision, affectedRouteIds: applied };
+  });
+}
+
+/**
+ * Choose which of the shared catalog a harness offers, and rename the binding.
+ *
+ * Management state only — nothing here is projected into an executable record,
+ * so choosing a subset can never enable a route, grant a mode's execution
+ * consent, or repoint a saved selection. A pin outside the new subset stays
+ * exactly where it was and simply reads as stale, which is what keeps a
+ * narrowed catalog from silently repicking somebody's model.
+ */
+export function updateBindingSettings({ bindingId, expectedRevision, label, selectedModels }) {
+  return serialize(async () => {
+    requireGraph();
+    const graph = await readGraph();
+    const binding = requireRow(graph.bindings, bindingId, 'Binding', 'BINDING_NOT_FOUND');
+    if (binding.revision !== expectedRevision) throw stale('The binding');
+    requireSettledRoutes(graph.routes.filter((route) => route.bindingId === binding.id));
+
+    const next = {
+      id: binding.id,
+      label: label ?? binding.label,
+      selectedModels: selectedModels ?? binding.selectedModels,
+    };
+    const revision = await saveBindingSettings(next);
+    return { bindingId: binding.id, revision, label: next.label, selectedModels: next.selectedModels };
+  });
+}
+
+/**
+ * Refresh the shared model catalog — ONE probe per backend, not one per route.
+ *
+ * `refreshProviderModelsBatch` groups the connection's routes by daemon and
+ * probe shape, so a connection carrying Claude CLI, Claude TUI and OpenCode
+ * routes is asked once and written once. It never throws for a per-route
+ * failure, which is what lets a partial answer stay a partial answer.
+ *
+ * The failure rule is the one this endpoint exists for: **a failed probe keeps
+ * the models the connection already knew**, with a sanitized reason attached.
+ * A successful probe that returns nothing writes `known` with an empty list —
+ * a backend whose last model was deleted is a real answer, not "never asked".
+ * No pin, default or `activeProvider` is repicked either way.
+ */
+export function refreshConnectionCatalog(connectionId) {
+  return serialize(async () => {
+    requireGraph();
+    const graph = await readGraph();
+    const connection = requireRow(graph.connections, connectionId, 'Connection', 'CONNECTION_NOT_FOUND');
+    const { routes } = connectionFanout(graph, connection.id);
+    if (routes.length === 0) {
+      throw new ServerError('This connection has no executable route to probe',
+        { status: 409, code: 'PROVIDER_GRAPH_CONNECTION_UNROUTED' });
+    }
+
+    const groups = await providerService().refreshProviderModelsBatch(routes.map((route) => route.providerId));
+    const failures = groups.filter((group) => group.status === 'failed');
+    const refreshed = groups.some((group) => group.status === 'updated');
+
+    // Canonical names come from the records as they are AFTER the write, so the
+    // catalog and each route's alias map describe the same observation.
+    const { providers } = await providerService().getAllProviders();
+    const byId = new Map(providers.map((provider) => [provider.id, provider]));
+    const models = [];
+    for (const route of routes) {
+      const provider = byId.get(route.providerId);
+      if (!provider) continue;
+      const { modelMap } = resolveRouteModels(provider);
+      await saveRouteModelMap(route.providerId, modelMap);
+      models.push(...Object.keys(modelMap));
+    }
+
+    // A failure is reported whether or not another group succeeded: a partial
+    // answer is still a harness that cannot reach this backend.
+    const error = failures.length > 0
+      ? sanitizeCatalogError(failures[0].error, connection.credentials)
+      : null;
+    const catalog = nextConnectionCatalog(connection.catalog,
+      refreshed ? { refreshed: true, models, error } : { refreshed: false, error });
+    await saveConnectionSettings({ ...connection, catalog });
+
+    console.log(`🔗 Refreshed connection ${connection.id} catalog: ${catalog.state}, `
+      + `${catalog.models.length} models across ${groups.length} probe groups (${failures.length} failed)`);
+    return { connectionId: connection.id, catalog, probedGroups: groups.length, failedGroups: failures.length };
+  });
 }
