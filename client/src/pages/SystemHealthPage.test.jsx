@@ -48,11 +48,23 @@ vi.mock('../hooks/useProviderModels', () => ({
   }),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn(), custom: vi.fn() }
+vi.mock('../components/ui/Toast', () => {
+  const toast = Object.assign(vi.fn(), {
+    success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn(), custom: vi.fn()
+  });
+  return { default: toast };
+});
+
+// useHealthWarningDismiss (client/src/hooks/) calls apiSystem.js directly
+// rather than through the '../services/api' barrel — mock it separately so
+// dismiss/undo assertions observe what the hook actually calls.
+vi.mock('../services/apiSystem.js', () => ({
+  dismissHealthWarning: vi.fn(() => Promise.resolve({ message: 'x', dismissedAt: '2026-01-01T00:00:00.000Z' })),
+  undismissHealthWarning: vi.fn(() => Promise.resolve({ success: true })),
 }));
 
 import * as api from '../services/api';
+import { dismissHealthWarning } from '../services/apiSystem.js';
 import SystemHealthPage, { RESOURCE_TABS } from './SystemHealthPage';
 import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
@@ -131,6 +143,33 @@ describe('SystemHealthPage remediation links', () => {
 
     await waitFor(() => expect(screen.getByText('55%')).toBeInTheDocument());
     expect(api.getSystemHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it('dismisses a warning as resolved and refetches health', async () => {
+    const user = userEvent.setup();
+    api.getSystemHealth
+      .mockResolvedValueOnce(withWarnings([{ type: 'disk', message: 'Disk usage at or above 90%' }]))
+      .mockResolvedValueOnce(withWarnings([]));
+    renderPage();
+
+    await screen.findByText('Disk usage at or above 90%');
+    await user.click(screen.getByRole('button', { name: 'Dismiss warning: Disk usage at or above 90%' }));
+
+    expect(dismissHealthWarning).toHaveBeenCalledWith('disk', 'Disk usage at or above 90%', { silent: true });
+    await waitFor(() => expect(screen.queryByText('Disk usage at or above 90%')).not.toBeInTheDocument());
+  });
+
+  it('toasts an error and does not refetch when dismissing fails', async () => {
+    const user = userEvent.setup();
+    api.getSystemHealth.mockResolvedValue(withWarnings([{ type: 'disk', message: 'Disk usage at or above 90%' }]));
+    dismissHealthWarning.mockRejectedValueOnce(new Error('offline'));
+    renderPage();
+
+    await screen.findByText('Disk usage at or above 90%');
+    await user.click(screen.getByRole('button', { name: 'Dismiss warning: Disk usage at or above 90%' }));
+
+    await waitFor(() => expect(api.getSystemHealth).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Disk usage at or above 90%')).toBeInTheDocument();
   });
 
   it('keeps the active section in the URL and runs storage scans explicitly', async () => {

@@ -10,6 +10,7 @@ import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { formatBytes } from '../lib/fileUtils.js';
+import { validateRequest, systemHealthWarningParamsSchema, systemHealthWarningDismissSchema } from '../lib/validation.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { checkGhHealth } from '../services/github.js';
 import { isAuthEnabled } from '../services/auth.js';
@@ -30,16 +31,38 @@ const DEFAULT_THRESHOLDS = {
   diskCritical: 98
 };
 
-async function loadThresholds() {
+// Dashboard warnings are recomputed fresh on every read (nothing about them is
+// persisted), so "dismiss" can't delete a row — it has to remember, per warning
+// TYPE, the exact message that was dismissed. A later read matching that same
+// (type, message) pair stays suppressed; a DIFFERENT message for the same type
+// (severity escalated, a different process started crash-looping) is a new
+// occurrence and is shown again automatically. Keyed by type rather than a
+// generated id because each health check emits at most one warning per type.
+//
+// Thresholds and dismissals both live under settings.health, so one read
+// covers both — GET /health/details used to call getSettings() twice (once
+// per concern), paying for two deep-clones of the settings cache on every
+// dashboard poll.
+async function loadHealthSettings() {
   const settings = await getSettings().catch(() => ({}));
   const h = settings.health || {};
+  const dismissedWarnings = h.dismissedWarnings;
   return {
-    memoryWarn: Number(h.memoryWarn) || DEFAULT_THRESHOLDS.memoryWarn,
-    memoryCritical: Number(h.memoryCritical) || DEFAULT_THRESHOLDS.memoryCritical,
-    diskWarn: Number(h.diskWarn) || DEFAULT_THRESHOLDS.diskWarn,
-    diskCritical: Number(h.diskCritical) || DEFAULT_THRESHOLDS.diskCritical
+    thresholds: {
+      memoryWarn: Number(h.memoryWarn) || DEFAULT_THRESHOLDS.memoryWarn,
+      memoryCritical: Number(h.memoryCritical) || DEFAULT_THRESHOLDS.memoryCritical,
+      diskWarn: Number(h.diskWarn) || DEFAULT_THRESHOLDS.diskWarn,
+      diskCritical: Number(h.diskCritical) || DEFAULT_THRESHOLDS.diskCritical
+    },
+    dismissedWarnings: dismissedWarnings && typeof dismissedWarnings === 'object' && !Array.isArray(dismissedWarnings)
+      ? dismissedWarnings
+      : {}
   };
 }
+
+// Every write below only ever touches settings.health — shallow-merging a
+// patch into whatever the write queue's freshest snapshot already holds there.
+const patchHealth = (current, patch) => ({ ...current, health: { ...(current.health || {}), ...patch } });
 
 const router = Router();
 
@@ -108,7 +131,7 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, appStatusSummary, cosStatus, self, dbHealth, version, diskStats, memStats, thresholds, forgeHealth, mediaCapacity] = await Promise.all([
+  const [pm2Processes, appStatusSummary, cosStatus, self, dbHealth, version, diskStats, memStats, healthSettings, forgeHealth, mediaCapacity] = await Promise.all([
     listProcesses().catch(() => []),
     apps.getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unknown: 0, degraded: false, unmanaged: 0 })),
     cos.getStatus().catch(() => null),
@@ -117,12 +140,13 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     getCurrentVersion().catch(() => null),
     statfs('/').catch(() => null),
     getMemoryStats(),
-    loadThresholds(),
+    loadHealthSettings(),
     checkGhHealth().catch(() => ({ status: 'error', ok: false, detail: 'Health check failed', remedy: null, checkedAt: null })),
     // Media-lane capacity never fails the health report: an unreadable GPU probe
     // degrades to `null`, which the UI renders as unknown rather than as idle.
     getMediaCapacity().catch(() => null)
   ]);
+  const { thresholds, dismissedWarnings } = healthSettings;
 
   const memUsagePercent = Math.round((memStats.used / memStats.total) * 100);
   const cpuLoad = os.loadavg()[0]; // 1-minute load average
@@ -181,44 +205,41 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // and excluded from the running denominator)
   const appStats = appStatusSummary;
 
-  // Determine overall health status
-  let overallHealth = 'healthy';
-  const warnings = [];
+  // Determine overall health status. Each condition below records its
+  // severity on the warning itself rather than mutating `overallHealth`
+  // inline, because a dismissed warning (see loadDismissedWarnings above)
+  // must not count toward the badge — overallHealth is derived once, after
+  // dismissals are filtered out, from whatever warnings remain visible.
+  const rawWarnings = [];
 
   if (memUsagePercent >= thresholds.memoryCritical) {
-    overallHealth = 'critical';
-    warnings.push({ type: 'memory', message: `Memory usage at or above ${thresholds.memoryCritical}%` });
+    rawWarnings.push({ type: 'memory', severity: 'critical', message: `Memory usage at or above ${thresholds.memoryCritical}%` });
   } else if (memUsagePercent >= thresholds.memoryWarn) {
-    if (overallHealth !== 'critical') overallHealth = 'warning';
-    warnings.push({ type: 'memory', message: `Memory usage at or above ${thresholds.memoryWarn}%` });
+    rawWarnings.push({ type: 'memory', severity: 'warning', message: `Memory usage at or above ${thresholds.memoryWarn}%` });
   }
 
   if (cpuUsagePercent > 100) {
-    if (overallHealth !== 'critical') overallHealth = 'warning';
-    warnings.push({ type: 'cpu', message: 'CPU load high' });
+    rawWarnings.push({ type: 'cpu', severity: 'warning', message: 'CPU load high' });
   }
 
   if (disk) {
     if (disk.usagePercent >= thresholds.diskCritical) {
-      overallHealth = 'critical';
-      warnings.push({ type: 'disk', message: `Disk usage at or above ${thresholds.diskCritical}%` });
+      rawWarnings.push({ type: 'disk', severity: 'critical', message: `Disk usage at or above ${thresholds.diskCritical}%` });
     } else if (disk.usagePercent >= thresholds.diskWarn) {
-      if (overallHealth !== 'critical') overallHealth = 'warning';
-      warnings.push({ type: 'disk', message: `Disk usage at or above ${thresholds.diskWarn}%` });
+      rawWarnings.push({ type: 'disk', severity: 'warning', message: `Disk usage at or above ${thresholds.diskWarn}%` });
     }
   }
 
   if (processStats.errored > 0) {
-    overallHealth = 'critical';
-    warnings.push({ type: 'process', message: `${processStats.errored} process(es) errored` });
+    rawWarnings.push({ type: 'process', severity: 'critical', message: `${processStats.errored} process(es) errored` });
   }
 
   if (processStats.unstableRestarts > 0) {
-    if (overallHealth !== 'critical') overallHealth = 'warning';
     const crashing = supervised.filter(p => (p.unstableRestarts || 0) > 0).map(p => p.name);
     const plural = processStats.unstableRestarts === 1 ? '' : 's';
-    warnings.push({
+    rawWarnings.push({
       type: 'restarts',
+      severity: 'warning',
       message: `${processStats.unstableRestarts} crash-loop restart${plural} (${crashing.join(', ')})`
     });
   }
@@ -227,17 +248,14 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // those apps' online/stopped status is unknown — surface it rather than letting
   // the counts silently read as "everything not started."
   if (appStats.degraded) {
-    if (overallHealth !== 'critical') overallHealth = 'warning';
     const unknown = appStats.unknown || 0;
-    warnings.push({ type: 'apps', message: `App status unavailable for ${unknown} app(s) — PM2 read failed` });
+    rawWarnings.push({ type: 'apps', severity: 'warning', message: `App status unavailable for ${unknown} app(s) — PM2 read failed` });
   }
 
   if (!dbHealth.connected) {
-    if (overallHealth !== 'critical') overallHealth = 'warning';
-    warnings.push({ type: 'database', message: `PostgreSQL disconnected${dbHealth.error ? `: ${dbHealth.error}` : ''}` });
+    rawWarnings.push({ type: 'database', severity: 'warning', message: `PostgreSQL disconnected${dbHealth.error ? `: ${dbHealth.error}` : ''}` });
   } else if (!dbHealth.hasSchema) {
-    if (overallHealth !== 'critical') overallHealth = 'warning';
-    warnings.push({ type: 'database', message: 'PostgreSQL connected but schema missing' });
+    rawWarnings.push({ type: 'database', severity: 'warning', message: 'PostgreSQL connected but schema missing' });
   }
 
   // A `gh` that cannot reach the forge does not fail loudly anywhere else: the
@@ -247,12 +265,35 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   // filed none. Warn only when gh is present but unusable; an install that
   // never had gh has opted out of those features rather than broken them.
   if (!forgeHealth.ok && forgeHealth.status !== 'not-installed') {
-    if (overallHealth !== 'critical') overallHealth = 'warning';
-    warnings.push({
+    rawWarnings.push({
       type: 'forge',
+      severity: 'warning',
       message: `GitHub CLI unusable (${forgeHealth.status})${forgeHealth.remedy ? ` — ${forgeHealth.remedy}` : ''}`
     });
   }
+
+  // A dismissal only stays applied while the warning it was recorded against
+  // is still current (same type AND same message) — see loadHealthSettings.
+  // Anything else (the condition cleared, or recurred with a different
+  // message) drops out of `dismissedWarnings` here so a genuinely new
+  // occurrence is never silently hidden by a stale record.
+  const nextDismissedWarnings = {};
+  const warnings = [];
+  for (const warning of rawWarnings) {
+    const dismissal = dismissedWarnings[warning.type];
+    if (dismissal?.message === warning.message) {
+      nextDismissedWarnings[warning.type] = dismissal;
+      continue;
+    }
+    warnings.push(warning);
+  }
+  if (Object.keys(dismissedWarnings).length !== Object.keys(nextDismissedWarnings).length) {
+    await updateSettingsWith((current) => patchHealth(current, { dismissedWarnings: nextDismissedWarnings })).catch(() => {});
+  }
+
+  const overallHealth = warnings.some(w => w.severity === 'critical')
+    ? 'critical'
+    : warnings.length > 0 ? 'warning' : 'healthy';
 
   // CoS status
   const cosInfo = cosStatus ? {
@@ -334,6 +375,41 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   });
 }));
 
+/**
+ * POST /api/system/health/warnings/:type/dismiss — mark the CURRENT instance
+ * of a dashboard warning as resolved. Warnings are computed fresh on every
+ * /health/details read rather than stored, so this records `{ message,
+ * dismissedAt }` per warning type in settings.health.dismissedWarnings; the
+ * next read hides it as long as the same (type, message) pair recurs, and
+ * automatically un-dismisses (and prunes the record) once the condition
+ * clears or changes. See the comment above loadHealthSettings.
+ */
+router.post('/health/warnings/:type/dismiss', asyncHandler(async (req, res) => {
+  const { type } = validateRequest(systemHealthWarningParamsSchema, req.params);
+  const { message } = validateRequest(systemHealthWarningDismissSchema, req.body || {});
+  const next = await updateSettingsWith((current) => patchHealth(current, {
+    dismissedWarnings: {
+      ...(current.health?.dismissedWarnings || {}),
+      [type]: { message, dismissedAt: new Date().toISOString() }
+    }
+  }));
+  res.json(next.health.dismissedWarnings[type]);
+}));
+
+/**
+ * DELETE /api/system/health/warnings/:type/dismiss — undo a dismissal so the
+ * warning (if its underlying condition is still true) reappears immediately.
+ */
+router.delete('/health/warnings/:type/dismiss', asyncHandler(async (req, res) => {
+  const { type } = validateRequest(systemHealthWarningParamsSchema, req.params);
+  await updateSettingsWith((current) => {
+    const dismissedWarnings = { ...(current.health?.dismissedWarnings || {}) };
+    delete dismissedWarnings[type];
+    return patchHealth(current, { dismissedWarnings });
+  });
+  res.json({ success: true });
+}));
+
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 router.put('/health/thresholds', asyncHandler(async (req, res) => {
@@ -364,7 +440,7 @@ router.put('/health/thresholds', asyncHandler(async (req, res) => {
 
   // Merge the health thresholds against the freshest snapshot inside the write
   // queue so a concurrent settings write isn't clobbered by a stale base.
-  await updateSettingsWith((current) => ({ ...current, health: { ...(current.health || {}), ...next } }));
+  await updateSettingsWith((current) => patchHealth(current, next));
   res.json(next);
 }));
 

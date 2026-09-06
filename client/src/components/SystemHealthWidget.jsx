@@ -12,9 +12,11 @@ import {
   XCircle,
   Clock,
   Zap,
-  RefreshCw
+  RefreshCw,
+  X
 } from 'lucide-react';
 import { MicroGlyph } from './micrographics';
+import { useHealthWarningDismiss } from '../hooks/useHealthWarningDismiss.jsx';
 
 /**
  * SystemHealthWidget - Compact system health overview for the Dashboard
@@ -24,6 +26,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
   const health = dashboardState?.health;
   const refetchHealth = dashboardState?.refetchHealth;
   const [refreshing, setRefreshing] = useState(false);
+  const { dismissingType, handleDismissWarning } = useHealthWarningDismiss(refetchHealth);
 
   const handleRefresh = async () => {
     if (!refetchHealth || refreshing) return;
@@ -154,8 +157,18 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
               key={idx}
               className="flex items-center gap-2 px-3 py-2 rounded-lg bg-port-warning/10 text-port-warning text-sm"
             >
-              <AlertTriangle size={14} />
-              <span>{warning.message}</span>
+              <AlertTriangle size={14} className="shrink-0" />
+              <span className="flex-1">{warning.message}</span>
+              <button
+                type="button"
+                onClick={() => handleDismissWarning(warning)}
+                disabled={!refetchHealth || dismissingType === warning.type}
+                className="shrink-0 inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded text-port-warning/70 transition-colors hover:bg-port-warning/20 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-50"
+                title="Dismiss as resolved"
+                aria-label={`Dismiss warning: ${warning.message}`}
+              >
+                <X size={13} aria-hidden="true" />
+              </button>
             </div>
           ))}
         </div>

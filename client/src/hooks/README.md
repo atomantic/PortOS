@@ -27,6 +27,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useOnDemandTaskToast` | Toasts when a user-triggered on-demand task run found no work (parked). | Wire once high in the tree so an explicit "Run" that parks isn't a silent no-op. |
 | `useEngagementReminderToast` | Polls deterministic POST/creative-feedback actions and shows each reminder once per browser tab/day with a deep link. | Wire once high in the tree so daily actions remain visible outside the dashboard. |
 | `useSharingNotifications` | Subscriber for share-bucket notifications. | Wire once to surface federation/sync events. |
+| `useHealthWarningDismiss` | Dismisses a system-health dashboard warning as resolved, with an Undo toast. | The dashboard widget and the Live health overview page both dismiss/undo warnings. |
 
 ## Pipeline / Story Builder wiring
 

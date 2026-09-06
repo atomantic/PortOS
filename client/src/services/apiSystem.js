@@ -34,6 +34,18 @@ export const updateHealthThresholds = (thresholds, options = {}) => request('/sy
   body: JSON.stringify(thresholds),
   ...options
 });
+// Dismiss/undo a dashboard health warning as resolved. `message` must be the
+// warning's current `message` field — the server keys the dismissal on the
+// (type, message) pair so an unrelated recurrence isn't silently hidden.
+export const dismissHealthWarning = (type, message, options = {}) => request(`/system/health/warnings/${encodeURIComponent(type)}/dismiss`, {
+  method: 'POST',
+  body: JSON.stringify({ message }),
+  ...options
+});
+export const undismissHealthWarning = (type, options = {}) => request(`/system/health/warnings/${encodeURIComponent(type)}/dismiss`, {
+  method: 'DELETE',
+  ...options
+});
 
 // Update
 export const getUpdateStatus = () => request('/update/status');

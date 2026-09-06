@@ -8,6 +8,8 @@ import { getSelf } from '../services/instances.js';
 import { isAuthEnabled } from '../services/auth.js';
 import { checkGhHealth } from '../services/github.js';
 import { getBuildIdentity } from '../lib/buildIdentity.js';
+import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { statfs } from 'fs/promises';
 
 vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn().mockResolvedValue([])
@@ -393,6 +395,96 @@ describe('System Health Routes', () => {
       expect(body.processes.totalMemory).toBe(150);
       expect(body.processes.totalCpu).toBe(8);
       expect(body.processes.totalRestarts).toBe(3);
+    });
+  });
+
+  describe('dismissing dashboard warnings as resolved', () => {
+    it('suppresses a warning whose stored dismissal message still matches', async () => {
+      // Force a disk-warn condition (95% used) so the 'disk' warning fires,
+      // then supply a dismissal recorded against that exact message.
+      vi.mocked(statfs).mockResolvedValueOnce({ blocks: 100, bavail: 5, bsize: 1 });
+      getSettings.mockResolvedValueOnce({
+        health: { dismissedWarnings: { disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' } } }
+      });
+
+      const response = await request(app).get('/api/system/health/details');
+
+      expect(response.body.warnings.some(w => w.type === 'disk')).toBe(false);
+    });
+
+    it('shows the warning again when the current message differs from the dismissal (new occurrence)', async () => {
+      // 99% used crosses diskCritical (98), not diskWarn (90) — a different
+      // message than the one that was dismissed.
+      vi.mocked(statfs).mockResolvedValueOnce({ blocks: 100, bavail: 1, bsize: 1 });
+      getSettings.mockResolvedValueOnce({
+        health: { dismissedWarnings: { disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' } } }
+      });
+
+      const response = await request(app).get('/api/system/health/details');
+
+      const diskWarnings = response.body.warnings.filter(w => w.type === 'disk');
+      expect(diskWarnings).toHaveLength(1);
+      expect(diskWarnings[0].message).toContain('98%');
+    });
+
+    it('prunes a stale dismissal once its condition no longer holds', async () => {
+      // Default disk mock (50% used) never raises a 'disk' warning, so a
+      // stored disk dismissal is now stale and should be dropped.
+      getSettings.mockResolvedValueOnce({
+        health: { dismissedWarnings: { disk: { message: 'Disk usage at or above 90%', dismissedAt: '2026-01-01T00:00:00.000Z' } } }
+      });
+      vi.mocked(updateSettingsWith).mockClear();
+
+      await request(app).get('/api/system/health/details');
+
+      expect(updateSettingsWith).toHaveBeenCalledTimes(1);
+      const mutate = vi.mocked(updateSettingsWith).mock.calls[0][0];
+      const next = await mutate({});
+      expect(next.health.dismissedWarnings).toEqual({});
+    });
+
+    describe('POST /health/warnings/:type/dismiss', () => {
+      it('records the dismissal and echoes it back', async () => {
+        const response = await request(app)
+          .post('/api/system/health/warnings/disk/dismiss')
+          .send({ message: 'Disk usage at or above 90%' });
+
+        expect(response.status).toBe(200);
+        expect(response.body).toMatchObject({ message: 'Disk usage at or above 90%' });
+        expect(response.body.dismissedAt).toEqual(expect.any(String));
+      });
+
+      it('rejects an unknown warning type', async () => {
+        const response = await request(app)
+          .post('/api/system/health/warnings/bogus/dismiss')
+          .send({ message: 'anything' });
+        expect(response.status).toBe(400);
+      });
+
+      it('rejects a missing message', async () => {
+        const response = await request(app)
+          .post('/api/system/health/warnings/disk/dismiss')
+          .send({});
+        expect(response.status).toBe(400);
+      });
+    });
+
+    describe('DELETE /health/warnings/:type/dismiss', () => {
+      it('undoes a dismissal', async () => {
+        vi.mocked(updateSettingsWith).mockClear();
+        const response = await request(app).delete('/api/system/health/warnings/disk/dismiss');
+
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({ success: true });
+        const mutate = vi.mocked(updateSettingsWith).mock.calls[0][0];
+        const next = await mutate({ health: { dismissedWarnings: { disk: { message: 'x', dismissedAt: 'y' } } } });
+        expect(next.health.dismissedWarnings).toEqual({});
+      });
+
+      it('rejects an unknown warning type', async () => {
+        const response = await request(app).delete('/api/system/health/warnings/bogus/dismiss');
+        expect(response.status).toBe(400);
+      });
     });
   });
 });
