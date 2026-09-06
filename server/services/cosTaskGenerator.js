@@ -30,7 +30,7 @@ import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, 
 import { PATHS } from '../lib/fileUtils.js';
 import { MODEL_ABUSE_GUARD_ID, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { isPlainObject } from '../lib/objects.js';
-import { onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
+import { hasQuotaBurnProvenance, onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -161,7 +161,10 @@ export function exceedsMaxSpawns(task) {
  *     exempt and therefore keeps completing) it never lapses — and the burn task
  *     sits in Pending until its window resets unspent, which is the exact outcome
  *     quota burn exists to prevent. (Tasks queued before this stamp existed are
- *     back-filled by migration 225, so the predicate reads metadata only.)
+ *     back-filled by migration 225, so the predicate reads metadata only.) Read
+ *     through `hasQuotaBurnProvenance` rather than the raw key so this gate stays
+ *     tied to the one block definition in `lib/quotaBurnOrigin.js` — a task
+ *     written by any release, in either the flat or the block shape, is exempt.
  *
  * `metadata.perpetual` is a bare boolean set upstream, but it round-trips through
  * COS-TASKS.md as the STRING `"true"` (taskParser serializes non-string/-object
@@ -178,7 +181,7 @@ export function isCooldownExemptTask(task) {
   if (!meta) return false;
   return meta.pipeline?.currentStage > 0
     || meta.perpetual === true || meta.perpetual === 'true'
-    || Boolean(meta.quotaBurnFamily);
+    || hasQuotaBurnProvenance(meta);
 }
 
 /**
