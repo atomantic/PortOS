@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod';
+import { comparePersistentMindMemories, persistentMindMemoryProtection } from './persistentMindMemory.js';
 import { PERSISTENT_MIND_PROMPT_LIMITS } from './persistentMindPrompt.js';
 
 export const PERSISTENT_MIND_ID = 'cos-persistent-mind';
@@ -386,13 +387,15 @@ export function assemblePersistentMindContext({
   );
   const memoryLines = (Array.isArray(memories) ? memories : [])
     .filter((memory) => memory && typeof memory === 'object')
+    .sort(comparePersistentMindMemories)
     .map((memory) => {
       const content = typeof memory.content === 'string' && memory.content.trim()
         ? memory.content.trim()
         : typeof memory.summary === 'string' ? memory.summary.trim() : '';
       if (!content) return null;
       const label = [memory.type, memory.category].filter(Boolean).join('/') || 'memory';
-      return `- [${label}; id=${memory.id || 'unknown'}] ${content}`;
+      const protection = persistentMindMemoryProtection(memory);
+      return `- [${label}; id=${memory.id || 'unknown'}${protection === 'standard' ? '' : `; protected=${protection}`}] ${content}`;
     })
     .filter(Boolean);
   const memoryText = bounded(

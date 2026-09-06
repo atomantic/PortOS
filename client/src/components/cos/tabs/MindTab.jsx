@@ -326,7 +326,7 @@ export default function MindTab() {
       return;
     }
     visibilityPendingRef.current = true;
-    if (!visibilityLoadedRef.current) setVisibilityLoading(true);
+    if (refresh || !visibilityLoadedRef.current) setVisibilityLoading(true);
     try {
       const response = await api.getPersistentMindVisibility({ refresh, silent: true });
       if (!runtimeMountedRef.current) return;
@@ -724,7 +724,9 @@ export default function MindTab() {
           {state?.started && !isPaused && <ActionButton label="Pause" icon={CirclePause} pending={lifecyclePending === 'pause'} onClick={() => runLifecycle('pause')} />}
           {state?.started && isPaused && <ActionButton label="Resume" icon={CirclePlay} pending={lifecyclePending === 'resume'} onClick={() => runLifecycle('resume')} />}
           {state?.started && <ActionButton label="Stop" icon={Square} pending={lifecyclePending === 'stop'} onClick={() => runLifecycle('stop')} />}
-          <ActionButton label="Reload" icon={RefreshCw} pending={loading || runtimeLoading} onClick={() => {
+          <ActionButton label="Settings" icon={Settings2} onClick={() => openPanel('settings')} />
+          <ActionButton label="Tools & permissions" icon={Wrench} onClick={() => openPanel('tools')} />
+          <ActionButton label="Reload" icon={RefreshCw} pending={loading || runtimeLoading || visibilityLoading} onClick={() => {
             void loadHistory({ reset: true });
             void loadRuntime();
             void loadVisibility({ refresh: true });
@@ -759,20 +761,7 @@ export default function MindTab() {
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_19rem]">
         <section data-testid="mind-chat" aria-label="Persistent mind chat" className="flex h-[68dvh] min-h-[30rem] max-h-[54rem] flex-col overflow-hidden rounded-[1.5rem] border border-port-border bg-port-card shadow-lg shadow-black/10 sm:min-h-[34rem]">
           <header className="flex shrink-0 items-center justify-between gap-3 border-b border-port-border bg-port-card/95 px-3 py-2.5 sm:px-4">
-            <div className="flex min-w-0 items-center gap-2.5">
-              <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-port-accent/15 text-port-accent">
-                <Brain size={19} aria-hidden="true" />
-                <span className={`absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-port-card ${state?.started && !isPaused ? 'bg-port-success' : 'bg-port-text-muted'}`} aria-hidden="true" />
-              </span>
-              <div className="min-w-0">
-                <h3 className="truncate text-sm font-semibold text-port-text">Chief of Staff</h3>
-                <p className="truncate text-[11px] text-port-text-muted">
-                  {state?.pauseReason || (state?.status === 'thinking' ? <MindTypingIndicator /> : state?.started ? 'Available' : 'Not started')}
-                  {state?.queuedMessageCount > 0 ? ` · ${state.queuedMessageCount} queued` : ''}
-                  {mind?.profile?.model ? ` · ${mind.profile.model}` : ''}
-                </p>
-              </div>
-            </div>
+            <h3 className="flex items-center gap-2 text-sm font-medium text-port-text">Conversation {state?.status === 'thinking' && <MindTypingIndicator />}</h3>
             <label htmlFor="mind-show-activity" className="flex shrink-0 items-center gap-2 rounded-full border border-port-border px-2.5 py-1.5 text-[11px] text-port-text-muted">
               <input id="mind-show-activity" type="checkbox" checked={showActivity} onChange={(event) => setShowActivity(event.target.checked)} className="accent-port-accent" /> Activity
             </label>
@@ -891,12 +880,12 @@ export default function MindTab() {
             onInspectSession={inspectSession}
           />
 
-          <div className="grid grid-cols-2 gap-2 xl:grid-cols-1">
+          <div className="grid grid-cols-2 gap-2">
             <MindStateButton icon={Brain} label="Context" value={runtime?.context?.approximateTokens == null ? 'Unavailable' : `~${runtime.context.approximateTokens.toLocaleString()} tokens`} detail={`${runtime?.context?.chars?.toLocaleString() || '—'} characters`} onClick={() => openPanel('context')} />
             <MindStateButton icon={Database} label="Memories" value={runtime?.context?.memoryCount == null ? 'Unavailable' : `${runtime.context.memoryCount} accessible`} detail="Created and curated" onClick={() => openPanel('memories')} />
             <MindStateButton icon={Eraser} label="Cleanup" value={mind?.capabilities?.manageMind ? 'Self-maintenance on' : 'User controlled'} detail="Memories, history, and context" onClick={() => openPanel('maintenance')} />
             <MindStateButton icon={Wrench} label="Tools" value={grantedCapabilityCount > 0 ? `${grantedCapabilityCount} grant${grantedCapabilityCount === 1 ? '' : 's'} enabled` : 'No grants'} detail="Narrow, typed authority" onClick={() => openPanel('tools')} />
-            <MindStateButton icon={Cpu} label="Settings" value={runtime?.inference?.active ? 'Running now' : runtime?.inference?.residency?.status === 'loaded' ? 'Loaded in memory' : 'Not running'} detail={runtime?.inference?.model || mind?.profile?.model || 'Not configured'} onClick={() => openPanel('settings')} />
+
           </div>
 
           <section aria-label="Mind environment" className="rounded-2xl border border-port-border bg-port-card p-3 text-xs text-port-text-muted">
@@ -928,7 +917,11 @@ export default function MindTab() {
         </div>
         {(visitedPanels.has('context') || activePanel === 'context') && <div hidden={activePanel !== 'context'} className="space-y-4">
           <PersistentMindRuntimePanel runtime={runtime} error={runtimeError} loading={runtimeLoading} />
-          <PersistentMindVisibilityPanel visibility={visibility} error={visibilityError} loading={visibilityLoading} onRefresh={() => loadVisibility({ refresh: true })} />
+          <PersistentMindVisibilityPanel visibility={visibility} error={visibilityError} loading={visibilityLoading} onRefresh={() => loadVisibility({ refresh: true })} onPrepareRepair={(workspace) => {
+            changeMessageText(`${messageText ? `${messageText}\n\n` : ''}Investigate workspace diagnostics for ${workspace.appName} (app ID: ${workspace.appId}). Use a CoS agent task to diagnose and resolve the reported setup issues: ${(workspace.preflight?.warnings || []).map((warning) => warning.message).join(' ')} Do not require the failing checks before queueing the repair itself. Preserve local changes and verify the required checks after repair.`);
+            closePanel();
+            document.getElementById('mind-input-text')?.focus();
+          }} />
           <PersistentMindContextPanel view="context" refreshKey={contextRefreshKey} />
         </div>}
         {(visitedPanels.has('memories') || activePanel === 'memories') && <div hidden={activePanel !== 'memories'}>

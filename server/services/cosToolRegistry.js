@@ -23,6 +23,7 @@ import {
   eidoverseWorldSaySchema,
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
+import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from '../lib/userActionTypes.js';
 import { dispatchTool, getToolSpecs, getToolSpecsForIntent } from './voice/tools.js';
@@ -128,7 +129,7 @@ const mindCleanupTool = Object.freeze({
   version: COS_TOOL_SCHEMA_VERSION,
   providerName: 'mind_cleanup',
   aliases: ['mind_cleanup'],
-  description: 'Clean Persistent Mind-owned memories, trajectory history, or derived context when stale information is no longer useful.',
+  description: 'Archive only unprotected Persistent Mind-owned memories, or clear trajectory history and derived context. Core identity and important memories always survive. Protect critical knowledge using mind.protect-memory before cleanup.',
   input_schema: zodToOpenApiSchema(persistentMindCleanupRequestSchema),
   output_schema: objectOutputSchema,
   policy: {
@@ -140,6 +141,22 @@ const mindCleanupTool = Object.freeze({
     confirmation: 'capability-grant',
   },
   adapter: { kind: 'persistent-mind-maintenance' },
+});
+
+const mindProtectMemoryTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'mind.protect-memory',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'mind_protect_memory',
+  aliases: ['mind_protect_memory'],
+  description: 'Protect an existing active mind-owned memory as core identity or important knowledge before cleanup. Use its id from curated context. Cannot remove protection or demote core identity. Protected memories survive both manual and self-triggered bulk cleanup.',
+  input_schema: zodToOpenApiSchema(persistentMindProtectMemorySchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'], requiredCapabilities: ['manageMind'], sideEffect: 'write',
+    idempotent: true, async: false, confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'persistent-mind-memory-protection' },
 });
 
 // One mind turn must not be able to dump the whole ledger into context — the
@@ -279,7 +296,7 @@ const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].
   policy: { scopes: ['mind'], requiredCapabilities: ['chooseThinkingPreset'], sideEffect: index ? 'write' : 'read', idempotent: true, async: false, confirmation: 'capability-grant' },
   adapter: { kind: index ? 'thinking-request' : 'thinking-catalog' },
 }));
-const toolCatalog = (intent) => [...thinkingTools, taskTool, mindCleanupTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
+const toolCatalog = (intent) => [...thinkingTools, taskTool, mindCleanupTool, mindProtectMemoryTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
@@ -413,6 +430,10 @@ const executeAdapter = async (tool, args, context) => {
   }
   if (tool.adapter.kind === 'voice-tool') {
     return dispatchTool(tool.adapter.legacyName, args, { sideEffects: [], signal: context.signal });
+  }
+  if (tool.adapter.kind === 'persistent-mind-memory-protection') {
+    const { protectPersistentMindMemory } = await import('./persistentMindContext.js');
+    return protectPersistentMindMemory(args);
   }
   if (tool.adapter.kind === 'persistent-mind-maintenance') {
     return cleanupPersistentMind({

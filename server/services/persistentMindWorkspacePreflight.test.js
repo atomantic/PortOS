@@ -178,6 +178,31 @@ describe('persistent mind workspace preflight', () => {
     });
   });
 
+  it('allows setup repair with incompatible engines while enforcing explicit engine requirements', () => {
+    const preflight = {
+      readiness: 'blocked', workspaceDiscovery: 'ready', warnings: [],
+      workspaces: [{ manifest: 'ready', engines: { node: { status: 'incompatible' } } }],
+    };
+    expect(assessPersistentMindWorkspaceReadiness(preflight).blockers).toEqual([]);
+    expect(assessPersistentMindWorkspaceReadiness(preflight, ['engines']).blockers).toEqual([
+      expect.objectContaining({ check: 'engines', status: 'unavailable' }),
+    ]);
+  });
+
+  it('does not flag native repositories for missing Node setup, but still detects missing declared workspaces', async () => {
+    const options = { now: 2_100, dependencies: createDependencies(), force: true };
+    const native = await readPersistentMindWorkspacePreflight(appFor(repoPath), options);
+    expect(native.readiness).toBe('ready');
+    expect(assessPersistentMindWorkspaceReadiness(native, ['dependencies', 'engines']).blockers).toEqual([]);
+    expect(native.warnings).not.toEqual(expect.arrayContaining([expect.objectContaining({ check: 'engines' })]));
+    await writeManifest(repoPath, 'package.json', { workspaces: ['missing-child'] });
+    const incomplete = await readPersistentMindWorkspacePreflight(appFor(repoPath), options);
+    expect(incomplete.readiness).toBe('unknown');
+    expect(assessPersistentMindWorkspaceReadiness(incomplete, ['engines']).blockers).toEqual([
+      expect.objectContaining({ check: 'engines', status: 'unknown' }),
+    ]);
+  });
+
   it('reports an unconfigured app and does not claim truncated workspace discovery is ready', async () => {
     const entries = await readPersistentMindWorkspacePreflights([
       { id: 'unconfigured-app', name: 'Unconfigured App' },

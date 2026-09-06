@@ -347,6 +347,19 @@ describe('persistent mind CoS-task capability', () => {
     expect(recordCapabilityEvent.mock.calls.map(([event]) => event.kind)).toEqual(['request', 'result']);
   });
 
+  it('queues a setup repair despite a blocked diagnostic snapshot', async () => {
+    mocks.workspacePreflight.mockResolvedValue({
+      readiness: 'blocked', workspaceDiscovery: 'ready',
+      workspaces: [{ manifest: 'ready', engines: { node: { status: 'incompatible' } } }], warnings: [],
+    });
+    const [result] = await executePersistentMindTaskRequests({
+      taskRequests: [taskRequest({ description: 'Repair runtime setup', requiredValidation: [] })],
+      turnId: 'turn-repair', wake: { kind: 'message', message: { id: 'message-repair' } },
+    });
+    expect(result.success).toBe(true);
+    expect(mocks.addTask).toHaveBeenCalledWith(expect.objectContaining({ useWorktree: true, approvalRequired: false }), 'internal');
+  });
+
   it('blocks only the validation checks a task explicitly requires', async () => {
     mocks.workspacePreflight.mockResolvedValue({ readiness: 'degraded', warnings: [] });
     mocks.assessWorkspaceReadiness.mockReturnValue({

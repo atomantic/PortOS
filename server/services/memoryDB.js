@@ -7,12 +7,15 @@
  * Same exported interface as memory.js so routes/consumers don't change.
  */
 
+import { PERSISTENT_MIND_MEMORY_PROTECTION_TAGS } from '../lib/persistentMindMemory.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { query, withTransaction, pgvectorToArray, arrayToPgvector } from '../lib/db.js';
 import { cosEvents } from './cosEvents.js';
 import * as notifications from './notifications.js';
 import { DEFAULT_MEMORY_CONFIG, generateSummary, decrementAgentPendingApproval } from './memoryConfig.js';
 import { getInstanceId } from './instances.js';
+
+const protectedMindMemoryTags = Object.values(PERSISTENT_MIND_MEMORY_PROTECTION_TAGS);
 
 /**
  * Convert a database row to the memory object format matching the file-based API
@@ -891,13 +894,15 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false) {
       SELECT id, summary, importance, embedding
       FROM memories
       WHERE id > a.id AND embedding IS NOT NULL AND status = 'active'
+        AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
       ORDER BY embedding <=> a.embedding
       LIMIT 5
     ) b
     WHERE a.embedding IS NOT NULL AND a.status = 'active'
+      AND NOT (COALESCE(a.tags, '{}'::text[]) && $2::text[])
       AND 1 - (a.embedding <=> b.embedding) >= $1
     ORDER BY similarity DESC
-  `, [threshold]);
+  `, [threshold, protectedMindMemoryTags]);
 
   // Build clusters using union-find
   const parent = new Map();
@@ -961,10 +966,11 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false) {
     }
   }
 
-  if (archiveIds.length > 0) {
-    await query("UPDATE memories SET status = 'archived' WHERE id = ANY($1)", [archiveIds]);
-  }
-  const merged = archiveIds.length;
+  const archived = archiveIds.length > 0 ? await query(
+    "UPDATE memories SET status = 'archived' WHERE id = ANY($1) AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])",
+    [archiveIds, protectedMindMemoryTags]
+  ) : null;
+  const merged = archived?.rowCount || 0;
 
   console.log(`🧠 Consolidated ${merged} duplicate memories into ${duplicateClusters.length} clusters`);
   return { merged, clusters: duplicateClusters.length };
@@ -984,12 +990,13 @@ export async function applyDecay(decayRate = 0.01) {
           + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
         )
       WHERE status = 'active'
+        AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
         AND created_at < NOW() - INTERVAL '30 days'
         AND GREATEST(0.1,
           importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
           + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
         ) < 0.15
-    `, [decayRate]);
+    `, [decayRate, protectedMindMemoryTags]);
 
     // Decay importance for remaining active memories where change exceeds threshold
     const decayResult = await client.query(`
@@ -998,11 +1005,12 @@ export async function applyDecay(decayRate = 0.01) {
         + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
       )
       WHERE status = 'active'
+        AND NOT (COALESCE(tags, '{}'::text[]) && $2::text[])
         AND abs(importance - GREATEST(0.1,
           importance * (1 - $1 * sqrt(EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0))
           + GREATEST(0, 0.1 - EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed, created_at))) / 86400.0 * 0.001)
         )) > 0.01
-    `, [decayRate]);
+    `, [decayRate, protectedMindMemoryTags]);
 
     return archiveResult.rowCount + decayResult.rowCount;
   });
@@ -1018,7 +1026,8 @@ export async function clearExpired() {
   const result = await query(`
     UPDATE memories SET status = 'expired'
     WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < NOW()
-  `);
+      AND NOT (COALESCE(tags, '{}'::text[]) && $1::text[])
+  `, [protectedMindMemoryTags]);
 
   const cleared = result.rowCount;
   console.log(`🧠 Cleared ${cleared} expired memories`);

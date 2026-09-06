@@ -574,6 +574,22 @@ describe.skipIf(!runDb)('memoryDB consolidateMemories (#3447)', () => {
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!runDb)('memoryDB applyDecay boundaries (#3447)', () => {
+  it('keeps protected identity and important records through consolidation, decay, and expiration', async () => {
+    await resetMemories();
+    const input = { type: 'fact', content: 'Stable identity.', importance: 0.1, expiresAt: new Date(Date.now() - 60_000).toISOString() };
+    const core = await memoryDB.createMemory({ ...input, tags: ['mind:core-identity'] }, axis(0));
+    const important = await memoryDB.createMemory({ ...input, tags: ['mind:important'] }, axis(0));
+    const ordinary = await memoryDB.createMemory({ ...input, tags: [] }, axis(0));
+    for (const memory of [core, important, ordinary]) await backdate(memory.id, 400);
+    await memoryDB.consolidateMemories(0.9);
+    await memoryDB.applyDecay(0.01);
+    await memoryDB.clearExpired();
+    expect(await statusOf(core.id)).toBe('active');
+    expect(await statusOf(important.id)).toBe('active');
+    expect(await statusOf(ordinary.id)).not.toBe('active');
+    expect((await memoryDB.peekMemory(core.id)).tags).toEqual(['mind:core-identity']);
+  });
+
   it('is a no-op at decayRate 0 for memories past the recency-bonus window', async () => {
     await resetMemories();
     // The recency bonus is GREATEST(0, 0.1 - daysSinceAccess * 0.001) — zero once

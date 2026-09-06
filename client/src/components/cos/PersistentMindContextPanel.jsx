@@ -5,7 +5,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import Banner from '../ui/Banner';
 
 const EMPTY_MEMORY = {
-  content: '', summary: '', type: 'observation', category: 'other', tags: [], importance: 0.5,
+  content: '', summary: '', type: 'observation', category: 'other', tags: [], importance: 0.5, protection: 'standard',
 };
 
 const promptDraft = (data) => ({
@@ -118,7 +118,7 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
       {view !== 'context' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-memory-heading">
         <div>
           <h3 id="mind-memory-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text"><Database size={16} aria-hidden="true" /> Curated memories</h3>
-          <p className="mt-1 text-xs text-port-text-muted">Memories created by the persistent mind and memories added here enter its bounded context automatically. You can edit them here at any time.</p>
+          <p className="mt-1 text-xs text-port-text-muted">Memories created by the persistent mind and memories added here enter its bounded context automatically. Core identity and important memories survive cleanup and receive priority in bounded context. Existing memories are standard until explicitly protected; an importance score alone does not protect them.</p>
         </div>
         <MemoryCreator onCreated={refreshMemories} />
         <div className="mt-3 space-y-2">
@@ -151,6 +151,19 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
   );
 }
 
+function MemoryProtectionSelect({ id, value, onChange, disabled }) {
+  return (
+    <label htmlFor={id} className="text-xs font-medium text-port-text">
+      Cleanup protection
+      <select id={id} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="mt-1 block w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text disabled:opacity-50">
+        <option value="standard">Standard · eligible for cleanup</option>
+        <option value="important">Important · kept during cleanup</option>
+        <option value="core-identity">Core identity · kept during cleanup</option>
+      </select>
+    </label>
+  );
+}
+
 function MemoryCreator({ onCreated }) {
   const id = useId();
   const [draft, setDraft] = useState(EMPTY_MEMORY);
@@ -180,6 +193,7 @@ function MemoryCreator({ onCreated }) {
         <input id={`${id}-content`} value={draft.content} maxLength={10240} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} placeholder="A stable fact, preference, decision, or context…" className="min-w-0 flex-1 rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-port-text" />
         <button type="submit" disabled={saving || !draft.content.trim()} className="flex items-center justify-center gap-2 rounded border border-port-accent px-3 py-2 text-xs font-medium text-port-accent disabled:opacity-50"><Plus size={14} aria-hidden="true" /> {saving ? 'Adding…' : 'Add memory'}</button>
       </div>
+      <div className="mt-3"><MemoryProtectionSelect id={`${id}-protection`} value={draft.protection} disabled={saving} onChange={(protection) => setDraft((current) => ({ ...current, protection }))} /></div>
       {error && <p role="alert" className="mt-2 text-xs text-port-error">{error}</p>}
     </form>
   );
@@ -192,9 +206,13 @@ function MemoryEditor({ memory, onSaved }) {
     summary: memory.summary || '',
     type: memory.type || 'observation',
     category: memory.category || 'other',
-    tags: (memory.tags || []).join(', '),
+    tags: (memory.tags || []).filter((tag) => !tag.startsWith('mind:')).join(', '),
     importance: memory.importance ?? 0.5,
   });
+  // Omit protection from ordinary edits so a newer protection applied by the
+  // mind survives even when this editor still has an older context snapshot.
+  const [protectionOverride, setProtectionOverride] = useState(null);
+  const protection = protectionOverride ?? memory.protection ?? 'standard';
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const save = async (event) => {
@@ -203,17 +221,21 @@ function MemoryEditor({ memory, onSaved }) {
     setError(null);
     await api.updatePersistentMindMemory(memory.id, {
       ...draft,
+      ...(protectionOverride !== null ? { protection: protectionOverride } : {}),
       summary: draft.summary.trim(),
       tags: draft.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
       importance: Number(draft.importance),
     }, { silent: true })
-      .then(() => onSaved())
+      .then(async () => {
+        setProtectionOverride(null);
+        await onSaved();
+      })
       .catch((nextError) => setError(nextError?.message || 'Could not save the memory'))
       .finally(() => setSaving(false));
   };
   return (
     <details className="rounded border border-port-border p-3">
-      <summary className="cursor-pointer text-sm text-port-text"><span className="font-medium">{memory.summary || memory.content}</span> <span className="text-xs text-port-text-muted">· {memory.type}/{memory.category}</span></summary>
+      <summary className="cursor-pointer text-sm text-port-text"><span className="font-medium">{memory.summary || memory.content}</span> <span className="text-xs text-port-text-muted">· {memory.type}/{memory.category}</span>{memory.protection && memory.protection !== 'standard' && <span className="ml-2 rounded border border-port-success/40 px-2 py-0.5 text-xs text-port-success">{memory.protection === 'core-identity' ? 'Core identity' : 'Important'} · Protected</span>}</summary>
       <form onSubmit={save} className="mt-3 grid gap-3">
         <label htmlFor={`${id}-content`} className="text-xs font-medium text-port-text">Content<textarea id={`${id}-content`} rows={4} required maxLength={10240} value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text" /></label>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -222,6 +244,8 @@ function MemoryEditor({ memory, onSaved }) {
           <label htmlFor={`${id}-category`} className="text-xs font-medium text-port-text">Category<input id={`${id}-category`} maxLength={100} value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal" /></label>
           <label htmlFor={`${id}-importance`} className="text-xs font-medium text-port-text">Importance<input id={`${id}-importance`} type="number" min="0" max="1" step="0.1" value={draft.importance} onChange={(event) => setDraft((current) => ({ ...current, importance: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal" /></label>
         </div>
+        <MemoryProtectionSelect id={`${id}-protection`} value={protection} disabled={saving} onChange={setProtectionOverride} />
+        {memory.protection && memory.protection !== 'standard' && protection === 'standard' && <p className="text-xs text-port-warning">Saving as Standard removes protection. Future cleanup may archive this memory.</p>}
         <label htmlFor={`${id}-tags`} className="text-xs font-medium text-port-text">Tags, comma-separated<input id={`${id}-tags`} value={draft.tags} onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))} className="mt-1 w-full rounded border border-port-border bg-port-bg px-2 py-1.5 font-normal" /></label>
         {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
         <div className="flex justify-end"><button type="submit" disabled={saving || !draft.content.trim()} className="flex items-center gap-2 rounded bg-port-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"><Save size={14} aria-hidden="true" /> {saving ? 'Saving…' : 'Save memory'}</button></div>

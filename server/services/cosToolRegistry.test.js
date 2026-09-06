@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   dispatch: vi.fn(),
   executeTasks: vi.fn(),
   cleanupMind: vi.fn(),
+  protectMemory: vi.fn(),
   worldStatus: vi.fn(),
   worldProject: vi.fn(),
   worldAugment: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock('./voice/tools.js', () => ({
 vi.mock('./persistentMindTaskCapability.js', () => ({
   executePersistentMindTaskRequests: (...args) => mocks.executeTasks(...args),
 }));
+vi.mock('./persistentMindContext.js', () => ({ protectPersistentMindMemory: (...args) => mocks.protectMemory(...args) }));
 vi.mock('./persistentMindMaintenance.js', () => ({
   cleanupPersistentMind: (...args) => mocks.cleanupMind(...args),
 }));
@@ -96,6 +98,7 @@ describe('cosToolRegistry', () => {
       'mind.request-thinking-preset',
       'cos.create-task',
       'mind.cleanup',
+      'mind.protect-memory',
       'user-actions.query',
       'eidoverse.chat',
       'eidoverse.destinations',
@@ -299,6 +302,15 @@ describe('cosToolRegistry', () => {
       { signal },
     );
     expect(mocks.worldSay).toHaveBeenCalledWith('Example message', { signal });
+  });
+
+  it('requires mind maintenance authority and accepts only protective changes', async () => {
+    const call = { requestId: 'protect-1', name: 'mind.protect-memory', arguments: { memoryId: 'memory-1', protection: 'core-identity' } };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: {} } })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    await expect(executeCosToolCall({ call: { ...call, arguments: { ...call.arguments, protection: 'standard' } }, authority: { scope: 'mind', capabilities: { manageMind: true } } })).rejects.toMatchObject({ code: 'TOOL_VALIDATION_ERROR' });
+    mocks.protectMemory.mockResolvedValue({ ok: true, success: true, protection: 'core-identity' });
+    await executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { manageMind: true } } });
+    expect(mocks.protectMemory).toHaveBeenCalledWith({ memoryId: 'memory-1', protection: 'core-identity' });
   });
 
   it('executes cleanup only with the dedicated mind capability and preserves current provenance', async () => {

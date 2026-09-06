@@ -294,7 +294,7 @@ PR. In plan-only mode, 'prCompletion' may be omitted. Otherwise set
 Use 'requiredValidation' only when the task's acceptance criteria require those
 workspace checks before queueing. Supported checks are 'dependencies',
 'engines', 'submodules', 'forge', and 'reviewers'. An omitted or empty list
-keeps absent dependencies advisory, which is appropriate for docs-only work.
+keeps workspace diagnostics advisory, including for setup repair and docs-only work. Agents can install dependencies and resolve runtime setup as part of the task; do not require a failing check before queueing its repair. Required checks remain enforced when explicitly requested.
 
 Choosing the app: pick the repository that will hold the change, not the subject
 the work is about. PortOS owns every integration it ships — the connector,

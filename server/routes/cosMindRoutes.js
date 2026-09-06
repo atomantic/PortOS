@@ -1,3 +1,4 @@
+import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
 import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistentMindThinkingRequests.js';
 /** Persistent Chief-of-Staff mind conversation and lifecycle routes. */
 
@@ -133,6 +134,7 @@ const promotionSchema = z.object({
 }).strict();
 const memoryType = z.enum(['fact', 'learning', 'observation', 'decision', 'preference', 'context']);
 const memoryFields = {
+  protection: persistentMindMemoryProtectionSchema.optional(),
   content: z.string().trim().min(1).max(10_240),
   summary: z.string().trim().max(500).optional(),
   type: memoryType,
