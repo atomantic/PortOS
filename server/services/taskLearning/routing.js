@@ -54,7 +54,8 @@ const tierWeight = (tier) => TIER_WEIGHT[tier] ?? HEAVIEST_WEIGHT;
  * default instead of the lightest tier it CAN run (e.g. `light`). They stay in
  * TIER_WEIGHT (the cost ordering is still accurate) — they're just not offered.
  */
-const NON_ROUTABLE_LEARNED_TIERS = new Set(['minimal', 'low']);
+// Ultra is an explicit capability request, never an automatic learned upgrade.
+const NON_ROUTABLE_LEARNED_TIERS = new Set(['minimal', 'low', 'ultra']);
 
 /**
  * True for a learned tier the selection path can't actually route to

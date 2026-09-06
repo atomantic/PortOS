@@ -199,6 +199,7 @@ describe('Provider Service', () => {
       lightModel: 'model-b',
       mediumModel: 'model-a',
       heavyModel: 'model-c',
+      ultraModel: 'model-c',
       fallbackProvider: 'fallback-provider-id',
       fallbackModel: 'fallback-model-id',
       numCtx: 32768,

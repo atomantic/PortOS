@@ -652,6 +652,7 @@ export function createProviderService(config = {}) {
         lightModel: providerData.lightModel || null,
         mediumModel: providerData.mediumModel || null,
         heavyModel: providerData.heavyModel || null,
+        ultraModel: providerData.ultraModel || null,
         fallbackProvider: providerData.fallbackProvider || null,
         fallbackModel: providerData.fallbackModel || null,
         numCtx: providerData.numCtx || null,

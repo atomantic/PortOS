@@ -81,4 +81,15 @@ describe('ProviderForm', () => {
     expect(api.createProvider).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Planning Window')).toBeInTheDocument();
   });
+  it('saves an Ultra mapping after switching away from the Models tab', async () => {
+    renderForm();
+    fireEvent.change(screen.getByLabelText('Name *'), { target: { value: 'Example Provider' } });
+    fireEvent.change(screen.getByLabelText('Command *'), { target: { value: 'example-cli' } });
+    switchTab('Models');
+    fireEvent.change(screen.getByLabelText('Ultra (frontier)'), { target: { value: 'frontier-model' } });
+    switchTab('Connection');
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledWith(expect.objectContaining({ ultraModel: 'frontier-model' })));
+  });
+
 });
