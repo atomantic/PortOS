@@ -1,3 +1,4 @@
+import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Error Analysis
  *
@@ -1569,6 +1570,12 @@ export function resolveTypeFailureSignal({ success, terminatedByUser = false, ho
  * spawnable once `releaseRetryHold` writes the resume pointer (#3373).
  */
 export async function resolveFailedTaskUpdate(task, errorAnalysis, agentId, now = Date.now()) {
+  if (isPrivateSecurityTask(task)) {
+    return { status: 'blocked', metadata: { ...task.metadata, blockedAt: new Date(now).toISOString(),
+      blockedCategory: 'private-security-assessment-failed',
+      blockedReason: 'Private assessment did not produce a validated report. Inspect its local output and configuration; no automatic investigation or provider fallback will run.' } };
+  }
+
   const decision = resolveFailedTaskDecision(task, errorAnalysis, { agentId, now });
   const { failureCount, lastErrorCategory } = decision.metadataUpdates;
 

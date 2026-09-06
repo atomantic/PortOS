@@ -583,3 +583,26 @@ describe('orchestration profiles (#5992)', () => {
     });
   });
 });
+
+// Regression: a private assessment must never inherit an active cloud provider
+// or regain write/publishing privileges from user-editable task metadata.
+describe('private assessment provider boundary', () => {
+  it('requires explicit local pins and never invokes the ordinary fallback resolver', async () => {
+    const task = { metadata: { analysisType: 'private-security-assessment', openPR: true, pipeline: { stage: 'publish' } } };
+    expect(await resolveAgentProviderAndModel(task)).toMatchObject({ ok: false, permanent: true });
+    expect(task.metadata).toMatchObject({ readOnly: true, openPR: false, fileIssues: false });
+    expect(task.metadata.pipeline).toBeUndefined();
+    expect(getActiveProvider).not.toHaveBeenCalled();
+    expect(getFallbackProvider).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform !== 'darwin')('honors the exact local pin and refuses a remote endpoint after provider edits', async () => {
+    const task = { metadata: { analysisType: 'private-security-assessment', provider: 'claude-ollama', model: 'example-local' } };
+    const provider = { id: 'claude-ollama', type: 'cli', command: 'claude', ollamaBacked: true };
+    getProviderById.mockResolvedValue(provider);
+    expect(await resolveAgentProviderAndModel(task)).toMatchObject({ ok: true, selectedModel: 'example-local' });
+    getProviderById.mockResolvedValue({ ...provider, envVars: { ANTHROPIC_BASE_URL: 'https://example.com' } });
+    expect(await resolveAgentProviderAndModel(task)).toMatchObject({ ok: false, permanent: true });
+    expect(getFallbackProvider).not.toHaveBeenCalled();
+  });
+});

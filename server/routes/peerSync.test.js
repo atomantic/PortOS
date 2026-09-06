@@ -661,6 +661,29 @@ describe('peer-sync routes', () => {
       await rm(tmp, { recursive: true, force: true });
     });
 
+    it('refuses a private assessment archive even when the peer knows its path', async () => {
+      await writeFile(join(tmp, 'agents', '2026-06-20', 'agent-abc', 'metadata.json'),
+        JSON.stringify({ metadata: { taskAnalysisType: 'private-security-assessment' } }));
+      await writeFile(join(tmp, 'agents', '2026-06-20', 'agent-abc', 'output.txt'), 'private finding');
+      const res = await request(buildApp())
+        .get('/api/peer-sync/cos-agent-archive?date=2026-06-20&agentId=agent-abc&file=output.txt');
+      expect(res.status).toBe(404);
+      expect(res.text).not.toContain('private finding');
+    });
+
+    it.each([undefined, '{', 'null', '[]', '"legacy"', '42'])(
+      'refuses archive bytes when metadata cannot classify privacy (%s)', async (metadata) => {
+        const agentDir = join(tmp, 'agents', '2026-06-20', 'agent-abc');
+        if (metadata === undefined) await rm(join(agentDir, 'metadata.json'));
+        else await writeFile(join(agentDir, 'metadata.json'), metadata);
+        await writeFile(join(agentDir, 'output.txt'), 'unclassified finding');
+        const res = await request(buildApp())
+          .get('/api/peer-sync/cos-agent-archive?date=2026-06-20&agentId=agent-abc&file=output.txt');
+        expect(res.status).toBe(404);
+        expect(res.text).not.toContain('unclassified finding');
+      }
+    );
+
     it('streams a valid archive file', async () => {
       const res = await request(buildApp())
         .get('/api/peer-sync/cos-agent-archive?date=2026-06-20&agentId=agent-abc&file=metadata.json');

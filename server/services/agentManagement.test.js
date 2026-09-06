@@ -384,6 +384,17 @@ describe('handleOrphanedTask — duplicate-investigation guard', () => {
     pausedAgents.clear();
   });
 
+  it('blocks an interrupted private assessment without retrying or investigating its transcript', async () => {
+    const task = { id: 'task-private', taskType: 'internal', status: 'in_progress',
+      metadata: { analysisType: 'private-security-assessment', orphanRetryCount: 4 } };
+    await handleOrphanedTask(task.id, 'agent-private', vi.fn().mockResolvedValue(task), { interrupted: true });
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'blocked',
+      metadata: expect.objectContaining({ blockedCategory: 'private-security-assessment-failed' }),
+    }), 'internal');
+    expect(addTask).not.toHaveBeenCalled();
+    expect(resolveTaskResumePatch).not.toHaveBeenCalled();
+  });
+
   it('skips tasks already blocked with blockedCategory=max-retries (no new investigation task)', async () => {
     const blockedTask = {
       id: 'task-foo',

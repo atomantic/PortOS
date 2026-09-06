@@ -546,7 +546,7 @@ describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', (
     expect(RUN_SPAWN_BODY).toMatch(/if\s*\(\s*handedOff\s*\)\s*\{[\s\S]{0,800}?throw\s+err\s*;/);
     // The pre-spawn branch runs cleanupOnError + re-emits job:spawn-failed for
     // autonomous-job tasks so cos.js can clear its job-level guard.
-    expect(RUN_SPAWN_BODY).toMatch(/cleanupOnError\(err\.message\)/);
+    expect(RUN_SPAWN_BODY).toMatch(/cleanupOnError\(setupError\)/);
     expect(RUN_SPAWN_BODY).toMatch(/job:spawn-failed/);
     expect(RUN_SPAWN_BODY).toMatch(/task\.metadata\??\.jobId/);
   });

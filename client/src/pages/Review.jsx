@@ -131,12 +131,14 @@ export default function Review() {
 
   useEffect(() => {
     const handleCreated = (item) => {
+      if (item.metadata?.privateSecurity) { fetchItems(); return; }
       setItems(prev => {
         if (prev.some(i => i.id === item.id)) return prev;
         return [item, ...prev];
       });
     };
     const handleUpdated = (item) => {
+      if (item.metadata?.privateSecurity) { fetchItems(); return; }
       setItems(prev => prev.map(i => i.id === item.id ? item : i));
     };
     const handleDeleted = (item) => {
@@ -152,7 +154,7 @@ export default function Review() {
       socket.off('review:item:updated', handleUpdated);
       socket.off('review:item:deleted', handleDeleted);
     };
-  }, []);
+  }, [fetchItems]);
 
   // Live-invalidate the cross-domain queue. A burst of producer events (e.g.
   // a draft sent fires both messages:draft:sent and messages:changed) coalesces

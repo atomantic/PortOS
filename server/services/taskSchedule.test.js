@@ -306,7 +306,7 @@ describe('taskSchedule', () => {
 
   describe('managed-app target task types', () => {
     it('keeps app-required scope explicit and separate from install-wide scope', () => {
-      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile'])
+      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['private-security-assessment', 'pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile'])
       expect(requiresManagedAppTarget('pr-reviewer')).toBe(true)
       expect(requiresManagedAppTarget('security')).toBe(false)
       expect(requiresManagedAppTarget('repo-sync')).toBe(false)

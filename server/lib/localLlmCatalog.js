@@ -14,6 +14,7 @@
 // imported anywhere. The installed-state overlay is applied by the caller
 // (server/services/localLlm.js) which knows what's actually on disk.
 
+import { localModelSafety } from './localModelSafety.js';
 import { hardwareRequirementsForLocalLlm } from './systemCapabilities.js';
 
 export const BACKENDS = ['ollama', 'lmstudio'];
@@ -23,6 +24,8 @@ export const isBackend = (b) => BACKENDS.includes(b);
 export const LOCAL_LLM_CATEGORIES = [
   { id: 'general', label: 'General purpose' },
   { id: 'coding', label: 'Coding & agents' },
+  { id: 'security', label: 'Security specialists' },
+  { id: 'security-uncensored', label: 'Security · Uncensored / abliterated' },
   { id: 'reasoning', label: 'Reasoning & analysis' },
   { id: 'vision', label: 'Image Analysis' },
   { id: 'chat', label: 'Chat & voice' },
@@ -71,6 +74,43 @@ export const LOCAL_LLM_CATEGORIES = [
 // pulling one gets you an API passthrough, not a local model. Verify a tag has a
 // non-zero manifest size before adding it here.
 export const LOCAL_LLM_CATALOG = [
+  {
+    key: 'vulnllm-r-7b-gguf', name: 'VulnLLM-R 7B (GGUF)',
+    category: 'security', recommendedFor: ['security'],
+    featured: { label: 'Vulnerability specialist', description: 'First specialist to evaluate for source vulnerability detection. Published results use different prompts and agent scaffolding; validate findings on your app.' },
+    params: '7B', size: '8.1 GB', family: 'qwen',
+    description: 'Specialized vulnerability reasoning from the original UCSB/VirtueAI project, converted by mradermacher. Published evaluations cover C/C++, Python and Java; JavaScript, TypeScript and Swift quality remains unverified.',
+    note: 'Use the sandboxed Private security assessment task. No verified CyberGym, ExploitBench or ExploitGym scores; quantized quality and remediation require validation.',
+    repository: 'mradermacher/VulnLLM-R-7B-GGUF',
+    capabilities: ['chat', 'code', 'reasoning'],
+    ollama: 'hf.co/mradermacher/VulnLLM-R-7B-GGUF:Q8_0',
+    lmstudio: 'mradermacher/VulnLLM-R-7B-GGUF@Q8_0',
+  },
+  {
+    key: 'foundation-sec-8b-reasoning', name: 'Foundation-Sec 8B Reasoning',
+    category: 'security', recommendedFor: ['security'],
+    params: '8B', size: '8.5 GB', family: 'llama', context: 32768,
+    description: 'Cisco Foundation AI security reasoning model, using Cisco’s own Q8 GGUF. A baseline for threat modeling, vulnerability interpretation and remediation guidance; CTI benchmarks do not establish code-audit or patch correctness.',
+    note: 'Safety-aligned, not an abliterated model. Run in the private assessment sandbox and independently validate guidance.',
+    repository: 'fdtn-ai/Foundation-Sec-8B-Reasoning-Q8_0-GGUF',
+    capabilities: ['chat', 'reasoning'],
+    ollama: 'hf.co/fdtn-ai/Foundation-Sec-8B-Reasoning-Q8_0-GGUF:Q8_0',
+    lmstudio: 'fdtn-ai/Foundation-Sec-8B-Reasoning-Q8_0-GGUF@Q8_0',
+  },
+  // Security candidates stay in a separate lane; refusal removal is not a
+  // measured security capability. Exact-build evidence lives in localModelSafety.
+  {
+    key: 'qwen38-27b-uncensored-gguf',
+    name: 'Qwen3.8 27B Uncensored (GGUF)',
+    category: 'security-uncensored', recommendedFor: ['security-uncensored'],
+    params: '27B', size: '16.8 GB', family: 'qwen',
+    description: 'Portable sibling of the MLX security candidate. Prefer Q6_K or Q8_0 when memory permits. Security benchmark results for this exact build remain unverified.',
+    note: 'Sandbox required for assessment. A popular publisher and a GGUF file are not a malware-free guarantee.',
+    capabilities: ['chat', 'code', 'reasoning', 'tools'], context: 262144,
+    ollama: 'hf.co/orcarouter/Qwen3.8-27B-Uncensored-GGUF:Q4_K_M',
+    lmstudio: 'orcarouter/Qwen3.8-27B-Uncensored-GGUF@Q4_K_M',
+  },
+
   // ── Small & fast tier ──
   // Sub-4B models for classification, routing, and the voice agent's tool turns,
   // where round-trip latency matters more than prose quality.
@@ -341,15 +381,16 @@ export const LOCAL_LLM_CATALOG = [
   {
     key: 'qwen3.8-27b-uncensored-mlx',
     name: 'Qwen3.8 27B Uncensored MLX',
-    category: 'general',
-    recommendedFor: ['general', 'coding', 'reasoning', 'vision', 'multilingual'],
+    category: 'security-uncensored',
+    recommendedFor: ['security-uncensored'],
+    featured: { label: 'Security candidate', description: 'Practical local candidate for private assessment and remediation planning. CyberGym, ExploitBench and ExploitGym: no verified results for this exact abliterated build.' },
     params: '27B',
-    size: '15.0 GB',
+    size: '16.1 GB',
     family: 'qwen',
     description: 'OrcaRouter’s abliterated Qwen3.8 variant for red-team and unrestricted local evaluation, with 2-, 4-, 6-, and 8-bit MLX builds plus vision, tools, reasoning, and multilingual support.',
-    note: 'Gated on Hugging Face — accept the repository terms and configure a Hugging Face token in Settings. Ollama imports the 4-bit build; LM Studio can select another quantization.',
+    note: 'Ollama imports 4-bit; LM Studio loads the root 4-bit build. Prefer 4-bit or higher; 2-bit is unsuitable for assessment. Sandbox required; benchmark quality remains unverified.',
     repository: 'orcarouter/Qwen3.8-27B-Uncensored-MLX',
-    gated: true,
+    gated: false,
     capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision', 'multilingual'],
     context: 262144,
     format: 'mlx',
@@ -624,19 +665,6 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Ornith-1.0-35B-GGUF'
   },
   {
-    key: 'nex-n2-mini',
-    name: 'Nex-N2-mini 35B-A3B',
-    category: 'coding',
-    recommendedFor: ['coding', 'reasoning', 'vision'],
-    params: '35B / 3B active',
-    size: '22 GB',
-    family: 'nex-n2',
-    description: "Nex AGI's agentic MoE (3B active) on a Qwen3.5 base — strong at coding, tool calling, long-horizon agent tasks, and vision (75.3 Terminal-Bench 2.1). Apache-2.0; the Q4 build fits comfortably on 32GB+ and is easy on a 128GB Mac. Vision needs the repo's mmproj file. The 397B Nex-N2-Pro is the big sibling — it won't fit a 128GB Mac even at Q4.",
-    capabilities: ['chat', 'code', 'tools', 'reasoning', 'vision'],
-    ollama: 'hf.co/sjakek/Nex-N2-mini-GGUF:UD-Q4_K_M',
-    lmstudio: 'sjakek/Nex-N2-mini-GGUF'
-  },
-  {
     key: 'qwen3.6-35b-a3b',
     name: 'Qwen3.6 35B-A3B',
     category: 'coding',
@@ -837,6 +865,21 @@ export const LOCAL_LLM_CATALOG = [
 // and `lmstudio-community/CodeLlama-7b-Instruct-GGUF` 404 as of this refresh,
 // so LLaVA 1.5 and Code Llama are omitted rather than mapped to a broken repo).
 const RETIRED_MODEL_MAPPINGS = [
+  // Preserve installed-model migration without recommending an unreviewed publisher.
+  {
+    key: 'nex-n2-mini',
+    name: 'Nex-N2-mini 35B-A3B',
+    category: 'coding',
+    recommendedFor: ['coding', 'reasoning', 'vision'],
+    params: '35B / 3B active',
+    size: '22 GB',
+    family: 'nex-n2',
+    description: "Nex AGI's agentic MoE (3B active) on a Qwen3.5 base — strong at coding, tool calling, long-horizon agent tasks, and vision (75.3 Terminal-Bench 2.1). Apache-2.0; the Q4 build fits comfortably on 32GB+ and is easy on a 128GB Mac. Vision needs the repo's mmproj file. The 397B Nex-N2-Pro is the big sibling — it won't fit a 128GB Mac even at Q4.",
+    capabilities: ['chat', 'code', 'tools', 'reasoning', 'vision'],
+    ollama: 'hf.co/sjakek/Nex-N2-mini-GGUF:UD-Q4_K_M',
+    lmstudio: 'sjakek/Nex-N2-mini-GGUF'
+  },
+
   { ollama: 'llama3.2', lmstudio: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF' },
   { ollama: 'llama3.1', lmstudio: 'lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF' },
   { ollama: 'llama3.3:70b', lmstudio: 'lmstudio-community/Llama-3.3-70B-Instruct-GGUF' },
@@ -951,6 +994,7 @@ export function getCatalog(backend, installedIds = [], { appleSilicon } = {}) {
         ? [...entry.recommendedFor]
         : [entry.category];
       return {
+        ...localModelSafety(entry.repository || entry.lmstudio || entry[backend]),
         id: entry[backend],
         key: entry.key,
         name: entry.name,

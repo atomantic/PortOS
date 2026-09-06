@@ -346,6 +346,31 @@ describe('LocalLlmLibraryView installed models', () => {
 });
 
 describe('LocalLlmLibraryView recommendations', () => {
+  it('separates reduced-safeguard models and shows the sandbox warning with dated provenance', async () => {
+    getLocalLlmCatalog.mockResolvedValue({ models: [{
+      id: 'example/security', key: 'security', name: 'Security candidate', params: '27B',
+      category: 'security-uncensored', recommendedFor: ['security-uncensored'],
+      capabilities: ['chat', 'tools', 'code'], reducedSafeguards: true,
+      publisherReview: 'reviewed-build', warning: 'Run carefully in a sandbox without secrets.',
+      provenance: { checkedAt: '2026-09-06', likes: 100, downloads: 1000, followers: 200,
+        repository: 'example/security', revision: 'abc123' },
+    }, { id: 'example/specialist', key: 'specialist', name: 'Security specialist',
+      category: 'security', recommendedFor: ['security'], reducedSafeguards: false,
+      publisherReview: 'established-publisher', capabilities: ['chat', 'reasoning'],
+    }] });
+    await renderLibrary();
+    expect(await screen.findByText('Security candidate')).toBeTruthy();
+    expect(screen.getByRole('note')).toHaveTextContent('sandbox without secrets');
+    expect(screen.getByRole('note')).toHaveClass('text-port-warning');
+    expect(screen.getByRole('link', { name: 'Reviewed revision' })).toHaveAttribute('href', 'https://huggingface.co/example/security/tree/abc123');
+    expect(screen.queryByText('Agents', { exact: true })).toBeNull();
+    expect(screen.getAllByText('Security · Uncensored / abliterated').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Security specialists (1)' }));
+    expect(screen.getByText('Security specialist')).toBeInTheDocument();
+    expect(screen.queryByText('Security candidate')).toBeNull();
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+
   it('links a gated curated model to Hugging Face so its terms can be accepted', async () => {
     getLocalLlmCatalog.mockResolvedValue({
       models: [{

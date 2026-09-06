@@ -58,6 +58,7 @@ import { isAuditTaskType } from '../lib/auditCatalog.js';
 // must know WITHOUT paying for the import can be declared here, keeping this the
 // single registration point (a parallel per-capability list would be free to drift).
 const HOOK_MODULES = {
+  'private-security-assessment': { load: () => import('./privateSecurityAssessment.js') },
   'issue-watcher': {
     load: () => import('./issueWatcher.js')
   },

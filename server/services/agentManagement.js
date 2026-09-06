@@ -6,6 +6,9 @@
  */
 
 import { join } from 'path';
+import { rm } from 'node:fs/promises';
+import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
+import { privateSecurityScratchCwd } from '../lib/privateSecuritySandbox.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450). This module is one
@@ -1292,7 +1295,7 @@ async function runCleanupOrphanedAgents() {
         // Close the run BEFORE the agent record. If the run write fails, the
         // agent remains eligible for the next sweep; if the later agent write
         // fails, completeAgentRun's endTime guard makes this retry harmless.
-        await completeAgentRun(agent.metadata.runId, output, interrupted ? 143 : 1, duration, {
+        await completeAgentRun(agent.metadata.runId, isPrivateSecurityTask(task) || isPrivateSecurityTask(agent) ? 'Private security assessment interrupted; inspect its local assessment archive.' : output, interrupted ? 143 : 1, duration, {
           message: errorMessage,
           category: interrupted ? 'interrupted' : 'orphaned',
         });
@@ -1431,6 +1434,9 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
     await updateAgent(agentId, { metadata: { interruptedBy: null } })
       .catch(err => emitLog('warn', `Could not clear interrupted breadcrumb on ${agentId}: ${err.message}`, { agentId }));
   }
+  if (isPrivateSecurityTask({ metadata: agentMetadata })) {
+    await rm(privateSecurityScratchCwd(agentId), { recursive: true, force: true });
+  }
   const task = await getTaskByIdFn(taskId).catch(() => null);
   if (!task) {
     emitLog('warn', `Could not find task ${taskId} for orphaned agent ${agentId}`, { taskId, agentId });
@@ -1440,6 +1446,18 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // Never requeue tasks that were explicitly terminated by the user
   if (task.status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated') {
     emitLog('info', `⏭️ Skipping orphaned task ${taskId} — user-terminated`, { taskId, agentId });
+    return;
+  }
+
+  // Lost in-memory source scope cannot validate a recovered assessment. Never
+  // hand its transcript to an ordinary investigation or retry provider.
+  if (isPrivateSecurityTask(task) || isPrivateSecurityTask({ metadata: agentMetadata })) {
+    if (task.status === 'completed') return;
+    await rm(privateSecurityScratchCwd(agentId), { recursive: true, force: true });
+    await updateTask(taskId, { status: 'blocked', metadata: { ...task.metadata,
+      blockedAt: new Date().toISOString(), blockedCategory: 'private-security-assessment-failed',
+      blockedReason: 'Private assessment was interrupted. Inspect its local output and explicitly rerun it; no automatic investigation or provider fallback will run.',
+    } }, task.taskType || 'user');
     return;
   }
 

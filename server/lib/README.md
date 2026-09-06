@@ -577,3 +577,9 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `eidoverseCityLayout.js` | Native halls, rooftop landmark clearance and plinths, curated furniture, visitor chambers, and ordered signal bays for PortOS Commons. |
 | `eidoverseCitySurface.js` | Deterministic GLB island scenery, pedestrian paths, gathering terraces, and physical district signs, stored through Eidoverse's content-addressed upload API. |
 | `eidoverseIslandLandscape.js` | `appendEidoverseIslandLandscape` appends deterministic coastline, ocean, and distant mountain-island geometry to the Commons asset. |
+
+| `localModelSafety.js` | `localModelSafety`, `ESTABLISHED_MODEL_PUBLISHERS`, `REVIEWED_SECURITY_MODELS` — reduced-safeguard warnings and dated publisher/build provenance; never a malware-free certification. |
+
+| `privateSecurityPolicy.js` | Private assessment task identity, immutable delivery posture, and report schema. |
+
+| `privateSecuritySandbox.js` | Loopback-only local-provider gate and macOS Seatbelt launch with isolated CLI home and scratch workspace. |

@@ -635,6 +635,8 @@ describe('huggingFaceCatalog', () => {
         [(u) => u.includes('blobs=true'), mlxBlobs(repo, {
           'model-00001-of-00002.safetensors': 9_000_000_000,
           'model-00002-of-00002.safetensors': 9_000_000_000,
+          '8-bit/model.safetensors': 30_000_000_000,
+          'mtp/model.safetensors': 2_000_000_000,
         })],
       ]))
 

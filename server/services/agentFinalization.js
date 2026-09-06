@@ -1,3 +1,4 @@
+import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Finalization
  *
@@ -925,7 +926,7 @@ export async function finalizeAgent({
   // the diff probe's git timeouts — it holds the agent's CoS concurrency slot for
   // its duration, which is why it is skipped entirely unless the user configured
   // a local backend for it.
-  const fidelity = success
+  const fidelity = success && !isPrivateSecurityTask(task)
     ? await evaluateGoalFidelity({ task, workspacePath, startedAt: runStartedAt })
       .catch(err => {
         emitLog('warn', `⚠️ Goal-fidelity review failed for ${agentId}: ${err.message}`, { agentId });
@@ -990,7 +991,23 @@ export async function finalizeAgent({
   // of awaiting here is that the agent still counts against the CoS concurrency
   // gate for the hook's duration, so the dispatch is hard-bounded — see
   // withOutputHookTimeout.
-  const hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success, workspacePath });
+  let hookResult = await dispatchTaskOutputHookOnce({ agentId, task, success, workspacePath });
+  // A private assessment's deliverable is the validated, persisted report.
+  // A skipped, thrown or timed-out hook cannot establish that deliverable,
+  // even when the CLI exited zero. Keep other task types' existing semantics.
+  if (isPrivateSecurityTask(task) && (!hookResult?.ran || hookResult.threw
+    || hookResult.outcome?.accepted !== true)) {
+    hookResult = {
+      ...hookResult,
+      ran: true,
+      outcome: hookResult?.outcome?.accepted === false ? hookResult.outcome : {
+        accepted: false,
+        permanent: true,
+        reason: 'private-security-report-unverified',
+        message: 'Private assessment report was not validated and saved. Inspect the local output and retry explicitly.',
+      },
+    };
+  }
 
   // Output hooks may return a trusted metadata patch that advances a staged
   // workflow. Apply it before task persistence and cleanup so the next stage
@@ -1110,7 +1127,12 @@ export async function finalizeAgent({
     // Pass the downgrade explicitly: this run exited 0, so the run record would
     // otherwise keep saying "success" for the one run we just concluded did not
     // land its PR (#3358).
-    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis, prVerdict.ok && !driftDowngrade && !fidelityDowngrade ? null : false);
+    const runOutput = isPrivateSecurityTask(task)
+      ? success
+        ? 'Private security assessment: see the local Review Hub report.'
+        : 'Private security assessment report was not verified; inspect the local assessment archive.'
+      : outputBuffer;
+    await completeAgentRun(runId, runOutput, exitCode, duration, errorAnalysis, prVerdict.ok && !driftDowngrade && !fidelityDowngrade && !hookRejected ? null : false);
   }
 
   // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome into
@@ -1120,6 +1142,12 @@ export async function finalizeAgent({
   // lands on the peer that ran the agent.
   await stampLiExecutionVerdict(taskUpdate, task, { success, validationPassed, errorAnalysis });
 
+  // The bounded source inventory belongs only to this run and its private
+  // report. Task metadata is replicated to peers and reused in later prompts.
+  if (isPrivateSecurityTask(task)) {
+    delete task.privateSecurityScope;
+    if (taskUpdate.metadata) delete taskUpdate.metadata.privateSecurityScope;
+  }
   const taskResult = await updateTask(task.id, taskUpdate, taskType);
   if (taskResult?.error) {
     const label = terminatedByUser ? 'blocked' : success ? 'completed' : 'failed';

@@ -1,3 +1,4 @@
+import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Completion Helpers
  *
@@ -29,6 +30,13 @@ import { finalizeMalwareScan } from './malwareScanReports.js';
  * Shared between handleAgentCompletion (runner mode) and spawnDirectly (direct mode).
  */
 export async function processAgentCompletion(agentId, task, success, outputBuffer) {
+  // Private findings must not enter memory extraction or a later cloud prompt.
+  if (isPrivateSecurityTask(task)) {
+    const { rm } = await import('node:fs/promises');
+    const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
+    await rm(privateSecurityScratchCwd(agentId), { recursive: true, force: true });
+    return;
+  }
   await finalizeMalwareScan({ agentId, task, success }).catch(err => {
     emitLog('warn', `Failed to finalize malware scan for ${task.id}: ${err.message}`, { taskId: task.id, agentId });
   });

@@ -1,3 +1,4 @@
+import { ESTABLISHED_MODEL_PUBLISHERS, localModelSafety } from '../lib/localModelSafety.js'
 import { getHfToken } from './hfToken.js';
 import { formatBytes as formatBytesRaw } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
@@ -48,6 +49,8 @@ const CATEGORY_SEARCH = {
   chat: 'instruct gguf',
   reasoning: 'reasoning gguf',
   coding: 'coder gguf',
+  security: 'security gguf',
+  'security-uncensored': 'uncensored gguf',
   writing: 'fiction gguf',
   vision: 'vision gguf',
   // Audio is NOT a GGUF category — the search relaxes the GGUF filter for it
@@ -110,25 +113,7 @@ const CURATED_AUDIO_MODELS = [
   },
 ]
 
-const TRUSTED_PUBLISHERS = new Set([
-  'unsloth',
-  'bartowski',
-  'ggml-org',
-  'lmstudio-community',
-  'mradermacher',
-  'qwen',
-  'meta-llama',
-  'mistralai',
-  'google',
-  'microsoft',
-  'nomic-ai',
-  'ibm-granite',
-  // audio/music generator publishers
-  'facebook',
-  'cvssp',
-  'stabilityai',
-  'ace-step'
-])
+
 
 const QUANT_PRIORITY = [
   'UD-Q4_K_XL',
@@ -297,7 +282,8 @@ function hasAudioSignal(model) {
 }
 
 function classifyModel(model, requestedCategory) {
-  if (CATEGORY_IDS.has(requestedCategory) && requestedCategory !== 'all') return requestedCategory
+  if (localModelSafety(repoIdOf(model), tagsOf(model)).reducedSafeguards) return 'security-uncensored'
+  if (CATEGORY_IDS.has(requestedCategory) && !['all', 'security-uncensored'].includes(requestedCategory)) return requestedCategory
   const haystack = `${repoIdOf(model)} ${(tagsOf(model) || []).join(' ')} ${model?.pipeline_tag || ''}`.toLowerCase()
   if (AUDIO_RE.test(haystack)) return 'audio'
   if (/(embed|sentence-transformers|feature-extraction)/.test(haystack)) return 'embedding'
@@ -358,7 +344,7 @@ function scoreModel(model, category, file) {
     else if (daysOld <= 540) score -= 4
     else score -= 14
   }
-  if (TRUSTED_PUBLISHERS.has(publisher)) score += 22
+  if (ESTABLISHED_MODEL_PUBLISHERS.has(publisher)) score += 22
   if (file) score += 18
   if (/gguf/i.test(repoId) || tags.includes('gguf')) score += 10
   if (category !== 'general' && CATEGORY_SEARCH[category]?.split(/\s+/).some((term) => categoryText.includes(term))) score += 12
@@ -562,7 +548,7 @@ function safetensorsFilesOf(model) {
 // Sum the safetensors shards — an MLX repo's resident footprint ≈ the weight
 // total (same overhead heuristic as GGUF; MEMORY_OVERHEAD covers the KV cache).
 function sumSafetensorsBytes(model) {
-  const total = safetensorsFilesOf(model).reduce((sum, f) => sum + (f.size || 0), 0)
+  const total = safetensorsFilesOf(model).filter((file) => !file.name.includes('/')).reduce((sum, f) => sum + (f.size || 0), 0)
   return total > 0 ? total : null
 }
 
@@ -642,6 +628,7 @@ function toMlxResult(model, requestedCategory, installedIds) {
     installed: false,
     source: 'huggingface',
     format: 'mlx',
+    ...localModelSafety(repoId, tagsOf(model)),
     repository: repoId,
     publisher: publisherOf(repoId),
     downloads: Number(model?.downloads || 0),
@@ -692,6 +679,7 @@ function toResult(model, backend, requestedCategory, installedIds, installedAudi
     // Format discriminator for the UI badge: GGUF chat models vs. (separately
     // queried) MLX. Audio repos are neither, so they stay null.
     format: isAudio ? null : 'gguf',
+    ...localModelSafety(repoId, tagsOf(model)),
     repository: repoId,
     publisher: publisherOf(repoId),
     downloads: Number(model?.downloads || 0),
@@ -1111,6 +1099,7 @@ export async function searchHuggingFaceModels({ backend, query = '', category = 
     })
 
   const results = [...curated, ...live, ...mlxLive]
+    .filter((model) => requestedCategory !== 'security-uncensored' || model.reducedSafeguards)
     .sort((a, b) => b.score - a.score || b.downloads - a.downloads)
     .slice(0, limit)
 

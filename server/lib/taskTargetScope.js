@@ -28,7 +28,7 @@ export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review
 // alongside the install-wide registry gives both the on-demand request gate
 // and the global generator one target-scope contract; neither has to infer
 // scope from a task name or from which generator happened to receive a call.
-export const MANAGED_APP_TARGET_TASK_TYPES = new Set(['pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile']);
+export const MANAGED_APP_TARGET_TASK_TYPES = new Set(['private-security-assessment', 'pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile']);
 
 export function requiresManagedAppTarget(taskType) {
   return MANAGED_APP_TARGET_TASK_TYPES.has(taskType);

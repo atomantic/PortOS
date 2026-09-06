@@ -1,3 +1,6 @@
+import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
+import { privateSecurityEndpoint } from '../lib/privateSecuritySandbox.js';
+import { supportsPublicReviewProvider } from '../lib/providerVendors.js';
 /**
  * Agent Provider Resolution
  *
@@ -34,6 +37,20 @@ import { publicReviewPostureForTask, resolvePublicReviewProvider } from './publi
  * >}
  */
 export async function resolveAgentProviderAndModel(task) {
+  if (isPrivateSecurityTask(task)) {
+    Object.assign(task.metadata, PRIVATE_SECURITY_DELIVERY);
+    delete task.metadata.pipeline;
+    const provider = task.metadata.provider ? await getProviderById(task.metadata.provider) : null;
+    const model = task.metadata.model;
+    if (process.platform !== 'darwin' || !provider || provider.enabled === false
+      || !privateSecurityEndpoint(provider) || !supportsPublicReviewProvider(provider)
+      || typeof model !== 'string' || !model.trim() || /:cloud(?:$|[\s/])/i.test(model)
+      || Object.values(MODEL_TIERS).includes(model)) {
+      return { ok: false, permanent: true, error: 'Private security assessment requires macOS Seatbelt and an explicitly pinned loopback Ollama/LM Studio CLI provider and local model. No cloud or unsandboxed fallback is allowed.' };
+    }
+    return { ok: true, provider, selectedModel: model, modelSelection: { model, tier: 'user-specified', reason: 'Private local assessment pin' } };
+  }
+
   // Old schedules may already have queued raw issue-watcher prompts. New runs
   // execute entirely in the server's constrained analysis boundary; an upgrade
   // must not let the old backlog retain a general-purpose agent harness.

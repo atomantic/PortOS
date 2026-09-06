@@ -117,6 +117,9 @@ vi.mock('./ollamaAgentContext.js', () => ({
 vi.mock('./providers.js', () => ({
   isOllamaBackedProvider: vi.fn(() => false),
 }));
+vi.mock('../lib/privateSecuritySandbox.js', () => ({
+  preparePrivateSecuritySpawn: vi.fn(),
+}));
 
 import { buildCliSpawnConfig, createStreamJsonParser, spawnDirectly } from './agentCliSpawning.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
@@ -597,6 +600,23 @@ describe('stream error containment', () => {
   });
 
   describe('spawn failure containment', () => {
+    it('settles private sandbox preparation failure without spawning an uncontained child', async () => {
+      const { preparePrivateSecuritySpawn } = await import('../lib/privateSecuritySandbox.js');
+      const { finalizeAgent, releaseAgentLane } = await import('./agentFinalization.js');
+      const { spawn } = await import('../lib/childProcess.js');
+      spawn.mockClear();
+      finalizeAgent.mockClear();
+      releaseAgentLane.mockClear();
+      preparePrivateSecuritySpawn.mockRejectedValueOnce(new Error('synthetic sandbox unavailable'));
+      const task = { id: 'private-task', taskType: 'internal', metadata: { analysisType: 'private-security-assessment' } };
+      await expect(spawnDirectly({ ...minimalArgs, task })).resolves.toBeNull();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(releaseAgentLane).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-test', success: false }));
+      expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+        task, success: false, exitCode: 1, completionReason: 'spawn-error', outputBuffer: '',
+      }));
+    });
+
     const failedSpawn = () => makeFakeProcess({
       noStdin: true,
       failWith: Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' }),

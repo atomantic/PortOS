@@ -66,6 +66,13 @@ beforeEach(() => {
 });
 
 describe('buildCosTasksPayload', () => {
+  it('never federates private assessment tasks or their source inventory', async () => {
+    vi.mocked(getCosTasks).mockResolvedValue({ tasks: [task('private', 'pending', { metadata: {
+      analysisType: 'private-security-assessment', privateSecurityScope: { files: ['auth.js'] },
+    } })] });
+    expect((await buildCosTasksPayload()).tasks).toEqual([]);
+  });
+
   it('unions user + internal tasks with a taskType discriminator and a deterministic listHash', async () => {
     vi.mocked(getUserTasks).mockResolvedValue({ tasks: [task('task-a', 'pending')] });
     vi.mocked(getCosTasks).mockResolvedValue({ tasks: [task('sys-b', 'in_progress', { metadata: { claimedBy: 'i1' } })] });

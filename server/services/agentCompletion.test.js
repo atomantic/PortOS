@@ -30,10 +30,20 @@ vi.mock('./malwareScanReports.js', () => ({
 import { processAgentCompletion } from './agentCompletion.js';
 import * as appActivity from './appActivity.js';
 import { getConfig } from './cosState.js';
+import { extractAndStoreMemories } from './memoryExtractor.js';
 
 describe('processAgentCompletion - cooldown handling for recovery tasks', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('keeps private assessment output out of memory extraction and app improvement scoring', async () => {
+    await processAgentCompletion('agent-private-test', {
+      metadata: { analysisType: 'private-security-assessment', app: 'example' },
+    }, true, 'private evidence '.repeat(20));
+    expect(extractAndStoreMemories).not.toHaveBeenCalled();
+    expect(appActivity.markAppReviewCompleted).not.toHaveBeenCalled();
+    expect(appActivity.startAppCooldown).not.toHaveBeenCalled();
   });
 
   it('bumps cooldown for normal app improvement tasks', async () => {
