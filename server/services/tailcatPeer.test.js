@@ -4,6 +4,9 @@ import {
   redactTcAddress,
   isValidTcAddress,
   ensureTailcatInstalled,
+  listTailcatInstallers,
+  listCandidateTailcatBins,
+  manualInstallHint,
   allocateLocalPort,
   startForwardProcess,
   addPeerViaTailcat,
@@ -66,38 +69,115 @@ describe('tailcatPeer helpers', () => {
   });
 
   it('ensureTailcatInstalled returns existing binary without installing', async () => {
-    const runGoInstall = vi.fn();
+    const run = vi.fn();
     const result = await ensureTailcatInstalled({
       detect: async () => '/usr/bin/tailcat',
-      runGoInstall,
-      probeGo: async () => true,
+      installers: [{ label: 'brew install tailcat', run }],
     });
     expect(result).toEqual({ bin: '/usr/bin/tailcat', installed: false });
-    expect(runGoInstall).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
   });
 
-  it('ensureTailcatInstalled runs go install when missing, then re-detects', async () => {
+  it('ensureTailcatInstalled installs when missing, then re-detects', async () => {
     let calls = 0;
-    const runGoInstall = vi.fn(async () => {});
+    const run = vi.fn(async () => {});
     const result = await ensureTailcatInstalled({
       detect: async () => {
         calls += 1;
         return calls === 1 ? null : '/example/go/bin/tailcat';
       },
-      goBin: 'go',
-      runGoInstall,
-      probeGo: async () => true,
+      installers: [{ label: 'go install', run }],
     });
-    expect(runGoInstall).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
     expect(result).toEqual({ bin: '/example/go/bin/tailcat', installed: true });
   });
 
-  it('ensureTailcatInstalled fails clearly when Go is absent', async () => {
+  it('falls back to the next installer when the first one fails', async () => {
+    let calls = 0;
+    const brew = vi.fn(async () => { throw new Error('Error: No available formula\nsecond line'); });
+    const go = vi.fn(async () => {});
+    const result = await ensureTailcatInstalled({
+      detect: async () => {
+        calls += 1;
+        return calls <= 1 ? null : '/example/go/bin/tailcat';
+      },
+      installers: [{ label: 'brew install tailcat', run: brew }, { label: 'go install', run: go }],
+    });
+    expect(brew).toHaveBeenCalledOnce();
+    expect(go).toHaveBeenCalledOnce();
+    expect(result).toEqual({ bin: '/example/go/bin/tailcat', installed: true });
+  });
+
+  it('reports what every installer said when they all fail', async () => {
     await expect(ensureTailcatInstalled({
       detect: async () => null,
-      probeGo: async () => false,
-      runGoInstall: vi.fn(),
+      platform: 'linux',
+      installers: [
+        { label: 'brew install tailcat', run: async () => { throw new Error('brew boom'); } },
+        { label: 'go install', run: async () => { throw new Error('dial tcp: connect: bad file descriptor\nignored'); } },
+      ],
+    })).rejects.toMatchObject({
+      code: 'TAILCAT_INSTALL_FAILED',
+      status: 503,
+      message: expect.stringContaining('brew install tailcat failed: brew boom'),
+    });
+  });
+
+  it('treats an installer that leaves no binary as a failure, not a success', async () => {
+    await expect(ensureTailcatInstalled({
+      detect: async () => null,
+      installers: [{ label: 'go install', run: async () => {} }],
+    })).rejects.toMatchObject({
+      code: 'TAILCAT_INSTALL_FAILED',
+      message: expect.stringContaining('go install finished but no tailcat binary was found'),
+    });
+  });
+
+  it('ensureTailcatInstalled fails clearly when no package manager is present', async () => {
+    await expect(ensureTailcatInstalled({
+      detect: async () => null,
+      installers: [],
     })).rejects.toMatchObject({ code: 'TAILCAT_MISSING', status: 503 });
+  });
+
+  it('points macOS at Homebrew, since tailcat ships no darwin release binary', () => {
+    expect(manualInstallHint('darwin')).toContain('brew install tailcat');
+    expect(manualInstallHint('darwin')).not.toContain('/releases');
+    expect(manualInstallHint('linux')).toContain('https://github.com/tailscale/tailcat/releases');
+  });
+
+  it('lists brew before go, and only for package managers that exist', () => {
+    const runInstall = vi.fn(async () => {});
+    expect(listTailcatInstallers({ brewBin: '/opt/homebrew/bin/brew', goBin: '/usr/bin/go', runInstall })
+      .map((i) => i.label)).toEqual(['brew install tailcat', 'go install']);
+    expect(listTailcatInstallers({ brewBin: null, goBin: '/usr/bin/go', runInstall })
+      .map((i) => i.label)).toEqual(['go install']);
+    expect(listTailcatInstallers({ brewBin: null, goBin: null, runInstall })).toEqual([]);
+  });
+
+  it('skips Homebrew auto-update so adding a peer does not refresh the formula index', async () => {
+    const runInstall = vi.fn(async () => {});
+    const [brew] = listTailcatInstallers({ brewBin: '/opt/homebrew/bin/brew', goBin: null, runInstall });
+    await brew.run();
+    expect(runInstall).toHaveBeenCalledWith('/opt/homebrew/bin/brew', ['install', 'tailcat'],
+      expect.objectContaining({ HOMEBREW_NO_AUTO_UPDATE: '1' }));
+  });
+
+  it('surfaces a real install command failure as a readable error', async () => {
+    const [installer] = listTailcatInstallers({ brewBin: null, goBin: '/example/missing/go' });
+    await expect(installer.run()).rejects.toThrow(/ENOENT|spawn/);
+  });
+
+  it('looks for tailcat in the GOBIN and Homebrew prefixes a server may not have on PATH', () => {
+    const bins = listCandidateTailcatBins({
+      env: { PATH: '', GOBIN: '/example/gobin', HOMEBREW_PREFIX: '/example/brew' },
+      home: '/example/home',
+    });
+    expect(bins).toContain('/example/gobin/tailcat');
+    expect(bins).toContain('/example/brew/bin/tailcat');
+    expect(bins).toContain('/opt/homebrew/bin/tailcat');
+    expect(listCandidateTailcatBins({ env: { PATH: '', GOPATH: '/example/gopath' }, home: '/example/home' }))
+      .toContain('/example/gopath/bin/tailcat');
   });
 
   it('allocateLocalPort prefers 15555 then walks upward when busy', async () => {

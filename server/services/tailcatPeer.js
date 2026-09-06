@@ -13,10 +13,11 @@
 
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { commandExists } from '../lib/commandExists.js';
+import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
 import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
@@ -29,6 +30,8 @@ import { addPeer, getPeers, removePeer as removeInstancePeer } from './instances
 
 const FORWARDS_FILE = dataPath('tailcat-forwards.json');
 const GO_INSTALL_PKG = 'github.com/tailscale/tailcat/cmd/tailcat@latest';
+const BREW_FORMULA = 'tailcat';
+const RELEASES_URL = 'https://github.com/tailscale/tailcat/releases';
 const INSTALL_TIMEOUT_MS = 180_000;
 const FORWARD_READY_MS = 8_000;
 const PORT_SCAN_LIMIT = 32;
@@ -77,14 +80,22 @@ async function saveForwards(data) {
   await atomicWrite(FORWARDS_FILE, data);
 }
 
-export function listCandidateTailcatBins() {
-  const home = homedir();
+/**
+ * Where a freshly installed `tailcat` can land. PATH is checked first, then the
+ * install directories a package manager uses but a long-running server process
+ * may never have inherited: GOBIN / GOPATH/bin for `go install`, and the
+ * Homebrew prefix for `brew install`.
+ */
+export function listCandidateTailcatBins({ env = process.env, home = homedir() } = {}) {
+  // GOPATH may be a delimiter-separated list; `go install` writes into the first entry's bin.
+  const goPath = String(env.GOPATH || '').split(delimiter).find(Boolean) || join(home, 'go');
+  const goBinDir = env.GOBIN || join(goPath, 'bin');
+  const brewPrefixes = [env.HOMEBREW_PREFIX, '/opt/homebrew', '/usr/local'].filter(Boolean);
   const candidates = [
     findCommandOnPath('tailcat'),
-    join(home, 'go', 'bin', 'tailcat'),
-    join(home, 'go', 'bin', 'tailcat.exe'),
-    '/usr/local/bin/tailcat',
-    '/opt/homebrew/bin/tailcat',
+    join(goBinDir, 'tailcat'),
+    join(goBinDir, 'tailcat.exe'),
+    ...brewPrefixes.map((prefix) => join(prefix, 'bin', 'tailcat')),
   ].filter(Boolean);
   return [...new Set(candidates)];
 }
@@ -104,79 +115,109 @@ export async function detectTailcat({
 }
 
 /**
- * Install via `go install` when Go is available. Clear, actionable errors when
- * neither binary nor toolchain is present — PortOS never downloads arbitrary
- * URLs without the operator knowing.
+ * Manual-install guidance for this host. Tailcat publishes release binaries for
+ * Linux and Windows ONLY — pointing a macOS operator at the releases page is a
+ * dead end, so darwin gets the Homebrew formula instead.
+ */
+export function manualInstallHint(platform = process.platform) {
+  if (platform === 'darwin') {
+    return `Install it with \`brew install ${BREW_FORMULA}\` (Tailcat ships no macOS release binary), then retry.`;
+  }
+  return `Install a release binary from ${RELEASES_URL}, then retry.`;
+}
+
+/**
+ * Ordered install strategies available on this host.
+ *
+ * Homebrew comes first: it is the only prebuilt route on macOS, and it fetches
+ * over plain HTTPS, so it still works where `go install` cannot reach the Go
+ * module proxy (a local network filter breaking Go's dialer shows up as an
+ * opaque `connect: bad file descriptor`). `go install` stays as the fallback
+ * for hosts with a toolchain but no brew.
+ */
+export function listTailcatInstallers({
+  brewBin = findCommandOnPath('brew'),
+  goBin = findCommandOnPath('go'),
+  runInstall = runInstallCommand,
+} = {}) {
+  const installers = [];
+  if (brewBin) {
+    installers.push({
+      label: `brew install ${BREW_FORMULA}`,
+      // Auto-update pulls the whole formula index before installing a ~10MB
+      // bottle; the operator asked to add a peer, not to refresh Homebrew.
+      run: () => runInstall(brewBin, ['install', BREW_FORMULA], {
+        HOMEBREW_NO_AUTO_UPDATE: '1',
+        HOMEBREW_NO_INSTALL_CLEANUP: '1',
+      }),
+    });
+  }
+  if (goBin) {
+    installers.push({
+      label: 'go install',
+      run: () => runInstall(goBin, ['install', GO_INSTALL_PKG]),
+    });
+  }
+  return installers;
+}
+
+/**
+ * Resolve a runnable `tailcat`, installing it through the first strategy that
+ * works. Every strategy is a named package manager the operator already has —
+ * PortOS never downloads an arbitrary URL on their behalf — and a total failure
+ * reports what each one actually said so the operator can act on it.
  */
 export async function ensureTailcatInstalled({
   detect = detectTailcat,
-  goBin = findCommandOnPath('go') || 'go',
-  runGoInstall = defaultGoInstall,
-  probeGo = (bin) => commandExists(bin, ['version'], { timeoutMs: 10_000 }),
+  installers = listTailcatInstallers(),
+  platform = process.platform,
 } = {}) {
   const existing = await detect();
   if (existing) return { bin: existing, installed: false };
 
-  const goOk = await probeGo(goBin);
-  if (!goOk) {
+  if (installers.length === 0) {
     throw new ServerError(
-      'tailcat is not installed and Go was not found on PATH. '
-      + 'Install from https://github.com/tailscale/tailcat/releases '
-      + 'or `brew install tailcat`, then retry.',
+      `tailcat is not installed, and neither Homebrew nor Go was found on PATH. ${manualInstallHint(platform)}`,
       { status: 503, code: 'TAILCAT_MISSING' }
     );
   }
 
-  try {
-    await runGoInstall(goBin);
-  } catch (err) {
-    throw new ServerError(
-      'Failed to install tailcat via go install. '
-      + 'Install a release binary from https://github.com/tailscale/tailcat/releases and retry.',
-      { status: 503, code: 'TAILCAT_INSTALL_FAILED' }
-    );
+  const failures = [];
+  for (const installer of installers) {
+    const error = await installer.run().then(() => null, (err) => err);
+    if (error) {
+      failures.push(`${installer.label} failed: ${summarizeInstallError(error)}`);
+      continue;
+    }
+    const bin = await detect();
+    if (bin) return { bin, installed: true };
+    failures.push(`${installer.label} finished but no tailcat binary was found`);
   }
 
-  const bin = await detect();
-  if (!bin) {
-    throw new ServerError(
-      'go install finished but `tailcat` is still not on PATH '
-      + '(check ~/go/bin). Add that directory to PATH and retry.',
-      { status: 503, code: 'TAILCAT_INSTALL_PATH' }
-    );
-  }
-  return { bin, installed: true };
+  throw new ServerError(
+    `Could not install tailcat — ${failures.join('; ')}. ${manualInstallHint(platform)}`,
+    { status: 503, code: 'TAILCAT_INSTALL_FAILED' }
+  );
 }
 
-function defaultGoInstall(goBin) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      goBin,
-      ['install', GO_INSTALL_PKG],
-      safeChildProcessOptions({
-        env: safeChildProcessEnv(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-    );
-    let stderr = '';
-    child.stderr?.on('data', (chunk) => {
-      stderr += String(chunk);
-      if (stderr.length > 8_000) stderr = stderr.slice(-8_000);
-    });
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error(`timed out after ${INSTALL_TIMEOUT_MS}ms`));
-    }, INSTALL_TIMEOUT_MS);
-    child.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error(stderr.trim() || `exit ${code}`));
-    });
+/** One line of an installer's diagnostics, bounded so a toast stays readable. */
+function summarizeInstallError(error) {
+  const first = String(error?.message || 'unknown error').split('\n').map((line) => line.trim()).find(Boolean);
+  const text = first || 'unknown error';
+  return text.length > 240 ? `${text.slice(0, 240)}…` : text;
+}
+
+async function runInstallCommand(bin, args, extraEnv = {}) {
+  const result = await bufferedSpawn(bin, args, {
+    env: safeChildProcessEnv(extraEnv),
+    timeoutMs: INSTALL_TIMEOUT_MS,
   });
+  if (result.success) return;
+  throw new Error(result.timedOut
+    ? `timed out after ${INSTALL_TIMEOUT_MS / 1000}s`
+    // Homebrew opens with tap/deprecation warnings, so its FIRST stderr line is
+    // rarely the failure — spawnFailureDetail takes the last one it printed.
+    : spawnFailureDetail(result, `exit ${result.code}`));
 }
 
 /** True when nothing is listening on 127.0.0.1:port (or bind fails for other reasons → busy). */

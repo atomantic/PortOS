@@ -361,7 +361,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
             Forwards <span className="font-mono text-gray-400">127.0.0.1:{DEFAULT_TAILCAT_LOCAL_PORT}</span>
             {' '}→ remote <span className="font-mono text-gray-400">:5555</span> via tailcat
             (next free port if {DEFAULT_TAILCAT_LOCAL_PORT} is busy). No Tailscale account required.
-            Tailcat is installed with Go if needed.
+            Tailcat is installed with Homebrew (or Go) if needed.
           </p>
         </>
       )}
