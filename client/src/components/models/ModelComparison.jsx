@@ -174,7 +174,7 @@ export default function ModelComparison() {
   const availableSet = useMemo(() => new Set([
     ...(catalog?.availableModels || []),
     // Keep executable endpoint IDs as well as normalized public model references.
-    ...(catalog?.inventory || []).flatMap(provider => provider.models.map(entry => entry.model)),
+    ...(catalog?.inventory || []).flatMap(provider => provider.models.flatMap(({ model }) => model.startsWith('opencode/') ? [model, model.slice('opencode/'.length)] : [model])),
   ]), [catalog]);
 
   useEffect(() => {

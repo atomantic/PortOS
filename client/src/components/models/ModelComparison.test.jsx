@@ -339,14 +339,14 @@ it('switches metric coordinates, clears stale zoom, and preserves evidence table
 });
 
 it('keeps exact Zen IDs in available coverage and plots free prices without inventing quality', async () => {
-  const free = { ...observation, id: 'free', model: 'opencode/example-free', benchmark: 'Unbenchmarked (pricing only)', quality: null, costPerTask: null, inputPerMillion: metric(0), outputPerMillion: metric(0) };
-  api.getModelComparison.mockResolvedValue({ observations: [observation, free], availableModels: ['example'], inventory: [{ id: 'zen', models: [{ model: free.model, efforts: [] }] }] });
+  const free = { ...observation, id: 'free', model: 'example-free', benchmark: 'Unbenchmarked (pricing only)', quality: null, costPerTask: null, inputPerMillion: metric(0), outputPerMillion: metric(0) };
+  api.getModelComparison.mockResolvedValue({ observations: [observation, free], availableModels: ['example'], inventory: [{ id: 'zen', models: [{ model: `opencode/${free.model}`, efforts: [] }] }] });
   render(<MemoryRouter initialEntries={['/?xAxis=inputPerMillion&yAxis=outputPerMillion&scale=linear']}><ModelComparison /></MemoryRouter>);
-  expect(await screen.findByTestId('scatter-opencode/example-free')).toHaveAttribute('data-values', '[[0,0]]');
+  expect(await screen.findByTestId('scatter-example-free')).toHaveAttribute('data-values', '[[0,0]]');
   fireEvent.click(screen.getByRole('button', { name: 'Fit visible' }));
   const domain = JSON.parse(screen.getByTestId('xaxis').getAttribute('data-domain'));
   expect(domain[1]).toBeGreaterThan(domain[0]);
   fireEvent.change(screen.getByLabelText('Y axis'), { target: { value: 'quality' } });
-  expect(screen.queryByTestId('scatter-opencode/example-free')).toBeNull();
+  expect(screen.queryByTestId('scatter-example-free')).toBeNull();
   expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
 });
