@@ -554,6 +554,7 @@ const piCliArgs = (args, { model, effort }) => ensurePiHeadlessArgs(args, model,
 const PI = {
   id: 'pi',
   idFragment: 'pi-',
+  matchId: (id) => /^pi(?:-|$)/.test(id),
   inferredCommand: PI_COMMAND,
   matchCommand: isPiCommand,
   tuiArgs: ensurePiTuiArgs,
@@ -825,7 +826,7 @@ export function publicReviewRecipe(provider, posture) {
 export function inferTuiCommand(id) {
   if (!id) return CLAUDE.inferredCommand;
   for (const vendor of PROVIDER_VENDORS) {
-    if (vendor.idFragment && id.includes(vendor.idFragment)) return vendor.inferredCommand;
+    if (vendor.matchId ? vendor.matchId(id) : vendor.idFragment && id.includes(vendor.idFragment)) return vendor.inferredCommand;
   }
   return CLAUDE.inferredCommand;
 }

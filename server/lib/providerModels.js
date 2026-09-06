@@ -439,6 +439,8 @@ export const CODEX_EFFORT_KEY = 'model_reasoning_effort';
 // provider args gets a SECOND, injected `--effort <level>` appended. Grok's
 // parser accepts the duplicate and takes the last one, so their explicit pin
 // would be silently overridden — the exact opposite of the contract below.
+// Pi's --thinking is also a value-taking effort pin; shared stripping keeps
+// per-run overrides consistent when switching providers.
 const EFFORT_FLAG_NAMES = Object.freeze(['--effort', '--reasoning-effort', '--thinking']);
 
 /**

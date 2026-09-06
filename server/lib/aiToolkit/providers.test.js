@@ -37,6 +37,8 @@ describe('Provider Service', () => {
     await expect(providerService.refreshProviderModels(provider.id)).rejects.toThrow('failed');
     expect((await providerService.getProviderById(provider.id)).models).toEqual(['example/model-a']);
     await emit('No models available. Use /login to authenticate.');
+    await expect(providerService.refreshProviderModels(provider.id)).rejects.toThrow('no authenticated models');
+    expect((await providerService.getProviderById(provider.id)).models).toEqual(['example/model-a']);
     expect(await providerService._fetchPiModels({ command })).toEqual([]);
     await emit('No models available. Use /login to authenticate.', 1);
     expect(await providerService._fetchPiModels({ command })).toEqual([]);

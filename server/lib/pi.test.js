@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
 import { isPiCommand, ensurePiHeadlessArgs } from './pi.js';
-import { PROVIDER_VENDORS, publicReviewRecipe, PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE } from './providerVendors.js';
+import { PROVIDER_VENDORS, inferTuiCommand, publicReviewRecipe, PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE } from './providerVendors.js';
 import { parseHarnessModels } from './harnessOutput.js';
 import { reviewerEffortArgs } from './reviewerConfig.js';
 
@@ -21,6 +21,8 @@ describe('Pi provider boundaries', () => {
     expect(ensurePiHeadlessArgs(args, 'example/other', 'high')).toEqual(args);
     expect(isPiCommand('/opt/bin/pi.exe')).toBe(true);
     expect(isPiCommand('pipeline')).toBe(false);
+    expect(inferTuiCommand('pi-tui')).toBe('pi');
+    expect(inferTuiCommand('example-api-tui')).toBe('claude');
     expect(PROVIDER_VENDORS.slice(-2).map(v => v.id)).toEqual(['pi', 'claude']);
   });
   it('discards unsafe saved arguments in the no-tool posture and refuses action review', () => {

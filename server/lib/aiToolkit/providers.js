@@ -967,6 +967,14 @@ export function createProviderService(config = {}) {
       // returning null so `null` keeps exactly ONE meaning out of this function:
       // the provider does not exist. That is what lets the route's 404 say
       // plainly "Provider not found" instead of guessing at a reason.
+      // Pi reports an unauthenticated install as an empty list. That is useful
+      // for first setup, but a lapsed login must not erase a populated catalog.
+      if (resolveModelFetcher(provider)?.key === 'pi' && Array.isArray(fetched)
+        && fetched.length === 0 && provider.models?.length) {
+        const error = new Error('Pi has no authenticated models. Use pi /login before refreshing the stored catalog.');
+        error.status = 502;
+        throw error;
+      }
       const catalog = toModelCatalog(fetched);
       if (catalog === null) {
         const unsupported = new Error(`Model refresh returned nothing for provider '${provider.id}'`);
@@ -1345,12 +1353,12 @@ export function createProviderService(config = {}) {
       const { stdout } = await pending.catch((err) => {
         const output = `${err.stdout || ''}\n${err.stderr || ''}`;
         if (!err.killed && isEmptyCatalog(output)) return { stdout: output };
-        throw new Error(`'${bin} models' failed: ${err?.message || 'could not run the binary'}`);
+        throw new Error(`'${bin} ${listArgs.join(' ')}' failed: ${err?.message || 'could not run the binary'}`);
       });
 
       const listed = parse(stdout);
       if (listed.length === 0 && !isEmptyCatalog(stdout)) {
-        throw new Error(`'${bin} models' returned no model ids`);
+        throw new Error(`'${bin} ${listArgs.join(' ')}' returned no model ids`);
       }
       return listed;
     },

@@ -56,10 +56,6 @@ const displayName = (provider) => String(provider?.name || '').toLowerCase();
  */
 export const MODEL_FETCHERS = [
   {
-    key: 'pi', cliMatch: (p) => isPiCommand(p?.command),
-    tuiMatch: (p) => isPiCommand(p?.command), fetch: '_fetchPiModels',
-  },
-  {
     key: 'ollama',
     // Not a command test: the marker can be `ollamaBacked`, an id, or an
     // ANTHROPIC_BASE_URL. Still a STRONG signal, so it sits in the first pass.
@@ -126,6 +122,10 @@ export const MODEL_FETCHERS = [
     cliMatch: isGatewayBackedProvider,
     tuiMatch: isGatewayBackedProvider,
     fetch: '_fetchGatewayModels',
+  },
+  {
+    key: 'pi', cliMatch: (p) => isPiCommand(p?.command),
+    tuiMatch: (p) => isPiCommand(p?.command), fetch: '_fetchPiModels',
   },
   {
     key: 'cursor',
