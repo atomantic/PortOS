@@ -10,7 +10,7 @@ const ALLOWED_SCREENSHOT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', 
 // Reasoning-effort values accepted by the effort-capable CLI providers. Keep
 // this local because the vendored toolkit must remain self-contained; the
 // runtime mirror lives in server/lib/providerModels.js and the UI mirror lives
-// in client/src/utils/providers.js.
+// in client/src/utils/providerModels.js.
 const PROVIDER_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 const providerEffort = z.preprocess(

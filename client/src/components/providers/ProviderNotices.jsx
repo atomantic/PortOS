@@ -12,7 +12,7 @@
 // copies the key from the sibling API provider whose id equals the gateway id.
 // This answers "where do I put the API key?" from the card/form: it's on the
 // API provider, not here. `gateway` is a row of PROVIDER_GATEWAYS
-// (client/src/utils/providers.js), so the copy names the right gateway rather
+// (client/src/utils/providerGateways.js), so the copy names the right gateway rather
 // than hardcoding one.
 export function GatewayKeyHint({ gateway, sibling, className = '', onEdit }) {
   if (!gateway) return null;

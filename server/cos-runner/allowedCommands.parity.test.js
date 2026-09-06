@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { ALLOWED_COMMANDS, isAllowedCommand } from './allowedCommands.js';
-import { isRunnerAllowedCommand } from '../../client/src/utils/providers.js';
+import { isRunnerAllowedCommand } from '../../client/src/utils/providerReadiness.js';
 
 const allowlist = [...ALLOWED_COMMANDS].sort();
 const sampleAllowed = allowlist[0];

@@ -10,7 +10,7 @@
  *   - localLlm.getStatus (recommend a best-fit editorial model)
  *
  * The client mirrors `isEmbeddingModel` + `isVisionModel` + `isToolUseModel`
- * in client/src/utils/providers.js — keep the regexes in lockstep (the
+ * in client/src/utils/localModelHeuristics.js — keep the regexes in lockstep (the
  * aiToolkit/lib dirs can't be imported there). `localModelHeuristics.mirror.test.js`
  * enforces that, by what each pattern matches rather than by its text.
  */
@@ -171,7 +171,7 @@ export function isVisionModel(model) {
 // NOT matched (tool use landed in 3.1); neither is Gemma 3 (tools landed in
 // Gemma 4), so the gemma rule is anchored to the family AND the version.
 //
-// MIRRORED in client/src/utils/providers.js (isToolUseModel) and inlined in
+// MIRRORED in client/src/utils/localModelHeuristics.js (isToolUseModel) and inlined in
 // server/lib/aiToolkit/providers.js (TOOL_USE_RE) — keep all three in lockstep;
 // `localModelHeuristics.mirror.test.js` fails when any of them drifts.
 const TOOL_USE_RE = new RegExp([

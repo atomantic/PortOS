@@ -114,7 +114,7 @@ describe('stageRunner — context windows', () => {
   it('resolves configured-default provider windows by provider identity', () => {
     expect(knownProviderContextWindow({ id: 'codex-tui', type: 'tui', command: 'codex' })).toBe(CODEX_CONTEXT_WINDOW);
     expect(knownProviderContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' })).toBe(GEMINI_CONTEXT_WINDOW);
-    // Mirrors client/src/utils/providers.js — a custom grok CLI/TUI without an
+    // Mirrors client/src/utils/providerContextWindows.js — a custom grok CLI/TUI without an
     // explicit contextWindow must resolve the same 256K on both sides.
     expect(knownProviderContextWindow({ id: 'grok-cli', type: 'cli', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
     expect(knownProviderContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);

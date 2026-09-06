@@ -1,6 +1,6 @@
 /**
  * Shared sentinel and helpers for provider model resolution.
- * Mirrors the constants in client/src/utils/providers.js — keep in sync.
+ * Mirrored in client/src/utils/providerModels.js (sentinels, ladders) and client/src/utils/providerTypes.js (predicates) — keep in sync.
  */
 
 import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js';
@@ -79,7 +79,7 @@ export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null
 // values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, plus
 // model-gated `ultra`) and agy
 // (`--help`: "Reasoning effort for the current CLI session (low|medium|high)"). Mirrored in
-// client/src/utils/providers.js — keep in sync
+// client/src/utils/providerModels.js — keep in sync
 // (`providerModels.mirror.test.js` fails when the two copies drift).
 //
 // Codex Ultra adds automatic task delegation on the models that advertise it.
@@ -141,7 +141,7 @@ const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model
 // errors with `gemini-3.1-pro has no "medium" effort (available: low, high)`.
 // So the tiers a base model offers are derived from the provider's own model
 // catalog rather than assumed to be the full low/medium/high ladder.
-// Mirrored in client/src/utils/providers.js — keep in lockstep.
+// Mirrored in client/src/utils/providerModels.js — keep in lockstep.
 // ---------------------------------------------------------------------------
 
 const ANTIGRAVITY_EFFORT_SUFFIX_RE = new RegExp(`-(${ANTIGRAVITY_EFFORT_LEVELS.join('|')})$`);
@@ -276,7 +276,7 @@ export function isOpencodeProvider(provider) {
  * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
  * ids or any provider whose launch command basename is `kimi` (path/exe tolerant).
  * The single home for the kimi signature, same posture as `isCodexProvider`.
- * Mirrored in client/src/utils/providers.js — keep in lockstep.
+ * Mirrored in client/src/utils/providerTypes.js — keep in lockstep.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -292,7 +292,7 @@ export function isKimiProvider(provider) {
  * companion to `isAntigravityCommand` in antigravity.js; lives here (rather
  * than there) so `effortLevelsForProvider` can key on it without this
  * dependency-light module importing a sibling. Mirrored in
- * client/src/utils/providers.js — keep in lockstep.
+ * client/src/utils/providerTypes.js — keep in lockstep.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -315,7 +315,7 @@ export function isAntigravityProvider(provider) {
  *
  * Deliberately never matches a bare `cursor` command: that is Cursor's GUI
  * editor launcher, not the agent binary (see cursor.js).
- * Mirrored in client/src/utils/providers.js — keep in lockstep.
+ * Mirrored in client/src/utils/providerTypes.js — keep in lockstep.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */

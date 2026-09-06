@@ -1,6 +1,6 @@
 /**
  * Mirror parity test for the effort ladders and model sentinels shared by
- * server/lib/providerModels.js and client/src/utils/providers.js (the browser
+ * server/lib/providerModels.js and client/src/utils/providerModels.js (the browser
  * cannot import server code, so the tables are duplicated on each side behind a
  * "keep in sync" comment).
  *
@@ -29,7 +29,7 @@ import { compareDeclaration } from './mirrorParity.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const SERVER_PATH = resolve(__dirname, 'providerModels.js');
-const CLIENT_PATH = resolve(__dirname, '../../client/src/utils/providers.js');
+const CLIENT_PATH = resolve(__dirname, '../../client/src/utils/providerModels.js');
 
 const MIRRORED_NAMES = [
   'CLAUDE_EFFORT_LEVELS',
@@ -67,7 +67,7 @@ describe('providerModels↔client providers effort-ladder mirror parity', () => 
         compareDeclaration(serverSrc, clientSrc, name);
 
       expect(serverDecl, `server/lib/providerModels.js is missing: ${name}`).not.toBeNull();
-      expect(clientDecl, `client/src/utils/providers.js is missing: ${name}`).not.toBeNull();
+      expect(clientDecl, `client/src/utils/providerModels.js is missing: ${name}`).not.toBeNull();
       expect(
         clientNorm,
         `"${name}" diverged — the server copy is authoritative; port the change verbatim`,

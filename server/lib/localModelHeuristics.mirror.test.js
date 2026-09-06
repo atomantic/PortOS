@@ -2,7 +2,7 @@
  * Mirror parity test for the local-model capability regexes, which exist in
  * three copies by architecture:
  *   1. server/lib/localModelHeuristics.js — authoritative;
- *   2. client/src/utils/providers.js — the browser cannot import server code;
+ *   2. client/src/utils/localModelHeuristics.js — the browser cannot import server code;
  *   3. server/lib/aiToolkit/providers.js — the vendored toolkit may not import
  *      out of its own directory (see aiToolkit/AGENTS.md), so TOOL_USE_RE is
  *      inlined there too.
@@ -33,7 +33,7 @@ import { compareDeclaration, compareRegexDeclaration } from './mirrorParity.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const SERVER_PATH = resolve(__dirname, 'localModelHeuristics.js');
-const CLIENT_PATH = resolve(__dirname, '../../client/src/utils/providers.js');
+const CLIENT_PATH = resolve(__dirname, '../../client/src/utils/localModelHeuristics.js');
 const TOOLKIT_PATH = resolve(__dirname, 'aiToolkit/providers.js');
 
 // [server declaration, the client predicate that inlines it]
@@ -58,14 +58,14 @@ describe('localModelHeuristics↔client providers capability-regex mirror parity
         compareRegexDeclaration(serverSrc, clientSrc, serverName, clientName);
 
       expect(serverDecl, `server/lib/localModelHeuristics.js is missing: ${serverName}`).not.toBeNull();
-      expect(clientDecl, `client/src/utils/providers.js is missing: ${clientName}`).not.toBeNull();
+      expect(clientDecl, `client/src/utils/localModelHeuristics.js is missing: ${clientName}`).not.toBeNull();
       expect(
         serverSource,
         `server/lib/localModelHeuristics.js#${serverName} is neither a /…/i literal nor the new RegExp([…].join('|'), 'i') form`,
       ).not.toBeNull();
       expect(
         clientSource,
-        `client/src/utils/providers.js#${clientName} no longer inlines a /…/i literal`,
+        `client/src/utils/localModelHeuristics.js#${clientName} no longer inlines a /…/i literal`,
       ).not.toBeNull();
       expect(
         clientSource,

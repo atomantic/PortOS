@@ -1,6 +1,6 @@
 /**
  * Mirror parity test for the `KNOWN_MODEL_CONTEXT_WINDOWS` table, which lives
- * in both server/services/stageRunner.js and client/src/utils/providers.js (the
+ * in both server/services/stageRunner.js and client/src/utils/providerContextWindows.js (the
  * client can't import server modules, so the table is duplicated behind a
  * "Keep in sync" comment on each side).
  *
@@ -26,7 +26,7 @@ import { compareDeclaration } from '../lib/mirrorParity.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const SERVER_PATH = resolve(__dirname, 'stageRunner.js');
-const CLIENT_PATH = resolve(__dirname, '../../client/src/utils/providers.js');
+const CLIENT_PATH = resolve(__dirname, '../../client/src/utils/providerContextWindows.js');
 
 // The table's rows are `[/regex/i, SOME_CONTEXT_WINDOW]` — the *values* are
 // symbols defined separately in each file, so pinning the table text alone
@@ -61,7 +61,7 @@ describe('stageRunner↔client providers context-window mirror parity', () => {
         compareDeclaration(serverSrc, clientSrc, name);
 
       expect(serverDecl, `server/services/stageRunner.js is missing: ${name}`).not.toBeNull();
-      expect(clientDecl, `client/src/utils/providers.js is missing: ${name}`).not.toBeNull();
+      expect(clientDecl, `client/src/utils/providerContextWindows.js is missing: ${name}`).not.toBeNull();
       expect(
         clientNorm,
         `"${name}" diverged — the server copy is authoritative; port the change verbatim`,

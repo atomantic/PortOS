@@ -111,7 +111,7 @@ export const isCodexSubscriptionProvider = (provider) => {
   // paint "No ChatGPT account is signed in" on a provider that needs no account
   // — and the card would sit in UNKNOWN until an account read that will never
   // matter answers. MIRROR of `isCodexSubscriptionProvider` in
-  // client/src/utils/providers.js.
+  // client/src/utils/providerTypes.js.
   return localRuntimeNamespace(provider) === null;
 };
 

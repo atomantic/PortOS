@@ -147,7 +147,7 @@ function claudeLocalEnvDefaults(provider) {
     // to Qwen3.8's chat-template default, which is thinking ON. Emitting the
     // var there would look like an off switch while changing nothing, so the
     // provider card does not offer the toggle for those records either (see
-    // `generationControlsFor` in client/src/utils/providers.js).
+    // `generationControlsFor` in client/src/utils/providerModels.js).
     ...(provider.ollamaBacked === true && provider.thinking === false
       ? { MAX_THINKING_TOKENS: '0' }
       : {}),

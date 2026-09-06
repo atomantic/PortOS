@@ -9,7 +9,7 @@
  * The two SERVER copies are compared as VALUES — the toolkit module imports
  * cleanly here, so `toEqual` pins every field including `baseURL`.
  *
- * The client copy (`client/src/utils/providers.js`) is compared as TEXT: it is
+ * The client copy (`client/src/utils/providerGateways.js`) is compared as TEXT: it is
  * read with `readFileSync` and its rows are parsed out of the source, never
  * imported, so the client's dependency tree stays out of the server CI job.
  * That comparison is deliberately field-scoped — the browser omits `baseURL`
@@ -30,7 +30,7 @@ import { gatewayForProvider as serverGatewayFor } from './providerGateways.js';
 import { extractDeclaration, stripCommentsAndNormalize } from './mirrorParity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CLIENT_PATH = resolve(__dirname, '../../client/src/utils/providers.js');
+const CLIENT_PATH = resolve(__dirname, '../../client/src/utils/providerGateways.js');
 
 // The fields the browser copy carries, and the only ones it can be held to.
 const CLIENT_FIELDS = ['id', 'label', 'apiKeyEnv', 'legacyMarker'];
@@ -119,13 +119,13 @@ describe('providerGateways ↔ aiToolkit/internal/gateways parity', () => {
   });
 });
 
-describe('providerGateways ↔ client/src/utils/providers.js parity', () => {
+describe('providerGateways ↔ client/src/utils/providerGateways.js parity', () => {
   const clientRows = parseClientGatewayRows();
 
   it('the client declares a parseable PROVIDER_GATEWAYS table', () => {
     expect(
       clientRows,
-      'client/src/utils/providers.js#PROVIDER_GATEWAYS is missing, or a row is no longer a flat table of static `key: \'value\'` properties — this guard cannot read it, so re-shape the row or teach the parser',
+      'client/src/utils/providerGateways.js#PROVIDER_GATEWAYS is missing, or a row is no longer a flat table of static `key: \'value\'` properties — this guard cannot read it, so re-shape the row or teach the parser',
     ).not.toBeNull();
     expect(clientRows.length).toBeGreaterThan(0);
   });

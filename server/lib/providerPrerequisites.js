@@ -13,7 +13,7 @@
  *      recent failure?
  *
  * Until #4611 this check existed only in the browser (`providerCardState` in
- * client/src/utils/providers.js), so it painted a `NEEDS SETUP` card while the
+ * client/src/utils/providerReadiness.js), so it painted a `NEEDS SETUP` card while the
  * server happily routed a run at the very same provider and discovered the
  * missing binary at spawn time as a raw ENOENT. This module is the server-side
  * copy the routing layer and the API payload both read, and the client now
@@ -109,7 +109,7 @@ const endpointHost = (endpoint) => {
  * as un-runnable would take a supported deployment out of the fallback chain.
  * A public endpoint with no key stays flagged: that one really is misconfigured.
  *
- * MIRROR of `isPrivateNetworkEndpoint` in client/src/utils/providers.js — keep
+ * MIRROR of `isPrivateNetworkEndpoint` in client/src/utils/providerEndpoints.js — keep
  * in lockstep. A host that cannot be parsed reads as NOT private, keeping the
  * stricter of the two answers for input we don't understand.
  *

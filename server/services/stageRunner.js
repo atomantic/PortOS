@@ -181,7 +181,7 @@ export const GEMINI_CONTEXT_WINDOW = 1_048_576;
 export const GROK_CONTEXT_WINDOW = 256_000;
 export const KIMI_CONTEXT_WINDOW = 256_000;
 
-// Keep in sync with client/src/utils/providers.js.
+// Keep in sync with client/src/utils/providerContextWindows.js.
 const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
   [/gpt[-_.:/]?5\.5(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
   [/gpt[-_.:/]?5\.4[-_.:/]?mini(?:[-_.:/]|\b)/i, 400_000],
@@ -243,7 +243,7 @@ const isLikelyLargeContextProvider = (provider) => {
  * aiToolkit/internal/modelCatalog.js), so it is the serving side's declaration
  * rather than a guess — which is why it outranks the hand-maintained regex
  * table below. Mirror of `catalogModelContextWindow` in
- * client/src/utils/providers.js.
+ * client/src/utils/providerContextWindows.js.
  */
 export function catalogModelContextWindow(provider, model) {
   const windows = provider?.modelContextWindows;

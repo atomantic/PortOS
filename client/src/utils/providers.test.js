@@ -1,3 +1,8 @@
+// Exercised THROUGH the `providers.js` facade on purpose: the helpers under test
+// are declared across the nine `provider*` / `localModelHeuristics` modules it
+// re-exports, so a helper that drops out of the facade fails here before any of
+// the 69 `utils/providers` importers notices. The server-mirror parity suites
+// (`server/lib/*.mirror.test.js`) pin the declaring modules directly.
 import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
