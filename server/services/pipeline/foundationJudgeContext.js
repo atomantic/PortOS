@@ -11,6 +11,7 @@ import { renderCharacterArcsForPrompt } from '../../lib/seriesCharacterArc.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { isBlankString, isBlankArray } from '../universeCharacterExpand.js';
 import { PSYCHOLOGY_DRIVE_AXES } from '../../lib/storyBible.js';
+import { buildCastIntegrityReport } from '../../lib/characterIntegrity.js';
 
 // The character-framework subset the character dimension scores (Ghost → Wound →
 // Lie → Want → Need chain + secrets + arc fields). Shared by the hash projection
@@ -168,6 +169,93 @@ export function countFoundationCharacterBlanks(characters, series, issues = []) 
   const targets = repairableSeriesFoundationCharacters(characters, series, issues);
   return rankFoundationCharacters(targets, series, issues)
     .reduce((total, { blanks }) => total + blanks, 0);
+}
+
+// ---------- cast integrity (#6415) ----------
+
+/**
+ * Deterministic cast-integrity gaps across the cast a `character` repair may
+ * WRITE — the shared contract scoped to this series' repairable roster.
+ *
+ * `countFoundationCharacterBlanks` above answers "how many named fields are
+ * empty" and holds every character to the SAME field list. That is the wrong
+ * question for two of this cast: a declared minor role does not owe the story a
+ * Ghost, and a character whose interior the author explicitly ruled out with a
+ * note is finished, not thin. `buildCastIntegrityReport` computes that depth
+ * per character and only reports the gaps the depth actually asks for — so the
+ * judge can be told which requirements are binding instead of scoring every
+ * spear-carrier as an incomplete lead.
+ *
+ * It is also the only deterministic view that reaches the psychology profile
+ * (#6414): none of the blank-counted field sets include `psychology`, so a
+ * repair that authors a theory of control and six drive leaves currently
+ * registers as literally zero measurable progress.
+ *
+ * Zero provider calls — safe on every judge round, exactly like the blank count.
+ *
+ * It measures the same repairable roster `countFoundationCharacterBlanks` does,
+ * so the two objective signals disagree only about what they count, never who.
+ */
+export function countSeriesCastIntegrityFindings(characters, series, issues = []) {
+  return buildCastIntegrityReport(
+    repairableSeriesFoundationCharacters(characters, series, issues),
+  ).findings.length;
+}
+
+// Why a character is held to a lighter standard, in the judge's own terms. The
+// issue is explicit that these are EXPLAINED requirements, not silent excuses:
+// a depth the prompt cannot justify reads as inconsistent scoring.
+const DEPTH_NOTE = Object.freeze({
+  explained: 'interior declared unknown/not-applicable with an author note — a finished assessment, ask nothing further',
+  light: 'declared minor role or flat arc — conscious pursuit only, no origin-damage chain',
+  full: 'full framework expected',
+});
+
+/**
+ * Render the deterministic report for the judge prompt, bounded by `maxChars`.
+ *
+ * Rows carrying gaps are emitted first so a tight budget drops the clean ones —
+ * a dropped clean line costs the judge nothing, where a dropped gap line would
+ * hide the very thing the character dimension is scored on. The header always
+ * survives, so the judge can never read a truncated block as a full pass.
+ */
+export function renderCastIntegrity(report, { maxChars = Infinity } = {}) {
+  const coverage = Array.isArray(report?.coverage) ? report.coverage : [];
+  if (coverage.length === 0) return '(no series-linked cast to measure)';
+  const byCharacter = new Map();
+  for (const finding of (Array.isArray(report?.findings) ? report.findings : [])) {
+    const own = byCharacter.get(finding.characterId) || [];
+    own.push(`${finding.field} (${finding.kind})`);
+    byCharacter.set(finding.characterId, own);
+  }
+  const withGaps = coverage.filter((row) => row.findingCount > 0).length;
+  const head = [
+    `Deterministic pass (no model call) over ${coverage.length} series-linked characters — ${withGaps} carry gaps.`,
+    `Depth rulings are BINDING: ${Object.entries(DEPTH_NOTE).map(([depth, note]) => `${depth} = ${note}`).join('; ')}.`,
+  ];
+  const rows = coverage
+    .map((row) => {
+      const gaps = byCharacter.get(row.characterId) || [];
+      const detail = gaps.length
+        ? `${gaps.length} gap${gaps.length === 1 ? '' : 's'}: ${gaps.join('; ')}`
+        : `no gaps (${DEPTH_NOTE[row.depth] || DEPTH_NOTE.full})`;
+      return { hasGaps: gaps.length > 0, line: `- **${row.characterName || 'Unnamed'}** [${row.depth}] — ${detail}` };
+    })
+    .sort((a, b) => Number(b.hasGaps) - Number(a.hasGaps));
+  let remaining = maxChars - joinedLength(head);
+  const kept = [];
+  let index = 0;
+  // Stop at the first row that does not fit rather than skipping ahead to a
+  // shorter one: the sort put the gaps first, and a greedy fill would happily
+  // drop a long gap line to keep a short clean one.
+  while (index < rows.length && rows[index].line.length + 1 <= remaining) {
+    kept.push(rows[index].line);
+    remaining -= rows[index].line.length + 1;
+    index += 1;
+  }
+  const omitted = rows.length - index;
+  if (omitted > 0) kept.push(`  [${omitted} clean cast-integrity ${pluralLines(omitted)} omitted to fit the judging budget]`);
+  return [...head, ...kept].join('\n');
 }
 
 // ---------- input hashing (fast-pass / staleness) ----------
@@ -477,6 +565,12 @@ export function buildFoundationContext({ series, universe, canon, issues = [], c
     ? seriesCharacters.map((character) => renderCharacterLine(character, { core: true })).join('\n')
     : '(no canon characters)';
   const sectionMax = Math.max(1_000, Math.floor(contentMax / 3));
+  // The cast's third of the budget is split between the full roster render and
+  // the deterministic integrity block. The block gets the smaller share because
+  // it summarizes material the roster already shows in full — its unique
+  // contribution is the depth ruling per character, which is one short clause.
+  const integrityMax = Math.max(400, Math.floor(sectionMax / 4));
+  const rosterMax = Math.max(600, sectionMax - integrityMax);
   const world = renderWorldFoundation(universe, { maxChars: sectionMax });
   // Character quality lives in the choices between start and end, not merely
   // the endpoints. Reuse the canonical authored-arc renderer here so the judge
@@ -484,8 +578,8 @@ export function buildFoundationContext({ series, universe, canon, issues = [], c
   // repair prompt keeps the legacy compact summary because it already receives
   // the full `series.characterArcs` JSON separately.
   const arcText = renderArc(series, issues, { includeArcTransitions: true });
-  const roster = characterRoster.length > sectionMax
-    ? `${characterRoster.slice(0, sectionMax)}\n\n[character roster truncated for judging]`
+  const roster = characterRoster.length > rosterMax
+    ? `${characterRoster.slice(0, rosterMax)}\n\n[character roster truncated for judging]`
     : characterRoster;
   const arcContext = arcText.length > sectionMax
     ? `${arcText.slice(0, sectionMax)}\n\n[series plan truncated for judging]`
@@ -499,6 +593,13 @@ export function buildFoundationContext({ series, universe, canon, issues = [], c
     },
     worldEntitiesSummary: world,
     characterRoster: roster,
+    // Deterministic, model-free, and measured off the SAME roster the render
+    // above walks — so the depth rulings the judge is told are binding always
+    // name characters it can actually see.
+    castIntegrity: renderCastIntegrity(
+      buildCastIntegrityReport(seriesCharacters),
+      { maxChars: integrityMax },
+    ),
     characterCount: seriesCharacters.length,
     arc: arcContext,
   };
