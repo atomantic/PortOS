@@ -89,6 +89,27 @@ describe('AutomationTab per-app options', () => {
     expect(within(row).getByLabelText('Provider override')).toBeInTheDocument();
   });
 
+  it('flags a provider override that diverges from the schedule pin, collapsed', async () => {
+    // Schedule pins layered-intelligence to 'global-claude'; the app overrides
+    // it to a DIFFERENT provider — the exact silent-shadowing scenario #4783
+    // documents. Must be visible without expanding Configure.
+    await renderTab({ 'layered-intelligence': { providerId: 'claude-cli' } });
+    const row = rowFor('layered-intelligence');
+    expect(within(row).getByText('Provider override')).toBeInTheDocument();
+  });
+
+  it('does not flag an override that matches the schedule pin', async () => {
+    await renderTab({ 'layered-intelligence': { providerId: 'global-claude' } });
+    const row = rowFor('layered-intelligence');
+    expect(within(row).queryByText('Provider override')).toBeNull();
+  });
+
+  it('does not flag a task type with no app override', async () => {
+    await renderTab();
+    const row = rowFor('layered-intelligence');
+    expect(within(row).queryByText('Provider override')).toBeNull();
+  });
+
   it('changing the provider PATCHes updateAppTaskTypeOverride with providerId + cleared model', async () => {
     await renderTab();
     const row = rowFor('layered-intelligence');
