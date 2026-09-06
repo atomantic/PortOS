@@ -9,6 +9,7 @@ import {
   unlinkBinding,
   updateBindingSettings,
   updateConnectionSettings,
+  updateRouteModelAliases,
   updateRouteSettings,
 } from '../services/providerGraph.js';
 import { Router } from 'express';
@@ -29,6 +30,7 @@ import {
   providerBindingUnlinkSchema,
   providerBindingUpdateSchema,
   providerConnectionUpdateSchema,
+  providerRouteModelAliasSchema,
   providerRouteSettingsUpdateSchema,
 } from '../lib/validation.js';
 import {
@@ -403,6 +405,25 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.patch('/routes/:providerId', asyncHandler(async (req, res) => {
     const input = validateRequest(providerRouteSettingsUpdateSchema, req.body ?? {});
     res.json(await updateRouteSettings({ providerId: req.params.providerId, ...input }));
+  }));
+
+  /**
+   * Correct ONE route's canonical→executable model aliases by hand (#6369).
+   *
+   * A refresh records only the aliases it can VERIFY — a stored model string
+   * round-trips through the harness's own adapter or it stays an unresolved
+   * alias rather than being rewritten — so a spelling the adapter cannot
+   * reproduce reaches no shared catalog and no model menu. This is where a
+   * human supplies it.
+   *
+   * `null` for a key removes that override and is the ONLY thing that does: a
+   * refresh rewrites what it observed in a separate column, so a correction
+   * survives it and an alias for a model the route no longer lists is kept and
+   * reported stale rather than dropped.
+   */
+  router.patch('/routes/:providerId/model-aliases', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerRouteModelAliasSchema, req.body ?? {});
+    res.json(await updateRouteModelAliases({ providerId: req.params.providerId, ...input }));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {

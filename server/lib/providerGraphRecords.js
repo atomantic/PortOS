@@ -7,6 +7,12 @@ import {
   buildProviderGraphPreview,
 } from './providerGraphPreview.js';
 import { PROVIDER_HARNESS_IDS, ROUTE_MODES, providerRouteMode } from './providerHarnesses.js';
+import {
+  effectiveModelAliases,
+  modelAliasRevision,
+  sanitizeModelAliases,
+  staleModelAliases,
+} from './providerModelAliases.js';
 import { routeSettingsRevision, routeSettingsSchema } from './providerRouteSettings.js';
 
 // `PROVIDER_GRAPH_SCHEMA_VERSION` is deliberately NOT re-exported: it is one
@@ -81,7 +87,18 @@ const routeDtoSchema = z.object({
   providerId: z.string().min(1),
   bindingId: z.string().min(1),
   mode: z.enum(ROUTE_MODES),
+  // The EFFECTIVE alias map: what the last refresh observed, with the user's
+  // hand-authored overrides laid over the top (#6369).
   modelMap: z.record(z.string(), z.string()),
+  // The override half on its own, so the panel can say which aliases a human
+  // wrote and offer to remove them, plus the fingerprint an edit must send
+  // back. `ai_route_bindings` has no revision column, so the stale check is a
+  // hash of these values — the same technique the mode overrides use.
+  modelAliasOverrides: z.record(z.string(), z.string()),
+  modelAliasRevision: z.string().min(1),
+  // Overrides naming a spelling the record no longer lists. Reported, never
+  // repaired: a saved alias is only ever removed by the person who wrote it.
+  staleModelAliases: z.array(z.string()),
   // Presence only — the snapshots themselves can carry secrets.
   projectionPending: z.boolean(),
   // This mode's own overrides, and the fingerprint a write must send back
@@ -124,6 +141,11 @@ export const managementGraphSchema = z.object({
  * row whose record is mid-removal — publishes an empty override set rather than
  * an absent field, so the client never has to branch on presence.
  *
+ * A route entry also carries `storedModels` — the record's own model list — used
+ * only to decide which hand-authored aliases have gone stale. It is read here
+ * rather than from the graph row because `providers.json` is what a run
+ * actually executes, so the file is the honest thing to check an alias against.
+ *
  * @param {{routeSettings?: Map<string, object>}} input
  */
 export function toManagementGraphDto({ connections, bindings, routes, activeProvider = null, routeSettings = new Map() }) {
@@ -143,13 +165,19 @@ export function toManagementGraphDto({ connections, bindings, routes, activeProv
     bindings: bindings.map(({ id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels }) => ({
       id, revision, connectionId, harnessId, variantKey, label, enabled, selectedModels, blocked: blocked.has(id),
     })),
-    routes: routes.map(({ providerId, bindingId, mode, modelMap, pending }) => {
-      const { settings = {}, effortLevels = null, tuiCommandLine = null } = routeSettings.get(providerId) || {};
+    routes: routes.map(({ providerId, bindingId, mode, modelMap, modelAliasOverrides, pending }) => {
+      const {
+        settings = {}, effortLevels = null, tuiCommandLine = null, storedModels = null,
+      } = routeSettings.get(providerId) || {};
+      const overrides = sanitizeModelAliases(modelAliasOverrides);
       return {
         providerId,
         bindingId,
         mode,
-        modelMap,
+        modelMap: effectiveModelAliases(modelMap, overrides),
+        modelAliasOverrides: overrides,
+        modelAliasRevision: modelAliasRevision(overrides),
+        staleModelAliases: staleModelAliases(overrides, storedModels),
         projectionPending: Boolean(pending),
         settings,
         settingsRevision: routeSettingsRevision(settings),

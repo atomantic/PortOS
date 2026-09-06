@@ -171,3 +171,18 @@ export const updateProviderRouteSettings = (providerId, body, options) => reques
   `/providers/routes/${encodeURIComponent(providerId)}`,
   { method: 'PATCH', body: JSON.stringify(body), ...options },
 );
+
+/**
+ * Edit ONE route's hand-authored canonical→executable model aliases.
+ *
+ * The correction surface for a `modelMap` a refresh could only fill with the
+ * aliases it could verify. `null` for a key removes that override and is the
+ * only thing that does — a refresh rewrites what it observed in a separate
+ * column, so a correction survives it. `expectedRevision` is the route's
+ * `modelAliasRevision` from the management graph; a 409 means the aliases moved
+ * and the edit must be re-made against a fresh read.
+ */
+export const updateProviderRouteModelAliases = (providerId, body, options) => request(
+  `/providers/routes/${encodeURIComponent(providerId)}/model-aliases`,
+  { method: 'PATCH', body: JSON.stringify(body), ...options },
+);

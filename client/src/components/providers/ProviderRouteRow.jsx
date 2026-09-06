@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Star, Terminal } from 'lucide-react';
+import ProviderRouteModelAliases from './ProviderRouteModelAliases';
 import { routeOverrideDraft, routeOverridePatch } from '../../lib/providerManagement';
 
 /**
@@ -63,6 +64,7 @@ export default function ProviderRouteRow({
   blocked,
   onMakeDefault,
   onSaveSettings,
+  onSaveAliases,
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(() => routeOverrideDraft(route.settings));
@@ -125,16 +127,18 @@ export default function ProviderRouteRow({
             <Terminal size={12} aria-hidden="true" /> Launch in Shell
           </Link>
         )}
-        {fields.length > 0 && (
-          <button type="button" onClick={() => setOpen((prev) => !prev)} aria-expanded={open}
-            className="ml-auto text-xs text-port-muted hover:underline">
-            {open ? 'Hide overrides' : `Overrides${dirty ? ' •' : ''}`}
-          </button>
-        )}
+        <button type="button" onClick={() => setOpen((prev) => !prev)} aria-expanded={open}
+          className="ml-auto text-xs text-port-muted hover:underline">
+          {open ? 'Hide' : `Overrides & aliases${dirty ? ' •' : ''}`}
+        </button>
       </div>
 
-      {open && fields.length > 0 && (
+      {open && (
         <div className="mt-2 space-y-2 border-t border-port-border pt-2">
+          {/* A route whose mode publishes no overridable setting still has
+              aliases to correct, so the disclosure opens either way. */}
+          {fields.length > 0 && (
+          <>
           <div className="grid gap-2 sm:grid-cols-2">
             {fields.map((key) => (
               <label key={key} className="block text-sm" htmlFor={fieldId(key)}>
@@ -192,6 +196,14 @@ export default function ProviderRouteRow({
               Revert
             </button>
           </div>
+          </>
+          )}
+          <ProviderRouteModelAliases
+            route={route}
+            busy={busy}
+            blocked={blocked}
+            onSaveAliases={onSaveAliases}
+          />
         </div>
       )}
     </li>
