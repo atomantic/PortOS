@@ -38,8 +38,30 @@ export const DEFAULT_PERPETUAL_RECHECK_MS = DAY_MS;
 export const FAILURE_BACKOFF_BASE_MS = HOUR_MS;
 export const FAILURE_BACKOFF_CAP_MS = DAY_MS;
 export const FAILURE_PARK_THRESHOLD = 5;
-export const ON_DEMAND_ORIGINS = { USER: 'user', REFILL: 'refill' };
+/**
+ * Who asked for an on-demand run.
+ *
+ *   USER       — a human pressed Run. The only origin that clears the drain's
+ *                brakes (park, convergence signature, dispatch counter) and the
+ *                only one written to the operator-action ledger.
+ *   REFILL     — the perpetual drain re-issuing ITSELF through the same lane.
+ *   QUOTA_BURN — a quota-burn step invoking a task the user already owns
+ *                (`quotaBurnInvoke.js`). Automated, so it clears no brakes; it
+ *                carries a `burn` provenance block (`lib/quotaBurnOrigin.js`)
+ *                naming the family and step, and it is subject to the SAME
+ *                invocation-eligibility gate a human Run faces.
+ *
+ * A request written before `origin` existed carries none, which reads as USER.
+ */
+export const ON_DEMAND_ORIGINS = { USER: 'user', REFILL: 'refill', QUOTA_BURN: 'quota-burn' };
 export const isRefillRequest = (request) => request?.origin === ON_DEMAND_ORIGINS.REFILL;
+/**
+ * Whether a human asked for this run. Absent origin reads as USER (see above),
+ * so this is NOT `!isRefillRequest` — every automated origin added later fails
+ * CLOSED into "not a human" instead of silently inheriting a human's brakes.
+ */
+export const isUserOriginRequest = (request) =>
+  (request?.origin ?? ON_DEMAND_ORIGINS.USER) === ON_DEMAND_ORIGINS.USER;
 const RECONCILE_DRAIN_TASK_TYPES = new Set(['branch-reconcile', 'issue-reconcile']);
 export const isReconcileDrainTaskType = (taskType) => RECONCILE_DRAIN_TASK_TYPES.has(taskType);
 

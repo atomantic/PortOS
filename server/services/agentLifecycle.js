@@ -837,6 +837,10 @@ async function runAgentSpawn(task) {
       // the auto-run-gated queue lane. `isTruthyMeta` accepts the boolean set at
       // spawn AND the string `"true"` a COS-TASKS.md round-trip yields.
       taskOnDemand: isTruthyMeta(task.metadata?.onDemand),
+      // WHO asked for that on-demand run. `perpetualRefillPlan` needs it to tell
+      // a human Run (which keeps draining) from an automated origin such as a
+      // quota burn (which is one unit and stops).
+      taskOnDemandOrigin: task.metadata?.onDemandOrigin || null,
       // The single PR a pr-reviewer run was narrowed to. Same hand-picked-projection
       // reason as the keys around it: perpetualRefillPlan must see from the AGENT
       // record that this run was scoped, or its untargeted re-issue silently widens

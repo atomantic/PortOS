@@ -18,6 +18,7 @@
 // names are the canonical PortOS-wide schemas.
 export * from './appDeployFlags.js';
 export * from './apiContractSchemas.js';
+export * from './autonomousJobTask.js';
 export * from './asyncApiSpec.js';
 export * from './avatarVariants.js';
 export * from './avatarStyles.js';
@@ -190,6 +191,7 @@ export * from './providerTranscriptUsage.js';
 // duplicate-identifier collision check.
 export * as reviewerConfig from './reviewerConfig.js';
 export * from './quotaBurnConfig.js';
+export * from './quotaBurnOrigin.js';
 export * from './quotaBurnPresets.js';
 export * from './auditCatalog.js';
 export * from './quotaBurnTaskRef.js';

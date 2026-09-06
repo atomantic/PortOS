@@ -2270,6 +2270,34 @@ describe('perpetualRefillPlan — manual vs scheduled drain lane', () => {
     )).toEqual({ lane: 'skip' });
   });
 
+  it('does not refill a QUOTA BURN run — a burn invokes exactly one unit', () => {
+    // The burn has its own continuation (quotaBurnRunner#onBurnAgentCompleted)
+    // behind the window/reserve/cap ladder. Letting the perpetual drain refill
+    // too would walk the whole backlog outside every one of those gates, on the
+    // very subscription the plan was rationing.
+    expect(perpetualRefillPlan(
+      agent({ taskAnalysisType: 'claim-issue', taskApp: 'app-42', taskOnDemand: true, taskOnDemandOrigin: 'quota-burn' }),
+      schedule,
+    )).toEqual({ lane: 'skip' });
+  });
+
+  it('does not refill an UNKNOWN on-demand origin either — the lane allowlist fails closed', () => {
+    // The rule is an allowlist, not a list of exclusions: an automated origin
+    // added later must stop after one unit by default rather than silently
+    // acquiring a human Run's drain.
+    expect(perpetualRefillPlan(
+      agent({ taskAnalysisType: 'claim-issue', taskOnDemand: true, taskOnDemandOrigin: 'some-future-automation' }),
+      schedule,
+    )).toEqual({ lane: 'skip' });
+  });
+
+  it('treats an unrecorded origin as a human Run (tasks queued before the field existed)', () => {
+    expect(perpetualRefillPlan(
+      agent({ taskAnalysisType: 'claim-issue', taskOnDemand: true, taskApp: 'app-42' }),
+      schedule,
+    )).toEqual({ lane: 'onDemand', taskType: 'claim-issue', appId: 'app-42' });
+  });
+
   it('skips a non-candidate even when it is marked on-demand (disabled / non-perpetual / unknown)', () => {
     expect(perpetualRefillPlan(agent({ taskAnalysisType: 'claim-issue-disabled', taskOnDemand: true }), schedule))
       .toEqual({ lane: 'skip' });
@@ -2360,18 +2388,16 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     expect(returnAfterTrigger).toBeLessThan(queueIdx);
   });
 
-  it('the on-demand spawn engine marks generated tasks on-demand and forwards ignoreTaskId to addTask', () => {
-    // For the manual continuation to be recognized on completion, the on-demand
-    // engine must stamp metadata.onDemand; and the completion-triggered re-issue
-    // must be dedup-safe against the still-in_progress completing task, so the
-    // engine's addTask must forward the dequeue's ignoreTaskId.
+  it('the on-demand spawn engine forwards ignoreTaskId to addTask', () => {
+    // The completion-triggered re-issue must be dedup-safe against the
+    // still-in_progress completing task, so the engine's addTask must forward
+    // the dequeue's ignoreTaskId.
     const engIdx = COS_SRC.indexOf('async function spawnDequeuePriority0OnDemand');
     expect(engIdx, 'spawnDequeuePriority0OnDemand must exist').toBeGreaterThan(-1);
     const engSlice = COS_SRC.slice(engIdx, engIdx + 6400);
-    expect(
-      /onDemand:\s*true/.test(engSlice),
-      'on-demand engine must stamp metadata.onDemand: true before addTask'
-    ).toBe(true);
+    // The metadata merge itself is pinned once, in cosTaskGenerator.test.js —
+    // that guard greps the full statement against BOTH engine sources, so
+    // repeating a weaker subset here would only ever fail alongside it.
     expect(
       /addTask\(\s*task\s*,\s*'internal'\s*,\s*\{[\s\S]*?raw:\s*true[\s\S]*?ignoreTaskId[\s\S]*?\}\s*\)/.test(engSlice),
       'on-demand engine must forward ignoreTaskId to addTask'

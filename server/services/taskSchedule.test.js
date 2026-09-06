@@ -2239,9 +2239,74 @@ describe('taskSchedule', () => {
         expect(writeFile).not.toHaveBeenCalled()
       })
 
+      it('clears NOTHING for a quota burn either — it is automation, not a human Run', async () => {
+        // A burn that cleared the park would re-run a converged drain every time
+        // its window opened, which is the opposite of "invoke this once".
+        mockSchedule(parked())
+        expect(await applyOnDemandRunResets({ taskType: 'branch-reconcile', origin: ON_DEMAND_ORIGINS.QUOTA_BURN }, 'app-1')).toBe(false)
+        expect(writeFile).not.toHaveBeenCalled()
+      })
+
       it('treats a pre-origin request as user-initiated (safe default for a human-filled queue)', async () => {
         mockSchedule(parked())
         expect(await applyOnDemandRunResets({ taskType: 'branch-reconcile' }, 'app-1')).toBe(true)
+      })
+    })
+
+    // A quota burn asks the schedule to run a task the user already owns. The
+    // request has to carry enough to attribute the burn later — acceptance is
+    // asynchronous, so nothing else can reconstruct it — and it must face the
+    // same invocation-eligibility gate a human Run does.
+    describe('quota-burn origin', () => {
+      const burn = { family: 'grok', stepId: 'step-1', limitingResetAt: 1700000000000, overrides: { providerId: 'grok-tui', model: null, effort: null } }
+      const trigger = (options) => triggerOnDemandTask('security', null, { emit: false, origin: ON_DEMAND_ORIGINS.QUOTA_BURN, ...options })
+
+      it('persists the burn provenance on the queued request', async () => {
+        mockSchedule({ tasks: { security: { type: 'on-demand', enabled: true } } })
+        const request = await trigger({ burn })
+        expect(request.origin).toBe(ON_DEMAND_ORIGINS.QUOTA_BURN)
+        expect(request.burn).toEqual(burn)
+        // And it survives the write, so an engine draining it after a restart
+        // still knows which family and step to credit.
+        const written = JSON.parse(writeFile.mock.calls.at(-1)[1]).onDemandRequests.at(-1)
+        expect(written.burn).toEqual(burn)
+      })
+
+      it('refuses a burn request that cannot be attributed, before touching the schedule', async () => {
+        mockSchedule({ tasks: { security: { type: 'on-demand', enabled: true } } })
+        expect((await trigger({ burn: { family: 'grok' } })).error).toMatch(/must name the burning family and its burn step/)
+        expect(writeFile).not.toHaveBeenCalled()
+      })
+
+      it('is not written to the operator-action ledger', async () => {
+        mockSchedule({ tasks: { security: { type: 'on-demand', enabled: true } } })
+        await trigger({ burn })
+        expect(recordUserAction).not.toHaveBeenCalled()
+      })
+
+      it('faces the same gates a human Run does', async () => {
+        mockSchedule({ tasks: { security: { type: 'on-demand', enabled: false } } })
+        expect((await trigger({ burn })).error).toMatch(/disabled/i)
+        mockSchedule({ tasks: { security: { type: 'on-demand', enabled: true } } })
+        expect((await triggerOnDemandTask('not-a-task', null, { emit: false, origin: ON_DEMAND_ORIGINS.QUOTA_BURN, burn })).error)
+          .toMatch(/Unknown task type/)
+      })
+
+      // The invocation-eligibility gate is the one that cannot be exercised
+      // behaviorally: `TASK_TYPE_INVOCATION` is deliberately empty today, so no
+      // shipped type is subsidiary and there is nothing to refuse. The rule still
+      // has to hold the day one is added, and the failure mode is silent — an
+      // unattended burn commandeering a task another automation owns — so the
+      // shape is pinned here. Only REFILL (that automation re-issuing itself) is
+      // exempt; a burn is gated exactly like a human Run.
+      it('exempts only a drain refill from the invocation-eligibility gate', async () => {
+        // `fs` is doubled for this suite, so read through the real one.
+        const { readFileSync } = await vi.importActual('node:fs')
+        const src = readFileSync(new URL('./taskSchedule.js', import.meta.url), 'utf8')
+        expect(src).toMatch(/if \(origin !== ON_DEMAND_ORIGINS\.REFILL && !invocation\.userInvokable\)/)
+        // Probe: the previous, narrower gate must be gone, or the assertion above
+        // could pass on a file that still only checks USER somewhere else.
+        expect(src).not.toMatch(/origin === ON_DEMAND_ORIGINS\.USER && !invocation\.userInvokable/)
       })
     })
 

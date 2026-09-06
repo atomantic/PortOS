@@ -538,6 +538,12 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (Number.isFinite(taskData.quotaBurnLimitingResetAt)) {
       metadata.quotaBurnLimitingResetAt = taskData.quotaBurnLimitingResetAt;
     }
+    // Which STEP of the plan asked. The built-in lane stamps this (and the
+    // request id) straight onto the generated task's metadata via
+    // `lib/quotaBurnOrigin.js`; a custom-job burn reaches disk through this
+    // non-raw path instead, so the key has to be mapped here or the two lanes
+    // would carry different provenance for the same feature.
+    if (taskData.quotaBurnStepId) metadata.quotaBurnStepId = taskData.quotaBurnStepId;
     if (planOnly) {
       // Plan-and-file is a single bounded CoS action. The bundled plan-task
       // command is already issue-only, so pass its supported `--yes` flag to
