@@ -85,6 +85,9 @@ export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null
 // Codex Ultra adds automatic task delegation on the models that advertise it.
 // Keep it model-gated: older Codex models and Luna top out at `max`.
 //
+// `minimal` is model-gated the other way — it is a gpt-5-era rung that the
+// gpt-6 family dropped. See CODEX_NO_MINIMAL_MODEL_RE below.
+//
 // `none` is a real codex variant but is deliberately NOT offered: it means "do
 // not reason at all", which no PortOS effort control should be able to select.
 // ---------------------------------------------------------------------------
@@ -123,9 +126,30 @@ export const EFFORT_LEVELS = Object.freeze([...new Set([
 
 const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra']);
 
-const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model || '').trim().toLowerCase())
-  ? CODEX_ULTRA_EFFORT_LEVELS
-  : CODEX_EFFORT_LEVELS;
+// Models that REJECT `minimal`. The gpt-6 family dropped the rung: codex
+// against `gpt-6-astra` answers HTTP 400 `unsupported_value` — "'minimal' is
+// not supported with the 'gpt-6-astra' model. Supported values are: 'low',
+// 'medium', 'high', 'xhigh', and 'max'." — so a picker that offers it hands the
+// user a level whose only outcome is a failed run.
+//
+// Matched as a FAMILY prefix rather than an id list, deliberately: the two
+// failure directions are not symmetric. Missing a new gpt-6/7 model ships that
+// 400 again, while over-matching a model that does still accept `minimal` costs
+// it only its weakest rung (a stored `minimal` clamps up to `low`).
+const CODEX_NO_MINIMAL_MODEL_RE = /^gpt-[6-9]([.-]|$)/;
+
+const withoutMinimal = (levels) => Object.freeze(levels.filter((l) => l !== 'minimal'));
+const CODEX_EFFORT_LEVELS_NO_MINIMAL = withoutMinimal(CODEX_EFFORT_LEVELS);
+const CODEX_ULTRA_EFFORT_LEVELS_NO_MINIMAL = withoutMinimal(CODEX_ULTRA_EFFORT_LEVELS);
+
+const codexEffortLevelsForModel = (model) => {
+  const id = String(model || '').trim().toLowerCase();
+  const ultra = CODEX_ULTRA_MODELS.has(id);
+  if (CODEX_NO_MINIMAL_MODEL_RE.test(id)) {
+    return ultra ? CODEX_ULTRA_EFFORT_LEVELS_NO_MINIMAL : CODEX_EFFORT_LEVELS_NO_MINIMAL;
+  }
+  return ultra ? CODEX_ULTRA_EFFORT_LEVELS : CODEX_EFFORT_LEVELS;
+};
 
 // ---------------------------------------------------------------------------
 // Antigravity base-model ↔ effort-suffix split.

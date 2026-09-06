@@ -187,6 +187,21 @@ describe('effortLevelsForProvider (server mirror)', () => {
     expect(effortLevelsForProvider(provider)).toEqual(expected);
     expect(serverEffortLevelsForProvider(provider)).toEqual(expected);
   });
+
+  // Codex's ladder is model-gated in BOTH directions: the gpt-6 family adds
+  // `ultra` and drops `minimal` (sending it fails the run with HTTP 400
+  // `unsupported_value`). A client that still offers the rung shows the user a
+  // level whose only outcome is a dead run, so pin the gate on both sides.
+  it.each([
+    ['gpt-6-astra', ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']],
+    ['gpt-6.1-nova', ['low', 'medium', 'high', 'xhigh', 'max']],
+    ['gpt-5.6-sol', ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']],
+    ['gpt-5.3-codex-spark', CODEX_EFFORT_LEVELS],
+  ])('codex ladder for %s', (model, expected) => {
+    const codex = { id: 'codex', command: 'codex' };
+    expect(effortLevelsForProvider(codex, model)).toEqual(expected);
+    expect(serverEffortLevelsForProvider(codex, model)).toEqual(expected);
+  });
 });
 
 // Which providers the Generation Defaults block is offered for. The rule has to
