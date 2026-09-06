@@ -201,9 +201,19 @@ export async function fetchAllArtificialAnalysisModels(apiKey) {
   return allModels;
 }
 
-export async function syncArtificialAnalysisCatalog({ apiKey } = {}) {
+// Presence only — never the value. The comparison page reads this to decide
+// whether the Sync button prompts for a key or just syncs with the stored one.
+export async function hasArtificialAnalysisKey() {
+  return Boolean(await resolveArtificialAnalysisKey());
+}
+
+async function resolveArtificialAnalysisKey(apiKey) {
   const settings = await getSettings();
-  const key = apiKey?.trim() || settings.secrets?.artificialAnalysis?.apiKey || process.env.ARTIFICIAL_ANALYSIS_API_KEY;
+  return apiKey?.trim() || settings.secrets?.artificialAnalysis?.apiKey || process.env.ARTIFICIAL_ANALYSIS_API_KEY || '';
+}
+
+export async function syncArtificialAnalysisCatalog({ apiKey } = {}) {
+  const key = await resolveArtificialAnalysisKey(apiKey);
   if (!key) {
     throw new ServerError('No Artificial Analysis API key provided or configured in ARTIFICIAL_ANALYSIS_API_KEY', { status: 400 });
   }
