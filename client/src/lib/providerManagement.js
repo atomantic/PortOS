@@ -214,3 +214,60 @@ export function routeModelAliasRows(route) {
     }))
     .sort((a, b) => a.canonical.localeCompare(b.canonical));
 }
+
+// --- creating a backend and a harness on it (#6369) --------------------------
+//
+// The two questions the create controls ask of a graph response. Both are
+// answered from what the SERVER published (`creatableHarnesses`,
+// `creatableConnectionKinds`), never from a table mirrored into the browser:
+// which harnesses carry a command recipe, and which backend kinds a minted
+// route can honestly describe, are server decisions.
+
+/** The one transport protocol a connection declares, or `null`. */
+export const connectionProtocol = (connection) => Object.keys(connection?.transports || {})[0] || null;
+
+/**
+ * Transport protocols a new backend may declare, each with the programs that
+ * speak it, so the form can say what the choice is FOR.
+ *
+ * @returns {{protocol:string, drivers:string[]}[]}
+ */
+export function transportProtocolOptions(graph) {
+  const harnesses = Array.isArray(graph?.creatableHarnesses) ? graph.creatableHarnesses : [];
+  const byProtocol = new Map();
+  for (const harness of harnesses) {
+    byProtocol.set(harness.protocol, [...(byProtocol.get(harness.protocol) || []), harness.label]);
+  }
+  // A direct API route has no harness and speaks the OpenAI-compatible wire, so
+  // that protocol is offerable even on a build shipping no OpenAI harness.
+  byProtocol.set('openai', [...(byProtocol.get('openai') || []), 'Direct API']);
+  return [...byProtocol.entries()]
+    .map(([protocol, drivers]) => ({ protocol, drivers }))
+    .sort((a, b) => a.protocol.localeCompare(b.protocol));
+}
+
+/**
+ * The harnesses that can be added to THIS backend, plus the direct API option.
+ *
+ * Filtered by the backend's declared protocol rather than offered and then
+ * refused: the server rejects a harness that does not speak it, and an option
+ * whose only outcome is a 409 is not an option. `needsCredential` is why an
+ * otherwise-valid choice will still be refused, so the row can say so before
+ * the click rather than after it.
+ *
+ * @returns {{harnessId:string|null, label:string, modes:string[], needsCredential:string|null}[]}
+ */
+export function harnessOptionsFor(graph, connection) {
+  const protocol = connectionProtocol(connection);
+  const harnesses = (Array.isArray(graph?.creatableHarnesses) ? graph.creatableHarnesses : [])
+    .filter((harness) => harness.protocol === protocol)
+    .map((harness) => ({
+      harnessId: harness.id,
+      label: harness.label,
+      modes: harness.modes,
+      needsCredential: harness.credentialRequired && !connection?.hasCredentials ? harness.credentialKey : null,
+    }));
+  return protocol === 'openai'
+    ? [...harnesses, { harnessId: null, label: 'Direct API', modes: ['api'], needsCredential: null }]
+    : harnesses;
+}

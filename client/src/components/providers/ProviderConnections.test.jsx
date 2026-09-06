@@ -23,6 +23,8 @@ const api = vi.hoisted(() => ({
   linkProviderBinding: vi.fn(),
   unlinkProviderBinding: vi.fn(),
   deleteProviderConnection: vi.fn(),
+  createProviderConnection: vi.fn(),
+  createProviderBinding: vi.fn(),
   updateProviderRouteSettings: vi.fn(),
   updateProviderRouteModelAliases: vi.fn(),
   setActiveProvider: vi.fn(),
@@ -42,6 +44,13 @@ const CLAUDE_BINDING = '33333333-3333-4333-8333-333333333333';
 const graphFixture = () => ({
   schemaVersion: 1,
   activeProvider: 'claude-ollama',
+  // The static create surface the server publishes, so the browser never has to
+  // mirror which harnesses carry a command recipe.
+  creatableHarnesses: [
+    { id: 'claude', label: 'Claude Code', modes: ['cli', 'tui'], protocol: 'anthropic', credentialKey: 'ANTHROPIC_AUTH_TOKEN', credentialRequired: true },
+    { id: 'opencode', label: 'OpenCode', modes: ['cli', 'tui'], protocol: 'openai', credentialKey: 'apiKey', credentialRequired: false },
+  ],
+  creatableConnectionKinds: [{ id: 'ollama', label: 'Ollama' }, { id: 'api', label: 'Direct API' }],
   connections: [
     {
       id: CONNECTION,
@@ -124,7 +133,7 @@ describe('backend connection management', () => {
 
     expect(await screen.findByText('Example local daemon')).toBeInTheDocument();
     // The harness label comes from the mirrored registry, not a raw id.
-    expect(screen.getByText('Claude Code')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Claude Code' })).toBeInTheDocument();
     // Both executable routes on that one backend are listed and deep-linkable.
     expect(screen.getByRole('link', { name: 'claude-ollama' })).toHaveAttribute('href', '/ai/edit/claude-ollama');
     expect(screen.getByRole('link', { name: 'claude-ollama-tui' })).toBeInTheDocument();
@@ -408,5 +417,69 @@ describe('hand-authored model aliases', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(screen.getByLabelText('Backend model name')).toHaveValue('example-model');
+  });
+});
+
+describe('adding a backend and a harness (#6369)', () => {
+  it('sends exactly one transport and no probe, then opens what it made', async () => {
+    const onSelectConnection = vi.fn();
+    api.createProviderConnection.mockResolvedValue({ connection: { id: OTHER, label: 'Remote example' } });
+    renderPanel({ onSelectConnection });
+
+    fireEvent.click(await screen.findByRole('button', { name: /add a backend/i }));
+    fireEvent.change(screen.getByLabelText('Backend name'), { target: { value: 'Remote example' } });
+    fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://ollama.example.com/v1' } });
+    fireEvent.change(screen.getByLabelText('Backend'), { target: { value: 'api' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add backend' }));
+
+    await waitFor(() => expect(api.createProviderConnection).toHaveBeenCalled());
+    const [body] = api.createProviderConnection.mock.calls[0];
+    expect(body).toMatchObject({
+      kind: 'api',
+      label: 'Remote example',
+      transports: { openai: { baseUrl: 'https://ollama.example.com/v1' } },
+    });
+    // No credential typed, so none is sent — an empty string would be stored as
+    // a real (and broken) secret.
+    expect(body).not.toHaveProperty('credentials');
+    expect(Object.keys(body.transports)).toHaveLength(1);
+    expect(api.refreshProviderConnectionModels).not.toHaveBeenCalled();
+    // The next step is adding a harness, and that control lives in the panel.
+    await waitFor(() => expect(onSelectConnection).toHaveBeenCalledWith(OTHER));
+  });
+
+  it('offers only harnesses that speak the backend it is on', async () => {
+    renderPanel();
+    const select = await screen.findByLabelText('Program');
+    // The fixture backend declares the anthropic transport; OpenCode speaks
+    // openai and is not offered, because an option whose only outcome is a 409
+    // is not an option.
+    expect([...select.options].map((option) => option.textContent)).toEqual(['Claude Code']);
+  });
+
+  it('creates a disabled binding for the checked modes only', async () => {
+    api.createProviderBinding.mockResolvedValue({ routeIds: ['claude-ollama-2'], enabled: false });
+    renderPanel();
+
+    fireEvent.click(await screen.findByLabelText('tui'));
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+
+    await waitFor(() => expect(api.createProviderBinding).toHaveBeenCalled());
+    expect(api.createProviderBinding.mock.calls[0][0]).toEqual({
+      connectionId: CONNECTION, harnessId: 'claude', modes: ['cli'],
+    });
+    expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('disabled'));
+  });
+
+  it('refuses to add a harness that needs a credential the backend has not got', async () => {
+    api.getProviderManagementGraph.mockResolvedValue({
+      ...graphFixture(),
+      connections: graphFixture().connections.map((connection) => ({ ...connection, hasCredentials: false })),
+    });
+    renderPanel();
+
+    expect(await screen.findByText(/ANTHROPIC_AUTH_TOKEN/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Add$/ })).toBeDisabled();
+    expect(api.createProviderBinding).not.toHaveBeenCalled();
   });
 });

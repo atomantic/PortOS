@@ -111,6 +111,26 @@ export const isManagementUnsupported = (error) =>
 /** The durable graph: connections, harness bindings and executable routes. */
 export const getProviderManagementGraph = (options) => request('/providers/management', options);
 
+/**
+ * Create a new backend. Nothing is probed and no route is minted — a
+ * connection with no binding is a legitimate row you then attach a harness to.
+ */
+export const createProviderConnection = (body, options) => request('/providers/connections', {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+/**
+ * Add a harness to an existing backend, minting one executable route per
+ * requested mode from that harness's command recipe.
+ *
+ * Every minted route arrives DISABLED with no model pins: creating a route is a
+ * management act, and granting it execution stays a separate, explicit edit on
+ * the route editor.
+ */
+export const createProviderBinding = (body, options) => request('/providers/bindings', {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
 /** What linking this binding onto another connection would change. Read-only. */
 export const previewProviderBindingLink = (bindingId, body, options) => request(
   `/providers/bindings/${encodeURIComponent(bindingId)}/link/preview`,

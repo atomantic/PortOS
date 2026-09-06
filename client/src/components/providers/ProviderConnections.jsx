@@ -4,6 +4,8 @@ import toast from '../ui/Toast';
 import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
 import EmptyState from '../EmptyState';
+import ProviderConnectionForm from './ProviderConnectionForm';
+import ProviderHarnessForm from './ProviderHarnessForm';
 import ProviderRouteRow from './ProviderRouteRow';
 import * as api from '../../services/api';
 import { harnessLabel } from '../../utils/providerHarnesses';
@@ -42,6 +44,15 @@ import {
  * or `/ai/harnesses/:harnessId/connections/:connectionId`) so the open row is
  * shareable, bookmarkable and reachable from ⌘K and voice.
  */
+
+/**
+ * A blank "add a backend" form. `openai` is the default protocol because it is
+ * the one every OpenAI-compatible daemon, gateway and direct API route speaks;
+ * Claude Code is the exception, and the field says so.
+ */
+const EMPTY_BACKEND_DRAFT = Object.freeze({
+  label: '', kind: 'ollama', protocol: 'openai', baseUrl: '', credentialKey: '', credential: '',
+});
 
 /** How each catalog state reads at a glance — the four are deliberately distinct. */
 const CATALOG_TONE_CLASS = {
@@ -84,6 +95,13 @@ export default function ProviderConnections({
   const [credentialDraft, setCredentialDraft] = useState('');
   const [linkTarget, setLinkTarget] = useState({});
   const [linkPreview, setLinkPreview] = useState(null);
+
+  // Creating a backend, and adding a harness to one (#6369). Both drafts live
+  // here for the same reason the edit drafts above do: a graph reload after any
+  // write must not silently discard a half-typed create.
+  const [addingBackend, setAddingBackend] = useState(false);
+  const [backendDraft, setBackendDraft] = useState(EMPTY_BACKEND_DRAFT);
+  const [harnessDraft, setHarnessDraft] = useState({});
 
   const loadGraph = useCallback(async () => {
     setLoading(true);
@@ -157,6 +175,46 @@ export default function ProviderConnections({
     onGraphChanged?.();
     return result;
   }, [loadGraph, onGraphChanged]);
+
+  /**
+   * Add a backend. One transport only, which is the server's rule too: a
+   * provider record names one endpoint, so a backend declaring two could never
+   * be the backend its own routes describe.
+   */
+  const createBackend = useCallback(async () => {
+    const draft = backendDraft;
+    const credentialKey = draft.credentialKey.trim() || 'apiKey';
+    const created = await run('Adding the backend', () => api.createProviderConnection({
+      kind: draft.kind,
+      label: draft.label.trim(),
+      transports: { [draft.protocol]: { baseUrl: draft.baseUrl.trim() } },
+      ...(draft.credential.trim() ? { credentials: { [credentialKey]: draft.credential.trim() } } : {}),
+    }, { silent: true }));
+    if (!created) return;
+    setBackendDraft(EMPTY_BACKEND_DRAFT);
+    setAddingBackend(false);
+    // Open what was just made: the next step is adding a harness to it, and
+    // that control lives inside the panel.
+    onSelectConnection(created.connection.id);
+    toast.success('Backend added. Nothing was contacted — add a harness to give it a route.');
+  }, [backendDraft, run, onSelectConnection]);
+
+  /**
+   * Add a harness to a backend, minting one route per checked mode.
+   *
+   * Every minted route arrives disabled: this creates the configuration, it
+   * does not grant it permission to run.
+   */
+  const addHarness = useCallback(async (connection, draft) => {
+    const created = await run('Adding the harness', () => api.createProviderBinding({
+      connectionId: connection.id,
+      harnessId: draft.harnessId ?? null,
+      modes: draft.modes,
+    }, { silent: true }));
+    if (!created) return;
+    setHarnessDraft(({ [connection.id]: _cleared, ...rest }) => rest);
+    toast.success(`Added ${created.routeIds.join(', ')} — disabled, so nothing runs until you enable it.`);
+  }, [run]);
 
   const saveConnection = useCallback(async () => {
     if (!selected) return;
@@ -321,10 +379,20 @@ export default function ProviderConnections({
         <div className="space-y-4">
           {loading && <p className="text-sm text-port-muted">Loading connections…</p>}
 
+          <ProviderConnectionForm
+            graph={graph}
+            draft={backendDraft}
+            onChange={setBackendDraft}
+            onSubmit={createBackend}
+            open={addingBackend}
+            onToggle={() => setAddingBackend((isOpen) => !isOpen)}
+            busy={busy}
+          />
+
           {!loading && groups.length === 0 && (
             <EmptyState
               title="No managed connections yet"
-              message="Connections are imported from your existing provider routes the first time the graph runs. Configure a provider and it will appear here."
+              message="Connections are imported from your existing provider routes the first time the graph runs — or add one above and give it a harness."
             />
           )}
 
@@ -421,6 +489,15 @@ export default function ProviderConnections({
                           </button>
                         )}
                       </div>
+
+                      <ProviderHarnessForm
+                        graph={graph}
+                        connection={group.connection}
+                        draft={harnessDraft[group.connection.id]}
+                        onChange={(next) => setHarnessDraft((prev) => ({ ...prev, [group.connection.id]: next }))}
+                        onSubmit={(input) => addHarness(group.connection, input)}
+                        busy={busy}
+                      />
 
                       {group.bindings.map(({ binding, label, routes }) => {
                         const offer = bindingModelOffer(group.connection, binding);
