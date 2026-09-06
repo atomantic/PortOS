@@ -34,6 +34,18 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
     return peerHosts.filter((host) => (host?.serving || host?.enabled) && !isFleetHostConfigured(host, providers));
   }, [compact, peerHosts, providers]);
 
+  // Host setup only ever creates a Direct API provider on the host itself
+  // (fleetLlmHost.js `configure()`), never an OpenCode TUI one — and the
+  // peer-discovery cards above only ever surface OTHER instances, so a host
+  // machine that wants to also run OpenCode TUI against its own queue had no
+  // discoverable path to it. Reuse the same dedupe the peer cards use, keyed
+  // on this machine's own tailnet endpoint.
+  const selfNeedsProvider = useMemo(
+    () => compact && Boolean(status?.endpoint) && Boolean(status?.serving || status?.enabled)
+      && !isFleetHostConfigured({ endpoint: status.endpoint }, providers),
+    [compact, status, providers],
+  );
+
   const reveal = () => {
     setRevealing(true);
     revealFleetLlmHostKey({ silent: true }).then(({ apiKey }) => setKey(apiKey))
@@ -43,39 +55,29 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
   const actionClass = 'inline-flex items-center justify-center min-h-[40px] px-3 py-2 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50';
   const title = status?.recommendation.title || 'Recommended model host setup';
   if (compact) {
-    if (unconfiguredPeerHosts.length > 0) {
+    if (selfNeedsProvider || unconfiguredPeerHosts.length > 0) {
       return (
         <div className="space-y-3" aria-label="Available model hosts">
+          {selfNeedsProvider && (
+            <HostCard
+              ariaLabel="This machine's model host"
+              headline="This machine is serving its own model host — add a provider for it?"
+              badge={`${status.serving ? 'Serving' : 'Enabled'} · ${status.model || 'Qwen3.8-27B'}`}
+              description="Host setup already created a Direct API provider. Add OpenCode TUI (or another one) on this same machine to use it for coding agents too."
+              href="/ai/fleet?fleetStep=client&selfHost=1"
+              actionClass={actionClass}
+            />
+          )}
           {unconfiguredPeerHosts.map((host) => (
-            <section
+            <HostCard
               key={host.peerId}
-              className="rounded-xl border border-port-accent/50 bg-port-card p-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between shadow-xs"
-              aria-label={`Available model host ${host.peerName}`}
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="flex h-2 w-2 rounded-full bg-port-success shrink-0" />
-                  <p className="text-sm font-medium text-white flex items-center gap-2 truncate">
-                    <Server size={16} className="text-port-accent shrink-0" />
-                    Available federated host: <span className="text-port-accent font-semibold">{host.peerName}</span>
-                  </p>
-                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-port-success/20 text-port-success font-medium">
-                    {host.serving ? 'Serving' : 'Enabled'} · {host.model || 'Qwen3.8-27B'}
-                  </span>
-                </div>
-                <p className="text-xs text-gray-400 mt-1">
-                  Instance <strong className="text-gray-200">{host.peerName}</strong> is running a federated LLM host. Set it up as a provider on this machine?
-                </p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <Link
-                  to={`/ai/fleet?fleetStep=client&peerId=${encodeURIComponent(host.peerId)}`}
-                  className={actionClass}
-                >
-                  Set up as provider
-                </Link>
-              </div>
-            </section>
+              ariaLabel={`Available model host ${host.peerName}`}
+              headline={<>Available federated host: <span className="text-port-accent font-semibold">{host.peerName}</span></>}
+              badge={`${host.serving ? 'Serving' : 'Enabled'} · ${host.model || 'Qwen3.8-27B'}`}
+              description={<>Instance <strong className="text-gray-200">{host.peerName}</strong> is running a federated LLM host. Set it up as a provider on this machine?</>}
+              href={`/ai/fleet?fleetStep=client&peerId=${encodeURIComponent(host.peerId)}`}
+              actionClass={actionClass}
+            />
           ))}
         </div>
       );
@@ -112,7 +114,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
           </ul>
           {status.recommendation.supported && (
             <section className="rounded-lg border border-port-border p-3 space-y-3 text-sm">
-              <p>Reserve this GPU for Qwen. Setup reuses prepared weights, fills in missing runtime settings, keeps the container loaded, and creates a local API provider. A new install can download about 30 GB.</p>
+              <p>Reserve this GPU for Qwen. Setup reuses prepared weights, fills in missing runtime settings, keeps the container loaded, and creates a Direct API provider on this machine (not an OpenCode TUI one — add that separately below if you want coding agents on this same machine). A new install can download about 30 GB.</p>
               <p className="text-xs text-gray-400">One active generation across all clients; up to 16 requests wait for at most two minutes. Disconnecting cancels the request. Requests are held in memory and are not replayed after a restart. Other GPU models must be unloaded first. Setup disables competing local providers so they do not reload automatically.</p>
               <button type="button" disabled={installing || status.setupRunning} onClick={() => setInstalling(true)} className={actionClass}>
                 {status.serving ? 'Reapply recommended host setup' : 'Set up dedicated host · download if needed'}
@@ -125,6 +127,17 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
               {status.serving ? 'Ready for client connections.' : 'Configured; model is loading or unavailable. Refresh until all checks pass.'}
               <p className="mt-1 text-xs">{status.queue.active} generating · {status.queue.queued} queued · limit {status.queue.maxActive} active / {status.queue.maxQueued} waiting</p>
             </Banner>
+          )}
+          {status.hasApiKey && status.endpoint && (
+            <section className="space-y-2 text-sm">
+              <h3 className="font-medium">Use this host from this same machine</h3>
+              <p className="text-xs text-gray-400">
+                The Direct API provider above was created automatically. To also run OpenCode coding agents against this queue on this machine, add that provider explicitly — its endpoint and key are filled in for you.
+              </p>
+              <Link to="/ai/fleet?fleetStep=client&selfHost=1" className={actionClass}>
+                Set up OpenCode TUI on this machine
+              </Link>
+            </section>
           )}
           <section className="space-y-3 text-sm">
             <h3 className="font-medium">Connect another PortOS instance</h3>
@@ -152,5 +165,32 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
         description="Prepare missing weights (~30 GB on a fresh install), reserve the GPU and enable the shared API queue."
         doneText="Host configured. Check readiness while the model loads." />
     </div>
+  );
+}
+
+// Shared shape for the compact "here's an unconfigured host, add it as a
+// provider?" prompt — used for both this machine's own host and a discovered
+// peer's, which differ only in copy and link target.
+function HostCard({ ariaLabel, headline, badge, description, href, actionClass }) {
+  return (
+    <section
+      className="rounded-xl border border-port-accent/50 bg-port-card p-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between shadow-xs"
+      aria-label={ariaLabel}
+    >
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="flex h-2 w-2 rounded-full bg-port-success shrink-0" />
+          <p className="text-sm font-medium text-white flex items-center gap-2 truncate">
+            <Server size={16} className="text-port-accent shrink-0" />
+            {headline}
+          </p>
+          <span className="text-[11px] px-1.5 py-0.5 rounded bg-port-success/20 text-port-success font-medium">{badge}</span>
+        </div>
+        <p className="text-xs text-gray-400 mt-1">{description}</p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <Link to={href} className={actionClass}>Set up as provider</Link>
+      </div>
+    </section>
   );
 }

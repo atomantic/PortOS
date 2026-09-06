@@ -1294,6 +1294,28 @@ export const mergeModelLists = (...lists) => {
 };
 
 /**
+ * Merge a partial-update payload onto an existing provider record in place, so
+ * repointing a provider at a new backend (e.g. a fleet host) doesn't clobber
+ * fields the payload didn't set out to change. A raw PATCH replaces whichever
+ * top-level keys it names wholesale — without this, pointing an OpenCode TUI
+ * provider at a new endpoint would silently drop its other env vars and reset
+ * its served-model history to just the one new model id.
+ *
+ * @param {object|null|undefined} target - the existing provider being updated
+ * @param {object} payload - field values about to be written; mutated in place
+ * @returns {object} payload
+ */
+export const mergeProviderUpdate = (target, payload) => {
+  if (!target) return payload;
+  if (payload.envVars) payload.envVars = { ...target.envVars, ...payload.envVars };
+  if (payload.secretEnvVars) {
+    payload.secretEnvVars = Array.from(new Set([...(target.secretEnvVars || []), ...payload.secretEnvVars]));
+  }
+  if (payload.models) payload.models = mergeModelLists(target.models, payload.models);
+  return payload;
+};
+
+/**
  * Display label for a model `<option>`: the id plus a "(32K ctx)" parenthetical
  * when the model's context window is known. The option's `value` stays the raw
  * id — only the label carries the annotation.

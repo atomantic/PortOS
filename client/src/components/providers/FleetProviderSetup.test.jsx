@@ -10,6 +10,10 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('../../services/apiProviders', () => api);
 
+const existingProviders = [
+  { id: 'opencode-1', name: 'My OpenCode', type: 'tui', command: 'opencode', envVars: { OTHER_VAR: '1' }, models: ['old-model'] },
+];
+
 const peers = [
   { id: 'peer-1', name: 'Workstation GPU', host: 'workstation.tailnet.ts.net', enabled: true },
   { id: 'peer-2', name: 'MacBook', address: '192.168.1.50', enabled: true },
@@ -118,5 +122,66 @@ describe('FleetProviderSetup', () => {
         })
       );
     });
+  });
+
+  it('prefills this machine\'s own loopback endpoint and key in self-host mode', async () => {
+    api.getFleetLlmHost.mockResolvedValue({ hasApiKey: true, model: 'qwen3.8-27b' });
+    api.revealFleetLlmHostKey.mockResolvedValue({ apiKey: 'self-host-key-1234567890123456' });
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&selfHost=1']}>
+        <FleetProviderSetup onClose={() => {}} onCreate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('GPU host endpoint').value).toBe('http://127.0.0.1:18022/v1');
+    });
+    expect(screen.getByPlaceholderText('Enter host API key').value).toBe('self-host-key-1234567890123456');
+  });
+
+  it('surfaces an error in self-host mode when the host has not been set up yet', async () => {
+    api.getFleetLlmHost.mockResolvedValue({ hasApiKey: false });
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&selfHost=1']}>
+        <FleetProviderSetup onClose={() => {}} onCreate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText(/Complete Model host setup/)).toBeInTheDocument();
+  });
+
+  it('updates an existing provider in place instead of creating a new one when repointing', async () => {
+    const onUpdate = vi.fn().mockResolvedValue({});
+    const onCreate = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&peerId=peer-1']}>
+        <FleetProviderSetup peers={peers} providers={existingProviders} onClose={onClose} onCreate={onCreate} onUpdate={onUpdate} />
+      </MemoryRouter>
+    );
+
+    fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'opencode-1' } });
+    fireEvent.change(screen.getByPlaceholderText('Enter host API key'), { target: { value: 'repoint-key-at-least-24-characters' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider' }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith(
+        'opencode-1',
+        expect.objectContaining({
+          name: 'My OpenCode',
+          apiKey: 'repoint-key-at-least-24-characters',
+          type: 'tui',
+          // The provider's other env var and previously-served model survive
+          // the repoint instead of being clobbered by the fleet defaults.
+          envVars: expect.objectContaining({ OTHER_VAR: '1' }),
+          models: expect.arrayContaining(['old-model', 'qwen3.8-27b']),
+        })
+      );
+    });
+    expect(onCreate).not.toHaveBeenCalled();
   });
 });
