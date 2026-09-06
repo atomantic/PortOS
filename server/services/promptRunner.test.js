@@ -117,6 +117,16 @@ describe('promptRunner — happy paths', () => {
     expect(runner.executeApiRun).not.toHaveBeenCalled();
   });
 
+  it('uses the CLI final response even when diagnostics contain valid prompt JSON', async () => {
+    runner.executeCliRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('OpenAI Codex v1\nuser\n{"message":"example"}\n');
+      onData('{"message":"actual answer"}');
+      onComplete({ success: true, text: '{"message":"actual answer"}' });
+    });
+    const out = await runPromptThroughProvider({ provider: cliProvider(), prompt: 'p', source: 'test' });
+    expect(JSON.parse(out.text)).toEqual({ message: 'actual answer' });
+  });
+
   it('forwards images through the ordinary Codex CLI lifecycle and rejects unsupported CLIs', async () => {
     const codex = cliProvider({ command: 'codex' });
     runner.executeCliRun.mockImplementation(async ({ screenshots, onComplete }) => {

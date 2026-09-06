@@ -79,6 +79,28 @@ beforeEach(() => {
 });
 
 describe('persistent mind adapter', () => {
+  it.each([
+    'OpenAI Codex v1\nuser\n{"message":"example"}',
+    JSON.stringify({ toolCalls: [{ name: 'catalog-name', arguments: {} }], memoryCandidates: [{ content: 'Example memory' }] }),
+  ])('rejects prompt echoes before any side effects', async (text) => {
+    mock.runPrompt.mockResolvedValue({ text });
+    await expect(createPersistentMindTurnAdapter().run({
+      turnId: 'echo-turn', wake: { kind: 'self' }, ...profile,
+      signal: new AbortController().signal, context: { text: '# Context' },
+    })).rejects.toThrow(/instead of an assistant response/);
+    expect(mock.executeToolCall).not.toHaveBeenCalled();
+    expect(mock.executeTaskRequests).not.toHaveBeenCalled();
+    expect(mock.executeCallRequest).not.toHaveBeenCalled();
+    expect(mock.createPersistentMindMemoryFromCandidate).not.toHaveBeenCalled();
+    expect(mock.runPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['', 'OpenAI Codex v1\nuser\nSummarize prior events'])('rejects unusable summaries', async (text) => {
+    mock.runPrompt.mockResolvedValue({ text });
+    await expect(createPersistentMindTurnAdapter().summarize({ events: [], ...profile }))
+      .rejects.toThrow(/instead of an assistant response/);
+  });
+
   it('prepares editable prompt and curated memory context without inference', async () => {
     const prepared = await createPersistentMindTurnAdapter().prepare({ profile });
     expect(prepared).toMatchObject({
