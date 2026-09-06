@@ -9,6 +9,7 @@
  */
 
 import os from 'os';
+import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { isAppleSilicon } from './platform.js';
 import { getCudaCapability, getCudaComputeCapability } from './cudaCapability.js';
 
@@ -385,6 +386,13 @@ export function withHardwareCompatibility(item, capabilities, requirements) {
 }
 
 export function withProviderHardwareCompatibility(provider, capabilities) {
+  // These probes describe this PortOS host, not the machine serving a remote
+  // API (including a local CLI harness backed by a fleet GPU endpoint).
+  // Preserve requirements, but leave remote hardware unverified and selectable.
+  const endpoint = provider?.endpoint;
+  const remoteEndpoint = typeof endpoint === 'string' && URL.canParse(endpoint)
+    && !isLocalInstanceEndpoint(endpoint);
+  const runtimeCapabilities = remoteEndpoint ? null : capabilities;
   const hardwareRequirements = hardwareRequirementsForProvider(provider);
   const modelRequirementLayers = provider?.modelHardwareRequirements || {};
   const modelIds = [...new Set([
@@ -398,7 +406,7 @@ export function withProviderHardwareCompatibility(provider, capabilities) {
   ].filter((model) => typeof model === 'string' && model))];
   const modelHardwareCompatibility = Object.fromEntries(modelIds.map((model) => {
     const requirements = hardwareRequirementsForProviderModel(provider, model);
-    return [model, evaluateHardwareRequirements(requirements, capabilities)];
+    return [model, evaluateHardwareRequirements(requirements, runtimeCapabilities)];
   }));
   const hasModelRequirements = Object.values(modelHardwareCompatibility).some(
     (compatibility) => Object.keys(compatibility.requirements).length > 0,
@@ -407,7 +415,7 @@ export function withProviderHardwareCompatibility(provider, capabilities) {
   return {
     ...provider,
     hardwareRequirements,
-    hardwareCompatibility: evaluateHardwareRequirements(hardwareRequirements, capabilities),
+    hardwareCompatibility: evaluateHardwareRequirements(hardwareRequirements, runtimeCapabilities),
     modelHardwareCompatibility,
   };
 }

@@ -179,6 +179,32 @@ describe('systemCapabilities', () => {
     expect(provider.modelHardwareCompatibility.large.state).toBe('unavailable');
   });
 
+  it('keeps fleet API and TUI models selectable without applying the caller hardware', () => {
+    for (const type of ['api', 'tui']) {
+      const provider = {
+        id: 'fleet-gpu',
+        type,
+        command: type === 'tui' ? 'opencode' : undefined,
+        endpoint: 'http://gpu.example.com:18022/v1',
+        vllmBacked: true,
+        models: ['qwen3.8-27b'],
+        hardwareRequirements: { platforms: ['win32'] },
+        modelHardwareRequirements: { 'qwen3.8-27b': { minMemoryGb: 256 } },
+      };
+      const remote = withProviderHardwareCompatibility(provider, APPLE_32GB);
+      expect(remote.hardwareCompatibility.state).toBe('unknown');
+      expect(remote.modelHardwareCompatibility['qwen3.8-27b']).toMatchObject({
+        state: 'unknown',
+        requirements: { minMemoryGb: 256, platforms: ['win32'] },
+      });
+      for (const endpoint of ['http://localhost:18022/v1', 'http://[::1]:18022/v1', '', undefined]) {
+        const local = withProviderHardwareCompatibility({ ...provider, endpoint }, APPLE_32GB);
+        expect(local.hardwareCompatibility.state).toBe('unavailable');
+        expect(local.modelHardwareCompatibility['qwen3.8-27b'].state).toBe('unavailable');
+      }
+    }
+  });
+
   it('retains inferred local model compatibility without provider overrides', () => {
     const provider = withProviderHardwareCompatibility({
       id: 'ollama',
