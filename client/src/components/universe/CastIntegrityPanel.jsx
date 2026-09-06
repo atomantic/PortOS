@@ -210,7 +210,12 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
               Whether each character holds together — not just whether the fields are filled. The completeness pass below is free; the semantic review costs one provider call.
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close cast integrity" className="text-gray-500 hover:text-white">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close cast integrity"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center text-gray-500 hover:text-white"
+          >
             <X size={16} />
           </button>
         </div>
@@ -285,6 +290,7 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
                               id={checkboxId}
                               checked={selected.has(f.id)}
                               onChange={() => toggleFinding(f.id)}
+                              aria-label={`Select ${humanizeField(f.field)} on ${f.characterName || f.characterId} for augmentation`}
                               className="mt-0.5 accent-port-accent"
                             />
                           ) : <span className="w-3" aria-hidden="true" />}
