@@ -79,13 +79,14 @@ describe('the shipped records a harness refresh may rewrite', () => {
       .sort();
 
     expect(rewritable).toEqual([
-      // The three harnesses that can enumerate their own models, crossed with
+      // The four harnesses that can enumerate their own models, crossed with
       // the wrappers that run those models natively. Every OpenCode wrapper
       // pointed at a local daemon or a hosted gateway is correctly absent.
       'antigravity-cli', 'antigravity-tui',
       'cursor-cli', 'cursor-tui',
       'grok-cli', 'grok-tui',
       'opencode-zen-cli', 'opencode-zen-tui',
+      'pi-cli', 'pi-tui',
     ]);
   });
 });
