@@ -296,3 +296,27 @@ it('respects initial zoom and stretch URL search parameters', async () => {
   expect(screen.getByTestId('yaxis')).toHaveAttribute('data-domain', JSON.stringify([40, 60]));
 });
 
+it('persists settings to localStorage and restores them on a fresh visit', async () => {
+  localStorage.clear();
+  const { unmount } = render(
+    <MemoryRouter initialEntries={['/']}>
+      <ModelComparison />
+    </MemoryRouter>
+  );
+  await act(async () => {});
+  await screen.findByText(/1 plotted/);
+
+  fireEvent.click(screen.getByRole('button', { name: '1.5×' }));
+  await waitFor(() => expect(localStorage.getItem('portos-model-comparison-settings')).toContain('stretch=1.5'));
+  unmount();
+
+  render(
+    <MemoryRouter initialEntries={['/']}>
+      <ModelComparison />
+    </MemoryRouter>
+  );
+  await act(async () => {});
+  await screen.findByText(/1 plotted/);
+  expect(screen.getByRole('button', { name: '1.5×' })).toHaveAttribute('aria-pressed', 'true');
+});
+

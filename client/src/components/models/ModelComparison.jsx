@@ -33,6 +33,9 @@ import {
 import Modal from '../ui/Modal';
 import ComparisonResearch from './ComparisonResearch';
 import { EFFORT_LADDER, withEstimatedCosts } from '../../lib/effortCostEstimate';
+import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
+
+const SETTINGS_STORAGE_KEY = 'portos-model-comparison-settings';
 
 const COLORS = [
   '#2563eb', // blue (GPT-5.6 Sol)
@@ -98,6 +101,25 @@ export default function ModelComparison() {
   const [syncStatus, setSyncStatus] = useState('');
   const [syncError, setSyncError] = useState('');
   const [syncing, setSyncing] = useState(false);
+
+  // Restore the last-viewed settings from localStorage when the page is opened
+  // with no query string (a bookmark-free visit), so filters/zoom/scale persist
+  // across sessions instead of resetting every time. An explicit URL (a shared
+  // link, browser back/forward) always wins over the stored snapshot.
+  useEffect(() => {
+    if (params.toString() !== '') return;
+    const stored = safeReadStorage(SETTINGS_STORAGE_KEY);
+    if (!stored) return;
+    setParams(new URLSearchParams(stored), { replace: true });
+    // Restore once, on mount only — subsequent param changes are the user
+    // driving the page, not something to overwrite from storage again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const query = params.toString();
+    if (query) safeWriteStorage(SETTINGS_STORAGE_KEY, query);
+  }, [params]);
 
   const xMinParam = params.get('xMin');
   const xMaxParam = params.get('xMax');
