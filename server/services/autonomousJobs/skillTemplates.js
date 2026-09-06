@@ -150,7 +150,7 @@ async function generateTaskFromJob(job) {
     ? (job.appId ? await getAppById(job.appId) : { id: null, name: 'PortOS', repoPath: PATHS.root })
     : null
   const inputs = selectedInputs.length > 0
-    ? await resolveTaskDataInputs(selectedInputs, { app })
+    ? await resolveTaskDataInputs(selectedInputs, { app, taskMetadata: job.taskMetadata })
     : []
   const taskPrompt = appendTaskDataInputs(prompt, inputs)
   const description = taskPrompt.split('\n').map(line => line.trim()).find(Boolean) || job.name

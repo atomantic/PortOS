@@ -68,6 +68,28 @@ describe('taskDataInputs', () => {
     expect(empty[0].content).toBe('No open issues.');
   });
 
+  it('uses task policy for issue context and fails closed when policy resolution fails', async () => {
+    const listConfiguredIssues = vi.fn().mockResolvedValue({ ok: true, issues: [{ number: 7, title: 'Eligible' }] });
+    const listIssues = vi.fn();
+    const options = {
+      app: APP, taskType: 'claim-issue',
+      taskMetadata: { issueAuthorFilter: 'collaborators', issueExcludeLabels: ['human-only'] },
+      dependencies: {
+        resolveTracker: vi.fn().mockResolvedValue({ forge: 'gh', host: 'github.com' }),
+        resolveTokenEnv: vi.fn().mockResolvedValue({}), listConfiguredIssues, listIssues,
+      },
+    };
+    const sections = await resolveTaskDataInputs(['open-issues'], options);
+    expect(sections[0].content).toContain('#7 Eligible');
+    expect(listConfiguredIssues).toHaveBeenCalledWith('gh', APP, options.taskMetadata, expect.any(Object));
+    listConfiguredIssues.mockResolvedValue({ ok: false, issues: [] });
+    expect((await resolveTaskDataInputs(['open-issues'], options))[0].content).toContain('could not be preloaded');
+    options.taskMetadata = {};
+    await resolveTaskDataInputs(['open-issues'], options);
+    expect(listConfiguredIssues).toHaveBeenLastCalledWith('gh', APP, { issueAuthorFilter: 'self', issueExcludeLabels: [] }, expect.any(Object));
+    expect(listIssues).not.toHaveBeenCalled();
+  });
+
   it('reports a discovered document that could not be read', async () => {
     const sections = await resolveTaskDataInputs(['project-goals'], {
       app: APP,

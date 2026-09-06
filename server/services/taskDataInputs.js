@@ -216,11 +216,22 @@ const INPUT_LOADERS = {
   'project-goals': async ({ app, deps }) => renderRepositoryDocuments(
     'GOALS.md', await deps.findFiles(app?.repoPath, 'GOALS.md')
   ),
-  'open-issues': async ({ app, deps, forge }) => {
+  'open-issues': async ({ app, deps, forge, taskMetadata, taskType }) => {
     if (!forge) return unavailableMessage('Open issues', 'repository forge is unavailable');
-    const result = await deps.listIssues({ cli: forge.cli, cwd: app.repoPath, env: forge.env });
+    const claimTask = ['claim-issue', 'claim-issue-gitlab', 'claim-work'].includes(taskType);
+    const configured = taskMetadata.issueAuthorFilter !== undefined
+      || taskMetadata.issueExcludeLabels?.length > 0
+      || claimTask;
+    const result = configured
+      ? await deps.listConfiguredIssues(forge.cli, app, {
+          issueAuthorFilter: taskMetadata.issueAuthorFilter
+            ?? (claimTask ? 'self' : 'any'),
+          issueExcludeLabels: taskMetadata.issueExcludeLabels || [],
+        }, forge.env)
+      : await deps.listIssues({ cli: forge.cli, cwd: app.repoPath, env: forge.env });
     return result.ok
-      ? renderForgeItems(result.issues, { emptyMessage: 'No open issues.' })
+      ? renderForgeItems(result.issues, { emptyMessage: configured ? 'No open issues match this task’s configured filters.' : 'No open issues.' })
+        + (result.truncated ? TRUNCATION_NOTICE : '')
       : unavailableMessage('Open issues');
   },
   'open-pull-requests': async ({ app, deps, forge }) => {
@@ -240,7 +251,7 @@ const INPUT_LOADERS = {
 };
 
 /** Resolve selected input ids into prompt-ready sections without throwing. */
-export async function resolveTaskDataInputs(inputIds, { app, dependencies = {} } = {}) {
+export async function resolveTaskDataInputs(inputIds, { app, taskMetadata = {}, taskType, dependencies = {} } = {}) {
   const selected = Array.isArray(inputIds) ? [...new Set(inputIds)] : [];
   if (!selected.length) return [];
   const definitions = new Map(TASK_DATA_INPUT_DEFINITIONS.map((definition) => [definition.id, definition]));
@@ -249,6 +260,10 @@ export async function resolveTaskDataInputs(inputIds, { app, dependencies = {} }
     resolveTracker: resolveAppWorkTracker,
     resolveTokenEnv: resolveForgeTokenEnv,
     listIssues: listForgeOpenIssues,
+    listConfiguredIssues: async (...args) => {
+      const { listConfiguredForgeIssues } = await import('./perpetualWork.js');
+      return listConfiguredForgeIssues(...args);
+    },
     listPullRequests: listForgePullRequests,
     environment: process.env,
     ...dependencies,
@@ -262,7 +277,7 @@ export async function resolveTaskDataInputs(inputIds, { app, dependencies = {} }
     const definition = definitions.get(id);
     const loader = INPUT_LOADERS[id];
     if (!definition || !loader) return null;
-    const content = await loader({ app, deps, forge }).catch(() => unavailableMessage(definition.label));
+    const content = await loader({ app, deps, forge, taskMetadata, taskType }).catch(() => unavailableMessage(definition.label));
     return { id, label: definition.label, content };
   }));
   return sections.filter(Boolean);

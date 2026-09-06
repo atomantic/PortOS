@@ -18,6 +18,7 @@ import {
   issueNumberFromRef,
   detectActionableWork,
   detectGithubIssues,
+  listConfiguredForgeIssues,
   detectGitlabIssues,
   registerWorkDetector,
   getWorkDetector,
@@ -543,6 +544,35 @@ describe('perpetualWork', () => {
         expect(authorListCalls()).toEqual(['alice', 'bob', 'carol']);
         const memberCall = spawn.mock.calls.find(([cmd, args]) => cmd === 'gh' && args[0] === 'api' && args.includes('--paginate'));
         expect(memberCall[1]).toEqual(expect.arrayContaining(['--hostname', 'github.com']));
+      });
+
+      it('preloads only trusted authors and configured labels without applying claim-state skips', async () => {
+        routeCollaborators({ issuesByAuthor: {
+          alice: [
+            { number: 1, title: 'Blocked context', labels: ['blocked'], author: { login: 'alice' } },
+            { number: 2, title: 'Reserved', labels: [{ name: 'Human-Only' }], author: { login: 'alice' } },
+            { number: 3, title: 'External', labels: [], author: { login: 'outsider' } },
+            { number: 4, title: 'Unknown', labels: [] }
+          ],
+          bob: [{ number: 5, title: 'Teammate', labels: [], author: { login: 'Bob' } }],
+          carol: []
+        } });
+        const out = await listConfiguredForgeIssues('gh', app, {
+          issueAuthorFilter: 'collaborators', issueExcludeLabels: ['human-only']
+        }, { PATH: '/bin' });
+        expect(out.ok).toBe(true);
+        expect(out.issues.map(issue => issue.number)).toEqual([1, 5]);
+        expect(spawn.mock.calls.filter(([cmd]) => cmd === 'gh').every(([, , options]) =>
+          options.env?.PATH === '/bin'
+        )).toBe(true);
+        expect(authorListCalls()).toEqual(['alice', 'bob', 'carol']);
+      });
+
+      it('does not preload a partial trusted set when collaborator lookup fails', async () => {
+        routeCollaborators({ collabCode: 1 });
+        const out = await listConfiguredForgeIssues('gh', app, { issueAuthorFilter: 'collaborators' });
+        expect(out).toMatchObject({ ok: false, issues: [] });
+        expect(authorListCalls()).toEqual([]);
       });
 
       it('de-duplicates an issue returned by more than one author query', async () => {

@@ -68,10 +68,10 @@ export const WORK_ITEM_LIMIT = 50;
  * Never rejects: a spawn error, non-zero exit, or timeout all resolve to a
  * result object the detectors classify themselves.
  */
-function runCli(cmd, args, cwd) {
+function runCli(cmd, args, cwd, env) {
   return new Promise((resolve) => {
     let stdout = '', stderr = '', settled = false;
-    const child = spawn(cmd, args, { cwd, shell: false });
+    const child = spawn(cmd, args, { cwd, shell: false, ...(env ? { env } : {}) });
     const done = (result) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result); } };
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
@@ -266,9 +266,9 @@ const withGithubHost = async (args, repoPath) => [
   ...args.slice(1)
 ];
 
-async function resolveAuthenticatedLogin(cli, args, repoPath) {
+async function resolveAuthenticatedLogin(cli, args, repoPath, env) {
   const probeArgs = cli === 'gh' ? await withGithubHost(args, repoPath) : args;
-  const res = await runCli(cli, probeArgs, repoPath);
+  const res = await runCli(cli, probeArgs, repoPath, env);
   const login = (res.stdout || '').trim();
   return (res.code !== 0 || !login) ? { error: `${cli}-unavailable` } : { login };
 }
@@ -282,13 +282,13 @@ async function resolveAuthenticatedLogin(cli, args, repoPath) {
  * security boundary. Both are worse than retrying next tick, so the failure
  * carries a `remedy` the caller can surface instead.
  */
-async function resolveTrustedLogins(cfg, repoPath) {
-  const { login, error } = await resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath);
+async function resolveTrustedLogins(cfg, repoPath, env) {
+  const { login, error } = await resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, env);
   if (error) return { error };
   const membersArgs = cfg.cli === 'gh'
     ? await withGithubHost(cfg.membersArgs, repoPath)
     : cfg.membersArgs;
-  const res = await runCli(cfg.cli, membersArgs, repoPath);
+  const res = await runCli(cfg.cli, membersArgs, repoPath, env);
   if (res.code !== 0) return { error: cfg.membersFail, remedy: cfg.membersRemedy };
   const logins = new Set([login.toLowerCase()]);
   for (const line of (res.stdout || '').split('\n')) {
@@ -367,8 +367,8 @@ const FORGE_ISSUE_CONFIG = {
     // gh; transient if gh is unauthenticated / not a GitHub remote. `isOrg` lets
     // detectForgeIssues short-circuit the owner-filter org trap — an org login is
     // never an issue author, so `--author <org>` is guaranteed to match nothing.
-    resolveOwner: async (repoPath) => {
-      const r = await runCli('gh', ['repo', 'view', '--json', 'owner,isInOrganization'], repoPath);
+    resolveOwner: async (repoPath, env) => {
+      const r = await runCli('gh', ['repo', 'view', '--json', 'owner,isInOrganization'], repoPath, env);
       if (r.code !== 0) return { error: 'gh-unavailable' };
       let parsed;
       try {
@@ -433,20 +433,20 @@ const FORGE_ISSUE_CONFIG = {
     // somehow does, skip the ambiguous probe and take the safe `--author <ns>`
     // path (isOrg:false). Nested subgroups are URL-encoded (`parent%2Fsub`) and so
     // are never all-numeric — they still probe normally.
-    resolveOwner: async (repoPath) => {
+    resolveOwner: async (repoPath, env) => {
       const namespace = await resolveGitlabNamespace(repoPath);
       if (!namespace) return { error: 'glab-owner-unresolved' };
       const probe = /^\d+$/.test(namespace)
         ? { code: 1 }
-        : await runCli('glab', ['api', `groups/${encodeURIComponent(namespace)}`], repoPath);
+        : await runCli('glab', ['api', `groups/${encodeURIComponent(namespace)}`], repoPath, env);
       return { owner: namespace, isOrg: probe.code === 0 };
     },
     // `--self` mode: glab's `--author` expects a username (no `@me` token), so
     // resolve the authenticated account via the API; the same lookup also powers
     // the self-assignee retry check. It is transient if glab is unauthenticated
     // or unreachable.
-    resolveSelf: async (repoPath) => {
-      const { login, error } = await resolveAuthenticatedLogin('glab', GLAB_SELF_LOGIN_ARGS, repoPath);
+    resolveSelf: async (repoPath, env) => {
+      const { login, error } = await resolveAuthenticatedLogin('glab', GLAB_SELF_LOGIN_ARGS, repoPath, env);
       return error ? { error } : { author: login };
     },
     // `collaborators` mode: you + every project member. `members/all` (not
@@ -472,8 +472,8 @@ const FORGE_ISSUE_CONFIG = {
  * phantom count. Reuses `cfg.listArgs`, which is the base list WITHOUT the
  * `--author` filter (the filter is appended separately in detectForgeIssues).
  */
-async function countOpenIssuesUnfiltered(cfg, repoPath) {
-  const res = await runCli(cfg.cli, [...cfg.listArgs], repoPath);
+async function countOpenIssuesUnfiltered(cfg, repoPath, env) {
+  const res = await runCli(cfg.cli, [...cfg.listArgs], repoPath, env);
   if (res.code !== 0) return 0;
   let raw;
   try {
@@ -493,7 +493,7 @@ async function countOpenIssuesUnfiltered(cfg, repoPath) {
  * issues; 'any' = every author). The in-flight scan runs only when the list is
  * non-empty, so an empty queue parks without a wasted branch/PR scan.
  */
-async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [] } = {}) {
+async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [] } = {}, contextOnly = false, env) {
   const cfg = FORGE_ISSUE_CONFIG[forgeKey];
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
@@ -537,12 +537,12 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   if (issueAuthorFilter === 'any') {
     // no --author filter
   } else if (issueAuthorFilter === 'collaborators') {
-    const { logins, error, remedy } = await resolveTrustedLogins(cfg, repoPath);
+    const { logins, error, remedy } = await resolveTrustedLogins(cfg, repoPath, env);
     if (error) return transient(error, remedy);
     trustedLogins = logins;
     authorApplied = true;
   } else if (issueAuthorFilter === 'owner') {
-    const { owner, isOrg, error } = await cfg.resolveOwner(repoPath);
+    const { owner, isOrg, error } = await cfg.resolveOwner(repoPath, env);
     if (error) return transient(error);
     if (isOrg) {
       // The owner filter resolved to a non-authoring owner (a GitHub ORG or a
@@ -551,13 +551,13 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
       // count with the forge-flavored short-circuit reason (`owner-is-org` /
       // `owner-is-group`), so the toast steers the user to 'self'/'any' instead of
       // implying a personal-username mismatch (the failure that motivated this).
-      const openCount = await countOpenIssuesUnfiltered(cfg, repoPath);
+      const openCount = contextOnly ? 0 : await countOpenIssuesUnfiltered(cfg, repoPath, env);
       return parked(cfg.ownerIsOrgReason, openCount);
     }
     args.push('--author', owner);
     authorApplied = true;
   } else {
-    const { author, error } = await cfg.resolveSelf(repoPath);
+    const { author, error } = await cfg.resolveSelf(repoPath, env);
     if (error) return transient(error);
     args.push('--author', author);
     authorApplied = true;
@@ -566,8 +566,9 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   // One issue-list invocation: run it, parse it, and report the forge-flavored
   // transient reason on any failure. Shared by the single-query paths and by the
   // `collaborators` per-login fan-out below.
+  let listingTruncated = false;
   const listIssues = async (extraArgs = []) => {
-    const res = await runCli(cfg.cli, [...args, ...extraArgs], repoPath);
+    const res = await runCli(cfg.cli, [...args, ...extraArgs], repoPath, env);
     if (res.code !== 0) return { error: cfg.listFail };
     let parsed;
     try {
@@ -576,6 +577,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
       return { error: cfg.parseFail };
     }
     if (!Array.isArray(parsed)) return { error: cfg.parseFail };
+    if (parsed.length >= (cfg.cli === 'gh' ? 500 : 100)) listingTruncated = true;
     return { issues: cfg.normalize(parsed) };
   };
 
@@ -612,6 +614,18 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   // boundary, so "can't tell who filed it" resolves to "not trusted".
   if (trustedLogins) issues = issues.filter((i) => trustedLogins.has(i.authorLogin));
 
+  // Prompt context observes author and configured label policy without hiding
+  // blocked/assigned work that a non-claim task may need to inspect.
+  if (contextOnly) {
+    const excluded = new Set((Array.isArray(issueExcludeLabels) ? issueExcludeLabels : []).map((label) => String(label).toLowerCase()));
+    return {
+      truncated: listingTruncated || (trustedLogins?.size || 0) > MAX_COLLABORATOR_AUTHOR_QUERIES,
+      issues: issues.filter((issue) => !(issue.labels || []).some((label) =>
+        excluded.has(String(typeof label === 'string' ? label : label?.name).toLowerCase())
+      ))
+    };
+  }
+
   if (issues.length === 0) {
     // An empty *filtered* list is ambiguous: the repo may truly have no open
     // issues, OR it has open issues that just don't match the author filter —
@@ -631,7 +645,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     // when the other-authored issues are all blocked/assigned/decomposed
     // epics. Counting claimable ones would cost the full skip-list scan here.
     if (authorApplied) {
-      const openCount = await countOpenIssuesUnfiltered(cfg, repoPath);
+      const openCount = await countOpenIssuesUnfiltered(cfg, repoPath, env);
       if (openCount > 0) return parked('no-authored-issues', openCount);
     }
     return parked('no-open-issues');
@@ -641,7 +655,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   const [inFlight, currentLoginResult] = await Promise.all([
     inFlightIssueNumbers(repoPath, cfg.inFlightForge),
     hasAssignedIssue
-      ? resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath)
+      ? resolveAuthenticatedLogin(cfg.cli, cfg.selfLoginArgs, repoPath, env)
       : Promise.resolve({ login: null })
   ]);
   if (currentLoginResult.error) return transient(currentLoginResult.error);
@@ -672,6 +686,14 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     signature: JSON.stringify(canonicalizeIds(actionable.map((i) => i.number))),
     items: actionable.slice(0, WORK_ITEM_LIMIT).map((i) => ({ ref: String(i.number), title: i.title || '' }))
   };
+}
+
+/** List prompt inputs using the same author-resolution boundary as claiming. */
+export async function listConfiguredForgeIssues(cli, app, options, env) {
+  const result = await detectForgeIssues(
+    cli === 'glab' ? 'claim-issue-gitlab' : 'claim-issue', app, options, true, env
+  );
+  return { ok: !result.transient && result.reason !== 'no-repo-path', issues: result.issues || [], truncated: result.truncated === true };
 }
 
 // Forge-specific detector entry points (thin wrappers over the shared factory).

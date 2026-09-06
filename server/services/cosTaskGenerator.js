@@ -1917,7 +1917,9 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   }
 
   const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, {
-    app: { id: null, name: 'PortOS', repoPath: PATHS.root }
+    app: { id: null, name: 'PortOS', repoPath: PATHS.root },
+    taskMetadata: metadata,
+    taskType
   });
   description = appendTaskDataInputs(description, taskDataInputs);
 
@@ -3171,7 +3173,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       planConstraint: planConstraintBlock
     }
   });
-  const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, { app });
+  const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, { app, taskMetadata: metadata, taskType: promptTaskType });
   const description = scopeDescriptionToPullRequest(
     appendTaskDataInputs(baseDescription, taskDataInputs),
     metadata
