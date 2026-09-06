@@ -1201,6 +1201,66 @@ describe('authored psychology at the FableLoom prompt boundary (#6416)', () => {
   });
 });
 
+describe('descriptive canon reveal gate at the FableLoom prompt boundary (#6426)', () => {
+  // A spoiler character whose concealed origin lives in `background` — the
+  // field the descriptive block used to publish while the psychology block
+  // masked the same character. Obviously-fake placeholder content only.
+  const maskedCanonUniverse = () => authoredCanonUniverse({
+    characters: [{
+      id: 'character-masked',
+      name: 'The Auditor',
+      role: 'antagonist',
+      spoiler: true,
+      surfaceDescriptor: 'a clerk with a ledger',
+      background: 'LEAK-background signed off on the collapse',
+      personality: 'LEAK-personality outwardly meek, actually the signatory',
+      lie: 'LEAK-lie the ledger is the only honest thing left',
+    }],
+  });
+
+  it('keeps the concealed background out of the generation digest while still naming the character', async () => {
+    getUniverseMock.mockResolvedValue(maskedCanonUniverse());
+    const digest = await buildCanonDigest({ universeId: 'uni-1' });
+    expect(digest).toContain('- The Auditor [antagonist]: a clerk with a ledger — (reveal-gated');
+    expect(digest).not.toMatch(/LEAK-/);
+  });
+
+  it('never reaches the reader-facing play turn', async () => {
+    const { loomId, episodeId } = await setup();
+    getUniverseMock.mockResolvedValue(maskedCanonUniverse());
+    await updateLoom(loomId, { participationMode: 'protagonist' });
+    runStagedLLM.mockResolvedValueOnce({ content: generatedGraph(), runId: 'weave-run' });
+    const woven = await weaveEpisode(loomId, episodeId, {});
+    const startNode = woven.loom.episodes[0].nodes.find((node) => node.id === woven.loom.episodes[0].startNodeId);
+    runStagedLLM.mockClear();
+    runStagedLLM.mockResolvedValueOnce({ content: { action: 'stay', narration: 'You wait.' }, runId: 'play-run' });
+
+    await playTurn(loomId, episodeId, { nodeId: startNode.id, message: 'look around' });
+
+    const prompt = JSON.stringify(runStagedLLM.mock.calls[0]);
+    expect(prompt).not.toMatch(/LEAK-/);
+    // Not even the masked identity line: a play turn renders no canon at all,
+    // so piping any digest in here — gated or not — fails this.
+    expect(prompt).not.toContain('The Auditor');
+    expect(prompt).not.toContain('character engines');
+  });
+
+  it('never reaches the first-time-viewer cold read', async () => {
+    const { loomId, episodeId } = await setup();
+    getUniverseMock.mockResolvedValue(maskedCanonUniverse());
+    runStagedLLM.mockResolvedValueOnce({ content: generatedOutline(), runId: 'outline-run' });
+    await generateEpisodeOutline(loomId, episodeId, {});
+    runStagedLLM.mockClear();
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'No personal goal is shown.', risks: ['Show what she wants.'] }, runId: 'cold-review' });
+
+    await reviewEpisodeOutline(loomId, episodeId, {});
+
+    const prompt = JSON.stringify(runStagedLLM.mock.calls[0]);
+    expect(prompt).toContain('(withheld for first-time-viewer review)');
+    expect(prompt).not.toMatch(/LEAK-/);
+  });
+});
+
 describe('series plan AI', () => {
   it('drafts and persists a complete scaffold while preserving episode records', async () => {
     const { loomId, episodeId } = await setup();

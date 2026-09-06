@@ -198,8 +198,18 @@ const loadEditorialDependencies = async (loom, {
     // Same composer the generation stages use, so the editor reviews a story
     // against the SAME authored psychology the writer was given — a reviewer
     // that can't see the Lie can't tell a broken arc from an intended one.
+    //
+    // The reveal gate is OFF here on purpose (#6426). The editorial pass is a
+    // read-only author-side critique whose whole job includes catching a
+    // premature reveal; a reviewer handed the masked view cannot tell concealed
+    // history from history the story never had. storyBible.js makes the same
+    // call for its editorial checks ("NOT by the editorial checks — they get
+    // full canon"). Generation stages keep the gate on via the default.
     canonDigest: universe
-      ? renderStoryCanonDigest(universe, { protagonistCharacterId: loom.protagonistCharacterId })
+      ? renderStoryCanonDigest(universe, {
+        protagonistCharacterId: loom.protagonistCharacterId,
+        respectRevealGates: false,
+      })
       : '',
   };
 };
