@@ -96,6 +96,15 @@ describe('videoGen/fal — _internals.buildRequestBody', () => {
       prompt: 'pan', duration: '10', aspect_ratio: '16:9', image_url: 'data:image/png;base64,AA==',
     });
   });
+
+  it('folds negativePrompt into the prompt as an Avoid clause, same fallback as grok', () => {
+    expect(fal._internals.buildRequestBody({ prompt: 'a fox running', negativePrompt: 'blurry, low quality' }))
+      .toEqual({ prompt: 'a fox running\nAvoid: blurry, low quality' });
+    expect(fal._internals.buildRequestBody({ prompt: 'a fox running', negativePrompt: '  ' }))
+      .toEqual({ prompt: 'a fox running' });
+    expect(fal._internals.buildRequestBody({ prompt: 'a fox running' }))
+      .toEqual({ prompt: 'a fox running' });
+  });
 });
 
 describe('videoGen/fal — generateVideo', () => {

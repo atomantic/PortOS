@@ -111,8 +111,12 @@ async function toDataUri(imagePath) {
   return `data:${mime};base64,${buf.toString('base64')}`;
 }
 
-function buildRequestBody({ prompt, duration, aspectRatio, imageDataUri }) {
-  const body = { prompt: prompt.trim() };
+function buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri }) {
+  // fal.ai's queue REST API has no dedicated negative-prompt field for these
+  // models — fold it into the prompt as an "Avoid:" clause, same fallback
+  // grok.js uses for a provider that lacks a native field.
+  const avoid = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
+  const body = { prompt: `${prompt.trim()}${avoid}` };
   if (duration) body.duration = String(duration);
   if (aspectRatio) body.aspect_ratio = aspectRatio;
   if (imageDataUri) body.image_url = imageDataUri;
@@ -202,7 +206,7 @@ export async function generateVideo({
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
   broadcastSse(job, { type: 'status', message: 'Submitting to fal.ai…' });
 
-  runFalVideo(job, jobId, { apiKey, modelId, prompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, outputPath, filename, meta })
+  runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, outputPath, filename, meta })
     .catch((err) => {
       console.log(`❌ fal video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
     });
@@ -214,13 +218,13 @@ export async function generateVideo({
   };
 }
 
-async function runFalVideo(job, jobId, { apiKey, modelId, prompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta }) {
+async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt, duration, aspectRatio, sourceImagePath, outputPath, filename, meta }) {
   const entry = { apiKey, aborted: false, cancelUrl: null };
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_RENDER_TIMEOUT_MS;
   try {
     const imageDataUri = sourceImagePath ? await toDataUri(sourceImagePath) : null;
-    const body = buildRequestBody({ prompt, duration, aspectRatio, imageDataUri });
+    const body = buildRequestBody({ prompt, negativePrompt, duration, aspectRatio, imageDataUri });
     const submitted = await submitFalJob({ apiKey, modelId, body });
     entry.cancelUrl = submitted.cancel_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${submitted.request_id}/cancel`;
     const statusUrl = submitted.status_url || `${FAL_QUEUE_BASE}/${modelId}/requests/${submitted.request_id}/status`;
