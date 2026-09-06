@@ -724,11 +724,15 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     onTaskAdded?.(result, { position: addToTop ? 'top' : 'bottom' });
   };
 
-  // Compact mode: single row with description + app + add, expandable
+  // Compact mode: single row with description + app + add, expandable.
+  // Every breakpoint below is a CONTAINER query, not a viewport one: compact
+  // mode renders inside a dashboard tile that can be ~250px wide on a 2560px
+  // screen, where a viewport `sm:` kept the wide row and squeezed the textarea
+  // down to one character per line.
   if (compact) {
     return (
-      <div className="space-y-3">
-        <div className="flex flex-col sm:flex-row gap-2">
+      <div className="@container space-y-3">
+        <div className="flex flex-col @md:flex-row gap-2">
           <label htmlFor="compact-task-desc" className="sr-only">Task description (required)</label>
           <AutoSizeTextarea
             id="compact-task-desc"
@@ -741,11 +745,11 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 handleAddTask();
               }
             }}
-            className="w-full sm:flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+            className="w-full @md:flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />
           <div className="flex gap-2">
-            <div className="flex-1 sm:w-40 sm:flex-none">
+            <div className="flex-1 min-w-0 @md:w-40 @md:flex-none">
               <AppContextPicker
                 apps={apps}
                 value={newTask.app}
@@ -760,7 +764,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             <button
               onClick={handleAddTask}
               disabled={isSubmitting || isEnhancing}
-              className="flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[44px]"
+              className="flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[44px]"
             >
               {(isSubmitting || isEnhancing) ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
               {isSubmitting ? (planOnly ? 'Planning...' : 'Adding...') : planOnly ? 'Plan & File' : 'Add'}
@@ -786,7 +790,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
 
   // Full mode: identical to original TasksTab form
   return (
-    <div className="bg-port-card border border-port-accent/50 rounded-lg p-4 mb-4" role="form" aria-label="Add new task">
+    <div className="@container bg-port-card border border-port-accent/50 rounded-lg p-4 mb-4" role="form" aria-label="Add new task">
       {/* Quick Templates */}
       {templates.length > 0 && (
         <div className="mb-4">
@@ -815,7 +819,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                   {/* The Claude-Code form of the command, as a recognizable label.
                       The actual invocation is resolved server-side per provider. */}
                   {template.slashdoCommand && (
-                    <span className="hidden sm:inline text-xs text-port-accent/80 font-mono">{slashdoLabel(template.slashdoCommand)}</span>
+                    <span className="hidden @sm:inline text-xs text-port-accent/80 font-mono">{slashdoLabel(template.slashdoCommand)}</span>
                   )}
                   {template.useCount > 0 && (
                     <span className="text-xs text-gray-600">({template.useCount})</span>
@@ -878,7 +882,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             instances={assignableInstances}
           />
         )}
-        <div className="grid grid-cols-1 sm:flex sm:items-center gap-x-4 gap-y-1 sm:flex-wrap">
+        <div className="grid grid-cols-1 @sm:flex @sm:items-center gap-x-4 gap-y-1 @sm:flex-wrap">
           <label className="flex items-center gap-2 cursor-pointer select-none py-1">
             <input
               type="checkbox"
@@ -961,9 +965,9 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 </span>
               </label>
               {!useWorktree && (
-                <label htmlFor="task-when-done" className="flex items-center gap-2 py-1 basis-full sm:basis-auto">
+                <label htmlFor="task-when-done" className="flex flex-wrap items-center gap-2 py-1 basis-full @sm:basis-auto">
                   <span className="text-sm text-gray-400">When done</span>
-                  <select id="task-when-done" value={whenDone} onChange={(e) => setWhenDone(e.target.value)} className="min-w-52 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden">
+                  <select id="task-when-done" value={whenDone} onChange={(e) => setWhenDone(e.target.value)} className="w-full @sm:w-auto @sm:min-w-52 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden">
                     <option value="leave-uncommitted">Leave code uncommitted</option>
                     <option value="commit-push">Commit and push to default branch</option>
                   </select>
@@ -995,14 +999,14 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 </span>
               </label>
               {openPR && (
-                <label htmlFor="task-pr-completion" className="flex items-center gap-2 py-1 basis-full sm:basis-auto">
+                <label htmlFor="task-pr-completion" className="flex flex-wrap items-center gap-2 py-1 basis-full @sm:basis-auto">
                   <span className="text-sm text-gray-400">After opening PR</span>
                   <select
                     id="task-pr-completion"
                     value={prCompletion}
                     title={prCompletionOption(prCompletion)?.description}
                     onChange={(e) => setPrCompletion(e.target.value)}
-                    className="min-w-44 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden"
+                    className="w-full @sm:w-auto @sm:min-w-44 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden"
                   >
                     {PR_COMPLETION_OPTIONS.map(option => (
                       <option key={option.value} value={option.value}>{option.label}</option>
@@ -1055,8 +1059,8 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             </>
           )}
         </div>
-        <div className="flex items-center justify-between gap-2 pt-1 border-t border-port-border/40">
-          <div className="flex items-center gap-1.5 text-xs text-gray-400">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-port-border/40">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
             <span>Execution:</span>
             <button
               type="button"
@@ -1110,13 +1114,13 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 const models = selectedProv ? effortAwareModelOptions(selectedProv, roleData.model) : [];
 
                 return (
-                  <div key={key} className="flex flex-col sm:flex-row sm:items-center gap-2 text-xs">
-                    <div className="sm:w-28 flex-shrink-0">
+                  <div key={key} className="flex flex-col @lg:flex-row @lg:items-center gap-2 text-xs">
+                    <div className="@lg:w-28 flex-shrink-0">
                       <span className="font-medium text-white">{label}</span>
                       <span className="block text-[10px] text-gray-400 truncate">{hint}</span>
                     </div>
 
-                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="flex-1 min-w-0 grid grid-cols-1 @lg:grid-cols-3 gap-2">
                       <select
                         aria-label={`${label} provider`}
                         value={roleData.provider || ''}
@@ -1160,8 +1164,8 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             </div>
           </div>
         ) : (
-          <div className="flex flex-col sm:flex-row gap-3">
-            <div className="sm:w-40">
+          <div className="flex flex-col @md:flex-row gap-3">
+            <div className="@md:w-40">
               <label htmlFor="task-provider" className="sr-only">AI provider</label>
               <select
                 id="task-provider"
@@ -1179,7 +1183,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               </select>
             </div>
             {availableModels.length > 0 ? (
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <label htmlFor="task-model" className="sr-only">AI model</label>
                 <select
                   id="task-model"
@@ -1207,7 +1211,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 )}
               </div>
             ) : selectedProvider ? (
-              <div className="flex-1 px-3 py-2 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 flex items-center">
+              <div className="flex-1 min-w-0 px-3 py-2 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 flex items-center">
                 {providerModelNote}
               </div>
             ) : null}
@@ -1216,12 +1220,12 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               model={effectiveModelFor(selectedProvider, newTask.model)}
               value={newTask.effort}
               onChange={effort => setNewTask(t => ({ ...t, effort }))}
-              className="sm:w-40 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+              className="@md:w-40 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             />
           </div>
         )}
         {isOpencodeLocalProvider(selectedProvider) && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 @md:grid-cols-2 gap-3">
             {/* OrcaRouter fronts cloud models that own their own reasoning
                 switch, so it is the one local-namespace wrapper with no
                 thinking toggle to override. */}
@@ -1346,7 +1350,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
         )}
         {/* Template Save Inline Input */}
         {showTemplateSave && (
-          <div className="flex gap-2 items-center">
+          <div className="flex flex-wrap gap-2 items-center">
             <input
               type="text"
               value={templateNameInput}
@@ -1396,7 +1400,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               title="Save current form as a reusable template"
             >
               <Bookmark size={14} aria-hidden="true" />
-              <span className="hidden sm:inline">Save Template</span>
+              <span className="hidden @sm:inline">Save Template</span>
             </button>
             <button
               onClick={handleAddTask}

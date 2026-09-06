@@ -26,6 +26,21 @@ const normalizeReviewerValue = (value) => normalizeReviewerSlug(value);
 // older build either.
 const CUSTOM_MODEL_OPTION = '[custom]';
 
+// Shared row grid, one template for the header and every row so their columns
+// cannot drift apart. The wide form keeps minimum tracks for order, provider,
+// model, effort, optional, max, and remove — together ~32rem, so the collapse is
+// keyed to a CONTAINER query (`@xl`), not a viewport one: this picker also
+// renders inside a narrow dashboard tile on a wide screen, where a viewport
+// `sm:` was unconditionally true and forced the wide grid into a ~250px column.
+// Below `@xl` a row collapses to a stacked 2-column label/value block, so a
+// narrow container never scrolls horizontally. The header is wide-only — in the
+// stacked form each cell carries its own inline label, since a header far above
+// a stacked row doesn't associate.
+const WIDE_TRACKS = '@xl:grid-cols-[2.5rem_minmax(5rem,1fr)_minmax(8rem,2fr)_minmax(7rem,1fr)_auto_3.25rem_auto]';
+const ROW_CLASS = `grid grid-cols-[auto_1fr] ${WIDE_TRACKS} items-center gap-x-2 gap-y-1 px-1.5 py-1.5 rounded border border-port-border bg-port-bg @xl:border-transparent @xl:bg-transparent @xl:py-0.5 @xl:rounded-none`;
+const CELL_LABEL_CLASS = '@xl:hidden text-[10px] uppercase tracking-wide text-gray-600';
+const HEADER_CLASS = `hidden @xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.5 text-[10px] uppercase tracking-wide text-gray-600`;
+
 /**
  * Ordered multi-reviewer picker, rendered as one row per reviewer with the five
  * per-reviewer controls as columns: **Provider | Model | Effort | Optional | Max
@@ -647,18 +662,8 @@ export default function ReviewerPicker({
     emit({ reviewers: next });
   };
 
-  // Shared row grid. Desktop keeps minimum tracks for order, provider, model,
-  // effort, optional, max, and remove; under `sm` it collapses to a stacked
-  // 2-column label/value block so a narrow screen never needs horizontal
-  // scrolling. The header row is desktop-only — on mobile each cell carries
-  // its own inline label, since a header far above a stacked row doesn't
-  // associate.
-  const ROW_CLASS = 'grid grid-cols-[auto_1fr] sm:grid-cols-[2.5rem_minmax(5rem,1fr)_minmax(8rem,2fr)_minmax(7rem,1fr)_auto_3.25rem_auto] items-center gap-x-2 gap-y-1 px-1.5 py-1.5 rounded border border-port-border bg-port-bg sm:border-transparent sm:bg-transparent sm:py-0.5 sm:rounded-none';
-  const CELL_LABEL_CLASS = 'sm:hidden text-[10px] uppercase tracking-wide text-gray-600';
-  const HEADER_CLASS = 'hidden sm:grid sm:grid-cols-[2.5rem_minmax(5rem,1fr)_minmax(8rem,2fr)_minmax(7rem,1fr)_auto_3.25rem_auto] items-center gap-x-2 px-1.5 text-[10px] uppercase tracking-wide text-gray-600';
-
   return (
-    <div className="flex flex-col gap-2 w-full">
+    <div className="@container flex flex-col gap-2 w-full">
       <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">Reviewers (in order):</span>
         {selected.length > 0 && (
@@ -672,14 +677,14 @@ export default function ReviewerPicker({
               <span className="text-center">Max</span>
               <span className="sr-only">Remove</span>
             </div>
-            <div className="flex flex-col gap-1.5 sm:gap-0.5">
+            <div className="flex flex-col gap-1.5 @xl:gap-0.5">
               {selected.map((value, index) => (
                 <div
                   key={value}
                   className={ROW_CLASS}
                   title={REVIEWER_OPTIONS.find(o => o.value === value)?.description}
                 >
-                  <div className="flex items-center gap-0.5 col-span-2 sm:col-span-1">
+                  <div className="flex items-center gap-0.5 col-span-2 @xl:col-span-1">
                     <span className="text-port-accent font-mono text-xs">{index + 1}.</span>
                     <button
                       type="button"
@@ -700,7 +705,7 @@ export default function ReviewerPicker({
                       <ChevronDown size={12} />
                     </button>
                   </div>
-                  <span className="flex items-center gap-1 min-w-0 col-span-2 sm:col-span-1">
+                  <span className="flex items-center gap-1 min-w-0 col-span-2 @xl:col-span-1">
                     <span className="text-xs text-gray-300 truncate">{reviewerLabel(value)}</span>
                     {renderUnavailableBadge(value)}
                   </span>
@@ -716,7 +721,7 @@ export default function ReviewerPicker({
                   </div>
                   <span className={CELL_LABEL_CLASS}>Max iterations</span>
                   <div>{renderMaxRounds(value, reviewerLabel(value))}</div>
-                  <div className="col-span-2 sm:col-span-1 justify-self-end">
+                  <div className="col-span-2 @xl:col-span-1 justify-self-end">
                     <button
                       type="button"
                       disabled={disabled}
@@ -787,15 +792,15 @@ export default function ReviewerPicker({
       <div className="flex flex-col gap-1.5 pt-1 border-t border-port-border/50">
         <span className="text-xs text-gray-500">GitHub reviewers (gate merge):</span>
         {selectedUsernames.length > 0 ? (
-          <div className="flex flex-col gap-1.5 sm:gap-0.5">
+          <div className="flex flex-col gap-1.5 @xl:gap-0.5">
             {selectedUsernames.map((value) => (
               <div
                 key={value}
                 className={ROW_CLASS}
                 title="GitHub username requested as a PR reviewer to gate the merge"
               >
-                <span className="text-port-accent font-mono text-xs col-span-2 sm:col-span-1">@</span>
-                <span className="text-xs text-gray-300 col-span-2 sm:col-span-1 truncate">{value}</span>
+                <span className="text-port-accent font-mono text-xs col-span-2 @xl:col-span-1">@</span>
+                <span className="text-xs text-gray-300 col-span-2 @xl:col-span-1 truncate">{value}</span>
                 <span className={CELL_LABEL_CLASS}>Model</span>
                 <div className="min-w-0">{renderModelCell(`@${value}`)}</div>
                 <span className={CELL_LABEL_CLASS}>Effort</span>
@@ -808,7 +813,7 @@ export default function ReviewerPicker({
                 </div>
                 <span className={CELL_LABEL_CLASS}>Max iterations</span>
                 <div>{renderMaxRounds(`@${value}`, `@${value}`)}</div>
-                <div className="col-span-2 sm:col-span-1 justify-self-end">
+                <div className="col-span-2 @xl:col-span-1 justify-self-end">
                   <button
                     type="button"
                     disabled={disabled}
