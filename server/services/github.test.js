@@ -37,6 +37,7 @@ import {
   __resetGhCallBackoff,
   execGh,
   getGitHubAuthStatus,
+  getIssueDispatchHint,
   getPullRequestState,
   setRepoArchived,
   setSecret,
@@ -354,6 +355,80 @@ describe('getPullRequestState', () => {
 
   it('reports unavailable without shelling out when given no reference', async () => {
     await expect(getPullRequestState('')).resolves.toEqual({ status: 'unavailable', state: null, detail: 'no PR reference' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+});
+
+// branch-reconcile's per-branch dispatch-hint line (#6373) reads exactly this
+// answer, and a failed/unavailable read must be indistinguishable from "no
+// labels" to that caller — never a thrown error, never a state that could be
+// mistaken for a real (if empty) hint.
+describe('getIssueDispatchHint', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  const run = (issueNumber, drive) => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = getIssueDispatchHint(issueNumber);
+    drive(child);
+    return promise;
+  };
+
+  it('recovers both axes from the issue\'s labels', async () => {
+    const res = await run(77, (c) => {
+      c.stdout.emit('data', Buffer.from(JSON.stringify({
+        labels: [{ name: 'model:heavy' }, { name: 'effort:max' }, { name: 'area:cos-agents' }]
+      })));
+      c.emit('close', 0);
+    });
+    expect(res).toEqual({ status: 'known', model: 'heavy', effort: 'max' });
+  });
+
+  it('reports known with both axes null when the issue carries neither label', async () => {
+    const res = await run(77, (c) => {
+      c.stdout.emit('data', Buffer.from(JSON.stringify({ labels: [{ name: 'bug' }] })));
+      c.emit('close', 0);
+    });
+    expect(res).toEqual({ status: 'known', model: null, effort: null });
+  });
+
+  it('ignores an unrecognized axis value rather than misreading it', async () => {
+    const res = await run(77, (c) => {
+      c.stdout.emit('data', Buffer.from(JSON.stringify({ labels: [{ name: 'model:huge' }] })));
+      c.emit('close', 0);
+    });
+    expect(res).toEqual({ status: 'known', model: null, effort: null });
+  });
+
+  it('passes the issue number straight to `gh issue view --json labels`', async () => {
+    await run(77, (c) => {
+      c.stdout.emit('data', Buffer.from('{"labels":[]}'));
+      c.emit('close', 0);
+    });
+    expect(spawn).toHaveBeenCalledWith('gh', ['issue', 'view', '77', '--json', 'labels'], expect.anything());
+  });
+
+  it('reports unavailable — never a thrown error — when gh fails', async () => {
+    const res = await run(77, (c) => {
+      c.stderr.emit('data', Buffer.from('dial tcp: connect: bad file descriptor'));
+      c.emit('close', 1);
+    });
+    expect(res).toEqual({ status: 'unavailable', model: null, effort: null });
+  });
+
+  it('reports unavailable when a zero-exit gh emits nothing parseable', async () => {
+    const res = await run(77, (c) => {
+      c.stdout.emit('data', Buffer.from('not json'));
+      c.emit('close', 0);
+    });
+    expect(res).toEqual({ status: 'unavailable', model: null, effort: null });
+  });
+
+  it('reports unavailable without shelling out when given no issue number', async () => {
+    await expect(getIssueDispatchHint(null)).resolves.toEqual({ status: 'unavailable', model: null, effort: null });
     expect(spawn).not.toHaveBeenCalled();
   });
 });

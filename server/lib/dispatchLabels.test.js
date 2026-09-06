@@ -24,6 +24,7 @@ import {
   jiraDispatchLabel,
   forgeDispatchLabels,
   jiraDispatchLabels,
+  dispatchHintFromLabels,
   forgeContributorLabels,
   jiraContributorLabels,
   forgeIssueLabels,
@@ -112,6 +113,24 @@ describe('forge vs Jira label formatting', () => {
     expect(forgeDispatchLabels({ model: 'heavy', effort: 'low' })).toEqual(['model:heavy', 'effort:low']);
     expect(forgeDispatchLabels({ model: 'epic', effort: 'yes' })).toEqual([]);
     expect(jiraDispatchLabels({ model: 'light', effort: 'max' })).toEqual(['model-light', 'effort-max']);
+  });
+});
+
+describe('dispatchHintFromLabels', () => {
+  it('recovers both axes from a raw label-name list, ignoring unrelated labels', () => {
+    expect(dispatchHintFromLabels(['model:heavy', 'effort:max', 'area:cos-agents']))
+      .toEqual({ model: 'heavy', effort: 'max' });
+  });
+
+  it('reports each missing axis as null rather than guessing', () => {
+    expect(dispatchHintFromLabels(['model:light'])).toEqual({ model: 'light', effort: null });
+    expect(dispatchHintFromLabels(['bug', 'plan'])).toEqual({ model: null, effort: null });
+    expect(dispatchHintFromLabels([])).toEqual({ model: null, effort: null });
+    expect(dispatchHintFromLabels(undefined)).toEqual({ model: null, effort: null });
+  });
+
+  it('treats an unrecognized axis value as absent, not as a misread', () => {
+    expect(dispatchHintFromLabels(['model:huge', 'effort:max'])).toEqual({ model: null, effort: 'max' });
   });
 });
 

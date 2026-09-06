@@ -12,6 +12,7 @@
 // PORTOS_API_URL is interpolated into the jira-status-report default prompt below.
 import { PORTOS_API_URL } from '../../lib/ports.js';
 import {
+  DISPATCH_HINT_FANOUT_GUIDANCE,
   EPIC_DECOMPOSED_LABEL,
   EPIC_LABEL,
   ISSUE_QUALITY_GUIDANCE,
@@ -2240,7 +2241,9 @@ Each branch listed below is a LOCAL branch in THIS clone of {appName}. On a mach
 
 {inFlightBranches}
 
-Spawn ONE sub-agent per branch (they are independent — run them in parallel) to carry out that branch's "Do:" instruction, each working in the branch's existing worktree when it has one.
+Spawn ONE sub-agent per branch (they are independent — run them in parallel) to carry out that branch's "Do:" instruction, each working in the branch's existing worktree when it has one. **Dispatch each sub-agent at ITS OWN branch's recommended model and effort** — a branch's block above names one when its issue carries \`model:\`/\`effort:\` labels; a batch is one partition decision, not one routing decision, and two branches in the same run routinely deserve different capability. Name the model/effort you used for each branch in your final summary.
+
+${DISPATCH_HINT_FANOUT_GUIDANCE}
 
 ## Rules
 - Work ONLY on the branches listed above. Never touch a branch that is not listed.
