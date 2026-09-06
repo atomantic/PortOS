@@ -5796,10 +5796,11 @@ describe('generateVideo — MiniMax H3 draft decode (#5423)', () => {
 describe('resident video batches', () => {
   it.each([
     { exitCode: 0, outputs: 2, complete: true },
+    { exitCode: 1, outputs: 0, complete: false, invalidOutput: true },
     { exitCode: 1, outputs: 1, complete: false },
     { exitCode: 0, outputs: 1, complete: false },
     { exitCode: null, signal: 'SIGTERM', outputs: 1, complete: false },
-  ])('persists finished outputs and ends the queue job once ($exitCode, $signal, $outputs outputs)', async ({ exitCode, signal = null, outputs, complete }) => {
+  ])('persists finished outputs and ends the queue job once ($exitCode, $signal, $outputs outputs)', async ({ exitCode, signal = null, outputs, complete, invalidOutput }) => {
     const { EventEmitter } = await import('node:events');
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
     const { atomicWrite } = await import('../../lib/fileUtils.js');
@@ -5826,6 +5827,9 @@ describe('resident video batches', () => {
     const job = videoJobState.jobs.get(jobId);
     const args = vi.mocked(spawnDetached).mock.calls.at(-1)[1];
     expect(JSON.parse(args[args.indexOf('--batch-seeds') + 1])).toEqual([0, 1]);
+    if (invalidOutput) {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify({ video_path: join(MOCK_PATHS.videos, 'other.mp4'), batch_index: 0, seed: 99 }) + '\n'));
+    }
     if (complete) vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     for (const item of batch.slice(0, outputs)) {
       proc.stdout.emit('data', Buffer.from(JSON.stringify({ video_path: join(MOCK_PATHS.videos, item.filename), batch_index: item.index, seed: item.seed }) + '\n'));
@@ -5843,12 +5847,15 @@ describe('resident video batches', () => {
     proc.emit('close', exitCode, signal);
     await vi.waitFor(() => expect(complete ? completed : failed).toHaveBeenCalledTimes(1));
     expect(complete ? failed : completed).not.toHaveBeenCalled();
-    const saved = vi.mocked(atomicWrite).mock.calls.at(-1)[1];
+    const saved = vi.mocked(atomicWrite).mock.calls.at(-1)?.[1] || [];
     expect(saved.filter((item) => item.batchId === jobId)).toHaveLength(outputs);
-    expect(saved[0].seed).toBe(outputs - 1);
-    expect(saved[0].id).toMatch(/^[a-f0-9-]{36}$/);
+    if (outputs) {
+      expect(saved[0].seed).toBe(outputs - 1);
+      expect(saved[0].id).toMatch(/^[a-f0-9-]{36}$/);
+    }
     const terminal = (complete ? completed : failed).mock.calls[0][0];
-    expect(terminal.results.map((item) => item.seed)).toEqual(complete ? [0, 1] : [0]);
-    expect(proc.kill).not.toHaveBeenCalled();
+    expect(terminal.results.map((item) => item.seed)).toEqual(complete ? [0, 1] : outputs ? [0] : []);
+    if (invalidOutput) expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    else expect(proc.kill).not.toHaveBeenCalled();
   });
 });

@@ -1031,11 +1031,14 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
     preview = _install_h3_stepwise_preview(pipe, args)
     encode = pipe.text_encoder.encode
     encoded = None
+    encoded_key = None
 
-    def encode_once(*values, **kwargs):
-        nonlocal encoded
-        if encoded is None:
-            encoded = encode(*values, **kwargs)
+    def encode_once(prompt, images=None):
+        nonlocal encoded, encoded_key
+        key = (prompt, tuple(hash_conditioning_image(image) for image in (images or [])))
+        if key != encoded_key:
+            encoded = encode(prompt, images)
+            encoded_key = key
         return encoded
 
     if batch_seeds is not None:
@@ -1089,11 +1092,14 @@ def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
 
 def main() -> int:
     args = parse_args()
-    batch_seeds = json.loads(args.batch_seeds) if args.batch_seeds else None
+    try:
+        batch_seeds = json.loads(args.batch_seeds) if args.batch_seeds else None
+    except ValueError:
+        raise SystemExit("--batch-seeds must be a JSON array of unsigned 32-bit integers") from None
     if batch_seeds is not None and (not isinstance(batch_seeds, list)
             or not 2 <= len(batch_seeds) <= 20
             or any(type(seed) is not int or not 0 <= seed <= 2 ** 32 - 1 for seed in batch_seeds)):
-        raise ValueError("--batch-seeds requires 2 to 20 unsigned 32-bit integers")
+        raise SystemExit("--batch-seeds requires 2 to 20 unsigned 32-bit integers")
     validate_args(args)
     # Read the keyframes first: everything below is a git probe, ~35 HF cache
     # lookups and an mlx/transformers import, so an unreadable conditioning

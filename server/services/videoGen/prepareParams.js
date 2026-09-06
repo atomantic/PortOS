@@ -316,7 +316,6 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
     capabilities,
     effectiveModel.hardwareRequirements,
   );
-  validateVideoBatch({ ...body, backend }, effectiveModel);
   // Validate modelId before staging (when supplied). Without this the queue
   // would happily accept a typo'd modelId and fail asynchronously inside
   // the worker — leaving a persisted, doomed queue entry.
@@ -327,6 +326,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
   }
+  validateVideoBatch({ ...body, backend }, effectiveModel);
   if (effectiveModel && !isHardwareCompatible(effectiveModel.hardwareCompatibility)) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(

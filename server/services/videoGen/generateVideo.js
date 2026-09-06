@@ -162,8 +162,8 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   const { modelId: selectedModelId, model } = await resolveVideoModelSelection(modelId, { resolveModel: resolveVideoModel });
   modelId = selectedModelId;
-  validateVideoBatch({ batchSize, seed }, model);
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
+  validateVideoBatch({ batchSize, seed }, model);
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
       `Video model "${modelId}" is unavailable on this machine: ${model.hardwareCompatibility.reasons.join(' · ')}`,
