@@ -20,8 +20,13 @@ import useMounted from '../../hooks/useMounted';
 //   editButtonTitle                    — title="" on the row's edit button
 //   primary: { key, label, placeholder, inputExtraClass, autoFocus, trim }
 //     — the bare identity input (object/character name, place slugline)
-//   fields: [{ key, label, placeholder, kind: 'text'|'csv'|'multiline', rows, trim }]
-//     — every other editable field, rendered in order in the Editor
+//   fields: [{ key, label, placeholder, kind, rows, trim, options, heading }]
+//     — every other editable field, rendered in order in the Editor.
+//     kind: 'text' (input) | 'multiline' (textarea) | 'csv' (comma-separated
+//     → string[]) | 'lines' (one entry per line → string[], for a list the
+//     entries are long enough to want their own row) | 'select' (a <select>
+//     over `options: [{ value, label }]`, persisting '' as null so the field
+//     can be cleared). `heading` renders a small group label above the field.
 //   bodyField, bodyEmptyText           — the row's primary description line
 //   detailBlocks: [{ key, label, marginClass }] — extra "Label: value" lines
 //   blanksExcludeKeys                  — fields skipped by the "Missing: …" warning
@@ -31,6 +36,11 @@ import useMounted from '../../hooks/useMounted';
 //   getSortKey(item)                   — list sort comparator key
 //   validate(draft)                    — returns an error string, or null
 //   api: { list, create, update, remove }
+// Marshal a `csv` / `lines` textarea back to the string[] the API stores.
+// An empty box yields `[]` — a real clear, not an omitted key.
+const splitEntries = (raw, separator) =>
+  String(raw || '').split(separator).map((s) => s.trim()).filter(Boolean);
+
 export function BibleAiBadge() {
   return (
     <span className="text-[9px] text-gray-500" title="Created by AI extraction — edit to mark as user-curated">
@@ -205,7 +215,9 @@ function BibleEditor({ workId, item, config, onSaved, onDeleted, onCancel }) {
   const [draft, setDraft] = useState(() => {
     const seed = { [primary.key]: item?.[primary.key] || '' };
     for (const f of fields) {
-      seed[f.key] = f.kind === 'csv' ? (item?.[f.key] || []).join(', ') : (item?.[f.key] || '');
+      if (f.kind === 'csv') seed[f.key] = (item?.[f.key] || []).join(', ');
+      else if (f.kind === 'lines') seed[f.key] = (item?.[f.key] || []).join('\n');
+      else seed[f.key] = item?.[f.key] || '';
     }
     return seed;
   });
@@ -221,10 +233,14 @@ function BibleEditor({ workId, item, config, onSaved, onDeleted, onCancel }) {
     }
     setSaving(true);
     const payload = { [primary.key]: draft[primary.key].trim() };
+    // Every field is always sent, including as its empty value — '' / [] /
+    // null is how the writer CLEARS one, and the server distinguishes that
+    // from an absent key (which would preserve the stored value).
     for (const f of fields) {
-      payload[f.key] = f.kind === 'csv'
-        ? draft[f.key].split(',').map((s) => s.trim()).filter(Boolean)
-        : (f.trim ? draft[f.key].trim() : draft[f.key]);
+      if (f.kind === 'csv') payload[f.key] = splitEntries(draft[f.key], ',');
+      else if (f.kind === 'lines') payload[f.key] = splitEntries(draft[f.key], '\n');
+      else if (f.kind === 'select') payload[f.key] = draft[f.key] || null;
+      else payload[f.key] = f.trim ? draft[f.key].trim() : draft[f.key];
     }
     const result = await (isCreate
       ? config.api.create(workId, payload, { silent: true })
@@ -278,14 +294,26 @@ function BibleEditor({ workId, item, config, onSaved, onDeleted, onCancel }) {
         </button>
       </div>
       {fields.map((f) => (
-        <label key={f.key} htmlFor={`bible-field-${f.key}`} className="block">
-          <span className="text-[9px] uppercase tracking-wider text-gray-500">{f.label}</span>
-          {f.kind === 'multiline' ? (
-            <textarea id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} rows={f.rows || 2} className={`${inputCls} font-sans resize-y`} />
-          ) : (
-            <input id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} className={inputCls} />
+        <div key={f.key}>
+          {f.heading && (
+            <div className="text-[9px] uppercase tracking-wider text-port-accent/80 pt-1.5 pb-0.5 border-t border-port-border/60 mt-1.5">
+              {f.heading}
+            </div>
           )}
-        </label>
+          <label htmlFor={`bible-field-${f.key}`} className="block">
+            <span className="text-[9px] uppercase tracking-wider text-gray-500">{f.label}</span>
+            {f.kind === 'multiline' || f.kind === 'lines' ? (
+              <textarea id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} rows={f.rows || 2} className={`${inputCls} font-sans resize-y`} />
+            ) : f.kind === 'select' ? (
+              <select id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} className={inputCls}>
+                <option value="">{f.placeholder || '—'}</option>
+                {(f.options || []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            ) : (
+              <input id={`bible-field-${f.key}`} value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} className={inputCls} />
+            )}
+          </label>
+        </div>
       ))}
       <div className="flex items-center justify-between pt-1">
         {!isCreate ? (

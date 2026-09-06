@@ -17,6 +17,16 @@ import {
   Drama, KeyRound, Mic, Images, BadgeCheck, Play, Compass,
 } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
+// Shared narrative-framework definitions (#2175, #6417) — one source of truth
+// with the server store/schema and the Writers Room cast editor. An
+// unrecognized arc type is coerced to null server-side, so `''` = unset.
+import {
+  CHARACTER_ARC_TYPES,
+  CHARACTER_FRAMEWORK_EDITOR_FIELDS,
+  CHARACTER_MOTIVATIONS_FIELD,
+  CHARACTER_SECRETS_FIELD,
+  CHARACTER_SLIDER_AXES,
+} from '../../lib/characterFramework';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useRowDraft from '../../hooks/useRowDraft';
 import usePendingListRows from '../../hooks/usePendingListRows';
@@ -50,7 +60,7 @@ const SECTIONS = Object.freeze([
   {
     key: 'personality', label: 'Personality & motivations', icon: Smile,
     fields: [
-      { name: 'motivations', label: 'Motivations', placeholder: 'what they WANT and what they fear losing', max: L.MOTIVATIONS_MAX, type: 'textarea' },
+      { ...CHARACTER_MOTIVATIONS_FIELD, type: 'textarea' },
       { name: 'likes', label: 'Likes', placeholder: 'short prose; comma-separated', max: L.LIKES_MAX, type: 'textarea' },
       { name: 'dislikes', label: 'Dislikes', placeholder: 'short prose; comma-separated', max: L.DISLIKES_MAX, type: 'textarea' },
       { name: 'mannerisms', label: 'Mannerisms', placeholder: 'habitual physical / verbal tics', max: L.MANNERISMS_MAX, type: 'textarea' },
@@ -60,13 +70,10 @@ const SECTIONS = Object.freeze([
   },
   {
     key: 'framework', label: 'Character framework', icon: Drama,
-    fields: [
-      { name: 'ghost', label: 'Ghost (backstory wound cause)', placeholder: 'the past event that wounded them — must causally explain the Lie', max: L.GHOST_MAX, type: 'textarea' },
-      { name: 'wound', label: 'Wound', placeholder: 'the lasting emotional damage the Ghost left', max: L.WOUND_MAX, type: 'textarea' },
-      { name: 'lie', label: 'Lie (optional judgment about a belief)', placeholder: 'state in one sentence — "I only matter if I win". Optional: the belief itself can live in the psychology section as a theory of control.', max: L.LIE_MAX, type: 'textarea' },
-      { name: 'need', label: 'Need (internal alternative)', placeholder: 'the truth that answers the Lie — "I matter whether I win or lose". It may qualify the belief rather than be its literal opposite.', max: L.NEED_MAX, type: 'textarea' },
-      { name: 'want', label: 'Want (external goal)', placeholder: 'the concrete goal they pursue — usually conflicts with the Need', max: L.WANT_MAX, type: 'textarea' },
-    ],
+    // Shared with the Writers Room cast editor (#6417) — same Ghost → Wound →
+    // Lie → Need → Want definitions, adapted there onto BibleSection's compact
+    // field config instead of being restated.
+    fields: CHARACTER_FRAMEWORK_EDITOR_FIELDS.map((f) => ({ ...f, type: 'textarea' })),
   },
   {
     key: 'visualIdentity', label: 'Visual identity', icon: Eye,
@@ -90,11 +97,6 @@ const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
   'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
 ]);
 
-// Mirrors `CHARACTER_ARC_TYPES` in server/lib/storyBible.js (#2175). The server
-// sanitizer coerces an unrecognized value to null, so an empty selection clears
-// the field. `''` = unset.
-const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
-const SLIDER_AXES = Object.freeze(['proactivity', 'likability', 'competence']);
 const VOICE_SOURCE_POLICIES = Object.freeze(['designed', 'consented-performance', 'licensed']);
 const IDENTITY_ASSET_ROLES = Object.freeze([
   'neutral', 'profile', 'full-body', 'expression-gesture', 'wardrobe',
@@ -151,7 +153,7 @@ const LIST_SECTIONS = Object.freeze([
     // via `toRows` / `fromRows` below (see ListSectionEditor).
     stringList: true,
     columns: [
-      { name: 'text', placeholder: 'something they hide from others or themselves', max: L.SECRET_MAX },
+      { name: 'text', placeholder: CHARACTER_SECRETS_FIELD.placeholder, max: CHARACTER_SECRETS_FIELD.max },
     ],
     summary: (s) => s.text,
   },
@@ -546,7 +548,7 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
   const sliders = (entry.sliders && typeof entry.sliders === 'object') ? entry.sliders : {};
   const arcId = `chr-arc-${idPrefix || 'unknown'}`;
   const patchSlider = (axis, value) => onPatch?.({ sliders: { ...sliders, [axis]: value } });
-  const setCount = SLIDER_AXES.reduce((n, a) => n + (typeof entry[a] === 'string' ? 0 : (sliders[a] != null ? 1 : 0)), 0);
+  const setCount = CHARACTER_SLIDER_AXES.reduce((n, a) => n + (typeof entry[a] === 'string' ? 0 : (sliders[a] != null ? 1 : 0)), 0);
   const summary = `${entry.arcType || 'no arc'}${setCount ? ` · ${setCount}/3 sliders` : ''}`;
   return (
     <BoxedSection icon={Drama} label="Arc type & sliders" summary={summary}>
@@ -568,7 +570,7 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
       <p className="text-[10px] text-gray-500 leading-snug">
         Rule: HIGH (≥7) on at least two sliders, or high on one with room to grow. All-low = boring; all-high = Mary Sue.
       </p>
-      {SLIDER_AXES.map((axis) => {
+      {CHARACTER_SLIDER_AXES.map((axis) => {
         const id = `chr-slider-${idPrefix || 'unknown'}-${axis}`;
         const val = sliders[axis];
         const set = val != null;

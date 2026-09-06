@@ -16,6 +16,7 @@ import { isPlainObject } from './objects.js';
 import { shortCanonPrimaryField } from './canonPrompt.js';
 import { trimTo } from './textUtils.js';
 import { BIBLE_LIMITS } from './bibleLimits.js';
+import { CHARACTER_ARC_TYPES } from './characterFramework.js';
 
 // Re-export so callers (writers-room domain files) can import a single
 // canonical normalizer when they need to match places by slugline.
@@ -103,11 +104,12 @@ export const PLACE_TIME_OF_DAY = Object.freeze(['dawn', 'day', 'dusk', 'night'])
 const PLACE_INT_EXT_SET = new Set(PLACE_INT_EXT);
 const PLACE_TIME_OF_DAY_SET = new Set(PLACE_TIME_OF_DAY);
 
-// Declared character arc type (CWQE Phase 10, #2175). A positive arc overcomes
-// the Lie and embraces the Truth; a negative arc is consumed by the Lie; a flat
-// arc holds a truth the character already knows and changes the world around
-// them instead. Unset (null) keeps the field absent for every pre-#2175 record.
-export const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
+// Declared character arc type (CWQE Phase 10, #2175). Defined in the pure
+// `characterFramework.js` leaf alongside the rest of the narrative-framework
+// field list (so the browser bundle can read it without this module's crypto /
+// fileUtils imports) and re-exported here, where every existing caller looks
+// for it.
+export { CHARACTER_ARC_TYPES };
 const CHARACTER_ARC_TYPE_SET = new Set(CHARACTER_ARC_TYPES);
 
 // Character psychology (#6414). An OPTIONAL layer over the existing framework:

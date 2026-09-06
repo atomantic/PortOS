@@ -17,6 +17,7 @@ import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
 import { CUT_TYPES } from '../../lib/editorial/cutApplier.js';
 import { getWorkWithBody, ensureWorkMediaCollection } from './local.js';
 import { addItem as addCollectionItem, ERR_DUPLICATE } from '../mediaCollections.js';
+import { pickCastFramework } from '../../lib/characterFramework.js';
 import { listCharacters, mergeExtractedCharacters } from './characters.js';
 import { listPlaces, mergeExtractedPlaces } from './places.js';
 import { listObjects, mergeExtractedObjects } from './objects.js';
@@ -428,6 +429,18 @@ export async function runAnalysis(workId, { kind } = {}) {
     }
 
     const variables = { work: workCtx, draftBody: body, returnsJson };
+    // Author-side review (#6417): hand the editorial pass the cast's AUTHORED
+    // framework so it reports delivery against the plan instead of inferring
+    // the plan and the delivery from the same prose. Deliberately scoped to
+    // `evaluate` — the bible extractors and the script pass are cold reads
+    // that must derive everything from the text alone, and `extractBible`
+    // already sends existing profiles under its own no-clobber contract. This
+    // is a local file read, not an LLM call: nothing here fires until the user
+    // asks for an analysis.
+    if (kind === 'evaluate') {
+      const cast = pickCastFramework(await listCharacters(workId));
+      if (cast.length) variables.castFrameworkJson = JSON.stringify(cast, null, 2);
+    }
     const { content, model: usedModel, providerId: usedProvider } = await runStagedLLM(stage, variables, {
       source: `writers-room-${kind}`,
     });

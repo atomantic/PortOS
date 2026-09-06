@@ -17,6 +17,7 @@ import {
   BIBLE_LIMITS, RELATIONSHIP_LINK_TYPES, RELATIONSHIP_OPPOSITION_AXES,
   ATTACHMENT_ROLES, VOICE_CANON_SOURCE_POLICIES, IDENTITY_ASSET_ROLES,
 } from './storyBible.js';
+import { CHARACTER_ARC_TYPES, CHARACTER_FRAMEWORK_LIMITS } from './characterFramework.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkInfra/taxonomy.js';
@@ -480,8 +481,28 @@ const wrRelationshipLinksField = z.array(z.object({
   opposition: wrOppositionField.nullable().optional(),
   locked: z.boolean().optional(),
 }).strict()).max(BIBLE_LIMITS.RELATIONSHIP_LINKS_PER_CHARACTER_MAX);
-export const writersRoomCharacterCreateSchema = z.object({
-  name: z.string().trim().min(1).max(200),
+// Narrative character framework (#6417) — parity with what the Universe cast
+// editor already authors and `sanitizeCharacter` already persists. Every field
+// is optional AND tolerates its empty value ('' / [] / null) so a writer can
+// deliberately clear one; absence leaves the stored value untouched, which is
+// the absent-vs-intentionally-empty split the store relies on.
+const wrCharFrameworkFields = Object.freeze({
+  motivations: z.string().max(CHARACTER_FRAMEWORK_LIMITS.motivations).optional(),
+  ghost: z.string().max(CHARACTER_FRAMEWORK_LIMITS.ghost).optional(),
+  wound: z.string().max(CHARACTER_FRAMEWORK_LIMITS.wound).optional(),
+  lie: z.string().max(CHARACTER_FRAMEWORK_LIMITS.lie).optional(),
+  need: z.string().max(CHARACTER_FRAMEWORK_LIMITS.need).optional(),
+  want: z.string().max(CHARACTER_FRAMEWORK_LIMITS.want).optional(),
+  // '' and null both clear the declared arc; the sanitizer's trimEnum maps
+  // anything it doesn't recognize to null rather than rejecting.
+  arcType: z.enum(CHARACTER_ARC_TYPES).or(z.literal('')).nullable().optional(),
+  secrets: z.array(z.string().trim().min(1).max(BIBLE_LIMITS.SECRET_MAX))
+    .max(BIBLE_LIMITS.SECRETS_PER_CHARACTER_MAX).optional(),
+});
+// Shared between create and update — the two differ only in whether `name` is
+// required, and drifting them apart is how `relationshipLinks` ended up
+// accepted on one path and dropped on the other.
+const wrCharacterFields = Object.freeze({
   aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
   role: wrCharTextField.optional(),
   physicalDescription: wrCharTextField.optional(),
@@ -493,20 +514,15 @@ export const writersRoomCharacterCreateSchema = z.object({
   identityPack: identityPackField.optional(),
   wardrobes: wrWardrobeField.optional(),
   relationshipLinks: wrRelationshipLinksField.optional(),
+  ...wrCharFrameworkFields,
+});
+export const writersRoomCharacterCreateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  ...wrCharacterFields,
 }).strict();
 export const writersRoomCharacterUpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
-  aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
-  role: wrCharTextField.optional(),
-  physicalDescription: wrCharTextField.optional(),
-  personality: wrCharTextField.optional(),
-  background: wrCharTextField.optional(),
-  notes: wrCharTextField.optional(),
-  voiceId: wrVoiceIdField.optional(),
-  voiceCanon: voiceCanonField.optional(),
-  identityPack: identityPackField.optional(),
-  wardrobes: wrWardrobeField.optional(),
-  relationshipLinks: wrRelationshipLinksField.optional(),
+  ...wrCharacterFields,
 }).strict();
 
 const wrPlaceTextField = z.string().max(2000);
