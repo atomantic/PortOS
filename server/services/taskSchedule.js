@@ -45,6 +45,7 @@ import {
   getTaskTypeInvocation,
   getTaskTypePromptInfo,
   requiresManagedAppTarget,
+  requiresInstallWideTarget,
   enforceBranchReconcileBatch,
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
@@ -68,7 +69,7 @@ export {
   MANAGED_APP_TARGET_TASK_TYPES,
   MANAGED_AGENT_OPTIONS, PERPETUAL_DRAIN_DISPATCH_CAP, SELF_IMPROVEMENT_TASK_TYPES,
   TASK_TYPE_DESCRIPTIONS, TASK_TYPE_INVOCATION, TASK_TYPE_PROMPT_INFO,
-  getTaskTypeInvocation, getTaskTypePromptInfo, requiresManagedAppTarget,
+  getTaskTypeInvocation, getTaskTypePromptInfo, requiresManagedAppTarget, requiresInstallWideTarget,
   stripManagedAgentOptionsFromOverride
 } from './taskScheduleRegistry.js';
 export { loadSchedule } from './taskScheduleStore.js';
@@ -792,6 +793,9 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
  * Check if a task type should run for a specific app (or globally)
  */
 export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
+  if (appId && requiresInstallWideTarget(taskType)) {
+    return { shouldRun: false, reason: 'requires-install-wide-target' };
+  }
   const schedule = await loadSchedule();
   const interval = schedule.tasks[taskType];
 
@@ -1103,6 +1107,9 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
     }
     if (requiresManagedAppTarget(taskType) && !appId) {
       return { result: { error: `Task type '${taskType}' requires a managed app target` }, changed: false };
+    }
+    if (appId && requiresInstallWideTarget(taskType)) {
+      return { result: { error: `Task type '${taskType}' requires an install-wide target (no app)` }, changed: false };
     }
 
     // Reject if the master Improve toggle is off — request would be silently dropped downstream

@@ -72,18 +72,39 @@ same port would silently steal its traffic instead of failing loudly.
    progress over the `slotstream:download` socket event; the download resumes
    from a partial file if interrupted, and stalls (no bytes for 20 minutes by
    default) are abandoned rather than hung forever, resumable on the next
-   press. PortOS also accepts a plain Hugging Face `owner/name` outside the
-   curated list, as long as the repo is a Slotstream-loadable MoE checkpoint.
-   Nothing downloads without this explicit press.
+   press. Every downloaded file is checked against the hash Hugging Face
+   published for it (`expectedSha256` in `streamResumableDownload`) before it
+   counts as finished; a mismatch fails the install and removes the partial
+   file rather than leaving a silently corrupt checkpoint on disk. PortOS also
+   accepts a plain Hugging Face `owner/name` outside the curated list, as long
+   as the repo is a Slotstream-loadable MoE checkpoint. Nothing downloads
+   without this explicit press.
 3. **Start Slotstream** on the card, or **Save configuration** to store the
    choice for a later on-demand start without starting it now. Either way,
    Slotstream never fetches weights at start time — a start reads
    `~/.slotstream/models` (or `SLOTSTREAM_MODEL_DIR`, see below) and refuses
    with a clear message if nothing servable is cached, rather than trying to
    fetch the requested checkpoint.
-4. Point an `api`/`tui` provider at the Slotstream endpoint (or use the
-   `slotstream` preset if one exists in AI Providers) and use it for
-   supported tasks.
+4. Enable the **Slotstream (SSD-streaming MoE)** preset on **AI Providers** —
+   see below — or point any `api`/`tui` provider at the endpoint by hand, and
+   use it for supported tasks.
+
+## AI Providers preset
+
+`data.reference/providers.json` ships a `slotstream` preset (`api` type,
+`http://127.0.0.1:5564/v1`, **disabled by default** — the same
+consent-before-cost posture as the download itself) and migration 340 seeds it
+into existing installs. It offers the curated catalog's three checkpoint ids
+as candidate models, defaulting to the 235B-class headline case; whichever
+checkpoint is actually cached and started is what answers, regardless of which
+catalog id the request names.
+
+Unlike MTPLX, Slotstream gets no `opencode-slotstream` CLI/TUI wrapper: it is
+text-only, so it is not a valid CoS coding-agent runner. `isSlotstreamProvider`
+(`server/services/slotstreamServerManager.js`) recognizes any `api`/`tui`
+provider pointed at `PORTS.SLOTSTREAM` — including a hand-added one, not only
+this preset — so `ensureSlotstreamProviderReady` lazy-starts the runtime for
+it the same way.
 
 ## Memory plan
 

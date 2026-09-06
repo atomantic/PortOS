@@ -6,11 +6,11 @@
  * Notes stay in their original vault directories — PortOS indexes but doesn't copy.
  */
 
-import { writeFile, readdir, stat, unlink } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { join, relative, resolve, basename, dirname, extname, isAbsolute } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS, writeFileGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { ICLOUD_NOT_MATERIALIZED, isSuspectedDataless, materializeAndWait, readIfMaterialized } from '../lib/icloudFile.js';
 import { escapeRegExp } from '../lib/textUtils.js';
 
@@ -364,7 +364,7 @@ export async function updateNote(vaultId, notePath, content, { force = false } =
     }
   }
 
-  await writeFile(fullPath, content, 'utf-8');
+  await writeFileGuarded(fullPath, content, 'utf-8');
   console.log(`📓 Updated note: ${notePath} in vault ${vault.name}`);
   return await getNote(vaultId, notePath, { includeBacklinks: false });
 }
@@ -398,7 +398,7 @@ export async function createNote(vaultId, notePath, content = '') {
   // iCloud containers holding 373 evicted files, macOS 26 / APFS), and the probe
   // `mortalLoomStore` used to carry for it was deleted rather than copied here.
   // See the "only ONE representation" section in server/lib/icloudFile.js.
-  await writeFile(fullPath, content, 'utf-8');
+  await writeFileGuarded(fullPath, content, 'utf-8');
   console.log(`📓 Created note: ${notePath} in vault ${vault.name}`);
   return await getNote(vaultId, notePath, { includeBacklinks: false });
 }
@@ -463,7 +463,7 @@ export async function deleteNote(vaultId, notePath) {
   // threadpool the way `updateNote`'s overwrite could, and guarding it would be
   // strictly worse than useless: the guard's own remedy is `materializeAndWait`,
   // i.e. downloading every byte of a file purely to throw it away.
-  await unlink(fullPath);
+  await unlinkGuarded(fullPath);
   console.log(`📓 Deleted note: ${notePath} from vault ${vault.name}`);
   return true;
 }

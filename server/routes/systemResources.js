@@ -13,8 +13,21 @@ import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { onClientDisconnect } from '../lib/sseDownload.js';
 import { stopRun } from '../services/runner.js';
 import { getSystemResourceReport, triageSystemResources } from '../services/systemResources.js';
+import { rectifyModelDuplicates } from '../services/modelDeduplication.js';
 
 const router = Router();
+const duplicatePairsSchema = z.object({
+  pairs: z.array(z.object({
+    sourcePath: z.string().min(1).max(4096).refine((path) => !path.includes('\0'), 'Invalid model path'),
+    targetPath: z.string().min(1).max(4096).refine((path) => !path.includes('\0'), 'Invalid model path'),
+  }).strict()).min(1).max(200),
+  mode: z.literal('hardlink').default('hardlink'),
+}).strict();
+
+router.post('/duplicates/rectify', asyncHandler(async (req, res) => {
+  const { pairs } = validateRequest(duplicatePairsSchema, req.body);
+  res.json(await rectifyModelDuplicates(pairs));
+}));
 const emptyBodySchema = z.object({}).strict();
 
 const blankToUndefined = (value) => {

@@ -81,12 +81,27 @@ beforeEach(() => {
 });
 
 describe('cosToolRegistry', () => {
+  it('keeps local thinking authority separate and refuses raw configuration arguments', async () => {
+    const call = { requestId: 'thinking-1', name: 'mind.request-thinking-preset', arguments: { presetId: 'local', reason: 'Try a focused pass' } };
+    await expect(executeCosToolCall({ call, authority: { scope: 'mind', capabilities: { writePortos: true, createTasks: true } } })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+    await expect(executeCosToolCall({ call: { ...call, arguments: { ...call.arguments, endpoint: 'https://example.com' } }, authority: { scope: 'mind', capabilities: { chooseThinkingPreset: true } } })).rejects.toMatchObject({ code: 'TOOL_VALIDATION_ERROR' });
+    await expect(executeCosToolCall({ call, authority: { scope: 'agent', capabilities: { chooseThinkingPreset: true } } })).rejects.toMatchObject({ code: 'TOOL_SCOPE_DENIED' });
+    expect(getCosToolCatalog({ scope: 'mind', capabilities: { chooseThinkingPreset: true } }).tools.filter((tool) => tool.granted).map((tool) => tool.name)).toEqual(['mind.thinking-presets', 'mind.request-thinking-preset']);
+  });
+
   it('exports a compact canonical catalog and provider translations', () => {
     const catalog = getCosToolCatalog({ scope: 'mind', capabilities: { readPortos: true } });
     expect(catalog.tools.map((tool) => tool.name)).toEqual([
+      'mind.thinking-presets',
+      'mind.request-thinking-preset',
       'cos.create-task',
       'mind.cleanup',
       'user-actions.query',
+      'eidoverse.chat',
+      'eidoverse.destinations',
+      'eidoverse.visit',
+      'eidoverse.visit-chat',
+      'eidoverse.leave',
       'eidoverse.status',
       'eidoverse.project',
       'eidoverse.augment',
@@ -99,6 +114,7 @@ describe('cosToolRegistry', () => {
     const openai = formatCosToolCatalog(catalog, 'openai');
     expect(openai.tools).toEqual([
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'user_actions_query' }) }),
+      expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_chat' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'eidoverse_status' }) }),
       expect.objectContaining({ type: 'function', function: expect.objectContaining({ name: 'brain_search' }) }),
     ]);
@@ -222,6 +238,13 @@ describe('cosToolRegistry', () => {
     })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
   });
 
+  it('requires a distinct peer travel grant even when local world management is allowed', async () => {
+    await expect(executeCosToolCall({
+      call: { requestId: 'peer-travel-denied', name: 'eidoverse.visit', arguments: { peerId: 'peer-example' } },
+      authority: { scope: 'mind', capabilities: { readPortos: true, writePortos: true, manageEidoverse: true } },
+    })).rejects.toMatchObject({ code: 'TOOL_CAPABILITY_DENIED' });
+  });
+
   it('keeps private-world management separate from generic PortOS writes and propagates cancellation', async () => {
     const signal = new AbortController().signal;
     await expect(executeCosToolCall({
@@ -269,8 +292,8 @@ describe('cosToolRegistry', () => {
 
     expect([status.state, project.state, augment.state, say.state, agentAugment.state])
       .toEqual(['completed', 'completed', 'completed', 'completed', 'completed']);
-    expect(mocks.worldStatus).toHaveBeenCalledWith();
-    expect(mocks.worldProject).toHaveBeenCalledWith({ signal });
+    expect(mocks.worldStatus).toHaveBeenCalledWith({ compact: true });
+    expect(mocks.worldProject).toHaveBeenCalledWith({ signal, compact: true });
     expect(mocks.worldAugment).toHaveBeenCalledWith(
       [{ verb: 'spawn', args: { id: 'example', lib: 'eidoverse/assets/example.glb' } }],
       { signal },

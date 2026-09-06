@@ -20,6 +20,9 @@ const api = vi.hoisted(() => ({
   getSampleProviders: vi.fn(),
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
+  getOrchestrationProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
+  createRun: vi.fn().mockResolvedValue({ runId: 'run-1' }),
+  stopRun: vi.fn().mockResolvedValue({}),
 }));
 
 const localModels = vi.hoisted(() => ({ value: { ctxById: {}, installed: { ollama: null, lmstudio: null } } }));
@@ -32,6 +35,12 @@ const toast = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/api', () => api);
+vi.mock('../services/apiProviders', () => ({
+  getFleetLlmHost: vi.fn(() => new Promise(() => {})),
+  getFleetPeerHosts: vi.fn(() => new Promise(() => {})),
+  revealFleetLlmHostKey: vi.fn(),
+  revealFleetPeerHostKey: vi.fn(),
+}));
 vi.mock('../components/ui/Toast', () => ({
   default: toast,
 }));
@@ -44,8 +53,8 @@ vi.mock('../services/socket', () => ({
 vi.mock('../hooks/useLocalModels', () => ({
   default: () => localModels.value,
 }));
-vi.mock('../components/settings/SettingsTabsHeader', () => ({
-  default: () => <div data-testid="settings-tabs-header" />,
+vi.mock('../components/models/ModelsTabsHeader', () => ({
+  default: ({ activeTab }) => <div data-testid="models-tabs-header" data-active-tab={activeTab} />,
 }));
 vi.mock('../components/install/RuntimeInstallModal', () => ({
   // `params` becomes the setup request's query string, so the test can assert
@@ -273,7 +282,15 @@ describe('AIProviders page load error handling', () => {
     expect(screen.getByRole('menuitem', { name: /Compare local models/ })).toHaveAttribute('href', '/models/performance');
   });
 
-  // The page hosts SettingsTabsHeader; before #5653 it also hand-rolled a
+  it('uses the Models child navigation after Providers moves out of Settings', async () => {
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+
+    renderPage();
+
+    expect(await screen.findByTestId('models-tabs-header')).toHaveAttribute('data-active-tab', 'providers');
+  });
+
+  // The page hosts ModelsTabsHeader; before #5653 it also hand-rolled a
   // `Settings` title bar above it, so every render stacked two h1s and pushed
   // the first provider card off a phone viewport.
   it('renders exactly one h1, naming the page rather than the settings section', async () => {
@@ -572,8 +589,8 @@ describe('fleet LLM setup walkthrough', () => {
   it('creates an OpenCode provider whose actual baseURL points at the selected peer', async () => {
     renderPage('/ai/fleet');
 
-    expect(await screen.findByRole('heading', { name: 'Fleet LLM setup' })).toBeInTheDocument();
-    expect(screen.getByText(/Recommended for one RTX 3090/)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Model host setup' })).toBeInTheDocument();
+
 
     fireEvent.click(screen.getByRole('tab', { name: 'Connect client' }));
     fireEvent.change(await screen.findByLabelText('Known PortOS peer'), { target: { value: 'peer-example' } });
@@ -585,7 +602,7 @@ describe('fleet LLM setup walkthrough', () => {
     expect(created).toMatchObject({
       type: 'tui',
       command: 'opencode',
-      endpoint: 'http://gpu-host.example.ts.net:18020/v1',
+      endpoint: 'http://gpu-host.example.ts.net:18022/v1',
       apiKey: 'example-secret',
       defaultModel: 'qwen3.8-27b',
       vllmBacked: true,
@@ -593,8 +610,8 @@ describe('fleet LLM setup walkthrough', () => {
       enabled: true,
     });
     expect(JSON.parse(created.envVars.OPENCODE_CONFIG_CONTENT).provider.vllm.options.baseURL)
-      .toBe('http://gpu-host.example.ts.net:18020/v1');
-    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Fleet LLM setup' })).not.toBeInTheDocument());
+      .toBe('http://gpu-host.example.ts.net:18022/v1');
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Model host setup' })).not.toBeInTheDocument());
     expect(toast.success).toHaveBeenCalledWith('Fleet GPU · OpenCode TUI is connected to the fleet GPU host');
   });
 
@@ -611,7 +628,7 @@ describe('fleet LLM setup walkthrough', () => {
     expect(created).toMatchObject({
       name: 'Fleet GPU · API',
       type: 'api',
-      endpoint: 'http://gpu-host.example.ts.net:18020/v1',
+      endpoint: 'http://gpu-host.example.ts.net:18022/v1',
       vllmBacked: true,
     });
     expect(created).not.toHaveProperty('command');
@@ -1738,5 +1755,80 @@ describe('vLLM-backed TUI provider', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     await screen.findByDisplayValue('opencode');
     expect(screen.queryByLabelText('API Key')).toBeNull();
+  });
+});
+
+describe('AIProviders orchestration profiles', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getOrchestrationProfiles.mockResolvedValue({
+      profiles: [
+        {
+          id: 'deep-research',
+          name: 'Deep Research',
+          description: 'o3-mini planner + sonnet coder',
+          profile: {
+            architect: { provider: 'codex', model: 'o3-mini', effort: 'high' },
+            implementer: { provider: 'anthropic', model: 'claude-3-5-sonnet', effort: 'medium' },
+          },
+        },
+      ],
+    });
+    api.createRun.mockResolvedValue({ runId: 'run-123' });
+    localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: null } };
+  });
+
+  it('renders orchestration profiles link in the more actions menu', async () => {
+    api.getProviders.mockResolvedValue({ providers: [], activeProvider: null });
+    renderPage();
+
+    await openHeaderMenu();
+    const link = await screen.findByRole('menuitem', { name: 'Orchestration profiles' });
+    expect(link).toHaveAttribute('href', '/settings/orchestration');
+  });
+
+  it('allows selecting an orchestration profile in the run panel and renders role chips', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{ id: 'prov-1', name: 'Prov 1', type: 'api', enabled: true, hardwareUnavailable: false }],
+      activeProvider: 'prov-1',
+    });
+    renderPage();
+
+    // Open runner panel
+    const runBtn = await screen.findByRole('button', { name: 'Run Prompt' });
+    fireEvent.click(runBtn);
+
+    // Profile selector should be available
+    const profileSelect = await screen.findByLabelText('Orchestration profile');
+    expect(profileSelect).toBeInTheDocument();
+    fireEvent.change(profileSelect, { target: { value: 'deep-research' } });
+
+    // Role chips should appear
+    expect(await screen.findByText('o3-mini planner + sonnet coder')).toBeInTheDocument();
+    expect(screen.getByText('architect:')).toBeInTheDocument();
+    expect(screen.getByText('o3-mini')).toBeInTheDocument();
+    expect(screen.getByText('(high)')).toBeInTheDocument();
+
+    // Fill prompt and execute
+    const promptInput = screen.getByLabelText('Prompt');
+    fireEvent.change(promptInput, { target: { value: 'Test run with orchestration' } });
+
+    const executeBtn = screen.getByRole('button', { name: 'Execute' });
+    fireEvent.click(executeBtn);
+
+    await waitFor(() => {
+      expect(api.createRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerId: 'prov-1',
+          prompt: 'Test run with orchestration',
+          orchestrationProfileId: 'deep-research',
+        }),
+        expect.anything()
+      );
+    });
   });
 });

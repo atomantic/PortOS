@@ -33,11 +33,11 @@
  */
 
 import { spawn } from '../../lib/childProcess.js';
-import { copyFile, mkdir, open, rename, rm, stat, unlink } from 'fs/promises';
+import { mkdir, open, stat } from 'fs/promises';
 import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { atomicWrite, detectImageFormat, ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -321,7 +321,7 @@ async function runGrok(job, jobId, bin, args, {
   // scratch-dir spawn telling the child one consistent story about where it is.
   const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
-  const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+  const removeScratch = () => rmGuarded(scratchDir, { recursive: true, force: true }).catch(() => {});
 
   if (useStdin) {
     // POSIX: grok reads the prompt via --prompt-file /dev/stdin. EPIPE fires
@@ -394,18 +394,14 @@ async function runGrok(job, jobId, bin, args, {
         return finalizeError(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
       }
       if (harvested.format === 'png') {
-        // Move, not copy — the staging file is PortOS-owned and disposable,
-        // so rename is a metadata-only op when tmpdir and the gallery share
-        // a filesystem. copyFile+unlink is the cross-device (EXDEV) fallback.
-        await rename(stagingPath, outputPath).catch(async () => {
-          await copyFile(stagingPath, outputPath);
-          await unlink(stagingPath).catch(() => {});
-        });
+        await copyFileGuarded(stagingPath, outputPath);
+        await unlinkGuarded(stagingPath).catch(() => {});
       } else {
         // Grok wrote a real image but not a PNG (jpeg/webp/gif) despite the
         // prompt. The gallery serves by extension and sidecars assume PNG,
         // so transcode rather than shipping mislabeled bytes.
-        await sharp(stagingPath).png().toFile(outputPath);
+        const pngBytes = await sharp(stagingPath).png().toBuffer();
+        await atomicWrite(outputPath, pngBytes);
       }
       removeScratch();
       // Degenerate-frame gate (#4173) — a decline that still emitted a flat

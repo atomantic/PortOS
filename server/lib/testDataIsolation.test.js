@@ -18,7 +18,7 @@ import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { isAbsolute, join, relative, sep } from 'path';
-import { appendFileGuarded, atomicWrite, copyFileGuarded, ensureDir, writeFileGuarded } from './fileCore.js';
+import { appendFileGuarded, atomicWrite, copyFileGuarded, createWriteStreamGuarded, ensureDir, rmGuarded, unlinkGuarded, writeFileGuarded } from './fileCore.js';
 import { appendJSONLine } from './jsonIo.js';
 import { assertNotNewRealDataDir, assertNotRealDataWrite, isInsideRealDataRoot } from './testDataIsolation.js';
 import { isPathAtOrInsideDir } from './pathContainment.js';
@@ -174,6 +174,32 @@ describe('the guarded raw-fs wrappers', () => {
     await expect(copyFileGuarded(src, join(REAL_DATA, 'copied.txt'))).rejects.toThrow(/copyFile refused/);
     await copyFileGuarded(src, join(tempRoot, 'dest.txt'));
     expect(readFileSync(join(tempRoot, 'dest.txt'), 'utf8')).toBe('payload');
+  });
+
+  it('rmGuarded refuses the real tree and allows a temp root', async () => {
+    await expect(rmGuarded(join(REAL_DATA, 'probe.txt'))).rejects.toThrow(/rm refused/);
+    const target = join(tempRoot, 'to-rm.txt');
+    await writeFileGuarded(target, 'x');
+    await rmGuarded(target);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('unlinkGuarded refuses the real tree and allows a temp root', async () => {
+    await expect(unlinkGuarded(join(REAL_DATA, 'probe.txt'))).rejects.toThrow(/unlink refused/);
+    const target = join(tempRoot, 'to-unlink.txt');
+    await writeFileGuarded(target, 'x');
+    await unlinkGuarded(target);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('createWriteStreamGuarded refuses the real tree and allows a temp root', async () => {
+    await expect(createWriteStreamGuarded(join(REAL_DATA, 'probe.txt'))).rejects.toThrow(/createWriteStream refused/);
+    const target = join(tempRoot, 'streamed.txt');
+    const ws = await createWriteStreamGuarded(target);
+    await new Promise((res, rej) => {
+      ws.write('streamed content', (err) => (err ? rej(err) : ws.end(res)));
+    });
+    expect(readFileSync(target, 'utf8')).toBe('streamed content');
   });
 });
 

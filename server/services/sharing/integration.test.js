@@ -97,6 +97,23 @@ describe('sharing round-trip', () => {
     if (tempBucket) rmSync(tempBucket, { recursive: true, force: true });
   });
 
+  it('preserves local video holds while importing bundled media-job records', async () => {
+    const bucket = await buckets.createBucket({ name: 'Example Bucket', path: tempBucket, mode: 'inbox' });
+    const local = { id: 'retained-local', kind: 'video', status: 'queued', params: { modelId: 'example-video' } };
+    const videoHolds = [{ id: '00000000-0000-4000-8000-000000000001', modelId: 'example-video', runtime: 'mlx_video',
+      classification: 'runtimeerror', cause: 'shader failed', heldAt: '2026-09-05T00:00:00.000Z' }];
+    const file = join(tempData, 'media-jobs.json');
+    writeFileSync(file, JSON.stringify({ jobs: [local], videoHolds, futureEnvelopeField: 'preserved' }));
+    const incoming = { id: '00000000-0000-4000-8000-000000000002', kind: 'video', status: 'completed', params: {} };
+    mkdirSync(join(tempBucket, 'records', 'media'), { recursive: true });
+    writeFileSync(join(tempBucket, 'records', 'media', `${incoming.id}.json`), JSON.stringify(incoming));
+    writeFileSync(join(tempBucket, 'manifests', 'example-media.json'), JSON.stringify({
+      id: 'example-manifest', senderInstanceId: 'example-peer', kind: 'media', recordIds: [incoming.id], assetRefs: [],
+    }));
+    expect((await importer.processManifest(bucket.id, 'example-media.json')).processed).toBe(true);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ jobs: [local, incoming], videoHolds, futureEnvelopeField: 'preserved' });
+  });
+
   it('exports a series, processes the manifest as inbox, then promotes — id + origin preserved', async () => {
     const bucket = await buckets.createBucket({ name: 'Test', path: tempBucket, mode: 'inbox' });
 

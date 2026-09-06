@@ -103,6 +103,7 @@ const INHERITED_ENV = {
   // Test-harness only — setting any of these on a real install is meaningless.
   VITEST: 'set by the vitest runner',
   VITEST_FAST: 'opt-in fast-suite selector, CI/local test runs only',
+  CI_EXPECT_SLASHDO_SUBMODULE: 'CI flag that turns a skipped slashdo adapter contract into a failure',
   TEST_DB_OK: 'test-harness flag for the DB-backed suites',
   PGTESTDATABASE: 'test-harness override naming portos_test',
   PORTOS_REQUIRE_DB: 'CI flag that turns a skipped DB suite into a failure',

@@ -36,14 +36,14 @@ const BASE_CONFIG = {
 // The real `onUpdate` (ScheduleTab's handleUpdateTask) is async, and several
 // handlers here attach a rejection handler to what it returns — so the default
 // mock must resolve a promise, not `undefined`.
-function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskType = 'feature-ideas', config: extraConfig = {}, setUpdating = () => {} } = {}) {
+function renderControls({ taskMetadata, onUpdate = vi.fn(async () => {}), taskType = 'feature-ideas', config: extraConfig = {}, setUpdating = () => {}, providers = [] } = {}) {
   render(
     <GlobalConfigControls
       taskType={taskType}
       config={{ ...BASE_CONFIG, taskMetadata, ...extraConfig }}
       onUpdate={onUpdate}
       onTrigger={() => {}}
-      providers={[]}
+      providers={providers}
       apps={[]}
       updating={false}
       setUpdating={setUpdating}
@@ -304,5 +304,26 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
     // A cron+perpetual task rechecks on its OWN expression, so it needs none.
     renderControls({ config: { type: 'cron', cronExpression: '0 7 * * *', perpetual: true } });
     expect(screen.queryByText('Recheck Cadence')).not.toBeInTheDocument();
+  });
+});
+
+
+describe('GlobalConfigControls — external issue isolation', () => {
+  it('offers text API providers and explains the source policy while retaining an invalid saved pin', async () => {
+    const onUpdate = renderControls({
+      taskType: 'issue-watcher',
+      config: { providerId: 'coding-cli', promptMode: 'runtime-generated' },
+      providers: [
+        { id: 'coding-cli', name: 'Coding CLI', type: 'cli', enabled: true },
+        { id: 'local-api', name: 'Local API', type: 'api', enabled: true },
+        { id: 'another-cli', name: 'Another CLI', type: 'cli', enabled: true },
+      ],
+    });
+    expect(screen.getByRole('option', { name: 'Coding CLI (API provider required)' })).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Local API' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Another CLI' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Abuse Guard source settings' })).toHaveAttribute('href', '/models/llms/abuse');
+    await act(async () => { fireEvent.change(screen.getByLabelText('Provider (optional)'), { target: { value: '' } }); });
+    expect(onUpdate).toHaveBeenCalledWith('issue-watcher', { providerId: null, model: null, effort: null });
   });
 });

@@ -77,6 +77,7 @@ function pm2Row({ id, label, icon, status, platformReason, onStart, onStop, onIn
     icon,
     state,
     endpoint: status?.endpoint || null,
+    releaseReason: !status?.running && status?.releaseReason ? status.releaseReason : null,
     detail: platformReason || detail || null,
     pm2: true,
     runAtStartup: status?.runAtStartup ?? null,
@@ -190,6 +191,11 @@ function ServerRow({ row, busy, actionInProgress, children }) {
             starts at boot
           </span>
         )}
+        {row.releaseReason && (
+          <span className="text-xs text-port-warning" title={row.releaseReason}>
+            {row.releaseReason}
+          </span>
+        )}
         {row.detail && <span className="text-xs text-gray-500">{row.detail}</span>}
       </div>
       <div className="flex items-center gap-2 flex-wrap shrink-0">
@@ -296,6 +302,7 @@ export default function RuntimeServersCard({
   onStopSlotstream,
   onSaveStartup,
   onSaveIdleWindow,
+  onToggleKeepLoaded,
 }) {
   // Read off each daemon's own status payload — the same place `runAtStartup`
   // and Ollama's `disabled` come from — so there is no second settings fetch on
@@ -304,6 +311,11 @@ export default function RuntimeServersCard({
     llama: llamaStatus?.idleMinutes ?? 0,
     mtplx: mtplxStatus?.idleMinutes ?? 0,
     slotstream: slotstreamStatus?.idleMinutes ?? 0,
+  };
+  const keepLoaded = {
+    llama: Boolean(llamaStatus?.keepLoaded),
+    mtplx: Boolean(mtplxStatus?.keepLoaded),
+    slotstream: Boolean(slotstreamStatus?.keepLoaded),
   };
   const ollamaService = status?.ollama?.service;
   const ollamaRunsAtStartup = Boolean(ollamaService?.runAtStartup);
@@ -424,17 +436,32 @@ export default function RuntimeServersCard({
               </button>
             )}
             {(row.id === 'llama' || row.id === 'mtplx' || row.id === 'slotstream') && row.state !== 'unsupported' && row.state !== 'missing' && (
-              <IdleWindowField
-                id={row.id}
-                value={idleWindows[row.id] ?? 0}
-                busy={busy}
-                onSave={(minutes) => onSaveIdleWindow?.(row.id, minutes)}
-                note={row.id === 'llama'
-                  ? 'Minutes of PortOS inactivity after which llama.cpp unloads the model in place and reloads it on the next request. 0 = keep it resident. Applies from the next start.'
-                  : row.id === 'slotstream'
-                    ? 'Minutes of PortOS inactivity after which Slotstream is stopped. The next PortOS request starts it again on the same checkpoint and memory cap. 0 = keep it running.'
-                    : 'Minutes of PortOS inactivity after which MTPLX is stopped. The next PortOS request starts it again on the same checkpoint. 0 = keep it running.'}
-              />
+              <div className="flex items-center gap-3">
+                <IdleWindowField
+                  id={row.id}
+                  value={idleWindows[row.id] ?? 0}
+                  busy={busy || keepLoaded[row.id]}
+                  onSave={(minutes) => onSaveIdleWindow?.(row.id, minutes)}
+                  note={keepLoaded[row.id]
+                    ? `${row.label} is pinned to keep loaded and is exempt from idle release and memory pressure eviction.`
+                    : row.id === 'llama'
+                      ? 'Minutes of PortOS inactivity after which llama.cpp unloads the model in place and reloads it on the next request. 0 = keep it resident. Applies from the next start.'
+                      : row.id === 'slotstream'
+                        ? 'Minutes of PortOS inactivity after which Slotstream is stopped. The next PortOS request starts it again on the same checkpoint and memory cap. 0 = keep it running.'
+                        : 'Minutes of PortOS inactivity after which MTPLX is stopped. The next PortOS request starts it again on the same checkpoint. 0 = keep it running.'}
+                />
+                <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={keepLoaded[row.id] ?? false}
+                    disabled={busy}
+                    onChange={() => onToggleKeepLoaded?.(row.id, !(keepLoaded[row.id] ?? false))}
+                    className="rounded bg-port-bg border-port-border text-port-accent focus:ring-0 focus:ring-offset-0"
+                    aria-label={`Keep ${row.label} loaded`}
+                  />
+                  <span>Keep loaded</span>
+                </label>
+              </div>
             )}
             {(row.id === 'llama' || row.id === 'mtplx' || row.id === 'slotstream') && row.state !== 'unsupported' && (
               <button

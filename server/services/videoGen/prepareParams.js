@@ -26,11 +26,10 @@
  */
 
 import { existsSync } from 'fs';
-import { copyFile, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { PATHS, ensureDir, resolveGalleryImage } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../../lib/ffmpeg.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import {
@@ -51,7 +50,7 @@ import {
 import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getTrack } from '../tracks/index.js';
-import { VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
+import { VIDEO_GEN_MODE, resolveVideoMode, isVideoModeUsable } from './modes.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import {
   listVideoModels,
@@ -70,6 +69,7 @@ import {
 // module mock local.js wholesale, and a mocked rule table would assert nothing.
 import { videoModeContractError, videoChainUnsupportedError, videoReferenceModeError } from './modeContract.js';
 import { resolveByovRuntimeLoraCapable, videoLoraUnsupportedError } from './runtimes.js';
+import { validateVideoBatch } from './batch.js';
 import { audioDurationToFrames } from './audioDuration.js';
 
 // Retries reuse persisted worker parameters instead of passing through the
@@ -103,6 +103,7 @@ export async function validateVideoRetryParams(params = {}) {
     && !supportsVideoTextEncoder(model, params.textEncoderId)) {
     throw videoTextEncoderUnsupportedError(model, params.textEncoderId);
   }
+  validateVideoBatch(params, model);
   const mode = params.mode || (params.sourceImagePath ? 'image' : 'text');
   const modeError = videoModeContractError({
     model,
@@ -196,7 +197,7 @@ export const cleanupMultipartTemp = async (uploads) => {
     cleanedMultipartUploads.add(uploads);
   }
   for (const f of Object.values(uploads || {})) {
-    if (f?.path) await unlink(f.path).catch(() => {});
+    if (f?.path) await unlinkGuarded(f.path).catch(() => {});
   }
 };
 
@@ -325,6 +326,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
   }
+  validateVideoBatch({ ...body, backend }, effectiveModel);
   if (effectiveModel && !isHardwareCompatible(effectiveModel.hardwareCompatibility)) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(
@@ -351,7 +353,8 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   // shared with services/videoGen/local.js so the route and worker stay
   // in sync.
   const runtimeBringsOwnVenv = effectiveModel && BYOV_VIDEO_RUNTIMES.has(effectiveModel.runtime);
-  if (!pythonPath && !runtimeBringsOwnVenv && backend !== 'grok') {
+  if (!pythonPath && !runtimeBringsOwnVenv
+    && backend !== VIDEO_GEN_MODE.GROK && backend !== VIDEO_GEN_MODE.FAL && backend !== VIDEO_GEN_MODE.REACTOR) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(
       'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
@@ -366,7 +369,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   // worker's cleanup never runs).
   const stagedDurablePaths = [];
   const cleanupStaged = async () => {
-    for (const p of stagedDurablePaths) await unlink(p).catch(() => {});
+    for (const p of stagedDurablePaths) await unlinkGuarded(p).catch(() => {});
     await cleanupMultipartTemp(uploads);
   };
 
@@ -402,16 +405,16 @@ async function resolvePreparedParams({
     const ext = extname(file.originalname || file.path) || '.bin';
     const durablePath = join(PATHS.uploads, `video-${kind}-${randomUUID()}${ext}`);
     try {
-      await copyFile(file.path, durablePath);
+      await copyFileGuarded(file.path, durablePath);
     } catch (err) {
-      await unlink(durablePath).catch(() => {});
+      await unlinkGuarded(durablePath).catch(() => {});
       await cleanupStaged();
       throw new ServerError(
         `Failed to stage upload to durable location: ${err.message}`,
         { status: 500, code: 'VIDEO_GEN_UPLOAD_STAGE_FAILED' },
       );
     }
-    await unlink(file.path).catch(() => {});
+    await unlinkGuarded(file.path).catch(() => {});
     stagedDurablePaths.push(durablePath);
     return durablePath;
   };
@@ -423,8 +426,8 @@ async function resolvePreparedParams({
   const stageExistingAudioDurable = async (sourcePath) => {
     const ext = extname(sourcePath) || '.bin';
     const durablePath = join(PATHS.uploads, `video-audio-${randomUUID()}${ext}`);
-    await copyFile(sourcePath, durablePath).catch(async (err) => {
-      await unlink(durablePath).catch(() => {});
+    await copyFileGuarded(sourcePath, durablePath).catch(async (err) => {
+      await unlinkGuarded(durablePath).catch(() => {});
       await cleanupStaged();
       throw new ServerError(
         `Failed to stage project audio: ${err.message}`,
@@ -473,10 +476,10 @@ async function resolvePreparedParams({
     // plain grok render with the reference clip silently dropped. The client's
     // mode bar snaps grok back to text/image, but reject explicitly so a direct
     // caller gets an error instead of a wrong-looking clip.
-    if (body.backend === 'grok') {
+    if (body.backend === VIDEO_GEN_MODE.GROK || body.backend === VIDEO_GEN_MODE.FAL || body.backend === VIDEO_GEN_MODE.REACTOR) {
       await cleanupStaged();
       throw new ServerError(
-        `${icSpec.label} mode runs on the local ltx2 runtime — it isn't available on the Grok backend.`,
+        `${icSpec.label} mode runs on the local ltx2 runtime — it isn't available on the ${body.backend} backend.`,
         { status: 400, code: 'IC_LORA_REQUIRES_LOCAL_BACKEND' },
       );
     }
@@ -728,11 +731,11 @@ async function resolvePreparedParams({
   }
   const discardSourceImage = async () => {
     if (uploadedTempPath) {
-      await unlink(uploadedTempPath).catch(() => {});
+      await unlinkGuarded(uploadedTempPath).catch(() => {});
       const index = stagedDurablePaths.indexOf(uploadedTempPath);
       if (index >= 0) stagedDurablePaths.splice(index, 1);
     }
-    if (uploads.sourceImage?.path) await unlink(uploads.sourceImage.path).catch(() => {});
+    if (uploads.sourceImage?.path) await unlinkGuarded(uploads.sourceImage.path).catch(() => {});
   };
   // Grok backend short-circuit (#2859 phase 2): everything past this point —
   // last-frame/keyframe staging, extend resolution, LoRA gating — is
@@ -754,6 +757,54 @@ async function resolvePreparedParams({
       backend,
       grok,
       effectiveModel: { id: 'grok', supportedModes: ['text', 'image'] },
+      sourceImagePath,
+      uploadedTempPath,
+      discardSourceImage,
+      cleanupStaged,
+    };
+  }
+
+  // fal.ai short-circuit (#6213): mirrors the grok branch above — the queue
+  // REST provider reads only prompt/dims/source-image/duration, so every
+  // local-runtime knob past this point is irrelevant to it.
+  if (backend === VIDEO_GEN_MODE.FAL) {
+    if (!isVideoModeUsable(settings, VIDEO_GEN_MODE.FAL)) {
+      await cleanupStaged();
+      throw new ServerError(
+        'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first',
+        { status: 400, code: 'FAL_NOT_CONFIGURED' },
+      );
+    }
+    return {
+      backend,
+      // No CLI-config sibling to grok's `grok` field: fal.js re-resolves the
+      // API key from live settings itself (see its generateVideo comment) so
+      // the secret never rides through job.params/media-jobs.json.
+      effectiveModel: { id: 'fal', supportedModes: ['text', 'image'] },
+      sourceImagePath,
+      uploadedTempPath,
+      discardSourceImage,
+      cleanupStaged,
+    };
+  }
+
+  // reactor.inc short-circuit (#6214): mirrors the fal branch above — the
+  // fast-h3 API reads only prompt/source-image/continue_from_clip_id/seconds,
+  // so every local-runtime knob past this point is irrelevant to it.
+  if (backend === VIDEO_GEN_MODE.REACTOR) {
+    if (!isVideoModeUsable(settings, VIDEO_GEN_MODE.REACTOR)) {
+      await cleanupStaged();
+      throw new ServerError(
+        'No reactor.inc API key configured — set it in Settings → Video Gen (or the REACTOR_API_KEY env var) first',
+        { status: 400, code: 'REACTOR_NOT_CONFIGURED' },
+      );
+    }
+    return {
+      backend,
+      // No CLI-config sibling to grok's `grok` field: reactor.js re-resolves
+      // the API key from live settings itself (see its generateVideo
+      // comment) so the secret never rides through job.params/media-jobs.json.
+      effectiveModel: { id: 'reactor', supportedModes: ['text', 'image'] },
       sourceImagePath,
       uploadedTempPath,
       discardSourceImage,

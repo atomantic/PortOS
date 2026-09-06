@@ -291,7 +291,7 @@ describe('taskSchedule', () => {
     it('names only task types that really sweep the whole install', () => {
       // repo-sync sweeps every managed checkout; user-action-review reads the
       // install-wide operator-action ledger — neither is a per-app run.
-      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review'])
+      expect([...INSTALL_WIDE_TASK_TYPES]).toEqual(['repo-sync', 'user-action-review', 'model-comparison-refresh'])
     })
 
     it('every install-wide type is a registered task type', () => {
@@ -303,7 +303,7 @@ describe('taskSchedule', () => {
 
   describe('managed-app target task types', () => {
     it('keeps app-required scope explicit and separate from install-wide scope', () => {
-      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['pr-reviewer'])
+      expect([...MANAGED_APP_TARGET_TASK_TYPES]).toEqual(['pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile'])
       expect(requiresManagedAppTarget('pr-reviewer')).toBe(true)
       expect(requiresManagedAppTarget('security')).toBe(false)
       expect(requiresManagedAppTarget('repo-sync')).toBe(false)
@@ -431,11 +431,11 @@ describe('taskSchedule', () => {
       expect(TASK_TYPE_PROMPT_INFO['issue-watcher']).toMatchObject({ mode: 'runtime-generated' });
     });
 
-    it('locks the reasoning-only throwaway-worktree posture', () => {
-      expect(MANAGED_AGENT_OPTIONS['issue-watcher']).toEqual(['useWorktree', 'openPR', 'discardWorktree']);
+    it('locks the direct no-checkout reasoning posture', () => {
+      expect(MANAGED_AGENT_OPTIONS['issue-watcher']).toEqual(['useWorktree', 'openPR', 'readOnly', 'worktreeChangesExpected']);
       const config = { taskMetadata: { useWorktree: false, openPR: true, discardWorktree: false } };
       expect(enforceManagedAgentOptions('issue-watcher', config)).toBe(true);
-      expect(config.taskMetadata).toMatchObject({ useWorktree: true, openPR: false, discardWorktree: true });
+      expect(config.taskMetadata).toMatchObject({ useWorktree: false, openPR: false, readOnly: true, worktreeChangesExpected: false });
     });
   });
 
@@ -446,7 +446,7 @@ describe('taskSchedule', () => {
       expect(DEFAULT_TASK_INTERVALS['pr-reviewer'].taskMetadata.pipeline.stages).toEqual([
         expect.objectContaining({ name: 'Security Scan', role: 'security', readOnly: true, managed: true }),
         expect.objectContaining({ name: 'Eligibility Gate', role: 'eligibility', readOnly: true, executionProfile: 'public-review-gate' }),
-        expect.objectContaining({ name: 'Code Review & Actions', role: 'actions', readOnly: true, executionProfile: 'public-review-actions' }),
+        expect.objectContaining({ name: 'Code Review & Validated Actions', role: 'actions', readOnly: true, executionProfile: 'public-review-gate' }),
       ]);
       expect(MANAGED_AGENT_OPTIONS['pr-reviewer']).toEqual(['useWorktree', 'openPR', 'worktreeChangesExpected']);
     });
@@ -484,13 +484,13 @@ describe('taskSchedule', () => {
       expect(schedule.executions).toBeDefined()
     })
 
-    it('installs every registered task as an enabled on-demand action', async () => {
+    it('installs tasks on demand and keeps model research disabled until configured', async () => {
       const schedule = await loadSchedule()
 
       for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
         expect(schedule.tasks[taskType], taskType).toMatchObject({
           type: INTERVAL_TYPES.ON_DEMAND,
-          enabled: true
+          enabled: taskType !== 'model-comparison-refresh'
         })
       }
     })
@@ -1960,6 +1960,17 @@ describe('taskSchedule', () => {
       loadState.mockResolvedValue({ config: { improvementEnabled: true } })
     })
 
+    it('keeps model research global for both scheduled and manual dispatch', async () => {
+      mockSchedule({ tasks: { 'model-comparison-refresh': { type: INTERVAL_TYPES.CRON, cronExpression: '* * * * *', enabled: true } } })
+      parseCronToNextRun.mockReturnValue(new Date(Date.now() - 1000))
+
+      expect(await shouldRunTask('model-comparison-refresh', 'app-1')).toMatchObject({ shouldRun: false, reason: 'requires-install-wide-target' })
+      expect((await triggerOnDemandTask('model-comparison-refresh', 'app-1')).error).toMatch(/requires an install-wide target/i)
+      expect((await getOnDemandRequests()).filter(r => r.taskType === 'model-comparison-refresh')).toHaveLength(0)
+      expect((await shouldRunTask('model-comparison-refresh')).shouldRun).toBe(true)
+      expect(await triggerOnDemandTask('model-comparison-refresh')).toMatchObject({ taskType: 'model-comparison-refresh', appId: null })
+    })
+
     it('should reject and not persist when master Improve is disabled', async () => {
       mockSchedule({
         tasks: { 'feature-ideas': { type: 'weekly', enabled: true } }
@@ -2211,7 +2222,7 @@ describe('taskSchedule', () => {
       expect(status.tasks['issue-watcher']).toMatchObject({
         description: TASK_TYPE_DESCRIPTIONS['issue-watcher'],
         promptMode: 'runtime-generated',
-        promptDescription: expect.stringContaining('deterministic GitHub gathering'),
+        promptDescription: expect.stringContaining('Three enforced server phases'),
         invocation: { kind: 'direct', visibility: 'visible', userInvokable: true },
       })
       expect(status.tasks.security).toMatchObject({

@@ -5,8 +5,8 @@
  */
 
 import { join } from 'path';
-import { readFile, readdir, rm } from 'fs/promises';
-import { PATHS, atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
+import { readFile, readdir } from 'fs/promises';
+import { PATHS, atomicWrite, ensureDir, safeJSONParse, tryReadFile, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripCodeFences } from '../aiProvider.js';
 import { runStagedLLM } from '../stageRunner.js';
@@ -267,7 +267,7 @@ async function migrateLegacyAnalyses(workId) {
   for (const [kind, { snapshot }] of latestPerKind) {
     await saveAnalysis(workId, { ...snapshot, id: kind });
   }
-  await Promise.all(legacy.map((id) => rm(join(dir, `${id}.json`)).catch(() => {})));
+  await Promise.all(legacy.map((id) => rmGuarded(join(dir, `${id}.json`)).catch(() => {})));
   return legacy.length;
 }
 

@@ -14,6 +14,7 @@ import { MortalLoomTab } from '../components/settings/MortalLoomTab';
 import { SecurityTab } from '../components/settings/SecurityTab';
 import { SharingTab } from '../components/settings/SharingTab';
 import { VoiceTab } from '../components/settings/VoiceTab';
+import OrchestrationTab from '../components/settings/OrchestrationTab';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 
 // Settings pages now host themselves as drawers on their feature pages where
@@ -51,6 +52,7 @@ export default function Settings() {
       case 'voice': return <VoiceTab />;
       case 'telegram': return <TelegramTab />;
       case 'mortalloom': return <MortalLoomTab />;
+      case 'orchestration': return <OrchestrationTab />;
       default: return <GeneralTab />;
     }
   };

@@ -20,8 +20,8 @@ const deps = (overrides = {}) => ({
   now: Date.parse('2026-09-02T12:00:00.000Z'),
   getActiveAgentIds: () => [],
   getActiveApps: async () => [
-    { id: 'portos-default', repoPath: '/tmp/portos' },
-    { id: 'app-acme', repoPath: '/tmp/acme' },
+    { id: 'portos-default', name: 'PortOS', repoPath: '/tmp/portos' },
+    { id: 'app-acme', name: 'Acme', repoPath: '/tmp/acme' },
   ],
   getDefaultBranch: async () => 'main',
   gatherBranchState: async (repoPath) => (repoPath === '/tmp/acme' ? [leftoverInput()] : []),
@@ -50,10 +50,36 @@ describe('detectIdleLeftoverBranches', () => {
     const findings = await detectIdleLeftoverBranches(deps());
     expect(findings).toEqual([{
       appId: 'app-acme',
+      // The insight card names the app the operator knows, not the registry id.
+      appName: 'Acme',
       leftoverCount: 1,
+      states: { NEEDS_PR: 1 },
+      branches: ['claim/issue-1'],
       lastUserReconcileAt: '2026-08-28T10:00:00.000Z',
       agentsIdle: true,
     }]);
+  });
+
+  // The card leads with one app by name, so the busiest one has to sort first —
+  // otherwise "N branches on <app>" points at whichever app the registry listed
+  // first rather than the one actually worth reconciling.
+  it('reports the app with the most leftover branches first, with its state mix', async () => {
+    const findings = await detectIdleLeftoverBranches(deps({
+      gatherBranchState: async (repoPath) => (repoPath === '/tmp/acme'
+        ? [leftoverInput()]
+        : [leftoverInput({ branch: 'claim/a' }), leftoverInput({ branch: 'claim/b' }), leftoverInput({ branch: 'claim/c' })]),
+      classifyBranches: (inputs) => inputs.map((input) => ({
+        ...input,
+        state: input.branch === 'claim/c' ? 'MERGED' : 'NEEDS_PR',
+      })),
+    }));
+    expect(findings.map((finding) => finding.appId)).toEqual(['portos-default', 'app-acme']);
+    expect(findings[0]).toMatchObject({
+      appName: 'PortOS',
+      leftoverCount: 3,
+      states: { NEEDS_PR: 2, MERGED: 1 },
+      branches: ['claim/a', 'claim/b', 'claim/c'],
+    });
   });
 
   it('returns nothing while any agent is still running', async () => {

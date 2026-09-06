@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { useState } from 'react';
@@ -57,6 +57,8 @@ describe('LoomSeriesPlan', () => {
     renderPlan({ loom: loom(), onLoomUpdate });
 
     fireEvent.change(screen.getByRole('textbox', { name: /story arc/i }), { target: { value: 'A stronger arc.' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'AI editor' }));
+    fireEvent.click(screen.getByText('Manual AI plan tools'));
     expect(screen.getByRole('button', { name: /analyze series/i })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
 
@@ -71,25 +73,27 @@ describe('LoomSeriesPlan', () => {
     api.updateLoom.mockResolvedValue(loom());
     renderPlan({ loom: loom(), onLoomUpdate: vi.fn() });
 
+    await user.click(screen.getByRole('tab', { name: 'Plot & challenges' }));
     await user.click(screen.getByRole('button', { name: 'Challenge' }));
     const challengeTitle = screen.getByRole('textbox', { name: 'Plot points 2 title' });
     expect(challengeTitle).toHaveValue('');
+    expect(challengeTitle).toHaveFocus();
     expect(screen.getByRole('textbox', { name: 'Plot points 2 description' }).value)
       .toContain('VIEWER DECISION LOOP');
     expect(screen.getByText('0/1 playable challenges mapped to episodes')).toBeInTheDocument();
-    await user.selectOptions(screen.getAllByRole('combobox', { name: 'Episode' })[1], 'ep-1');
+    await user.selectOptions(within(challengeTitle.closest('details')).getByRole('combobox', { name: 'Episode' }), 'ep-1');
     expect(screen.getByText('1/1 playable challenges mapped to episodes')).toBeInTheDocument();
   });
 
-  it('presents challenge planning before outline readiness and editorial automation', () => {
+  it('keeps drafts across section changes and shows only the selected planning area', () => {
     renderPlan({ loom: loom(), onLoomUpdate: vi.fn() });
-
-    const plotPoints = screen.getByRole('heading', { name: 'Plot points' });
-    const outlines = screen.getByRole('heading', { name: 'Episode beat outlines' });
-    const editorial = screen.getByText('Editorial automation');
-
-    expect(plotPoints.compareDocumentPosition(outlines) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(outlines.compareDocumentPosition(editorial) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: /story arc/i }), { target: { value: 'Unsaved arc' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Plot & challenges' }));
+    expect(screen.queryByRole('textbox', { name: /story arc/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Plot points' })).toBeVisible();
+    expect(screen.getByRole('button', { name: /save plan/i })).toBeVisible();
+    fireEvent.click(screen.getByRole('tab', { name: 'Story arc' }));
+    expect(screen.getByRole('textbox', { name: /story arc/i })).toHaveValue('Unsaved arc');
   });
 
   it('shows AI series analysis and recommendations for the outline', async () => {
@@ -103,6 +107,8 @@ describe('LoomSeriesPlan', () => {
     });
     renderPlan({ loom: loom(), onLoomUpdate: () => {} });
 
+    fireEvent.click(screen.getByRole('tab', { name: 'AI editor' }));
+    fireEvent.click(screen.getByText('Manual AI plan tools'));
     fireEvent.click(screen.getByRole('button', { name: /analyze series/i }));
     expect(await screen.findByText('The spine works.')).toBeInTheDocument();
     expect(screen.getByText('Move the reversal into episode 3')).toBeInTheDocument();
@@ -120,6 +126,8 @@ describe('LoomSeriesPlan', () => {
     api.feedbackLoomSeriesPlan.mockResolvedValue({ loom: updated, changes: ['Shifted plot point turn'] });
     renderPlan({ loom: loom(), onLoomUpdate });
 
+    fireEvent.click(screen.getByRole('tab', { name: 'AI editor' }));
+    fireEvent.click(screen.getByText('Manual AI plan tools'));
     fireEvent.change(screen.getByRole('textbox', { name: /edit outline & plot points/i }), {
       target: { value: 'Move the turn to episode 1 and raise stakes.' },
     });
@@ -148,6 +156,8 @@ describe('LoomSeriesPlan', () => {
     api.generateLoomSeriesPlan.mockResolvedValue({ loom: generated, runId: 'run-draft' });
     renderPlan({ loom: loom(), onLoomUpdate });
 
+    fireEvent.click(screen.getByRole('tab', { name: 'AI editor' }));
+    fireEvent.click(screen.getByText('Manual AI plan tools'));
     fireEvent.click(screen.getByRole('button', { name: /regenerate full plan/i }));
     expect(api.generateLoomSeriesPlan).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /^regenerate$/i }));
@@ -165,8 +175,11 @@ describe('LoomSeriesPlan', () => {
       { path: '/', element: <StatefulPlan initial={loom()} /> },
     ], { initialEntries: ['/'] })} />);
 
+    fireEvent.click(screen.getByRole('tab', { name: 'AI editor' }));
+    fireEvent.click(screen.getByText('Manual AI plan tools'));
     fireEvent.click(screen.getByRole('button', { name: /regenerate full plan/i }));
     fireEvent.click(screen.getByRole('button', { name: /^regenerate$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Story arc' }));
     fireEvent.change(screen.getByRole('textbox', { name: /story arc/i }), {
       target: { value: 'Typing that should not undo the requested regeneration.' },
     });
@@ -198,19 +211,6 @@ describe('LoomSeriesPlan', () => {
     expect(screen.getByRole('button', { name: /save plan/i })).toBeEnabled();
   });
 
-  it('renders AI tools and save plan within the persistent desktop rail beside the story content', () => {
-    renderPlan({ loom: loom(), onLoomUpdate: () => {} });
-    const rightRail = screen.getByRole('complementary', { name: /ai tools and actions/i });
-    expect(rightRail).toBeInTheDocument();
-    expect(rightRail.className).toContain('lg:sticky');
-    expect(rightRail.className).toContain('lg:top-0');
-
-    // Confirm actions and AI tools reside within the right rail
-    expect(rightRail).toContainElement(screen.getByRole('button', { name: /save plan/i }));
-    expect(rightRail).toContainElement(screen.getByRole('button', { name: /analyze series/i }));
-    expect(rightRail).toContainElement(screen.getByRole('button', { name: /(draft|regenerate) full plan/i }));
-  });
-
   it('reviews the complete expanded teleplay only when every episode has scenes', async () => {
     api.reviewLoomTeleplay.mockResolvedValue({
       analysis: {
@@ -228,6 +228,8 @@ describe('LoomSeriesPlan', () => {
     });
     renderPlan({ loom: fullLoom, onLoomUpdate: () => {} });
 
+    fireEvent.click(screen.getByRole('tab', { name: 'AI editor' }));
+    fireEvent.click(screen.getByText('Manual AI plan tools'));
     expect(screen.getByRole('button', { name: 'Review full teleplay' })).toBeEnabled();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Review full teleplay' }));
     expect(await screen.findByText('The full teleplay escalates cleanly.')).toBeInTheDocument();
@@ -242,6 +244,7 @@ describe('LoomSeriesPlan', () => {
     const user = userEvent.setup();
     renderPlan({ loom: loom(), onLoomUpdate: () => {} });
 
+    await user.click(screen.getByRole('tab', { name: 'Episode outlines' }));
     await user.click(screen.getByRole('button', { name: 'Validate full beat arc' }));
 
     expect(await screen.findByText(/Draft Episode 1 first\./)).toBeInTheDocument();
@@ -261,6 +264,7 @@ describe('LoomSeriesPlan', () => {
     const onLoomUpdate = vi.fn();
     renderPlan({ loom: threeEpisodeLoom, onLoomUpdate });
 
+    await user.click(screen.getByRole('tab', { name: 'Viewer handoffs' }));
     await user.click(screen.getByLabelText(/overnight voicemail between episodes/i));
     expect(screen.getAllByRole('textbox', { name: 'Voicemail transcript' })).toHaveLength(2);
     await user.type(screen.getAllByRole('textbox', { name: 'Voicemail transcript' })[0], 'Stay awake. The beacon is listening.');

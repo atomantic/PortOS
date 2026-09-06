@@ -1,4 +1,5 @@
 // Barrel for client/src/lib/ — discovery surface, not a forced import path.
+export * from './publicGuestRoutes.js';
 // See client/src/lib/README.md for the human-readable catalog and
 // AGENTS.md "Module organization" for the maintenance convention.
 
@@ -34,6 +35,7 @@ export * from './falVideoHandoff.js';
 export * from './fableLoomReadiness.js';
 export * from './glbFailure.js';
 export * from './grokVideoClip.js';
+export * from './reactorVideoClip.js';
 export * from './imageCleaners.js';
 export * from './imageGenBackends.js';
 // Namespace export: imageGenBackends re-exports every imageGenModes symbol
@@ -47,6 +49,7 @@ export * from './imageTo3dRenderOptions.js';
 export * from './importerDeepLink.js';
 export * from './installFailureTask.js';
 export * from './letteringDensity.js';
+export * from './isSafeHref.js';
 export * from './issueLength.js';
 export * from './musicDuration.js';
 export * from './muscriptorModels.js';
@@ -78,6 +81,7 @@ export * from './a11yKeyboard.js';
 export * from './agentResumeOutcome.js';
 export * from './appIdentity.js';
 export * from './applyManuscriptEdits.js';
+export * from './avatarStyles.js';
 export * from './assessmentTuningNotice.js';
 export * from './audioRecorder.js';
 export * from './callAudioBridge.js';
@@ -88,6 +92,7 @@ export * from './chipContrast.js';
 export * from './clientErrorReporter.js';
 export * from './clinicianReport.js';
 export * from './clipboard.js';
+export * from './effortCostEstimate.js';
 export * from './compareHelpers.js';
 export * from './consoleFilters.js';
 export * from './cosTaskType.js';
@@ -128,6 +133,7 @@ export * from './youtubeUrl.js';
 // === Page-scoped pure helpers ===
 export * from './audioContext.js';
 export * from './canvasRoll.js';
+export * from './wireframeCore.js';
 export * from './chiptunePlayback.js';
 export * from './chordPlayback.js';
 export * from './chordShapes.js';
@@ -137,9 +143,12 @@ export * from './drumNotation.js';
 export * from './drumPlayback.js';
 export * from './editorialChecks.js';
 export * from './editorialHealth.js';
+export * from './episodeSceneImport.js';
 export * from './lookaheadTransport.js';
 export * from './lossSparkline.js';
+export * from './managedAppSources.js';
 export * from './metronome.js';
+export * from './mindThinkingPresets.js';
 export * from './navFeatures.js';
 export * from './midiChords.js';
 export * from './midiNotes.js';
@@ -191,3 +200,4 @@ export * from './writingGuide.js';
 export * from './qrCode.js';
 export * from './riggingReasons.js';
 export * from './usdzExport.js';
+export * from './eidoverseFrame.js';

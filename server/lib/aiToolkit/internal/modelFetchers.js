@@ -1,3 +1,4 @@
+import { commandBasename } from './commandBasename.js';
 /**
  * The single per-vendor table behind model refresh.
  *
@@ -39,6 +40,7 @@
  */
 import { ANTIGRAVITY_TUI_ID, isAntigravityCommand } from './antigravity.js';
 import { CURSOR_TUI_ID, isCursorCommand } from './cursor.js';
+import { CODEX_TUI_ID, isCodexCommand } from './codex.js';
 import { isOllamaBackedProvider, ollamaBaseFromProvider } from './ollamaBacked.js';
 import { isGatewayBackedProvider } from './gateways.js';
 
@@ -60,6 +62,18 @@ export const MODEL_FETCHERS = [
     cliMatch: (p) => isOllamaBackedProvider(p),
     tuiMatch: (p) => isOllamaBackedProvider(p),
     fetch: '_fetchOllamaToolCapableModels',
+  },
+  {
+    key: 'lmstudio',
+    // LM Studio publishes the models it has downloaded through the same
+    // OpenAI-compatible `/v1/models` contract as every other local daemon here,
+    // so an `lmstudioBacked` harness wrapper probes that endpoint rather than
+    // running `opencode models` / `codex` (which would inventory the harness).
+    // It authenticates nothing on loopback, so the wrapper's `apiKey` is blank
+    // and `_refreshAPIProviderModels` simply omits the Bearer header.
+    cliMatch: (p) => p?.lmstudioBacked === true,
+    tuiMatch: (p) => p?.lmstudioBacked === true,
+    fetch: '_fetchLmstudioModels',
   },
   {
     key: 'mtplx',
@@ -110,11 +124,22 @@ export const MODEL_FETCHERS = [
     fetch: '_fetchGatewayModels',
   },
   {
+    key: 'pi', cliMatch: (p) => commandBasename(p?.command) === 'pi',
+    tuiMatch: (p) => commandBasename(p?.command) === 'pi', fetch: '_fetchPiModels',
+  },
+  {
     key: 'cursor',
     // No `cliNameMatch` on purpose — see the column notes above.
     cliMatch: (p) => isCursorCommand(p?.command),
     tuiMatch: (p) => p?.id === CURSOR_TUI_ID || isCursorCommand(p?.command),
     fetch: '_fetchCursorModels',
+  },
+  {
+    key: 'codex',
+    cliMatch: (p) => isCodexCommand(p?.command),
+    cliNameMatch: (p) => displayName(p).includes('codex'),
+    tuiMatch: (p) => p?.id === CODEX_TUI_ID || isCodexCommand(p?.command),
+    fetch: '_fetchCodexModels',
   },
   {
     key: 'claude',

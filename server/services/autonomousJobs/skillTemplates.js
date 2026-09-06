@@ -6,9 +6,8 @@
  * due job into a CoS task payload (`generateTaskFromJob`).
  */
 
-import { writeFile } from 'fs/promises'
 import { join } from 'path'
-import { ensureDir, PATHS, tryReadFile } from '../../lib/fileUtils.js'
+import { ensureDir, PATHS, tryReadFile, writeFileGuarded } from '../../lib/fileUtils.js'
 import { JOBS_SKILLS_DIR, JOB_SKILL_MAP } from './constants.js'
 import { getAppById } from '../apps.js'
 import { appendTaskDataInputs, resolveTaskDataInputs } from '../taskDataInputs.js'
@@ -35,7 +34,7 @@ async function loadJobSkillTemplate(skillName) {
 async function saveJobSkillTemplate(skillName, content) {
   await ensureDir(JOBS_SKILLS_DIR)
   const filePath = join(JOBS_SKILLS_DIR, `${skillName}.md`)
-  await writeFile(filePath, content)
+  await writeFileGuarded(filePath, content)
   console.log(`💾 Saved job skill template: ${skillName}`)
 }
 

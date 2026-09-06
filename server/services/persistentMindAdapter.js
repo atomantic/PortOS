@@ -5,7 +5,7 @@
  * headless CLI providers are stable service transports; TUI providers remain
  * supported for compatibility, but their terminal startup/scrape lifecycle is
  * exposed to the UI as the least reliable choice. Provider fallback is off:
- * the configured model is part of this mind's identity.
+ * the configured model is the user's explicit inference choice.
  */
 
 import { z } from 'zod';
@@ -32,6 +32,7 @@ import {
   buildPersistentMindTaskCapabilityPrompt,
   executePersistentMindTaskRequests,
   readPersistentMindTaskCatalog,
+  readPersistentMindTaskInventory,
 } from './persistentMindTaskCapability.js';
 import {
   buildPersistentMindCallCapabilityPrompt,
@@ -247,7 +248,8 @@ Return ONLY one JSON object with this shape:
   "selfWake": { "reason": "Why another wake would be useful", "delayMinutes": 60 },
   "callRequest": { "reason": "Why this cannot wait for a screen", "openingLine": "What to say the moment they answer" }
 }
-Use empty arrays when there is no durable memory candidate, task request, or tool call, and null for selfWake and callRequest when neither is needed. Memory candidates are durable memories to save automatically; only include information that is worth retaining. Never put the same CoS task in both taskRequests and toolCalls. This lane cannot mutate files directly, call arbitrary routes, contact anyone other than the configured PortOS user, or exceed the semantic tool catalog.`;
+Use empty arrays when there is no durable memory candidate, task request, or tool call, and null for selfWake and callRequest when neither is needed. Memory candidates are durable memories to save automatically; only include information that is worth retaining. Never put the same CoS task in both taskRequests and toolCalls. This lane cannot mutate files directly, call arbitrary routes, contact anyone other than the configured PortOS user, or exceed the semantic tool catalog.
+Do not open with a recap. The human already sees the trajectory, the memories, and every earlier reply, so summarizing prior turns or listing what you remember is wasted output. Say only what is new this turn: what you are thinking now, what you decided, and what you need from them. Reference prior context only where it changes the decision you are stating.`;
 }
 
 const summaryEventLines = (events) => (Array.isArray(events) ? events : []).map((event) => {
@@ -259,7 +261,14 @@ export function buildPersistentMindSummaryPrompt({ events, previousSummary }) {
   return `Summarize this older portion of one persistent mind's life in first person. Preserve concrete decisions, unresolved questions, user preferences, and causal links. Do not invent facts. Return plain text only, no heading.\n\n${previousSummary ? `Prior cumulative summary:\n${previousSummary}\n\n` : ''}New trajectory events:\n${summaryEventLines(events)}`;
 }
 
-async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat }) {
+/**
+ * The boundary a supervised turn supplies. Standalone/unit use gets this
+ * passthrough so the adapter still runs without one — the supervisor is the
+ * only production caller, and it always supplies the real guard.
+ */
+const passthroughCallBoundary = (_descriptor, run) => run({ reportRunId: () => {} });
+
+async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = [], signal, responseSchema, heartbeat, reportRunId }) {
   if (signal?.aborted) throw new Error(String(signal.reason || 'Persistent mind turn interrupted'));
   if (typeof heartbeat === 'function') await heartbeat();
   let activeRunId = null;
@@ -290,6 +299,9 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
     responseSchema,
     onRunCreated: (runId) => {
       activeRunId = runId;
+      // Reported as soon as the run id exists, so a receipt for a call that
+      // never returns still names the concrete run.
+      reportRunId?.(runId);
       if (signal?.aborted) interrupt();
     },
   }).then((result) => {
@@ -321,19 +333,20 @@ export function createPersistentMindTurnAdapter() {
       };
     },
 
-    async summarize({ events, previousSummary, provider, model, effort, signal, heartbeat }) {
-      const result = await runPinnedPrompt({
+    async summarize({ events, previousSummary, provider, model, effort, signal, heartbeat, callBoundary = passthroughCallBoundary }) {
+      const result = await callBoundary({ purpose: 'summary' }, ({ reportRunId }) => runPinnedPrompt({
         provider,
         model,
         effort,
         signal,
         heartbeat,
+        reportRunId,
         prompt: buildPersistentMindSummaryPrompt({ events, previousSummary }),
-      });
+      }));
       return result.text.trim();
     },
 
-    async run({ turnId, wake, provider, model, effort, signal, context, heartbeat, recordCapabilityEvent }) {
+    async run({ turnId, wake, provider, model, effort, signal, context, heartbeat, recordCapabilityEvent, callBoundary = passthroughCallBoundary }) {
       const root = await loadState();
       const taskAccess = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
       const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
@@ -343,12 +356,16 @@ export function createPersistentMindTurnAdapter() {
         prompt,
         provider,
       });
-      const taskCatalog = taskAccess.createTasks
-        ? await readPersistentMindTaskCatalog({ allowedAppIds: taskAccess.allowedAppIds })
-        : undefined;
+      const [taskCatalog, taskInventory] = taskAccess.createTasks
+        ? await Promise.all([
+          readPersistentMindTaskCatalog({ allowedAppIds: taskAccess.allowedAppIds }),
+          readPersistentMindTaskInventory(),
+        ])
+        : [undefined, []];
       const taskCapabilityPrompt = buildPersistentMindTaskCapabilityPrompt({
         enabled: taskAccess.createTasks,
         catalog: taskCatalog,
+        inventory: taskInventory,
       });
       const visibilityPrompt = buildPersistentMindVisibilityPrompt(visibility);
       // Deterministic and always included (epic #5593 decision 14): bounded,
@@ -379,16 +396,22 @@ export function createPersistentMindTurnAdapter() {
       const completedToolResults = [];
       const actionNotices = new Set();
       for (let round = 0; round < MAX_TOOL_PROVIDER_ROUNDS; round += 1) {
-        result = await runPinnedPrompt({
-          provider,
-          model,
-          effort,
-          signal,
-          heartbeat,
-          screenshots,
-          prompt: providerPrompt,
-          responseSchema: persistentMindResponseSchema,
-        });
+        // Round 0 is the turn itself; every later round is a continuation the
+        // model earned by asking for tools. Each is admitted on its own.
+        result = await callBoundary(
+          { purpose: round === 0 ? 'turn' : 'tool-round', round },
+          ({ reportRunId }) => runPinnedPrompt({
+            provider,
+            model,
+            effort,
+            signal,
+            heartbeat,
+            screenshots,
+            reportRunId,
+            prompt: providerPrompt,
+            responseSchema: persistentMindResponseSchema,
+          }),
+        );
         parsed = persistentMindResponseSchema.parse(parseLLMJSON(result.text));
         const finalProviderRound = round === MAX_TOOL_PROVIDER_ROUNDS - 1;
         if (finalProviderRound && parsed.toolCalls.length > 0) {

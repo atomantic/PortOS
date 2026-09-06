@@ -1,6 +1,6 @@
 /** Cross-cutting filesystem, time, formatting, and hashing helpers. */
-import { access, appendFile, chmod, copyFile, mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
-import { createReadStream, existsSync, statSync, watch as watchFileSystem } from 'fs';
+import { access, appendFile, chmod, copyFile, mkdir, readFile, readdir, stat, writeFile, rename, unlink, rm } from 'fs/promises';
+import { createReadStream, createWriteStream, existsSync, statSync, watch as watchFileSystem } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import { basename, dirname, extname, join } from 'path';
 import { promisify } from 'util';
@@ -277,6 +277,24 @@ export async function appendFileGuarded(filePath, data, options) {
 export async function copyFileGuarded(src, dest, mode) {
   if (isVitestRunner()) (await loadGuard()).assertNotRealDataWrite(dest, 'copyFile');
   return copyFile(src, dest, mode);
+}
+
+/** Guarded `fs/promises.rm`. Same signature. */
+export async function rmGuarded(target, options) {
+  if (isVitestRunner()) (await loadGuard()).assertNotRealDataWrite(target, 'rm');
+  return rm(target, options);
+}
+
+/** Guarded `fs/promises.unlink`. Same signature. */
+export async function unlinkGuarded(target) {
+  if (isVitestRunner()) (await loadGuard()).assertNotRealDataWrite(target, 'unlink');
+  return unlink(target);
+}
+
+/** Guarded `fs.createWriteStream`. Returns a Promise resolving to the WriteStream. */
+export async function createWriteStreamGuarded(filePath, options) {
+  if (isVitestRunner()) (await loadGuard()).assertNotRealDataWrite(filePath, 'createWriteStream');
+  return createWriteStream(filePath, options);
 }
 
 export const MINUTE = 60 * 1000;

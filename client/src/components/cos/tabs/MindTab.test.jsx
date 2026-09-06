@@ -332,7 +332,7 @@ describe('MindTab', () => {
     await user.click(taskAccess);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 5, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 7, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(screen.getAllByText(/code review then merge/i).length).toBeGreaterThan(0);
@@ -515,6 +515,20 @@ describe('MindTab', () => {
     expect(screen.getByText('Here is the recommendation.')).toBeInTheDocument();
     expect(screen.getByText('1 thought').closest('details')).not.toHaveAttribute('open');
     expect(screen.getAllByRole('button', { name: /chief of staff/i })).toHaveLength(1);
+  });
+
+  it('keeps the trajectory rollup recap out of the conversation until Activity is on', async () => {
+    api.getPersistentMind.mockResolvedValue(response({ events: [
+      event({ eventId: 'summary-1', kind: 'mind.summary', sequence: 2, data: { summaryText: 'Earlier I confirmed the provider switch and queued follow-up wakes.' } }),
+      event({ eventId: 'reply-1', kind: 'mind.reply', turnId: 'mind-turn-1', sequence: 3, data: { displayText: 'Here is the recommendation.' } }),
+    ] }));
+    renderTab();
+
+    expect(await screen.findByText('Here is the recommendation.')).toBeInTheDocument();
+    expect(screen.queryByText(/Earlier I confirmed the provider switch/)).not.toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole('checkbox', { name: 'Activity' }));
+    expect(await screen.findByText(/Earlier I confirmed the provider switch/)).toBeInTheDocument();
   });
 
   it('shows a typing indicator in the chat header while the mind is thinking', async () => {

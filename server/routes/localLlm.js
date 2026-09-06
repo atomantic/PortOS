@@ -204,6 +204,12 @@ router.post('/security-guard/install', asyncHandler(async (req, res) => {
       ? 'Add a Hugging Face read token before installing Prompt Guard.'
       : code === 'security-guard-huggingface-access-required'
         ? 'Hugging Face has not granted Prompt Guard access yet. Submit the usage request on its model card, then retry.'
+        : code === 'security-guard-python-unavailable'
+          ? 'Install Python 3.10 or newer on this machine, restart PortOS if needed to detect it, then refresh Abuse Guard status.'
+          : code === 'security-guard-self-test-failed'
+            ? 'Prompt Guard could not complete its local verification. Repair the dedicated runtime from Models > LLMs > Abuse Guard before retrying.'
+            : code === 'security-guard-runtime-install-failed'
+              ? 'Classifier package installation failed. Check internet access and Python compatibility, then retry from Models > LLMs > Abuse Guard.'
         : code
     emit('error', message, { scope: 'security-guard' })
     throw new ServerError(message, { status: 502, code })

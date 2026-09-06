@@ -6,11 +6,11 @@
  * the job's `scriptHandler` name to its implementation.
  */
 
-import { readdir, stat, rm } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync } from 'fs'
-import { spawn } from '../../lib/childProcess.js';import { DAY, PATHS, readJSONFile } from '../../lib/fileUtils.js'
+import { spawn } from '../../lib/childProcess.js';import { DAY, PATHS, readJSONFile, rmGuarded } from '../../lib/fileUtils.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from '../autobiography.js'
 import { runGoalCheckIn } from '../goalCheckIn.js'
 import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManager.js'
@@ -23,7 +23,7 @@ import { runBrainParitySweep } from './brainParitySweep.js'
 // store itself. The job remains deterministic and makes no provider call.
 async function eidoverseProjection() {
   const { projectEidoverseWorld } = await import('../eidoverseWorld.js')
-  return projectEidoverseWorld()
+  return projectEidoverseWorld({ compact: true })
 }
 
 /**
@@ -108,7 +108,7 @@ async function agentDataCleanup() {
       const info = await stat(entryPath).catch(() => null)
       if (!info?.isDirectory()) continue
       if (info.mtimeMs < cutoff) {
-        const removed = await rm(entryPath, { recursive: true, force: true }).then(() => true, (err) => {
+        const removed = await rmGuarded(entryPath, { recursive: true, force: true }).then(() => true, (err) => {
           console.warn(`⚠️ Failed to clean agent dir ${entry}: ${err.message}`)
           return false
         })

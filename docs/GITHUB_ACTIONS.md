@@ -59,6 +59,23 @@ the scanner set from the tree and fails when a new scanner is added without
 being registered, either in `ALWAYS_RUN_TESTS` or in its own
 `STRUCTURALLY_SELECTED` map naming the selector that already reaches it.
 
+### The bundled `lib/slashdo` submodule
+
+`server/lib/slashdoLoader.test.js` and `server/lib/slashdoInvocation.test.js`
+carry contract suites that exercise the real bundled renderer in
+`lib/slashdo` (see AGENTS.md "Slashdo Commands"). A git diff reports only the
+gitlink pointer at that path, never the files inside it, so the planner can't
+detect a relevant change the way it does an ordinary source edit.
+`needsSlashdoSubmodule()` in `ci-test-plan.js` sets the `slashdo` output
+whenever the plan is full, the gitlink itself changed, or either contract
+suite (or the loader/adapter source it exercises) is selected. The `server`
+job's "Initialize slashdo submodule" step runs `git submodule update --init
+lib/slashdo` only when that output is true, so an unrelated scoped PR pays
+nothing for the fetch. When the output is true, the two contract suites fail
+the job instead of silently skipping if the submodule still isn't there
+(`CI_EXPECT_SLASHDO_SUBMODULE`); outside that signal — a local checkout, or a
+CI run that never needed it — they keep the documented skip.
+
 ### Vitest runner tuning
 
 On GitHub Actions, `CI=true` caps the server Vitest runner at `maxWorkers: 4`

@@ -28,6 +28,19 @@ const blockedVisibility = (overrides = {}) => ({
 });
 
 describe('PersistentMindVisibilityPanel', () => {
+  it('makes missing world access actionable and shows release context without enabling anything', () => {
+    renderPanel({ orientation: {
+      eidoverse: { status: 'offline', canBuild: false, connected: false },
+      release: { status: 'available', version: '1.0.0', highlights: ['Example release improvement'] },
+      modelPolicy: { continuity: 'Identity and memories persist.' },
+    } });
+    expect(screen.getByRole('region', { name: 'Mind orientation' })).toHaveTextContent('World building off');
+    expect(screen.getByRole('link', { name: 'Open Eidoverse' })).toHaveAttribute('href', '/eidoverse');
+    expect(screen.getByRole('link', { name: 'Configure mind tools' })).toHaveAttribute('href', '/cos/mind?panel=tools');
+    expect(screen.getByRole('link', { name: 'Change thinking model' })).toHaveAttribute('href', '/cos/mind?panel=settings');
+    expect(screen.getByText('Example release improvement')).toBeInTheDocument();
+  });
+
   it('turns a blocked snapshot into direct repair and permission actions', () => {
     renderPanel(blockedVisibility());
 

@@ -246,7 +246,7 @@ describe('getRenderConfigForItem - video', () => {
       steps: 30,
       guidanceScale: 3.5,
       seed: 100,
-      tiling: true,
+      tiling: undefined,
       disableAudio: false,
       textEncoderId: 'example-encoder',
       loraFilenames: ['lora-cinematic.safetensors'],
@@ -304,6 +304,12 @@ describe('getRenderConfigForItem - video', () => {
     const video = normalizeVideo({ id: 'v5', filename: 'e.mp4', prompt: '' });
     const cfg = getRenderConfigForItem(video);
     expect(cfg.mode).toBe('text');
+  });
+
+  it('retains recognized tiling modes and omits legacy or unknown values', () => {
+    expect(getRenderConfigForItem(normalizeVideo({ id: 'v6', tiling: 'spatial' })).tiling).toBe('spatial');
+    expect(getRenderConfigForItem(normalizeVideo({ id: 'v7', tiling: false })).tiling).toBeUndefined();
+    expect(getRenderConfigForItem(normalizeVideo({ id: 'v8', tiling: 'invalid' })).tiling).toBeUndefined();
   });
 });
 // @vitest-environment node

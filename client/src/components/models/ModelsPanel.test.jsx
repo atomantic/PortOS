@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+
+vi.mock('../../services/apiSystem.js', () => ({ rectifyModelDuplicates: vi.fn(async () => ({ reclaimedBytes: 1024 })) }));
+const { rectifyModelDuplicates } = await import('../../services/apiSystem.js');
 
 const memory = vi.hoisted(() => ({ publish: null }));
 vi.mock('../settings/MemoryManagement.jsx', () => ({
@@ -96,4 +99,20 @@ describe('ModelsPanel live residency', () => {
     expect(warning.textContent).toContain('ollama-backend');
     expect(warning.textContent).not.toContain('lmstudio-backend');
   });
+});
+
+it('confirms duplicate linking and refreshes the inventory', async () => {
+  const refresh = vi.fn();
+  render(<MemoryRouter><ModelsPanel report={{ ...report, modelDuplicates: {
+    items: [{ model: 'Example weights', sourcePath: '/models/example.safetensors', targetPath: '/pinokio/example.safetensors', canLink: true, sizeBytes: 1024, reclaimableBytes: 1024 }],
+  } }} loading={false} onRunReport={refresh} cleanup={cleanup} /></MemoryRouter>);
+  expect(screen.getByText('Duplicate Model Weights')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Link All' }));
+  expect(rectifyModelDuplicates).not.toHaveBeenCalled();
+  expect(screen.getByText(/In-place edits affect both applications/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm linking' }));
+  await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+  expect(rectifyModelDuplicates).toHaveBeenCalledWith({ mode: 'hardlink', pairs: [{
+    sourcePath: '/models/example.safetensors', targetPath: '/pinokio/example.safetensors',
+  }] }, { silent: true });
 });

@@ -12,7 +12,11 @@ const api = vi.hoisted(() => ({
   getAppWorkTracker: vi.fn(),
   getAppRepositorySources: vi.fn(),
   applyCosTaskTemplate: vi.fn(),
-  addCosTask: vi.fn()
+  addCosTask: vi.fn(),
+  getOrchestrationProfiles: vi.fn(),
+  // Declared so the render-path assertion below is real: the picker must read the
+  // cached catalog off the provider payload, never fetch one of its own (#6306).
+  getCodexModels: vi.fn(),
 }));
 
 // useAssignableInstances reads the instance registry straight off apiSystem, so
@@ -50,6 +54,7 @@ describe('TaskAddForm responsive layout', () => {
       },
     });
     api.applyCosTaskTemplate.mockResolvedValue({ success: true });
+    api.getOrchestrationProfiles.mockResolvedValue({ profiles: [] });
     apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
   });
 
@@ -147,6 +152,67 @@ describe('TaskAddForm responsive layout', () => {
     await user.click(screen.getByRole('button', { name: /^Add$/ }));
     await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
     expect(api.addCosTask.mock.calls[0][0].app).toBe('current-app');
+  });
+
+  // #6219: ReviewerPicker gets no `defaults` prop wired, the submit payload
+  // unconditionally spread all eight reviewer fields whenever review-then-merge
+  // was active — even when the picker was never touched — freezing today's
+  // Code Review Defaults into the new task's metadata permanently.
+  describe('reviewer defaults inheritance (#6219)', () => {
+    const REVIEWER_PAYLOAD_KEYS = [
+      'reviewers', 'usernames', 'optionalReviewers', 'reviewerMaxRounds',
+      'reviewerModels', 'reviewerEfforts', 'reviewStopMode', 'reviewerApplies',
+    ];
+    const app = {
+      id: 'example-app',
+      name: 'Example App',
+      repoPath: 'example.com/repo',
+      defaultOpenPR: true,
+      defaultPrCompletion: 'review-then-merge',
+    };
+
+    it('leaves every reviewer field absent when the picker is never touched', async () => {
+      const user = userEvent.setup();
+      api.getCodeReviewDefaults.mockResolvedValue({
+        reviewers: ['copilot', 'claude'], usernames: [], optionalReviewers: [],
+        reviewerMaxRounds: {}, stopMode: 'all', reviewerApplies: false,
+      });
+      api.addCosTask.mockResolvedValue({ success: true });
+      render(<TaskAddForm providers={[]} apps={[app]} defaultApp="example-app" onTaskAdded={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText('Reviewers (in order):')).toBeInTheDocument());
+      await user.type(screen.getByPlaceholderText('Task description *'), 'Fix the bug');
+      await user.click(screen.getByRole('button', { name: /^Add$/ }));
+
+      await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
+      const payload = api.addCosTask.mock.calls.at(-1)[0];
+      for (const key of REVIEWER_PAYLOAD_KEYS) expect(payload).not.toHaveProperty(key);
+    });
+
+    it('sends only the field the user actually changed', async () => {
+      const user = userEvent.setup();
+      api.getCodeReviewDefaults.mockResolvedValue({
+        reviewers: ['copilot', 'claude'], usernames: [], optionalReviewers: [],
+        reviewerMaxRounds: {}, stopMode: 'all', reviewerApplies: false,
+      });
+      api.addCosTask.mockResolvedValue({ success: true });
+      render(<TaskAddForm providers={[]} apps={[app]} defaultApp="example-app" onTaskAdded={vi.fn()} />);
+
+      await waitFor(() => expect(screen.getByText('Reviewers (in order):')).toBeInTheDocument());
+      const stopModeSelect = await screen.findByLabelText('Stop mode:');
+      await user.selectOptions(stopModeSelect, 'on-clean');
+
+      await user.type(screen.getByPlaceholderText('Task description *'), 'Fix the bug');
+      await user.click(screen.getByRole('button', { name: /^Add$/ }));
+
+      await waitFor(() => expect(api.addCosTask).toHaveBeenCalled());
+      const payload = api.addCosTask.mock.calls.at(-1)[0];
+      expect(payload.reviewStopMode).toBe('on-clean');
+      for (const key of REVIEWER_PAYLOAD_KEYS) {
+        if (key === 'reviewStopMode') continue;
+        expect(payload).not.toHaveProperty(key);
+      }
+    });
   });
 
   it('restores a plain-text draft from the previous storage format', async () => {
@@ -595,5 +661,137 @@ describe('TaskAddForm worktree/PR defaults', () => {
         expect.anything()
       ));
     });
+  });
+
+  describe('orchestration mode and profile picker', () => {
+    it('switches to orchestrated mode and passes orchestration profile on submit', async () => {
+      const user = userEvent.setup();
+      const onTaskAdded = vi.fn();
+      api.getOrchestrationProfiles.mockResolvedValue({
+        profiles: [
+          {
+            id: 'heavy-planner',
+            name: 'Heavy Planner',
+            profile: {
+              architect: { provider: 'anthropic', model: 'claude-3-opus', effort: 'high' },
+              implementer: { provider: 'anthropic', model: 'claude-3-5-sonnet', effort: 'medium' },
+            },
+          },
+        ],
+      });
+      api.addCosTask.mockResolvedValue({ id: 'task-orch', description: 'Orchestrated task', status: 'pending', metadata: {} });
+
+      render(
+        <TaskAddForm
+          providers={[
+            { id: 'anthropic', name: 'Anthropic', enabled: true, models: ['claude-3-opus', 'claude-3-5-sonnet'] },
+          ]}
+          apps={[{ id: 'app-1', name: 'PortOS' }]}
+          onTaskAdded={onTaskAdded}
+        />
+      );
+      await act(async () => {});
+
+      // Click "Orchestrated" mode button
+      const orchBtn = screen.getByRole('button', { name: /Orchestrated/i });
+      await user.click(orchBtn);
+
+      // Select "Heavy Planner" profile
+      const profileSelect = screen.getByLabelText(/Profile:/i);
+      await user.selectOptions(profileSelect, 'heavy-planner');
+
+      const desc = screen.getByPlaceholderText('Task description *');
+      await user.type(desc, 'Orchestrated task');
+
+      const submitBtn = screen.getByRole('button', { name: 'Add' });
+      await user.click(submitBtn);
+
+      await waitFor(() => {
+        expect(api.addCosTask).toHaveBeenCalledWith(
+          expect.objectContaining({
+            description: 'Orchestrated task',
+            orchestrationMode: 'orchestrated',
+            orchestrationProfile: expect.objectContaining({
+              architect: expect.objectContaining({ provider: 'anthropic', model: 'claude-3-opus', effort: 'high' }),
+              implementer: expect.objectContaining({ provider: 'anthropic', model: 'claude-3-5-sonnet', effort: 'medium' }),
+            }),
+          }),
+          expect.anything()
+        );
+      });
+    });
+  });
+});
+
+// #6306: a Codex task must not be queued against a model the signed-in ChatGPT
+// account cannot run — and a cold/failed catalog must not empty the dropdown.
+describe('TaskAddForm Codex model catalog', () => {
+  const SHIPPED = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.4'];
+  const codexProvider = (codexModelCatalog) => ({
+    id: 'codex',
+    name: 'Codex CLI',
+    type: 'cli',
+    command: 'codex',
+    enabled: true,
+    models: SHIPPED,
+    codexModelCatalog,
+  });
+
+  const renderWithCodex = async (catalog) => {
+    const user = userEvent.setup();
+    render(
+      <TaskAddForm
+        providers={[codexProvider(catalog)]}
+        apps={[{ id: 'example-app', name: 'Example App', repoPath: 'example.com/repo' }]}
+        defaultApp="example-app"
+        onTaskAdded={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(screen.getByLabelText('AI provider')).not.toBeDisabled());
+    await user.selectOptions(screen.getByLabelText('AI provider'), 'codex');
+    return user;
+  };
+
+  const modelValues = () =>
+    Array.from(screen.getByLabelText('AI model').querySelectorAll('option'))
+      .map((option) => option.value)
+      .filter(Boolean);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getCosPopularTemplates.mockResolvedValue({ templates: [] });
+    api.getCodeReviewDefaults.mockResolvedValue(null);
+    api.getLocalLlmStatus.mockResolvedValue({ ollama: { models: [] }, lmstudio: { models: [] } });
+    api.getProviders.mockResolvedValue({ providers: [] });
+    api.getAppWorkTracker.mockResolvedValue({ resolved: 'github' });
+    api.getAppRepositorySources.mockResolvedValue({
+      issueTargets: { default: 'origin', canChoose: false, origin: { fullName: 'example-org/example-app' }, upstream: { fullName: 'example-org/example-app' } },
+    });
+    api.applyCosTaskTemplate.mockResolvedValue({ success: true });
+    api.getOrchestrationProfiles.mockResolvedValue({ profiles: [] });
+    apiSystem.getAssignableInstances.mockResolvedValue({ instances: [] });
+  });
+
+  it('offers the signed-in account catalog, and never fetches one from a render', async () => {
+    await renderWithCodex({ models: [{ id: 'gpt-5.4' }, { id: 'gpt-5.4-mini' }], fetchedAt: 1, error: null });
+
+    expect(modelValues()).toEqual(['gpt-5.4', 'gpt-5.4-mini']);
+    expect(screen.getByText(/signed-in ChatGPT account can run/i)).toBeInTheDocument();
+    // Rendering a picker must not be what starts `codex app-server`.
+    expect(api.getCodexModels).not.toHaveBeenCalled();
+  });
+
+  it('keeps the shipped list, and says so, when the catalog failed to load', async () => {
+    await renderWithCodex({ models: null, fetchedAt: null, error: { code: 'protocol', message: 'boom' } });
+
+    expect(modelValues()).toEqual(SHIPPED);
+    expect(screen.getByText(/bundled list/i)).toBeInTheDocument();
+  });
+
+  it('explains a successfully-read empty catalog instead of rendering a blank control', async () => {
+    await renderWithCodex({ models: [], fetchedAt: 1, error: null });
+
+    expect(screen.queryByLabelText('AI model')).not.toBeInTheDocument();
+    expect(screen.getByText(/exposes no models/i)).toBeInTheDocument();
   });
 });

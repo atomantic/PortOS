@@ -122,6 +122,8 @@ function resolveSentinelPath(worktreeInfo, workspaceDir, agentId) {
   return `${worktreeInfo?.worktreePath || workspaceDir}/${doneSentinelName(agentId)}`;
 }
 
+const PREVIOUS_STAGE_OUTPUT_INLINE_CAP = 12_000;
+
 function pipelineContextLines(pipelineCtx) {
   if (!pipelineCtx || (!pipelineCtx.previousStageAgentId && !pipelineCtx.previousStageOutput)) return [];
 
@@ -130,18 +132,28 @@ function pipelineContextLines(pipelineCtx) {
     `Previous stage: "${pipelineCtx.stages[pipelineCtx.currentStage - 1]?.name}"`,
     '',
   ];
-  if (pipelineCtx.previousStageAgentId) {
+  const rawPreviousOutput = typeof pipelineCtx.previousStageOutput === 'string'
+    ? pipelineCtx.previousStageOutput.trim()
+    : '';
+  const clipped = rawPreviousOutput.length > PREVIOUS_STAGE_OUTPUT_INLINE_CAP;
+  const previousOutput = rawPreviousOutput.slice(0, PREVIOUS_STAGE_OUTPUT_INLINE_CAP).replace(/~+/g, "'");
+  if (!pipelineCtx.previousStageAgentId) {
+    lines.push('The previous stage completed as a direct preflight; its summary is included below.');
+  } else if (previousOutput) {
+    // A producer that hands over the output chose the inline hand-off; the file
+    // pointer would only send the agent OUTSIDE its worktree — which, under a
+    // sandboxed permission posture, is a tool-permission dialog nobody is
+    // present to answer.
+    lines.push(clipped
+      ? `The previous stage's hand-off is inlined below, clipped to its first ${PREVIOUS_STAGE_OUTPUT_INLINE_CAP} characters.`
+      : "The previous stage's hand-off is inlined below in full; there is nothing further to read from disk.");
+  } else {
     lines.push(
       "Read the previous stage's output from:",
       `\`${join(AGENTS_DIR, pipelineCtx.previousStageAgentId, 'output.txt')}\``,
     );
-  } else {
-    lines.push('The previous stage completed as a direct preflight; its summary is included below.');
   }
 
-  const previousOutput = typeof pipelineCtx.previousStageOutput === 'string'
-    ? pipelineCtx.previousStageOutput.trim().slice(0, 12_000).replace(/~+/g, "'")
-    : '';
   if (previousOutput) {
     lines.push(
       '',

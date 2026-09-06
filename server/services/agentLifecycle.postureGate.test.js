@@ -345,6 +345,35 @@ describe('public-review posture gate — spawn behavior (#5866)', () => {
     );
   });
 
+  // #6238 — OpenCode's actions row exists for exactly this: a Stage 3 run on an
+  // OpenCode-backed TUI record gets a PTY (and so an attachable Shell session)
+  // instead of being forced headless. Its no-tool gate stays blocked above.
+  it('blocks OpenCode actions because a worktree cannot isolate untrusted code', async () => {
+    const { buildTuiSpawnConfig, spawnTuiAgent } = await import('./agentTuiSpawning.js');
+    vi.mocked(resolveAgentProviderAndModel).mockResolvedValue({
+      ok: true, provider: { ...OPENCODE_TUI, mtplxBacked: true }, selectedModel: 'example-model', modelSelection: {},
+    });
+    vi.mocked(buildTuiSpawnConfig).mockReturnValue({ command: 'opencode', args: [], commandLine: 'opencode' });
+    reachDispatch();
+
+    await spawnAgentForTask({
+      id: 'task-public-review-actions-opencode',
+      metadata: {
+        executionProfile: 'public-review-actions',
+        issueWatcher: { pullRequests: [{ number: 42 }] },
+        pipeline: {
+          securityScan: { completed: true, status: 'passed', safePrCount: 1 },
+          eligibility: { complete: true, eligibleNumbers: [42] },
+        },
+      },
+    });
+
+    expect(postureBlockWrites()).toHaveLength(1);
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(spawnTuiAgent).not.toHaveBeenCalled();
+    expect(buildTuiSpawnConfig).not.toHaveBeenCalled();
+  });
+
   // The narrow half of the same rule. A vendor whose actions recipe has not been
   // reviewed for a PTY emits headless argv (`exec`, `--print`, `run`) that a PTY
   // can neither prompt nor enforce, so it stays headless rather than opening a

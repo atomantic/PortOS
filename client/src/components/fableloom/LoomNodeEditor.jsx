@@ -12,6 +12,7 @@
  * gate on in-flight saves per the client save-gating convention.
  */
 
+import { estimatedShotSeconds } from '../../../../server/lib/fableLoomShots.js';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { GitBranch, Loader2, Trash2 } from 'lucide-react';
@@ -27,6 +28,8 @@ import {
 import { fieldClass, labelClass, sceneFieldClass } from './fieldStyles';
 import { isTeleplayFormat } from './loomFormats';
 import LoomSceneMedia from './LoomSceneMedia';
+import LoomReferenceReview from './LoomReferenceReview';
+import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import { FABLELOOM_CAMERA_MOVEMENTS } from '../../../../server/lib/fableLoomCameraMovements.js';
 import {
   FABLELOOM_HOLD_ROTATION_MODES,
@@ -73,6 +76,7 @@ export default function LoomNodeEditor({
   generationDisabled = false, generationDisabledReason = '',
 }) {
   const [form, setForm] = useState(null);
+  const [referenceCharacterId, setReferenceCharacterId] = useState(null);
   // In-flight blur-saves; the AI buttons (which read server-side state) stay
   // disabled until every pending save settles.
   const [pendingSaves, setPendingSaves] = useState(0);
@@ -90,6 +94,7 @@ export default function LoomNodeEditor({
   useEffect(() => {
     setForm({
       title: node.title || '',
+      shot: node.shot || null,
       prose: node.prose || '',
       imagePrompt: node.imagePrompt || '',
       videoPrompt: node.videoPrompt || '',
@@ -403,6 +408,14 @@ export default function LoomNodeEditor({
         />
       </FormField>
 
+      {form.shot ? <div className="rounded border border-port-border p-3 space-y-2">
+        <p className="text-xs text-port-text-muted">Dramatic scene: {form.shot.dramaticSceneTitle}</p>
+        <label htmlFor="loom-shot-seconds" className="block text-xs">Shot duration (seconds)</label>
+        <input id="loom-shot-seconds" type="number" min={5} max={10} step={1} className={fieldClass} value={form.shot.durationSeconds} onChange={(event) => setForm((current) => ({ ...current, shot: { ...current.shot, durationSeconds: Number(event.target.value) } }))} onBlur={() => saveField('shot', form.shot)} />
+        <p className="text-xs">{form.shot.framing}</p>
+        <p className={`text-xs ${estimatedShotSeconds(form.prose) > form.shot.durationSeconds ? 'text-port-error' : 'text-port-text-muted'}`}>Estimated dialogue + pause: {estimatedShotSeconds(form.prose)}s. {estimatedShotSeconds(form.prose) > form.shot.durationSeconds ? 'Split or shorten before rendering.' : 'Timing estimate; validate the final voice delivery.'}</p>
+      </div> : null}
+
       <FormField label={teleplay ? 'Scene (teleplay)' : 'Scene prose'} labelClassName={labelClass}>
         <textarea
           rows={teleplay ? 12 : 7}
@@ -693,6 +706,19 @@ export default function LoomNodeEditor({
         </div>
       </div>
 
+      <LoomReferenceReview episode={episode} node={{ ...node, shot: form.shot, visualCanon: form.visualCanon }} />
+            {form.visualCanon && node.image && (
+              <label className="flex items-center gap-2 text-xs" htmlFor="loom-node-storyboard-approved">
+                <input
+                  id="loom-node-storyboard-approved"
+                  aria-label="Approve storyboard image for video"
+                  type="checkbox"
+                  checked={form.visualCanon.storyboardImageApproved === true}
+                  onChange={(event) => updateVisualCanon({ storyboardImageApproved: event.target.checked })}
+                />
+                Approve the current storyboard image as this shot's video first frame
+              </label>
+            )}
       <div>
         <span className="mb-1 block text-xs font-medium text-port-text-muted">Scene media</span>
         <LoomSceneMedia
@@ -828,6 +854,12 @@ export default function LoomNodeEditor({
                     {appearance && canonicalWardrobeLocked && (
                       <p className="text-[11px] text-port-accent">Locked to the loom&apos;s canonical protagonist wardrobe.</p>
                     )}
+                    {appearance && form.visualCanon.mode === 'draft' && (
+                      <div className="flex items-center gap-2 text-xs">
+                        {appearance.referenceImage && <img src={`/data/images/${appearance.referenceImage}`} alt={`${character.name} draft reference`} className="h-14 w-14 rounded object-cover" />}
+                        <button type="button" className="min-h-11 text-port-accent hover:underline" onClick={() => setReferenceCharacterId(character.id)}>Choose draft character reference</button>
+                      </div>
+                    )}
                     {appearance && (
                       <div className="grid gap-2 sm:grid-cols-2">
                         <input
@@ -868,6 +900,11 @@ export default function LoomNodeEditor({
                 );
               })}
             </fieldset>
+            <GalleryImagePicker open={Boolean(referenceCharacterId)} onClose={() => setReferenceCharacterId(null)} onSelect={(image) => {
+              const visualCanon = { ...form.visualCanon, characterAppearances: form.visualCanon.characterAppearances.map((appearance) => appearance.characterId === referenceCharacterId ? { ...appearance, referenceImage: image.filename } : appearance) };
+              setForm((current) => ({ ...current, visualCanon }));
+              patchNode({ visualCanon });
+            }} />
 
             <FormField label="Location" labelClassName={labelClass}>
               <select
@@ -928,18 +965,7 @@ export default function LoomNodeEditor({
               />
             </FormField>
 
-            {node.image && (
-              <label className="flex items-center gap-2 text-xs" htmlFor="loom-node-storyboard-approved">
-                <input
-                  id="loom-node-storyboard-approved"
-                  aria-label="Approve storyboard image for video"
-                  type="checkbox"
-                  checked={form.visualCanon.storyboardImageApproved === true}
-                  onChange={(event) => updateVisualCanon({ storyboardImageApproved: event.target.checked })}
-                />
-                Approve the current storyboard image as this shot's video first frame
-              </label>
-            )}
+
           </div>
         )}
       </div>

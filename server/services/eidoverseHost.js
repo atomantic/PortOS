@@ -8,6 +8,8 @@ import { ServerError } from '../lib/errorHandler.js';
 import { EIDOVERSE_PORT } from './eidoverse.js';
 
 const BAD_GATEWAY_BODY = 'Eidoverse Worlds is not running.';
+const HOST_DESCRIPTOR_PATH = '/host';
+const EMBED_CONFIG_PATH = '/embed-config';
 
 // Where a conflicting listener would sit. A local squatter almost always claims
 // loopback — Docker publishes to 127.0.0.1, dev servers bind localhost — and
@@ -25,6 +27,92 @@ const forwardedHeaders = (req, protocol, targetHost, targetPort) => ({
   'x-forwarded-host': req.headers.host || '',
   'x-forwarded-proto': protocol,
 });
+
+const requestPathname = (url) => String(url || '').split('?')[0].replace(/\/+$/, '') || '/';
+
+// Node suppresses the body of a HEAD response itself, so every writer here can
+// pass one unconditionally.
+const writePlainText = (res, status, body, headers = {}) => {
+  res.writeHead(status, {
+    'content-type': 'text/plain; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    ...headers,
+  });
+  res.end(body);
+};
+
+/**
+ * Terminate `GET /host` at the bridge. Runs outside the Express lifecycle, so a
+ * rejected read is caught here rather than crashing the process.
+ */
+const serveHostDescriptor = async (req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    writePlainText(res, 405, 'The PortOS host descriptor is read-only.', { allow: 'GET, HEAD' });
+    return;
+  }
+  // Deferred import: this bridge is constructed from the always-loaded settings
+  // route, while `/host` is a rare request. A static edge would drag the world
+  // config graph into every suite that reaches this module (server/AGENTS.md,
+  // "Import scoping").
+  const descriptor = await import('./eidoverseWorld.js')
+    .then(({ readEidoverseHostDescriptor }) => readEidoverseHostDescriptor())
+    .catch((error) => {
+      console.error(`❌ Eidoverse host descriptor failed: ${error.message}`);
+      return null;
+    });
+  if (!descriptor) {
+    writePlainText(res, 503, 'The PortOS host descriptor is unavailable.');
+    return;
+  }
+  const body = JSON.stringify(descriptor);
+  res.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store',
+  });
+  res.end(body);
+};
+
+// The hostname the browser actually used to reach this bridge. An origin keeps
+// IPv6 brackets and drops the port, so `[::1]:5563` and `host:5563` are split
+// differently; anything that is neither is refused rather than repaired.
+const requestHostname = (req) => {
+  const raw = String(req.headers.host || '').trim();
+  if (!raw) return null;
+  const bracketed = raw.startsWith('[') && raw.includes(']') ? raw.slice(0, raw.indexOf(']') + 1) : null;
+  const hostname = bracketed || raw.split(':')[0];
+  return /^\[[0-9a-fA-F:.]+\]$/.test(hostname) || /^[a-zA-Z0-9.-]+$/.test(hostname) ? hostname : null;
+};
+
+/**
+ * The PortOS page origin this bridge is embedded by. The renderer's frame
+ * contract requires the parent origin to come from trusted embedding
+ * configuration rather than from whoever opened the frame, and PortOS is that
+ * configuration: the hostname is the one the browser just used, while the
+ * scheme and port are PortOS's own. A static `EMBED_PARENT_ORIGIN` in the
+ * external checkout cannot do this — one install is reachable as localhost, a
+ * LAN address and a MagicDNS name, and only one of those would ever match.
+ */
+const embedParentOrigin = (req, protocol) => {
+  const hostname = requestHostname(req);
+  return hostname ? `${protocol}://${hostname}:${Number(process.env.PORT) || PORTS.API}` : null;
+};
+
+// Terminated here rather than forwarded: the managed checkout answers this from
+// its own environment, which PortOS deliberately leaves unset.
+const serveEmbedConfig = (req, res, protocol) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    writePlainText(res, 405, 'The PortOS embedding configuration is read-only.', { allow: 'GET, HEAD' });
+    return;
+  }
+  const body = JSON.stringify({ parentOrigin: embedParentOrigin(req, protocol) });
+  res.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'cache-control': 'no-store',
+  });
+  res.end(body);
+};
 
 const writeBadGateway = (res) => {
   if (res.headersSent) {
@@ -89,6 +177,20 @@ export function createEidoverseHost({
   };
 
   const handleHttp = (req, res) => {
+    const pathname = requestPathname(req.url);
+    if (pathname === EMBED_CONFIG_PATH) {
+      serveEmbedConfig(req, res, protocol());
+      return;
+    }
+    if (pathname === HOST_DESCRIPTOR_PATH) {
+      // Nothing holds this promise, and a client that hung up mid-write makes
+      // `res` throw — so own the rejection here rather than killing the process.
+      serveHostDescriptor(req, res).catch((error) => {
+        console.error(`❌ Eidoverse host descriptor response failed: ${error.message}`);
+        res.destroy();
+      });
+      return;
+    }
     const upstream = httpRequest({
       hostname: targetHost,
       port: targetPort,

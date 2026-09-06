@@ -352,7 +352,7 @@ async function mergeMediaJobRecords(bucketPath, recordIds) {
     changed = true;
   }
   if (changed) {
-    await atomicWrite(persistedPath, { jobs: Array.from(byId.values()) });
+    await atomicWrite(persistedPath, { ...persisted, jobs: Array.from(byId.values()) });
   }
 }
 

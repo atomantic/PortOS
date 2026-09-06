@@ -4,12 +4,13 @@
  */
 
 import { Router } from 'express';
-import { unlink, readdir, stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   pathExists, PATHS, sanitizeFilename, getFileExtension, getMimeType,
   EXTENSION_MIME_MAP, isPathInsideDir, saveBase64Upload, serveLocalFile,
+  unlinkGuarded,
 } from '../lib/fileUtils.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { validateRequest, uploadRequestSchema } from '../lib/validation.js';
@@ -130,7 +131,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
   }
 
   const stats = await stat(filepath);
-  await unlink(filepath);
+  await unlinkGuarded(filepath);
 
   console.log(`🗑️ File deleted: ${safeFilename} (${formatSize(stats.size)})`);
 
@@ -156,7 +157,7 @@ router.delete('/', asyncHandler(async (req, res) => {
     const filepath = join(UPLOADS_DIR, filename);
     const stats = await stat(filepath);
     freedSpace += stats.size;
-    await unlink(filepath);
+    await unlinkGuarded(filepath);
   }
 
   console.log(`🗑️ Cleared all uploads: ${files.length} files (${formatSize(freedSpace)})`);

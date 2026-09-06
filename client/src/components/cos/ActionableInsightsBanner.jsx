@@ -13,10 +13,22 @@ import {
   ChevronDown,
   X,
   Zap,
-  Unlock
+  Unlock,
+  GitBranch,
+  Play
 } from 'lucide-react';
 import * as api from '../../services/api';
 import ProvenanceChip from '../ui/ProvenanceChip';
+import { timeAgo } from '../../utils/formatters';
+
+// One app's leftover branches as a single line — "4 branches · 3 NEEDS_PR · 1
+// MERGED". Busiest state first so the row reads the same across refreshes.
+export const formatBranchSummary = ({ leftoverCount, states }) => [
+  `${leftoverCount} branch${leftoverCount === 1 ? '' : 'es'}`,
+  ...Object.entries(states || {})
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([state, count]) => `${count} ${state}`),
+].join(' · ');
 
 // The chip answers "why am I seeing this?" the same way the taste-identity and
 // health surfaces do — but the honesty distinction the feature exists to enforce
@@ -101,7 +113,20 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
   const [dismissed, setDismissed] = useState([]);
   const [expanded, setExpanded] = useState({});
   const [approvingTaskId, setApprovingTaskId] = useState(null);
+  // Per-app, not one id: several apps can be queued from the same card, and a
+  // single in-flight id would clear the first app's finish over a second app's
+  // still-pending request and re-enable its button mid-flight.
+  const [reconcileState, setReconcileState] = useState({});
   const navigate = useNavigate();
+
+  // The insight only clears once branch-reconcile has actually RUN, so the card
+  // outlives the request — the button has to say it already went out, or the
+  // operator queues the same app again on every glance.
+  const reconcileButton = (app) => (
+    reconcileState[app.appId] === 'queuing' ? { label: 'Queuing…', disabled: true }
+      : reconcileState[app.appId] === 'queued' ? { label: 'Queued', disabled: true }
+        : { label: 'Run Now', disabled: false }
+  );
 
   const handleDismiss = (type) => {
     setDismissed(prev => [...prev, type]);
@@ -114,6 +139,17 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
     }
     // For blocked insights, toggle expand to show individual tasks
     if (insight.type === 'blocked' && insight.tasks?.length > 0) {
+      setExpanded(prev => ({ ...prev, [insight.type]: !prev[insight.type] }));
+      return;
+    }
+    // Leftover branches: one app can be reconciled straight from the banner;
+    // several have to be named first, because "Run Now" is per-app and the
+    // operator can't pick one they were never shown.
+    if (insight.type === 'leftover-branches' && insight.apps?.length > 0) {
+      if (insight.apps.length === 1) {
+        handleRunReconcile(insight.apps[0]);
+        return;
+      }
       setExpanded(prev => ({ ...prev, [insight.type]: !prev[insight.type] }));
       return;
     }
@@ -132,6 +168,21 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
     if (!result) return;
     toast.success('Task approved');
     onRefresh?.();
+  };
+
+  const handleRunReconcile = async (app) => {
+    setReconcileState(prev => ({ ...prev, [app.appId]: 'queuing' }));
+    const result = await api.triggerCosOnDemandTask('branch-reconcile', app.appId, { silent: true }).catch(err => {
+      toast.error(err.message);
+      return null;
+    });
+    if (!result?.success) {
+      // Back to Run Now — a rejected request left nothing queued to wait on.
+      setReconcileState(prev => ({ ...prev, [app.appId]: undefined }));
+      return;
+    }
+    setReconcileState(prev => ({ ...prev, [app.appId]: 'queued' }));
+    toast.success(`Queued branch-reconcile for ${app.appName}`);
   };
 
   const handleUnblockTask = async (taskId, taskType) => {
@@ -167,6 +218,17 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
   const isExpanded = expanded[primaryInsight.type];
   const hasBlockedTasks = primaryInsight.type === 'blocked' && primaryInsight.tasks?.length > 0;
   const approvalTask = primaryInsight.type === 'approval' ? primaryInsight.tasks?.[0] : null;
+  const leftoverApps = primaryInsight.type === 'leftover-branches' ? (primaryInsight.apps || []) : [];
+  // One app is actionable from the card itself; several have to be listed first.
+  const singleLeftoverApp = leftoverApps.length === 1 ? leftoverApps[0] : null;
+  const expandsLeftoverApps = leftoverApps.length > 1;
+  const expandsInPlace = hasBlockedTasks || expandsLeftoverApps;
+  const primaryButton = approvalTask && approvingTaskId === approvalTask.id
+    ? { label: 'Approving…', disabled: true }
+    : singleLeftoverApp ? reconcileButton(singleLeftoverApp)
+      : expandsLeftoverApps ? { label: isExpanded ? 'Collapse' : `View ${leftoverApps.length} Apps`, disabled: false }
+        : hasBlockedTasks ? { label: isExpanded ? 'Collapse' : 'View Tasks', disabled: false }
+          : { label: primaryInsight.action?.label, disabled: false };
 
   return (
     <div className={`${styles.bg} border ${styles.border} rounded-lg p-3 mb-4 transition-all`}>
@@ -216,6 +278,44 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
             </div>
           )}
 
+          {/* Expanded per-app leftover branches — names the app, what kind of
+              leftovers it holds, and runs branch-reconcile for that app alone. */}
+          {expandsLeftoverApps && isExpanded && (
+            <div className="mt-2 space-y-1.5">
+              {leftoverApps.map(app => (
+                <div
+                  key={app.appId}
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 bg-black/20 rounded px-2 py-1.5"
+                  title={app.branches?.length ? `Leftover branches: ${app.branches.join(', ')}` : undefined}
+                >
+                  <GitBranch size={11} className="shrink-0 text-gray-500" />
+                  <span className="text-xs text-gray-300 truncate">{app.appName}</span>
+                  <span className="text-xs text-gray-500 shrink-0">{formatBranchSummary(app)}</span>
+                  <span className="flex-1 text-xs text-gray-600 truncate text-right">
+                    last run {timeAgo(app.lastUserReconcileAt)}
+                  </span>
+                  <button
+                    onClick={() => handleRunReconcile(app)}
+                    disabled={reconcileButton(app).disabled}
+                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded transition-colors shrink-0 min-h-[28px] disabled:opacity-50"
+                    title={`Queue branch-reconcile for ${app.appName}`}
+                  >
+                    <Play size={11} />
+                    {reconcileButton(app).label}
+                  </button>
+                </div>
+              ))}
+              {primaryInsight.action?.route && (
+                <button
+                  onClick={() => navigate(primaryInsight.action.route)}
+                  className="text-xs text-gray-500 hover:text-gray-300 underline"
+                >
+                  Open the branch-reconcile schedule
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Additional insights indicator */}
           {remainingCount > 0 && (
             <div className="flex items-center gap-1 mt-1.5 text-xs text-gray-500">
@@ -230,13 +330,11 @@ export default function ActionableInsightsBanner({ insights, onTaskUnblocked, on
           {primaryInsight.action && (
             <button
               onClick={() => handleAction(primaryInsight)}
-              disabled={Boolean(approvalTask && approvingTaskId === approvalTask.id)}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-white/10 hover:bg-white/20 text-white rounded transition-colors min-h-[32px]"
+              disabled={primaryButton.disabled}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-white/10 hover:bg-white/20 text-white rounded transition-colors min-h-[32px] disabled:opacity-50"
             >
-              {approvalTask && approvingTaskId === approvalTask.id
-                ? 'Approving…'
-                : hasBlockedTasks ? (isExpanded ? 'Collapse' : 'View Tasks') : primaryInsight.action.label}
-              {hasBlockedTasks
+              {primaryButton.label}
+              {expandsInPlace
                 ? (isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)
                 : !approvalTask && <ChevronRight size={12} />
               }

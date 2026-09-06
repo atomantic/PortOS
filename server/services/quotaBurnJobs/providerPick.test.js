@@ -65,6 +65,7 @@ describe('providerForFamily', () => {
     const providers = [
       { id: 'claude-ollama-tui', type: 'tui', enabled: true, ollamaBacked: true },
       { id: 'opencode-mtplx-tui', type: 'tui', enabled: true, mtplxBacked: true },
+      { id: 'opencode-lmstudio-tui', type: 'tui', enabled: true, lmstudioBacked: true },
       { id: 'claude-code-tui', type: 'tui', enabled: true },
       { id: 'claude-code', type: 'cli', enabled: true },
     ];
@@ -72,6 +73,7 @@ describe('providerForFamily', () => {
     // Not even by explicit pin — it cannot do the one thing the job is for.
     expect(providerForFamily(providers, { familyId: 'claude', providerId: 'claude-ollama-tui' })).toBeNull();
     expect(providerForFamily(providers, { familyId: 'claude', providerId: 'opencode-mtplx-tui' })).toBeNull();
+    expect(providerForFamily(providers, { familyId: 'opencode', providerId: 'opencode-lmstudio-tui' })).toBeNull();
     expect(providerForFamily([providers[0]], { familyId: 'claude' })).toBeNull();
   });
 });

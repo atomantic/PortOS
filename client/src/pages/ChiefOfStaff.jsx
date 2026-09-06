@@ -8,6 +8,7 @@ import * as api from '../services/api';
 import { isRiggedAvatarStyle, riggedRecordForStyle, useAvatarCapabilities } from '../hooks/useAvatarCapabilities';
 import { coalesce } from '../utils/coalesce';
 import { sameJsonShape } from '../lib/sameJsonShape';
+import { WEBGL_AVATAR_STYLE_IDS } from '../lib/avatarStyles';
 import { Play, Pause, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -59,13 +60,21 @@ const ConfigTab = lazy(() => import('../components/cos/tabs/ConfigTab'));
 const BriefingTab = lazy(() => import('../components/cos/tabs/BriefingTab'));
 
 // Three.js-based avatars lazy-loaded so the R3F stack isn't bundled unless the
-// user's chosen avatar style actually needs it.
-const LAZY_AVATARS = {
+// user's chosen avatar style actually needs it. `core` is a plain 2D canvas
+// (no three.js) but stays lazy so the default SVG path loads nothing extra.
+// Every registry id (`lib/avatarStyles.js`) EXCEPT `svg`/`ascii` renders through
+// a lazily-loaded component here — those two fall through to the inline
+// `CoSCharacter` default below. `ChiefOfStaff.avatarStyles.test.jsx` fails if a
+// registry id is missing from this map (or from the inline-rendered pair).
+export const INLINE_RENDERED_AVATAR_STYLES = new Set(['svg', 'ascii']);
+
+export const LAZY_AVATARS = {
   cyber:    lazy(() => import('../components/cos/CyberCoSAvatar')),
   sigil:    lazy(() => import('../components/cos/SigilCoSAvatar')),
   esoteric: lazy(() => import('../components/cos/EsotericCoSAvatar')),
   nexus:    lazy(() => import('../components/cos/NexusCoSAvatar')),
   muse:     lazy(() => import('../components/cos/MuseCoSAvatar')),
+  core:     lazy(() => import('../components/cos/CoreCoSAvatar')),
   // Bundled CC0 Kenney Mini Characters — animated rigged GLB avatars.
   miniMaleC:   lazy(() => import('../components/cos/MiniCharMaleC')),
   miniFemaleD: lazy(() => import('../components/cos/MiniCharFemaleD')),
@@ -77,10 +86,9 @@ const LAZY_AVATARS = {
 // avatar so three.js stays out of the main chunk until it is picked.
 const LazyRiggedAvatar = lazy(() => import('../components/cos/MiniCharacterCoSAvatar'));
 
-const CANVAS_AVATAR_STYLES = new Set([
-  'cyber', 'sigil', 'esoteric', 'nexus', 'muse',
-  'miniMaleC', 'miniFemaleD',
-]);
+// `CANVAS_AVATAR_STYLES` means "needs the WebGL/three.js stage" — derives
+// directly from the registry's `webgl` flag (`lib/avatarStyles.js`).
+const CANVAS_AVATAR_STYLES = WEBGL_AVATAR_STYLE_IDS;
 
 // Shared brand gradient for the "CoS" wordmark headings (clipped to text).
 const COS_TITLE_GRADIENT = 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)';
@@ -922,7 +930,7 @@ export default function ChiefOfStaff() {
           {desktopPanelCollapsed ? (
             <div className="hidden lg:block overflow-hidden min-w-0" />
           ) : (
-            <div className="hidden lg:block relative">
+            <div className="hidden lg:block relative min-w-0 w-full max-w-full lg:w-[320px] lg:max-w-[320px]">
               <button
                 onClick={toggleDesktopPanel}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute top-2 right-2 z-10 p-1.5 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
@@ -1002,7 +1010,7 @@ export default function ChiefOfStaff() {
           </div>
         </>
       ) : (
-        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
+        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 shrink-0 w-full max-w-full min-w-0 lg:w-[320px] lg:max-w-[320px] overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
           {/* Desktop Collapse Button */}
           <button
             onClick={toggleDesktopPanel}
@@ -1043,7 +1051,7 @@ export default function ChiefOfStaff() {
           {/* Collapsible Content */}
           <div
             id="cos-agent-panel"
-            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] lg:min-h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 w-full max-w-full relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] lg:min-h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
           >
             {/* Background Effects */}
             <div
@@ -1069,7 +1077,13 @@ export default function ChiefOfStaff() {
             )}
 
             {/* Avatar UI overlays the full-width canvas stage for 3D styles. */}
-            <div className={`${hasCanvasAvatar ? 'absolute inset-y-0 left-0 w-[46%] lg:relative lg:inset-auto lg:w-full lg:flex-none lg:min-h-full p-2 sm:p-3 lg:px-4 lg:py-6' : 'relative flex-1 min-w-0 lg:flex-none lg:min-h-full p-2 lg:px-4 lg:py-6'} min-w-0 flex flex-col items-center z-10`}>
+            <div
+              className={`${
+                hasCanvasAvatar
+                  ? 'absolute inset-y-0 left-0 w-[46%] p-2 sm:p-3'
+                  : 'relative flex-1 w-full p-2'
+              } min-w-0 lg:relative lg:inset-auto lg:w-full lg:max-w-full lg:flex-none lg:min-h-full lg:px-4 lg:py-6 flex flex-col items-center z-10`}
+            >
               <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-port-text-muted mb-1 font-mono">
                 Digital Assistant
               </div>
@@ -1095,12 +1109,12 @@ export default function ChiefOfStaff() {
               </div>
 
               {/* Desktop Stats Grid - integrated into CoS sidebar (matches mobile compressed layout) */}
-              <div className="hidden lg:grid grid-cols-2 gap-1.5 w-full mt-3 relative z-10">
+              <div className="hidden lg:grid grid-cols-2 gap-1.5 w-full min-w-0 mt-3 relative z-10">
                 {statsGridCards}
               </div>
 
               {status?.running && (
-                <div className="hidden lg:flex flex-1 min-h-0 w-full flex-col">
+                <div className="hidden lg:flex flex-1 min-h-0 w-full min-w-0 flex-col">
                   <EventLog logs={eventLogs} />
                 </div>
               )}
@@ -1237,7 +1251,7 @@ export default function ChiefOfStaff() {
         {activeTab === 'schedule' && (
           <div role="tabpanel" id="tabpanel-schedule" aria-labelledby="tab-schedule">
             <Suspense fallback={<TabLoadFallback label="schedule" />}>
-              <ScheduleTab apps={apps} providers={providers} activeProviderId={activeProviderId} providersLoaded={providersLoaded} />
+              <ScheduleTab apps={apps} providers={providers} activeProviderId={activeProviderId} providersLoaded={providersLoaded} daemonRunning={status?.running} />
             </Suspense>
           </div>
         )}

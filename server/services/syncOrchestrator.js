@@ -6,9 +6,9 @@
  * Maintains per-peer cursors and triggers sync on peer connect + interval.
  */
 
-import { writeFile, access } from 'fs/promises';
+import { access } from 'fs/promises';
 import { join } from 'path';
-import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite } from '../lib/fileUtils.js';
+import { readJSONFile, ensureDir, PATHS, dataPath, atomicWrite, writeFileGuarded } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { instanceEvents } from './instanceEvents.js';
 import { getPeers, resolveEffectiveCategories, updatePeer, getInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
@@ -122,7 +122,7 @@ async function syncImageFromPeer(peer, avatarPath) {
   await res.arrayBuffer()
     .then(async (bytes) => {
       await ensureDir(PATHS.images);
-      await writeFile(localPath, Buffer.from(bytes));
+      await writeFileGuarded(localPath, Buffer.from(bytes));
       console.log(`🔄 Synced avatar image: ${filename}`);
     })
     .catch(() => {});

@@ -11,8 +11,8 @@ describe('VIDEO_GEN_MODE', () => {
     // rather than re-typing is what keeps a schema from drifting from dispatch.
     expect(VIDEO_GEN_MODE.LOCAL).toBe(IMAGE_GEN_MODE.LOCAL);
     expect(VIDEO_GEN_MODE.GROK).toBe(IMAGE_GEN_MODE.GROK);
-    expect(VIDEO_GEN_MODES).toEqual(['local', 'grok']);
-    expect(CLOUD_VIDEO_GEN_MODES).toEqual(['grok']);
+    expect(VIDEO_GEN_MODES).toEqual(['local', 'grok', 'fal', 'reactor']);
+    expect(CLOUD_VIDEO_GEN_MODES).toEqual(['grok', 'fal', 'reactor']);
     expect(Object.isFrozen(VIDEO_GEN_MODE)).toBe(true);
   });
 });
@@ -32,6 +32,26 @@ describe('isVideoModeUsable', () => {
     expect(isVideoModeUsable({}, 'codex')).toBe(false);
     expect(isVideoModeUsable({}, 'external')).toBe(false);
     expect(isVideoModeUsable({}, undefined)).toBe(false);
+  });
+
+  it('gates fal on a configured API key, settings or env', () => {
+    expect(isVideoModeUsable({ videoGen: { fal: { apiKey: 'key' } } }, 'fal')).toBe(true);
+    expect(isVideoModeUsable({ videoGen: { fal: { apiKey: '  ' } } }, 'fal')).toBe(false);
+    expect(isVideoModeUsable({}, 'fal')).toBe(false);
+    const prevEnv = process.env.FAL_KEY;
+    process.env.FAL_KEY = 'env-key';
+    expect(isVideoModeUsable({}, 'fal')).toBe(true);
+    if (prevEnv === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = prevEnv;
+  });
+
+  it('gates reactor on a configured API key, settings or env', () => {
+    expect(isVideoModeUsable({ videoGen: { reactor: { apiKey: 'key' } } }, 'reactor')).toBe(true);
+    expect(isVideoModeUsable({ videoGen: { reactor: { apiKey: '  ' } } }, 'reactor')).toBe(false);
+    expect(isVideoModeUsable({}, 'reactor')).toBe(false);
+    const prevEnv = process.env.REACTOR_API_KEY;
+    process.env.REACTOR_API_KEY = 'env-key';
+    expect(isVideoModeUsable({}, 'reactor')).toBe(true);
+    if (prevEnv === undefined) delete process.env.REACTOR_API_KEY; else process.env.REACTOR_API_KEY = prevEnv;
   });
 });
 

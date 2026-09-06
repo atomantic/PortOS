@@ -28,8 +28,7 @@
  */
 
 import sharp from 'sharp';
-import { copyFile } from 'fs/promises';
-import { tryReadFile } from '../../lib/fileUtils.js';
+import { tryReadFile, copyFileGuarded } from '../../lib/fileUtils.js';
 import { hexToRgb, keyChannelSplit, keyShareFn } from './chromaKey.js';
 import { describeFrameStats, isDegenerateFrame } from '../../lib/imageFrameStats.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -203,7 +202,7 @@ export async function extractForegroundPalette(src, maskKeyHex) {
 export async function normalizeFromAnalysis(analysis, src, dest, canvasKeyHex) {
   const { data, width, mask, bbox, maskKey } = analysis;
   if (!bbox) {
-    await copyFile(src, dest);
+    await copyFileGuarded(src, dest);
     return { copiedThrough: true };
   }
   const charW = bbox.right - bbox.left;
@@ -253,7 +252,7 @@ export async function normalizeFromAnalysis(analysis, src, dest, canvasKeyHex) {
 export async function recompositeOnKey(analysis, src, dest, canvasKeyHex) {
   const { data, width, height, mask, bbox, maskKey } = analysis;
   if (!bbox) {
-    await copyFile(src, dest);
+    await copyFileGuarded(src, dest);
     return { copiedThrough: true };
   }
   const fill = hexToRgb(canvasKeyHex);

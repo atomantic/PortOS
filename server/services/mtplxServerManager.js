@@ -364,6 +364,7 @@ export async function getMtplxServerStatus() {
     // another process's launch line.
     tuningFlags: base.managed === true ? launchArgs('mtplx', currentConfig?.tuning) : [],
     idleMinutes: await configuredIdleMinutes(),
+    keepLoaded: await configuredKeepLoaded(),
     // What a lazy start will launch on, so the card's fields show the saved
     // choice rather than resetting to "Auto" on every page load.
     launch: await savedLaunchConfig(),
@@ -821,9 +822,11 @@ export function _resetMtplxServerStateForTests({
   relaunchReadyTimeout,
   relaunchPoll,
   idleMinutes = 0,
+  keepLoaded = null,
   logFiles,
 } = {}) {
   idleMinutesOverride = idleMinutes;
+  keepLoadedOverride = keepLoaded;
   mtplxLogFiles = logFiles ? {
     stdout: logFiles.stdout || DEFAULT_MTPLX_LOG_FILES.stdout,
     stderr: logFiles.stderr || DEFAULT_MTPLX_LOG_FILES.stderr,
@@ -837,6 +840,11 @@ export function _resetMtplxServerStateForTests({
   portReleaseTimeoutMs = Number.isFinite(portRelease) ? portRelease : 30_000;
   relaunchReadyTimeoutMs = Number.isFinite(relaunchReadyTimeout) ? relaunchReadyTimeout : 300_000;
   relaunchPollMs = Number.isFinite(relaunchPoll) ? relaunchPoll : 1000;
+}
+
+// Test hook for pinning
+export function _setMtplxKeepLoadedOverrideForTests(val) {
+  keepLoadedOverride = val;
 }
 
 // =============================================================================
@@ -865,6 +873,7 @@ export function _resetMtplxServerStateForTests({
 const readSettings = () => import('./settings.js').then((m) => m.getSettings()).catch(() => null);
 // See `configuredIdleMinutes`. Only `_resetMtplxServerStateForTests` writes it.
 let idleMinutesOverride = null;
+let keepLoadedOverride = null;
 
 async function configuredIdleMinutes() {
   // Test seam, same reason as `llamaServerManager`'s: a suite must not depend on
@@ -875,12 +884,20 @@ async function configuredIdleMinutes() {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
 }
 
+async function configuredKeepLoaded() {
+  if (keepLoadedOverride !== null) return keepLoadedOverride;
+  const settings = await readSettings();
+  return Boolean(settings?.localLlm?.mtplx?.keepLoaded ?? settings?.localLlm?.mtplx?.pinned);
+}
+
 // Registered at module load so the reaper knows about MTPLX regardless of which
 // call path touches this module first. Registration itself starts nothing and
 // reads no settings — the window is resolved per sweep, inside `getIdleMs`.
 registerIdleDaemon({
   name: MTPLX_APP,
   getIdleMs: async () => idleWindowMs(await configuredIdleMinutes()),
+  isPinned: async () => configuredKeepLoaded(),
+  isRunning: async () => Boolean((await getAppStatusStrict(MTPLX_APP))?.status === 'online'),
   stop: () => stopMtplxServer(),
 });
 

@@ -23,8 +23,8 @@
  */
 
 import { join, basename, dirname } from 'path';
-import { readdir, copyFile, rm } from 'fs/promises';
-import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, expandHome } from '../../lib/fileUtils.js';
+import { readdir } from 'fs/promises';
+import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, expandHome, copyFileGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { upsertImportedRecord } from './records.js';
 import {
@@ -78,7 +78,7 @@ async function copyTree(srcDir, destDir, shouldCopy = () => true) {
           await ensureDir(parent);
           ensuredDirs.add(parent);
         }
-        await copyFile(srcPath, destPath);
+        await copyFileGuarded(srcPath, destPath);
         copied.push(entryRel);
       }
     }
@@ -114,7 +114,7 @@ async function verifyHashes(destDir, expectations, errors, copiedThisRun) {
       // nobody approved. Drop it — that run just stays non-re-derivable until
       // a clean re-import.
       if (SOURCE_CLIP_REF.test(relPath)) {
-        await rm(join(destDir, relPath), { force: true });
+        await rmGuarded(join(destDir, relPath), { force: true });
         return { dropped: relPath };
       }
       return { error: `sha256 mismatch: ${relPath}` };
@@ -237,7 +237,7 @@ async function copyCharFile(srcCharDir, destDir, rel) {
   const destRel = canonicalizeImportedRunPath(rel);
   const dest = join(destDir, destRel);
   await ensureDir(dirname(dest));
-  await copyFile(join(srcCharDir, srcRel), dest);
+  await copyFileGuarded(join(srcCharDir, srcRel), dest);
   return destRel;
 }
 
@@ -405,7 +405,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   await ensureDir(destDir);
 
   // Character spec — verbatim copy for provenance alongside the record.
-  await copyFile(specPath, join(destDir, 'character-spec.json'));
+  await copyFileGuarded(specPath, join(destDir, 'character-spec.json'));
   result.files += 1;
 
   const hashExpectations = [];

@@ -67,6 +67,17 @@ export const MODEL_ABUSE_GUARD_PYTHON_IMPORTS = Object.freeze([
   'huggingface_hub'
 ]);
 
+// Independent of the image runtime's package aliases. These releases satisfy
+// Transformers 5.16's Hub >=1.5,<2 / safetensors >=0.8 requirements. The runner
+// uses the supported overflowing-window tokenizer API, not prepare_for_model
+// removed in v5. Updating these pins requires the explicit install canary.
+export const MODEL_ABUSE_GUARD_PYTHON_PACKAGES = Object.freeze([
+  'torch==2.14.0',
+  'transformers==5.16.1',
+  'safetensors==0.8.0',
+  'huggingface_hub==1.30.0',
+]);
+
 // Operator-facing install stages, in the order `installModelAbuseGuard` runs
 // them. Status maps host facts onto this list; the UI must not invent a
 // parallel checklist. Token presence is a boolean on the stage — never a token
@@ -80,7 +91,7 @@ export const MODEL_ABUSE_GUARD_STAGES = Object.freeze([
   {
     id: 'python',
     label: 'Host Python',
-    description: 'A Python interpreter PortOS can use as the base for the dedicated runtime.',
+    description: 'Python 3.10 or newer, with a supported PyTorch wheel for this machine.',
   },
   {
     id: 'venv',
@@ -140,6 +151,7 @@ export const MODEL_ABUSE_GUARD_MAX_CHUNKS = 100_000;
 export const MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE = 0.9;
 export const MODEL_ABUSE_GUARD_TIMEOUT_MS = 5 * 60 * 1000;
 export const MODEL_ABUSE_GUARD_CHUNK_TOKENS = 512;
+export const MODEL_ABUSE_GUARD_CONTENT_TOKENS = 510;
 export const MODEL_ABUSE_GUARD_CHUNK_OVERLAP = 64;
 
 /**
@@ -489,7 +501,9 @@ function normalizeLabel(label) {
  */
 export function normalizeModelAbuseGuardResult(raw, { minBenignScore = MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE } = {}) {
   const chunks = raw?.chunks;
-  if (!Array.isArray(chunks) || chunks.length < 1 || chunks.length > MODEL_ABUSE_GUARD_MAX_CHUNKS) {
+  if (raw?.schemaVersion !== 1 || raw?.complete !== true
+    || !Number.isInteger(raw?.tokenCount) || raw.tokenCount < 1
+    || !Array.isArray(chunks) || chunks.length < 1 || chunks.length > MODEL_ABUSE_GUARD_MAX_CHUNKS) {
     return { ok: false, code: 'security-guard-verdict-invalid' };
   }
 
@@ -497,13 +511,15 @@ export function normalizeModelAbuseGuardResult(raw, { minBenignScore = MODEL_ABU
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
     const label = normalizeLabel(chunk?.label);
-    const score = Number(chunk?.score);
+    const score = chunk?.score;
+    const expectedStart = index * (MODEL_ABUSE_GUARD_CONTENT_TOKENS - MODEL_ABUSE_GUARD_CHUNK_OVERLAP);
     if (
       !chunk || typeof chunk !== 'object' || Array.isArray(chunk)
       || chunk.index !== index
       || !label || !Number.isFinite(score) || score < 0 || score > 1
-      || !Number.isInteger(chunk.tokenStart) || chunk.tokenStart < 0
-      || !Number.isInteger(chunk.tokenEnd) || chunk.tokenEnd <= chunk.tokenStart
+      || chunk.tokenStart !== expectedStart || expectedStart >= raw.tokenCount
+      || chunk.tokenEnd !== Math.min(expectedStart + MODEL_ABUSE_GUARD_CONTENT_TOKENS, raw.tokenCount)
+      || (index > 0 && normalized[index - 1].tokenEnd === raw.tokenCount)
     ) {
       return { ok: false, code: 'security-guard-verdict-invalid' };
     }
@@ -514,6 +530,10 @@ export function normalizeModelAbuseGuardResult(raw, { minBenignScore = MODEL_ABU
       tokenStart: chunk.tokenStart,
       tokenEnd: chunk.tokenEnd
     });
+  }
+
+  if (normalized.at(-1).tokenEnd !== raw.tokenCount) {
+    return { ok: false, code: 'security-guard-verdict-invalid' };
   }
 
   const malicious = normalized.filter((chunk) => chunk.label === 'malicious');

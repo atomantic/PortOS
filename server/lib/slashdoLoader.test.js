@@ -1,69 +1,126 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import * as fsPromises from 'fs/promises';
-// Mock fs/promises so the fixture-driven tests below control exactly what
-// `readFile` returns, independent of the vendored slashdo submodule's live
-// content — so assertions can't drift with a slashdo version bump. Defaults to
-// delegating to the real implementation.
-vi.mock('fs/promises', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    readFile: vi.fn((...args) => actual.readFile(...args)),
-  };
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const { fixtureRoot } = await vi.hoisted(async () => {
+  const { mkdtempSync } = await import('fs');
+  const { tmpdir } = await import('os');
+  const { join } = await import('path');
+  return { fixtureRoot: mkdtempSync(join(tmpdir(), 'slashdo-loader-')) };
 });
-import { loadSlashdoLib, loadSlashdoFile } from './slashdoLoader.js';
+vi.mock('./fileUtils.js', async importOriginal => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS,
+    slashdo: fixtureRoot, slashdoResolved: `${fixtureRoot}/resolved`,
+  } };
+});
+import { loadSlashdoLib, loadSlashdoFile, loadSlashdoBundle, writeResolvedSlashdoBody } from './slashdoLoader.js';
+import { requireSlashdoSubmoduleInCi } from './testHelper.js';
 
-// Regression guard for the CoS review-loop bug: PortOS inlines slashdo lib
-// markdown into headless CoS-agent prompts WITHOUT going through slashdo's
-// own per-environment installer, so it must resolve the `<!-- if:teams -->`
-// conditionals itself. Leaving both branches in shipped a self-contradictory
-// reviewer spec (in-process Agent tool AND `claude -p`) to a codex agent,
-// which then improvised its own `claude` invocation via a dozen probe calls.
-describe('slashdo loaders (loadSlashdoFile / loadSlashdoLib)', () => {
-  // Driven from controlled fixtures via the mocked `readFile`, NOT the vendored
-  // submodule's live content — so the assertions can't drift with a slashdo
-  // version bump. Each test resets `readFile` to clean real-delegation first: a
-  // `mockRejectedValueOnce` leaked from an earlier suite would otherwise null out
-  // a load and fail here (the flake that reddened CI), and the reset also lets
-  // `mockResolvedValueOnce` feed a fixture as the next read.
-  let realReadFile;
-  beforeEach(async () => {
-    realReadFile = (await vi.importActual('fs/promises')).readFile;
-    vi.mocked(fsPromises.readFile).mockReset();
-    vi.mocked(fsPromises.readFile).mockImplementation((...args) => realReadFile(...args));
+const source = fileURLToPath(new URL('../../lib/slashdo/src', import.meta.url));
+const hasSubmodule = existsSync(join(source, 'transformer.js'));
+requireSlashdoSubmoduleInCi(hasSubmodule);
+const write = (path, body) => {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, body);
+};
+beforeAll(() => {
+  // The upstream renderer has its own fixture matrix. These exercise the real
+  // PortOS adapter and staging boundary when the bundled submodule is available.
+  if (hasSubmodule) cpSync(source, join(fixtureRoot, 'src'), { recursive: true });
+});
+afterAll(() => rmSync(fixtureRoot, { recursive: true, force: true }));
+
+describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
+  it('keeps command/lib eager consumers self-contained and resolves host capabilities', async () => {
+    const lib = 'run "$PROMPT" $& $`tail\n<!-- if:teams -->IN_PROCESS<!-- else -->SUBPROCESS<!-- /if:teams -->';
+    write(join(fixtureRoot, 'lib/example.md'), lib);
+    write(join(fixtureRoot, 'commands/do/example.md'), '---\ndescription: Example\n---\n!`cat ~/.claude/lib/example.md`');
+    const body = await loadSlashdoFile('example', { stripFrontmatter: true });
+    expect(body).toContain('run "$PROMPT" $& $`tail');
+    expect(body).toContain('SUBPROCESS');
+    expect(body).not.toContain('IN_PROCESS');
+    expect(body).not.toContain('description:');
+    expect(await loadSlashdoLib('example', { teams: true })).toContain('IN_PROCESS');
+    expect(await loadSlashdoLib('example')).toContain('SUBPROCESS');
   });
 
-  it('loadSlashdoLib resolves if:teams to the else branch by default and the if branch under teams:true', async () => {
-    const fixture = 'A<!-- if:teams -->IF<!-- else -->ELSE<!-- /if:teams -->B';
-    vi.mocked(fsPromises.readFile).mockResolvedValueOnce(fixture);
-    expect(await loadSlashdoLib('cond-fixture-else')).toBe('AELSEB');
-    vi.mocked(fsPromises.readFile).mockResolvedValueOnce(fixture);
-    expect(await loadSlashdoLib('cond-fixture-if', { teams: true })).toBe('AIFB');
+  it('renders the bundled scoped review without rejecting it or enabling public edits', async () => {
+    const { buildReviewLoopFollowUpSection } = await import('../services/promptSections/reviewLifecycle.js');
+    const recipe = readFileSync(new URL('../../lib/slashdo/lib/local-agent-review-loop.md', import.meta.url), 'utf8');
+    write(join(fixtureRoot, 'lib/scoped-review.md'), recipe);
+    const body = await loadSlashdoLib('scoped-review');
+    const prompt = buildReviewLoopFollowUpSection(
+      { reviewLoopReviewers: ['claude', 'antigravity', 'codex'], reviewLoopReviewerApplies: true },
+      { localOnly: true, baseBranch: 'main', localAgentLoopBody: body },
+    );
+
+    expect(prompt).not.toContain('entire recipe was rejected');
+    expect(prompt).toContain('--tools "Read,Glob,Grep" --allowedTools "Read,Glob,Grep"');
+    expect(prompt).toContain('--strict-mcp-config');
+    expect(prompt).toContain('disableAllHooks');
+    expect(prompt).toMatch(/Inlining a\s+diff alone is not tool isolation/);
+    expect(prompt).toContain('--sandbox read-only review --base');
+    expect(prompt).not.toContain('--sandbox workspace-write');
+    expect(prompt).not.toContain('--sandbox danger-full-access');
+    expect(prompt).not.toContain('agy --dangerously');
+    expect(prompt).toContain('Reviewer applies (off)');
   });
 
-  it('loadSlashdoLib leaves a non-teams conditional block untouched', async () => {
-    const fixture = 'A<!-- if:other -->X<!-- /if:other -->B';
-    vi.mocked(fsPromises.readFile).mockResolvedValueOnce(fixture);
-    expect(await loadSlashdoLib('cond-fixture-other')).toBe(fixture);
+  it('keeps inline reviewer recipes limited to explicit reads', async () => {
+    write(join(fixtureRoot, 'lib/recipe.md'), 'Recipe\n!read lib/required.md\nSee `lib/unrelated.md`.');
+    write(join(fixtureRoot, 'lib/required.md'), 'Required verification');
+    write(join(fixtureRoot, 'lib/unrelated.md'), 'Unrelated reviewer workflow');
+    const body = await loadSlashdoLib('recipe');
+    expect(body).toContain('Required verification');
+    expect(body).not.toContain('Unrelated reviewer workflow');
+    expect(body).not.toContain('!read');
   });
 
-  it('loadSlashdoLib returns null for a lib file that does not exist', async () => {
-    expect(await loadSlashdoLib('no-such-lib-file-xyz')).toBeNull();
+  it('stages deferred phase reads and keeps different reviewer bundles independent', async () => {
+    write(join(fixtureRoot, 'commands/do/phases.md'), '# Workflow\n!read lib/audit.md\n!read lib/local-agent-review-loop.md');
+    write(join(fixtureRoot, 'lib/audit.md'), 'Required audit phase\n!read lib/verify.md');
+    write(join(fixtureRoot, 'lib/verify.md'), 'Required verification');
+    write(join(fixtureRoot, 'lib/local-agent-review-loop.md'), 'Required local review');
+    const full = await loadSlashdoBundle('phases');
+    const pruned = await loadSlashdoBundle('phases', { skipIncludes: ['local-agent-review-loop'] });
+    const fullPath = await writeResolvedSlashdoBody('phases', full.body, { files: full.files });
+    const prunedPath = await writeResolvedSlashdoBody('phases', pruned.body, { files: pruned.files });
+    expect(fullPath).not.toBe(prunedPath);
+    expect(readFileSync(fullPath, 'utf8')).toContain('lib/audit.md');
+    expect(readFileSync(join(dirname(fullPath), 'lib/audit.md'), 'utf8')).toContain('./verify.md');
+    expect(readFileSync(join(dirname(fullPath), 'lib/verify.md'), 'utf8')).toContain('Required verification');
+    expect(pruned.files).not.toHaveProperty('local-agent-review-loop.md');
+    expect(full.files).toHaveProperty('local-agent-review-loop.md');
+    const eager = await loadSlashdoFile('phases');
+    expect(eager).toContain('Required verification');
+    expect(eager).toContain('Required local review');
+    expect(eager).not.toContain('!read');
   });
 
-  it('loadSlashdoFile inlines includes with $-tokens verbatim and resolves conditionals', async () => {
-    // A shell-heavy lib whose `$&` / `$`-backtick tokens must survive a
-    // String.replace (a bare-string replacement would interpret them and splice
-    // pre-match content in, corrupting the text and ballooning the output).
-    const libBody = 'run claude -p "$LOCAL_PROMPT" $& $`tail';
-    const cmdBody = 'HEAD\n!`cat ~/.claude/lib/some-lib.md`\n<!-- if:teams -->TEAMS<!-- else -->SUB<!-- /if:teams -->\nTAIL';
-    vi.mocked(fsPromises.readFile)
-      .mockResolvedValueOnce(cmdBody)   // the command file
-      .mockResolvedValueOnce(libBody);  // the included lib
-    const body = await loadSlashdoFile('cmd-fixture-dollar');
-    expect(body).toContain('claude -p "$LOCAL_PROMPT" $& $`tail'); // $-tokens verbatim, no blowup
-    expect(body).toContain('SUB');                                 // else branch kept
-    expect(body).not.toContain('TEAMS');                           // if branch stripped
-    expect(body).not.toMatch(/<!--\s*(if:|else|\/if:)/);           // markers gone
+  it('distinguishes absent commands from missing required dependencies', async () => {
+    expect(await loadSlashdoFile('no-such-command')).toBeNull();
+    write(join(fixtureRoot, 'commands/do/broken.md'), '!read lib/no-such-library.md');
+    await expect(loadSlashdoBundle('broken')).rejects.toThrow();
+  });
+});
+
+describe('immutable slashdo staging', () => {
+  it('addresses the entire bundle by content, preserving earlier dispatched procedures', async () => {
+    const body = 'Read lib/review.md';
+    const oldPath = await writeResolvedSlashdoBody('review', body, { files: { 'review.md': 'Original review' } });
+    const newPath = await writeResolvedSlashdoBody('review', body, { files: { 'review.md': 'Updated review' } });
+    expect(newPath).not.toBe(oldPath);
+    expect(readFileSync(join(dirname(oldPath), 'lib/review.md'), 'utf8')).toBe('Original review');
+    expect(readFileSync(join(dirname(newPath), 'lib/review.md'), 'utf8')).toBe('Updated review');
+    expect(await writeResolvedSlashdoBody('review', body, { files: { 'review.md': 'Updated review' } })).toBe(newPath);
+  });
+
+  it('rejects unsafe output paths before writing the entrypoint', async () => {
+    expect(await writeResolvedSlashdoBody('../outside', 'Body')).toBeNull();
+    await expect(writeResolvedSlashdoBody('review', 'Body', { files: { '../outside.md': 'Outside' } })).rejects.toThrow('Invalid slashdo supporting file');
+    await expect(writeResolvedSlashdoBody('review', 'Body', { files: { 'invalid.md': null } })).rejects.toThrow('Invalid slashdo supporting file');
+    expect(existsSync(join(fixtureRoot, 'outside.md'))).toBe(false);
   });
 });

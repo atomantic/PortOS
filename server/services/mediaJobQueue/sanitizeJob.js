@@ -1,12 +1,14 @@
 import { effectiveJobPrompt } from '../../lib/federatedMediaWire.js';
+import { videoHoldSchema } from './videoHolds.js';
 import { isRemoteMediaJob } from './remoteMediaJob.js';
+import { mediaJobExecutionLane } from '../../lib/generationModes.js';
 
 // Public projection of a media job. Keep worker-only paths and subprocess
 // details out of both the queue API and the processing dashboard.
 const PARAM_ALLOWLIST = new Set([
   'prompt', 'negativePrompt', 'modelId', 'model', 'effort',
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidanceScale',
-  'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
+  'batchSize', 'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
   'i2vReferenceMode',
   // Sampler/decoder knobs the retry editor re-offers. 'draftDecode' (#5423) is
   // the preview-fidelity decode REQUEST the job was submitted with — projected
@@ -77,6 +79,7 @@ export function sanitizeJob(job) {
   // requires an explicit `modelId` for a peer render) carries it on the wire
   // request. This branch is now the ONLY source of a routed job's model id.
   const routed = isRemoteMediaJob(job);
+  const hold = !routed && job.status === 'queued' ? videoHoldSchema.safeParse(job.hold) : null;
   const remoteModelId = job.params?.remoteMedia?.request?.modelId;
   if (safeParams && routed) {
     if (remotePrompt) safeParams.prompt = remotePrompt;
@@ -90,8 +93,16 @@ export function sanitizeJob(job) {
     // an exact description of what a projected `params` can contain. The UI
     // needs it because a peer render must not wear the local model badge.
     renderer: routed ? 'remote' : 'local',
+    // Which of the scheduler's execution lanes actually runs this job, from the
+    // SAME classifier mediaJobQueue schedules with — so the Render Queue can
+    // never re-derive a stale backend list of its own. `renderer` above stays
+    // exactly what it was (routed vs not); this is the finer local-GPU vs
+    // cloud-provider split it cannot express.
+    executionLane: mediaJobExecutionLane({ kind: job.kind, mode: job.params?.mode, remote: routed }),
     owner: job.owner,
     status: job.status,
+    ...(hold?.success ? { hold: { ...hold.data, heldJobCount: job.hold.heldJobCount,
+      ...(job.hold.scope === 'local-video' ? { scope: 'local-video' } : {}) } } : {}),
     queuedAt: job.queuedAt,
     startedAt: job.startedAt,
     completedAt: job.completedAt,

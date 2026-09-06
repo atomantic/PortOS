@@ -6,6 +6,8 @@ import {
   projectedStorage,
 } from './eidoverseWorld.js';
 import { eidoverseProjectionRecipeSchema } from '../lib/validation.js';
+import { EIDOVERSE_META_ENTITY_ID, EIDOVERSE_WORLD_DESIGN_VERSION } from '../lib/eidoverseWorldDesign.js';
+import { EIDOVERSE_LABEL_VISIBILITIES } from '../lib/eidoverseWorldLabels.js';
 
 const APP_FALLBACK = DEFAULT_EIDOVERSE_PROJECTION_RECIPE.assetRecipe.slots.app.fallback;
 
@@ -67,14 +69,14 @@ describe('Eidoverse PortOS projection plan', () => {
 
     expect(second).toEqual(first);
     expect(first.summary).toMatchObject({
-      designVersion: 2,
+      designVersion: 3,
       liveEntityCount: 2,
-      infrastructureCount: 29,
+      infrastructureCount: 83,
       sourceAvailability: { apps: true, agents: true, health: true, environment: true },
     });
     expect(first.operations).toEqual(expect.arrayContaining([
       expect.objectContaining({ verb: 'terrain' }),
-      expect.objectContaining({ verb: 'sky', args: expect.objectContaining({ system: 'skymesh', hours: 7.2 }) }),
+      expect.objectContaining({ verb: 'sky', args: expect.objectContaining({ system: 'skymesh', hours: 10 }) }),
       expect.objectContaining({ verb: 'grass' }),
       expect.objectContaining({ verb: 'light', args: expect.objectContaining({ id: 'portos-design-v2-light-nexus' }) }),
       expect.objectContaining({ verb: 'spawn', args: expect.objectContaining({ id: expect.stringContaining('signal-app-'), lib: APP_FALLBACK }) }),
@@ -86,6 +88,38 @@ describe('Eidoverse PortOS projection plan', () => {
       verb: 'comp',
       args: expect.objectContaining({ type: 'motion' }),
     }));
+  });
+
+  it('builds a bounded walkable city and retains it without repeat writes', () => {
+    const first = buildProjectionPlan({ source: appSource() });
+    const structures = first.operations.filter(({ verb, args }) => verb === 'comp' && args.type === 'structure' && args.id.includes('-hall-'));
+    expect(structures).toHaveLength(8);
+    for (const { args } of structures) {
+      expect(JSON.stringify(args.data).length).toBeLessThan(8192);
+      expect(args.data.levels[0].tiles.length).toBeGreaterThan(0);
+      expect(args.data.levels[0].apertures.some((edge) => edge[3] === 'arch')).toBe(true);
+    }
+    const state = snapshotFromPlan(first, { foldModelDefaults: true });
+    // Rooftop landmarks must clear both the entrance and the sign, including
+    // the bottom of animated landmarks at the lowest point of their bob.
+    for (const district of DEFAULT_EIDOVERSE_PROJECTION_RECIPE.districts.filter(({ id }) => id !== 'apps')) {
+      const hall = state.entities[`portos-design-v2-city-hall-${district.id}`];
+      const landmark = state.entities[`portos-design-v2-infra-${district.id}`];
+      const roof = hall.pos[1] + hall.comp.structure.wallH + 0.26;
+      expect(landmark.pos[1] - (landmark.comp?.motion?.amp || 0)).toBeGreaterThan(roof);
+      const dx = landmark.pos[0] - district.anchor[0], dz = landmark.pos[2] - district.anchor[2];
+      expect(Math.hypot(dx, dz)).toBeCloseTo(8);
+    }
+    state.entities['visitor-building'] = { lib: 'store/example.glb', comp: { structure: { levels: [] } } };
+    const next = buildProjectionPlan({ source: appSource(), currentState: state });
+    expect(next.operations).toEqual([]);
+    const crowded = buildProjectionPlan({ source: { ...emptySources(),
+      agents: Array.from({ length: 6 }, (_, i) => ({ id: `example-agent-${i}` })),
+      tasks: Array.from({ length: 6 }, (_, i) => ({ id: `example-task-${i}` })),
+    } });
+    const positions = crowded.operations.filter(({ verb, args }) => verb === 'spawn' && args.id.includes('-signal-'))
+      .map(({ args }) => `${args.pos[0]},${args.pos[2]}`);
+    expect(new Set(positions).size).toBe(12);
   });
 
   it('uses the install-local materialized asset lock in projection operations', () => {
@@ -109,6 +143,7 @@ describe('Eidoverse PortOS projection plan', () => {
     const pathMarker = 'store/example-path-marker';
     const recipe = {
       ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE,
+      paths: [{ id: 'example-path', label: 'Example walkway', toDistrictId: 'apps', nodes: [[-14, 0, -14]] }],
       assets: {
         ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE.assets,
         feature: legacyFeature,
@@ -213,7 +248,8 @@ describe('Eidoverse PortOS projection plan', () => {
       verb === 'comp' && args.id === signal.args.id && args.type === 'portos'
     ));
 
-    expect(landmark.args.pos).toEqual([50, 0, 50]);
+    expect(landmark.args.pos[0]).toBeCloseTo(51.4142, 3);
+    expect(landmark.args.pos[2]).toBeCloseTo(44.3431, 3);
     expect(component.args.data).toMatchObject({
       districtId: 'apps',
       districtLabel: 'Example App Garden',
@@ -665,7 +701,7 @@ describe('Eidoverse PortOS projection plan', () => {
     });
     const goal = signalSpawn(plan, 'goal');
 
-    expect(goal.args.pos[1]).toBeCloseTo(5.625, 3);
+    expect(goal.args.pos[1]).toBeCloseTo(5.655, 3);
   });
 
   it('turns enabled feature flags into district affordances instead of extra props', () => {
@@ -716,6 +752,29 @@ describe('Eidoverse PortOS projection plan', () => {
     expect(appsLandmark(capped).args.scale).toBe(appsLandmark(empty).args.scale);
   });
 
+  it('grounds arcade computers on desks facing the park, retaining both through a source outage', () => {
+    const assetResolutions = {
+      app: { path: 'store/example-computer.glb', bounds: { min: [-2, -1, 4], max: [0, 2, 6] } },
+      desk: { path: 'store/example-desk.glb', bounds: { min: [5, -2, -1], max: [8, -1, 1] } },
+    };
+    const recipe = { ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE, assets: Object.fromEntries(Object.entries(assetResolutions).map(([slot, asset]) => [slot, asset.path])) };
+    const plan = buildProjectionPlan({ source: { ...appSource(), apps: [{ id: 'app-example', status: 'error' }] }, recipe, assetResolutions });
+    const currentState = snapshotFromPlan(plan);
+    const computer = signalSpawn(plan, 'app').args;
+    const desk = Object.values(currentState.entities).find((entity) => entity.id.startsWith('portos-design-v2-city-desk-'));
+    expect(computer.pos[1] + assetResolutions.app.bounds.min[1] * computer.scale)
+      .toBeCloseTo(desk.pos[1] + assetResolutions.desk.bounds.max[1] * desk.scale);
+    expect(currentState.entities[computer.id].comp.motion ?? null).toBeNull();
+    const hall = currentState.entities['portos-design-v2-city-hall-apps'];
+    const distance = Math.hypot(hall.pos[0], hall.pos[2]);
+    expect(Math.sin(hall.yaw) * -hall.pos[0] + Math.cos(hall.yaw) * -hall.pos[2]).toBeCloseTo(distance);
+    const outage = buildProjectionPlan({ source: { ...emptySources(), apps: null }, currentState, recipe, assetResolutions });
+    expect(outage.operations.some(({ verb, args }) => verb === 'remove' && [desk.id, computer.id].includes(args.id))).toBe(false);
+    expect(outage.operations.some(({ verb, args }) => verb === 'comp' && args.id === computer.id && args.type === 'motion' && args.data)).toBe(false);
+    const removed = buildProjectionPlan({ source: emptySources(), currentState, recipe, assetResolutions });
+    for (const id of [desk.id, computer.id]) expect(removed.operations).toContainEqual({ layer: 'reconciliation', verb: 'remove', args: { id } });
+  });
+
   it('keeps authored architecture identical across installs while local signals differ', () => {
     const first = buildProjectionPlan({ source: {
       ...emptySources(),
@@ -747,4 +806,282 @@ describe('Eidoverse PortOS projection plan', () => {
       layer: 'reconciliation', verb: 'remove', args: { id: 'portos-projection-app-retired' },
     }));
   });
+});
+
+describe('Eidoverse world self-description', () => {
+  it('hangs the world title, host id, and design version on one managed meta entity', () => {
+    const meta = { title: 'Example Garden', hostId: 'hst_0123456789ab' };
+    const plan = buildProjectionPlan({ source: emptySources(), meta });
+    const state = snapshotFromPlan(plan);
+    const entity = state.entities[EIDOVERSE_META_ENTITY_ID];
+
+    expect(entity.comp.portos).toMatchObject({
+      managedBy: 'portos',
+      kind: 'world-meta',
+      designVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
+      meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' },
+    });
+    // No record contents ride along — the payload is identity, not data.
+    expect(Object.keys(entity.comp.portos.meta).sort()).toEqual(['hostId', 'title']);
+    expect(plan.summary.infrastructureCount)
+      .toBe(buildProjectionPlan({ source: emptySources() }).summary.infrastructureCount + 1);
+  });
+
+  it('creates the meta entity once and reconciles it like every other managed entity', () => {
+    const meta = { title: 'Example Garden', hostId: 'hst_0123456789ab' };
+    const first = buildProjectionPlan({ source: emptySources(), meta });
+    const currentState = snapshotFromPlan(first, { foldModelDefaults: true });
+
+    const second = buildProjectionPlan({ source: emptySources(), meta, currentState });
+    expect(second.operations.filter(({ args }) => args?.id === EIDOVERSE_META_ENTITY_ID)).toEqual([]);
+
+    const renamed = buildProjectionPlan({
+      source: emptySources(),
+      meta: { ...meta, title: 'Renamed Garden' },
+      currentState,
+    });
+    expect(renamed.operations.filter(({ args }) => args?.id === EIDOVERSE_META_ENTITY_ID))
+      .toEqual([
+        {
+          layer: 'infrastructure',
+          verb: 'comp',
+          args: {
+            id: EIDOVERSE_META_ENTITY_ID,
+            type: 'portos',
+            data: expect.objectContaining({ meta: { title: 'Renamed Garden', hostId: meta.hostId } }),
+          },
+        },
+        // Renaming the world renames its plaque in the same pass, so the two
+        // can never describe different worlds.
+        {
+          layer: 'infrastructure',
+          verb: 'comp',
+          args: {
+            id: EIDOVERSE_META_ENTITY_ID,
+            type: 'label',
+            data: expect.objectContaining({ name: 'Renamed Garden', visibility: 'always' }),
+          },
+        },
+      ]);
+  });
+
+  // A managed entity the plan no longer wants is swept by the reconciliation
+  // pass — which is what makes a world reset take the meta carrier with it.
+  it('sweeps the meta entity away when the world no longer declares one', () => {
+    const withMeta = buildProjectionPlan({
+      source: emptySources(),
+      meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' },
+    });
+    const plan = buildProjectionPlan({
+      source: emptySources(),
+      currentState: snapshotFromPlan(withMeta, { foldModelDefaults: true }),
+    });
+
+    expect(plan.operations).toContainEqual({
+      layer: 'reconciliation',
+      verb: 'remove',
+      args: { id: EIDOVERSE_META_ENTITY_ID },
+    });
+  });
+});
+
+// Values a live install genuinely holds — invented here, never observed. The
+// append-only world log is replicated to a renderer PortOS does not run, so a
+// record title, a machine name, an address, or a repository path reaching a
+// label is a privacy incident, not a cosmetic bug.
+const PRIVATE_FIXTURE_VALUES = [
+  'Acme Payroll Sync',
+  'Ship the Q3 invoice run',
+  'host-XXXX.example.ts.net',
+  '192.0.2.10',
+  '/Users/example-user/github.com/acme/private-notes',
+  'alice@example.com',
+];
+
+const privateSource = () => ({
+  ...emptySources(),
+  apps: [{
+    id: 'app-acme-payroll',
+    label: 'Acme Payroll Sync',
+    status: 'online',
+    installPath: '/Users/example-user/github.com/acme/private-notes',
+    host: 'host-XXXX.example.ts.net',
+    restarts: 2,
+  }],
+  tasks: [{
+    id: 'task-invoice',
+    title: 'Ship the Q3 invoice run',
+    prompt: 'Ship the Q3 invoice run',
+    status: 'running',
+  }],
+  peers: [{ id: 'peer-lab', label: 'host-XXXX.example.ts.net', address: '192.0.2.10', status: 'online' }],
+  memory: [{ id: 'memory-inbox', owner: 'alice@example.com', status: 'active', entries: 12 }],
+  health: { id: 'overview', status: 'healthy' },
+});
+
+const labelOps = (plan) => plan.operations.filter(({ verb, args }) => verb === 'comp' && args.type === 'label');
+
+const labelFor = (plan, id) => labelOps(plan).find(({ args }) => args.id === id)?.args.data;
+
+describe('Eidoverse projection labels', () => {
+  it('names every owned landmark, walkway, world identity and live indicator by what it represents', () => {
+    const plan = buildProjectionPlan({ source: appSource(), meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' } });
+    const district = labelFor(plan, 'portos-design-v2-infra-apps');
+    const pathNode = labelOps(plan).find(({ args }) => args.id.startsWith('portos-design-v2-path-'))?.args.data;
+    const worldMeta = labelFor(plan, EIDOVERSE_META_ENTITY_ID);
+    const signal = labelFor(plan, signalSpawn(plan, 'app').args.id);
+
+    // Landmarks read from across a district; the walkway markers that lead to
+    // them are numerous, so only landmarks and the world identity float.
+    expect(district).toMatchObject({ name: 'App Arcade', visibility: 'always' });
+    expect(district.description).toContain('console arcade');
+    expect(district.description).toContain('apps');
+    expect(pathNode).toBeUndefined();
+    expect(worldMeta).toMatchObject({ name: 'Example Garden', visibility: 'always' });
+    expect(signal).toMatchObject({ visibility: 'nearby' });
+    expect(signal.name).toMatch(/^Managed app [0-9a-f]{6}$/);
+    expect(signal.description).toContain('App Arcade');
+    expect(signal.description).toContain('an app this install manages');
+
+    // Every managed model carries one, and none of them describes the
+    // decorative asset that happens to stand in for it.
+    const managedSpawns = plan.operations
+      .filter(({ verb, args }) => verb === 'spawn' && args.id.startsWith('portos-design-v2-') && !args.id.includes('-city-'))
+      .map(({ args }) => args.id);
+    expect(labelOps(plan).map(({ args }) => args.id).sort()).toEqual(managedSpawns.sort());
+    expect(labelOps(plan).every(({ args }) => !/\.glb|assets\/models/.test(JSON.stringify(args.data)))).toBe(true);
+    // A visibility the renderer does not know is a label it silently drops.
+    expect(labelOps(plan).every(({ args }) => EIDOVERSE_LABEL_VISIBILITIES.includes(args.data.visibility))).toBe(true);
+  });
+
+  it('keeps record contents, machine identity, addresses and paths out of every projected payload', () => {
+    const plan = buildProjectionPlan({
+      source: privateSource(),
+      meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' },
+    });
+    const serialized = JSON.stringify(plan.operations);
+
+    for (const value of PRIVATE_FIXTURE_VALUES) {
+      expect(serialized).not.toContain(value);
+    }
+    // The labels are still useful: they name the category and its district.
+    expect(labelOps(plan).length).toBeGreaterThan(0);
+    expect(labelOps(plan).map(({ args }) => args.data.name)).toEqual(
+      expect.arrayContaining([expect.stringContaining('Federated peer')]),
+    );
+  });
+
+  it('emits no label verbs for an unchanged world and never duplicates a label', () => {
+    const first = buildProjectionPlan({ source: appSource(), meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' } });
+    const currentState = snapshotFromPlan(first, { foldModelDefaults: true });
+    const second = buildProjectionPlan({
+      source: appSource(),
+      meta: { title: 'Example Garden', hostId: 'hst_0123456789ab' },
+      currentState,
+    });
+
+    expect(labelOps(second)).toEqual([]);
+    const ids = labelOps(first).map(({ args }) => args.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('labels only PortOS-owned entities and drops the label when the world reset sweeps them', () => {
+    const first = buildProjectionPlan({ source: appSource() });
+    const currentState = snapshotFromPlan(first, { foldModelDefaults: true });
+    currentState.entities['example-manual-model'] = {
+      id: 'example-manual-model',
+      lib: 'store/example-manual-model',
+      pos: [1, 0, 1],
+      comp: { label: { name: 'Authored by a visitor', visibility: 'always' } },
+    };
+    const next = buildProjectionPlan({ source: appSource(), currentState });
+
+    expect(next.operations.some(({ args }) => args?.id === 'example-manual-model')).toBe(false);
+    // A managed entity is removed whole, so its label leaves with it — PortOS
+    // never issues a bare label delete against someone else's entity.
+    expect(first.operations.filter(({ verb }) => verb === 'remove')).toEqual([]);
+  });
+
+  it('explains why a retained indicator is stale once its source goes away', () => {
+    const created = buildProjectionPlan({ source: appSource(), currentState: currentEnvironment() });
+    const appSpawn = signalSpawn(created, 'app');
+    const entityId = appSpawn.args.id;
+    const currentComponent = created.operations.find((operation) => (
+      operation.verb === 'comp' && operation.args.id === entityId && operation.args.type === 'portos'
+    )).args.data;
+    const unavailable = buildProjectionPlan({
+      source: { ...emptySources(), apps: null },
+      currentState: {
+        ...currentEnvironment(),
+        entities: {
+          [entityId]: {
+            ...appSpawn.args,
+            comp: { portos: currentComponent, label: labelFor(created, entityId) },
+          },
+        },
+      },
+    });
+
+    expect(labelFor(unavailable, entityId).description).toContain('data is stale');
+  });
+});
+
+
+describe('Eidoverse saved object legend and aliases', () => {
+  it('keeps alias, asset provenance, stale retention and removal in the projection contract', () => {
+    const source = appSource();
+    const path = 'store/example-display-model';
+    const recipe = { ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE, assets: { app: path } };
+    const assetResolutions = { app: { path, strategy: 'user-override', userOverride: true } };
+    const first = buildProjectionPlan({ source, recipe, assetResolutions });
+    const object = first.summary.objects.find(({ kind }) => kind === 'app');
+    expect(object).toMatchObject({
+      name: expect.stringMatching(/^Managed app /), visibility: 'nearby', route: '/apps',
+      asset: { slot: 'app', path, reason: 'user-override' },
+    });
+    const labelAliases = { [object.resourceKey]: 'Example observatory' };
+    const renamed = buildProjectionPlan({
+      source, recipe, assetResolutions, labelAliases, currentState: snapshotFromPlan(first),
+    });
+    expect(renamed.operations.filter(({ args }) => args.type === 'label')).toEqual([
+      expect.objectContaining({ args: expect.objectContaining({ id: object.id, data: expect.objectContaining({ name: 'Example observatory' }) }) }),
+    ]);
+    const renamedState = snapshotFromPlan(first);
+    renamedState.entities[object.id].comp.label.name = 'Example observatory';
+    const noop = buildProjectionPlan({ source, recipe, assetResolutions, labelAliases, currentState: renamedState });
+    expect(noop.operations).toEqual([]);
+    expect(noop.summary.objects).toEqual(renamed.summary.objects);
+    const stale = buildProjectionPlan({ source: { ...source, apps: null }, recipe, assetResolutions, labelAliases, currentState: renamedState });
+    expect(stale.summary.objects.find(({ id }) => id === object.id)).toMatchObject({
+      name: 'Example observatory', description: expect.stringContaining('data is stale'),
+      asset: { path, reason: 'user-override' },
+    });
+    const mismatchedLock = buildProjectionPlan({ source: { ...source, apps: null }, recipe,
+      assetResolutions: { app: { path: 'store/example-replacement', strategy: 'preferred' } }, currentState: renamedState });
+    expect(mismatchedLock.summary.objects.find(({ id }) => id === object.id).asset.reason).toBe('unresolved');
+    const cleared = buildProjectionPlan({ source, recipe, assetResolutions, labelAliases: {}, currentState: renamedState });
+    expect(cleared.summary.objects.find(({ id }) => id === object.id).name).toBe(object.name);
+    const removed = buildProjectionPlan({ source: { ...source, apps: [] }, recipe, labelAliases, currentState: renamedState });
+    expect(removed.summary.objects.some(({ id }) => id === object.id)).toBe(false);
+    expect(removed.operations).toContainEqual({ layer: 'reconciliation', verb: 'remove', args: { id: object.id } });
+  });
+});
+
+it('gives every available destination a functional chamber outside the live signal cap and removes departed pods', () => {
+  const source = { ...emptySources(), peers: Array.from({ length: 6 }, (_, index) => ({ id: `peer-example-${index}`, status: 'online', travelAvailable: true })) };
+  const recipe = { ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE, maxEntities: 1, limits: { ...DEFAULT_EIDOVERSE_PROJECTION_RECIPE.limits, peers: 1 } };
+  const plan = buildProjectionPlan({ source, recipe });
+  const pods = plan.summary.objects.filter((object) => object.travelPeerId);
+  expect(pods).toHaveLength(6);
+  expect(plan.summary.liveEntityCount).toBeLessThanOrEqual(1);
+  const currentState = snapshotFromPlan(plan);
+  for (const pod of pods) {
+    const entity = currentState.entities[pod.id];
+    expect(pod).toMatchObject({ route: '/eidoverse', name: expect.stringContaining('Teleport pod') });
+    expect(entity.comp.portos).toMatchObject({ action: 'visit', travelPeerId: pod.travelPeerId });
+    expect(entity.comp.structure.levels[0].tiles).toHaveLength(4);
+    expect(entity.comp.motion).toBeFalsy();
+  }
+  const departed = buildProjectionPlan({ source: { ...source, peers: [] }, recipe, currentState });
+  for (const pod of pods) expect(departed.operations).toContainEqual({ layer: 'reconciliation', verb: 'remove', args: { id: pod.id } });
 });

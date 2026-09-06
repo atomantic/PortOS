@@ -30,12 +30,12 @@
  */
 
 import { spawn } from '../../lib/childProcess.js';
-import { copyFile, readFile, readdir, stat, writeFile } from 'fs/promises';
+import { readFile, readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
-import { atomicWrite, ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { atomicWrite, copyFileGuarded, ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -413,9 +413,9 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
         return finalizeError(job, jobId, proc, noImageReason(stdoutTail));
       }
       if (harvested.path) {
-        await copyFile(harvested.path, outputPath);
+        await copyFileGuarded(harvested.path, outputPath);
       } else {
-        await writeFile(outputPath, harvested.buffer);
+        await atomicWrite(outputPath, harvested.buffer);
       }
       // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but
       // contentless canvas never becomes a gallery record.

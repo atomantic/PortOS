@@ -39,6 +39,8 @@ vi.mock('../lib/fileUtils.js', () => ({
   resolveScreenshot: mocks.resolveScreenshot,
   sanitizeFilename: mocks.sanitizeFilename,
   saveImageUpload: mocks.saveImageUpload,
+  unlinkGuarded: mocks.unlink,
+  writeFileGuarded: mocks.writeFile,
 }));
 
 vi.mock('fs/promises', async (importOriginal) => ({

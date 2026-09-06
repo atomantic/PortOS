@@ -16,6 +16,10 @@ import {
   validateRequest, videoModelTermsSchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
+import {
+  REACTOR_MAX_CLIP_ID_LENGTH, REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS,
+  REACTOR_ASPECTS,
+} from '../lib/reactorVideoClip.js';
 import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
 import {
@@ -43,6 +47,9 @@ import {
 } from '../services/videoGen/local.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
+import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
+import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
+import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELDS } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
@@ -72,7 +79,7 @@ import {
   streamVideoRuntimeInstall,
 } from '../services/videoGen/runtimeInstaller.js';
 import { detectSystemCapabilities, withHardwareCompatibility } from '../lib/systemCapabilities.js';
-import { isDisplaySleepEnabled } from '../services/displayPower.js';
+import { isDisplaySleepEnabled } from '../services/videoGen/displayPower.js';
 
 const router = Router();
 
@@ -207,6 +214,7 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.FPS]: optionalNum(1, 60, 'fps'),
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.STEPS]: optionalNum(1, 200, 'steps'),
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.GUIDANCE_SCALE]: optionalNum(0, 30, 'guidanceScale'),
+  [VIDEO_GEN_LOCAL_ONLY_FIELDS.BATCH_SIZE]: optionalInt(1, MAX_VIDEO_BATCH_SIZE, 'batchSize'),
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.SEED]: optionalNum(0, Number.MAX_SAFE_INTEGER, 'seed'),
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.IMAGE_STRENGTH]: optionalNum(0, 1, 'imageStrength'),
   // What the conditioning image PROMISES (#4874) — 'anchor' (default) pins it as
@@ -243,18 +251,51 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
 });
 
 const generateBodySchema = z.object({
-  // Render backend: the local runtimes (default) or the Grok Build CLI's
-  // image-first image_to_video flow (#2859 phase 2). Grok ignores the
-  // local-only knobs below; it reads prompt/negativePrompt, width/height
-  // (mapped to an aspect ratio), sourceImageFile/sourceImage, and
-  // grokDuration.
-  backend: z.enum(['local', 'grok']).optional(),
+  // Render backend: the local runtimes (default), the Grok Build CLI's
+  // image-first image_to_video flow (#2859 phase 2), fal.ai's queue REST API
+  // (#6213), or reactor.inc's fast-h3 API (#6214). Grok, fal, and reactor all
+  // ignore the local-only knobs below; they read prompt/negativePrompt,
+  // width/height (mapped to an aspect ratio), sourceImageFile/sourceImage,
+  // and their own duration field.
+  backend: z.enum(['local', 'grok', 'fal', 'reactor']).optional(),
   // Grok image_to_video clip length in seconds — the shared schema (see
   // lib/grokVideoClip.js for which lengths grok actually delivers). Multipart
   // bodies arrive as strings, so coerce first.
   grokDuration: z.preprocess(
     (v) => (v == null || v === '' ? undefined : Number(v)),
     grokVideoDurationSchema.optional(),
+  ),
+  // fal.ai model id (e.g. 'fal-ai/minimax/hailuo-02/standard/text-to-video')
+  // and clip duration in seconds — loosely validated since fal's own model
+  // catalog, not PortOS, owns the set of valid ids/durations per model.
+  falModelId: z.string().min(1).max(200).optional(),
+  falDuration: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : Number(v)),
+    optionalNum(1, 60, 'falDuration'),
+  ),
+  // reactor.inc fast-h3 (#6214): the clip id to chain from
+  // (continue_from_clip_id — frame-accurate continuation, unlike fal/grok
+  // which start a fresh render each time) and clip length in seconds. The
+  // bounds come from lib/reactorVideoClip.js rather than a hand-copied 1-60,
+  // which accepted lengths the fast-h3 API rejects outright.
+  reactorClipId: z.string().min(1).max(REACTOR_MAX_CLIP_ID_LENGTH).optional(),
+  reactorSeconds: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : Number(v)),
+    optionalNum(REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, 'reactorSeconds'),
+  ),
+  reactorSeed: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : Number(v)),
+    optionalNum(0, 2 ** 32 - 1, 'reactorSeed'),
+  ),
+  // fast-h3 session canvas — a `set_canvas` aspect, NOT width/height: every
+  // canvas holds a 768px short edge so the aspect is the whole choice. Omitted
+  // means "derive it from the starting frame" (the picker's Auto entry), which
+  // is what keeps a portrait image off the 1344x768 canvas every render used to
+  // open with. Multipart bodies arrive as strings, so the empty-string sentinel
+  // has to read as omitted rather than as an invalid enum value.
+  reactorAspect: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.enum(REACTOR_ASPECTS).optional(),
   ),
   prompt: z.string().min(1).max(8000),
   negativePrompt: z.string().max(8000).optional(),
@@ -264,6 +305,12 @@ const generateBodySchema = z.object({
   ...LOCAL_ONLY_VIDEO_PARAMS,
   audioStartSec: optionalNum(0, 36000, 'audioStartSec'),
   disableAudio: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
+  // Per-render override of the install-wide display-sleep default
+  // (settings.videoGen.displaySleep, opt-in). Absent means "use the install
+  // default" — the local-only branch of submitVideoGenJob only forwards this
+  // when the client actually sent a choice, so an omitted field can never
+  // clobber the settings-level default with a stale false.
+  displaySleep: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
   sourceImageFile: z.string().max(512).optional(),
   // Gallery-pick filename for the FFLF end-frame. The end-frame can also
   // arrive as a multipart `lastImage` upload (handled below) — when both
@@ -455,12 +502,20 @@ router.get('/status', asyncHandler(async (_req, res) => {
     // reject the whole /status response.
     runtime: await resolveRuntimeFingerprint().catch(() => null),
     // Will a render on this install actually sleep the display? macOS-only, and
-    // the user can opt out (settings.videoGen.displaySleep). Paired with each
+    // OFF unless the user opted in (settings.videoGen.displaySleep). Paired with each
     // model's `sleepsDisplayDuringRender`, this is what lets the UI warn BEFORE
     // the screen goes dark — a user who is not warned reads it as a crash and
     // wakes the display, re-introducing the exact GPU-watchdog contention the
     // sleep is there to avoid.
     displaySleepOnRender: isDisplaySleepEnabled(s.videoGen),
+    // Backend usability for the two metered-API video providers (#6213/#6214).
+    // Computed server-side through the SAME resolver `isVideoModeUsable` uses
+    // to gate an actual render, so a key set only via FAL_KEY/REACTOR_API_KEY
+    // env var (no Settings-form entry) still surfaces the backend switcher —
+    // the client can't see env vars, and re-deriving "has a key" from the
+    // settings object alone missed that case entirely.
+    falEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.FAL),
+    reactorEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.REACTOR),
   });
 }));
 
@@ -495,6 +550,18 @@ router.post('/model-terms', asyncHandler(async (req, res) => {
     return { ...current, videoGen: { ...(current.videoGen || {}), acceptedModelTerms: updated } };
   });
   res.json({ accepted: acceptedVideoModelTerms(next) });
+}));
+
+// Mints a short-lived reactor.inc session JWT scoped to `reactor/fast-h3`
+// (#6214) — the raw REACTOR_API_KEY never reaches the client. Load-bearing
+// security pattern: never cached, and the scope/session bound is set by
+// reactor.js#mintReactorToken, not by the caller.
+router.get('/reactor/token', asyncHandler(async (_req, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  const settings = await getSettings();
+  const apiKey = resolveReactorApiKey(settings);
+  const { jwt, expiresAt } = await mintReactorToken(apiKey);
+  res.json({ jwt, expires_at: expiresAt });
 }));
 
 // `installed` here means "fully ready to render" — both the venv binary
@@ -847,7 +914,7 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   'prompt', 'negativePrompt', 'modelId',
   'width', 'height', 'numFrames', 'fps',
   'steps', 'guidanceScale', 'seed',
-  'tiling', 'disableAudio', 'mode', 'chunks', 'chunkPrompts', 'contextFrames', 'imageStrength',
+  'tiling', 'disableAudio', 'displaySleep', 'mode', 'chunks', 'chunkPrompts', 'contextFrames', 'imageStrength',
   // Plain enum, no path — safe to echo so a reloading page restores the promise the
   // in-flight render is actually keeping.
   'i2vReferenceMode',
@@ -866,6 +933,11 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // 'grok' discriminator for them) and the clip duration — both plain
   // values, safe to echo for the reloading page's form restore.
   'videoMode', 'duration',
+  // reactor.inc jobs (#6214): the clip to chain from, the clip length, and the
+  // fast-h3 session canvas — all plain scalars (no filesystem path), safe to
+  // echo for the reloading page's form restore. `seed` above already covers
+  // reactor's seed field.
+  'continueFromClipId', 'seconds', 'aspect',
   // loras are { filename, scale } basenames (no server filesystem paths), so
   // they're safe to echo back for the resuming picker to repopulate.
   'loras',

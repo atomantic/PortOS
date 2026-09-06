@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
-import { formatDateTime, formatTimeOfDaySeconds } from '../../../utils/formatters';
+import { formatDateTime, formatTimeOfDaySeconds, timeAgo } from '../../../utils/formatters';
 import Banner from '../../ui/Banner';
 import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults';
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
@@ -40,7 +40,7 @@ function mergeOnDemandRequest(schedule, request) {
 // passed down — same convention as TasksTab/AgentsTab — so this tab's provider/
 // model pickers stay live without standing up a second independent poll of the
 // same data.
-export default function ScheduleTab({ apps, providers, providersLoaded, activeProviderId }) {
+export default function ScheduleTab({ apps, providers, providersLoaded, activeProviderId, daemonRunning }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -101,7 +101,12 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
     if (!result?.success) return null;
 
     const appName = appId ? apps?.find(app => app.id === appId)?.name || 'selected app' : null;
-    toast.success(`Queued ${taskType} request${appName ? ` for ${appName}` : ''} — it will appear in Tasks when evaluation begins`);
+    const queuedMsg = `Queued ${taskType} request${appName ? ` for ${appName}` : ''}`;
+    if (daemonRunning === false) {
+      toast.error(`${queuedMsg} — but the CoS daemon is stopped, so it will not run until you start it`);
+    } else {
+      toast.success(`${queuedMsg} — it will appear in Tasks when evaluation begins`);
+    }
 
     // The POST returns the persisted request. Paint it immediately instead of
     // waiting for a second round trip; the evaluator may drain it into Tasks
@@ -112,7 +117,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
     }
     fetchSchedule();
     return result.request || true;
-  }, [apps, fetchSchedule]);
+  }, [apps, fetchSchedule, daemonRunning]);
 
   const handleTriggerAppImprovement = handleTriggerTask;
 
@@ -170,11 +175,20 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
       )}
 
       {schedule.onDemandRequests?.length > 0 && (
-        <Banner tone="info" size="lg" title="Pending On-Demand Tasks">
+        <Banner
+          tone={daemonRunning === false ? 'warning' : 'info'}
+          size="lg"
+          title="Pending On-Demand Tasks"
+        >
+          {daemonRunning === false && (
+            <div className="text-sm mb-2">
+              The CoS daemon is stopped, so these requests will not run until it's started — use the Start button above.
+            </div>
+          )}
           <div className="space-y-1 mt-2">
             {schedule.onDemandRequests.map(req => (
               <div key={req.id} className="text-sm text-gray-300">
-                {req.taskType}{req.appId ? ` (${apps?.find(app => app.id === req.appId)?.name || req.appId})` : ''} - requested {formatTimeOfDaySeconds(req.requestedAt)}
+                {req.taskType}{req.appId ? ` (${apps?.find(app => app.id === req.appId)?.name || req.appId})` : ''} - requested {formatTimeOfDaySeconds(req.requestedAt)} ({timeAgo(req.requestedAt)})
               </div>
             ))}
           </div>

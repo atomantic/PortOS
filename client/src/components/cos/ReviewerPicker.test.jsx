@@ -668,4 +668,129 @@ describe('ReviewerPicker', () => {
       expect(details).toHaveAttribute('open');
     });
   });
+
+  describe('defaults-aware emit (#6208)', () => {
+    const DEFAULTS = {
+      reviewers: ['copilot'],
+      usernames: [],
+      optionalReviewers: [],
+      reviewerMaxRounds: {},
+      reviewerModels: {},
+      reviewerEfforts: {},
+      stopMode: 'all',
+      reviewerApplies: false,
+    };
+
+    it('emits the full snapshot when no defaults are provided', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(<ReviewerPicker reviewers={['codex', 'antigravity']} onChange={onChange} />);
+      await user.click(screen.getByLabelText('Remove Codex'));
+      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+        reviewers: ['antigravity'],
+        usernames: [],
+        optionalReviewers: [],
+        reviewerMaxRounds: {},
+        reviewerModels: {},
+        reviewerEfforts: {},
+      }));
+    });
+
+    it('omits every key that still equals the defaults when only the stop-mode changes', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ReviewerPicker
+          reviewers={['codex', 'antigravity']}
+          stopMode="all"
+          defaults={{ ...DEFAULTS, reviewers: ['codex', 'antigravity'] }}
+          onChange={onChange}
+        />
+      );
+      await user.selectOptions(screen.getByLabelText('Stop mode:'), 'on-clean');
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith({ stopMode: 'on-clean' });
+    });
+
+    it('emits only reviewers when one is removed from a seeded list', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ReviewerPicker
+          reviewers={['codex', 'antigravity']}
+          defaults={{ ...DEFAULTS, reviewers: ['codex', 'antigravity'] }}
+          onChange={onChange}
+        />
+      );
+      await user.click(screen.getByLabelText('Remove Codex'));
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith({ reviewers: ['antigravity'] });
+    });
+
+    it('emits an explicitly-emptied map that clears a default pin (absent ≠ empty)', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ReviewerPicker
+          reviewers={['codex']}
+          optionalReviewers={['codex']}
+          defaults={{ ...DEFAULTS, reviewers: ['codex'], optionalReviewers: ['codex'] }}
+          onChange={onChange}
+        />
+      );
+      await user.click(screen.getByLabelText('Make Codex blocking'));
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith({ optionalReviewers: [] });
+    });
+
+    it('omits a pin map that already matches the defaults when an unrelated control changes', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ReviewerPicker
+          reviewers={['codex']}
+          reviewerModels={{ codex: 'gpt-5' }}
+          defaults={{ ...DEFAULTS, reviewers: ['codex'], reviewerModels: { codex: 'gpt-5' } }}
+          onChange={onChange}
+        />
+      );
+      await user.click(screen.getByLabelText('Make Codex non-blocking'));
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith({ optionalReviewers: ['codex'] });
+    });
+
+    it('compares membership lists order-insensitively (reviewers stay order-sensitive)', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ReviewerPicker
+          reviewers={['codex', 'antigravity']}
+          optionalReviewers={['antigravity', 'codex']}
+          defaults={{ ...DEFAULTS, reviewers: ['codex', 'antigravity'], optionalReviewers: ['codex', 'antigravity'] }}
+          onChange={onChange}
+        />
+      );
+      // Reordering the reviewers IS a change (run order); the same-membership
+      // optional set in another order is not — only reviewers is emitted.
+      await user.click(screen.getByLabelText('Move Antigravity earlier'));
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith({ reviewers: ['antigravity', 'codex'] });
+    });
+
+    it('compares pin-map keys case-insensitively', async () => {
+      const onChange = vi.fn();
+      const user = userEvent.setup();
+      render(
+        <ReviewerPicker
+          reviewers={['codex']}
+          reviewerModels={{ Codex: 'gpt-5' }}
+          defaults={{ ...DEFAULTS, reviewers: ['codex'], reviewerModels: { codex: 'gpt-5' } }}
+          onChange={onChange}
+        />
+      );
+      await user.click(screen.getByLabelText('Make Codex non-blocking'));
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith({ optionalReviewers: ['codex'] });
+    });
+  });
 });

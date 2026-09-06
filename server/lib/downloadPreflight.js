@@ -542,8 +542,7 @@ const IDLE_STALL_TIMEOUT_MS = 20 * 60 * 1000;
  * migrated download path stayed unprotected until somebody remembered to add
  * that clause. Registering here removes that step for every path that claims a
  * slot; what such a path must still do is BE LOADED, which
- * `orphanedPartialGc.test.js` pins. (A path that claims no slot — `loras.js`
- * today — is still unprotected; issue #6190 migrates it.)
+ * `orphanedPartialGc.test.js` pins.
  *
  * Call `createDownloadSlot` at MODULE scope only: this Set is add-only, so a
  * per-request slot would grow it for the process's lifetime and slow

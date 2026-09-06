@@ -190,6 +190,50 @@ describe('blocksRouting', () => {
   });
 
   it('pins the routing-blocking set so widening it is a deliberate edit', () => {
-    expect([...ROUTING_BLOCKING_CODES]).toEqual(['runtime']);
+    // Every member is an UNARGUABLE negative — no credential, env var, or
+    // config file makes it go away. `codexOss` (the probed binary does not
+    // accept --oss) and `codexLocalRuntime` (the record is marked with a local
+    // runtime codex cannot serve) qualify for the same reason the missing
+    // binary does; the credential findings still do not.
+    expect([...ROUTING_BLOCKING_CODES]).toEqual(['runtime', 'codexOss', 'codexLocalRuntime']);
+  });
+});
+
+/**
+ * The routing advisory (#6304). What this uniquely catches: the advisory
+ * leaking into `missing`, where it would bucket a perfectly runnable Codex card
+ * as NEEDS SETUP and (via the strict readiness map) block authoritative task
+ * choices — the exact opposite of "report, do not block".
+ */
+describe('codex routing advisory', () => {
+  const codex = { id: 'codex', type: 'cli', command: 'codex' };
+  const overridden = { overridden: true, keys: ['openai_base_url'], baseUrl: 'http://127.0.0.1:9999/v1' };
+
+  it('reports the override without adding a missing prerequisite', () => {
+    const result = providerPrerequisites(codex, { codexRouting: overridden });
+    expect(result.met).toBe(true);
+    expect(result.missing).toEqual([]);
+    expect(result.advisories).toEqual([{
+      code: 'codexRoutingOverridden',
+      label: expect.stringContaining('config.toml'),
+      keys: ['openai_base_url'],
+      baseUrl: 'http://127.0.0.1:9999/v1',
+    }]);
+  });
+
+  it('stays silent for a not-determined snapshot, a clean config, and a non-codex provider', () => {
+    expect(providerPrerequisites(codex, { codexRouting: null }).advisories).toEqual([]);
+    expect(providerPrerequisites(codex, {
+      codexRouting: { overridden: false, keys: [], baseUrl: null },
+    }).advisories).toEqual([]);
+    expect(providerPrerequisites(
+      { id: 'claude-code', type: 'cli', command: 'claude' },
+      { codexRouting: overridden },
+    ).advisories).toEqual([]);
+  });
+
+  it('stays silent once the provider is pinned past the user config', () => {
+    expect(providerPrerequisites({ ...codex, ignoreUserConfig: true }, { codexRouting: overridden }).advisories)
+      .toEqual([]);
   });
 });

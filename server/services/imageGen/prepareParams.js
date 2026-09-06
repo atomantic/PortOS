@@ -22,11 +22,10 @@
  * middleware translates it to a 4xx response.
  */
 
-import { copyFile, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { PATHS, ensureDir, resolveGalleryImage } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, resolveGalleryImage, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { getSettings } from '../settings.js';
 import { IMAGE_GEN_MODE, resolveImageCleaners } from './index.js';
 import { editIncapableModeError, isEditCapableMode, modeLabel } from './modes.js';
@@ -123,7 +122,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   const cleanupReqFilesTemp = () => {
     if (!files) return;
     for (const f of Object.values(files)) {
-      if (f?.path) unlink(f.path).catch(() => {});
+      if (f?.path) unlinkGuarded(f.path).catch(() => {});
     }
   };
 
@@ -137,7 +136,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
   const stagedRefPaths = [];
   const cleanupStagedAndTemp = () => {
     cleanupReqFilesTemp();
-    for (const p of stagedRefPaths) unlink(p).catch(() => {});
+    for (const p of stagedRefPaths) unlinkGuarded(p).catch(() => {});
   };
 
   // Resolve the effective backend BEFORE staging reference uploads — an
@@ -263,7 +262,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
     // on every i2i/edit render. The runner re-anchors init paths through
     // resolveImageInputPath, which accepts the refs dir.
     initImagePath = join(PATHS.imageRefs, initFilename);
-    await copyFile(initUpload.path, initImagePath);
+    await copyFileGuarded(initUpload.path, initImagePath);
     stagedRefPaths.push(initImagePath);
     uploadedTempPaths.push(initUpload.path);
   } else if (data.initImageFile) {
@@ -300,7 +299,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
     const ext = MIME_TO_EXT[(upload.mimetype || '').toLowerCase()] || '.png';
     const refFilename = `ref-${randomUUID()}${ext}`;
     const refPath = join(PATHS.imageRefs, refFilename);
-    await copyFile(upload.path, refPath);
+    await copyFileGuarded(upload.path, refPath);
     stagedRefPaths.push(refPath);
     uploadedTempPaths.push(upload.path);
     referenceImagePaths.push(refPath);

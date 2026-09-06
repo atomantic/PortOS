@@ -29,6 +29,7 @@ import {
   listVideoModels,
   resolveVideoModel,
 } from '../videoGen/local.js';
+import { validateReactorRequest } from '../videoGen/reactor.js';
 import { loadHistory as loadVideoHistory } from '../videoGen/history.js';
 import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode } from '../videoGen/modes.js';
 import {
@@ -63,7 +64,7 @@ const ACTIVE_ASSET_STATUSES = new Set(['preparing', 'queued', 'running']);
 const EFFECTIVE_PARAMETER_KEYS = Object.freeze([
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidance', 'guidanceScale',
   'seed', 'imageStrength', 'quantize', 'effort', 'mode', 'videoMode',
-  'aspectRatio', 'disableAudio', 'tiling',
+  'aspectRatio', 'disableAudio', 'tiling', 'seconds',
 ]);
 
 const nowIso = () => new Date().toISOString();
@@ -469,6 +470,15 @@ function resolveVideoBackend(settings, render, recordedConditioning = null) {
       code: 'GROK_VIDEO_DISABLED',
     });
   }
+  if (requested === VIDEO_GEN_MODE.FAL && mode !== VIDEO_GEN_MODE.FAL) {
+    throw new ServerError('No fal.ai API key configured — set it in Settings → Video Gen first', {
+      status: 400,
+      code: 'FAL_VIDEO_DISABLED',
+    });
+  }
+  if (requested === VIDEO_GEN_MODE.REACTOR && mode !== VIDEO_GEN_MODE.REACTOR) {
+    throw new ServerError('Reactor video is not configured — set an API key in Settings → Video Gen.', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
+  }
   return mode;
 }
 
@@ -606,7 +616,11 @@ async function prepareVideoJob(run, asset) {
     backend,
     model: backend === VIDEO_GEN_MODE.LOCAL
       ? model
-      : { id: 'grok-video', supportedModes: ['image'] },
+      : backend === VIDEO_GEN_MODE.FAL
+        ? { id: 'fal-video', supportedModes: ['text', 'image'] }
+        : backend === VIDEO_GEN_MODE.REACTOR
+          ? { id: 'reactor-video', supportedModes: ['text', 'image'] }
+          : { id: 'grok-video', supportedModes: ['image'] },
   });
   const requestedSourceImagePath = imageInputForNode(run, asset);
   const conditioned = await conditionRequest(run, asset, 'video', capability, requestedSourceImagePath);
@@ -647,6 +661,46 @@ async function prepareVideoJob(run, asset) {
         sourceImagePath,
         mode: videoMode,
         ...replayParameters,
+        visualConditioning: conditioned?.visualConditioning || null,
+        fableLoom: productionTag(run, asset),
+      },
+    };
+  }
+
+  if (backend === VIDEO_GEN_MODE.REACTOR) {
+    const loom = await loadRunLoom(run);
+    const node = findEpisode(loom, run.episodeId)?.nodes.find((candidate) => candidate.id === asset.nodeId);
+    // The compiler owns prompt compaction; never truncate dialogue at this boundary.
+    const request = validateReactorRequest({
+      prompt: conditioned?.prompt || asset.prompt,
+      seconds: replayParameters.seconds ?? node?.shot?.durationSeconds ?? 6,
+      seed: replayParameters.seed,
+    });
+    return {
+      kind: 'video', provider: backend, modelId: 'reactor:fast-h3',
+      modelRevision: capability.modelRevision || null,
+      params: {
+        mode: backend, videoMode: sourceImagePath ? 'image' : 'text',
+        ...request, sourceImagePath,
+        visualConditioning: conditioned?.visualConditioning || null,
+        fableLoom: productionTag(run, asset),
+      },
+    };
+  }
+
+  if (backend === VIDEO_GEN_MODE.FAL) {
+    return {
+      kind: 'video',
+      provider: backend,
+      modelId: recordedConditioning?.capability?.modelId || null,
+      modelRevision: capability.modelRevision || null,
+      params: {
+        mode: VIDEO_GEN_MODE.FAL,
+        videoMode: sourceImagePath ? 'image' : 'text',
+        prompt: conditioned?.prompt || asset.prompt,
+        negativePrompt: conditioned?.negativePrompt || '',
+        ...replayParameters,
+        sourceImagePath,
         visualConditioning: conditioned?.visualConditioning || null,
         fableLoom: productionTag(run, asset),
       },

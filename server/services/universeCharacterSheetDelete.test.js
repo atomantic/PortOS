@@ -37,6 +37,8 @@ vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { imageRefs: '/mock/data/image-refs', images: '/mock/data/images', data: '/mock/data' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   shortId: (id, n = 8) => (id == null ? '' : String(id).slice(0, n)),
+  unlinkGuarded: (...args) => unlinkMock(...args),
+  copyFileGuarded: vi.fn(),
   // Real basename-only validator behavior the helper relies on as defense-in-depth.
   assertSafeFilename: vi.fn((filename) => {
     if (!filename || typeof filename !== 'string') {

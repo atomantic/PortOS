@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   readPreflights: vi.fn(),
 }));
 
+vi.mock('./persistentMindOrientation.js', () => ({ readPersistentMindOrientation: vi.fn(async () => ({ status: 'unknown' })) }));
+
 vi.mock('./apps.js', () => ({ getActiveApps: mocks.getActiveApps }));
 vi.mock('./persistentMindRuntime.js', () => ({ inspectPersistentMindRuntime: mocks.inspectRuntime }));
 vi.mock('./persistentMindWorkspacePreflight.js', () => ({
@@ -56,6 +58,18 @@ beforeEach(() => {
 });
 
 describe('persistent mind visibility', () => {
+  it('counts busy agents from the root and passes actual mind state to runtime inspection', async () => {
+    const root = {
+      config: { maxConcurrentAgents: 2 },
+      agents: { one: { status: 'running' }, two: { status: 'starting' }, done: { status: 'completed' } },
+      persistentMind: { status: 'thinking', activeTurn: { id: 'turn-example' } },
+    };
+    const result = await readPersistentMindVisibility({ root, apps: [] });
+    expect(result.scheduler.capacity).toEqual({ active: 2, limit: 2, status: 'full' });
+    expect(mocks.inspectRuntime).toHaveBeenCalledWith(expect.objectContaining({ state: root.persistentMind }));
+    expect(result.health.database).toBe('unknown');
+  });
+
   it('projects shared runtime, actions, scheduler, health, and workspace facts', async () => {
     const visibility = await readPersistentMindVisibility({
       root: { config: { persistentMindCapabilities: { createTasks: true }, domainAutonomy: { cos: 'execute' } } },
@@ -82,7 +96,7 @@ describe('persistent mind visibility', () => {
         ]),
       },
       scheduler: { autonomy: 'execute', capacity: { status: 'unknown' } },
-      health: { system: 'available', provider: 'configured', database: 'available', forge: 'ready' },
+      health: { system: 'available', provider: 'configured', database: 'unknown', forge: 'ready' },
       workspaces: [{ appId: 'example-app', readiness: 'degraded', preflight: { repository: { reachable: true } } }],
       surfaces: expect.arrayContaining(['mind/visibility', 'workspace-preflight']),
     });
@@ -109,7 +123,8 @@ describe('persistent mind visibility', () => {
     const visibility = await readPersistentMindVisibility({ apps, now: 2_000 });
     expect(visibility.truncated).toBe(true);
     expect(visibility.characterBudget).toMatchObject({ maxChars: 20_000, truncated: true });
-    expect(JSON.stringify(visibility).length).toBeLessThanOrEqual(21_000);
+    expect(JSON.stringify(visibility).length).toBeLessThanOrEqual(20_000);
+    expect(buildPersistentMindVisibilityPrompt(visibility).length).toBeLessThanOrEqual(20_000);
   });
 
   // #5154 privacy contract. Every forbidden value below is fed in through a

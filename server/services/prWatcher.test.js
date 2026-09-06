@@ -216,7 +216,7 @@ describe('merge-only PR watcher', () => {
     expect(execGhMock).toHaveBeenCalledWith([
       'pr', 'view', '88', '--repo', 'github.com/o/r',
       '--json', 'state,mergeStateStatus,statusCheckRollup'
-    ]);
+    ], undefined, { backoffKey: 'github.com/o/r' });
   });
 
   it.each([
@@ -369,7 +369,11 @@ describe('getSelfLogin', () => {
     expect(execGhMock).toHaveBeenCalledTimes(1);
     // --hostname is required: without it `gh api` hits github.com regardless of
     // cwd and would resolve the wrong identity on an enterprise repo.
-    expect(execGhMock).toHaveBeenCalledWith(['api', 'user', '--hostname', 'github.com', '--jq', '.login']);
+    expect(execGhMock).toHaveBeenCalledWith(
+      ['api', 'user', '--hostname', 'github.com', '--jq', '.login'],
+      undefined,
+      { backoffKey: 'github.com' }
+    );
   });
 
   it('caches each host independently — a different login per host', async () => {
@@ -405,147 +409,70 @@ describe('getSelfLogin', () => {
   });
 });
 
-describe('checkPullRequests', () => {
-  const app = { id: 'app1', repoPath: '/repos/app1' };
+describe('checkPullRequests trusted maintenance boundary', () => {
+  const app = { id: 'app1', repoPath: '/repos/example', prWatcherState: { lastSeenPrNumber: 9 } };
+  const rawPr = (number, login, extra = {}) => ({ number, author: { login }, headRefOid: 'a'.repeat(40), updatedAt: '2026-08-01T00:00:00Z', ...extra });
+  function forge(prs, { permission = 'write', host = 'github.com' } = {}) {
+    getOriginInfoMock.mockResolvedValue({ host, fullName: 'example/project', hasOrigin: true });
+    execGhMock.mockImplementation(async args => {
+      if (args[0] === 'repo') return 'main';
+      if (args[0] === 'pr') return JSON.stringify(prs);
+      if (args.at(-1) === 'user') return JSON.stringify({ login: 'operator' });
+      const login = args.at(-1).split('/').at(-2);
+      return JSON.stringify({ user: { login }, permission: login === 'collaborator' ? permission : 'read' });
+    });
+  }
 
-  it('bails when the repo is not a github repo', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: false, isGithub: false, fullName: null });
-    const r = await checkPullRequests(app, { authorFilter: 'any' });
-    expect(r).toEqual({ ok: false, reason: 'not-a-github-repo' });
+  it('routes self and live write collaborators, and legacy any/others never widen maintenance', async () => {
+    forge([rawPr(10, 'operator'), rawPr(11, 'collaborator'), rawPr(12, 'external'), rawPr(13, null)]);
+    for (const authorFilter of ['any', 'others', 'trusted']) {
+      const result = await checkPullRequests(app, { authorFilter });
+      expect(result.newPrs.map(pr => pr.number)).toEqual([10, 11]);
+      expect(Object.keys(result.activityByPr)).toEqual(['10', '11']);
+    }
+    expect((await checkPullRequests(app, { authorFilter: 'self' })).newPrs.map(pr => pr.number)).toEqual([10]);
   });
 
-  // #3358 — before this gate, an unreachable gh returned an empty PR page, the
-  // high-water mark stayed put, and the watcher reported a permanently quiet
-  // repo with nothing in the log naming the cause.
-  it('skips the cycle when the gh probe is not ok, without asking gh anything', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
-    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable', detail: 'dial tcp' });
-    const r = await checkPullRequests(app, { authorFilter: 'any' });
-    expect(r).toMatchObject({ ok: false, reason: 'forge-unreachable', forgeStatus: 'unreachable' });
-    expect(execGhMock).not.toHaveBeenCalled();
+  it('baselines once, converges, and re-dispatches an existing trusted PR after head or CI changes', async () => {
+    const prs = [rawPr(3, 'collaborator')];
+    forge(prs);
+    const baseline = await checkPullRequests({ ...app, prWatcherState: {} });
+    expect(baseline).toMatchObject({ firstRun: true, newPrs: [], newLastSeen: 3 });
+    const tracked = { ...app, prWatcherState: { lastSeenPrNumber: 3, activityByPr: baseline.activityByPr } };
+    expect((await checkPullRequests(tracked)).newPrs).toEqual([]);
+    prs[0].headRefOid = 'b'.repeat(40);
+    expect((await checkPullRequests(tracked)).newPrs.map(pr => pr.number)).toEqual([3]);
+    prs[0].headRefOid = 'a'.repeat(40);
+    prs[0].statusCheckRollup = [{ status: 'COMPLETED', conclusion: 'FAILURE' }];
+    expect((await checkPullRequests(tracked)).newPrs.map(pr => pr.number)).toEqual([3]);
+    const failureSeen = await checkPullRequests(tracked);
+    prs[0].statusCheckRollup[0].completedAt = '2026-08-02T00:00:00Z';
+    expect((await checkPullRequests({ ...tracked, prWatcherState: { lastSeenPrNumber: 3, activityByPr: failureSeen.activityByPr } })).newPrs.map(pr => pr.number)).toEqual([3]);
   });
 
-  it('probes THIS repo\'s API host, not gh\'s default (enterprise-correct)', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: false, host: 'github.acme-corp.example', fullName: 'o/r' });
-    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'not-authenticated', detail: null });
-    await checkPullRequests(app, { authorFilter: 'any' });
-    expect(ensureForgeReachableMock).toHaveBeenCalledWith('pr-watcher', { hostname: 'github.acme-corp.example' });
+  it('refreshes authority every poll and pins repository and permission queries to the enterprise host', async () => {
+    forge([rawPr(10, 'collaborator')], { host: 'github.enterprise.example' });
+    expect((await checkPullRequests(app)).newPrs).toHaveLength(1);
+    expect(execGhMock.mock.calls.filter(([a]) => a[0] === 'api').every(([a]) => a.includes('github.enterprise.example'))).toBe(true);
+    expect(execGhMock.mock.calls.filter(([a]) => a.includes('--repo')).every(([a]) => a.includes('github.enterprise.example/example/project'))).toBe(true);
+    expect(execGhMock.mock.calls
+      .filter(([a]) => a[0] === 'repo' || (a[0] === 'pr' && a[1] === 'list'))
+      .every(([, , options]) => options?.backoffKey === 'github.enterprise.example/example/project')).toBe(true);
+    forge([rawPr(10, 'collaborator')], { permission: 'read' });
+    expect((await checkPullRequests(app)).newPrs).toEqual([]);
+    execGhMock.mockImplementation(async args => args[0] === 'repo' ? 'main' : args[0] === 'pr' ? JSON.stringify([rawPr(10, 'collaborator')]) : Promise.reject(new Error('unavailable')));
+    expect((await checkPullRequests(app)).newPrs).toEqual([]);
   });
 
-  it('reports pr-list-failed (not "no open PRs") when gh pr list rejects', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
-    execGhMock
-      .mockResolvedValueOnce('main')                          // repo view → default branch
-      .mockRejectedValueOnce(new Error('connect: bad file descriptor'));
-    const r = await checkPullRequests(app, { authorFilter: 'any' });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('pr-list-failed');
-  });
-
-  it('reports pr-list-failed for a zero-exit gh that emits a non-array', async () => {
-    // Degrading unreadable output to [] would clear lastError and record a quiet
-    // poll for a page we never parsed.
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
-    execGhMock
-      .mockResolvedValueOnce('main')
-      .mockResolvedValueOnce('{"message":"Not Found"}');
-    const r = await checkPullRequests(app, { authorFilter: 'any' });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('pr-list-failed');
-  });
-
-  it('bails when the default branch cannot be resolved', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
-    execGhMock.mockResolvedValueOnce(''); // repo view → empty
-    const r = await checkPullRequests(app, { authorFilter: 'any' });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('default-branch-unresolved');
-  });
-
-  it('bails when an author gate is set but self login is unavailable', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
-    execGhMock
-      .mockResolvedValueOnce('main')          // repo view → default branch
-      .mockRejectedValueOnce(new Error('no auth')); // api user → fails
-    const r = await checkPullRequests(app, { authorFilter: 'self' });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('self-login-unavailable');
-  });
-
-  it('bails when the PR list call fails', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
-    execGhMock
-      .mockResolvedValueOnce('main')                  // repo view
-      .mockRejectedValueOnce(new Error('list failed')); // pr list
-    const r = await checkPullRequests(app, { authorFilter: 'any' });
-    expect(r.ok).toBe(false);
-    expect(r.reason).toBe('pr-list-failed');
-  });
-
-  it('first run baselines without dispatching', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
-    execGhMock
-      .mockResolvedValueOnce('main') // repo view
-      .mockResolvedValueOnce(JSON.stringify([
-        { number: 4, title: 'a', author: { login: 'x' }, url: 'u4', createdAt: '2026-06-01T00:00:00Z', isDraft: false, headRefName: 'h4' }
-      ]));
-    const r = await checkPullRequests({ ...app, prWatcherState: {} }, { authorFilter: 'any' });
-    expect(r.ok).toBe(true);
-    expect(r.firstRun).toBe(true);
-    expect(r.newLastSeen).toBe(4);
-    expect(r.newPrs).toEqual([]);
-  });
-
-  it('dispatches new PRs above the mark, honoring the author gate', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
-    execGhMock
-      .mockResolvedValueOnce('main')        // repo view
-      .mockResolvedValueOnce('bob')         // api user
-      .mockResolvedValueOnce(JSON.stringify([
-        { number: 7, title: 'mine', author: { login: 'bob' }, url: 'u7', createdAt: '2026-06-04T00:00:00Z', isDraft: false, headRefName: 'h7' },
-        { number: 8, title: 'theirs', author: { login: 'alice' }, url: 'u8', createdAt: '2026-06-05T00:00:00Z', isDraft: false, headRefName: 'h8' }
-      ]));
-    const r = await checkPullRequests({ ...app, prWatcherState: { lastSeenPrNumber: 6 } }, { authorFilter: 'others' });
-    expect(r.ok).toBe(true);
-    expect(r.firstRun).toBe(false);
-    expect(r.newPrs.map(p => p.number)).toEqual([8]);
-    expect(r.newLastSeen).toBe(8);
-    expect(r.repoFullName).toBe('o/r');
-    expect(r.defaultBranch).toBe('main');
-  });
-
-  it('accepts a GitHub Enterprise host (isGithub false) and resolves self against THAT host', async () => {
-    // The core fix: an enterprise repo (github.* but not github.com, so
-    // origin.isGithub is false) must still be watched, and the self gate must
-    // resolve identity on the enterprise host — not github.com.
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: false, host: 'github.enterprise.test', fullName: 'o/r' });
-    execGhMock
-      .mockResolvedValueOnce('main')           // repo view (default branch)
-      .mockResolvedValueOnce('alice_corp')     // api user --hostname github.enterprise.test
-      .mockResolvedValueOnce(JSON.stringify([
-        { number: 7, title: 'mine', author: { login: 'alice_corp' }, url: 'u7', createdAt: '2026-06-04T00:00:00Z', isDraft: false, headRefName: 'h7' }
-      ]));
-    const r = await checkPullRequests({ id: 'ent', repoPath: '/repos/ent', prWatcherState: { lastSeenPrNumber: 6 } }, { authorFilter: 'self' });
-    expect(r.ok).toBe(true);
-    expect(r.newPrs.map(p => p.number)).toEqual([7]);
-    // Mechanism assertions (not just the end result): self is resolved on the
-    // enterprise host via --hostname, and repo view / pr list pin the
-    // host-qualified HOST/OWNER/REPO selector. These pin the exact contract so a
-    // regression that reintroduced the original bug — a host-less `--repo o/r`
-    // (defaults to github.com) or a dropped host qualifier — fails here.
-    expect(execGhMock).toHaveBeenCalledWith(['api', 'user', '--hostname', 'github.enterprise.test', '--jq', '.login']);
-    expect(execGhMock).toHaveBeenCalledWith(['repo', 'view', 'github.enterprise.test/o/r', '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name']);
-    expect(execGhMock).toHaveBeenCalledWith(['pr', 'list', '--repo', 'github.enterprise.test/o/r', '--base', 'main', '--state', 'open', '--limit', '200', '--json', 'number,title,author,url,createdAt,isDraft,headRefName']);
-    // No call ever passes a host-less `--repo o/r` (the exact original bug).
-    const usedHostlessRepo = execGhMock.mock.calls.some(([args]) =>
-      Array.isArray(args) && args.indexOf('--repo') !== -1 && args[args.indexOf('--repo') + 1] === 'o/r');
-    expect(usedHostlessRepo).toBe(false);
-  });
-
-  it('rejects a non-GitHub (GitLab) host as not-a-github-repo', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: false, host: 'gitlab.enterprise.test', fullName: 'o/r' });
-    const r = await checkPullRequests({ id: 'gl', repoPath: '/repos/gl' }, { authorFilter: 'any' });
-    expect(r).toEqual({ ok: false, reason: 'not-a-github-repo' });
-    expect(execGhMock).not.toHaveBeenCalled();
+  it('does not advance state after unsupported forge, unreachable, malformed or truncated input', async () => {
+    getOriginInfoMock.mockResolvedValue({ host: 'gitlab.example.com', fullName: 'example/project' });
+    expect(await checkPullRequests(app)).toMatchObject({ ok: false, reason: 'not-a-github-repo' });
+    forge([]);
+    ensureForgeReachableMock.mockResolvedValueOnce({ ok: false, status: 'unreachable' });
+    expect(await checkPullRequests(app)).toMatchObject({ ok: false, reason: 'forge-unreachable' });
+    execGhMock.mockImplementation(async args => args[0] === 'repo' ? 'main' : '{}');
+    expect(await checkPullRequests(app)).toMatchObject({ ok: false, reason: 'pr-list-failed' });
+    forge(Array.from({ length: 200 }, (_, i) => rawPr(i + 1, 'operator')));
+    expect(await checkPullRequests(app)).toMatchObject({ ok: false, reason: 'too-many-open-prs' });
   });
 });

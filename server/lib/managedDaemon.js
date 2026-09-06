@@ -1,3 +1,5 @@
+import { getMemoryStats } from './memoryStats.js';
+
 /**
  * Shared plumbing for a local daemon PortOS runs as an optional PM2 process
  * (`llamaServerManager.js` → `portos-llama-server`, `mtplxServerManager.js` →
@@ -190,6 +192,7 @@ export function createDaemonWatcher({
       runAtStartup: savedApps === null ? null : savedApps.includes(appName),
       recentLogs: logs.withPm2Logs(`${pm2Logs?.stdout || ''}\n${pm2Logs?.stderr || ''}`),
       lastExitError: isReadFailed ? 'Failed to read PM2 status' : getLastExitError(),
+      releaseReason: isManagedActive ? null : (idleDaemons.get(appName)?.releaseReason ?? null),
     };
   };
 
@@ -234,9 +237,49 @@ export function createDaemonWatcher({
 /** How often the reaper checks. Coarse on purpose — the windows are minutes. */
 const IDLE_REAP_INTERVAL_MS = 60_000;
 
-/** name → `{ getIdleMs, stop, lastUsedAt }`. */
+/** Default free-memory threshold below which host memory is considered under pressure (4 GB). */
+export const DEFAULT_PRESSURE_THRESHOLD_BYTES = 4 * 1024 * 1024 * 1024;
+/** Dead-band: memory must rise above threshold + dead-band (4 GB + 2 GB = 6 GB) to exit pressure. */
+export const DEFAULT_PRESSURE_DEAD_BAND_BYTES = 2 * 1024 * 1024 * 1024;
+/** How long pressure must be sustained before a daemon is released early (30s). */
+export const DEFAULT_SUSTAINED_PRESSURE_MS = 30_000;
+/** Calm-down window after releasing a daemon before another daemon can be released (60s). */
+export const DEFAULT_PRESSURE_CALM_DOWN_MS = 60_000;
+
+/** Format a timestamp into HH:MM (e.g. 09:14) for human-legible release notes. */
+export function formatReleaseTime(timestamp = Date.now()) {
+  const d = new Date(timestamp);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+/** name → `{ getIdleMs, isPinned, isRunning, stop, lastUsedAt, releaseReason, releasedAt }`. */
 const idleDaemons = new Map();
 let reaperTimer = null;
+
+let pressureHistory = [];
+let lastPressureReleaseAt = null;
+const MAX_PRESSURE_HISTORY = 100;
+
+export function recordPressureSample({ at = Date.now(), free, used, total }) {
+  pressureHistory.push({ at, free, used, total });
+  if (pressureHistory.length > MAX_PRESSURE_HISTORY) {
+    pressureHistory = pressureHistory.slice(-MAX_PRESSURE_HISTORY);
+  }
+}
+
+export function getPressureHistory() {
+  return [...pressureHistory];
+}
+
+export function getLastPressureReleaseTime() {
+  return lastPressureReleaseAt;
+}
+
+export function setLastPressureReleaseTime(time) {
+  lastPressureReleaseAt = time;
+}
 
 /**
  * A user-supplied idle window in minutes, as milliseconds.
@@ -271,16 +314,27 @@ export function idleWindowMs(minutes) {
  * Re-registering the same name refreshes the hooks and leaves `lastUsedAt`
  * alone, so a manager reloaded under test doesn't reset a live clock.
  *
- * @param {{name: string, getIdleMs: () => Promise<number|null>|number|null, stop: () => Promise<unknown>}} daemon
- *   `getIdleMs` resolves the CURRENT configured window on every sweep (so a
- *   settings change takes effect without a restart); `null`/`0` = never stop.
+ * @param {{
+ *   name: string,
+ *   getIdleMs: () => Promise<number|null>|number|null,
+ *   isPinned?: () => Promise<boolean>|boolean,
+ *   isRunning?: () => Promise<boolean>|boolean,
+ *   stop: () => Promise<unknown>
+ * }} daemon
+ *   `getIdleMs` resolves the CURRENT configured window on every sweep; `null`/`0` = never stop.
+ *   `isPinned` returns true if user pinned the server ("keep loaded") — pinned servers are never stopped.
+ *   `isRunning` checks if the daemon process is online.
  */
-export function registerIdleDaemon({ name, getIdleMs, stop }) {
+export function registerIdleDaemon({ name, getIdleMs, isPinned, isRunning, stop }) {
   const existing = idleDaemons.get(name);
   idleDaemons.set(name, {
     getIdleMs,
+    isPinned: typeof isPinned === 'function' ? isPinned : () => Boolean(isPinned),
+    isRunning: typeof isRunning === 'function' ? isRunning : null,
     stop,
     lastUsedAt: existing?.lastUsedAt ?? Date.now(),
+    releaseReason: existing?.releaseReason ?? null,
+    releasedAt: existing?.releasedAt ?? null,
   });
 }
 
@@ -290,14 +344,17 @@ export function registerIdleDaemon({ name, getIdleMs, stop }) {
  * status poll: a status card that refreshes every few seconds would otherwise
  * hold a 24GB checkpoint resident forever while nobody used it.
  *
- * A no-op for an unregistered name, so a call site doesn't have to know whether
- * this install registered that daemon.
+ * Clears any prior release reason now that the server is active again.
  *
  * @param {string} name
  */
 export function markDaemonUsed(name) {
   const entry = idleDaemons.get(name);
-  if (entry) entry.lastUsedAt = Date.now();
+  if (entry) {
+    entry.lastUsedAt = Date.now();
+    entry.releaseReason = null;
+    entry.releasedAt = null;
+  }
 }
 
 /** The recorded last-use timestamp for `name`, or `null`. Exposed for status cards. */
@@ -305,18 +362,164 @@ export function daemonLastUsedAt(name) {
   return idleDaemons.get(name)?.lastUsedAt ?? null;
 }
 
+/** The recorded release reason for `name`, or `null`. */
+export function daemonReleaseReason(name) {
+  return idleDaemons.get(name)?.releaseReason ?? null;
+}
+
+/** Explicitly clear release reason for `name`. */
+export function clearDaemonReleaseReason(name) {
+  const entry = idleDaemons.get(name);
+  if (entry) {
+    entry.releaseReason = null;
+    entry.releasedAt = null;
+  }
+}
+
 /**
- * One sweep: stop every registered daemon whose window has elapsed.
+ * Pure policy function for memory pressure daemon eviction.
+ * Evaluates current state, pressure reading, and recent history.
  *
- * Exported so a test can drive it directly instead of waiting on the timer, and
- * so a caller can force a sweep after a settings change.
+ * Returns `{ shouldRelease: boolean, target?: object, reason?: string, ... }`.
+ */
+export function evaluateMemoryPressurePolicy({
+  daemons = [],
+  memoryStats = null,
+  history = [],
+  now = Date.now(),
+  lastReleasedAt = null,
+  options = {},
+} = {}) {
+  const thresholdBytes = options.pressureThresholdBytes ?? DEFAULT_PRESSURE_THRESHOLD_BYTES;
+  const deadBandBytes = options.deadBandBytes ?? DEFAULT_PRESSURE_DEAD_BAND_BYTES;
+  const sustainedDurationMs = options.sustainedDurationMs ?? DEFAULT_SUSTAINED_PRESSURE_MS;
+  const calmDownMs = options.calmDownMs ?? DEFAULT_PRESSURE_CALM_DOWN_MS;
+
+  if (!memoryStats || typeof memoryStats.free !== 'number') {
+    return { shouldRelease: false, target: null, reason: 'memory stats unavailable' };
+  }
+
+  const free = memoryStats.free;
+  const wasUnderPressure = Boolean(options.wasUnderPressure ?? (lastReleasedAt && (now - lastReleasedAt < calmDownMs * 2)));
+  const exitThresholdBytes = thresholdBytes + deadBandBytes;
+  const isRelieved = wasUnderPressure
+    ? free >= exitThresholdBytes
+    : free >= thresholdBytes;
+
+  if (isRelieved) {
+    return {
+      shouldRelease: false,
+      target: null,
+      reason: 'host memory not under pressure',
+      free,
+      thresholdBytes,
+      exitThresholdBytes,
+      wasUnderPressure,
+    };
+  }
+
+  if (lastReleasedAt && (now - lastReleasedAt < calmDownMs)) {
+    return {
+      shouldRelease: false,
+      target: null,
+      reason: 'in calm-down window',
+      remainingCalmDownMs: calmDownMs - (now - lastReleasedAt),
+    };
+  }
+
+  if (sustainedDurationMs > 0) {
+    // Track "under pressure" against the same bar isRelieved just used above —
+    // when wasUnderPressure, that's the higher exit threshold, not the base
+    // threshold — otherwise samples sitting in the dead-band (below exitThresholdBytes
+    // but above thresholdBytes) never count as sustained and eviction starves.
+    const activeThresholdBytes = wasUnderPressure ? exitThresholdBytes : thresholdBytes;
+    const validSamples = (history || [])
+      .map((s) => ({
+        at: s.at ?? s.timestamp ?? s.time ?? now,
+        free: s.free ?? (s.total != null && s.used != null ? s.total - s.used : null),
+      }))
+      .filter((s) => s.at <= now && typeof s.free === 'number')
+      .sort((a, b) => a.at - b.at);
+
+    let earliestUnderPressureAt = null;
+    for (let i = validSamples.length - 1; i >= 0; i--) {
+      if (validSamples[i].free < activeThresholdBytes) {
+        earliestUnderPressureAt = validSamples[i].at;
+      } else {
+        break;
+      }
+    }
+
+    const sustainedMs = earliestUnderPressureAt != null ? (now - earliestUnderPressureAt) : 0;
+    if (sustainedMs < sustainedDurationMs) {
+      return {
+        shouldRelease: false,
+        target: null,
+        reason: 'pressure not sustained',
+        sustainedMs,
+        requiredMs: sustainedDurationMs,
+      };
+    }
+  }
+
+  const list = Array.isArray(daemons)
+    ? daemons
+    : Array.from(daemons?.values?.() || []);
+  const eligible = list.filter((d) => (
+    d
+    && d.running !== false
+    && !d.pinned
+    && !d.keepLoaded
+  ));
+
+  if (eligible.length === 0) {
+    return {
+      shouldRelease: false,
+      target: null,
+      reason: 'no eligible daemons to release',
+    };
+  }
+
+  // Least recently used ordering: smallest lastUsedAt first
+  eligible.sort((a, b) => (a.lastUsedAt ?? 0) - (b.lastUsedAt ?? 0));
+  const target = eligible[0];
+
+  return {
+    shouldRelease: true,
+    target,
+    reason: 'host memory pressure',
+    free,
+    thresholdBytes,
+  };
+}
+
+/**
+ * Sweep: stop daemons whose idle window has elapsed, and run pressure-aware pass
+ * to release the least recently used unpinned daemon under sustained host memory pressure.
  *
  * @param {number} [now]
+ * @param {object} [options]
  * @returns {Promise<string[]>} the names actually stopped
  */
-export async function reapIdleDaemons(now = Date.now()) {
+export async function reapIdleDaemons(now = Date.now(), options = {}) {
   const stopped = [];
+
+  // 1. Normal idle timeout pass
   for (const [name, entry] of idleDaemons) {
+    // Fail-safe to pinned on a transient read error, matching the pressure-aware
+    // pass below — assuming "not pinned" here would risk stopping a keepLoaded
+    // daemon on a flaky settings read.
+    const isPinned = await Promise.resolve(entry.isPinned?.()).catch(() => true);
+    if (isPinned) continue; // Pinned servers are exempt
+
+    // Already stopped (by the pressure-aware pass, or externally) — skip so this
+    // pass doesn't overwrite its release reason and doesn't preempt the
+    // pressure-aware pass below via the early return once its idle window re-elapses.
+    const isRunning = entry.isRunning
+      ? await Promise.resolve(entry.isRunning()).catch(() => true)
+      : true;
+    if (!isRunning) continue;
+
     // Resolved per sweep, so lowering the window in Settings applies to the very
     // next beat rather than to the next server restart.
     const windowMs = await Promise.resolve(entry.getIdleMs()).catch(() => null);
@@ -335,8 +538,68 @@ export async function reapIdleDaemons(now = Date.now()) {
     // Only on success: a failed stop that left the daemon up would otherwise
     // retry every beat forever with the clock reset each time.
     entry.lastUsedAt = now;
+    entry.releasedAt = now;
+    entry.releaseReason = `released at ${formatReleaseTime(now)} — idle timeout`;
     stopped.push(name);
   }
+
+  // Release at most one daemon per tick and re-read before the next
+  if (stopped.length > 0) {
+    return stopped;
+  }
+
+  // 2. Pressure-aware pass
+  const memoryStats = options.memoryStats ?? await getMemoryStats().catch(() => null);
+  if (memoryStats) {
+    recordPressureSample({
+      at: now,
+      free: memoryStats.free,
+      used: memoryStats.used,
+      total: memoryStats.total,
+    });
+
+    const daemonList = [];
+    for (const [name, entry] of idleDaemons) {
+      const isPinned = await Promise.resolve(entry.isPinned?.()).catch(() => true);
+      const isRunning = entry.isRunning
+        ? await Promise.resolve(entry.isRunning()).catch(() => false)
+        : true;
+      daemonList.push({
+        name,
+        entry,
+        lastUsedAt: entry.lastUsedAt,
+        pinned: isPinned,
+        running: isRunning,
+      });
+    }
+
+    const policyOptions = { ...options.policyOptions, ...options };
+    const decision = evaluateMemoryPressurePolicy({
+      daemons: daemonList,
+      memoryStats,
+      history: options.history ?? getPressureHistory(),
+      now,
+      lastReleasedAt: getLastPressureReleaseTime(),
+      options: policyOptions,
+    });
+
+    if (decision.shouldRelease && decision.target) {
+      const { target } = decision;
+      const freeMb = Math.round((memoryStats.free || 0) / (1024 * 1024));
+      console.log(`⚠️ Stopping ${target.name} — host memory pressure (free ${freeMb}MB)`);
+      const failed = await Promise.resolve(target.entry.stop()).then(() => null, (err) => err);
+      if (failed) {
+        console.error(`❌ Pressure stop of ${target.name} failed: ${failed.message}`);
+      } else {
+        target.entry.lastUsedAt = now;
+        target.entry.releasedAt = now;
+        target.entry.releaseReason = `released at ${formatReleaseTime(now)} — host memory pressure`;
+        setLastPressureReleaseTime(now);
+        stopped.push(target.name);
+      }
+    }
+  }
+
   return stopped;
 }
 
@@ -371,8 +634,11 @@ export function stopIdleReaper() {
   reaperTimer = null;
 }
 
-/** Test seam: drop every registration and disarm the timer. */
+/** Test seam: drop every registration, reset pressure state, and disarm the timer. */
 export function _resetIdleDaemonsForTests() {
   stopIdleReaper();
   idleDaemons.clear();
+  pressureHistory = [];
+  lastPressureReleaseAt = null;
 }
+

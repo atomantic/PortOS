@@ -53,6 +53,8 @@ export const repairRunRecords = (body = {}, options = {}) =>
 // timed-out request cannot duplicate a message or annotation.
 export const getPersistentMind = (filters = {}, options = {}) =>
   request(`/cos/mind${runEventQuery(filters)}`, options);
+export const cancelPersistentMindThinkingRequest = (options = {}) =>
+  request('/cos/mind/thinking-request', { method: 'DELETE', ...options });
 export const getPersistentMindContext = (options = {}) => request('/cos/mind/context', options);
 export const getPersistentMindTools = (options = {}) => request('/cos/mind/tools', options);
 export const getCosToolCatalog = ({ scope = 'all', format = 'portos', intent, ...options } = {}) => {
@@ -163,6 +165,21 @@ export const resolveCosTaskChallenge = (id, body, options = {}) => request(`/cos
 });
 export const forceCosEvaluate = (options = {}) => request('/cos/evaluate', { method: 'POST', ...options });
 export const forceSpawnTask = (taskId, options = {}) => request(`/cos/tasks/${taskId}/spawn`, { method: 'POST', ...options });
+export const getOrchestrationProfiles = (options) => request('/settings/orchestration-profiles', options);
+export const saveOrchestrationProfile = (profile, options = {}) => request('/settings/orchestration-profiles', {
+  method: 'POST',
+  body: JSON.stringify(profile),
+  ...options,
+});
+export const updateOrchestrationProfile = (id, updates, options = {}) => request(`/settings/orchestration-profiles/${encodeURIComponent(id)}`, {
+  method: 'PUT',
+  body: JSON.stringify(updates),
+  ...options,
+});
+export const deleteOrchestrationProfile = (id, options = {}) => request(`/settings/orchestration-profiles/${encodeURIComponent(id)}`, {
+  method: 'DELETE',
+  ...options,
+});
 export const getCosHealth = () => request('/cos/health');
 export const forceHealthCheck = (options = {}) => request('/cos/health/check', { method: 'POST', ...options });
 export const getCosAgents = (options) => request('/cos/agents', options);
@@ -280,7 +297,7 @@ export const getCosDecisionSummary = (options) => request('/cos/decisions/summar
 
 // Task Schedule (Configurable Intervals)
 export const getCosUpcomingTasks = (limit = 10, options) => request(`/cos/upcoming?limit=${limit}`, options);
-export const getCosSchedule = () => request('/cos/schedule');
+export const getCosSchedule = (options) => request('/cos/schedule', options);
 // Unified task interval update
 export const updateCosTaskInterval = (taskType, settings, options = {}) => request(`/cos/schedule/task/${taskType}`, {
   method: 'PUT',

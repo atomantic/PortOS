@@ -9,12 +9,14 @@ import {
   canTypeSlashCommands,
   resolveOwnsPrWorkflow,
   isValidSlashdoCommand,
+  parseExplicitReviewWith,
   resolveSlashdoInvocation,
   resolveSlashdoStyle,
   slashdoSkillName,
   unreachableReviewerIncludes,
 } from './slashdoInvocation.js';
 import { loadSlashdoFile } from './slashdoLoader.js';
+import { requireSlashdoSubmoduleInCi } from './testHelper.js';
 
 describe('isValidSlashdoCommand', () => {
   it('accepts bare command names', () => {
@@ -286,10 +288,11 @@ describe('buildSlashdoSection — inline budget vs file pointer', () => {
     expect(section).toMatch(/READ THAT FILE/);
   });
 
-  it('inlines the body when it is under budget even with a path available', () => {
+  it('uses a staged entrypoint even when it is under budget', () => {
     const section = buildSlashdoSection(codex(), small, { bodyPath: PATH });
-    expect(section).toContain(small);
-    expect(section).not.toContain(PATH);
+    expect(section).not.toContain(small);
+    expect(section).toContain(PATH);
+    expect(section).toContain('relative to the file containing that reference');
   });
 
   it('inlines an over-budget body when no path is offered (an api provider has no file tools)', () => {
@@ -378,53 +381,76 @@ describe('unreachableReviewerIncludes', () => {
   });
 });
 
-// -----------------------------------------------------------------------------
-// Budget pin — the ONE place these tests touch the vendored submodule (#3110)
-// -----------------------------------------------------------------------------
-// The budget only does its job if every big command is actually over it. If a
-// slashdo release shrinks one under 24,000 chars it would silently flip back to
-// being pasted whole, which is exactly the regression this issue removed. These
-// assert on measured SIZE, never on the submodule's text, and skip when the
-// submodule isn't checked out.
-describe('SLASHDO_INLINE_BUDGET_CHARS pin against the bundled commands', () => {
-  // Commands whose expanded bodies are large enough that pasting them dominates
-  // a prompt (measured 2026-07: 38KB–317KB). Not the whole catalog — small
-  // commands like `push` (3KB) are SUPPOSED to stay inlined.
-  const OVER_BUDGET_COMMANDS = ['review', 'better', 'better-swift', 'release', 'depfree', 'next', 'replan', 'plan-task'];
-
-  it('every large bundled command is over the budget, even fully pruned', async () => {
-    const submodulePresent = await loadSlashdoFile('review', { stripFrontmatter: true }).catch(() => null);
-    if (!submodulePresent) return; // submodule not checked out — nothing to pin
-
-    for (const command of OVER_BUDGET_COMMANDS) {
-      // Prune EVERY reviewer variant — the smallest body this code can produce.
-      const pruned = await loadSlashdoFile(command, {
-        stripFrontmatter: true,
-        skipIncludes: SLASHDO_REVIEWER_INCLUDE_NAMES,
-      });
-      expect(pruned, `slashdo ships commands/do/${command}.md`).toBeTruthy();
-      expect(
-        pruned.length,
-        `${command} is ${pruned.length} chars fully pruned — under the ${SLASHDO_INLINE_BUDGET_CHARS} budget, so it would be INLINED again. Either it genuinely shrank (lower the budget deliberately) or the prune is over-eager.`
-      ).toBeGreaterThan(SLASHDO_INLINE_BUDGET_CHARS);
+// The upstream renderer owns reference semantics. Exercise its shipped output
+// here when the submodule is initialized; fixtures cover dispatch and staging
+// separately without requiring a submodule in every CI shard.
+describe('bundled command context budget', () => {
+  it('keeps the better entrypoint small and preserves an eager procedure', async () => {
+    const { existsSync } = await import('fs');
+    if (!existsSync(new URL('../../lib/slashdo/src/transformer.js', import.meta.url))) {
+      requireSlashdoSubmoduleInCi(false);
+      return;
     }
+    const { loadSlashdoBundle } = await import('./slashdoLoader.js');
+    const bundle = await loadSlashdoBundle('better', { stripFrontmatter: true });
+    const eager = await loadSlashdoFile('better', { stripFrontmatter: true });
+    expect(bundle.body.length).toBeLessThan(SLASHDO_INLINE_BUDGET_CHARS);
+    expect(Object.keys(bundle.files).length).toBeGreaterThan(0);
+    expect(bundle.body.length).toBeLessThan(eager.length / 4);
+    expect(eager).not.toMatch(/^!read /m);
+  });
+});
+
+// slashdo's `--review-with` grammar is the one thing PortOS re-parses rather than
+// owns, and the whole point of the parser is that anything it can't read falls
+// through to "prune and pin nothing". A prompt-level test can't cheaply pin that
+// matrix — and a mis-read entry is invisible there, since the wrong answer is a
+// well-formed prompt naming the wrong reviewer.
+describe('parseExplicitReviewWith', () => {
+  it('reads no flag as no explicit selection', () => {
+    expect(parseExplicitReviewWith('--issues 42')).toBeNull();
+    expect(parseExplicitReviewWith('')).toBeNull();
+    expect(parseExplicitReviewWith(undefined)).toBeNull();
+    // A different flag that merely shares the prefix is not ours to read.
+    expect(parseExplicitReviewWith('--review-with-nothing x')).toBeNull();
   });
 
-  it('pruning unreachable reviewer loops measurably shrinks a reviewer-heavy command', async () => {
-    const full = await loadSlashdoFile('review', { stripFrontmatter: true }).catch(() => null);
-    if (!full) return;
-    // A lone codex reviewer keeps only the local-agent loop.
-    const pruned = await loadSlashdoFile('review', {
-      stripFrontmatter: true,
-      skipIncludes: unreachableReviewerIncludes({ reviewers: ['codex'] }),
+  it.each([
+    ['spaced form', '--review-with ollama', ['ollama'], []],
+    ['equals form', '--review-with=codex,claude', ['codex', 'claude'], []],
+    ['slashdo agy slug and its aliases', '--review-with agy,gemini,antigravity', ['antigravity'], []],
+    ['cursor-agent alias', '--review-with cursor-agent', ['cursor'], []],
+    ['suffixes and a model bracket', '--review-with agy[gemini-3.8-flash]~opt~max=1~effort=medium', ['antigravity'], []],
+    ['a quoted model id containing spaces', '--review-with "agy[Gemini 3.5 Flash (High)]~opt"', ['antigravity'], []],
+    ['a @login, bot suffix included', '--review-with codex,@review-bot[bot]', ['codex'], ['review-bot[bot]']],
+    ['repeats that agree', '--review-with codex --review-with codex', ['codex'], []],
+  ])('resolves %s', (_label, args, reviewers, usernames) => {
+    expect(parseExplicitReviewWith(args)).toEqual({ explicit: true, none: false, reviewers, usernames });
+  });
+
+  it.each(['--review-with none', '--review-with NONE', '--review-with=none'])('reads %s as the opt-out tombstone', (args) => {
+    expect(parseExplicitReviewWith(args)).toEqual({ explicit: true, none: true, reviewers: [], usernames: [] });
+  });
+
+  it.each([
+    ['a missing value', '--review-with'],
+    ['the next flag where the value should be', '--review-with --merge'],
+    ['a shell expansion we cannot see through', '--review-with $REVIEWER'],
+    ['an unterminated quote', '--review-with "codex'],
+    ['an unterminated model bracket', '--review-with codex[a --merge'],
+    ['a slug slashdo has no counterpart for', '--review-with lmstudio'],
+    ['a slug outside the grammar entirely', '--review-with some-future-reviewer'],
+    ['a bracket on a reviewer that takes none', '--review-with copilot[x]'],
+    ['an unknown per-entry suffix', '--review-with codex~bogus'],
+    ['a repeated per-entry suffix', '--review-with codex~max=1~max=2'],
+    ['a non-integer round cap', '--review-with codex~max=two'],
+    ['an effort outside the ladder', '--review-with codex~effort=turbo'],
+    ['the tombstone mixed with real slugs', '--review-with none,codex'],
+    ['repeats that disagree', '--review-with codex --review-with claude'],
+    ['a malformed login', '--review-with @-nope'],
+  ])('refuses to guess at %s', (_label, args) => {
+    expect(parseExplicitReviewWith(args)).toEqual({
+      explicit: true, unresolved: true, reviewers: [], usernames: [],
     });
-    // Shape, not an exact byte count: pruning must be a real double-digit-percent
-    // reduction, and must not be a no-op that quietly stopped working. Measured
-    // -23% for a lone CLI reviewer (258,260 → 198,997) — the orchestration
-    // wrapper is deliberately never pruned, which costs ~37KB of the ceiling.
-    expect(pruned.length).toBeLessThan(full.length * 0.85);
-    // The kept loop is still there and the omission is announced, not silent.
-    expect(pruned).toContain('not applicable to this run');
-    expect(pruned).not.toContain(`\`${SLASHDO_REVIEWER_INCLUDES.localAgent}\` omitted`);
   });
 });

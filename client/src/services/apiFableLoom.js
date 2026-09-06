@@ -187,3 +187,6 @@ export const reviewLoomEpisodeContinuity = (id, episodeId, body = {}, options = 
   request(episodePath(id, episodeId, '/continuity/review'), {
     method: 'POST', body: JSON.stringify(body), ...options,
   });
+
+export const planLoomEpisodeShots = (id, episodeId, body = {}, options = {}) => request(episodePath(id, episodeId, '/shots/plan'), { method: 'POST', body: JSON.stringify(body), ...options });
+export const applyLoomEpisodeShots = (id, episodeId, body, options = {}) => request(episodePath(id, episodeId, '/shots/apply'), { method: 'POST', body: JSON.stringify(body), ...options });

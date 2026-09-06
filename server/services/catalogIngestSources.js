@@ -24,7 +24,6 @@
  */
 
 import { randomUUID } from 'crypto';
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import * as catalogDB from './catalogDB.js';
 import * as brainStorage from './brainStorage.js';
@@ -32,7 +31,7 @@ import { extractIngredientsForScrap } from './catalogExtraction.js';
 import { transcribe } from './voice/stt.js';
 import { navigateToUrlPinned } from './browserService.js';
 import { lookup } from 'dns/promises';
-import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse, writeFileGuarded } from '../lib/fileUtils.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
 
 // Cap fetched/transcribed bodies at the scrap column boundary (the Zod
@@ -192,7 +191,7 @@ async function persistVoiceMemoAudio(audioBuffer, mimeType) {
   const ext = mimeType?.includes('webm') ? 'webm' : mimeType?.includes('mpeg') ? 'mp3' : 'wav';
   const mediaKey = `voice-memo-${randomUUID()}.${ext}`;
   await ensureDir(PATHS.audio);
-  await writeFile(join(PATHS.audio, mediaKey), audioBuffer);
+  await writeFileGuarded(join(PATHS.audio, mediaKey), audioBuffer);
   return mediaKey;
 }
 

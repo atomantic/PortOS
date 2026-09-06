@@ -5,11 +5,11 @@
  * Enables proactive task generation when user queue is empty.
  */
 
-import { promises as fs } from 'fs'
+import { readdir } from 'fs/promises'
 import path from 'path'
 import { v4 as uuidv4 } from '../lib/uuid.js'
 import { cosEvents } from './cosEvents.js'
-import { atomicWrite, safeJSONParse, ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js'
+import { atomicWrite, safeJSONParse, ensureDir, PATHS, tryReadFile, unlinkGuarded } from '../lib/fileUtils.js'
 
 const DATA_DIR = PATHS.missions
 
@@ -61,7 +61,7 @@ async function loadMissions() {
 
   await ensureDir(DATA_DIR)
 
-  const files = await fs.readdir(DATA_DIR).catch(() => [])
+  const files = await readdir(DATA_DIR).catch(() => [])
 
   // Read every mission file in parallel on cold load rather than serializing
   // one disk read at a time; the result is memoized in missionsCache below.
@@ -432,7 +432,7 @@ async function getStats() {
  */
 async function deleteMission(id) {
   const filePath = path.join(DATA_DIR, `${id}.json`)
-  await fs.unlink(filePath).catch(() => {})
+  await unlinkGuarded(filePath).catch(() => {})
 
   if (missionsCache) {
     missionsCache = missionsCache.filter(m => m.id !== id)

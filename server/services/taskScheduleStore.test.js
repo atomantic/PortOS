@@ -144,7 +144,7 @@ describe('taskScheduleStore', () => {
 
     expect(stages).toHaveLength(3);
     expect(stages[1]).toMatchObject({ role: 'eligibility', promptKey: 'pr-reviewer-eligibility', executionProfile: 'public-review-gate' });
-    expect(stages[2]).toMatchObject({ role: 'actions', providerId: 'codex-cli', model: 'gpt-5.6', executionProfile: 'public-review-actions' });
+    expect(stages[2]).toMatchObject({ role: 'actions', providerId: 'codex-cli', model: 'gpt-5.6', executionProfile: 'public-review-gate' });
     expect(state.writes.at(-1).tasks['pr-reviewer'].taskMetadata.pipeline.stages).toHaveLength(3);
   });
 });

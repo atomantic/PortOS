@@ -9,7 +9,10 @@
  * see `worktreeOwnershipReason` for why the claim comes last. Callers can
  * explicitly opt into the differences that are intentional: a reaper may
  * include `.claude/worktrees/`, stale claims may be reclaimed only by branch
- * reconciliation, and only the dispatch side reads a live claim as unowned.
+ * reconciliation, and a live claim reads as unowned only for branch-reconcile's
+ * dispatch side and a non-committing coordinator follow-up (review-loop,
+ * PR-remediation) adopting the exact branch it exists to land — all three name
+ * the branch, not merely the directory.
  */
 
 import { win32 } from 'path';
@@ -86,7 +89,13 @@ export function worktreeOwnershipReason({
 
   const agentId = worktreeAgentId(path);
   const mustBeAgentWorktree = root?.requireAgentId ?? requireAgentId;
-  if (mustBeAgentWorktree && !isAgentWorktreeId(agentId)) return 'worktree-missing-agent-id';
+  // A claim-shaped id inside an agent-only root would otherwise fail here before
+  // ever reaching the human-claim check below — which is exactly the id shape
+  // `allowLiveClaim` exists to admit. Let it through to that check instead of
+  // being turned away one gate early.
+  if (mustBeAgentWorktree && !isAgentWorktreeId(agentId) && !(allowLiveClaim && isHumanClaimWorktree(agentId))) {
+    return 'worktree-missing-agent-id';
+  }
   if (locked) return 'worktree-locked';
   if (activeAgentIds instanceof Set && activeAgentIds.has(agentId)) return 'worktree-active-agent';
   if (requireKnownLiveness && isAgentWorktreeId(agentId) && !(activeAgentIds instanceof Set)) {

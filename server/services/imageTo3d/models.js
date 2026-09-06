@@ -17,9 +17,9 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'node:path';
-import { rm, access, writeFile } from 'node:fs/promises';
+import { access } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
-import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
+import { PATHS, resolveGalleryImage, ensureDir, rmGuarded, writeFileGuarded } from '../../lib/fileUtils.js';
 import { claimHeavyLocalJob } from '../../lib/heavyJobClaim.js';
 import { prepareLocalMemory, gpuBlockersMessage } from '../localMemory.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
@@ -98,7 +98,7 @@ const usdzDiskPath = (id) => join(recordDir(id), 'model.usdz');
  * not the render got far enough to emit a file.
  */
 async function cleanupRenderDir(id) {
-  await rm(recordDir(id), { recursive: true, force: true })
+  await rmGuarded(recordDir(id), { recursive: true, force: true })
     .catch((err) => console.error(`❌ Image-to-3D cleanup failed for ${id}: ${err.message}`));
 }
 
@@ -286,7 +286,7 @@ async function executeRender({ id, operationId, adapter, sourcePath, caps, optio
         }),
       };
     }, { includeDeleted: true });
-    await rm(usdzDiskPath(id), { force: true })
+    await rmGuarded(usdzDiskPath(id), { force: true })
       .catch((err) => console.error(`❌ Image-to-3D stale USDZ cleanup failed for ${id}: ${err.message}`));
     console.log(`🧊 Image-to-3D mesh ready: ${id}`);
   } catch (error) {
@@ -518,7 +518,7 @@ export async function saveModelUsdz(id, bytes) {
     throw new ServerError('Payload is not a USDZ archive', { status: 400, code: 'USDZ_INVALID' });
   }
   await ensureDir(recordDir(id));
-  await writeFile(usdzDiskPath(id), bytes);
+  await writeFileGuarded(usdzDiskPath(id), bytes);
   console.log(`🥽 Image-to-3D stored AR export for ${id} (${bytes.length} bytes)`);
   return store.mutateModel(id, (current) => ({
     ...current,

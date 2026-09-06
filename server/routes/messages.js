@@ -237,11 +237,9 @@ router.post('/drafts/generate', asyncHandler(async (req, res) => {
       const aiResult = await generateReplyBody(originalMsg, data.instructions, {
         useVoice: data.useVoice,
         threadMessages
-      }).catch(err => {
-        console.log(`📧 AI reply generation failed, using placeholder: ${err.message}`);
-        return null;
       });
-      replyBody = aiResult?.body || `[AI generation failed — configure provider in Messages > Config]\n\nContext: ${data.context}`;
+      if (!aiResult?.body?.trim()) throw new ServerError('The selected model did not produce a reply draft. Check Models > LLMs > Abuse Guard.', { status: 422, code: 'UNTRUSTED_REPLY_UNAVAILABLE' });
+      replyBody = aiResult.body;
     }
   }
   if (!replyBody) {

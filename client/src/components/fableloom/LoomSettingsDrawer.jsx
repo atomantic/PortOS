@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Cloud, Cpu, Layers, Loader2, Sparkles } from 'lucide-react';
+import { CheckCircle2, Cloud, Cpu, Film, Layers, Loader2, Sparkles } from 'lucide-react';
 import { Link } from 'react-router';
 import Drawer from '../Drawer';
 import BackendChipStrip from '../media/BackendChipStrip';
@@ -51,6 +51,8 @@ const VIDEO_RENDER_BACKENDS = [
   { id: 'auto', label: 'Auto', icon: Layers },
   { id: 'local', label: 'Local', icon: Cpu },
   { id: 'grok', label: 'Grok', icon: Cloud },
+  { id: 'fal', label: 'fal.ai', icon: Cloud },
+  { id: 'reactor', label: 'Reactor.inc', icon: Cloud },
 ];
 
 const modelOptions = (models, selected) => {
@@ -83,7 +85,7 @@ const rewriteProgressLabel = ({ index, total, title, scenesLeft }) => [
   scenesLeft ? ` ${scenesLeft} scene${scenesLeft === 1 ? '' : 's'} left in it.` : '',
 ].join('');
 
-export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLoomUpdate, onRewritten }) {
+export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLoomUpdate, onRewritten, episodeId }) {
   const { providers } = useProviderModels({ allowDefault: true, silent: true, withEffort: true });
 
   // Which episode the rewrite is on. The walk is one request per episode, so
@@ -618,6 +620,20 @@ export default function LoomSettingsDrawer({ open, onClose, loom, universe, onLo
               </FormField>
             )}
           </div>
+
+          {episodeId && (
+            <div className="rounded border border-port-border p-2.5">
+              <Link
+                to={`/media/video?episode=1&loomId=${encodeURIComponent(loom.id)}&episodeId=${encodeURIComponent(episodeId)}`}
+                className="flex items-center gap-1.5 text-xs text-port-accent hover:underline"
+              >
+                <Film className="w-3.5 h-3.5" /> Open Episode Composer for this episode
+              </Link>
+              <p className="text-[11px] text-port-text-muted mt-1">
+                Draft a chained multi-scene continuous-video render in MediaGen, importing this episode's scenes as a starting point.
+              </p>
+            </div>
+          )}
 
           <FormField
             label="Codex image effort"

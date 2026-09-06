@@ -74,6 +74,32 @@ export default function PersistentMindVisibilityPanel({ visibility, error, loadi
         {visibility?.truncated && <span className="text-port-warning">Some checks were bounded before completion.</span>}
       </div>
 
+      {visibility?.orientation && (
+        <section aria-label="Mind orientation" className="mt-3 space-y-3 rounded border border-port-border p-3 text-xs text-port-text-muted">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h4 className="font-semibold text-port-text">Current abilities and context</h4>
+            <Link to="/cos/mind?panel=tools" className="text-port-accent hover:underline">Configure mind tools</Link>
+          </div>
+          <p>Eidoverse: <strong className="text-port-text">{visibility.orientation.eidoverse?.status || 'unknown'}</strong> · World building {visibility.orientation.eidoverse?.canBuild ? 'enabled' : 'off'} · Presence {visibility.orientation.eidoverse?.connected ? 'connected' : 'not connected'}</p>
+          <div className="flex flex-wrap gap-3">
+            <Link to="/eidoverse" className="text-port-accent hover:underline">Open Eidoverse</Link>
+            <Link to="/settings/features" className="text-port-accent hover:underline">Feature setup</Link>
+            <Link to="/cos/mind?panel=settings" className="text-port-accent hover:underline">Change thinking model</Link>
+            <Link to="/cos/mind?panel=memories" className="text-port-accent hover:underline">Add durable context</Link>
+          </div>
+          <p>{visibility.orientation.modelPolicy?.continuity} Model changes are user controlled and apply to the next wake. Task model permissions govern delegated agents separately.</p>
+          <details>
+            <summary className="cursor-pointer font-medium text-port-text">Release context · {visibility.orientation.release?.version || 'unknown version'}</summary>
+            <p className="mt-2">Included in each turn. Release notes describe shipped changes; enabled tools and runtime status determine what the mind can do now.</p>
+            {visibility.orientation.release?.status !== 'available' && <p className="mt-2">Release notes unavailable.</p>}
+            <ul className="mt-2 list-disc space-y-1 pl-4">
+              {(visibility.orientation.release?.highlights || []).map((line, index) => <li key={index}>{line}</li>)}
+            </ul>
+            {visibility.orientation.release?.truncated && <p className="mt-2">Showing a bounded selection of release notes.</p>}
+          </details>
+        </section>
+      )}
+
       {readiness === 'blocked' && (
         <div role="alert" className="mt-3 flex flex-col gap-2 rounded border border-port-error/40 bg-port-error/10 p-3 text-xs text-port-text sm:flex-row sm:items-center sm:justify-between">
           <p><span className="font-semibold text-port-error">Delegated work is blocked.</span> Repair a required check below, or change the mind&apos;s managed-app permissions.</p>

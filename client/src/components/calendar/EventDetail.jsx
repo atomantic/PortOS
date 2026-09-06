@@ -1,5 +1,6 @@
-import { MapPin, Clock, Users, Repeat, CalendarDays } from 'lucide-react';
+import { MapPin, Clock, Users, Repeat, CalendarDays, Video } from 'lucide-react';
 import { formatEventDateTime } from '../../utils/formatters';
+import { isHttpUrl } from '../../utils/urlNormalize';
 import Drawer from '../Drawer';
 
 const RSVP_STYLES = {
@@ -10,6 +11,19 @@ const RSVP_STYLES = {
 };
 
 export default function EventDetail({ event, onClose }) {
+  // Re-check the scheme at render time as well as at sync time: a cached event
+  // predates today's write-side validation, so a stored `javascript:` URL must
+  // never reach an href. A meeting you cancelled or declined gets no join
+  // action; a past one still does, since people rejoin recordings and overruns.
+  //
+  // The cancelled/declined terms are NOT redundant with the list filter: the
+  // four parent views read `GET /api/calendar/events`, which drops those
+  // events, but `GET /api/calendar/events/:accountId/:eventId` serves them
+  // unfiltered — so any deep link or future single-event fetch reaches here
+  // with them intact.
+  const canJoin =
+    isHttpUrl(event.meetingUrl) && !event.isCancelled && event.myStatus !== 'declined';
+
   return (
     <Drawer open onClose={onClose} title={event.title} closeLabel="Close">
       <div className="space-y-4">
@@ -34,6 +48,19 @@ export default function EventDetail({ event, onClose }) {
             )}
           </div>
         </div>
+
+        {/* Join meeting */}
+        {canJoin && (
+          <a
+            href={event.meetingUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 rounded-lg bg-port-accent/20 text-port-accent border border-port-accent/40 text-sm font-medium hover:bg-port-accent/30 transition-colors"
+          >
+            <Video size={16} />
+            Join meeting
+          </a>
+        )}
 
         {/* Location */}
         {event.location && (

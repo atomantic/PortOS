@@ -16,7 +16,10 @@
 
 import { describe, it, expect } from 'vitest';
 import { RENDER_TARGET, RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
-import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODES } from './generationModes.js';
+import {
+  CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODES, VIDEO_GEN_MODES,
+  CLOUD_VIDEO_GEN_MODES, MEDIA_JOB_EXECUTION_LANES, mediaJobExecutionLane,
+} from './generationModes.js';
 import { EDIT_INCAPABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 import { cloudPromptRequired, maxInputImages } from '../services/imageGen/cloudProviderConfig.js';
 // Import the node-safe leaf, NOT imageGenBackends.js — that module imports
@@ -29,6 +32,9 @@ import {
   I2I_CAPABLE_MODES as CLIENT_I2I_CAPABLE,
   MAX_INPUT_IMAGES as CLIENT_MAX_INPUT_IMAGES,
   cloudPromptRequired as clientCloudPromptRequired,
+  CLOUD_VIDEO_RENDER_MODES as CLIENT_CLOUD_VIDEO_MODES,
+  MEDIA_JOB_LANES as CLIENT_MEDIA_JOB_LANES,
+  fallbackExecutionLane as clientFallbackExecutionLane,
 } from '../../client/src/lib/imageGenModes.js';
 
 // Targets the Settings UI deliberately does NOT list — a pin nobody's
@@ -117,6 +123,37 @@ describe('cloud input-image capability client mirror parity', () => {
         expect(clientCloudPromptRequired(mode, hasInputImage),
           `client cloudPromptRequired("${mode}", ${hasInputImage}) disagrees with the server`)
           .toBe(cloudPromptRequired(mode, hasInputImage));
+      }
+    }
+  });
+});
+
+/**
+ * The Render Queue groups rows by the lane the scheduler actually chose, and
+ * derives it client-side when a response carries no `executionLane`. That
+ * derivation is a second copy of the rule, and a second copy nothing binds to
+ * the first is exactly how fal.ai and Reactor video renders came to be filed
+ * under "Local machine" (#6292). Bind it here: adding a cloud backend
+ * server-side now fails this suite until the client mirror follows.
+ */
+describe('media-job execution-lane client mirror parity', () => {
+  it('mirrors the cloud video alphabet and the lane vocabulary', () => {
+    expect([...CLIENT_CLOUD_VIDEO_MODES].sort()).toEqual([...CLOUD_VIDEO_GEN_MODES].sort());
+    expect([...CLIENT_MEDIA_JOB_LANES].sort()).toEqual([...MEDIA_JOB_EXECUTION_LANES].sort());
+  });
+
+  it('derives the same lane as the scheduler for every kind/mode/remote combination', () => {
+    // 'text' stands in for the semantic (non-backend) modes a local video
+    // render carries; an unknown value stands in for a backend this build has
+    // never heard of. Both must resolve to the GPU lane.
+    const modes = [...new Set([...IMAGE_GEN_MODES, ...VIDEO_GEN_MODES, 'text', 'unknown-future-backend', undefined])];
+    for (const kind of ['image', 'video', 'training', 'audio']) {
+      for (const mode of modes) {
+        for (const remote of [false, true]) {
+          expect(clientFallbackExecutionLane({ kind, mode, renderer: remote ? 'remote' : 'local' }),
+            `client fallbackExecutionLane(${kind}, ${mode}, remote=${remote}) disagrees with the scheduler`)
+            .toBe(mediaJobExecutionLane({ kind, mode, remote }));
+        }
       }
     }
   });

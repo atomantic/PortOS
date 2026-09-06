@@ -11,6 +11,7 @@
  * so a malformed mutation can never persist.
  */
 
+import { sanitizeShot } from '../../lib/fableLoomShots.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
@@ -90,6 +91,7 @@ const sanitizeVisualCanon = (raw) => {
     .map((item) => ({
       characterId: nullableRef(item.characterId),
       wardrobeId: nullableRef(item.wardrobeId),
+      ...(isSafeImageFilename(item.referenceImage) ? { referenceImage: item.referenceImage } : {}),
       expression: trimTo(item.expression, LOOM_LIMITS.VISUAL_NOTE_MAX),
       continuityNotes: trimTo(item.continuityNotes, LOOM_LIMITS.VISUAL_NOTE_MAX),
     }));
@@ -128,6 +130,7 @@ function sanitizeNode(raw) {
     id: raw.id,
     title: trimTo(raw.title, LOOM_LIMITS.NODE_TITLE_MAX),
     prose: trimTo(raw.prose, LOOM_LIMITS.PROSE_MAX),
+    ...(raw.shot ? { shot: sanitizeShot(raw.shot) } : {}),
     plotPointId: isStr(raw.plotPointId)
       ? raw.plotPointId.trim().slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX)
       : null,
@@ -386,6 +389,7 @@ const editorialContentSignature = (loom) => JSON.stringify({
       id: node.id,
       title: node.title,
       prose: node.prose,
+      shot: node.shot,
       plotPointId: node.plotPointId,
       challengePhase: node.challengePhase,
       imagePrompt: node.imagePrompt,
@@ -686,7 +690,7 @@ const preserveLegacyDeliveryPlan = (remotePlan, localPlan, senderVersion) => (
 // them. A sender at the current schema version's present null remains an
 // intentional clear.
 const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
-  if (!local || senderVersion >= 6) return remote;
+  if (!local || senderVersion >= 7) return remote;
   const localEpisodes = new Map(local.episodes.map((episode) => [episode.id, episode]));
   const localPlotPoints = new Map((local.seriesPlan?.plotPoints || []).map((item) => [item.id, item]));
   const legacyRenderSettings = senderVersion < 5
@@ -730,6 +734,18 @@ const preserveLegacyVisualProduction = (remote, local, senderVersion) => {
           const localNode = localNodes.get(node.id);
           return localNode ? {
             ...node,
+            ...(senderVersion < 7 ? {
+              ...(localNode.shot ? { shot: localNode.shot } : {}),
+              ...(senderVersion >= 3 && node.visualCanon ? {
+                visualCanon: {
+                  ...node.visualCanon,
+                  characterAppearances: node.visualCanon.characterAppearances.map((appearance) => {
+                    const previous = localNode.visualCanon?.characterAppearances.find((item) => item.characterId === appearance.characterId);
+                    return previous?.referenceImage ? { ...appearance, referenceImage: previous.referenceImage } : appearance;
+                  }),
+                },
+              } : {}),
+            } : {}),
             ...(senderVersion < 5 ? {
               plotPointId: localNode.plotPointId,
               challengePhase: localNode.challengePhase,
@@ -761,7 +777,7 @@ export async function mergeLoomsFromSync(
   remoteLooms,
   {
     source = { via: 'sync', peerId: null },
-    senderSchemaVersions = { fableLoom: 6 },
+    senderSchemaVersions = { fableLoom: 7 },
   } = {},
 ) {
   if (!Array.isArray(remoteLooms)) return { applied: false, count: 0 };
@@ -898,6 +914,7 @@ export function deleteEpisode(loomId, episodeId) {
 // --- Nodes & transitions ----------------------------------------------------
 
 const NODE_PATCH_FIELDS = [
+  'shot',
   'title', 'prose', 'plotPointId', 'challengePhase', 'imagePrompt', 'videoPrompt', 'cameraMovement', 'playbackMode',
   'audienceConnection', 'protagonistPresence', 'visualCanon', 'videoHistoryId', 'playbackAssets', 'interactionWindow',
   'isEnding', 'endingLabel', 'pos', 'transitions',

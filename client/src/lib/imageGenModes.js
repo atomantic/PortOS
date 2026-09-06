@@ -71,7 +71,19 @@ export const RENDER_TARGET_OPTIONS = Object.freeze([
 // Client mirror of the server's VIDEO_GEN_MODES (services/videoGen/modes.js) —
 // the backend alphabet for the video pin controls above and the install-wide
 // `settings.videoGen.mode` pin.
-export const VIDEO_RENDER_MODES = Object.freeze(['local', 'grok']);
+export const VIDEO_RENDER_MODES = Object.freeze(['local', 'grok', 'fal', 'reactor']);
+
+// Client mirror of the server's CLOUD_VIDEO_GEN_MODES (lib/generationModes.js)
+// — the video backends that render in a provider's cloud rather than on the
+// local accelerator. 'local' is the only non-cloud entry of VIDEO_RENDER_MODES.
+export const CLOUD_VIDEO_RENDER_MODES = Object.freeze(
+  VIDEO_RENDER_MODES.filter((mode) => mode !== IMAGE_GEN_MODE.LOCAL),
+);
+export const isCloudVideoMode = (mode) => CLOUD_VIDEO_RENDER_MODES.includes(mode);
+
+// Client mirror of the server's MEDIA_JOB_EXECUTION_LANES
+// (server/lib/generationModes.js) — the lanes the media-job scheduler runs in.
+export const MEDIA_JOB_LANES = Object.freeze(['gpu', 'cloud', 'remote']);
 
 // Client mirror of the server's normalizeRenderPinValue
 // (server/lib/renderTargets.js) — THE one render-pin normalization rule: trim;
@@ -94,6 +106,8 @@ export const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.GROK]: 'Grok',
   [IMAGE_GEN_MODE.AGY]: 'Agy',
   [IMAGE_GEN_MODE.EXTERNAL]: 'External',
+  fal: 'fal.ai',
+  reactor: 'Reactor.inc',
 });
 
 // Client mirror of the server's CLOUD_IMAGE_GEN_MODES (imageGen/modes.js) —
@@ -211,6 +225,32 @@ export const I2I_CAPABLE_MODES = Object.freeze([
 
 // True when a mode can run image-to-image.
 export const isI2iCapableMode = (mode) => I2I_CAPABLE_MODES.includes(mode);
+
+// Backward-compatibility read of a media job's execution lane for a queue
+// response carrying no `executionLane` (server/lib/generationModes.js#
+// mediaJobExecutionLane). The bundle is served by the same install whose API it
+// calls, so this is not routine version skew — it covers the window where a
+// rebuilt client is already being served by a server process that has not
+// restarted yet, and a replayed/hand-edited response. A federated job
+// is already identifiable from `renderer`; otherwise the cloud alphabets
+// decide, and every remaining mode — including local video's semantic
+// text/image/fflf values, which are not backend names at all — is a local GPU
+// render. Never call this when `executionLane` is present: the server's own
+// classification is authoritative.
+export const fallbackExecutionLane = ({ kind, mode, renderer } = {}) => {
+  if (renderer === 'remote') return 'remote';
+  if (kind === 'image' && isCloudCliMode(mode)) return 'cloud';
+  if (kind === 'video' && isCloudVideoMode(mode)) return 'cloud';
+  return 'gpu';
+};
+
+// THE one lane read for a projected media job: the server's classification when
+// it is there, the compatibility derivation when it isn't.
+export const mediaJobLane = (job) => (
+  MEDIA_JOB_LANES.includes(job?.executionLane)
+    ? job.executionLane
+    : fallbackExecutionLane({ kind: job?.kind, mode: job?.params?.mode, renderer: job?.renderer })
+);
 
 // Pick the best available i2i backend from a list of `{ id }` backends,
 // preferring local (its form exposes strength + LoRAs), then codex, grok, agy.

@@ -75,6 +75,7 @@ const EXACT_RATES = {
   'claude-sonnet-4-5': [3.0, 15.0],
   'claude-haiku-4-5': [1.0, 5.0],
   // OpenAI (Codex CLI)
+  'gpt-6-astra': [10.0, 50.0],
   'gpt-5.6-sol': [5.0, 30.0],
   'gpt-5.6-terra': [2.5, 15.0],
   'gpt-5.6-luna': [1.0, 6.0],
@@ -135,6 +136,7 @@ const FAMILY_RULES = [
   // the proprietary `/gpt/i` rule below, which would bill it at ~10-20x. Every
   // size/host lands here (never `exact`) since the id alone can't price it.
   { test: /gpt-oss/i, rateModel: 'gpt-oss-120b (cerebras)' },
+  { test: /astra/i, rateModel: 'gpt-6-astra' },
   { test: /gpt/i, rateModel: 'gpt-5.4' },
   { test: /grok-build/i, rateModel: 'grok-build-0.1' },
   { test: /grok-4\.20/i, rateModel: 'grok-4.3' },
@@ -317,7 +319,7 @@ export function isFreeProvider(providerOrId) {
   if (providerOrId == null) return false;
   if (typeof providerOrId === 'string') return FREE_ID.test(providerOrId);
   const p = providerOrId;
-  if (p.ollamaBacked === true || p.mtplxBacked === true || p.llamaBacked === true || p.vllmBacked === true || p.sglangBacked === true) return true;
+  if (p.ollamaBacked === true || p.lmstudioBacked === true || p.mtplxBacked === true || p.llamaBacked === true || p.vllmBacked === true || p.sglangBacked === true) return true;
   if (FREE_ID.test(p.id || '') || FREE_ID.test(p.command || '')) return true;
   if (typeof p.endpoint === 'string' && LOCALHOST_ENDPOINT.test(p.endpoint.trim())) return true;
   return false;

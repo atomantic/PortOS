@@ -568,6 +568,28 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
   if (releasedCount) {
     emitLog('info', `🔓 issue-reconcile ${app.name}: released ${releasedCount} abandoned claim(s) back to the queue`, { appId: app.id, analysisType: taskType });
   }
+  // Also deterministic, also no model needed: an issue labeled `blocked` on a
+  // genuine dependency (`Blocked by #N` convention — portos-file-issue skill)
+  // whose blocker(s) have all since closed is unlabeled here, not gated behind
+  // the zombie coordinator. gatherBlockedIssueState resolves its own forge
+  // target and returns null for anything but GitHub/GitLab (JIRA included —
+  // it has no equivalent scan), so no forge pre-check is needed here.
+  const { gatherBlockedIssueState, unblockIssues } = await import('./blockedIssueReconcile.js');
+  const blockedState = await gatherBlockedIssueState(app.repoPath, { app }).catch((err) => {
+    emitLog('warn', `issue-reconcile could not scan blocked issues for ${app.name}: ${err.message}`, { appId: app.id });
+    return null;
+  });
+  if (blockedState?.ready.length) {
+    const unblockedCount = await unblockIssues(blockedState.ready, {
+      forge: blockedState.forge, repoSpec: blockedState.repoSpec, fullName: blockedState.fullName, repoPath: app.repoPath,
+    }).catch((err) => {
+      emitLog('warn', `issue-reconcile could not unblock issues for ${app.name}: ${err.message}`, { appId: app.id });
+      return 0;
+    });
+    if (unblockedCount) {
+      emitLog('info', `🔓 issue-reconcile ${app.name}: removed the \`blocked\` label from ${unblockedCount} issue(s) whose dependency closed`, { appId: app.id, analysisType: taskType });
+    }
+  }
   if (result.stalled.length) {
     // In-progress issues with NO merged PR and NO live claim — a different stuck
     // state issue-reconcile deliberately does NOT auto-heal. Surface them.
@@ -578,6 +600,21 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
     emitLog('info', `🧟 issue-reconcile parked for ${app.name}: no zombie issues`, { appId: app.id });
     return { skip: true };
   }
+  if (result.forge === 'github') {
+    const { screenForgeMaintenance } = await import('./forgeMaintenanceEvidence.js');
+    const { execGh } = await import('./github.js');
+    const screened = await screenForgeMaintenance({
+      records: result.zombies, kind: 'issue', host: result.repoSpec.split('/')[0],
+      repoFullName: result.fullName, runGh: execGh,
+    });
+    if (!screened.ok) {
+      emitLog('warn', `issue-reconcile held: ${screened.code}`, { appId: app.id });
+      return { skip: true };
+    }
+    const accepted = new Map(screened.records.map(record => [record.number, record]));
+    result.zombies = result.zombies.filter(record => accepted.has(record.number)).map(record => ({ ...record, maintenanceEvidence: accepted.get(record.number).maintenanceEvidence }));
+    if (screened.withheld?.length) emitLog('warn', `issue-reconcile held ${screened.withheld.length} discussion(s) while proceeding with screened issues`, { appId: app.id });
+  }
   // Convergence guards — identical to branch-reconcile's (shared helper).
   const dispatch = await resolveReconcileDrainGate(taskSchedule, taskType, app, {
     signature: zombieSignature(result.zombies),
@@ -587,6 +624,7 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
   });
   if (!dispatch) return { skip: true };
   metadata.perpetual = true;
+  metadata.forgeMaintenanceVersion = 1;
   const block = formatZombiesForPrompt(result.zombies, {
     fullName: result.fullName, forge: result.forge, autoClose,
     projectKey: jira?.projectKey, instanceId: jira?.instanceId,
@@ -652,7 +690,7 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
   // cycle instead, so a disabled `pr-watcher` task can't strand them (see
   // `sweepPendingMergePrs`). This function owns only PR *discovery*.
   // prAuthorFilter was already merged + value-constrained into `metadata`.
-  const authorFilter = metadata.prAuthorFilter || 'any';
+  const authorFilter = metadata.prAuthorFilter === 'self' ? 'self' : 'trusted';
   const check = await prWatcher.checkPullRequests(app, { authorFilter });
   const checkedAt = new Date().toISOString();
   // The gh poll IS the cadence-bearing work — a poll that dispatches nothing
@@ -666,11 +704,39 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
     return { skip: true };
   }
 
+  let screeningError = null;
+  if (!check.firstRun && check.newPrs.length) {
+    const { screenForgeMaintenance } = await import('./forgeMaintenanceEvidence.js');
+    const { execGh } = await import('./github.js');
+    const { getOriginInfo } = await import('../lib/gitRemote.js');
+    const { githubApiHost } = await import('../lib/workTracker.js');
+    const origin = await getOriginInfo(app.repoPath);
+    const screened = await screenForgeMaintenance({
+      records: check.newPrs, kind: 'pr', host: githubApiHost(origin.host),
+      repoFullName: check.repoFullName, runGh: execGh,
+    });
+    if (!screened.ok) {
+      await prWatcher.persistPrWatcherState(app.id, { lastCheckedAt: checkedAt, lastError: screened.code });
+      await recordPoll();
+      emitLog('warn', `pr-watcher held: ${screened.code}`, { appId: app.id });
+      return { skip: true };
+    }
+    const accepted = new Set(screened.records.map(record => record.number));
+    check.newPrs = check.newPrs.filter(record => accepted.has(record.number));
+    const priorActivity = prWatcher.readPrWatcherState(app).activityByPr || {};
+    for (const held of screened.withheld || []) {
+      if (priorActivity[held.number]) check.activityByPr[held.number] = priorActivity[held.number];
+      else delete check.activityByPr[held.number];
+    }
+    screeningError = screened.code || null;
+  }
+
   // Always advance the high-water mark + clear any prior error.
   await prWatcher.persistPrWatcherState(app.id, {
     lastSeenPrNumber: check.newLastSeen,
+    activityByPr: check.activityByPr,
     lastCheckedAt: checkedAt,
-    lastError: null
+    lastError: screeningError
   });
 
   if (check.firstRun) {
@@ -684,6 +750,7 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
     return { skip: true };
   }
 
+  metadata.forgeMaintenanceVersion = 1;
   const block = prWatcher.formatPullRequestsForPrompt(check.newPrs, {
     repoFullName: check.repoFullName, defaultBranch: check.defaultBranch
   });

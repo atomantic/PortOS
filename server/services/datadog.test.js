@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const { writeFileMock } = vi.hoisted(() => ({
+  writeFileMock: vi.fn(),
+}));
+
 vi.mock('fs/promises', () => {
   const mod = {
     readFile: vi.fn(),
-    writeFile: vi.fn(),
+    writeFile: writeFileMock,
     mkdir: vi.fn()
   };
   return { ...mod, default: mod };
@@ -14,10 +18,11 @@ vi.mock('fs', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
+  tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
   ensureDir: vi.fn(),
-  readJSONFile: vi.fn()
+  readJSONFile: vi.fn(),
+  atomicWrite: vi.fn(async (p, data) => writeFileMock(p, typeof data === 'string' ? data : JSON.stringify(data))),
 }));
 
 vi.mock('../lib/httpClient.js', () => ({

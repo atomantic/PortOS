@@ -9,6 +9,7 @@ const mock = vi.hoisted(() => ({
   // per-test temp repo instead.
   paths: { root: '' },
   updateDefaultBranch: vi.fn(),
+  addTask: vi.fn(),
   spawn: vi.fn(),
   startPortosSelfUpdate: vi.fn(),
   dashboardOpen: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock('../lib/detachedSpawn.js', () => ({
   spawnDetached: mock.dashboardOpen,
 }));
 vi.mock('./managedAppRepositories.js', () => ({ syncManagedAppFork: mock.syncFork }));
+vi.mock('./cosTaskStore.js', () => ({ addTask: mock.addTask }));
 
 import { updateApp } from './appUpdater.js';
 
@@ -53,6 +55,7 @@ describe('managed app updates', () => {
     mock.dashboardRunning.mockResolvedValue(false);
     mock.dashboardOpen.mockResolvedValue(mock.dashboardHandle);
     mock.restart.mockResolvedValue({ success: true });
+    mock.addTask.mockResolvedValue({ id: 'sys-conflict' });
     mock.syncFork.mockResolvedValue({
       alreadyUpToDate: false,
       fullName: 'example-owner/example-app',
@@ -89,6 +92,73 @@ describe('managed app updates', () => {
     expect(mock.spawn).not.toHaveBeenCalledWith('npm', expect.anything(), expect.anything());
     expect(emit).toHaveBeenCalledWith('git-pull:companion-1', 'done', 'Already up to date');
     expect(emit).toHaveBeenCalledWith('app-update', 'done', 'App update routine complete');
+  });
+
+  it('queues a CoS agent and stops the update when the pull hits a conflict', async () => {
+    mock.updateDefaultBranch.mockResolvedValueOnce({
+      success: false,
+      branch: 'main',
+      conflict: true,
+      error: 'CONFLICT (content): Merge conflict in server/index.js',
+    });
+    const emit = vi.fn();
+
+    const result = await updateApp({
+      id: 'example-app',
+      name: 'Example App',
+      type: 'express',
+      repoPath: repo,
+      pm2ProcessNames: ['example-app'],
+    }, emit);
+
+    expect(result.success).toBe(false);
+    expect(result.steps).toEqual([expect.objectContaining({ step: 'git-pull', success: false })]);
+    expect(emit).toHaveBeenCalledWith('git-pull', 'error', expect.stringContaining('CoS agent'));
+    expect(mock.addTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: `Resolve git conflict in Example App at ${repo}`,
+        app: 'example-app',
+        priority: 'HIGH',
+      }),
+      'internal',
+    );
+    expect(mock.addTask.mock.calls[0][0].context).toContain('Merge conflict in server/index.js');
+    // The conflict is upstream of every mutating step — nothing may run on a
+    // checkout that is mid-rebase or carrying conflict markers.
+    expect(mock.spawn).not.toHaveBeenCalled();
+    expect(mock.restart).not.toHaveBeenCalled();
+  });
+
+  it('queues a CoS agent for a companion repository conflict', async () => {
+    const companionRepo = join(repo, '..', 'example-companion');
+    mock.updateDefaultBranch
+      .mockResolvedValueOnce({ branch: 'main', output: 'Already up to date' })
+      .mockResolvedValueOnce({ success: false, branch: 'main', conflict: true, error: 'CONFLICT (content): x' });
+    const emit = vi.fn();
+
+    const result = await updateApp({
+      id: 'example-app',
+      name: 'Example App',
+      type: 'express',
+      repoPath: repo,
+      companionRepoPaths: [companionRepo],
+      pm2ProcessNames: ['example-app'],
+    }, emit);
+
+    expect(result.success).toBe(false);
+    expect(emit).toHaveBeenCalledWith('git-pull:companion-1', 'error', expect.stringContaining('CoS agent'));
+    // `app` routes the agent's workspace to the app's PRIMARY repoPath, so a
+    // companion conflict must NOT claim it — the agent would land in a checkout
+    // that isn't even conflicted. The absolute path steers it instead.
+    expect(mock.addTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        description: `Resolve git conflict in Example App at ${companionRepo}`,
+        app: null,
+        context: expect.stringContaining(companionRepo),
+      }),
+      'internal',
+    );
+    expect(mock.restart).not.toHaveBeenCalled();
   });
 
   it('syncs a detected fork before pulling when the managed update requests it', async () => {

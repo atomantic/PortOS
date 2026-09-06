@@ -32,7 +32,7 @@ const eligibleProvidersFor = (providers, policy) =>
 const providerNames = (providers) => providers.map((p) => p.name || p.id).join(', ');
 
 // Constant now that the eligible set is left to the dropdown.
-const NO_TOOL_STAGE_NOTE = "Tool-free stage. A local model must additionally report no tool-calling capability; a cloud model is held tool-free by the provider's own enforced flags. Leave the provider unset to use the first eligible one. It returns only a binary allowlist; the final stage never receives rejected content.";
+const NO_TOOL_STAGE_NOTE = "A local model must additionally report no tool-calling capability; a cloud model is held tool-free by the provider's own enforced flags. Leave the provider unset to use the first eligible one.";
 
 // Every enabled CLI/TUI provider can run the actions stage; the note says which
 // of them the server additionally wraps in the vendor's own OS sandbox, so a
@@ -129,7 +129,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
             <div>
               <p className="text-sm font-medium text-white">Run final code review and actions</p>
               <p className="text-xs text-gray-400 mt-1">
-                When enabled, a sandbox-capable reviewer applies only the screened patch, runs local tests, and returns a structured review for the deterministic GitHub coordinator. It is nested here, not a separate scheduled task.
+                When enabled, a tool-free reviewer analyzes screened PR content and returns a structured static review. The deterministic GitHub coordinator validates any resulting actions. Contributor code is never executed. This stage is nested here, not a separate scheduled task.
               </p>
             </div>
             <ToggleSwitch
@@ -154,32 +154,17 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
             ? (prReviewerStageRole(stage) || (i === 0 ? 'security' : i === 1 ? 'eligibility' : 'actions'))
             : null;
           const isSecurityStage = role === 'security';
-          // The posture is read off the stage's own execution profile, so a
-          // custom pipeline that reuses one of these profiles gets the same
-          // gating without being a pr-reviewer stage.
-          const posture = isSecurityStage ? null : stagePublicReviewPosture(stage);
+          // PR roles reassert the server's no-tool contract even for legacy
+          // profiles or position-only stages. Other pipelines keep their profile.
+          const posture = isSecurityStage ? null : stagePublicReviewPosture(role ? { ...stage, role } : stage);
           const isNoToolStage = posture === PUBLIC_REVIEW_NO_TOOL_POSTURE;
           const isActionsStage = Boolean(posture) && !isNoToolStage;
           const eligibleProviders = posture ? eligibleProvidersFor(providers, selectionPolicies[posture]) : null;
           const localBackend = localBackendForProvider(stageProvider);
           const localModelIds = localBackend === 'ollama' ? ollama : localBackend === 'lmstudio' ? lmstudio : [];
-          // A LOCAL provider's installed-model list is the source of truth (its
-          // stored catalog is a cached snapshot, and only an installed model has
-          // a probeable capability report). That holds for the sandboxed actions
-          // stage as much as the tool-free gate — offering the stale catalog
-          // there let a stage be pinned to a model the daemon no longer serves,
-          // and hid one that had just been pulled. Every other provider uses its
-          // own catalog, so a cloud CLI stage can pick any model it offers.
-          //
-          // `useLocalModels` reports BOTH "not fetched yet" and "daemon said
-          // nothing" as `[]`, so an empty list is not evidence the daemon serves
-          // no models. The two stages part ways on what to do about that. The
-          // tool-free gate must stay strict: its policy needs a probeable
-          // capability report, and a model with none is not selectable at all,
-          // so an empty list correctly offers nothing. The actions stage has no
-          // such gate, so it falls back to the record's catalog — otherwise a
-          // stopped daemon (or the in-flight window) renders an empty picker and
-          // drops the stage's own saved pin out of the dropdown.
+          // Both PR analysis stages require the local daemon's capability report.
+          // Cached models cannot establish no-tool eligibility when it is offline.
+          // Generic sandboxed-action stages retain their catalog fallback.
           const localStageModels = localModelIds.map(id => ({
             id,
             name: id,
@@ -202,7 +187,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                   <span className="text-[10px] px-1 py-0.5 bg-gray-600/30 text-gray-400 rounded">read-only</span>
                 )}
                 {isNoToolStage && (
-                  <span className="text-[10px] px-1 py-0.5 bg-port-accent/15 text-port-accent rounded">tool-free gate</span>
+                  <span className="text-[10px] px-1 py-0.5 bg-port-accent/15 text-port-accent rounded">{role === 'actions' ? 'tool-free review' : 'tool-free gate'}</span>
                 )}
                 {isActionsStage && (
                   <span className="text-[10px] px-1 py-0.5 bg-port-accent-2/15 text-port-accent-2 rounded">sandboxed actions</span>
@@ -217,7 +202,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                   <p className="font-medium text-port-accent">Deterministic hidden-content screen</p>
                   <p className="mt-1">Server-side checks on each external PR&apos;s complete title, description, and diff for content a human reviewer would miss — invisible or direction-control Unicode, comments GitHub never renders that address a model — and for obvious model-directed harm: instruction overrides, decode-and-follow or download-and-run instructions, credential exfiltration, and attempts to steer the review verdict. No model, tools, repository checkout, or GitHub credentials are involved.</p>
                   <p className="mt-1 text-gray-500">
-                    The pinned Llama Prompt Guard 2 classifier runs as an optional second layer only when it is installed on{' '}
+                    The pinned Llama Prompt Guard 2 classifier is required by default. Install and configure it on{' '}
                     <Link to="/models/llms/abuse" className="underline hover:text-port-accent">Models → LLMs → Abuse Guard</Link>.
                   </p>
                 </div>
@@ -254,7 +239,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                 <p className="text-xs text-gray-500 mt-2">
                   {localModelsLoading
                     ? 'Loading installed local model capability reports…'
-                    : NO_TOOL_STAGE_NOTE}
+                    : `${role === 'actions' ? 'Tool-free review. Returns a structured static review for server-validated actions; it cannot run contributor code or tests.' : role === 'eligibility' ? 'Tool-free stage. Returns only a binary allowlist; rejected content never reaches the final review.' : 'Tool-free stage.'} ${NO_TOOL_STAGE_NOTE}`}
                 </p>
               )}
               {isActionsStage && eligibleProviders?.length > 0 && (
@@ -273,7 +258,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
       </div>
       <p className="text-xs text-gray-500 mt-2">
         {needsSecurityModelPolicy
-          ? 'Stage 1 screens complete public content with a managed classifier; only cleared content reaches the tool-free Eligibility Gate, and only eligible PRs reach the optional sandboxed final review. Stages are nested, not independently scheduled.'
+          ? 'Stage 1 screens complete public content with a managed classifier; only cleared content reaches the tool-free Eligibility Gate, and only eligible PRs reach the optional tool-free final review. The server validates resulting GitHub actions. Stages are nested, not independently scheduled.'
           : 'Each stage runs as a separate agent inside this pipeline; stages are not scheduled independently.'}
         {' Configure a different provider, model, and thinking effort per stage.'}
       </p>

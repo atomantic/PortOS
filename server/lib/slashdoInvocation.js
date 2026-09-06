@@ -17,15 +17,10 @@
  * bare command name in `metadata.slashdoCommand` and this module resolves the
  * concrete invocation when the prompt is built.
  *
- * Skill-style hosts (and any provider we can't positively identify) get the
- * command's markdown body inlined into the prompt instead — the provider-agnostic
- * fallback that works even when that environment has no slashdo install at all.
- *
- * Those bodies are large (38KB–317KB expanded), so two size controls apply
- * (#3110): unreachable reviewer variants are pruned out of the body
- * (`unreachableReviewerIncludes`), and whatever is still over
- * `SLASHDO_INLINE_BUDGET_CHARS` is handed to file-tool hosts as a path to a
- * resolved copy on disk rather than pasted (`buildSlashdoSection`'s `bodyPath`).
+ * Every host receives the bundled procedure independently of a global install.
+ * File-tool hosts read an entrypoint and phase-specific supporting files; API
+ * providers receive a self-contained body. Explicitly pinned reviewer choices
+ * prune unreachable variants before either form is rendered.
  */
 import { isClaudeProvider, isOpencodeProvider } from './providerModels.js';
 import { inferTuiCommand } from './providerVendors.js';
@@ -41,35 +36,16 @@ export const SLASHDO_NAMESPACE = 'do';
  * the agent needs no extra file read. Over it, a host with file tools gets a
  * pointer at a resolved copy on disk instead (see `buildSlashdoSection`).
  *
- * 24,000 chars ≈ 6k tokens. Every current bundled command is far over it even
- * after pruning (`review` measures 258,260 chars raw, 198,997 pruned to one
- * reviewer, 112,269 with every reviewer include dropped), which is the intent:
- * the budget exists so a future SMALL command still inlines. The budget-pin test
- * in `slashdoInvocation.test.js` asserts this against the measured sizes, so a
- * slashdo release that shrinks a command can't silently flip it back to inlining
- * without someone noticing.
+ * 24,000 chars is approximately 6k tokens. Deferred bundles are always staged
+ * because their relative references need a filesystem base, even when the
+ * entrypoint is under this limit. Small self-contained commands stay inline.
  */
 export const SLASHDO_INLINE_BUDGET_CHARS = 24000;
 
 /**
- * slashdo lib includes that are REVIEWER VARIANTS — one loop per reviewer kind,
- * all five pasted into `review` / `better` / `pr` / `release` / `depfree` though
- * a given run drives exactly one. Pruning the unreachable ones is where the real
- * prompt saving is — pruning to a single CLI reviewer measured -23% on `review`,
- * -27% on `pr`, -28% on `depfree`; the file pointer is the backstop for the rest.
- *
- * Keyed by the PortOS reviewer slug (`REVIEWER_VALUES` in `reviewerConfig.js`) so
- * the keep-set derives from already-resolved run settings. `copilot` and the
- * arbitrary-`@login` loop are GitHub-side; `claude`/`codex`/`antigravity`/`grok`/`cursor`
- * all share slashdo's one local-agent loop; `ollama`/`lmstudio` are the
- * local-model loop.
- *
- * `multi-reviewer-loop` is the ORCHESTRATION WRAPPER, not a per-reviewer variant:
- * slashdo's commands hand off to it for any non-empty reviewer list, and its own
- * spec says `{REVIEW_AGENTS}` "may contain a single entry". So it is listed here
- * (it is prunable in principle — a run with no reviewers at all doesn't reach it)
- * but `unreachableReviewerIncludes` never drops it once a reviewer resolves.
- * Pruning it for a lone reviewer left the inner loop with nothing to dispatch it.
+ * Reviewer-specific libraries that can be omitted once the run's reviewers are
+ * pinned. CLI reviewers share localAgent; local-model reviewers share localModel.
+ * Keep the multi-reviewer dispatcher for every non-empty list, even one reviewer.
  */
 export const SLASHDO_REVIEWER_INCLUDES = Object.freeze({
   copilot: 'copilot-review-loop',
@@ -97,9 +73,236 @@ export const SLASHDO_REVIEWER_INCLUDE_NAMES = Object.freeze(Object.values(SLASHD
  * (whose keys are the same roster); a reviewer added to one and not the other
  * is a drift the test catches.
  */
-export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor', 'opencode', 'kimi']);
+export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kimi']);
 /** Reviewer slugs that drive slashdo's local-model (Ollama-style) loop. */
 const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio', 'mtplx']);
+/**
+ * slashdo's own `--review-with` reviewer vocabulary, mapped to the PortOS slug
+ * `unreachableReviewerIncludes` is keyed by. slashdo spells antigravity `agy`
+ * and accepts `gemini`/`antigravity` as aliases for it; `cursor-agent` is an
+ * alias for `cursor`. PortOS stores the long names.
+ *
+ * Kept local rather than imported from `reviewerConfig.js` for the same reason
+ * `LOCAL_AGENT_REVIEWERS` is: `cosValidation.js` (which re-exports that module)
+ * imports THIS one, so the arrow can only point one way.
+ *
+ * Deliberately NOT the full `REVIEWER_VALUES` roster — a `PORTOS_ONLY_REVIEWERS`
+ * slug (`lmstudio`/`mtplx`/`opencode`/`kimi`) has no slashdo counterpart and
+ * aborts the command, so seeing one in an explicit flag means the argument was
+ * hand-written against a grammar we don't own. That falls through to the
+ * unresolvable branch, which prunes nothing.
+ */
+const SLASHDO_REVIEWER_SLUGS = Object.freeze({
+  copilot: 'copilot',
+  codex: 'codex',
+  claude: 'claude',
+  grok: 'grok',
+  cursor: 'cursor',
+  pi: 'pi',
+  'cursor-agent': 'cursor',
+  agy: 'antigravity',
+  gemini: 'antigravity',
+  antigravity: 'antigravity',
+  ollama: 'ollama',
+});
+
+/** Reviewer slugs slashdo rejects a `[<model>]` bracket on. */
+const BRACKET_FREE_SLASHDO_REVIEWERS = new Set(['copilot']);
+const REVIEW_WITH_FLAG = '--review-with';
+/** slashdo's explicit "no external reviewer this run" tombstone. */
+const REVIEW_WITH_NONE = 'none';
+/**
+ * Shell constructs whose expansion we cannot see. A value carrying one is not a
+ * reviewer list we can resolve — the agent's shell decides what it becomes.
+ */
+const UNEXPANDABLE_VALUE_RE = /[$`\\]/;
+/** GitHub login charset plus the optional `[bot]` App suffix, per slashdo. */
+const REVIEWER_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9-]*(?:\[bot\])?$/;
+const ENTRY_MAX_RE = /^max=\d+$/;
+const ENTRY_EFFORT_RE = /^effort=(?:low|medium|high|xhigh|max)$/;
+
+/** The sentinel for "an explicit flag is there, but we can't read it safely". */
+const UNRESOLVED_REVIEW_WITH = Object.freeze({ explicit: true, unresolved: true, reviewers: Object.freeze([]), usernames: Object.freeze([]) });
+
+/**
+ * Split a free-form argument string into argv-style tokens, honoring single and
+ * double quotes so a bracketed model id with spaces (`agy[Gemini 3.5 Flash]`)
+ * survives as one token.
+ * @param {string} args
+ * @returns {string[]|null} null when a quote is left open (nothing safe to read)
+ */
+function tokenizeSlashdoArgs(args) {
+  const tokens = [];
+  let current = '';
+  let started = false;
+  let quote = null;
+  for (const ch of args) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else current += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; started = true; continue; }
+    if (/\s/.test(ch)) {
+      if (started) { tokens.push(current); current = ''; started = false; }
+      continue;
+    }
+    current += ch;
+    started = true;
+  }
+  if (quote) return null;
+  if (started) tokens.push(current);
+  return tokens;
+}
+
+/**
+ * Split a `--review-with` value on the commas BETWEEN entries — never on one
+ * inside a `[<model>]` bracket, whose value is free-form.
+ * @param {string} value
+ * @returns {string[]|null} null when a bracket is left open
+ */
+function splitReviewerEntries(value) {
+  const entries = [];
+  let current = '';
+  let depth = 0;
+  for (const ch of value) {
+    if (ch === '[') depth += 1;
+    else if (ch === ']') { depth -= 1; if (depth < 0) return null; }
+    if (ch === ',' && depth === 0) { entries.push(current); current = ''; continue; }
+    current += ch;
+  }
+  if (depth !== 0) return null;
+  entries.push(current);
+  return entries;
+}
+
+/**
+ * Strip slashdo's per-entry `~` suffixes (`~opt`, `~max=<n>`, `~effort=<level>`)
+ * off an entry and return the bare slug/login. Suffixes are matched only OUTSIDE
+ * the outermost brackets, because a model id may itself contain a `~`.
+ *
+ * The suffix VALUES are deliberately discarded: they ride the explicit argument
+ * verbatim into the invocation, so PortOS never re-emits them. This only has to
+ * decide whether the entry is one slashdo would accept.
+ *
+ * @param {string} entry
+ * @returns {string|null} the suffix-free token, or null when a suffix is one
+ *   slashdo would reject (unknown, repeated, or malformed)
+ */
+function stripEntrySuffixes(entry) {
+  const open = entry.indexOf('[');
+  const close = entry.lastIndexOf(']');
+  if (open !== -1 && close < open) return null;
+  const tilde = entry.indexOf('~', close === -1 ? 0 : close + 1);
+  if (tilde === -1) return entry;
+  const seen = new Set();
+  for (const suffix of entry.slice(tilde + 1).split('~')) {
+    const kind = suffix === 'opt' ? 'opt'
+      : ENTRY_MAX_RE.test(suffix) ? 'max'
+        : ENTRY_EFFORT_RE.test(suffix) ? 'effort' : null;
+    if (!kind || seen.has(kind)) return null;
+    seen.add(kind);
+  }
+  return entry.slice(0, tilde);
+}
+
+/**
+ * Resolve one suffix-free `--review-with` entry to the PortOS reviewer slug (or
+ * `@login`) it names.
+ * @param {string} token
+ * @returns {{reviewer: string}|{username: string}|null} null when slashdo itself
+ *   would reject the entry, or when it names something PortOS can't map
+ */
+function resolveReviewerEntry(token) {
+  if (!token) return null;
+  if (token.startsWith('@')) {
+    const login = token.slice(1);
+    // slashdo rejects `@login[…]`; `[bot]` is part of the login, not a model.
+    return REVIEWER_LOGIN_RE.test(login) ? { username: login } : null;
+  }
+  const open = token.indexOf('[');
+  if (open !== -1 && !token.endsWith(']')) return null;
+  const slug = (open === -1 ? token : token.slice(0, open)).toLowerCase();
+  const reviewer = SLASHDO_REVIEWER_SLUGS[slug];
+  if (!reviewer) return null;
+  if (open !== -1 && BRACKET_FREE_SLASHDO_REVIEWERS.has(reviewer)) return null;
+  return { reviewer };
+}
+
+/**
+ * The reviewer contract an EXPLICIT `--review-with` in a task's `slashdoArgs`
+ * declares (#6261).
+ *
+ * slashdo's own precedence puts a typed flag above every saved or inherited
+ * default (`lib/review-config-defaults.md`), and PortOS passes `slashdoArgs`
+ * through verbatim — so when that flag is present it, not `resolveReviewerConfig`,
+ * is what the run will actually use. Pruning the body or pinning a `--review-with`
+ * from task metadata instead is how a prompt ends up requesting one reviewer,
+ * omitting its loop, and instructing the agent to use another.
+ *
+ * Three outcomes, and the caller must treat them differently:
+ * - `null` — no explicit flag; the metadata/defaults contract governs as before.
+ * - `{ unresolved: true }` — a flag is there but this parser can't safely read it
+ *   (an open quote or bracket, a shell expansion, a slug or suffix outside
+ *   slashdo's grammar, conflicting repeats). Preserve the arguments and prune and
+ *   pin NOTHING: a grammar we don't fully own is exactly the case where guessing
+ *   drops the loop the run needs.
+ * - `{ none: true }` or a resolved `{ reviewers, usernames }` — the explicit
+ *   selection, already mapped to PortOS slugs.
+ *
+ * Suffix values (`~opt` / `~max=<n>` / `~effort=<level>`) and `[<model>]` brackets
+ * are validated but not returned: they travel in the verbatim argument, so
+ * re-emitting them would state the same pin twice.
+ *
+ * @param {unknown} args - the task's raw `metadata.slashdoArgs`
+ * @returns {{explicit: true, unresolved?: true, none?: true, reviewers: string[],
+ *   usernames: string[]}|null}
+ */
+export function parseExplicitReviewWith(args) {
+  if (typeof args !== 'string' || !args.includes(REVIEW_WITH_FLAG)) return null;
+  const tokens = tokenizeSlashdoArgs(args);
+  if (!tokens) return UNRESOLVED_REVIEW_WITH;
+
+  const values = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === REVIEW_WITH_FLAG) {
+      const next = tokens[i + 1];
+      // A missing value, or the next flag where the value should be.
+      if (next === undefined || next.startsWith('-')) return UNRESOLVED_REVIEW_WITH;
+      values.push(next);
+      i += 1;
+    } else if (token.startsWith(`${REVIEW_WITH_FLAG}=`)) {
+      values.push(token.slice(REVIEW_WITH_FLAG.length + 1));
+    }
+    // Anything else starting with the same prefix (`--review-with-foo`) is a
+    // different flag — not ours to read.
+  }
+  if (!values.length) return null;
+  // Repeats are outside slashdo's documented grammar unless they agree.
+  if (new Set(values).size > 1) return UNRESOLVED_REVIEW_WITH;
+
+  const value = values[0];
+  if (!value || UNEXPANDABLE_VALUE_RE.test(value)) return UNRESOLVED_REVIEW_WITH;
+  if (value.toLowerCase() === REVIEW_WITH_NONE) {
+    return { explicit: true, none: true, reviewers: [], usernames: [] };
+  }
+
+  const entries = splitReviewerEntries(value);
+  if (!entries) return UNRESOLVED_REVIEW_WITH;
+  const reviewers = [];
+  const usernames = [];
+  for (const entry of entries) {
+    const bare = stripEntrySuffixes(entry.trim());
+    const resolved = bare === null ? null : resolveReviewerEntry(bare);
+    if (!resolved) return UNRESOLVED_REVIEW_WITH;
+    if (resolved.username) {
+      if (!usernames.some(u => u.toLowerCase() === resolved.username.toLowerCase())) usernames.push(resolved.username);
+    } else if (!reviewers.includes(resolved.reviewer)) reviewers.push(resolved.reviewer);
+  }
+  return { explicit: true, none: false, reviewers, usernames };
+}
+
 
 /**
  * Which reviewer-variant includes a run can never reach, given its resolved
@@ -384,7 +587,7 @@ export function resolveSlashdoInvocation({
  * @returns {string}
  */
 export function oversizedBodyPointer(bodyPath, body) {
-  return `The full procedure is on disk at \`${bodyPath}\` (${Math.round(body.length / 1000)}KB) — too large to paste here. READ THAT FILE before you start and follow it exactly rather than improvising. It is long: read it in sections as you need them, and do not assume a step you have not read.`;
+  return `The procedure entrypoint is on disk at \`${bodyPath}\` (${Math.round(body.length / 1000)}KB). READ THAT FILE before you start. Follow its phase order and required reads; read long procedures in sections as needed.`;
 }
 
 /**
@@ -392,25 +595,13 @@ export function oversizedBodyPointer(bodyPath, body) {
  * caller loads `body` (via `loadSlashdoFile`) and passes it in, so this module
  * stays side-effect free.
  *
- * The body is inlined for EVERY style, not just `skill`. PortOS bundles slashdo
- * as a submodule and only exposes it as slash commands through the repo-local
- * `.claude/commands/do/` symlinks — which exist in the PortOS checkout, not in
- * the managed-app workspaces most CoS tasks run in, and only for Claude Code.
- * So a typed invocation is a shortcut for hosts that happen to have slashdo
- * installed, never the thing the prompt depends on. Same posture as every other
- * slashdo consumer here (`loadSlashdoCommand`, the `/do:rpr` and review-loop
- * inlining), which is why the submodule exists at all: no global install required.
+ * The procedure accompanies every invocation style: managed apps need no global
+ * slashdo install or PortOS project-command symlinks.
  *
- * **Over-budget bodies become a pointer (#3110).** When `bodyPath` names a
- * resolved copy on disk and the body exceeds `SLASHDO_INLINE_BUDGET_CHARS`, the
- * section emits the path instead of the text and the agent reads it on demand.
- * This is NOT a token saving by itself — an agent that follows the whole
- * procedure pays the same tokens through `Read`. It is worth doing because a host
- * that can invoke slashdo natively, or that only needs part of the procedure,
- * skips the cost entirely; the prompt-size win comes from pruning unreachable
- * reviewer variants BEFORE this check (`unreachableReviewerIncludes`).
- * `bodyPath` is only ever passed for a host with file tools — an HTTP `api`
- * provider has none, so it always inlines.
+ * A staged body always renders as a pointer, including a short entrypoint with
+ * deferred references. Supporting files resolve relative to that entrypoint.
+ * `bodyPath` is only passed for hosts with file tools; API providers inline an
+ * eager, self-contained body.
  *
  * **`reviewWith` is mandatory whenever the body was pruned.** A pruned body has
  * only the reviewer loop(s) the caller pruned FOR; if the run then resolved some
@@ -424,7 +615,12 @@ export function oversizedBodyPointer(bodyPath, body) {
  * @param {string|null} [opts.bodyPath=null] - absolute path to a resolved copy of
  *   `body`. Pass only when the host has file tools.
  * @param {string} [opts.reviewWith=''] - reviewer CSV to pin (`codex,copilot`).
- *   Required when `body` had reviewer variants pruned out of it.
+ *   Required when `body` had reviewer variants pruned out of it AND the invocation
+ *   does not already carry its own `--review-with` (see `explicitReviewWith`).
+ * @param {boolean} [opts.explicitReviewWith=false] - the invocation's own arguments
+ *   carry an explicit `--review-with`, and `body` was pruned to match it (#6261).
+ *   Mutually exclusive with `reviewWith`: restating the value PortOS already passes
+ *   verbatim would emit every `~opt` / `~max=` / `~effort=` suffix twice.
  * @param {string} [opts.reviewerEffortNote=''] - the per-reviewer reasoning-effort
  *   instruction (`buildReviewerEffortNote`). Non-empty only when `reviewWith` is
  *   NOT emitted: a pinned CSV carries each effort as slashdo's `~effort=<level>`
@@ -440,6 +636,7 @@ export function buildSlashdoSection(resolved, body = null, {
   reviewWith = '',
   reviewerEffortNote = '',
   includeTaskContext = false,
+  explicitReviewWith = false,
 } = {}) {
   if (!resolved) return '';
 
@@ -462,7 +659,16 @@ export function buildSlashdoSection(resolved, body = null, {
       '```'
     );
   }
-  if (reviewWith) {
+  if (explicitReviewWith) {
+    // The invocation above already carries the flag verbatim, so the pin points AT
+    // it rather than repeating it: slashdo's own precedence puts an explicit flag
+    // above every saved default, and restating the value would emit each
+    // per-reviewer suffix a second time.
+    lines.push(
+      '',
+      'The `--review-with` value in the invocation above is authoritative for this run: the procedure you were given carries ONLY the reviewer loops that value can reach (the rest were omitted as unreachable). Do not substitute a different reviewer from a saved slashdo default.'
+    );
+  } else if (reviewWith) {
     lines.push(
       '',
       `Run this workflow with \`--review-with ${reviewWith}\` — the procedure you were given carries ONLY those reviewers' loops (the others were omitted as unreachable). Do not substitute a different reviewer from a saved slashdo default.`
@@ -471,8 +677,9 @@ export function buildSlashdoSection(resolved, body = null, {
   if (reviewerEffortNote) {
     lines.push('', reviewerEffortNote);
   }
-  if (body && bodyPath && body.length > SLASHDO_INLINE_BUDGET_CHARS) {
-    lines.push('', oversizedBodyPointer(bodyPath, body));
+  if (body && bodyPath) {
+    lines.push('', oversizedBodyPointer(bodyPath, body),
+      'Resolve each supporting-file path relative to the file containing that reference. Read each required reference only when its phase or condition applies; do not preload the bundle.');
   } else if (body) {
     lines.push(
       '',

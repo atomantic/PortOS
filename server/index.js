@@ -88,6 +88,7 @@ import autobiographyRoutes from './routes/autobiography.js';
 import backupRoutes from './routes/backup.js';
 import legacyExportRoutes from './routes/legacyExport.js';
 import eidoverseWorldRoutes from './routes/eidoverseWorldRoutes.js';
+import eidoverseTravelRoutes from './routes/eidoverseTravelRoutes.js';
 import databaseRoutes from './routes/database.js';
 import localLlmRoutes from './routes/localLlm.js';
 import codeReviewRoutes from './routes/codeReview.js';
@@ -117,6 +118,7 @@ import characterRoutes from './routes/character.js';
 import toolsRoutes from './routes/tools.js';
 import imageGenRoutes from './routes/imageGen.js';
 import videoGenRoutes from './routes/videoGen.js';
+import continuousVideoEpisodeRoutes from './routes/continuousVideoEpisode.js';
 import videoDownloadRoutes from './routes/videoDownload.js';
 import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
@@ -170,6 +172,7 @@ import { errorMiddleware } from './lib/errorHandler.js';
 import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
 import { JSON_BODY_LIMIT } from './lib/uploadLimits.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
+import { createModelComparisonRoutes } from './routes/modelComparison.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
 
@@ -280,6 +283,7 @@ app.use('/api/detect', detectRoutes);
 app.use('/api/scaffold', scaffoldRoutes);
 
 // AI Toolkit routes with PortOS extensions
+app.use('/api/providers/comparison', createModelComparisonRoutes(aiToolkit.services.providers));
 app.use('/api/providers', createPortOSProviderRoutes(aiToolkit));
 app.use('/api/runs', createPortOSRunsRoutes(aiToolkit));
 app.use('/api/prompts', createPortOSPromptsRoutes(aiToolkit));
@@ -306,6 +310,7 @@ app.use('/api/autofix', autoFixMetricsRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/legacy-export', legacyExportRoutes);
 app.use('/api/eidoverse/world', eidoverseWorldRoutes);
+app.use('/api/eidoverse/travel', eidoverseTravelRoutes);
 app.use('/api/database', databaseRoutes);
 app.use('/api/uploads', uploadsRoutes);
 app.use('/api/image-clean', imageCleanRoutes);
@@ -380,6 +385,7 @@ app.use('/api/character', characterRoutes);
 app.use('/api/tools', toolsRoutes);
 app.use('/api/image-gen', imageGenRoutes);
 app.use('/api/video-gen', videoGenRoutes);
+app.use('/api/continuous-video', continuousVideoEpisodeRoutes);
 app.use('/api/devtools/video-download', videoDownloadRoutes);
 app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
@@ -489,4 +495,7 @@ getBuildIdentity().catch((err) => console.error(`❌ Build identity probe failed
 // process itself. See services/bootstrap.js.
 runBootSequence({ io, httpServer, localHttpServer, httpsEnabled, port: PORT, host: HOST, spawnerReady });
 
+// Opt-in listener only: restores host configuration without generating tokens.
+import('./services/fleetLlmHost.js').then(({ startFleetLlmHost }) => startFleetLlmHost())
+  .catch(() => console.error('❌ Dedicated model host listener could not start; open AI Providers → Model host setup.'));
 registerShutdownHandlers({ io, httpServer, localHttpServer });

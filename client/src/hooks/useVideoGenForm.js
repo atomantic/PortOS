@@ -8,11 +8,10 @@ import {
   DEFAULT_I2V_REFERENCE_MODE, isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
   runtimeSupportsI2vReferenceMode, resolveI2vReferenceStrength,
 } from '../lib/videoReferenceModes';
-import { randomSeed } from '../lib/genUtils';
 import {
   resolutionOptionsForModel, defaultResolutionForModel, snapAspectToImage,
 } from '../lib/videoGenResolutions';
-import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
+import { normalizeVideoTiling } from '../lib/videoTilingOptions';
 import {
   MAX_CHUNKS,
   videoModelMemoryGb, isModelAllowedForMode,
@@ -70,8 +69,17 @@ const editableRemixModel = (models, defaultModelId) => {
  *     `buildGeneratePayload()` emit the text-to-video-only shape the federated
  *     wire accepts — kept here rather than in the page so there stays exactly
  *     one builder for what `server/routes/videoGen.js` validates.
+ *   - `displaySleepEnabled` — the page's effective choice (settings default,
+ *     overridable per render) for whether a local MLX render should sleep the
+ *     display. `buildGeneratePayload()` only attaches it when the SELECTED
+ *     MODEL actually has the mitigation (`currentModel.sleepsDisplayDuringRender`),
+ *     so the page doesn't need its own copy of that gate to build the payload —
+ *     only to decide whether to show the control at all.
  */
-export function useVideoGenForm({ models, modelContext, availableLoras, grokEnabled, remoteSubmissionFields = null }) {
+export function useVideoGenForm({
+  models, modelContext, availableLoras, grokEnabled, falEnabled = false, reactorEnabled = false,
+  remoteSubmissionFields = null, displaySleepEnabled = false,
+}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const incomingSourceImage = searchParams.get('sourceImageFile');
   const incomingAudioFilename = searchParams.get('audioFilename');
@@ -92,6 +100,12 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
     extendFromVideoId, setExtendFromVideoId,
     fps, setFps,
     grokDuration, setGrokDuration,
+    falDuration, setFalDuration,
+    falModelId, setFalModelId,
+    reactorClipId, setReactorClipId,
+    reactorSeconds, setReactorSeconds,
+    reactorSeed, setReactorSeed,
+    reactorAspect, setReactorAspect,
     guidanceScale, setGuidanceScale,
     height, setHeight,
     i2vReferenceMode, setI2vReferenceMode,
@@ -114,6 +128,7 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
     prompt, setPrompt,
     remixModelFallback, setRemixModelFallback,
     remixSourceModel, setRemixSourceModel,
+    batchSize, setBatchSize,
     seed, setSeed,
     selectedLoras, setSelectedLoras,
     selectedUniverse, setSelectedUniverse,
@@ -242,7 +257,8 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
     // VIDEO_TILING_OPTIONS so a hand-edited URL or stale link can't push the
     // <select> into an invalid state and 400 the next POST.
     const urlTiling = get('tiling');
-    if (urlTiling && VIDEO_TILING_ENUM_SET.has(urlTiling)) setTiling(urlTiling);
+    const normalizedUrlTiling = normalizeVideoTiling(urlTiling);
+    if (normalizedUrlTiling) setTiling(normalizedUrlTiling);
     // disableAudio is a boolean; accept the common encodings a hand-edited URL
     // might carry ('1' from our own Remix builder, 'true' from a manual share).
     // Anything else (absent, '0', 'false', garbage) means "default off".
@@ -531,6 +547,27 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
     [availableLoras, loraFamily],
   );
 
+  // `applyRemix` resolves each restored LoRA's DISPLAY NAME out of the installed
+  // library at apply time, falling back to the raw filename. The cross-page
+  // Remix handoff (#6290) can apply before that library has landed — the page
+  // fetches the LoRA list and the history list as independent mount effects with
+  // no ordering — so re-resolve once it arrives, or the picker sits on
+  // `lora-example-v7.safetensors` for the session. Filename and scale (what the
+  // payload is built from) are untouched; only the label is filled in.
+  useEffect(() => {
+    if (!availableLoras.length) return;
+    setSelectedLoras((prev) => {
+      let changed = false;
+      const next = prev.map((selected) => {
+        const name = availableLoras.find((l) => l.filename === selected.filename)?.name;
+        if (!name || name === selected.name) return selected;
+        changed = true;
+        return { ...selected, name };
+      });
+      return changed ? next : prev;
+    });
+  }, [availableLoras]);
+
   // Installed video LoRAs bucketed by family, regardless of the selected model.
   // One pass instead of one filter per family, and the source for the
   // "why is the picker gone" hint below.
@@ -586,7 +623,16 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
   // lane reads only prompt/dims/source-image/duration, so its image_to_video
   // always anchors and the promise has to collapse to the default there.
   const isGrok = grokEnabled && backend === 'grok';
-  const referenceModeApplies = mode === 'image' && !isGrok;
+  // fal.ai's queue REST API is usability-gated on a configured API key
+  // (`falEnabled`, mirrored from the server's isVideoModeUsable check), not a
+  // toggle — same short-circuit shape as grok: only prompt/dims/source-image
+  // and a duration reach the provider.
+  const isFal = falEnabled && backend === 'fal';
+  // reactor.inc fast-h3 is likewise usability-gated on a configured API key
+  // (`reactorEnabled`) — same short-circuit shape as fal, plus native
+  // clip-to-clip chaining via continue_from_clip_id.
+  const isReactor = reactorEnabled && backend === 'reactor';
+  const referenceModeApplies = mode === 'image' && !isGrok && !isFal && !isReactor;
   // The strength the render will actually use, for the slider readout — an
   // untouched slider under Inspire still resolves to the contract's low default
   // rather than the pipeline's 1.0, and the panel must say so.
@@ -637,7 +683,7 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
   const handleResolutionChange = (w, h) => {
     setWidth(w); setHeight(h); sizeManuallySetRef.current = true;
   };
-  const handleRandomSeed = () => setSeed(randomSeed());
+  const handleRandomSeed = () => setSeed('');
   // Switching model drops the sampler overrides — steps/guidanceScale are
   // per-model defaults, and carrying one model's numbers onto another is
   // usually wrong.
@@ -870,7 +916,7 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
   // clip survives the switch and reappears if the user flips back.
   const handleBackendChange = (id) => {
     setBackend(id);
-    if (id === 'grok' && mode !== 'text' && mode !== 'image') {
+    if ((id === 'grok' || id === 'fal' || id === 'reactor') && mode !== 'text' && mode !== 'image') {
       handleModeChange((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
     }
   };
@@ -1015,7 +1061,8 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
     // tiling must match the VIDEO_TILING_OPTIONS enum. Legacy sidecars sometimes
     // store a boolean here — silently ignore unknown values so the <select>
     // stays valid and the next POST doesn't 400.
-    if (typeof item.tiling === 'string' && VIDEO_TILING_ENUM_SET.has(item.tiling)) setTiling(item.tiling);
+    const tiling = normalizeVideoTiling(item.tiling);
+    if (tiling) setTiling(tiling);
     // ALWAYS set explicitly, like steps/guidanceScale above: history stamps the
     // strength only when it applied, so a missing field means "the model default"
     // and has to clear a leftover value rather than steer a render the user asked
@@ -1141,7 +1188,8 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
     if (p.fps) setFps(p.fps);
     if (p.steps != null) setSteps(String(p.steps));
     if (p.guidanceScale != null) setGuidanceScale(String(p.guidanceScale));
-    if (p.seed != null) setSeed(String(p.seed));
+    setBatchSize(p.batchSize ?? 1);
+    setSeed(p.seed == null ? '' : String(p.seed));
     if (p.tiling) setTiling(p.tiling);
     // Conditioning promise + strength. Both are echoed only when they applied, so
     // absence means "the defaults" and must CLEAR whatever the form last held —
@@ -1160,6 +1208,20 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
       setBackend('grok');
       setMode(p.videoMode === 'image' ? 'image' : 'text');
       if (p.duration) setGrokDuration(p.duration);
+    } else if (p.mode === 'fal') {
+      // fal.ai job: same discriminator shape as grok above.
+      setBackend('fal');
+      setMode(p.videoMode === 'image' ? 'image' : 'text');
+      if (p.duration) setFalDuration(p.duration);
+      if (p.modelId) setFalModelId(p.modelId);
+    } else if (p.mode === 'reactor') {
+      // reactor.inc job: same discriminator shape as grok/fal above.
+      setBackend('reactor');
+      setMode(p.videoMode === 'image' ? 'image' : 'text');
+      if (p.continueFromClipId) setReactorClipId(p.continueFromClipId);
+      if (p.seconds) setReactorSeconds(p.seconds);
+      if (p.seed !== undefined && p.seed !== null) setReactorSeed(p.seed);
+      if (p.aspect) setReactorAspect(p.aspect);
     } else if (p.mode) setMode(p.mode);
     if (p.chunks && p.chunks > 1) setChunks(p.chunks);
     // 0 is a real restored value ("last frame only"), so this can't gate on
@@ -1232,10 +1294,12 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
   // Snapshot the current validated state into a wire payload. The submit flow
   // stays pure so all three backend contracts can be tested independently.
   const submissionState = {
-    isGrok, grokDuration, remoteSubmissionFields,
+    isGrok, grokDuration, isFal, falDuration, falModelId,
+    isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
+    displaySleepEnabled,
     prompt, negativePrompt, stylePreset, selectedUniverse,
     width, height, mode, sourceImageFile, sourceImageUpload,
-    numFrames, fps, steps, guidanceScale, seed,
+    numFrames, fps, steps, guidanceScale, seed, batchSize,
     currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
     disableAudio, noMusic, imageStrength, i2vReferenceMode,
     keyframesActive, keyframes, loraFamily, selectedLoras,
@@ -1248,8 +1312,14 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
 
   return {
     // Backend + mode
-    backend, isGrok, handleBackendChange,
+    backend, isGrok, isFal, isReactor, handleBackendChange,
     grokDuration, setGrokDuration,
+    falDuration, setFalDuration,
+    falModelId, setFalModelId,
+    reactorClipId, setReactorClipId,
+    reactorSeconds, setReactorSeconds,
+    reactorSeed, setReactorSeed,
+    reactorAspect, setReactorAspect,
     mode, handleModeChange,
     // Prompt + style
     prompt, setPrompt,
@@ -1277,6 +1347,7 @@ export function useVideoGenForm({ models, modelContext, availableLoras, grokEnab
     imageStrength, setImageStrength,
     i2vReferenceMode, setI2vReferenceMode,
     referenceModeSupported, effectiveImageStrength,
+    batchSize, setBatchSize,
     seed, setSeed, handleRandomSeed,
     tiling, setTiling,
     textEncoderId, setTextEncoderId, textEncoderOptions,

@@ -11,6 +11,8 @@ import {
   detectLocalRuntimeOom,
   detectTerminalModelError,
   detectTerminalRequestTimeout,
+  detectTuiRetryBanner,
+  describeTuiRetryStall,
   extractWaitTime,
   isRunCanceledError,
   ERROR_CATEGORIES
@@ -628,6 +630,48 @@ describe('Error Detection', () => {
         requiresFallback: true,
         actionable: false,
       });
+    });
+  });
+
+  describe('detectTuiRetryBanner', () => {
+    it('reads Claude Code\'s retry banner as it comes off the ANSI-stripped screen', () => {
+      // Verbatim shape from agent-e057cca7's raw.txt (2026-09-04), after
+      // stripping: the colour reset lands the box-drawing rule flush against it.
+      expect(detectTuiRetryBanner('API error · Retrying in 0s · attempt 1/10─────'))
+        .toMatchObject({ retryInSeconds: 0, attempt: 1, maxAttempts: 10 });
+      // Cursor-positioned glyphs can lose their spaces on the way out.
+      expect(detectTuiRetryBanner('Requesttimedout·Retryingin38s·attempt3/10'))
+        .toMatchObject({ retryInSeconds: 38, attempt: 3, maxAttempts: 10 });
+    });
+
+    it('returns the newest banner when a repaint carries several ticks', () => {
+      const screen = 'API error · Retrying in 1s · attempt 2/10\n…\nAPI error · Retrying in 0s · attempt 2/10\n';
+      const banner = detectTuiRetryBanner(screen);
+      expect(banner).toMatchObject({ retryInSeconds: 0, attempt: 2 });
+      expect(screen.slice(banner.endIndex)).toBe('\n');
+    });
+
+    it('leaves prose about retries alone', () => {
+      expect(detectTuiRetryBanner('retrying the fetch later; attempt 1 of 3 failed')).toBeNull();
+      expect(detectTuiRetryBanner('')).toBeNull();
+      expect(detectTuiRetryBanner(null)).toBeNull();
+    });
+
+    it('describes a stall in a sentence that cannot re-match the banner detector', () => {
+      // The message becomes the run's error, then a task body a TUI echoes
+      // back through this detector. Re-matching would fail over the agent
+      // dispatched to investigate the stall.
+      const analysis = describeTuiRetryStall({ attempts: 3, spanMs: 12 * 60 * 1000 });
+      expect(analysis).toMatchObject({
+        category: ERROR_CATEGORIES.TIMEOUT,
+        requiresFallback: true,
+        actionable: false,
+        graceMs: 0,
+        origin: 'provider',
+      });
+      expect(analysis.message).toContain('retried it 3 times over 12 minutes');
+      expect(detectTuiRetryBanner(analysis.message)).toBeNull();
+      expect(detectTuiRetryBanner(analysis.suggestedFix)).toBeNull();
     });
   });
 

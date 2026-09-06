@@ -13,6 +13,7 @@ vi.mock('../services/codexAppServer.js', () => ({
   cancelCodexChatGptLogin: vi.fn(),
   codexLogout: vi.fn(),
   peekCodexAccountReadiness: vi.fn(() => null),
+  peekCodexModelCatalog: vi.fn(() => ({ models: null, fetchedAt: null, error: null })),
   listCodexModels: vi.fn(),
 }));
 vi.mock('../services/providerRuntimeInstaller.js', async (importOriginal) => ({
@@ -52,6 +53,7 @@ const appWith = (providers = [CODEX, CLAUDE]) => {
 beforeEach(() => {
   vi.clearAllMocks();
   codexAppServer.peekCodexAccountReadiness.mockReturnValue(null);
+  codexAppServer.peekCodexModelCatalog.mockReturnValue({ models: null, fetchedAt: null, error: null });
 });
 
 describe('GET /api/providers/codex/account', () => {
@@ -175,6 +177,30 @@ describe('GET /api/providers decorates the Codex cards', () => {
 
     expect(cards.codex.missingPrerequisites).toEqual([{ code: 'codexAccount', label: 'No ChatGPT account is signed in' }]);
     expect(cards['claude-code'].missingPrerequisites).toEqual([]);
+  });
+
+  it('publishes the model catalog as its three-state shape, on Codex cards only', async () => {
+    codexAppServer.peekCodexModelCatalog.mockReturnValue({
+      models: [{ id: 'gpt-5.6-terra' }],
+      fetchedAt: 1_700_000_000_000,
+      error: null,
+    });
+
+    const cards = byId(await request(appWith()).get('/api/providers'));
+
+    expect(cards.codex.codexModelCatalog.models).toEqual([{ id: 'gpt-5.6-terra' }]);
+    expect(cards['claude-code']).not.toHaveProperty('codexModelCatalog');
+    // Cache-only: rendering the list must not be what fetches a catalog.
+    expect(codexAppServer.listCodexModels).not.toHaveBeenCalled();
+  });
+
+  it('keeps a never-fetched catalog distinguishable from a fetched-empty one', async () => {
+    const cold = byId(await request(appWith()).get('/api/providers'));
+    expect(cold.codex.codexModelCatalog).toEqual({ models: null, fetchedAt: null, error: null });
+
+    codexAppServer.peekCodexModelCatalog.mockReturnValue({ models: [], fetchedAt: 1_700_000_000_000, error: null });
+    const empty = byId(await request(appWith()).get('/api/providers'));
+    expect(empty.codex.codexModelCatalog.models).toEqual([]);
   });
 
   it('does not turn an unknown verdict into a finding', async () => {

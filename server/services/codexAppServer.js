@@ -110,6 +110,14 @@ const activeTurns = new Map();
  * account has no models".
  */
 let modelsCache = null;
+/**
+ * `{ code, message }` from the LAST `model/list` attempt, or `null` when the most
+ * recent attempt succeeded (or none has run). Cached beside — never inside —
+ * `modelsCache`, so a failed read stays distinguishable from a never-fetched
+ * one while the last-known-good list survives: a picker reading the peek can
+ * then say WHY it is showing the shipped list instead of the account's.
+ */
+let modelsError = null;
 /** `{ until, category, message }` while the TEXT transport is benched. */
 let textTransportBench = null;
 /** The empty scratch directory generic text turns run in. Created lazily. */
@@ -222,6 +230,7 @@ const handleNotification = (method, params) => {
   // completely as one PortOS started.
   if (params?.success !== false) {
     modelsCache = null;
+    modelsError = null;
     clearCodexTextTransportBench();
   }
   const loginId = typeof params?.loginId === 'string' ? params.loginId : null;
@@ -610,6 +619,7 @@ export async function codexLogout() {
   settleLogin('ended by sign-out');
   readinessCache = null;
   modelsCache = null;
+  modelsError = null;
   // Signing out invalidates whatever the bench was waiting on, and signing back
   // in must not inherit the previous account's cooldown.
   clearCodexTextTransportBench();
@@ -729,13 +739,15 @@ export async function listCodexModels({ fresh = false } = {}) {
       throw new Error(`model/list did not finish paginating within ${MODEL_LIST_MAX_PAGES} pages`);
     }
     modelsCache = { at: Date.now(), models };
+    modelsError = null;
     return { models, fetchedAt: modelsCache.at, error: null };
   } catch (err) {
     console.error(`❌ Codex model/list failed: ${err.message}`);
+    modelsError = { code: err.code || CODEX_ERROR_CODES.protocol, message: err.message };
     return {
       models: modelsCache ? modelsCache.models : null,
       fetchedAt: modelsCache ? modelsCache.at : null,
-      error: { code: err.code || CODEX_ERROR_CODES.protocol, message: err.message },
+      error: modelsError,
     };
   }
 }
@@ -743,6 +755,26 @@ export async function listCodexModels({ fresh = false } = {}) {
 /** The cached catalog without spawning anything. `null` = never fetched. */
 export function peekCodexModels() {
   return modelsCache ? { models: modelsCache.models, fetchedAt: modelsCache.at } : null;
+}
+
+/**
+ * The cached catalog as the three-state shape a picker needs, without spawning
+ * anything. `models: null` = NEVER FETCHED, `[]` = fetched and genuinely empty,
+ * and a populated array is this account's real catalog; `error` is set when the
+ * last attempt failed, in which case `models` is the last-known-good list (or
+ * `null` if there never was one). A caller must fall back to its shipped list
+ * for every state except a successful read — that is the whole point of keeping
+ * the three apart.
+ *
+ * CACHE-ONLY, like `peekCodexAccountReadiness`: this is what the providers list
+ * may call on a render path, where spawning `codex app-server` is forbidden.
+ */
+export function peekCodexModelCatalog() {
+  return {
+    models: modelsCache ? modelsCache.models : null,
+    fetchedAt: modelsCache ? modelsCache.at : null,
+    error: modelsError,
+  };
 }
 
 /** The catalog entry for `modelId`, or `null` when the catalog is unknown. */
@@ -988,6 +1020,7 @@ export async function stopCodexAppServer() {
   settleLogin(null);
   readinessCache = null;
   modelsCache = null;
+  modelsError = null;
 
   // The child goes down BEFORE any await. `teardown` decides whether to fail
   // live turns by comparing `connection` to the dying target, so `connection`
@@ -1035,6 +1068,7 @@ export function __resetCodexAppServer() {
   connectingTarget = null;
   activeTurns.clear();
   modelsCache = null;
+  modelsError = null;
   textTransportBench = null;
   textTurnCwd = null;
   creatingTextTurnCwd = null;

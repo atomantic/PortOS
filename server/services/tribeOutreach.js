@@ -575,6 +575,7 @@ async function generateOutreachDraftImpl({
   const replyTo = eventToMessage(anchorEv, person?.name);
 
   const aiResult = await generateReplyBody(replyTo, instructions, {
+    source: source === 'imessage' || source === 'signal' ? source : 'email',
     useVoice,
     threadMessages,
     // Channel-appropriate template: casual/no-signoff for chat, greeting+signoff for

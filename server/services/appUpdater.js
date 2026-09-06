@@ -23,6 +23,67 @@ function runCommand(cmd, args, cwd) {
   return bufferedSpawnOrThrow(cmd, args, { cwd, timeoutMs: CMD_TIMEOUT_MS });
 }
 
+/**
+ * End the update at a git conflict the pull step could not resolve, handing the
+ * checkout to a CoS agent.
+ *
+ * `updateDefaultBranch` already tried a fast-forward and then a
+ * `pull --rebase --autostash`; reaching here means the checkout needs judgement
+ * no scripted pull can supply, so nothing downstream may run on it — it may be
+ * mid-rebase or carrying conflict markers. The task's first line is stable per
+ * repo path so `addTask`'s description+app dedup collapses repeated failed
+ * update attempts onto the one open task rather than queueing an agent per click.
+ *
+ * The CoS task store is imported lazily: this module is reached by every app
+ * operation, while the conflict branch is rare, and a static import would pull
+ * the whole CoS state graph into that closure (see "Import scoping" in
+ * server/AGENTS.md).
+ *
+ * @returns {Promise<{success: false, steps: object[]}>} the update's own result
+ *   shape. Never rejects — a failed enqueue must not mask the conflict message.
+ */
+async function failWithGitConflict({ app, repoPath, pullResult, stepId, emit, steps }) {
+  const error = pullResult.error || 'unknown git error';
+  const message = `Could not update ${repoPath}: ${error}. `
+    + `A CoS agent has been queued to resolve it.`;
+  emit(stepId, 'error', message);
+  steps.push({ step: stepId, success: false, message });
+  const label = app?.name || repoPath;
+  const branch = pullResult.branch || 'the default branch';
+  // `app` is what routes the agent's workspace: agentWorkspacePrep resolves the
+  // cwd as `getAppWorkspace(metadata.app)`, which returns the app's PRIMARY
+  // repoPath. A companion repository has no app record of its own, so claiming
+  // the app there would spawn the agent in the wrong checkout — one that isn't
+  // even conflicted. Only the primary repo may carry it; a companion conflict
+  // runs from the default workspace and is steered by the absolute path below.
+  const isPrimaryRepo = app?.repoPath === repoPath;
+  const task = {
+    description: `Resolve git conflict in ${label} at ${repoPath}`,
+    priority: 'HIGH',
+    app: (isPrimaryRepo && app?.id) || null,
+    context: `Updating ${label} failed: the checkout could not be brought onto origin/${branch}. `
+      + `A fast-forward and then a rebase with --autostash were both attempted. `
+      + `Error: ${error}\n\n`
+      + `The conflicted repository is at ${repoPath}`
+      + (isPrimaryRepo ? '' : ` — a companion repository of ${label}, NOT your default workspace, so work there explicitly`)
+      + `. Finish or abort any in-progress rebase, reconcile the working tree, commit or restore the `
+      + `stashed work, then leave the checkout clean on origin/${branch} so the update can be re-run.`,
+    position: 'top'
+  };
+  const created = await import('./cosTaskStore.js')
+    .then(({ addTask }) => addTask(task, 'internal'))
+    .catch((err) => {
+      console.error(`❌ Failed to queue conflict-resolution task for ${label}: ${err.message}`);
+      return null;
+    });
+  if (created?.duplicate) {
+    console.log(`⚠️ Conflict-resolution task already open for ${label} (${created.id})`);
+  } else if (created) {
+    console.log(`🔀 Queued conflict-resolution task ${created.id} for ${label} on ${branch}`);
+  }
+  return { success: false, steps };
+}
+
 // Per-app lock to prevent concurrent updates
 const updatingApps = new Set();
 const DASHBOARD_OPEN_SCRIPT = 'scripts/open-ui-in-browser.js';
@@ -167,6 +228,9 @@ async function _doUpdate(app, emit, {
 
   emit('git-pull', 'running', 'Updating from origin default branch...');
   const pullResult = await gitService.updateDefaultBranch(dir);
+  if (pullResult.conflict) {
+    return failWithGitConflict({ app, repoPath: dir, pullResult, stepId: 'git-pull', emit, steps });
+  }
   const pullMsg = pullResult.output?.trim() || `${pullResult.branch} is up to date`;
   emit('git-pull', 'done', pullMsg);
   steps.push({ step: 'git-pull', success: true, message: pullMsg });
@@ -179,6 +243,9 @@ async function _doUpdate(app, emit, {
     const stepId = `git-pull:companion-${index + 1}`;
     emit(stepId, 'running', `Pulling companion repository ${index + 1}/${companionRepoPaths.length}...`);
     const companionPull = await gitService.updateDefaultBranch(companionPath);
+    if (companionPull.conflict) {
+      return failWithGitConflict({ app, repoPath: companionPath, pullResult: companionPull, stepId, emit, steps });
+    }
     const companionMessage = companionPull.output?.trim() || `${companionPull.branch} is up to date`;
     emit(stepId, 'done', companionMessage);
     steps.push({ step: stepId, success: true, message: companionMessage });

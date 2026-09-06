@@ -98,7 +98,7 @@ vi.mock('../components/fableloom/LoomMediaJobWatchers', () => ({
 vi.mock('../components/fableloom/LoomEpisodeOutline', () => ({ default: ({ episode }) => <div data-testid="episode-outline">{episode.title}</div> }));
 vi.mock('../components/fableloom/LoomEpisodeOutlinePlanner', () => ({
   default: ({ onExpand }) => (
-    <button type="button" onClick={onExpand}>Expand validated outline to teleplay</button>
+    <button type="button" onClick={() => onExpand({ providerId: 'writer', model: 'example-model', effort: 'low' })}>Expand validated outline to teleplay</button>
   ),
 }));
 vi.mock('../components/fableloom/LoomEpisodeFeedback', () => ({ default: () => null }));
@@ -306,7 +306,7 @@ describe('FableLoomStory episode expansion safety', () => {
     await waitFor(() => expect(api.weaveLoomEpisode).toHaveBeenCalledWith(
       'loom-1',
       'ep-1',
-      expect.objectContaining({ replace: true, expandFromOutline: true }),
+      expect.objectContaining({ replace: true, expandFromOutline: true, providerId: 'writer', model: 'example-model', effort: 'low' }),
       { silent: true },
     ));
   });

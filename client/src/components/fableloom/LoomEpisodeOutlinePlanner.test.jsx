@@ -8,10 +8,12 @@ vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({ providers: [
 vi.mock('../../hooks/useFableLoomAiRun', () => ({
   default: () => ({ run: null, begin: () => '00000000-0000-4000-8000-000000000001', fail: vi.fn() }),
 }));
-vi.mock('../ProviderModelSelector', () => ({ default: () => <div data-testid="outline-route">Outline AI route</div> }));
+vi.mock('../ProviderModelSelector', () => ({ default: ({ onProviderChange, onModelChange, onEffortChange }) => <button type="button" onClick={() => { onProviderChange('writer'); onModelChange('example-model'); onEffortChange('low'); }}>Select outline route</button> }));
 
 vi.mock('../../services/api', () => ({
   generateLoomEpisodeOutline: vi.fn(),
+  planLoomEpisodeShots: vi.fn(),
+  applyLoomEpisodeShots: vi.fn(),
   reviewLoomEpisodeOutline: vi.fn(),
   updateLoomEpisode: vi.fn(),
   validateLoomEpisodeOutline: vi.fn(),
@@ -49,8 +51,9 @@ describe('LoomEpisodeOutlinePlanner', () => {
     expect(screen.getByText('Signal')).toBeInTheDocument();
     const expand = screen.getByRole('button', { name: 'Expand validated outline to teleplay' });
     expect(expand).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Select outline route' }));
     await user.click(expand);
-    expect(onExpand).toHaveBeenCalledTimes(1);
+    expect(onExpand).toHaveBeenCalledWith({ providerId: 'writer', model: 'example-model', effort: 'low' });
   });
 
   it('saves edited log-lines before the deterministic validation request', async () => {
@@ -152,4 +155,16 @@ describe('LoomEpisodeOutlinePlanner', () => {
       { silent: true },
     ));
   });
+});
+
+it('blocks competing outline work until shot planning settles', async () => {
+  let finish;
+  api.planLoomEpisodeShots.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+  render(<LoomEpisodeOutlinePlanner open loom={loom} episode={{ ...episode, nodes: [{ id: 'scene-1' }] }} onLoomUpdate={vi.fn()} onExpand={vi.fn()} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Preview shot split' }));
+  expect(screen.getByRole('button', { name: 'Refresh with AI' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Validate outline' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Expand validated outline to teleplay' })).toBeDisabled();
+  finish({ review: { summary: 'Ready.' }, groups: [] });
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Expand validated outline to teleplay' })).toBeEnabled());
 });

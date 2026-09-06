@@ -72,7 +72,8 @@ export default function JobRow({
   // Resolve the provider for this family/job to provide model options and effort support
   const familyProviders = (catalog.providers || []).filter((provider) =>
     provider?.enabled !== false &&
-    provider?.ollamaBacked !== true && provider?.mtplxBacked !== true &&
+    provider?.ollamaBacked !== true && provider?.lmstudioBacked !== true &&
+    provider?.mtplxBacked !== true &&
     provider?.llamaBacked !== true && provider?.vllmBacked !== true &&
     provider?.sglangBacked !== true &&
     (provider?.type === 'cli' || provider?.type === 'tui') &&

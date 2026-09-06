@@ -18,20 +18,21 @@
     "documentation": "246be4932c277fa0ec0ab365beb3baad",
     "error-handling": "9afba2e99b90a8d5771c75e7f0615d96",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
-    "issue-reconcile": "6f33db6ad0b57c36909229694b78891a",
+    "issue-reconcile": "53e068c533e989ae31025fdfd4a3ecf9",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
     "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
+    "model-comparison-refresh": "dc1702b07c7fb8be6165feb776d5acb6",
     "module-hygiene": "3b7671cd44f719d4b2116b96a279e6d0",
     "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
     "performance": "672bd3958b12afb0f382bcebb6dc3b33",
     "plan-feature": "87f71a894757f89354da4e2119e07118",
     "plan-task": "b85fe92999aa4ee4a8910320457c4242",
-    "pr-reviewer": "679680b3b382aeb6786df01c4d1a90c6",
+    "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
     "pr-reviewer-eligibility": "a5652f7bcb7e2e50b1cfb9a54a6fabe0",
-    "pr-reviewer-review": "f1dbfcf76971b30b4ee34b2cde73c40c",
+    "pr-reviewer-review": "a4b35a1dc44e03b3d0ecf1a4e1bae6df",
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
-    "pr-watcher": "53ead8e26d396849bfa78f28550bd691",
+    "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
     "react-lifecycle": "14b3816d1bcc10f0d7d6357e55cc5e69",
     "reference-watch": "e0e20754700fb08d5159b8437d9c260b",
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
@@ -64,17 +65,18 @@
     "documentation": 6,
     "error-handling": 2,
     "feature-ideas": 11,
-    "issue-reconcile": 4,
+    "issue-reconcile": 5,
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
     "mobile-responsive": 2,
+    "model-comparison-refresh": 1,
     "module-hygiene": 1,
     "observability": 1,
     "performance": 2,
     "plan-feature": 5,
     "plan-task": 18,
-    "pr-reviewer": 4,
-    "pr-watcher": 1,
+    "pr-reviewer": 5,
+    "pr-watcher": 2,
     "react-lifecycle": 1,
     "reference-watch": 3,
     "refresh-local-llm-catalog": 4,
@@ -206,6 +208,7 @@
       "d3282f16da29efe2d53595b3b34778bc"
     ],
     "issue-reconcile": [
+      "6f33db6ad0b57c36909229694b78891a",
       "c57a39aaa118173a496f030f5878bfc1",
       "c87d7adb57de208c069964760c9c6276",
       "a30f5d76b980bc9016f576047c9d5bb1"
@@ -241,11 +244,14 @@
       "910802d67f3b5a785f068f4d90178543"
     ],
     "pr-reviewer": [
+      "679680b3b382aeb6786df01c4d1a90c6",
       "9ceeed08f238b3787fc1201a0ce8e023",
       "f64e5d8176a871304fa691df812cda61",
       "add27b67daa6aa2c75717ac96a6bd625"
     ],
-    "pr-watcher": [],
+    "pr-watcher": [
+      "53ead8e26d396849bfa78f28550bd691"
+    ],
     "reference-watch": [
       "f9322140bff7d3f603799c09ce468da9",
       "722ca590fb4b6323c98850a176b9b309"

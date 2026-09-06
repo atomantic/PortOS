@@ -1,11 +1,13 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router';
-import { ExternalLink, Network, Server, WandSparkles } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router';
+import { Network, WandSparkles } from 'lucide-react';
 import Drawer from '../Drawer';
+import FleetHostSetup from './FleetHostSetup';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
 import { isLocalEndpoint, isPrivateNetworkEndpoint } from '../../utils/providers';
+import { revealFleetPeerHostKey } from '../../services/apiProviders';
 import { PORTS } from '../../lib/ports.js';
 
 const FLEET_TABS = [
@@ -16,7 +18,7 @@ const FLEET_TABS = [
 ];
 const FLEET_TAB_IDS = FLEET_TABS.map(({ id }) => id);
 const DEFAULT_MODEL = 'qwen3.8-27b';
-const DEFAULT_PORT = 18020;
+const DEFAULT_PORT = PORTS.FLEET_LLM;
 
 const endpointForPeer = (peer) => {
   const rawHost = String(peer?.host || peer?.address || '').trim();
@@ -80,15 +82,18 @@ export const buildFleetProvider = ({ name, endpoint, apiKey, model, harness }) =
   };
 };
 
-export default function FleetProviderSetup({ peers = [], onClose, onCreate }) {
+export default function FleetProviderSetup({ peers = [], onClose, onCreate, onConfigured }) {
+  const [searchParams] = useSearchParams();
+  const initialPeerId = searchParams.get('peerId') || '';
   const [activeTab, setActiveTab] = useDrawerTab('fleetStep', 'architecture', FLEET_TAB_IDS);
-  const [selectedPeerId, setSelectedPeerId] = useState('');
+  const [selectedPeerId, setSelectedPeerId] = useState(initialPeerId);
   const [endpointInput, setEndpointInput] = useState('');
   const [name, setName] = useState('Fleet GPU · OpenCode TUI');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL);
   const [harness, setHarness] = useState('tui');
   const [saving, setSaving] = useState(false);
+  const [fetchingKey, setFetchingKey] = useState(false);
   const [error, setError] = useState('');
   const availablePeers = useMemo(
     () => peers.filter((peer) => peer?.enabled !== false && (peer?.host || peer?.address)),
@@ -100,6 +105,30 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate }) {
     setSelectedPeerId(peerId);
     const peer = availablePeers.find(({ id }) => id === peerId);
     setEndpointInput(peer ? endpointForPeer(peer) : '');
+  };
+
+  useEffect(() => {
+    if (initialPeerId && availablePeers.length > 0 && !endpointInput) {
+      selectPeer(initialPeerId);
+    }
+  }, [initialPeerId, availablePeers]);
+
+  const handleFetchKey = async () => {
+    if (!selectedPeerId) return;
+    setFetchingKey(true);
+    setError('');
+    try {
+      const res = await revealFleetPeerHostKey(selectedPeerId, { silent: true });
+      if (res?.apiKey) {
+        setApiKey(res.apiKey);
+      } else {
+        setError('Host did not return an API key. Enter it manually.');
+      }
+    } catch (err) {
+      setError(err?.message || 'Could not retrieve API key from host.');
+    } finally {
+      setFetchingKey(false);
+    }
   };
 
   const selectHarness = (next) => {
@@ -129,7 +158,7 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate }) {
     <Drawer
       open
       onClose={onClose}
-      title="Fleet LLM setup"
+      title="Model host setup"
       subtitle="Use one dedicated GPU host from every PortOS instance"
       size="lg"
       tabs={FLEET_TABS}
@@ -142,7 +171,7 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate }) {
         <div className="space-y-4 text-sm text-gray-300">
           <Banner tone="success" icon={WandSparkles}>
             <p className="font-medium">Recommended for one RTX 3090: vLLM + Qwen3.8-27B + DFlash2 on the host, OpenCode TUI on coding clients.</p>
-            <p className="mt-1 text-port-success/80">Use a direct API provider instead when PortOS only needs text synthesis. Both connect straight to the same authenticated OpenAI-compatible endpoint over Tailscale.</p>
+            <p className="mt-1 text-port-success/80">Use a direct API provider instead when PortOS only needs text synthesis. Both use the host’s authenticated OpenAI-compatible queue over Tailscale.</p>
           </Banner>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -169,43 +198,12 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate }) {
           </div>
 
           <p className="text-xs text-gray-500">
-            The runtime is reached directly rather than proxied through PortOS. That avoids an extra hop and lets OpenCode use the standard OpenAI-compatible tool stream.
+            The host queues API requests from every instance and forwards one generation at a time to its resident model. Use the queued endpoint to share one capacity limit.
           </p>
         </div>
       )}
 
-      {activeTab === 'host' && (
-        <div className="space-y-4 text-sm text-gray-300">
-          <Banner tone="info" icon={Server}>
-            Do this on the dedicated RTX 3090 PortOS instance. No model download or provider call happens from this walkthrough.
-          </Banner>
-          <ol className="list-decimal pl-5 space-y-3">
-            <li>Open <strong>Load Samples</strong> on AI Providers and add <strong>OpenCode vLLM TUI (Qwen3.8-27B)</strong>.</li>
-            <li>Use that card’s setup checklist to prepare the vLLM stack. Set <code>SPEC=dflash2</code>, <code>PREFIX_CACHE=1</code>, and a strong <code>VLLM_API_KEY</code>.</li>
-            <li>Keep the runtime bound on port <code>18020</code>. The stack listens on the network; use Tailscale ACLs and the API key to limit clients.</li>
-            <li>Because this is a dedicated host, configure the container to restart unless stopped. Do not do that on a mixed media workstation: the model occupies nearly the whole GPU.</li>
-            <li>Confirm <code>/v1/models</code> answers through the host’s MagicDNS name or Tailscale IP before configuring clients.</li>
-          </ol>
-          <div className="flex flex-wrap gap-3">
-            <a
-              href="https://github.com/atomantic/PortOS/blob/main/docs/features/fleet-llm-host.md"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-port-accent hover:underline"
-            >
-              Fleet host guide <ExternalLink size={13} />
-            </a>
-            <a
-              href="https://github.com/syv-ai/qwen38-27b-rtx3090"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-port-accent hover:underline"
-            >
-              Runtime source <ExternalLink size={13} />
-            </a>
-          </div>
-        </div>
-      )}
+      {activeTab === 'host' && <FleetHostSetup onConfigured={onConfigured} />}
 
       {activeTab === 'client' && (
         <form onSubmit={submit} className="space-y-4">
@@ -238,7 +236,7 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate }) {
                 setSelectedPeerId('');
                 setEndpointInput(event.target.value);
               }}
-              placeholder="http://gpu-host.example.ts.net:18020/v1"
+              placeholder="http://gpu-host.example.ts.net:18022/v1"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
             />
           </FormField>
@@ -279,9 +277,22 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate }) {
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
               autoComplete="off"
+              placeholder="Enter host API key"
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
             />
           </FormField>
+          {selectedPeerId && (
+            <div className="flex justify-end -mt-2">
+              <button
+                type="button"
+                onClick={handleFetchKey}
+                disabled={fetchingKey}
+                className="text-xs text-port-accent hover:underline disabled:opacity-50"
+              >
+                {fetchingKey ? 'Fetching…' : 'Fetch API key from host'}
+              </button>
+            </div>
+          )}
 
           {error && <Banner tone="error">{error}</Banner>}
 

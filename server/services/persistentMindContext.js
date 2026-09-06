@@ -22,6 +22,7 @@ import {
   PERSISTENT_MIND_TRAJECTORY_LIMITS,
   assemblePersistentMindContext,
   buildPersistentMindRollup,
+  isPersistentMindCallDenial,
   isStoredPersistentMindRollup,
 } from '../lib/persistentMindTrajectory.js';
 import {
@@ -138,13 +139,23 @@ const latestReadyRollup = (rollups, promptVersion) => rollups
   .sort((a, b) => a.source.toSequence - b.source.toSequence)
   .at(-1) || null;
 
+// `attempted: false` means the summarizer never reached a provider — the
+// per-call boundary refused it (budget, authorization, lifecycle). Sealing a
+// FAILED rollup for that range would be a lie AND permanent: the range id is
+// deterministic, so `alreadyAttempted` would stop every later turn from
+// retrying, and a transient refusal would silently cost the mind that stretch
+// of its life forever.
 const summaryOutcome = (summarize, input) => Promise.resolve()
   .then(() => summarize(input))
   .then(
     (summary) => typeof summary === 'string' && summary.trim()
-      ? { ok: true, summary }
-      : { ok: false, error: 'Persistent mind summarizer returned no summary text' },
-    (error) => ({ ok: false, error: String(error?.message || error || 'Persistent mind summary failed').slice(0, 500) })
+      ? { ok: true, attempted: true, summary }
+      : { ok: false, attempted: true, error: 'Persistent mind summarizer returned no summary text' },
+    (error) => ({
+      ok: false,
+      attempted: !isPersistentMindCallDenial(error),
+      error: String(error?.message || error || 'Persistent mind summary failed').slice(0, 500),
+    })
   );
 
 /**
@@ -211,40 +222,44 @@ export async function preparePersistentMindContext({
           previousProvenance: previous?.provenance ?? null,
           promptVersion,
         });
-        const rollup = await recordPersistentMindRollup({
-          id: rollupId,
-          mindId,
-          status: outcome.ok ? 'ready' : 'failed',
-          summary: outcome.ok ? outcome.summary : null,
-          error: outcome.ok ? null : outcome.error,
-          source,
-          providerId,
-          model,
-          promptVersion,
-        });
-        await appendMindEvent({
-          kind: 'mind.summary',
-          mindId,
-          // Keyed on the rollup's own createdAt (unique per attempt), not just
-          // rollup.id: a forceSummary retry reuses the same rollup id, and the
-          // shared ledger dedupes mind events by eventId regardless of age — an
-          // id derived from rollup.id alone would make a successful retry's
-          // event silently drop, leaving the replayed trajectory stuck showing
-          // the earlier failed attempt forever.
-          eventId: `mind-summary-${sha256Text(`${rollup.id}:${rollup.provenance.createdAt}`).slice(0, 32)}`,
-          data: {
-            rollupId: rollup.id,
-            status: rollup.status,
-            fromSequence: source.fromSequence,
-            toSequence: source.toSequence,
+        // A refused call never reached a provider, so the range stays
+        // unattempted and a later turn can still seal it.
+        if (outcome.attempted) {
+          const rollup = await recordPersistentMindRollup({
+            id: rollupId,
+            mindId,
+            status: outcome.ok ? 'ready' : 'failed',
+            summary: outcome.ok ? outcome.summary : null,
+            error: outcome.ok ? null : outcome.error,
+            source,
             providerId,
             model,
             promptVersion,
-            summaryText: rollup.summary,
-            error: rollup.error,
-          },
-        });
-        rollups = await readPersistentMindRollups(mindId);
+          });
+          await appendMindEvent({
+            kind: 'mind.summary',
+            mindId,
+            // Keyed on the rollup's own createdAt (unique per attempt), not just
+            // rollup.id: a forceSummary retry reuses the same rollup id, and the
+            // shared ledger dedupes mind events by eventId regardless of age — an
+            // id derived from rollup.id alone would make a successful retry's
+            // event silently drop, leaving the replayed trajectory stuck showing
+            // the earlier failed attempt forever.
+            eventId: `mind-summary-${sha256Text(`${rollup.id}:${rollup.provenance.createdAt}`).slice(0, 32)}`,
+            data: {
+              rollupId: rollup.id,
+              status: rollup.status,
+              fromSequence: source.fromSequence,
+              toSequence: source.toSequence,
+              providerId,
+              model,
+              promptVersion,
+              summaryText: rollup.summary,
+              error: rollup.error,
+            },
+          });
+          rollups = await readPersistentMindRollups(mindId);
+        }
       }
     }
   }

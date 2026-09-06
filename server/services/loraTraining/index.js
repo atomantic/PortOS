@@ -15,10 +15,9 @@
 
 import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
-import { copyFile, writeFile } from 'fs/promises';
 import { join, basename, dirname } from 'path';
 import { platform } from 'os';
-import { PATHS, ensureDir, atomicWrite, shortId } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, atomicWrite, shortId, copyFileGuarded, writeFileGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { hfChildEnv } from '../hfToken.js';
@@ -591,12 +590,12 @@ export async function runTraining({ jobId, runId, pythonPath = null, resumeCheck
       await ensureDir(dataDir);
       for (let i = 0; i < manifest.images.length; i += 1) {
         const stem = String(i + 1).padStart(4, '0');
-        await copyFile(manifest.images[i].path, join(dataDir, `${stem}.png`));
-        await writeFile(join(dataDir, `${stem}.txt`), `${manifest.images[i].caption}\n`);
+        await copyFileGuarded(manifest.images[i].path, join(dataDir, `${stem}.png`));
+        await writeFileGuarded(join(dataDir, `${stem}.txt`), `${manifest.images[i].caption}\n`);
       }
       if ((run.params?.sampleEvery ?? TRAINING_DEFAULTS.sampleEvery) > 0) {
         const samplePrompt = run.params?.samplePrompt || `${run.triggerWord} portrait, neutral background`;
-        await writeFile(join(dataDir, 'preview_1.txt'), `${samplePrompt}\n`);
+        await writeFileGuarded(join(dataDir, 'preview_1.txt'), `${samplePrompt}\n`);
       }
       // output_path must NOT pre-exist — mflux appends a timestamp suffix to
       // an existing dir (its new_folder behavior), which would break the
@@ -1040,7 +1039,7 @@ async function registerTrainedLora({
 }) {
   await ensureDir(PATHS.loras);
   const dest = join(PATHS.loras, filename);
-  await writeFile(dest, buffer);
+  await writeFileGuarded(dest, buffer);
   const sizeBytes = buffer.length; // bytes written === on-disk size; no stat round-trip
   const sidecar = buildTrainedSidecar({
     run, result, filename, previewImageUrl, sizeBytes, selectedStep, autoSelected,
@@ -1183,7 +1182,7 @@ async function ensureCheckpointPreview(run, step, loraFilename) {
   if (!existsSync(renderedPath)) { console.error(`⚠️ training [${shortId(runId)}] preview render produced no file`); return; }
 
   await ensureDir(samplesDir);
-  await copyFile(renderedPath, dest);
+  await copyFileGuarded(renderedPath, dest);
   // Join is by step, sourced from artifacts.samples — append so listRunCheckpoints
   // picks it up. updateRun's function form merges against the freshest record.
   await runsDb.updateRun(runId, (current) => {

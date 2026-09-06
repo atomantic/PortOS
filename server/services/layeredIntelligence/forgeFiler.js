@@ -7,22 +7,13 @@
 
 import { dispatchLabelSpec, forgeIssueLabels } from '../../lib/dispatchLabels.js';
 import { safeJSONParse } from '../../lib/fileUtils.js';
+import { normalizeIssueState } from '../../lib/forgeIssueState.js';
 import { LI_LABEL, LI_BLOCKING_LABEL } from './constants.js';
 import { slugMarker, extractSlugFromBody } from './dedup.js';
 import { runCli } from './runCli.js';
 import { withGlabJson } from '../../lib/glabArgs.js';
 
-/**
- * Normalize a forge issue state to `open` / `closed`. GitLab reports `opened`
- * (and `closed`/`locked`); GitHub reports `open`/`closed`. Anything that isn't a
- * recognized closed/locked state is treated as open so dedup + park don't miss a
- * GitLab-`opened` issue. (`merged` never applies to issues.)
- */
-export function normalizeIssueState(state) {
-  const s = (state || '').toLowerCase();
-  if (s === 'closed' || s === 'locked') return 'closed';
-  return 'open';
-}
+export { normalizeIssueState };
 
 /**
  * Normalize a forge issue's labels to a plain `string[]`. gh reports objects

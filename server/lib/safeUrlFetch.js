@@ -240,7 +240,7 @@ async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, bloc
  * stream (e.g. a test double). Shared by fetchPublicBinary and the opt-in
  * fetchPublicText cap.
  */
-async function readBodyCapped(res, maxBytes) {
+export async function readBodyCapped(res, maxBytes) {
   const declared = Number(res.headers.get('content-length'));
   if (maxBytes && Number.isFinite(declared) && declared > maxBytes) return null;
 

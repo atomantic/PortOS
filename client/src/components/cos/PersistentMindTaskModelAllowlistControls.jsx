@@ -3,6 +3,7 @@ import * as api from '../../services/api';
 import {
   filterHardwareCompatibleProviderModels,
   filterSelectableModels,
+  providerModelList,
   selectableModelsForProvider,
 } from '../../utils/providers.js';
 import toast from '../ui/Toast';
@@ -14,10 +15,7 @@ const normalizeEntries = (value) => (Array.isArray(value) ? value : [])
 const modelId = (entry) => typeof entry === 'string' ? entry : entry?.id;
 
 const modelsFor = (provider) => filterHardwareCompatibleProviderModels(
-  filterSelectableModels(selectableModelsForProvider(
-    provider,
-    provider?.models?.length ? provider.models : [provider?.defaultModel],
-  )),
+  filterSelectableModels(selectableModelsForProvider(provider, providerModelList(provider))),
   provider,
 ).map(modelId).filter(Boolean);
 

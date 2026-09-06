@@ -6,9 +6,9 @@ const { fetchWithTimeout, imageGenEvents } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout }));
-vi.mock('fs/promises', () => ({ writeFile: vi.fn() }));
 vi.mock('../../lib/fileUtils.js', () => ({
   ensureDir: vi.fn(),
+  atomicWrite: vi.fn(),
   PATHS: { images: '/tmp/portos-external-image-test' },
 }));
 vi.mock('../../lib/imageClean.js', () => ({ autoCleanGeneratedImage: vi.fn() }));

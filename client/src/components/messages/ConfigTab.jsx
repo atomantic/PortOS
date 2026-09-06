@@ -600,7 +600,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
       <section>
         <h2 className="text-lg font-semibold text-white mb-3">AI Provider & Model</h2>
         <p className="text-sm text-gray-500 mb-3">
-          Configure separate AI providers for email triage (classification) and reply generation.
+          Email analysis requires a local text API provider. Configure screening and dedicated source overrides in <a href="/models/llms/abuse" className="text-port-accent underline">Abuse Guard</a>; those overrides take priority over the selections below.
         </p>
         <div className="space-y-3">
           {renderProviderSection(
@@ -617,15 +617,15 @@ export default function ConfigTab({ accounts, setAccounts }) {
       </section>
 
       <section>
-        <h2 className="text-lg font-semibold text-white mb-3">Digital Twin Voice</h2>
+        <h2 className="text-lg font-semibold text-white mb-3">Reply Tone</h2>
         <div className="p-4 bg-port-card rounded-lg border border-port-border">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <User size={20} className={config?.voiceMode ? 'text-port-accent-2' : 'text-gray-600'} />
               <div>
-                <div className="text-sm font-medium text-white">Voice Mode</div>
+                <div className="text-sm font-medium text-white">Conversational tone</div>
                 <div className="text-xs text-gray-500">
-                  Draft replies in your voice using Digital Twin personality documents (Soul, Communication, Personality, Values, Social)
+                  Draft replies in a natural, conversational tone without loading private identity documents.
                 </div>
               </div>
             </div>

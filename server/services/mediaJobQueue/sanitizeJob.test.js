@@ -200,4 +200,28 @@ describe('sanitizeJob', () => {
     // The marker must not rewrite a local training job's model either.
     expect(sanitized.params.modelId).toBe('dev');
   });
+  it('projects the scheduler execution lane for every video backend, with remote winning', () => {
+    const laneOf = (job) => sanitizeJob({ id: 'job', status: 'running', ...job }).executionLane;
+
+    // Local video's mode is a semantic pipeline value, not a backend name.
+    expect(laneOf({ kind: 'video', params: { mode: 'text' } })).toBe('gpu');
+    expect(laneOf({ kind: 'video', params: { mode: 'grok' } })).toBe('cloud');
+    // fal/Reactor were the drift: shipped cloud backends the UI filed as local.
+    expect(laneOf({ kind: 'video', params: { mode: 'fal' } })).toBe('cloud');
+    expect(laneOf({ kind: 'video', params: { mode: 'reactor' } })).toBe('cloud');
+    expect(laneOf({ kind: 'image', params: { mode: 'codex' } })).toBe('cloud');
+    expect(laneOf({ kind: 'image', params: { mode: 'local' } })).toBe('gpu');
+    // A routed job runs on a peer whatever backend it names.
+    expect(laneOf({
+      kind: 'video',
+      params: { mode: 'fal', remoteMedia: { wireVersion: 1, request: { modelId: 'peer-model' } } },
+    })).toBe('remote');
+  });
+
+  it('keeps the renderer field alongside the new lane so an older client still reads it', () => {
+    const sanitized = sanitizeJob({ id: 'job-fal', kind: 'video', status: 'running', params: { mode: 'fal', modelId: 'provider/video' } });
+
+    expect(sanitized.renderer).toBe('local');
+    expect(sanitized.executionLane).toBe('cloud');
+  });
 });

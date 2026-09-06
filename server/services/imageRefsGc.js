@@ -36,9 +36,9 @@
  * catches handler failures and records them in scheduler history.
  */
 
-import { readdir, stat, unlink } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { join, basename } from 'path';
-import { PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile, safeJSONParse, unlinkGuarded } from '../lib/fileUtils.js';
 import { createSweepScheduler } from './sweepScheduler.js';
 
 // `init-<uuid>` / `ref-<uuid>` with a decodable image extension — the exact
@@ -129,7 +129,7 @@ export async function sweepOrphanRefImages({
     }
     // Count only a genuine removal so the summary log can't over-report. A
     // concurrent vanish (ENOENT) or any unlink failure leaves `deleted` untouched.
-    const removed = await unlink(join(refsDir, name)).then(() => true).catch(() => false);
+    const removed = await unlinkGuarded(join(refsDir, name)).then(() => true).catch(() => false);
     if (removed) deleted += 1;
   }
 

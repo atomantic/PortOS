@@ -45,6 +45,10 @@ import {
   countPasteMarkers,
   createSelfClearingSignalGate,
   createOomNudgeGate,
+  createRetryStallGate,
+  createToolPermissionGate,
+  TOOL_PERMISSION_DECLINE_MAX,
+  TOOL_PERMISSION_NUDGE_TEXT,
   OOM_NUDGE_MAX_ATTEMPTS,
   OOM_NUDGE_TEXT,
   createMcpBootTracker,
@@ -310,7 +314,7 @@ export function buildTuiSpawnConfig(provider, model, {
     };
   }
   const command = provider?.command || inferTuiCommand(provider?.id);
-  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
+  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])], provider);
   // Model+effort injection (including the antigravity-validates-the-pair special
   // case) is shared with tuiHandshake.js#buildTuiInvocation via
   // providerVendors.js#injectTuiModelAndEffort, so the two spawn paths can't
@@ -739,6 +743,15 @@ export async function spawnTuiAgent({
   // createOomNudgeGate for why this is a separate mechanism from the gate above.
   const detectLocalRuntimeOom = createLocalRuntimeOomDetector();
   const oomNudgeGate = createOomNudgeGate();
+  // A request the TUI keeps retrying and the provider never answers. Every
+  // reaper reads such a session as busy (the retry ladder repaints the screen),
+  // so without this the run holds its lane until the max-runtime ceiling — see
+  // createRetryStallGate.
+  const retryStallGate = createRetryStallGate();
+  // A tool-permission dialog nobody is present to answer. Declined on sight —
+  // the launch posture already decided the run's scope — then nudged along
+  // once the session goes quiet. See createToolPermissionGate.
+  const toolPermissionGate = createToolPermissionGate();
   // Guards ingestDoneSentinel to a single read. finish() is its only caller and
   // is itself guarded by `finalized`, so this is defensive — it pins the
   // read-at-most-once invariant at the helper.
@@ -1417,6 +1430,36 @@ export async function spawnTuiAgent({
         }
       }
 
+      // Same gating as the OOM nudge above: before the prompt is in there is no
+      // request of ours for the provider to be retrying. Acted on by the
+      // provider-signal timer, on its own poll, like the other gates.
+      if (promptSubmittedAt) retryStallGate.observe(stripped, now);
+
+      // The permission dialog is Claude Code chrome. Watching another vendor's
+      // session for it would only ever match an ECHO — a Codex or agy agent
+      // investigating a stalled run cats its raw.txt straight into this stream
+      // — and answer a dialog that is not there with keystrokes into a working
+      // composer.
+      const permissionDialog = promptSubmittedAt && isClaudeCommand(tuiConfig.command)
+        ? toolPermissionGate.observe(stripped, now)
+        : null;
+      if (permissionDialog === 'exhausted') {
+        await finish({
+          success: false,
+          exitCode: 1,
+          error: `${tuiConfig.command} kept asking for tool permissions an unattended run cannot grant (${TOOL_PERMISSION_DECLINE_MAX} dialogs declined) — the model keeps reaching outside the run's allowed scope`,
+          reason: 'permission-prompt-loop',
+        });
+        return;
+      }
+      if (permissionDialog) {
+        // "No" is the last option and option 1 is highlighted: arrow down to it,
+        // then Enter — lands under both of Ink's selection models, whereas a bare
+        // digit is immediate-select in some builds and ignored in others.
+        shellService.writeToSession(sessionId, `${'\x1b[B'.repeat(Math.max(0, permissionDialog.noOption - 1))}${SUBMIT_KEY}`);
+        appendLine(`🚫 Declined ${tuiConfig.command} permission prompt for ${permissionDialog.toolCall || 'a tool call'} — an unattended run never widens its scope (${permissionDialog.count}/${TOOL_PERMISSION_DECLINE_MAX})`);
+      }
+
       if (!promptSentAt) {
         // Only the login-shell path can reach this: it is the shell PRINTING
         // "command not found". A direct PTY resolves the executable before it
@@ -1873,6 +1916,21 @@ export async function spawnTuiAgent({
     }
     if (selfClearingGate.armed) {
       resubmitAfterSignal();
+      return;
+    }
+    const stall = retryStallGate.takeStall();
+    if (stall) {
+      failOverToFallback(stall).catch((err) =>
+        emitLog('error', `TUI agent ${agentId} retry-stall fallback finish failed: ${err?.message || err}`, { agentId }));
+      return;
+    }
+    // A declined permission dialog ends the turn; once the session is quiet,
+    // tell it why and send it back to work.
+    const declined = toolPermissionGate.takeNudge(Date.now(), lastOutputAt);
+    if (declined) {
+      if (pasteController?.resubmit({ text: TOOL_PERMISSION_NUDGE_TEXT, label: 'declined-permission nudge' })) {
+        appendLine(`🔁 Nudged the session to continue after declined permission prompt ${declined}`);
+      }
       return;
     }
     // Nudge a session a local-GPU OOM parked. Rides this timer rather than one

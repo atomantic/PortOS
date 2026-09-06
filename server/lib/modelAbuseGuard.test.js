@@ -136,21 +136,21 @@ describe('model-abuse guard contract', () => {
       ok: false,
       code: 'security-guard-verdict-invalid',
     });
-    expect(normalizeModelAbuseGuardResult({ chunks: [{ index: 0, label: 'UNKNOWN', score: 1, tokenStart: 0, tokenEnd: 4 }] })).toMatchObject({
+    expect(normalizeModelAbuseGuardResult({ schemaVersion: 1, complete: true, tokenCount: 4, chunks: [{ index: 0, label: 'UNKNOWN', score: 1, tokenStart: 0, tokenEnd: 4 }] })).toMatchObject({
       ok: false,
       code: 'security-guard-verdict-invalid',
     });
-    expect(normalizeModelAbuseGuardResult({ chunks: [{ index: 0, label: 'BENIGN', score: 0.99, tokenStart: 0, tokenEnd: 4 }] })).toMatchObject({
+    expect(normalizeModelAbuseGuardResult({ schemaVersion: 1, complete: true, tokenCount: 4, chunks: [{ index: 0, label: 'BENIGN', score: 0.99, tokenStart: 0, tokenEnd: 4 }] })).toMatchObject({
       ok: true,
       safe: true,
       code: 'security-guard-passed',
     });
-    expect(normalizeModelAbuseGuardResult({ chunks: [{ index: 0, label: 'MALICIOUS', score: 0.99, tokenStart: 0, tokenEnd: 4 }] })).toMatchObject({
+    expect(normalizeModelAbuseGuardResult({ schemaVersion: 1, complete: true, tokenCount: 4, chunks: [{ index: 0, label: 'MALICIOUS', score: 0.99, tokenStart: 0, tokenEnd: 4 }] })).toMatchObject({
       ok: true,
       safe: false,
       code: 'security-guard-classified-malicious',
     });
-    expect(normalizeModelAbuseGuardResult({ chunks: [{ index: 0, label: 'BENIGN', score: 0.89, tokenStart: 0, tokenEnd: 4 }] })).toMatchObject({
+    expect(normalizeModelAbuseGuardResult({ schemaVersion: 1, complete: true, tokenCount: 4, chunks: [{ index: 0, label: 'BENIGN', score: 0.89, tokenStart: 0, tokenEnd: 4 }] })).toMatchObject({
       ok: true,
       safe: false,
       code: 'security-guard-low-confidence',
@@ -165,10 +165,30 @@ describe('model-abuse guard contract', () => {
       tokenStart: index,
       tokenEnd: index + 1,
     }));
-    expect(normalizeModelAbuseGuardResult({ chunks })).toMatchObject({
+    expect(normalizeModelAbuseGuardResult({ schemaVersion: 1, complete: true, tokenCount: chunks.length, chunks })).toMatchObject({
       ok: false,
       code: 'security-guard-verdict-invalid',
     });
+  });
+
+  it('requires complete ordered coverage, including the final window, before clearing long input', () => {
+    const verdict = {
+      schemaVersion: 1,
+      complete: true,
+      tokenCount: 700,
+      chunks: [
+        { index: 0, label: 'BENIGN', score: 0.99, tokenStart: 0, tokenEnd: 510 },
+        { index: 1, label: 'BENIGN', score: 0.99, tokenStart: 446, tokenEnd: 700 },
+      ],
+    };
+    expect(normalizeModelAbuseGuardResult(verdict)).toMatchObject({ ok: true, safe: true });
+    for (const invalid of [
+      { ...verdict, complete: false },
+      { ...verdict, tokenCount: undefined },
+      { ...verdict, chunks: verdict.chunks.slice(0, 1) },
+      { ...verdict, chunks: [verdict.chunks[0], { ...verdict.chunks[1], tokenStart: 511 }] },
+      { ...verdict, chunks: [{ ...verdict.chunks[0], score: '0.99' }, verdict.chunks[1]] },
+    ]) expect(normalizeModelAbuseGuardResult(invalid)).toMatchObject({ ok: false, code: 'security-guard-verdict-invalid' });
   });
 
   it('fingerprints the exact identity and content that crossed the boundary', () => {

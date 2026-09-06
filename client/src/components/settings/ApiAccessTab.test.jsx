@@ -181,7 +181,7 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
-        actions: { readPortos: false, writePortos: false, manageEidoverse: false },
+        actions: { readPortos: false, writePortos: false, manageEidoverse: false, visitEidoversePeers: false },
       },
     }, { silent: true }));
   });
@@ -202,7 +202,7 @@ describe('ApiAccessTab', () => {
         enabled: true,
         profile: 'metadata',
         scopes: ['navigation'],
-        actions: { readPortos: true, writePortos: false, manageEidoverse: false },
+        actions: { readPortos: true, writePortos: false, manageEidoverse: false, visitEidoversePeers: false },
       },
     }, { silent: true }));
   });
@@ -216,7 +216,7 @@ describe('ApiAccessTab', () => {
         enabled: false,
         profile: 'metadata',
         scopes: ['navigation', 'workspaces'],
-        actions: { readPortos: false, writePortos: false, manageEidoverse: true },
+        actions: { readPortos: false, writePortos: false, manageEidoverse: true, visitEidoversePeers: false },
       },
     }, { silent: true }));
   });

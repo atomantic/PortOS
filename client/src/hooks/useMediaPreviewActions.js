@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import toast from '../components/ui/Toast';
 import { cleanGalleryImage, extractLastFrame, removeImageWatermark } from '../services/apiImageVideo';
-import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
+import { normalizeVideoTiling } from '../lib/videoTilingOptions';
 
 // Common image render-setting params shared by the image branch of Remix and by
 // Send-to-image-to-image — both open /media/image with these fields prefilled.
@@ -77,9 +77,24 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
   // params), videos go to /media/video (with video-shaped params — frames,
   // fps, tiling, etc.). Video remix lands the user in 'text' mode with all
   // params filled; they can switch to image/extend mode and pick a source.
+  //
+  // Videos hand over the RECORD ID (`?remix=<id>`), not a render-settings
+  // bundle (#6290). A field-by-field URL is a second restore implementation
+  // that has to be extended every time a render field is added, and it fell
+  // behind the in-page one: `textEncoderId`, `speedProfileId`, `draftDecode`
+  // and the LoRA arrays were all missing here, so remixing the same clip from
+  // Media History silently returned those controls to stock while remixing it
+  // from the Video Gen gallery restored them. The id lets /media/video resolve
+  // the record from its own history load and reuse `applyRemix` — the single
+  // restore implementation. The field bundle below stays for records with no
+  // id (and keeps previously-issued links working), but is not extended.
   const handleRemix = useCallback((item) => {
     if (!item) return;
     if (item.kind === 'video') {
+      if (item.id != null && item.id !== '') {
+        navigate(`/media/video?remix=${encodeURIComponent(item.id)}`);
+        return;
+      }
       const params = new URLSearchParams();
       if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
       if (item.negativePrompt) params.set('negativePrompt', item.negativePrompt);
@@ -97,9 +112,8 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
       // tiling must match the server's enum. Legacy sidecars sometimes store
       // a boolean here — pass through only known-good string values so the
       // remixed POST doesn't 400 on /api/video-gen validation.
-      if (typeof raw.tiling === 'string' && VIDEO_TILING_ENUM_SET.has(raw.tiling)) {
-        params.set('tiling', raw.tiling);
-      }
+      const tiling = normalizeVideoTiling(raw.tiling);
+      if (tiling) params.set('tiling', tiling);
       const disableAudio = raw.disableAudio ?? raw.disable_audio;
       if (disableAudio === true) params.set('disableAudio', '1');
       navigate(`/media/video?${params}`);

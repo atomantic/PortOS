@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
+import { MEETING_URL_MAX } from '../lib/meetingUrl.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
 import * as calendarSync from '../services/calendarSync.js';
 import * as calendarGoogleSync from '../services/calendarGoogleSync.js';
@@ -15,6 +16,14 @@ import { getUserTimezone } from '../services/userTimezone.js';
 import { localDayWindowUtc } from '../lib/timezone.js';
 
 const router = express.Router();
+
+/** A string bounded by its TRIMMED length, so padding can't fail an otherwise fine value. */
+const trimmedString = (max) =>
+  z.preprocess((v) => (typeof v === 'string' ? v.trim() : v), z.string().max(max));
+
+/** An array CAPPED at `max` rather than rejected past it, so a valid leading item survives. */
+const cappedArray = (max, element) =>
+  z.preprocess((v) => (Array.isArray(v) ? v.slice(0, max) : v), z.array(element));
 
 // === Validation Schemas ===
 const createAccountSchema = z.object({
@@ -71,7 +80,52 @@ const pushSyncSchema = z.object({
     location: z.string().optional().default(''),
     description: z.string().optional().default(''),
     status: z.string().optional().default('confirmed'),
-    htmlLink: z.string().optional()
+    htmlLink: z.string().optional(),
+    // Conference metadata feeds the cached `meetingUrl` join link (#6289).
+    // OPTIONAL with no default, and nullable: `selectMeetingUrl` distinguishes
+    // a producer that omitted them (preserve the cached link) from one that
+    // explicitly sent none (clear it), so a default here would make every
+    // legacy push wipe a working Join action. Non-video entry types are
+    // accepted and ignored downstream, so ordinary phone/SIP metadata can't
+    // reject an otherwise valid event; Zod strips the conference passwords and
+    // dial-in codes Google ships alongside them, and the length bound comes
+    // from the selector's own module so the two can't drift.
+    //
+    // The bounds FAIL SOFT via `.catch`, at THREE granularities, because what
+    // a malformed value should cost depends on how much of the payload it
+    // implicates. Throwing costs the most: `validateRequest` 400s the WHOLE
+    // batch, so one 1301-character `uri` — even on a `phone` entry the
+    // selector ignores — silently stops the user's entire calendar from
+    // syncing, while an unbounded `description` sails through.
+    //
+    //   per ENTRY  → a bad entry becomes `{}`, which the selector skips. This
+    //                is the granularity that matters: a malformed phone entry
+    //                must not erase the usable video link sitting beside it.
+    //   per FIELD  → a bad `hangoutLink` / `conferenceData` becomes null, i.e.
+    //                "described, nothing usable came of it" — exactly true.
+    //   per EVENT  → nothing. Every other event in the batch still syncs.
+    //
+    // Omission short-circuits ahead of every catch, so an older client that
+    // sends neither field still reads as "not described" and keeps its link.
+    // The bounds also NORMALIZE before measuring, so this ingress is not
+    // needlessly stricter than the selector it feeds — anything it rejects
+    // reads downstream as "this meeting has no conference" and CLEARS a link
+    // the API and MCP paths keep for the same input. Untrimmed padding counted
+    // toward the length cap (1300 leading spaces sank a URL the selector trims
+    // and accepts), and an over-long array was rejected outright rather than
+    // capped, losing a valid leading video entry to its junk siblings.
+    //
+    // Truncation past 100 entries is the one place a bound can still drop a
+    // usable candidate, and it is the deliberate residue of having any bound at
+    // all: Google emits a handful of entry points, so 100 is ~20x headroom, and
+    // capping strictly beats rejecting the whole array as it used to.
+    hangoutLink: trimmedString(MEETING_URL_MAX).nullable().optional().catch(null),
+    conferenceData: z.object({
+      entryPoints: cappedArray(100, z.object({
+        entryPointType: trimmedString(32).nullable().optional(),
+        uri: trimmedString(MEETING_URL_MAX).nullable().optional()
+      }).catch(() => ({}))).nullable().optional().catch(null)
+    }).nullable().optional().catch(null)
   }))
 });
 

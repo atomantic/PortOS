@@ -45,6 +45,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { audio: '/tmp/data/audio' },
   ensureDir: vi.fn(),
   sleep: vi.fn(() => Promise.resolve()),
+  writeFileGuarded: vi.fn().mockResolvedValue(undefined),
   safeJSONParse: vi.fn((raw, fallback) => {
     try {
       return JSON.parse(raw);
@@ -60,6 +61,7 @@ const browserService = await import('./browserService.js');
 const brainStorage = await import('./brainStorage.js');
 const fsp = await import('fs/promises');
 const dnsp = await import('dns/promises');
+const fileUtils = await import('../lib/fileUtils.js');
 const {
   fetchUrlMainText,
   ingestFromUrl,
@@ -254,10 +256,10 @@ describe('ingestFromVoice', () => {
   it('defaults the audio persister to write under PATHS.audio with a wav extension', async () => {
     const transcribeFn = vi.fn().mockResolvedValue({ text: 'hi' });
     const { mediaKey } = await ingestFromVoice({ audioBase64: wavBase64 }, { transcribeFn });
-    // Real persistFn ran: it called writeFile under the mocked PATHS.audio.
-    expect(fsp.writeFile).toHaveBeenCalledTimes(1);
+    // Real persistFn ran: it called writeFileGuarded under the mocked PATHS.audio.
+    expect(fileUtils.writeFileGuarded).toHaveBeenCalledTimes(1);
     expect(mediaKey).toMatch(/^voice-memo-.*\.wav$/);
-    const writtenPath = fsp.writeFile.mock.calls[0][0];
+    const writtenPath = fileUtils.writeFileGuarded.mock.calls[0][0];
     // Composed with path.join — accept either separator.
     expect(writtenPath.split('\\').join('/')).toContain('/tmp/data/audio');
   });

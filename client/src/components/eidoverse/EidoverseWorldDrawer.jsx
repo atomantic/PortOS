@@ -3,6 +3,8 @@ import { Compass, Database, Palette, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router';
 import Drawer from '../Drawer';
 import useDrawerTab from '../../hooks/useDrawerTab';
+import { EIDOVERSE_SOURCE_ROUTES as SOURCE_ROUTES } from '../../lib/eidoverseFrame';
+import EidoverseObjectLegend from './EidoverseObjectLegend';
 import { formatBytes } from '../../utils/formatters';
 
 const TABS = [
@@ -12,12 +14,7 @@ const TABS = [
   { id: 'updates', label: 'Updates & Advanced', icon: RefreshCw },
 ];
 const TAB_IDS = TABS.map(({ id }) => id);
-const SOURCE_ROUTES = {
-  apps: '/apps', agents: '/cos/agents', tasks: '/cos/tasks', features: '/settings/features',
-  peers: '/instances', health: '/cos/health', productivity: '/cos/productivity',
-  activity: '/cos/productivity', goals: '/goals/list', memory: '/brain/memory',
-  storage: '/settings/database', jira: '/goals/list', operations: '/cos/health',
-};
+
 
 const fieldClass = 'mt-1 min-h-[42px] w-full rounded-lg border border-port-border bg-port-bg px-3 text-sm text-white focus:border-port-accent focus:outline-none';
 const secondaryButton = 'inline-flex min-h-[40px] items-center justify-center rounded-lg border border-port-border px-3 py-2 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white disabled:cursor-wait disabled:opacity-50';
@@ -43,6 +40,12 @@ export default function EidoverseWorldDrawer({
   setHumanName,
   recipeDraft,
   assetOverridesDraft,
+  labelAliasesDraft,
+  mutateLabelAlias,
+  frameConnection,
+  labelVisibility,
+  onLabelVisibilityChange,
+  appId,
   mutateRecipe,
   mutateAssetOverride,
   markDirty,
@@ -94,15 +97,50 @@ export default function EidoverseWorldDrawer({
     });
   };
 
+  const labelSupport = frameConnection?.status === 'ready'
+    ? frameConnection.capabilities.objectLabels
+    : reconciliation.runtimeVersion?.capabilities?.objectLabels === 1;
+  const labelSupportChecked = frameConnection?.status !== 'checking'
+    || Boolean(reconciliation.runtimeVersion);
+
   const identityFields = (
     <div className="space-y-4">
       <div className="rounded-xl border border-port-accent/25 bg-port-accent/5 p-4">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-port-accent">World Design V{design.selectedVersion || recipeDraft?.version}</p>
         <h3 className="mt-1 text-lg font-semibold text-white">{design.name || recipeDraft?.name}</h3>
         <p className="mt-2 text-sm leading-6 text-gray-400">
-          A luminous systems garden where PortOS apps, agents, goals, memory, data, peers, and activity each have a legible home.
+          A walkable commons of a grassy arrival park, inward-facing halls, and workspaces for PortOS apps, agents, goals, memory, data, peers, and activity.
         </p>
       </div>
+      <section className="rounded-xl border border-port-border bg-port-bg p-4">
+        <h3 className="font-medium text-white">Object labels</h3>
+        {labelSupportChecked && !labelSupport && (
+          <p className="mt-2 text-sm text-port-warning" role="status">
+            This renderer does not report object-label support. Update Eidoverse Worlds, then reload this page.
+            {' '}<Link className="underline" to={appId ? `/apps/${appId}/overview` : '/apps'}>Manage renderer updates</Link>.
+            {' '}Your design, aliases, and asset choices stay saved. The object legend below remains available.
+          </p>
+        )}
+        {labelSupport && (frameConnection?.status === 'unsupported' || (frameConnection?.status === 'ready'
+          && (!frameConnection.capabilities.portosNavigation || !frameConnection.capabilities.labelPreferences))) && (
+          <p className="mt-2 text-sm text-port-warning" role="status">
+            Reload or update the renderer to enable label controls and Open in PortOS.
+          </p>
+        )}
+        <label className="mt-3 block text-sm text-gray-300" htmlFor="eidoverse-label-visibility">
+          Floating labels
+          <select id="eidoverse-label-visibility" className={fieldClass} value={labelVisibility}
+            onChange={(event) => onLabelVisibilityChange(event.target.value)}>
+            <option value="nearby">Nearby — respect each object's label mode</option>
+            <option value="all-nearby">All nearby — label objects within 60 metres</option>
+            <option value="off">Off — hide floating labels</option>
+          </select>
+        </label>
+        <p className="mt-2 text-xs text-gray-400">Labels appear above objects in the world. Click or tap a label to learn what it represents. Off at the start of each visit. Use Labels in the toolbar when you want to inspect objects; turning labels off keeps already-open details available.</p>
+        {!frameConnection?.capabilities?.labelPreferences && (
+          <p className="mt-1 text-xs text-gray-400">The preference will apply when a compatible renderer connects.</p>
+        )}
+      </section>
       <label className="block text-sm text-gray-300" htmlFor="eidoverse-world-name">
         World name
         <input
@@ -235,6 +273,15 @@ export default function EidoverseWorldDrawer({
           </div>
         </section>
       ))}
+      <EidoverseObjectLegend
+        objects={projectionSummary.objects}
+        districts={worldState?.recipe?.districts}
+        aliases={labelAliasesDraft}
+        savedAliases={design.labelAliases}
+        onAliasChange={mutateLabelAlias}
+        busy={busy}
+        onAssets={() => setActiveTab('appearance')}
+      />
     </div>
   );
 
@@ -242,7 +289,7 @@ export default function EidoverseWorldDrawer({
     <div className="space-y-5">
       <section className="rounded-xl border border-port-border bg-port-bg p-4">
         <h3 className="font-medium text-white">Dawn atmosphere</h3>
-        <p className="mt-1 text-xs leading-5 text-gray-500">Lightweight skymesh, three authored lights, restrained fog, and sparse wind grass.</p>
+        <p className="mt-1 text-xs leading-5 text-gray-500">Lightweight skymesh, three authored lights, restrained fog, and a grassy meeting park.</p>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           {[
             ['hours', 'Sun hour', 0, 24, 0.1],
@@ -508,7 +555,7 @@ export default function EidoverseWorldDrawer({
       open={open}
       onClose={onClose}
       title="PortOS World Design"
-      subtitle={`${design.name || 'Luminous Systems Garden'} · recipe V${design.assetRecipeVersion || 2}`}
+      subtitle={`${design.name || 'PortOS Commons'} · recipe V${design.assetRecipeVersion || 3}`}
       size="lg"
       tabs={TABS}
       activeTab={activeTab}

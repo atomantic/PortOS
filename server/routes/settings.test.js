@@ -90,6 +90,36 @@ describe('Settings routes — operator-action actor (#5594)', () => {
   });
 });
 
+describe('Settings routes — untrusted-content policy', () => {
+  beforeEach(() => { store = {}; vi.clearAllMocks(); });
+  it('ships classifier-required defaults and persists source-specific constraints', async () => {
+    const defaults = await request(buildApp()).get('/api/settings');
+    expect(defaults.body.untrustedContent.defaults).toMatchObject({ classifierMode: 'required', minBenignScore: 0.9 });
+    const policy = { defaults: { classifierMode: 'required' }, sources: { signal: { providerId: 'local-api', model: 'example-model', maxInputChars: 5000 }, 'github-issue': { classifierMode: 'optional' } } };
+    const saved = await request(buildApp()).put('/api/settings').send({ untrustedContent: policy });
+    expect(saved.status).toBe(200);
+    expect(store.untrustedContent).toEqual(policy);
+    const read = await request(buildApp()).get('/api/settings');
+    expect(read.body.untrustedContent.sources).toEqual(policy.sources);
+  });
+  it('rejects invalid or weakening policy shapes before replacing the saved settings', async () => {
+    store = { untrustedContent: { defaults: { classifierMode: 'required' } } };
+    const previous = structuredClone(store);
+    for (const patch of [
+      { defaults: { classifierMode: 'off' } },
+      { sources: { signal: { maxInputChars: 999999999 } } },
+      { sources: { email: { providerId: {} } } },
+      { defaults: { minBenignScore: 0.1 } },
+      { sources: { unknown: {} } },
+    ]) {
+      const result = await request(buildApp()).put('/api/settings').send({ untrustedContent: patch });
+      expect(result.status).toBe(400);
+      expect(store).toEqual(previous);
+    }
+    expect(updateSettingsWith).not.toHaveBeenCalled();
+  });
+});
+
 describe('Settings routes — apiAccess slice', () => {
   beforeEach(() => {
     store = {};
@@ -698,6 +728,62 @@ describe('Settings routes — hideFirstRunCard (#5640)', () => {
     const res = await request(buildApp()).put('/api/settings').send({ hideFirstRunCard: 'yes' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('Settings routes — orchestration profiles (#5992)', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  it('GET /api/settings/orchestration-profiles returns profiles including built-ins', async () => {
+    const res = await request(buildApp()).get('/api/settings/orchestration-profiles');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.some(p => p.id === 'heavy-planner')).toBe(true);
+  });
+
+  it('POST /api/settings/orchestration-profiles saves a valid profile', async () => {
+    const payload = {
+      id: 'custom-team',
+      name: 'Custom Team',
+      description: 'Opus + Sonnet',
+      profile: {
+        architect: { provider: 'anthropic', model: 'claude-3-opus', effort: 'max' },
+        implementer: { provider: 'anthropic', model: 'claude-3-5-sonnet', effort: 'low' },
+      },
+    };
+    const res = await request(buildApp()).post('/api/settings/orchestration-profiles').send(payload);
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBe('custom-team');
+    expect(store.orchestrationProfiles?.some(p => p.id === 'custom-team')).toBe(true);
+  });
+
+  it('POST rejects an invalid role reasoning effort', async () => {
+    const payload = {
+      id: 'bad-effort',
+      name: 'Bad',
+      profile: {
+        architect: { effort: 'invalid-rung' },
+      },
+    };
+    const res = await request(buildApp()).post('/api/settings/orchestration-profiles').send(payload);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('PUT /api/settings validates orchestrationProfiles array', async () => {
+    const res = await request(buildApp()).put('/api/settings').send({
+      orchestrationProfiles: [{
+        id: 'valid',
+        name: 'Valid Profile',
+        profile: {
+          architect: { effort: 'high' },
+        },
+      }],
+    });
+    expect(res.status).toBe(200);
   });
 });
 

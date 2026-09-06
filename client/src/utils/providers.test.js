@@ -58,6 +58,7 @@ import {
   isCodexSubscriptionProvider,
   supportsModelRefresh,
   isAntigravityProvider,
+  isFleetHostConfigured,
   effortLevelsForProvider,
   generationControlsFor,
   resolveCliEffort,
@@ -79,6 +80,10 @@ import {
   selectableModelsForProvider,
   withStaleAntigravityPin,
   effortAwareModelOptions,
+  resolveProviderModelOptions,
+  codexCatalogModelIds,
+  providerModelList,
+  MODEL_SOURCE,
   effectiveModelFor,
   effortSurvivingModel,
   seedModelEffort,
@@ -161,6 +166,7 @@ describe('effortLevelsForProvider (server mirror)', () => {
     ['OpenCode MTPLX', { id: 'opencode-mtplx', command: 'opencode', mtplxBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', command: 'opencode', vllmBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode SGLang TUI', { id: 'opencode-sglang-tui', command: 'opencode', sglangBacked: true }, ['low', 'medium', 'high']],
+    ['OpenCode LM Studio', { id: 'opencode-lmstudio', command: 'opencode', lmstudioBacked: true }, ['low', 'medium', 'high']],
     ['OpenCode with no local backend', { id: 'opencode', command: 'opencode' }, null],
     // grok DOES have an effort control (`--reasoning-effort`, aliased `--effort`);
     // its ladder stops at xhigh, which is why it is not simply CLAUDE's.
@@ -205,6 +211,11 @@ describe('generationControlsFor', () => {
     // nothing reads. Sampling was never forwardable on a Claude harness either,
     // which would have left the block rendering one inert select.
     ['Claude SGLang TUI', { id: 'claude-sglang-tui', command: 'claude', sglangBacked: true }, null],
+    // LM Studio forwards temperature/top_p like any OpenAI-compatible endpoint,
+    // but reasoning is a property of the LOADED model instance there — no
+    // per-request field carries it, so the toggle would pin a value nothing
+    // reads (THINKING_STYLE.lmstudio is null on the server).
+    ['OpenCode LM Studio', { id: 'opencode-lmstudio', command: 'opencode', lmstudioBacked: true }, { temperature: true, topP: true, thinking: false }],
     ['native Ollama API', { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' }, { temperature: true, topP: true, thinking: true }],
     // OrcaRouter proxies cloud models that own their own reasoning switch.
     ['OpenCode OrcaRouter', { id: 'opencode-orcarouter', command: 'opencode', orcarouterBacked: true }, { temperature: true, topP: true, thinking: false }],
@@ -330,6 +341,80 @@ describe('Antigravity base-model split (server mirror)', () => {
       const codex = { id: 'codex', command: 'codex', models: ['gpt-5', 'gpt-5-mini'] };
       expect(effortAwareModelOptions(codex, 'gpt-5')).toEqual(['gpt-5', 'gpt-5-mini']);
       expect(effortAwareModelOptions(null, '')).toEqual([]);
+    });
+  });
+
+  // #6306: the CoS picker must offer the SIGNED-IN account's catalog, and must
+  // never be emptied by a cold cache or a failed read.
+  describe('resolveProviderModelOptions (Codex account catalog)', () => {
+    const SHIPPED = ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.4'];
+    const codex = (codexModelCatalog) => ({
+      id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', models: SHIPPED, codexModelCatalog,
+    });
+
+    it('offers the account catalog when one was fetched', () => {
+      const result = resolveProviderModelOptions(
+        codex({ models: [{ id: 'gpt-5.4' }, { id: 'gpt-5.4-mini' }], fetchedAt: 1, error: null }),
+        'gpt-5.4',
+      );
+      expect(result.models).toEqual(['gpt-5.4', 'gpt-5.4-mini']);
+      expect(result.source).toBe(MODEL_SOURCE.account);
+      expect(result.unlistedSelection).toBe(false);
+    });
+
+    it('keeps the shipped list for a never-fetched catalog and for a failed read', () => {
+      for (const catalog of [
+        undefined,
+        { models: null, fetchedAt: null, error: null },
+        { models: null, fetchedAt: null, error: { code: 'protocol', message: 'boom' } },
+        // A failed read hands back a LAST-KNOWN-GOOD list, which is not an answer
+        // about the account either — the shipped list stands.
+        { models: [{ id: 'gpt-5.4' }], fetchedAt: 1, error: { code: 'protocol', message: 'boom' } },
+      ]) {
+        const result = resolveProviderModelOptions(codex(catalog), '');
+        expect(result.models).toEqual(SHIPPED);
+        expect(result.source).toBe(MODEL_SOURCE.shipped);
+      }
+    });
+
+    it('reports a successfully-read empty catalog as its own state, not as shipped', () => {
+      const result = resolveProviderModelOptions(codex({ models: [], fetchedAt: 1, error: null }), '');
+      expect(result.models).toEqual([]);
+      expect(result.source).toBe(MODEL_SOURCE.accountEmpty);
+    });
+
+    it('retains a stored model the catalog no longer lists, flagged', () => {
+      const result = resolveProviderModelOptions(
+        codex({ models: [{ id: 'gpt-5.4' }], fetchedAt: 1, error: null }),
+        'gpt-6-astra',
+      );
+      expect(result.models).toEqual(['gpt-5.4', 'gpt-6-astra']);
+      expect(result.unlistedSelection).toBe(true);
+    });
+
+    it('leaves a non-subscription provider on its own catalog', () => {
+      const agy = { id: 'antigravity-cli', command: 'agy', models: CATALOG, codexModelCatalog: { models: [], error: null } };
+      expect(resolveProviderModelOptions(agy, '').source).toBe(MODEL_SOURCE.shipped);
+      expect(codexCatalogModelIds({ codexModelCatalog: { models: null, error: null } })).toBeNull();
+    });
+
+    it('is the raw list every other picker reads, so none reimplements the fallback', () => {
+      // providerModelList is the ONE place the account catalog enters a picker —
+      // useProviderModels, AppProviderPin and the allowlist controls all read it.
+      expect(providerModelList(codex({ models: [{ id: 'gpt-5.4' }], fetchedAt: 1, error: null })))
+        .toEqual(['gpt-5.4']);
+      expect(providerModelList(codex({ models: null, fetchedAt: null, error: null }))).toEqual(SHIPPED);
+      // A successfully-read EMPTY catalog must NOT fall through to defaultModel:
+      // the account really has no models, and the default is one of them.
+      expect(providerModelList({ ...codex({ models: [], fetchedAt: 1, error: null }), models: [], defaultModel: 'gpt-6-astra' }))
+        .toEqual([]);
+      // Non-Codex providers keep the defaultModel fallback for an empty list.
+      expect(providerModelList({ id: 'x', models: [], defaultModel: 'only-default' })).toEqual(['only-default']);
+    });
+
+    it('is what effortAwareModelOptions returns, so every picker agrees', () => {
+      const provider = codex({ models: [{ id: 'gpt-5.4' }], fetchedAt: 1, error: null });
+      expect(effortAwareModelOptions(provider, '')).toEqual(resolveProviderModelOptions(provider, '').models);
     });
   });
 
@@ -1124,9 +1209,12 @@ describe('supportsModelRefresh', () => {
     expect(withButton).toEqual([
       'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
       'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui',
-      'claude-sglang', 'claude-sglang-tui', 'cursor-cli',
+      'claude-sglang', 'claude-sglang-tui', 'codex', 'codex-lmstudio',
+      'codex-ollama', 'codex-tui',
+      'cursor-cli',
       'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
       'opencode-llama-tui',
+      'opencode-lmstudio', 'opencode-lmstudio-tui',
       'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama',
       'opencode-ollama-tui', 'opencode-openrouter', 'opencode-openrouter-tui',
       'opencode-orcarouter', 'opencode-orcarouter-tui',
@@ -1138,7 +1226,7 @@ describe('supportsModelRefresh', () => {
       // provider — nothing here can enumerate that, and Models → Harnesses
       // ("Refresh models") is where their catalog comes from instead.
       'opencode-zen',
-      'openrouter', 'orcarouter',
+      'openrouter', 'orcarouter', 'pi-cli', 'pi-tui', 'slotstream',
     ]);
   });
 });
@@ -1533,6 +1621,22 @@ describe('credentialSource', () => {
     const renamed = { id: 'codex', type: 'cli', command: 'opencode', envVars: { CUSTOM_API_KEY: '' } };
     expect(isCodexSubscriptionProvider(renamed)).toBe(false);
     expect(credentialSource(renamed)).toEqual({ kind: 'env', ref: 'CUSTOM_API_KEY' });
+  });
+
+  it('exempts a local-backed Codex record from the ChatGPT subscription contract', () => {
+    // `codex --oss --local-provider ollama` generates its tokens on this machine
+    // and authenticates against nothing, so the account is not one of its
+    // prerequisites — without this the card claims "No ChatGPT account is signed
+    // in" and, worse, parks in UNKNOWN awaiting a read that never matters.
+    // MIRROR of server/lib/codexAccount.js#isCodexSubscriptionProvider.
+    const local = SHIPPED_PROVIDERS.providers['codex-ollama'];
+    expect(local.ollamaBacked).toBe(true);
+    expect(isCodexSubscriptionProvider(local)).toBe(false);
+    expect(isCodexSubscriptionProvider(SHIPPED_PROVIDERS.providers.codex)).toBe(true);
+    // An enabled copy: a codex-command card whose account read came back with
+    // no verdict parks in UNKNOWN, which this record must never reach.
+    const enabled = { ...local, enabled: true, missingPrerequisites: [] };
+    expect(providerCardState(enabled, { codexAccount: null }).state).toBe(PROVIDER_CARD_STATE.READY);
   });
 
   it('lets a wrapper carrying its own key stand down from inheritance', () => {
@@ -1971,3 +2075,71 @@ describe('publicReviewSelectionPolicy', () => {
     expect(policy.model('grok-4', GROK)).toBe(true);
   });
 });
+
+describe('isFleetHostConfigured', () => {
+  const host = {
+    peerId: 'peer-1',
+    peerName: 'Workstation GPU',
+    peerHost: 'workstation.tailnet.ts.net',
+    peerAddress: '192.168.1.50',
+    endpoint: 'http://workstation.tailnet.ts.net:18022/v1',
+    model: 'qwen3.8-27b',
+    serving: true,
+  };
+
+  it('returns false for empty host or empty providers', () => {
+    expect(isFleetHostConfigured(null, [])).toBe(false);
+    expect(isFleetHostConfigured(host, [])).toBe(false);
+    expect(isFleetHostConfigured(host, null)).toBe(false);
+  });
+
+  it('matches provider by exact endpoint', () => {
+    const providers = [
+      { id: 'p1', endpoint: 'http://workstation.tailnet.ts.net:18022/v1' },
+    ];
+    expect(isFleetHostConfigured(host, providers)).toBe(true);
+
+    const providersWithSlash = [
+      { id: 'p1', endpoint: 'http://workstation.tailnet.ts.net:18022/v1/' },
+    ];
+    expect(isFleetHostConfigured(host, providersWithSlash)).toBe(true);
+  });
+
+  it('matches provider by peerHost hostname or peerAddress', () => {
+    const providers = [
+      { id: 'p1', endpoint: 'http://workstation.tailnet.ts.net:18022/v1' },
+    ];
+    expect(isFleetHostConfigured({ peerHost: 'workstation.tailnet.ts.net' }, providers)).toBe(true);
+    expect(isFleetHostConfigured({ peerAddress: '192.168.1.50' }, [
+      { id: 'p2', endpoint: 'http://192.168.1.50:18022/v1' },
+    ])).toBe(true);
+  });
+
+  it('matches OpenCode TUI provider by OPENCODE_CONFIG_CONTENT baseURL', () => {
+    const providers = [
+      {
+        id: 'p-tui',
+        type: 'tui',
+        envVars: {
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            provider: {
+              vllm: {
+                options: { baseURL: 'http://workstation.tailnet.ts.net:18022/v1' },
+              },
+            },
+          }),
+        },
+      },
+    ];
+    expect(isFleetHostConfigured(host, providers)).toBe(true);
+  });
+
+  it('returns false when no provider points to the host', () => {
+    const providers = [
+      { id: 'other', endpoint: 'http://other.tailnet.ts.net:18022/v1' },
+      { id: 'local', endpoint: 'http://127.0.0.1:11434' },
+    ];
+    expect(isFleetHostConfigured(host, providers)).toBe(false);
+  });
+});
+

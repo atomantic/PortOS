@@ -8,7 +8,7 @@ import { processScreenshotUploads, processAttachmentUploads } from '../../servic
 import { ATTACHMENT_ACCEPT } from '../../utils/fileUpload';
 import FilePickerButton from '../ui/FilePickerButton';
 import { formatBytes } from '../../utils/formatters';
-import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, isOpencodeLocalProvider, generationControlsFor, seedModelEffort } from '../../utils/providers';
+import { effectiveModelFor, effortAwareModelOptions, effortSurvivingModel, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, isCodexSubscriptionProvider, isOpencodeLocalProvider, generationControlsFor, seedModelEffort, resolveProviderModelOptions, MODEL_SOURCE } from '../../utils/providers';
 import { DEFAULT_PR_COMPLETION, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, PR_COMPLETION_OPTIONS, prCompletionOption } from './constants';
 import { clickableProps } from '../../lib/a11yKeyboard';
 import { slashdoLabel } from '../../lib/slashdoCatalog';
@@ -21,8 +21,35 @@ import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../l
 import { PORTOS_APP_ID } from '../../lib/appIdentity';
 import { safeReadJsonStorage, safeReadStorage, safeRemoveStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
 
+const ORCHESTRATION_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+const ORCHESTRATION_ROLES_META = [
+  { key: 'architect', label: 'Architect', hint: 'Planning & spec authoring' },
+  { key: 'implementer', label: 'Implementer', hint: 'Spec execution' },
+  { key: 'reviewer', label: 'Reviewer', hint: 'Spec verification' },
+];
+
 const TASK_DESCRIPTION_DRAFT_KEY = 'portos-cos-task-description-draft';
 const INVALID_DRAFT = Symbol('invalid task description draft');
+
+// ReviewerPicker's onChange patch keys, mapped to their addCosTask payload
+// names — only `stopMode` differs (→ `reviewStopMode`). Only keys present in
+// `reviewOverrides` (i.e. actually touched by the user) go on the wire; see
+// the submit payload below and #6219.
+const REVIEW_PICKER_TO_PAYLOAD_KEY = {
+  reviewers: 'reviewers',
+  usernames: 'usernames',
+  optionalReviewers: 'optionalReviewers',
+  reviewerMaxRounds: 'reviewerMaxRounds',
+  reviewerModels: 'reviewerModels',
+  reviewerEfforts: 'reviewerEfforts',
+  stopMode: 'reviewStopMode',
+  reviewerApplies: 'reviewerApplies',
+};
+const reviewOverridePayload = (reviewOverrides) => Object.fromEntries(
+  Object.entries(REVIEW_PICKER_TO_PAYLOAD_KEY)
+    .filter(([pickerKey]) => reviewOverrides[pickerKey] !== undefined)
+    .map(([pickerKey, payloadKey]) => [payloadKey, reviewOverrides[pickerKey]])
+);
 
 const readTaskDescriptionDraft = (defaultApp) => {
   const raw = safeReadStorage(TASK_DESCRIPTION_DRAFT_KEY);
@@ -65,14 +92,22 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // so the server keeps its own default. Only a slashdo-backed template sets it.
   const [worktreeChangesExpected, setWorktreeChangesExpected] = useState(undefined);
   const [prCompletion, setPrCompletion] = useState(DEFAULT_PR_COMPLETION);
-  const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
-  const [reviewUsernames, setReviewUsernames] = useState([]);
-  const [optionalReviewers, setOptionalReviewers] = useState([]);
-  const [reviewerMaxRounds, setReviewerMaxRounds] = useState({});
-  const [reviewerModels, setReviewerModels] = useState({});
-  const [reviewerEfforts, setReviewerEfforts] = useState({});
-  const [reviewStopMode, setReviewStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
-  const [reviewerApplies, setReviewerApplies] = useState(false);
+  const [reviewDefaults, setReviewDefaults] = useState({
+    reviewers: DEFAULT_REVIEWERS,
+    usernames: [],
+    optionalReviewers: [],
+    reviewerMaxRounds: {},
+    reviewerModels: {},
+    reviewerEfforts: {},
+    stopMode: DEFAULT_REVIEW_STOP_MODE,
+    reviewerApplies: false,
+  });
+  // Only the reviewer fields the user actually touched on THIS form, keyed like
+  // ReviewerPicker's onChange patch. Everything else inherits reviewDefaults, and
+  // only these (mapped to their task-metadata names) are ever submitted — so an
+  // untouched field keeps following future Code Review Defaults changes instead
+  // of freezing today's values into the new task permanently (#6219).
+  const [reviewOverrides, setReviewOverrides] = useState({});
   const [reviewerCliInstalled, setReviewerCliInstalled] = useState({});
   // Which federated instance runs this task (#4520). '' = any instance, the
   // opportunistic default. Hidden entirely on a single-instance install.
@@ -93,6 +128,66 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // Bare slashdo command a quick-template pinned (`plan-task`), never a rendered
   // `/do:x` string — see server/lib/slashdoInvocation.js for why.
   const [slashdoCommand, setSlashdoCommand] = useState('');
+  const [orchestrationMode, setOrchestrationMode] = useState('direct');
+  const [orchestrationProfiles, setOrchestrationProfiles] = useState([]);
+  const [selectedProfileId, setSelectedProfileId] = useState('');
+  const [orchestrationProfile, setOrchestrationProfile] = useState({
+    architect: { provider: '', model: '', effort: '' },
+    implementer: { provider: '', model: '', effort: '' },
+    reviewer: { provider: '', model: '', effort: '' },
+  });
+
+  useEffect(() => {
+    api.getOrchestrationProfiles?.({ silent: true })
+      ?.then((res) => {
+        const list = Array.isArray(res) ? res : res?.profiles || [];
+        setOrchestrationProfiles(list);
+      })
+      ?.catch(() => {});
+  }, []);
+
+  const handleSelectOrchestrationProfile = (profileId) => {
+    setSelectedProfileId(profileId);
+    if (!profileId) return;
+    const found = orchestrationProfiles.find((p) => p.id === profileId);
+    if (found?.profile) {
+      setOrchestrationProfile({
+        architect: {
+          provider: found.profile.architect?.provider || '',
+          model: found.profile.architect?.model || '',
+          effort: found.profile.architect?.effort || '',
+        },
+        implementer: {
+          provider: found.profile.implementer?.provider || '',
+          model: found.profile.implementer?.model || '',
+          effort: found.profile.implementer?.effort || '',
+        },
+        reviewer: {
+          provider: found.profile.reviewer?.provider || '',
+          model: found.profile.reviewer?.model || '',
+          effort: found.profile.reviewer?.effort || '',
+        },
+      });
+    }
+  };
+
+  const updateOrchestrationRoleField = (roleKey, field, val) => {
+    setOrchestrationProfile((prev) => {
+      const roleData = prev[roleKey] || {};
+      let updatedRole = { ...roleData, [field]: val };
+      if (field === 'provider') {
+        updatedRole.model = '';
+        updatedRole.effort = '';
+      } else if (field === 'model') {
+        const prov = providers?.find((p) => p.id === roleData.provider);
+        updatedRole.effort = effortSurvivingModel(prov, val, roleData.effort);
+      }
+      return {
+        ...prev,
+        [roleKey]: updatedRole,
+      };
+    });
+  };
   // Resolved model lists for the reviewer table's Model column. Owned here (not by
   // ReviewerPicker) so the picker stays fetch-free — see its `modelOptions` prop.
   const reviewerModelOptions = useReviewerModelOptions();
@@ -142,16 +237,18 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     api.getCodeReviewDefaults({ silent: true })
       .then((d) => {
         if (cancelled || !d) return;
-        if (Array.isArray(d.reviewers) && d.reviewers.length) setReviewers(d.reviewers);
-        if (Array.isArray(d.usernames)) setReviewUsernames(d.usernames);
-        if (Array.isArray(d.optionalReviewers)) setOptionalReviewers(d.optionalReviewers);
-        if (d.reviewerMaxRounds && typeof d.reviewerMaxRounds === 'object' && !Array.isArray(d.reviewerMaxRounds)) setReviewerMaxRounds(d.reviewerMaxRounds);
-        // The defaults persist per-reviewer models as scalars; the picker takes the
-        // token-keyed map (see client/src/lib/reviewerModels.js).
-        setReviewerModels(reviewerModelsFromDefaults(d));
-        setReviewerEfforts(reviewerEffortsFromDefaults(d));
-        if (d.stopMode) setReviewStopMode(d.stopMode);
-        if (d.reviewerApplies === true) setReviewerApplies(true);
+        setReviewDefaults({
+          reviewers: Array.isArray(d.reviewers) && d.reviewers.length ? d.reviewers : DEFAULT_REVIEWERS,
+          usernames: Array.isArray(d.usernames) ? d.usernames : [],
+          optionalReviewers: Array.isArray(d.optionalReviewers) ? d.optionalReviewers : [],
+          reviewerMaxRounds: d.reviewerMaxRounds && typeof d.reviewerMaxRounds === 'object' && !Array.isArray(d.reviewerMaxRounds) ? d.reviewerMaxRounds : {},
+          // The defaults persist per-reviewer models as scalars; the picker takes the
+          // token-keyed map (see client/src/lib/reviewerModels.js).
+          reviewerModels: reviewerModelsFromDefaults(d),
+          reviewerEfforts: reviewerEffortsFromDefaults(d),
+          stopMode: d.stopMode || DEFAULT_REVIEW_STOP_MODE,
+          reviewerApplies: d.reviewerApplies === true,
+        });
         if (d.installed && typeof d.installed === 'object' && !Array.isArray(d.installed)) setReviewerCliInstalled(d.installed);
       })
       .catch(() => {});
@@ -309,11 +406,27 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // with the tier picked separately — a legacy suffixed id saved in a template
   // stays selectable as its own option.
   const selectedProvider = providers?.find(p => p.id === newTask.provider);
-  const availableModels = effortAwareModelOptions(selectedProvider, newTask.model);
+  // A Codex-subscription provider offers the SIGNED-IN ACCOUNT's catalog when one
+  // has been fetched, so a tier the plan cannot run is never queued (#6306); every
+  // other state falls back to the shipped list, and the note below says which.
+  const { models: availableModels, source: modelSource, unlistedSelection } =
+    resolveProviderModelOptions(selectedProvider, newTask.model);
+  const NO_ACCOUNT_MODELS_NOTE = 'Your signed-in ChatGPT account exposes no models.';
+  const modelSourceNote = (() => {
+    if (!isCodexSubscriptionProvider(selectedProvider)) return '';
+    if (modelSource === MODEL_SOURCE.account) return 'Models your signed-in ChatGPT account can run.';
+    // Reachable with a stored pin the account no longer lists — the select still
+    // renders that one option, so it must not be labelled as the bundled list.
+    if (modelSource === MODEL_SOURCE.accountEmpty) return NO_ACCOUNT_MODELS_NOTE;
+    return 'Showing PortOS\u2019s bundled list \u2014 the ChatGPT account catalog has not been loaded.';
+  })();
   const providerModelNote = (() => {
     if (!selectedProvider) return '';
+    if (modelSource === MODEL_SOURCE.accountEmpty) return NO_ACCOUNT_MODELS_NOTE;
     if (isTuiProvider(selectedProvider)) return `${selectedProvider.name} runs in an attachable terminal UI session.`;
-    if (isCodexProvider(selectedProvider)) return 'Codex uses the model configured in ~/.codex/config.toml.';
+    // PortOS passes `--model` on every Codex spawn (providerVendors.js#codexSpawnArgs),
+    // so ~/.codex/config.toml is NOT what picks the model here.
+    if (isCodexProvider(selectedProvider)) return 'PortOS runs Codex with the model it selects; no models are listed for this provider yet.';
     if (isCliProvider(selectedProvider)) return `${selectedProvider.name} uses its CLI configured default model.`;
     return 'No models are configured. PortOS will use the provider default.';
   })();
@@ -543,6 +656,8 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
       model: newTask.model || undefined,
       provider: newTask.provider || undefined,
       effort: newTask.effort || undefined,
+      orchestrationMode: orchestrationMode === 'orchestrated' ? 'orchestrated' : undefined,
+      orchestrationProfile: orchestrationMode === 'orchestrated' ? orchestrationProfile : undefined,
       temperature: newTask.temperature === '' ? undefined : Number(newTask.temperature),
       thinking: newTask.thinking === '' ? undefined : newTask.thinking === 'true',
       app: newTask.app || undefined,
@@ -563,17 +678,11 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
         : worktreeChangesExpected !== undefined ? { worktreeChangesExpected } : {}),
       prCompletion: !planOnly && useWorktree && openPR ? prCompletion : undefined,
       // One gate for every per-reviewer field: they only apply when this task
-      // opens a PR that PortOS reviews before merging.
-      ...(!planOnly && openPR && prCompletion === 'review-then-merge' ? {
-        reviewers,
-        usernames: reviewUsernames,
-        optionalReviewers,
-        reviewerMaxRounds,
-        reviewerModels,
-        reviewerEfforts,
-        reviewStopMode,
-        reviewerApplies,
-      } : {}),
+      // opens a PR that PortOS reviews before merging. Only fields the user
+      // actually touched (reviewOverrides) go on the wire — an untouched field
+      // stays absent so the task keeps inheriting future Code Review Defaults
+      // changes instead of freezing today's values in on create (#6219).
+      ...(!planOnly && openPR && prCompletion === 'review-then-merge' ? reviewOverridePayload(reviewOverrides) : {}),
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
       attachments: attachments.length > 0 ? attachments.map(a => ({
         filename: a.filename,
@@ -615,11 +724,18 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
     onTaskAdded?.(result, { position: addToTop ? 'top' : 'bottom' });
   };
 
-  // Compact mode: single row with description + app + add, expandable
+  // Compact mode: single row with description + app + add, expandable.
+  // Every breakpoint below is a CONTAINER query, not a viewport one: compact
+  // mode renders inside a dashboard tile that can be ~250px wide on a 2560px
+  // screen, where a viewport `sm:` kept the wide row and squeezed the textarea
+  // down to one character per line. `@xl` (576px) is where the textarea, the
+  // 10rem app picker and the button each still get usable width — roughly the
+  // old 640px viewport threshold once page padding is subtracted, so a phone
+  // keeps the stacked form it had before.
   if (compact) {
     return (
-      <div className="space-y-3">
-        <div className="flex flex-col sm:flex-row gap-2">
+      <div className="@container space-y-3">
+        <div className="flex flex-col @xl:flex-row gap-2">
           <label htmlFor="compact-task-desc" className="sr-only">Task description (required)</label>
           <AutoSizeTextarea
             id="compact-task-desc"
@@ -632,11 +748,11 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 handleAddTask();
               }
             }}
-            className="w-full sm:flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+            className="w-full @xl:flex-1 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             aria-required="true"
           />
           <div className="flex gap-2">
-            <div className="flex-1 sm:w-40 sm:flex-none">
+            <div className="flex-1 min-w-0 @xl:w-40 @xl:flex-none">
               <AppContextPicker
                 apps={apps}
                 value={newTask.app}
@@ -651,7 +767,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             <button
               onClick={handleAddTask}
               disabled={isSubmitting || isEnhancing}
-              className="flex items-center gap-1 px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[44px]"
+              className="flex shrink-0 items-center gap-1 whitespace-nowrap px-3 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 min-h-[44px]"
             >
               {(isSubmitting || isEnhancing) ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
               {isSubmitting ? (planOnly ? 'Planning...' : 'Adding...') : planOnly ? 'Plan & File' : 'Add'}
@@ -677,7 +793,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
 
   // Full mode: identical to original TasksTab form
   return (
-    <div className="bg-port-card border border-port-accent/50 rounded-lg p-4 mb-4" role="form" aria-label="Add new task">
+    <div className="@container bg-port-card border border-port-accent/50 rounded-lg p-4 mb-4" role="form" aria-label="Add new task">
       {/* Quick Templates */}
       {templates.length > 0 && (
         <div className="mb-4">
@@ -706,7 +822,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                   {/* The Claude-Code form of the command, as a recognizable label.
                       The actual invocation is resolved server-side per provider. */}
                   {template.slashdoCommand && (
-                    <span className="hidden sm:inline text-xs text-port-accent/80 font-mono">{slashdoLabel(template.slashdoCommand)}</span>
+                    <span className="hidden @sm:inline text-xs text-port-accent/80 font-mono">{slashdoLabel(template.slashdoCommand)}</span>
                   )}
                   {template.useCount > 0 && (
                     <span className="text-xs text-gray-600">({template.useCount})</span>
@@ -769,7 +885,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             instances={assignableInstances}
           />
         )}
-        <div className="grid grid-cols-1 sm:flex sm:items-center gap-x-4 gap-y-1 sm:flex-wrap">
+        <div className="grid grid-cols-1 @sm:flex @sm:items-center gap-x-4 gap-y-1 @sm:flex-wrap">
           <label className="flex items-center gap-2 cursor-pointer select-none py-1">
             <input
               type="checkbox"
@@ -852,9 +968,9 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 </span>
               </label>
               {!useWorktree && (
-                <label htmlFor="task-when-done" className="flex items-center gap-2 py-1 basis-full sm:basis-auto">
+                <label htmlFor="task-when-done" className="flex flex-wrap items-center gap-2 py-1 basis-full @sm:basis-auto">
                   <span className="text-sm text-gray-400">When done</span>
-                  <select id="task-when-done" value={whenDone} onChange={(e) => setWhenDone(e.target.value)} className="min-w-52 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden">
+                  <select id="task-when-done" value={whenDone} onChange={(e) => setWhenDone(e.target.value)} className="w-full @sm:w-auto @sm:min-w-52 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden">
                     <option value="leave-uncommitted">Leave code uncommitted</option>
                     <option value="commit-push">Commit and push to default branch</option>
                   </select>
@@ -886,14 +1002,14 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 </span>
               </label>
               {openPR && (
-                <label htmlFor="task-pr-completion" className="flex items-center gap-2 py-1 basis-full sm:basis-auto">
+                <label htmlFor="task-pr-completion" className="flex flex-wrap items-center gap-2 py-1 basis-full @sm:basis-auto">
                   <span className="text-sm text-gray-400">After opening PR</span>
                   <select
                     id="task-pr-completion"
                     value={prCompletion}
                     title={prCompletionOption(prCompletion)?.description}
                     onChange={(e) => setPrCompletion(e.target.value)}
-                    className="min-w-44 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden"
+                    className="w-full @sm:w-auto @sm:min-w-44 rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white focus:border-port-accent focus:outline-hidden"
                   >
                     {PR_COMPLETION_OPTIONS.map(option => (
                       <option key={option.value} value={option.value}>{option.label}</option>
@@ -904,25 +1020,27 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               {openPR && prCompletion === 'review-then-merge' && (
                 <div className="basis-full mt-1">
                   <ReviewerPicker
-                    reviewers={reviewers}
-                    usernames={reviewUsernames}
-                    optionalReviewers={optionalReviewers}
-                    reviewerMaxRounds={reviewerMaxRounds}
-                    reviewerModels={reviewerModels}
-                    reviewerEfforts={reviewerEfforts}
+                    reviewers={reviewOverrides.reviewers ?? reviewDefaults.reviewers}
+                    usernames={reviewOverrides.usernames ?? reviewDefaults.usernames}
+                    optionalReviewers={reviewOverrides.optionalReviewers ?? reviewDefaults.optionalReviewers}
+                    reviewerMaxRounds={reviewOverrides.reviewerMaxRounds ?? reviewDefaults.reviewerMaxRounds}
+                    reviewerModels={reviewOverrides.reviewerModels ?? reviewDefaults.reviewerModels}
+                    reviewerEfforts={reviewOverrides.reviewerEfforts ?? reviewDefaults.reviewerEfforts}
                     modelOptions={reviewerModelOptions}
                     installed={reviewerCliInstalled}
-                    stopMode={reviewStopMode}
-                    reviewerApplies={reviewerApplies}
-                    onChange={({ reviewers: r, usernames: u, optionalReviewers: o, reviewerMaxRounds: m, reviewerModels: rm, reviewerEfforts: re, stopMode, reviewerApplies: ra }) => {
-                      setReviewers(r);
-                      setReviewUsernames(u);
-                      setOptionalReviewers(o);
-                      setReviewerMaxRounds(m);
-                      setReviewerModels(rm);
-                      setReviewerEfforts(re);
-                      setReviewStopMode(stopMode);
-                      setReviewerApplies(ra);
+                    stopMode={reviewOverrides.stopMode ?? reviewDefaults.stopMode}
+                    reviewerApplies={reviewOverrides.reviewerApplies ?? reviewDefaults.reviewerApplies}
+                    // The same fallback the props above were seeded from — the
+                    // picker omits whatever still equals it, so touching one
+                    // control no longer freezes every field into a permanent
+                    // override (#6219, mirroring #6208's GlobalConfigControls fix).
+                    defaults={reviewDefaults}
+                    onChange={(patch) => {
+                      // The picker emits only what differs from `defaults`, so
+                      // the patch IS the complete override set — replace outright
+                      // rather than merge, or a key reverted back to the default
+                      // would keep pinning its stale value.
+                      setReviewOverrides(patch);
                     }}
                   />
                 </div>
@@ -944,60 +1062,173 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             </>
           )}
         </div>
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="sm:w-40">
-            <label htmlFor="task-provider" className="sr-only">AI provider</label>
-            <select
-              id="task-provider"
-              value={newTask.provider}
-              onChange={e => setNewTask(t => ({ ...t, provider: e.target.value, model: '', effort: '', temperature: '', thinking: '' }))}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
-              disabled={!providersLoaded}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-port-border/40">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
+            <span>Execution:</span>
+            <button
+              type="button"
+              onClick={() => setOrchestrationMode('direct')}
+              className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                orchestrationMode === 'direct'
+                  ? 'bg-port-accent text-white font-medium'
+                  : 'bg-port-border/40 text-gray-400 hover:text-white'
+              }`}
             >
-              {providersLoaded
-                ? <option value="">Auto (default)</option>
-                : <option value="">Loading providers…</option>}
-              {providersLoaded && enabledProviders.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+              Direct
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrchestrationMode('orchestrated')}
+              className={`px-2.5 py-1 rounded text-xs transition-colors ${
+                orchestrationMode === 'orchestrated'
+                  ? 'bg-port-accent text-white font-medium'
+                  : 'bg-port-border/40 text-gray-400 hover:text-white'
+              }`}
+            >
+              Orchestrated
+            </button>
           </div>
-          {availableModels.length > 0 ? (
-            <div className="flex-1">
-              <label htmlFor="task-model" className="sr-only">AI model</label>
+          {orchestrationMode === 'orchestrated' && (
+            <div className="flex items-center gap-2">
+              <label htmlFor="orchestration-profile-select" className="text-xs text-gray-400">
+                Profile:
+              </label>
               <select
-                id="task-model"
-                value={newTask.model}
-                onChange={e => setNewTask(t => ({
-                  ...t,
-                  model: e.target.value,
-                  // A model with no effort tiers hides the select below — clear the
-                  // value with it rather than submitting a level the UI stopped showing.
-                  effort: effortSurvivingModel(selectedProvider, e.target.value, t.effort),
-                }))}
-                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+                id="orchestration-profile-select"
+                value={selectedProfileId}
+                onChange={(e) => handleSelectOrchestrationProfile(e.target.value)}
+                className="px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-white"
               >
-                <option value="">Select model...</option>
-                {availableModels.map(m => (
-                  <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
+                <option value="">Custom Profile</option>
+                {orchestrationProfiles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>
             </div>
-          ) : selectedProvider ? (
-            <div className="flex-1 px-3 py-2 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 flex items-center">
-              {providerModelNote}
-            </div>
-          ) : null}
-          <EffortSelect
-            provider={selectedProvider}
-            model={effectiveModelFor(selectedProvider, newTask.model)}
-            value={newTask.effort}
-            onChange={effort => setNewTask(t => ({ ...t, effort }))}
-            className="sm:w-40 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
-          />
+          )}
         </div>
+
+        {orchestrationMode === 'orchestrated' ? (
+          <div className="space-y-3 bg-port-bg/40 border border-port-border/60 rounded-xl p-3">
+            <div className="grid grid-cols-1 gap-2.5">
+              {ORCHESTRATION_ROLES_META.map(({ key, label, hint }) => {
+                const roleData = orchestrationProfile[key] || {};
+                const selectedProv = providers?.find((p) => p.id === roleData.provider);
+                const models = selectedProv ? effortAwareModelOptions(selectedProv, roleData.model) : [];
+
+                return (
+                  <div key={key} className="flex flex-col @lg:flex-row @lg:items-center gap-2 text-xs">
+                    <div className="@lg:w-28 flex-shrink-0">
+                      <span className="font-medium text-white">{label}</span>
+                      <span className="block text-[10px] text-gray-400 truncate">{hint}</span>
+                    </div>
+
+                    <div className="flex-1 min-w-0 grid grid-cols-1 @lg:grid-cols-3 gap-2">
+                      <select
+                        aria-label={`${label} provider`}
+                        value={roleData.provider || ''}
+                        onChange={(e) => updateOrchestrationRoleField(key, 'provider', e.target.value)}
+                        className="px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-xs"
+                      >
+                        <option value="">Auto / Default</option>
+                        {enabledProviders.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+
+                      <select
+                        aria-label={`${label} model`}
+                        value={roleData.model || ''}
+                        disabled={!selectedProv || models.length === 0}
+                        onChange={(e) => updateOrchestrationRoleField(key, 'model', e.target.value)}
+                        className="px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-xs disabled:opacity-50"
+                      >
+                        <option value="">Default Model</option>
+                        {models.map((m) => (
+                          <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
+                        ))}
+                      </select>
+
+                      <select
+                        aria-label={`${label} effort`}
+                        value={roleData.effort || ''}
+                        onChange={(e) => updateOrchestrationRoleField(key, 'effort', e.target.value)}
+                        className="px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-xs"
+                      >
+                        <option value="">Default Effort</option>
+                        {ORCHESTRATION_EFFORTS.map((eff) => (
+                          <option key={eff} value={eff}>{eff}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col @lg:flex-row gap-3">
+            <div className="@lg:w-40">
+              <label htmlFor="task-provider" className="sr-only">AI provider</label>
+              <select
+                id="task-provider"
+                value={newTask.provider}
+                onChange={e => setNewTask(t => ({ ...t, provider: e.target.value, model: '', effort: '', temperature: '', thinking: '' }))}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+                disabled={!providersLoaded}
+              >
+                {providersLoaded
+                  ? <option value="">Auto (default)</option>
+                  : <option value="">Loading providers…</option>}
+                {providersLoaded && enabledProviders.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            {availableModels.length > 0 ? (
+              <div className="flex-1 min-w-0">
+                <label htmlFor="task-model" className="sr-only">AI model</label>
+                <select
+                  id="task-model"
+                  value={newTask.model}
+                  onChange={e => setNewTask(t => ({
+                    ...t,
+                    model: e.target.value,
+                    // A model with no effort tiers hides the select below — clear the
+                    // value with it rather than submitting a level the UI stopped showing.
+                    effort: effortSurvivingModel(selectedProvider, e.target.value, t.effort),
+                  }))}
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+                >
+                  <option value="">Select model...</option>
+                  {availableModels.map(m => (
+                    <option key={m} value={m}>
+                      {unlistedSelection && m === newTask.model
+                        ? `${m} (not in account catalog)`
+                        : m.replace('claude-', '').replace(/-\d+$/, '')}
+                    </option>
+                  ))}
+                </select>
+                {modelSourceNote && (
+                  <p className="mt-1 text-xs text-gray-400">{modelSourceNote}</p>
+                )}
+              </div>
+            ) : selectedProvider ? (
+              <div className="flex-1 min-w-0 px-3 py-2 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 flex items-center">
+                {providerModelNote}
+              </div>
+            ) : null}
+            <EffortSelect
+              provider={selectedProvider}
+              model={effectiveModelFor(selectedProvider, newTask.model)}
+              value={newTask.effort}
+              onChange={effort => setNewTask(t => ({ ...t, effort }))}
+              className="@lg:w-40 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+            />
+          </div>
+        )}
         {isOpencodeLocalProvider(selectedProvider) && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 @md:grid-cols-2 gap-3">
             {/* OrcaRouter fronts cloud models that own their own reasoning
                 switch, so it is the one local-namespace wrapper with no
                 thinking toggle to override. */}
@@ -1122,7 +1353,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
         )}
         {/* Template Save Inline Input */}
         {showTemplateSave && (
-          <div className="flex gap-2 items-center">
+          <div className="flex flex-wrap gap-2 items-center">
             <input
               type="text"
               value={templateNameInput}
@@ -1172,7 +1403,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               title="Save current form as a reusable template"
             >
               <Bookmark size={14} aria-hidden="true" />
-              <span className="hidden sm:inline">Save Template</span>
+              <span className="hidden @sm:inline">Save Template</span>
             </button>
             <button
               onClick={handleAddTask}

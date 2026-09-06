@@ -496,6 +496,10 @@ export const providerSchema = z.object({
   defaultModel: z.string().nullable().optional(),
   timeout: z.number().int().min(AI_RUN_TIMEOUT_MIN_MS).max(AI_RUN_TIMEOUT_MAX_MS).optional(),
   enabled: z.boolean().optional(),
+  // Marks a harness wrapper whose backend is the LM Studio server on this
+  // machine. Unlike the containers below, its context window and reasoning are
+  // chosen when the model instance is LOADED, so PortOS forwards neither.
+  lmstudioBacked: z.boolean().optional(),
   // Kept in schema parity with aiToolkit's provider schema. Marks OpenCode
   // wrappers for a separately started local MTPLX native-MTP server.
   mtplxBacked: z.boolean().optional(),
@@ -1636,14 +1640,27 @@ export const renderDefaultsSettingsSchema = z.object(
 export const videoGenSettingsSchema = z.object({
   mode: videoModePinSchema,
   defaultModelId: z.preprocess(emptyToNull, z.string().trim().max(64).nullable().optional()),
-  // Default-on macOS GPU-watchdog mitigation for sustained MLX video renders.
-  // Set false for a headless display workflow that manages display power itself.
+  // Opt-in macOS GPU-watchdog mitigation for local MLX video renders (mlx
+  // #3267) — OFF by default, since a render is a short, attended action and
+  // sleeping the screen unasked reads as a crash. Set true to have PortOS
+  // sleep the display for the duration of a render; also settable per-render
+  // (see the `displaySleep` field on POST /api/video-gen).
   displaySleep: z.boolean().optional(),
   // Install-wide acknowledgement of restricted-model license gates, stored as
   // the exact reviewed-license ids (`termsGate.id`). Written through
   // POST /api/video-gen/model-terms; typed here so a Settings save can't put
   // junk where the render gate reads authorization from.
   acceptedModelTerms: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
+  // fal.ai queue REST provider (#6213) — settings-stored key wins over the
+  // FAL_KEY env var (same precedence as loras.js's Civitai key).
+  fal: z.object({
+    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+  }).optional(),
+  // reactor.inc fast-h3 provider (#6214) — same settings-wins-over-env
+  // precedence as `fal` above.
+  reactor: z.object({
+    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+  }).optional(),
 });
 
 // POST /api/video-gen/model-terms — record (or withdraw) the acknowledgement of
@@ -1681,9 +1698,15 @@ export const localLlmSettingsSchema = z.object({
   // release the model, which is what every install did before this setting
   // existed and stays the default. Capped at a day: a longer window is
   // indistinguishable from "never" and is far likelier a units mix-up.
-  llama: z.object({ idleMinutes: z.number().int().min(0).max(1440).optional() }).strict().optional(),
+  llama: z.object({
+    idleMinutes: z.number().int().min(0).max(1440).optional(),
+    keepLoaded: z.boolean().optional(),
+    pinned: z.boolean().optional(),
+  }).strict().optional(),
   mtplx: z.object({
     idleMinutes: z.number().int().min(0).max(1440).optional(),
+    keepLoaded: z.boolean().optional(),
+    pinned: z.boolean().optional(),
     // The launch line a lazy start replays. MTPLX has no Start button any more —
     // the first request that needs it brings it up — so the checkpoint and port
     // the user chose have to outlive the process, or an on-demand start would
@@ -1696,6 +1719,8 @@ export const localLlmSettingsSchema = z.object({
   }).strict().optional(),
   slotstream: z.object({
     idleMinutes: z.number().int().min(0).max(1440).optional(),
+    keepLoaded: z.boolean().optional(),
+    pinned: z.boolean().optional(),
     launch: z.object({
       model: z.string().trim().max(300).nullable().optional(),
       port: z.number().int().min(1).max(65535).optional(),
@@ -1843,3 +1868,46 @@ export * from './quotaBurnValidation.js';
 export * from './spriteValidation.js';
 export * from './agentContextValidation.js';
 export * from './eidoverseValidation.js';
+
+// Public benchmark observations. A source is attached to each metric because
+// price, quality and runtime measurements often come from different workloads.
+const comparisonSourceSchema = z.object({
+  url: z.string().url().max(2000).refine(value => /^https:\/\//i.test(value), 'Source must use HTTPS'),
+  retrievedAt: z.string().datetime().refine(value => Date.parse(value) <= Date.now(), 'Source date cannot be in the future'),
+  methodology: z.string().min(1).max(1000),
+}).strict();
+const comparisonMetricSchema = z.object({ value: z.number().finite().nonnegative(), source: comparisonSourceSchema }).strict();
+export const modelComparisonObservationSchema = z.object({
+  id: z.string().min(1).max(200),
+  provider: z.string().min(1).max(160),
+  model: z.string().min(1).max(200),
+  effort: z.string().min(1).max(80),
+  configuration: z.string().min(1).max(500),
+  billing: z.enum(['api', 'subscription', 'local', 'unknown']),
+  benchmark: z.string().min(1).max(160),
+  quality: comparisonMetricSchema.nullable(),
+  costPerTask: comparisonMetricSchema.nullable(),
+  inputPerMillion: comparisonMetricSchema.nullable(),
+  outputPerMillion: comparisonMetricSchema.nullable(),
+  reasoningPerMillion: comparisonMetricSchema.nullable(),
+  responseSeconds: comparisonMetricSchema.nullable(),
+  tokensPerSecond: comparisonMetricSchema.nullable(),
+  quota: z.object({ unitsPerTask: z.number().finite().nonnegative(), unit: z.string().min(1).max(80), source: comparisonSourceSchema }).strict().nullable(),
+  notes: z.string().max(2000),
+}).strict();
+export const modelComparisonImportSchema = z.object({
+  schemaVersion: z.literal(1),
+  observations: z.array(modelComparisonObservationSchema).min(1).max(2000),
+}).strict().superRefine((value, ctx) => {
+  const ids = new Set();
+  value.observations.forEach((row, index) => {
+    if (ids.has(row.id)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['observations', index, 'id'], message: 'Duplicate observation id' });
+    ids.add(row.id);
+    if (!row.quality && !row.costPerTask && !row.inputPerMillion && !row.outputPerMillion && !row.reasoningPerMillion && !row.responseSeconds && !row.tokensPerSecond && !row.quota) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['observations', index], message: 'At least one sourced metric is required' });
+    }
+  });
+});
+
+export const modelComparisonDiscoverySchema = z.object({ providerId: z.string().min(1).max(200) }).strict();
+export const modelComparisonSyncSchema = z.object({ apiKey: z.string().min(1).max(200).optional() }).strict();

@@ -16,6 +16,10 @@ import { createDefaultPersistentMindState, normalizePersistentMindState } from '
 import { createDefaultPersistentMindCapabilities, normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { createDefaultPersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { createDefaultPersistentMindPrompt, normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import {
+  createDefaultPersistentMindThinkingPresets,
+  normalizePersistentMindThinkingPresets,
+} from '../lib/persistentMindThinkingPresets.js';
 import { DEFAULT_ALWAYS_APPROVE_KINDS } from './taskLearning/safetyKind.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
@@ -69,7 +73,14 @@ export const DEFAULT_CONFIG = {
   improvementEnabled: true,
   avatarStyle: 'svg',
   dynamicAvatar: true,
-  alwaysOn: true,
+  // Start CoS with the server. FALSE is the shipped posture: an install that
+  // has never been configured must not begin autonomous, LLM-backed work on its
+  // own (AGENTS.md, "No cold-bootstrap LLM calls"), and every other work-
+  // generation flag below defaults on. This used to read `true` and was masked
+  // by a `data.reference/cos/config.json` seed seeding `false` over it; the
+  // seed is gone (see scripts/migrations/340-cos-config-seed-repair.js), so the
+  // default is now the only thing a fresh install reads.
+  alwaysOn: false,
   appReviewCooldownMs: 1800000,
   idleReviewEnabled: true,
   idleReviewPriority: 'MEDIUM',
@@ -81,6 +92,7 @@ export const DEFAULT_CONFIG = {
   // Persisting a profile is not consent to wake the mind. Fresh and upgraded
   // installs stay disabled until the user explicitly starts it.
   persistentMindProfile: createDefaultPersistentMindProfile(),
+  persistentMindThinkingPresets: createDefaultPersistentMindThinkingPresets(),
   persistentMindPrompt: createDefaultPersistentMindPrompt(),
   // Action grants are independent of the provider profile. Existing and fresh
   // conversation-only installs never gain task-creation authority on upgrade.
@@ -200,6 +212,7 @@ function mergeStoredConfig(storedConfig) {
     ...persistedConfig,
     persistentMindCapabilities: normalizePersistentMindCapabilities(persistedConfig.persistentMindCapabilities),
     persistentMindProfile: normalizePersistentMindProfile(persistedConfig.persistentMindProfile),
+    persistentMindThinkingPresets: normalizePersistentMindThinkingPresets(persistedConfig.persistentMindThinkingPresets),
     persistentMindPrompt: normalizePersistentMindPrompt(persistedConfig.persistentMindPrompt),
   };
 }

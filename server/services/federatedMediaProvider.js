@@ -37,6 +37,7 @@ import {
   enqueueJob,
   getJob,
   isRemoteMediaJob,
+  isVideoModelHeld,
   laneConcurrencyFor,
   listJobs,
 } from './mediaJobQueue/index.js';
@@ -445,10 +446,11 @@ async function localGeneratorCapabilities(kind, pythonPath, { models, configured
       : needsPython ? !!pythonPath
         : kind === 'video' ? await isByovRuntimeReady(model?.runtime)
           : true;
+    const held = kind === 'video' && model && isVideoModelHeld(model.id, model.runtime);
     const reason = !isLocal ? 'unknown-engine'
       : !model ? 'unknown-model'
         : !modelSupportsInput ? 'unsupported-input'
-          : !runtimeReady ? 'runtime-unavailable'
+          : !runtimeReady || held ? 'runtime-unavailable'
             : !modelReady ? 'model-unavailable'
               : null;
     const frameStride = Number.isInteger(Number(model?.frameStride)) && Number(model.frameStride) >= 1 && Number(model.frameStride) <= 64
@@ -557,7 +559,8 @@ const federatedLaneConcurrency = (kinds) => (kinds.length === 0 ? 1 : Math.min(
  */
 function activeQueueSnapshot(config, kinds) {
   const active = listJobs().filter((job) =>
-    ACTIVE_STATUSES.has(job.status) && !isRemoteMediaJob(job),
+    ACTIVE_STATUSES.has(job.status) && !isRemoteMediaJob(job)
+      && !(job.status === 'queued' && job.hold),
   );
   let providerActive = 0;
   let queued = 0;
@@ -839,6 +842,13 @@ export async function submitFederatedMediaJob({ callerId, config, input, idempot
     }
 
     const inputAssetParams = await resolveSubmissionInputAssets({ callerId, input, capability });
+    // A local render may have failed while readiness/assets were being read.
+    // Refuse this cohort without transmitting its diagnostic or hold record.
+    if (input.kind === 'video' && isVideoModelHeld(capability._model.id, capability._model.runtime)) {
+      unavailable('Requested model is not currently available', 'MEDIA_PROVIDER_MODEL_UNAVAILABLE', 503, {
+        reason: 'runtime-unavailable',
+      });
+    }
     // Opportunistic, and only once a submission has actually arrived: a provider
     // nobody sends work to has nothing to sweep, and one that does gets swept on
     // every admission. Never allowed to fail the job it rode in on.

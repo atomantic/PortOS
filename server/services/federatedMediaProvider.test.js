@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   cancelResult: { ok: true, status: 'canceled' },
   imageModels: [],
   videoModels: [],
+  videoHolds: [],
   cachedRepos: new Set(),
   laneWidthByKind: {},
 }));
@@ -58,6 +59,7 @@ vi.mock('./musicEngineCapabilities.js', () => ({
 
 vi.mock('./mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => state.jobs),
+  isVideoModelHeld: vi.fn((modelId, runtime = 'mlx_video') => state.videoHolds.some((hold) => hold.modelId === modelId && hold.runtime === runtime)),
   // Widths deliberately differ per kind so a test can tell a minimum from a sum
   // or a max; the real queue routes every federated kind to the same lane, but
   // that is the thing under test, not a premise of it.
@@ -159,6 +161,7 @@ beforeEach(() => {
   state.cancelResult = { ok: true, status: 'canceled' };
   state.imageModels = [];
   state.videoModels = [];
+  state.videoHolds = [];
   state.cachedRepos = new Set();
   state.laneWidthByKind = { audio: 1, image: 1, video: 1 };
   __resetFederatedMediaProviderForTests();
@@ -315,6 +318,16 @@ describe('federated media provider capacity and idempotency', () => {
     const status = await getFederatedMediaProviderStatus(config());
     expect(status.queue.byKind).toEqual({});
     expect(status.queue).toMatchObject({ totalActive: 2, providerActive: 1, running: 1, queued: 0 });
+  });
+
+  it('admits unrelated peer audio while retained local videos reach the queue cap', async () => {
+    state.jobs = [1, 2, 3].map((id) => ({ id: `held-${id}`, kind: 'video', status: 'queued',
+      hold: { cause: 'local diagnostic' }, owner: null }));
+    const status = await getFederatedMediaProviderStatus(config());
+    expect(status.queue).toMatchObject({ accepting: true, totalActive: 0 });
+    expect(JSON.stringify(status)).not.toContain('local diagnostic');
+    const result = await submitFederatedMediaJob({ callerId: 'peer-example', config: config(), input: input(), idempotencyKey: 'while-held' });
+    expect(result.job).toMatchObject({ status: 'queued', kind: 'audio' });
   });
 
   it('queues allowlisted audio without exposing the prompt in its response', async () => {
@@ -576,6 +589,28 @@ describe('federated media provider — image/video kinds', () => {
     expect(status.capabilities[0]).toMatchObject({
       ready: true, runtimeReady: true, unavailableReason: null,
     });
+  });
+
+  it('refuses held video cohorts even with no retained jobs while admitting another model', async () => {
+    state.videoModels = ['held-video', 'ready-video'].map((id) => ({
+      id, name: id, runtime: 'ltx2', repo: `example/${id}`, supportedModes: ['text'],
+    }));
+    state.cachedRepos = new Set(state.videoModels.map((model) => model.repo));
+    const providerConfig = { ...config(), videoModels: state.videoModels.map(({ id }) => ({ engine: 'local', modelId: id })) };
+    state.videoHolds = [{ modelId: 'held-video', runtime: 'ltx2', cause: 'private diagnostic' }];
+    const status = await getFederatedMediaProviderStatus(providerConfig, { kinds: ['video'] });
+    expect(status.capabilities).toEqual([
+      expect.objectContaining({ modelId: 'held-video', ready: false, unavailableReason: 'runtime-unavailable' }),
+      expect.objectContaining({ modelId: 'ready-video', ready: true }),
+    ]);
+    expect(JSON.stringify(status)).not.toContain('private diagnostic');
+    await expect(submitFederatedMediaJob({ callerId: 'peer-example', config: providerConfig,
+      input: { kind: 'video', engine: 'local', modelId: 'held-video', prompt: 'an invented clip' }, idempotencyKey: 'held-video' }))
+      .rejects.toMatchObject({ code: 'MEDIA_PROVIDER_MODEL_UNAVAILABLE' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+    const accepted = await submitFederatedMediaJob({ callerId: 'peer-example', config: providerConfig,
+      input: { kind: 'video', engine: 'local', modelId: 'ready-video', prompt: 'an invented clip' }, idempotencyKey: 'ready-video' });
+    expect(accepted.job).toMatchObject({ status: 'queued', kind: 'video' });
   });
 
   // These two models used to be hidden entirely: neither can render text-only,

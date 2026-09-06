@@ -5,13 +5,16 @@ import {
   filterSelectableModels,
   isProviderHardwareCompatible,
   isProviderModelHardwareCompatible,
+  providerModelList,
   selectableModelsForProvider,
   withStaleAntigravityPin,
 } from '../utils/providers';
 
-// The provider's selectable model source: its `models` list, or — when that
-// list is empty (a cloud/manual provider configured with only a defaultModel,
-// where `[]` is truthy so `||` wouldn't fall through) — its defaultModel.
+// The provider's selectable model source, via the shared `providerModelList`:
+// a signed-in ChatGPT account's own catalog when one has been fetched, else the
+// provider's `models` list, else — when that list is empty (a cloud/manual
+// provider configured with only a defaultModel, where `[]` is truthy so `||`
+// wouldn't fall through) — its defaultModel.
 //
 // `withEffort` then applies any provider-specific rewrite — today that means
 // Antigravity lists BASE models (`gemini-3.6-flash`) rather than one row per
@@ -19,7 +22,7 @@ import {
 // control the suffixed ids are the ONLY way to express a tier: collapsing them
 // there would silently strip the capability rather than relocate it.
 const sourceModels = (provider, withEffort) => {
-  const models = provider?.models?.length ? provider.models : [provider?.defaultModel];
+  const models = providerModelList(provider);
   return withEffort ? selectableModelsForProvider(provider, models) : models;
 };
 

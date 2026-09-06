@@ -4,7 +4,7 @@ import { join, dirname, delimiter, isAbsolute } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { assertSecretEndpoint, evaluateSecretEndpoint } from './endpointGuard.js';
 import { fileURLToPath } from 'url';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import {
   ANTIGRAVITY_CLI_ID,
@@ -182,9 +182,13 @@ const CODEX_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyMod
 // config (rather than the old "use ~/.codex/config.toml" sentinel) so PortOS
 // can pass the user's choice through as `codex --model <id>`.
 const CODEX_MODELS = [
-  'gpt-5.6-luna',
-  'gpt-5.6-terra',
+  'gpt-6-astra',
   'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini',
   'gpt-5.3-codex-spark',
 ];
 const CODEX_MODEL_DEFAULTS = {
@@ -199,6 +203,13 @@ const PRIOR_CODEX_MODEL_CATALOGS = [
     'gpt-5.6-luna',
     'gpt-5.6-terra',
     'gpt-5.6-sol',
+  ],
+  // Prior 2026-08 catalog before GPT-6 Astra, GPT-5.5, GPT-5.4, GPT-5.4 Mini were added.
+  [
+    'gpt-5.6-luna',
+    'gpt-5.6-terra',
+    'gpt-5.6-sol',
+    'gpt-5.3-codex-spark',
   ],
 ];
 const ANTIGRAVITY_MODEL_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
@@ -664,6 +675,10 @@ export function createProviderService(config = {}) {
         // MTPLX's native MTP runtime is a separate local OpenAI-compatible
         // backend. Preserve this marker so OpenCode receives the `mtplx/`
         // namespace and model refresh probes its local endpoint.
+        // LM Studio is a local backend PortOS already manages; preserve the
+        // marker so OpenCode receives the `lmstudio/` namespace and model
+        // refresh probes the LM Studio server rather than the harness.
+        ...(providerData.lmstudioBacked === true ? { lmstudioBacked: true } : {}),
         ...(providerData.mtplxBacked === true ? { mtplxBacked: true } : {}),
         ...(providerData.llamaBacked === true ? { llamaBacked: true } : {}),
         // The local vLLM container is a third distinct local backend: preserve
@@ -684,6 +699,10 @@ export function createProviderService(config = {}) {
         // non-allowlisted) endpoint — see endpointGuard.js. Only
         // persisted when true so existing keyless/local providers stay clean.
         ...(providerData.allowCustomEndpoint === true ? { allowCustomEndpoint: true } : {}),
+        // Codex 'ignore my ~/.codex/config.toml' pin. Only persisted when true so
+        // every existing record stays byte-identical and an older install
+        // reading this file sees nothing new.
+        ...(providerData.ignoreUserConfig === true ? { ignoreUserConfig: true } : {}),
         envVars: providerData.envVars || {},
         secretEnvVars: providerData.secretEnvVars || [],
         headlessArgs: providerData.headlessArgs || [],
@@ -947,6 +966,14 @@ export function createProviderService(config = {}) {
       // returning null so `null` keeps exactly ONE meaning out of this function:
       // the provider does not exist. That is what lets the route's 404 say
       // plainly "Provider not found" instead of guessing at a reason.
+      // Pi reports an unauthenticated install as an empty list. That is useful
+      // for first setup, but a lapsed login must not erase a populated catalog.
+      if (resolveModelFetcher(provider)?.key === 'pi' && Array.isArray(fetched)
+        && fetched.length === 0 && provider.models?.length) {
+        const error = new Error('Pi has no authenticated models. Use pi /login before refreshing the stored catalog.');
+        error.status = 502;
+        throw error;
+      }
       const catalog = toModelCatalog(fetched);
       if (catalog === null) {
         const unsupported = new Error(`Model refresh returned nothing for provider '${provider.id}'`);
@@ -1194,6 +1221,15 @@ export function createProviderService(config = {}) {
       return this._refreshAPIProviderModels(provider);
     },
 
+    /**
+     * Fetch the downloaded catalog from the local LM Studio server for its
+     * harness wrappers. Refresh-only, like every other local fetcher here: it
+     * never starts LM Studio, downloads a model, or issues a completion.
+     */
+    async _fetchLmstudioModels(provider) {
+      return this._refreshAPIProviderModels(provider);
+    },
+
     /** Fetch the llama-server catalog for OpenCode llama CLI/TUI wrappers. */
     async _fetchLlamaModels(provider) {
       return this._refreshAPIProviderModels(provider);
@@ -1293,11 +1329,13 @@ export function createProviderService(config = {}) {
      * @param {object} provider
      * @param {string} defaultBin - binary to use when the provider pins no command
      * @param {(stdout: string) => string[]} parse - vendor's stdout → ids parser
-     * @returns {Promise<string[]>} a non-empty id list
+     * @param {string[]} [listArgs] - catalog command arguments
+     * @param {(stdout: string) => boolean} [isEmptyCatalog] - explicit empty-catalog response
+     * @returns {Promise<string[]>} parsed ids; empty only when explicitly recognized
      */
-    async _execCliModelList(provider, defaultBin, parse) {
+    async _execCliModelList(provider, defaultBin, parse, listArgs = ['models'], isEmptyCatalog = () => false) {
       const bin = provider?.command || defaultBin;
-      const { command, args } = prepareWindowsSafeSpawn(bin, ['models']);
+      const { command, args } = prepareWindowsSafeSpawn(bin, listArgs);
       const pending = execFileAsync(command, args, {
         timeout: 15000,
         env: { ...process.env, ...provider?.envVars },
@@ -1312,14 +1350,22 @@ export function createProviderService(config = {}) {
       // or not a given binary has the behavior.
       pending.child?.stdin?.end();
       const { stdout } = await pending.catch((err) => {
-        throw new Error(`'${bin} models' failed: ${err?.message || 'could not run the binary'}`);
+        const output = `${err.stdout || ''}\n${err.stderr || ''}`;
+        if (!err.killed && isEmptyCatalog(output)) return { stdout: output };
+        throw new Error(`'${bin} ${listArgs.join(' ')}' failed: ${err?.message || 'could not run the binary'}`);
       });
 
       const listed = parse(stdout);
-      if (listed.length === 0) {
-        throw new Error(`'${bin} models' returned no model ids`);
+      if (listed.length === 0 && !isEmptyCatalog(stdout)) {
+        throw new Error(`'${bin} ${listArgs.join(' ')}' returned no model ids`);
       }
       return listed;
+    },
+
+    async _fetchPiModels(provider) {
+      const { PI_COMMAND, parsePiModelList } = await import('./internal/pi.js');
+      return this._execCliModelList(provider, PI_COMMAND, parsePiModelList, ['--list-models'],
+        (stdout) => /No models available/i.test(stdout) && /\/login/.test(stdout));
     },
 
     /**
@@ -1345,6 +1391,108 @@ export function createProviderService(config = {}) {
      */
     async _fetchCursorModels(provider) {
       return await this._execCliModelList(provider, CURSOR_COMMAND, parseCursorModelList);
+    },
+
+    /**
+     * Codex exposes its model catalog through the `codex app-server` JSON-RPC
+     * interface via the `model/list` RPC method.
+     *
+     * Throws on failure or timeout rather than falling back to static seeds,
+     * consistent with _execCliModelList and _fetchOllamaToolCapableModels.
+     */
+    async _fetchCodexModels(provider) {
+      const bin = provider?.command || 'codex';
+      // On Windows, npm places a POSIX `codex` stub beside its runnable
+      // `codex.cmd` shim. `spawn('codex')` can select the former (or fail to
+      // resolve it entirely), even though the provider passed its capability
+      // check. Resolve the extension-bearing shim before the safe cmd.exe
+      // wrapper below, matching the other CLI probes in this module.
+      const childEnv = { ...process.env, ...provider?.envVars };
+      const resolvedBin = resolveWindowsExecutable(bin, process.platform === 'win32', childEnv) || bin;
+      const { command, args } = prepareWindowsSafeSpawn(resolvedBin, ['app-server']);
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        let child;
+        const settle = (err, result) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          try {
+            child?.kill('SIGTERM');
+          } catch {}
+          if (err) reject(err);
+          else resolve(result);
+        };
+
+        const timer = setTimeout(() => {
+          settle(new Error(`'${bin} app-server' timed out waiting for model catalog`));
+        }, 15000);
+        timer.unref?.();
+
+        try {
+          child = spawn(command, args, {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: childEnv,
+            windowsHide: true,
+          });
+        } catch (err) {
+          settle(new Error(`'${bin} app-server' failed to spawn: ${err?.message || err}`));
+          return;
+        }
+
+        child.on('error', (err) => {
+          settle(new Error(`'${bin} app-server' failed: ${err?.message || err}`));
+        });
+
+        child.stdin?.on('error', () => {});
+
+        child.on('exit', (code, signal) => {
+          settle(new Error(`'${bin} app-server' exited prematurely with code ${code ?? signal}`));
+        });
+
+        let buffer = '';
+        child.stdout?.on('data', (chunk) => {
+          buffer += chunk.toString();
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            try {
+              const msg = JSON.parse(trimmed);
+              if (msg.id === 1) {
+                child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', method: 'initialized', params: {} }) + '\n');
+                child.stdin?.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'model/list', params: {} }) + '\n');
+              } else if (msg.id === 2) {
+                if (msg.error) {
+                  settle(new Error(`'${bin} app-server' model/list error: ${msg.error.message || JSON.stringify(msg.error)}`));
+                  return;
+                }
+                const rawModels = msg.result?.data || msg.result?.models || [];
+                const ids = rawModels
+                  .filter((m) => !m.hidden)
+                  .map((m) => (typeof m === 'string' ? m : m?.id || m?.model))
+                  .filter(Boolean);
+                if (ids.length === 0) {
+                  settle(new Error(`'${bin} app-server' returned no model ids`));
+                  return;
+                }
+                settle(null, [...new Set(ids)]);
+                return;
+              }
+            } catch {}
+          }
+        });
+
+        child.stdin?.write(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: { clientInfo: { name: 'portos', version: '1.0.0' } },
+          }) + '\n',
+        );
+      });
     },
 
     async _fetchOllamaToolCapableModels(provider) {

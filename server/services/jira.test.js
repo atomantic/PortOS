@@ -1,6 +1,14 @@
 import fs from 'fs/promises';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import {
+import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+const tempRoot = createTempDataRoot('portos-jira-');
+
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  return makePathsProxy(actual, { dataRoot: tempRoot });
+});
+const {
   addIssuesToSprint,
   buildColumnsFromBoardConfig,
   buildColumnsFromStatuses,
@@ -17,7 +25,7 @@ import {
   resolveCustomFieldIds,
   updateTicket,
   upsertInstance
-} from './jira.js';
+} = await import('./jira.js');
 
 describe('isCloudInstance', () => {
   it('treats *.atlassian.net hosts as Cloud', () => {

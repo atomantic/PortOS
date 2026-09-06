@@ -44,6 +44,14 @@ import {
   isCollapsedPasteChip,
   createInputReadyTracker,
   AGY_INPUT_READY_PATTERN,
+  createRetryStallGate,
+  RETRY_STALL_MS,
+  RETRY_STALL_MIN_ADVANCES,
+  detectToolPermissionPrompt,
+  createToolPermissionGate,
+  TOOL_PERMISSION_REPAINT_COOLDOWN_MS,
+  TOOL_PERMISSION_DECLINE_MAX,
+  TOOL_PERMISSION_NUDGE_TEXT,
 } from './tuiHandshake.js';
 import { detectImmediateFallbackSignal } from './aiToolkit/errorDetection.js';
 import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
@@ -1595,7 +1603,183 @@ describe('tuiHandshake — parity with the shipped provider catalog', () => {
   );
 });
 
+describe('createRetryStallGate', () => {
+  const MIN = 60 * 1000;
+  const banner = (attempt, secs = 0) => `API error · Retrying in ${secs}s · attempt ${attempt}/10`;
+
+  it('fails over a request the provider keeps failing across the stall window (agent-e057cca7)', () => {
+    // Stage 3's ~100K-token prefill was cancelled by the harness every ~6
+    // minutes and re-sent verbatim: attempt 1 at t, 2 at t+6m, 3 at t+12m …
+    const gate = createRetryStallGate();
+    gate.observe(banner(1, 1), 0);
+    gate.observe(banner(1, 0), 1000);
+    expect(gate.takeStall()).toBeNull();
+    gate.observe(banner(2), 6 * MIN);
+    expect(gate.takeStall()).toBeNull();
+    gate.observe(banner(3), 12 * MIN);
+
+    const verdict = gate.takeStall();
+    expect(verdict).toMatchObject({ category: 'timeout', requiresFallback: true, actionable: false });
+    expect(verdict.message).toContain('retried it 3 times over 12 minutes');
+    // Handed back once: the consumer fails over exactly once.
+    expect(gate.takeStall()).toBeNull();
+  });
+
+  it('is decided at a sighting, never by the clock: a fast ladder that then succeeded is not a stall', () => {
+    // A transient cloud fault: ten attempts in two minutes, the last one
+    // answered, and the run did an hour of useful work afterwards.
+    const gate = createRetryStallGate();
+    for (let attempt = 1; attempt <= 10; attempt += 1) gate.observe(banner(attempt), attempt * 12 * 1000);
+    gate.observe('⏺ Read(server/index.js)\n', 5 * MIN);
+    gate.observe('⏺ Edit(server/index.js)\n', 60 * MIN);
+    expect(gate.takeStall()).toBeNull();
+  });
+
+  it('needs the banner to advance RETRY_STALL_MIN_ADVANCES times inside one episode', () => {
+    const gate = createRetryStallGate();
+    // A single failing attempt repainted for a long time — the countdown
+    // ticking and a stale screen — is one sighting, not a ladder.
+    gate.observe(banner(1, 2), 0);
+    gate.observe(banner(1, 1), RETRY_STALL_MS);
+    gate.observe(banner(1, 0), RETRY_STALL_MS + 5000);
+    expect(gate.takeStall()).toBeNull();
+    gate.observe(banner(1 + RETRY_STALL_MIN_ADVANCES - 1), RETRY_STALL_MS + 6 * MIN);
+    expect(gate.takeStall()).toBeNull();
+    gate.observe(banner(1 + RETRY_STALL_MIN_ADVANCES), RETRY_STALL_MS + 12 * MIN);
+    expect(gate.takeStall()).not.toBeNull();
+  });
+
+  it('starts a new episode when the counter restarts or the last banner is stale', () => {
+    const gate = createRetryStallGate();
+    // Episode A: two attempts, then the request answered.
+    gate.observe(banner(1), 0);
+    gate.observe(banner(2), 6 * MIN);
+    // Episode B, a later request: its counter restarts at 1 …
+    gate.observe(banner(1), 30 * MIN);
+    gate.observe(banner(2), 36 * MIN);
+    expect(gate.takeStall()).toBeNull();
+    gate.observe(banner(3), 42 * MIN);
+    const verdict = gate.takeStall();
+    // … and is judged on its own attempts, not A's.
+    expect(verdict.message).toContain('retried it 3 times over 12 minutes');
+
+    // A banner more than the stall window after the previous one is a fresh
+    // episode even when its counter happens to be higher.
+    const stale = createRetryStallGate();
+    stale.observe(banner(1), 0);
+    stale.observe(banner(4), RETRY_STALL_MS + 1000);
+    stale.observe(banner(5), RETRY_STALL_MS + 2000);
+    expect(stale.takeStall()).toBeNull();
+  });
+
+  it('matches a banner split across PTY chunks, and never re-sights it from the carry-over', () => {
+    const gate = createRetryStallGate();
+    gate.observe('API error · Retrying in 0s · att', 0);
+    gate.observe('empt 1/10\n', 10);
+    // Chunks that follow carry no banner of their own; the carry-over was
+    // consumed through the match, so these must not read as new sightings that
+    // would keep an episode alive.
+    gate.observe('\n', 6 * MIN);
+    gate.observe('─────\n', 12 * MIN);
+    gate.observe(banner(2), 20 * MIN);
+    // If the carry-over had re-sighted attempt 1 at 6m/12m, attempt 2 at 20m
+    // would still be inside the episode; being > RETRY_STALL_MS after the only
+    // real sighting, it starts a new one instead.
+    gate.observe(banner(3), 21 * MIN);
+    gate.observe(banner(4), 22 * MIN);
+    expect(gate.takeStall()).toBeNull();
+  });
+});
+
+describe('tool-permission dialog (agent-e057cca7)', () => {
+  // Verbatim from the stripped screen: a local model hallucinated an absolute
+  // path, and acceptEdits asked a human who was not there.
+  const READ_DIALOG = ' Read(/data.reference/providers.json) Doyouwanttoproceed? ❯1. Yes 2. Yes,allowreadingfrom/data.referenceduringthissession 3. No Esc to cancel · Tab to amend ';
+  const TWO_OPTION_DIALOG = 'Bash(rm -rf build)\nDo you want to proceed?\n❯ 1. Yes\n  2. No\n';
+
+  describe('detectToolPermissionPrompt', () => {
+    it('reads the decline option off the screen, whatever its number', () => {
+      expect(detectToolPermissionPrompt(READ_DIALOG)).toEqual({ noOption: 3, toolCall: 'Read(/data.reference/providers.json)' });
+      expect(detectToolPermissionPrompt(TWO_OPTION_DIALOG)).toEqual({ noOption: 2, toolCall: 'Bash(rm -rf build)' });
+    });
+
+    it('waits for the option list rather than guessing which key declines', () => {
+      expect(detectToolPermissionPrompt(' Read(/etc/hosts) Doyouwanttoproceed? ')).toBeNull();
+    });
+
+    it('ignores prose and the nudge it sends', () => {
+      expect(detectToolPermissionPrompt('Ask the user whether they want to proceed with 3. No changes')).toBeNull();
+      expect(detectToolPermissionPrompt(TOOL_PERMISSION_NUDGE_TEXT)).toBeNull();
+      expect(detectToolPermissionPrompt('')).toBeNull();
+    });
+  });
+
+  describe('createToolPermissionGate', () => {
+    it('declines a dialog once, however many chunks repaint it, then nudges the quiet session', () => {
+      const gate = createToolPermissionGate();
+      // Split across a chunk boundary, as a PTY delivers it.
+      expect(gate.observe(READ_DIALOG.slice(0, 60), 0)).toBeNull();
+      expect(gate.observe(READ_DIALOG.slice(60), 50)).toEqual({ noOption: 3, toolCall: 'Read(/data.reference/providers.json)', count: 1 });
+      // The declined dialog keeps repainting while the keystrokes land.
+      expect(gate.observe(READ_DIALOG, 2000)).toBeNull();
+      expect(gate.observe(READ_DIALOG, TOOL_PERMISSION_REPAINT_COOLDOWN_MS - 1)).toBeNull();
+      // Still repainting: not quiet, so no nudge yet.
+      expect(gate.takeNudge(5000, 4000)).toBe(0);
+      // Quiet for the settle window: nudge, exactly once.
+      const quietAt = 5000;
+      expect(gate.takeNudge(quietAt + OOM_NUDGE_SETTLE_MS, quietAt)).toBe(1);
+      expect(gate.takeNudge(quietAt + OOM_NUDGE_SETTLE_MS + 5000, quietAt)).toBe(0);
+    });
+
+    it('drops the nudge when the session carried on by itself', () => {
+      const gate = createToolPermissionGate();
+      gate.observe(READ_DIALOG, 0);
+      // Output never stops for the whole arm window — the build handed the model
+      // a rejection and it kept working — so a later quiet stretch gets no nudge.
+      const late = OOM_NUDGE_ARM_WINDOW_MS + 1000;
+      expect(gate.takeNudge(late, late - 100)).toBe(0);
+      expect(gate.takeNudge(late + OOM_NUDGE_SETTLE_MS, late)).toBe(0);
+    });
+
+    it('reports exhaustion after TOOL_PERMISSION_DECLINE_MAX declines, nudged or not', () => {
+      // A build that hands the model a rejection and lets it continue never
+      // goes quiet, so no nudge ever fires — the declines alone must cap it.
+      const gate = createToolPermissionGate();
+      let now = 0;
+      for (let i = 1; i <= TOOL_PERMISSION_DECLINE_MAX; i += 1) {
+        now += TOOL_PERMISSION_REPAINT_COOLDOWN_MS + 1;
+        expect(gate.observe(READ_DIALOG, now)).toMatchObject({ count: i });
+      }
+      now += TOOL_PERMISSION_REPAINT_COOLDOWN_MS + 1;
+      expect(gate.observe(TWO_OPTION_DIALOG, now)).toBe('exhausted');
+    });
+
+    it('still sees a different dialog painted inside the repaint cooldown', () => {
+      const gate = createToolPermissionGate();
+      expect(gate.observe(READ_DIALOG, 0)).toMatchObject({ count: 1 });
+      // The model's very next call is also out of scope: its dialog lands
+      // seconds after the decline and is never repainted afterwards.
+      expect(gate.observe(TWO_OPTION_DIALOG, 3000)).toBeNull();
+      expect(gate.observe('\n', TOOL_PERMISSION_REPAINT_COOLDOWN_MS + 1000)).toMatchObject({ noOption: 2, count: 2 });
+    });
+  });
+});
+
 describe('createOomNudgeGate', () => {
+  it('re-arms from a box that outlasted its window, once the repaint stops', () => {
+    // The OOM box repaints past the arm window (the session never went quiet),
+    // then finally does: the expired arm must be replaceable by a sighting
+    // AFTER the cooldown, so a sighting while armed must not refresh it.
+    const gate = createOomNudgeGate();
+    const analysis = { message: 'oom' };
+    expect(gate.arm(analysis, 0)).toBe('armed');
+    expect(gate.arm(analysis, 60_000)).toBeNull();
+    expect(gate.takeNudge(OOM_NUDGE_ARM_WINDOW_MS + 5_000, OOM_NUDGE_ARM_WINDOW_MS + 4_000)).toBe(0);
+    expect(gate.arm(analysis, OOM_NUDGE_COOLDOWN_MS + 10_000)).toBe('armed');
+    const quietAt = OOM_NUDGE_COOLDOWN_MS + 10_000;
+    expect(gate.takeNudge(quietAt + OOM_NUDGE_SETTLE_MS, quietAt)).toBe(1);
+  });
+
   const analysis = { category: 'resource-exhausted', message: 'Local inference runtime ran out of GPU memory' };
 
   it('nudges only once the session has actually gone quiet', () => {

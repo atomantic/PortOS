@@ -21,6 +21,14 @@ import { listUserActions } from './userActions.js';
 
 export const LEFTOVER_BRANCH_LOOKBACK_DAYS = 14;
 export const LEFTOVER_BRANCH_CACHE_TTL_MS = 60_000;
+/**
+ * Branch names carried per app so the banner can name a few without unbounded
+ * payload growth. They reach the local UI only — `formatLeftoverBranchSnippet`
+ * below stays counts-only on purpose, so a branch name (which can carry a
+ * private project or issue title) never rides into an agent prompt and out into
+ * a filed issue.
+ */
+export const LEFTOVER_BRANCH_SAMPLE_LIMIT = 6;
 
 let leftoverCache = { at: 0, findings: null };
 
@@ -38,6 +46,13 @@ const lastManualReconcile = (events, appId) => {
   return match?.happenedAt ?? null;
 };
 
+/** `{ NEEDS_PR: 2, MERGED: 1 }` — what KIND of leftovers an app is holding. */
+const countByState = (rows) => rows.reduce((counts, row) => {
+  const state = row.state || 'UNKNOWN';
+  counts[state] = (counts[state] || 0) + 1;
+  return counts;
+}, {});
+
 async function computeIdleLeftoverBranches({
   now,
   getIds,
@@ -53,7 +68,7 @@ async function computeIdleLeftoverBranches({
 
   const apps = [...(await getApps())];
   if (!apps.some((app) => app.id === PORTOS_APP_ID)) {
-    apps.unshift({ id: PORTOS_APP_ID, repoPath: portosRoot });
+    apps.unshift({ id: PORTOS_APP_ID, name: 'PortOS', repoPath: portosRoot });
   }
 
   const from = new Date(now - LEFTOVER_BRANCH_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -74,13 +89,16 @@ async function computeIdleLeftoverBranches({
     try {
       const defaultBranch = await getDefault(repoPath);
       const inputs = await gather(repoPath, { defaultBranch, activeAgentIds: [] });
-      const leftoverCount = classify(inputs)
-        .filter((row) => !row.liveOwnerReason)
-        .length;
-      if (leftoverCount === 0) continue;
+      const leftovers = classify(inputs).filter((row) => !row.liveOwnerReason);
+      if (leftovers.length === 0) continue;
       findings.push({
         appId: app.id,
-        leftoverCount,
+        // The operator thinks in app NAMES, not registry ids — the insight card
+        // has to answer "which app do I run this for?" without a second lookup.
+        appName: app.name || app.id,
+        leftoverCount: leftovers.length,
+        states: countByState(leftovers),
+        branches: leftovers.slice(0, LEFTOVER_BRANCH_SAMPLE_LIMIT).map((row) => row.branch).filter(Boolean),
         lastUserReconcileAt: lastManualReconcile(triggers, app.id),
         agentsIdle: true,
       });
@@ -88,12 +106,13 @@ async function computeIdleLeftoverBranches({
       console.error(`❌ leftover-branch detector: skipped ${app.id}: ${error.message}`);
     }
   }
-  return findings;
+  // Worst offender first: the card names one app up front and lists the rest.
+  return findings.sort((a, b) => b.leftoverCount - a.leftoverCount);
 }
 
 /**
  * @param {object} [deps] injectable for tests. Passing deps bypasses the TTL cache.
- * @returns {Promise<Array<{appId: string, leftoverCount: number, lastUserReconcileAt: string|null, agentsIdle: true}>>}
+ * @returns {Promise<Array<{appId: string, appName: string, leftoverCount: number, states: Record<string, number>, branches: string[], lastUserReconcileAt: string|null, agentsIdle: true}>>}
  */
 export async function detectIdleLeftoverBranches(deps = null) {
   const useCache = deps == null;

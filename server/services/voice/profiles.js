@@ -8,11 +8,12 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { query } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
+import { writeFileGuarded } from '../../lib/fileUtils.js';
 
 export const VOICE_PROFILE_ENGINES = new Set(['kokoro', 'piper', 'qwen3-tts']);
 export const VOICE_PROFILE_KINDS = new Set(['preset', 'designed', 'cloned', 'fine-tuned']);
@@ -353,7 +354,7 @@ export async function createClonedVoiceCandidate({
   await mkdir(sourceDir, { recursive: true });
 
   const safePath = join(sourceDir, cleanFilename);
-  await writeFile(safePath, audioBuffer);
+  await writeFileGuarded(safePath, audioBuffer);
 
   const sha256 = createHash('sha256').update(audioBuffer).digest('hex');
   const now = timestamp();

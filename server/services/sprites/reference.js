@@ -23,10 +23,10 @@
  */
 
 import { join } from 'path';
-import { readdir, copyFile } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import {
   PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile,
-  importFileToDir, listDirectoryByExtension, resolveGalleryImage,
+  importFileToDir, listDirectoryByExtension, resolveGalleryImage, copyFileGuarded,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
@@ -804,7 +804,7 @@ export async function attachReferenceCandidate(ctx) {
   await ensureDir(candidatesDir);
   const name = await nextCandidateName(candidatesDir, anchorId);
   const dest = join(candidatesDir, name);
-  await copyFile(src, dest);
+  await copyFileGuarded(src, dest);
   const relPath = `reference/candidates/${name}`;
   await atomicWrite(join(candidatesDir, `${name.replace(/\.png$/, '')}.generation.json`), {
     schemaVersion: 1,

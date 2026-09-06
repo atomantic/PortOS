@@ -8,16 +8,20 @@
  * external checkout or calls an AI provider.
  */
 
-import { createHash } from 'node:crypto';
+import { buildEidoverseCitySurface } from '../lib/eidoverseCitySurface.js';
+import { eidoverseModelBounds } from '../lib/eidoverseCityLayout.js';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { atomicWrite, dataPath, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { eidoverseLabelCapabilities, normalizeEidoverseLabelAliases } from '../lib/eidoverseWorldLabels.js';
 import { canonicalStringify } from '../lib/objects.js';
-import { getSelf, ensureSelf } from './instances.js';
+import { getSelf, ensureSelf, getInstanceId } from './instances.js';
 import { getInstanceFeatures } from './instanceFeatures.js';
 import { getEidoverseStatus, EIDOVERSE_PORT } from './eidoverse.js';
+import { getCurrentVersion } from './updateChecker.js';
 import {
   EIDOVERSE_ASSET_SLOTS_BY_DISTRICT,
   EIDOVERSE_ASSET_RECIPE_VERSION,
@@ -37,6 +41,7 @@ import {
 } from './eidoverseWorldProjection.js';
 import {
   collectEidoverseWorldSources,
+  eidoverseHostId,
   projectedJiraTickets,
   projectedStorage,
 } from './eidoverseWorldSources.js';
@@ -82,6 +87,7 @@ const DEFAULT_STATE = {
   lastAppliedDesignVersion: null,
   pendingDesignVersion: EIDOVERSE_WORLD_DESIGN_VERSION,
   userOverrides: {},
+  labelAliases: {},
   assetRecipeVersion: EIDOVERSE_ASSET_RECIPE_VERSION,
   assetResolutions: {},
   migrationReport: null,
@@ -318,6 +324,7 @@ function normalizeState(raw) {
           ? input.pendingDesignVersion
           : EIDOVERSE_WORLD_DESIGN_VERSION),
     userOverrides: clone(userOverrides),
+    labelAliases: normalizeEidoverseLabelAliases(input.labelAliases),
     assetRecipeVersion: EIDOVERSE_ASSET_RECIPE_VERSION,
     assetResolutions: clone(assetResolutions),
     migrationReport: input.migrationReport || migration.report || null,
@@ -384,6 +391,7 @@ function configFromState(state, presence = cosPresence) {
     },
     design: {
       name: state.recipe.name,
+      labelAliases: clone(state.labelAliases),
       selectedVersion: state.selectedDesignVersion,
       lastAppliedVersion: state.lastAppliedDesignVersion,
       pendingVersion: state.pendingDesignVersion,
@@ -440,6 +448,33 @@ export async function ensureEidoverseWorldConfig() {
   });
 }
 
+/**
+ * Who hosts this world? Answered by the PortOS bridge on `GET /host`, so the
+ * upstream Eidoverse checkout stays untouched — and hung on the world's own
+ * meta entity, so a fork of the log carries it too.
+ *
+ * Anyone who can reach the door reads this, so it carries a non-reversible
+ * install digest and the operator-chosen world title only — never a hostname,
+ * tailnet/MagicDNS name, LAN or public address, OS username, or home path.
+ * Config reads only: the bridge must not have to open a world connection.
+ */
+export async function readEidoverseHostDescriptor() {
+  const [state, instanceId, version] = await Promise.all([
+    loadState(),
+    getInstanceId(),
+    getCurrentVersion(),
+  ]);
+  return {
+    id: eidoverseHostId(instanceId),
+    kind: 'portos',
+    label: safeText(state.recipe?.name, DEFAULT_EIDOVERSE_PROJECTION_RECIPE.name, 120),
+    version,
+    // The `eido:` resolver/export path is unimplemented upstream, so a visiting
+    // client must not assume this host can serve one.
+    caps: { eido: false },
+  };
+}
+
 export async function updateEidoverseWorldConfig(patch) {
   return worldLock(async () => {
     const self = await ensureSelf();
@@ -468,6 +503,7 @@ export async function updateEidoverseWorldConfig(patch) {
       if (patch.cosEnabled !== undefined) state.cos.enabled = patch.cosEnabled;
       if (fullReset) {
         state.userOverrides = {};
+        state.labelAliases = {};
         state.assetResolutions = {};
         state.ownership.retired = [];
         state.human.role = null;
@@ -495,6 +531,8 @@ export async function updateEidoverseWorldConfig(patch) {
           delete state.userOverrides.limits?.[sourceKey];
         }
         for (const kind of districtKinds) delete state.userOverrides.scale?.[kind];
+        state.labelAliases = Object.fromEntries(Object.entries(state.labelAliases)
+          .filter(([key]) => !districtKinds.some((kind) => key.startsWith(`${kind}-`))));
         const districtAssetSlots = new Set([
           ...(EIDOVERSE_ASSET_SLOTS_BY_DISTRICT[district.id] || ['district']),
           ...districtKinds,
@@ -503,6 +541,10 @@ export async function updateEidoverseWorldConfig(patch) {
           delete state.userOverrides.assets?.[slot];
           delete state.assetResolutions[slot];
         }
+        designChanged = true;
+      }
+      if (patch.labelAliases !== undefined) {
+        state.labelAliases = normalizeEidoverseLabelAliases(patch.labelAliases);
         designChanged = true;
       }
       if (patch.refreshAssets) {
@@ -608,7 +650,7 @@ function asConnectionError(error, fallback = 'Eidoverse Worlds is unavailable.')
   });
 }
 
-function createWorldConnection({ world, id, avatar, agent = true, onClosed = null }) {
+function createWorldConnection({ world, id, avatar, agent = true, guest = false, onClosed = null }) {
   const socket = new WebSocket(resolveWorldWsUrl());
   let closed = false;
   let failure = null;
@@ -621,6 +663,8 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
   let closeResolver = null;
   let messageTail = Promise.resolve();
   const pendingVerbs = [];
+  const chat = [];
+  let chatCursor = -1;
 
   const cleanupPending = (pending) => {
     clearTimeout(pending.timer);
@@ -706,6 +750,14 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
       }));
       return;
     }
+    if (message?.type === 'log' && message.entry?.verb === 'say') {
+      const entry = message.entry;
+      if (Number.isSafeInteger(entry.seq) && typeof entry.args?.text === 'string') {
+        chatCursor = Math.max(chatCursor, entry.seq);
+        chat.push({ seq: entry.seq, actor: String(entry.actor).slice(0, 64), text: entry.args.text.slice(0, 2000) });
+        if (chat.length > 100) chat.shift();
+      }
+    }
     if (message?.type !== 'log' || !message.entry || !pendingVerbs.length) return;
     const pending = pendingVerbs[0];
     if (message.entry.actor !== id || message.entry.verb !== pending.verb) return;
@@ -729,6 +781,7 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
       id,
       agent,
       avatar,
+      ...(guest ? { guest: true } : {}),
     };
     socket.send(JSON.stringify(join), (error) => {
       if (error) fail(error, 'Eidoverse Worlds rejected the join connection.');
@@ -840,6 +893,21 @@ function createWorldConnection({ world, id, avatar, agent = true, onClosed = nul
     close,
     isOpen: () => !closed && socket.readyState === WebSocket.OPEN,
     getSnapshot: () => snapshotValue,
+    readChat: (after = -1) => {
+      const unread = chat.filter((entry) => entry.seq > after);
+      const messages = [];
+      for (const entry of unread.slice(0, 20)) {
+        // Preserve a usable cursor inside the Mind's 4KB tool-result budget.
+        // Even heavily escaped text gets one bounded, explicitly clipped row.
+        const row = JSON.stringify(entry).length > 3000
+          ? { ...entry, text: entry.text.slice(0, 400), textTruncated: true } : entry;
+        if (JSON.stringify([...messages, row]).length > 3000) break;
+        messages.push(row);
+      }
+      return { messages, cursor: messages.at(-1)?.seq ?? Math.max(after, chatCursor),
+        hasMore: messages.length < unread.length, truncated: chat.length === 100 && after < chat[0].seq };
+    },
+    chatSummary: () => ({ cursor: chatCursor, retained: chat.length }),
   });
 }
 
@@ -1169,6 +1237,8 @@ async function preflightEidoverseProtocol({ signal } = {}) {
     });
   }
   return {
+    capabilities: { ...eidoverseLabelCapabilities(version),
+      largeWorldColliders: version.capabilities?.largeWorldColliders === 1 ? 1 : null },
     sha: safeText(version.sha, 'unknown', 80),
     commitTime: safeText(version.commitTime, 'unknown', 80),
   };
@@ -1234,6 +1304,72 @@ async function persistAssetLock(resolutions, runtimeVersion) {
   });
 }
 
+async function measureAssetLocks(resolutions, overrides, existing, { signal } = {}) {
+  const locks = { ...resolutions };
+  for (const [slot, path] of Object.entries(overrides)) {
+    if (locks[slot]?.path === path) continue;
+    locks[slot] = { slot, path, userOverride: true };
+  }
+  const byPath = new Map();
+  for (const lock of [...Object.values(existing), ...Object.values(locks)]) {
+    const bounds = eidoverseModelBounds(lock?.bounds);
+    if (bounds) byPath.set(lock.path, Promise.resolve(bounds));
+  }
+  for (const lock of Object.values(locks)) {
+    if (byPath.has(lock.path)) continue;
+    byPath.set(lock.path, fetchLibraryJson('/geom', { lib: lock.path }, { signal }).then((geometry) => {
+      const bounds = eidoverseModelBounds(geometry?.bbox);
+      if (!bounds) throw new ServerError('Eidoverse returned invalid model bounds. Update its model geometry and retry.', {
+        status: 503, code: 'EIDOVERSE_ASSET_GEOMETRY_INVALID',
+      });
+      return bounds;
+    }));
+  }
+  return Object.fromEntries(await Promise.all(Object.entries(locks).map(async ([slot, lock]) =>
+    [slot, { ...lock, bounds: await byPath.get(lock.path) }])));
+}
+
+async function prepareCityAssetLock(resolutions, config, runtimeVersion, { signal } = {}) {
+  const overrides = config.design?.userOverrides?.assets || {};
+  const measured = await measureAssetLocks(resolutions, overrides, config.design?.assetResolutions || {}, { signal });
+  if (!overrides.citySurface) {
+    // The authored coast fits the shipped footprint. Preserve customized land
+    // and district positions rather than raising scenery through their halls.
+    const defaultDistricts = DEFAULT_EIDOVERSE_PROJECTION_RECIPE.districts;
+    const fitsLandscape = config.recipe.districts.length === defaultDistricts.length
+      && config.recipe.districts.every(({ id, anchor }) => canonicalStringify(anchor)
+        === canonicalStringify(defaultDistricts.find((district) => district.id === id)?.anchor))
+      && canonicalStringify(config.recipe.environment.terrain)
+        === canonicalStringify(DEFAULT_EIDOVERSE_PROJECTION_RECIPE.environment.terrain);
+    const surface = buildEidoverseCitySurface(config.recipe.districts, {
+      landscape: runtimeVersion?.capabilities?.largeWorldColliders === 1 && fitsLandscape,
+    });
+    const head = await waitWithSignal(fetch(libraryUrl(`/library/${surface.path}`), { method: 'HEAD', signal }), signal);
+    if (head.status === 404) {
+      const response = await waitWithSignal(fetch(libraryUrl('/upload', { by: 'portos', name: 'PortOS Commons paving and signs' }), {
+        method: 'POST', headers: { 'content-type': 'model/gltf-binary' }, body: surface.bytes, signal,
+      }), signal);
+      if (!response.ok) throw new ServerError(`Eidoverse could not accept the Commons scene asset (HTTP ${response.status}).`, {
+        status: 503, code: 'EIDOVERSE_CITY_ASSET_UNAVAILABLE',
+      });
+      const uploaded = await response.json();
+      if (uploaded?.path !== surface.path) throw new ServerError('Eidoverse returned an unexpected Commons asset address.', {
+        status: 503, code: 'EIDOVERSE_CITY_ASSET_INVALID',
+      });
+      await verifyLibraryAsset(surface.path, { signal });
+    } else if (!head.ok) {
+      throw new ServerError(`Eidoverse could not verify the Commons scene asset (HTTP ${head.status}).`, {
+        status: 503, code: 'EIDOVERSE_CITY_ASSET_UNAVAILABLE',
+      });
+    }
+    measured.citySurface = { slot: 'citySurface', path: surface.path, bytes: surface.bytes.length,
+      designVersion: EIDOVERSE_WORLD_DESIGN_VERSION, assetRecipeVersion: EIDOVERSE_ASSET_RECIPE_VERSION,
+      recipeFingerprint: surface.fingerprint, strategy: 'generated', source: 'generated',
+      shippedDefault: true, userOverride: false };
+  }
+  return persistAssetLock(measured, runtimeVersion);
+}
+
 async function resolveAndLockAssets(config, { signal } = {}) {
   const runtimeVersion = await preflightEidoverseProtocol({ signal });
   const existing = config.design?.assetResolutions || {};
@@ -1262,7 +1398,7 @@ async function resolveAndLockAssets(config, { signal } = {}) {
     });
   }
   if (lockInspection.current && unavailablePaths.size === 0) {
-    return persistAssetLock(lockInspection.resolutions, runtimeVersion);
+    return prepareCityAssetLock(lockInspection.resolutions, config, runtimeVersion, { signal });
   }
 
   const files = await fetchLibraryJson('/library-list', { dir: 'eidoverse/assets/models' }, { signal });
@@ -1327,7 +1463,7 @@ async function resolveAndLockAssets(config, { signal } = {}) {
   };
   const result = await resolveVerified();
 
-  return persistAssetLock(result.resolutions, runtimeVersion);
+  return prepareCityAssetLock(result.resolutions, config, runtimeVersion, { signal });
 }
 
 function createVerbPacing() {
@@ -1595,7 +1731,7 @@ async function recordProjection({ success, summary = null, error = null }) {
   });
 }
 
-export async function projectEidoverseWorld({ signal } = {}) {
+export async function projectEidoverseWorld({ signal, compact = false } = {}) {
   const run = async () => {
     throwIfAborted(signal);
     await assertInstalled();
@@ -1603,11 +1739,24 @@ export async function projectEidoverseWorld({ signal } = {}) {
     const lockedConfig = await resolveAndLockAssets(config, { signal });
     const presence = await ensureCosPresenceInternal({ fresh: true, signal });
     const source = await collectEidoverseWorldSources({ signal });
+    const hostId = eidoverseHostId(await getInstanceId());
     throwIfAborted(signal);
     const plan = buildProjectionPlan({
       source,
       recipe: lockedConfig.recipe,
+      labelAliases: lockedConfig.design.labelAliases,
+      assetResolutions: {
+        ...lockedConfig.design.assetResolutions,
+        // Preflight verifies legacy kind overrides too, even though only the
+        // semantic slots have durable resolution locks.
+        ...Object.fromEntries(Object.entries(lockedConfig.design.userOverrides?.assets || {})
+          .map(([slot, path]) => [slot, {
+            ...(lockedConfig.design.assetResolutions[slot]?.path === path ? lockedConfig.design.assetResolutions[slot] : {}),
+            path, userOverride: true,
+          }])),
+      },
       currentState: presence.snapshot?.state || {},
+      meta: { title: lockedConfig.design.name, hostId },
     });
     await applyProjectionPlan(presence, plan, {
       signal,
@@ -1621,6 +1770,12 @@ export async function projectEidoverseWorld({ signal } = {}) {
       ...plan.summary,
     };
     const projection = await recordProjection({ success: true, summary });
+    // Persist the complete legend for the drawer before selecting the compact
+    // result used by tools, scheduled jobs, and boot reconciliation.
+    if (compact) {
+      const { objects, ...counts } = summary;
+      return { success: true, summary: { ...counts, objectCount: objects.length }, presence: presenceSummary(presence) };
+    }
     const appliedConfig = configFromState(await loadState());
     return {
       success: true,
@@ -1681,7 +1836,7 @@ export async function reconcilePendingEidoverseWorld() {
   }
   if (!setup.installed) return { reconciled: false, reason: 'not-installed' };
   if (setup.runtimeStatus !== 'online') return { reconciled: false, reason: 'runtime-offline' };
-  const result = await projectEidoverseWorld();
+  const result = await projectEidoverseWorld({ compact: true });
   return { reconciled: true, result };
 }
 
@@ -1823,9 +1978,27 @@ export async function sayInEidoverseWorld(text, { signal } = {}) {
   });
 }
 
-export async function getEidoverseWorldStatus() {
+export async function getEidoverseWorldStatus({ compact = false } = {}) {
   const [setup, self] = await Promise.all([getEidoverseStatus(), getSelf()]);
   const config = await readEidoverseWorldConfig(self);
+  // Semantic callers have a 4KB result budget. The full design/recipe can
+  // consume that before setup and presence are reached, hiding how to act.
+  if (compact) {
+    const assets = {};
+    const availableAssets = Object.entries(config.recipe.assets || {});
+    for (const [slot, path] of availableAssets) {
+      if (JSON.stringify({ ...assets, [slot]: path }).length > 2000) break;
+      assets[slot] = path;
+    }
+    return {
+      setup: { installed: setup.installed, runtimeStatus: setup.runtimeStatus, worldDataReady: setup.worldDataReady },
+      cos: { enabled: config.cos.enabled, connected: config.cos.connected, role: config.cos.role,
+        chat: cosPresence?.connection?.chatSummary() ?? { cursor: -1, retained: 0 } },
+      design: { selectedVersion: config.design.selectedVersion, lastAppliedVersion: config.design.lastAppliedVersion, pendingVersion: config.design.pendingVersion },
+      assets,
+      assetsTruncated: Object.keys(assets).length < availableAssets.length,
+    };
+  }
   return {
     ...config,
     identity: config.human,
@@ -1868,3 +2041,44 @@ export async function closeEidoverseWorldConnections() {
 }
 
 export const __resetEidoverseWorldForTests = closeEidoverseWorldConnections;
+
+
+/** Guest admission happens through the owner before any guest joins. */
+export async function admitEidoverseGuest({ agent = false } = {}) {
+  return worldLock(async () => {
+    await assertInstalled();
+    const presence = await ensureCosPresenceInternal();
+    if (presence.snapshot?.yourRights?.role !== 'owner') {
+      throw new ServerError('The resident must own this world to admit visitors.', { status: 409, code: 'EIDOVERSE_GUEST_ADMISSION_UNAVAILABLE' });
+    }
+    const id = `guest-${randomUUID()}`;
+    await sendPacedVerb(presence.connection, 'grant', { id, role: 'visitor', gen: false }, { pacing: presence.pacing });
+    const identity = { world: presence.connection.world, name: id, avatar: DEFAULT_HUMAN_AVATAR };
+    if (!agent) return { identity };
+    const connection = createWorldConnection({ world: identity.world, id, avatar: identity.avatar, agent: true, guest: true });
+    return connection.waitForSnapshot().then(async (snapshot) => {
+      if (snapshot.yourRights?.role !== 'visitor' || snapshot.yourRights?.gen || snapshot.yourRights?.open) {
+        await connection.close();
+        throw new ServerError('The world did not confirm visitor access.', { status: 409, code: 'EIDOVERSE_GUEST_ROLE_INVALID' });
+      }
+      return { identity, connection };
+    }).catch((error) => connection.close().then(() => { throw error; }));
+  });
+}
+
+/** Live messages only: joining never exports the world's stored chat history. */
+export async function readEidoverseWorldChat(after = -1) {
+  return worldLock(async () => {
+    const presence = await ensureCosPresenceInternal();
+    return presence.connection.readChat(after);
+  });
+}
+
+
+/** Fail closed when the managed renderer cannot isolate browser guest identity. */
+export async function supportsEidoverseGuestEntry() {
+  const response = await fetch(libraryUrl('/version'), { signal: AbortSignal.timeout(3000) }).catch(() => null);
+  if (!response?.ok) return false;
+  const version = await response.json().catch(() => null);
+  return version?.capabilities?.guestEntry === 1;
+}

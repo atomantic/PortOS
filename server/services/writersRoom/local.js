@@ -15,8 +15,8 @@
  */
 
 import { randomUUID, createHash } from 'crypto';
-import { readFile, rm } from 'fs/promises';
-import { atomicWrite, ensureDir } from '../../lib/fileUtils.js';
+import { readFile } from 'fs/promises';
+import { atomicWrite, ensureDir, rmGuarded } from '../../lib/fileUtils.js';
 import { countWords } from '../../lib/textUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
 import { sanitizeVoiceExemplars, renderVoiceExemplars } from '../../lib/styleGuide.js';
@@ -532,7 +532,7 @@ export async function deleteWork(id) {
     // would drop it), so it was never syncable. Hard-remove the dir so the API's
     // "delete a broken work to recover" path still works (the soft-delete store
     // call would otherwise no-op on the unreadable manifest and strand it).
-    await rm(wrWorkDir(id), { recursive: true, force: true });
+    await rmGuarded(wrWorkDir(id), { recursive: true, force: true });
     return { ok: true };
   }
   // Soft-delete tombstone (#1565) so the deletion federates and an out-of-date

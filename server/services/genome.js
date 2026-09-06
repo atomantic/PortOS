@@ -1,7 +1,6 @@
-import { writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile, unlinkGuarded } from '../lib/fileUtils.js';
 import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, resolveApoeHaplotype } from '../lib/curatedGenomeMarkers.js';
 
 const GENOME_DIR = PATHS.meatspace;
@@ -112,7 +111,7 @@ export async function uploadGenome(content, filename) {
   }
 
   // Save raw file
-  await writeFile(RAW_FILE, content);
+  await atomicWrite(RAW_FILE, content);
 
   // Cache the index
   snpIndex = index;
@@ -369,8 +368,8 @@ export async function deleteMarker(id) {
  * Delete all genome data: raw file, metadata, and clear cache.
  */
 export async function deleteGenome() {
-  await unlink(RAW_FILE).catch(() => {});
-  await unlink(META_FILE).catch(() => {});
+  await unlinkGuarded(RAW_FILE).catch(() => {});
+  await unlinkGuarded(META_FILE).catch(() => {});
   snpIndex = null;
   indexBuiltAt = 0;
   console.log('🧬 Genome data deleted');

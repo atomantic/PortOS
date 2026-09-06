@@ -149,15 +149,30 @@ describe('CoS config lives in its own file', () => {
     expect(readJson(STATE_PATH).config).toBeUndefined();
   });
 
+  // The shipped default is the ONLY thing stopping a never-configured install
+  // from auto-starting CoS (server/services/cos.js reads `alwaysOn || autoStart`
+  // at boot) and with it every work-generation flag that defaults on. That used
+  // to be enforced by a data.reference/cos/config.json seed, which was deleted
+  // in #6182's repair (migration 340) — so nothing but this literal enforces
+  // AGENTS.md's "No cold-bootstrap LLM calls" for a fresh install now.
+  it('defaults alwaysOn off so a fresh install never auto-starts CoS', async () => {
+    const { DEFAULT_CONFIG } = await freshModule();
+    expect(DEFAULT_CONFIG.alwaysOn).toBe(false);
+    expect(DEFAULT_CONFIG.autoStart).toBe(false);
+  });
+
   // Back-compat: an un-upgraded peer, or a restored pre-split backup, still
   // carries `config` inside state.json.
   it('falls back to a legacy config slice still sitting in state.json', async () => {
-    writeState({ running: false, config: { maxConcurrentAgents: 11, alwaysOn: false }, agents: {} });
+    // alwaysOn is stored as `true` on purpose: DEFAULT_CONFIG ships `false`, so a
+    // stored `false` would assert nothing — it would pass identically if the
+    // legacy fallback were deleted outright.
+    writeState({ running: false, config: { maxConcurrentAgents: 11, alwaysOn: true }, agents: {} });
     const { getConfig } = await freshModule();
 
     const config = await getConfig();
     expect(config.maxConcurrentAgents).toBe(11);
-    expect(config.alwaysOn).toBe(false);
+    expect(config.alwaysOn).toBe(true);
   });
 
   it('prefers config.json over a stale legacy slice when both exist', async () => {

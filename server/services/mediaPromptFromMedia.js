@@ -18,6 +18,7 @@ import { extname, join } from 'path';
 import { randomUUID } from 'crypto';
 
 import { ServerError } from '../lib/errorHandler.js';
+import { clampToCharLimit } from '../lib/textUtils.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { PATHS, resolveGalleryImage } from '../lib/fileUtils.js';
 import { extractEvaluationFrames, safeUnder } from '../lib/ffmpeg.js';
@@ -54,7 +55,7 @@ export const PROMPT_FROM_MEDIA_TARGETS = Object.freeze(['image', 'video']);
  * must fill; `mediaKind` + `frameCount` tell it whether it's looking at a
  * still or a chronological frame set.
  */
-export function buildPromptFromMediaPrompt({ targets, mediaKind, frameCount }) {
+export function buildPromptFromMediaPrompt({ targets, mediaKind, frameCount, maxVideoPromptLength }) {
   const wantImage = targets.includes('image');
   const wantVideo = targets.includes('video');
   const lookingAt = mediaKind === 'video'
@@ -89,6 +90,13 @@ export function buildPromptFromMediaPrompt({ targets, mediaKind, frameCount }) {
   }
   if (wantVideo) {
     rules.push('- videoPrompt: a moving-image prompt. Include subject action, camera move, pacing, and how light or atmosphere changes across the clip.');
+    // The video backend the caller is aiming at may CAP its prompt and reject
+    // anything longer outright (reactor.inc fast-h3: 800 characters), so a
+    // richer description than the cap allows is unusable rather than merely
+    // long. The clamp on the way out is the backstop.
+    if (Number.isFinite(maxVideoPromptLength) && maxVideoPromptLength > 0) {
+      rules.push(`- videoPrompt must be AT MOST ${maxVideoPromptLength} characters (characters, not words) — the target renderer REJECTS a longer prompt instead of trimming it. Spend the budget on the highest-value visible detail and motion; drop filler.`);
+    }
     if (mediaKind === 'video' && frameCount > 1) {
       rules.push('- The frames are chronological. Infer motion from what changes between them; do not describe each frame separately.');
     }
@@ -300,6 +308,7 @@ export async function promptFromMedia({
   providerId,
   model,
   effort,
+  maxVideoPromptLength,
 }) {
   const wanted = [...new Set((Array.isArray(targets) ? targets : []).filter((t) => PROMPT_FROM_MEDIA_TARGETS.includes(t)))];
   if (!wanted.length) {
@@ -324,6 +333,7 @@ export async function promptFromMedia({
     targets: wanted,
     mediaKind,
     frameCount: screenshots.length,
+    maxVideoPromptLength,
   });
 
   const { text, model: ranModel, ranProvider } = await runVision({
@@ -343,8 +353,15 @@ export async function promptFromMedia({
     throw new ServerError(e.message, { status: 502, code: 'PROMPT_FROM_MEDIA_BAD_JSON' });
   }
 
+  // Same contract as the prompt refiner: instruct, then clamp, then SAY the
+  // prompt was cut — a silent trim reads as the model losing detail.
+  const { text: videoPrompt, truncated: videoPromptTruncated } = clampToCharLimit(
+    parsed.videoPrompt, maxVideoPromptLength,
+  );
+
   return {
     ...parsed,
+    ...(parsed.videoPrompt ? { videoPrompt, videoPromptTruncated } : {}),
     mediaKind,
     frameCount: screenshots.length,
     targets: wanted,

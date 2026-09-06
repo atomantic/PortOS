@@ -215,6 +215,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
         <div className="w-full sm:w-auto sm:min-w-[240px] sm:max-w-[360px] sm:flex-1">
           <AppProviderPin
             providers={providers}
+            selectionPolicy={taskType === 'issue-watcher' ? { provider: (provider) => provider.type === 'api' } : undefined}
             loading={!providersLoaded}
             providerId={override?.providerId}
             model={override?.model}

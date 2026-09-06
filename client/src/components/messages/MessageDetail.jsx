@@ -137,7 +137,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
       setReplyBody(draft.body);
       setGeneratedDraftId(draft.id);
       setShowReply(true);
-      toast.success(useVoice ? 'AI draft generated with your voice' : 'AI draft generated');
+      toast.success(useVoice ? 'Conversational AI draft generated' : 'AI draft generated');
     }
   };
 
@@ -192,7 +192,7 @@ export default function MessageDetail({ message, accounts, onBack }) {
         </div>
         <div className="flex flex-wrap items-center justify-end gap-1">
           <button onClick={() => setShowReply(!showReply)} aria-label="Reply" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors" title="Reply"><Reply size={14} /></button>
-          <button onClick={() => setUseVoice(v => !v)} aria-label={useVoice ? 'Voice mode ON — replies use your Digital Twin voice' : 'Voice mode OFF — replies use generic tone'} className={`p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded transition-colors ${useVoice ? 'text-port-accent-2 bg-port-accent-2/10' : 'text-gray-500 hover:text-gray-300'}`} title={useVoice ? 'Voice mode ON — replies use your Digital Twin voice' : 'Voice mode OFF — replies use generic tone'}><User size={14} /></button>
+          <button onClick={() => setUseVoice(v => !v)} aria-label={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'} className={`p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded transition-colors ${useVoice ? 'text-port-accent-2 bg-port-accent-2/10' : 'text-gray-500 hover:text-gray-300'}`} title={useVoice ? 'Conversational tone ON — private identity documents stay separate' : 'Conversational tone OFF — replies use professional tone'}><User size={14} /></button>
           <button onClick={handleGenerateReply} disabled={generating} aria-label="AI Reply" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent-2 hover:bg-port-accent-2/10 rounded transition-colors disabled:opacity-50" title="AI Reply"><Sparkles size={14} className={generating ? 'animate-pulse' : ''} /></button>
           <button onClick={handleRefresh} disabled={refreshing} aria-label="Refresh" className="p-1.5 min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-port-accent hover:bg-port-accent/10 rounded transition-colors disabled:opacity-50" title="Refresh"><RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /></button>
           <span className="w-px h-4 bg-port-border mx-0.5" />

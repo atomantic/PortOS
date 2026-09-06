@@ -13,6 +13,7 @@ import { redactOutput } from '../lib/commandSecurity.js';
 import { stripAnsi } from '../lib/ansiStrip.js';
 import { describeOllamaContextOverflow, parseOllamaContextOverflow } from '../lib/ollamaContext.js';
 import { retryHoldMetadata } from '../lib/taskRetryHold.js';
+import { TUI_TOOL_PERMISSION_PROMPT_PATTERN } from '../lib/tuiHandshake.js';
 import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   INVESTIGATION_HEADLINE_PREFIX,
@@ -220,7 +221,7 @@ export const ERROR_PATTERNS = [
       const requires = redactFailureSnippet(match[2] || '').replace(/[.,;]+$/, '').slice(0, CONFIG_EXPECTED_MAX_CHARS);
       return {
         message: `Provider CLI rejected the flag ${flag}`,
-        suggestedFix: `The CLI exited while parsing its arguments, before the prompt was delivered, so every retry fails identically.${requires ? ` It reports that \`${flag}\` only works with ${requires}.` : ''} PortOS builds this argv itself — fix the posture/vendor recipe in server/lib/providerVendors.js (an attachable \`tui: true\` recipe must drop every flag that requires \`--print\`), not the provider record.`,
+        suggestedFix: `The CLI exited while parsing its arguments, before the prompt was delivered, so every retry fails identically.${requires ? ` It reports that \`${flag}\` only works with ${requires}.` : ''} PortOS builds this argv itself — fix the posture/vendor recipe in server/lib/providerVendors.js (an attachable \`tuiSpawnArgs\` recipe must drop every flag that requires \`--print\`), not the provider record.`,
         rejectedCliFlag: flag
       };
     }
@@ -950,6 +951,16 @@ export const COMPLETION_REASON_ANALYSES = {
     message: 'Agent session was terminated by a signal',
     suggestedFix: 'The TUI session was killed rather than exiting on its own — usually a PortOS restart taking its child processes down. The task resumes from the preserved worktree; no agent-side fix is needed.'
   },
+  // The TUI spawner declined TOOL_PERMISSION_DECLINE_MAX permission dialogs
+  // (createToolPermissionGate) and the model was still reaching outside the
+  // run's scope. Registered so the post-mortem does not fall through to the
+  // transcript keyword sweep — which would scrape the dialog chrome itself.
+  'permission-prompt-loop': {
+    category: 'timeout',
+    actionable: false,
+    message: 'Agent kept asking for tool permissions an unattended run cannot grant',
+    suggestedFix: 'Every permission dialog was declined and the model kept reaching outside the run\'s allowed scope (paths outside the worktree, tools the posture forbids). A fallback provider retries the task; if it recurs, pin the stage to a stronger model or remove the outside-path references from its prompt.'
+  },
   'command-not-found': {
     category: 'spawn-error',
     actionable: true,
@@ -1015,7 +1026,9 @@ export const AWAITING_INPUT_MARKERS = [
   /Enter to select/i,
   /↑\/↓ to navigate/,
   /❯\s*1\./,
-  /Do you want to proceed\?/i,
+  // Claude Code's tool-permission dialog — the live gate that declines it
+  // (createToolPermissionGate) reads the same pattern.
+  TUI_TOOL_PERMISSION_PROMPT_PATTERN,
   /Press Enter to continue/i
 ];
 

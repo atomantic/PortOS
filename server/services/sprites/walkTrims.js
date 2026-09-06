@@ -15,10 +15,10 @@
  */
 
 import { join } from 'path';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import {
-  ensureDir, atomicWrite, pathExists, sha256File, readJSONFile,
+  ensureDir, atomicWrite, pathExists, sha256File, readJSONFile, rmGuarded, writeFileGuarded,
 } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -49,7 +49,7 @@ async function encodeTrimGif(frames, fps, destAbs) {
   if (!ffmpeg) throw new ServerError('ffmpeg not found — install ffmpeg to render trim GIFs', { status: 503, code: 'FFMPEG_MISSING' });
   const scratch = await mkdtemp(join(tmpdir(), 'portos-sprite-trim-'));
   for (let i = 0; i < frames.length; i++) {
-    await writeFile(
+    await writeFileGuarded(
       join(scratch, `frame-${String(i).padStart(3, '0')}.png`),
       await encodePng(frames[i]),
     );
@@ -64,7 +64,7 @@ async function encodeTrimGif(frames, fps, destAbs) {
       destAbs,
     ],
   });
-  await rm(scratch, { recursive: true, force: true }).catch(() => {});
+  await rmGuarded(scratch, { recursive: true, force: true }).catch(() => {});
   if (!result.ok) throw new ServerError(`GIF encode failed: ${result.reason}`, { status: 500, code: 'GIF_ENCODE_FAILED' });
 }
 
@@ -197,7 +197,7 @@ async function saveLoopTrimImpl(recordId, payload) {
     width: cellSize * frames.length,
     height: cellSize,
   });
-  await writeFile(join(trimsAbs, stripName), stripBuf);
+  await atomicWrite(join(trimsAbs, stripName), stripBuf);
 
   const gifName = `${prefix}.gif`;
   await encodeTrimGif(frames, fps, join(trimsAbs, gifName));

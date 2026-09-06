@@ -8,8 +8,13 @@
 import { spawn } from '../lib/childProcess.js';
 import { platform } from 'os';
 
-export const isDisplaySleepEnabled = (settings) => (
-  platform() === 'darwin' && settings?.displaySleep !== false
+// `defaultEnabled` is the one thing that differs between callers (LoRA
+// training defaults ON — an unattended multi-hour run — while video gen
+// defaults OFF — a short, attended action, see services/videoGen/displayPower.js).
+// Both share the same darwin check and the same explicit-flag semantics, so
+// that's the only axis a caller with a different default needs to pass.
+export const isDisplaySleepEnabled = (settings, { defaultEnabled = true } = {}) => (
+  platform() === 'darwin' && (defaultEnabled ? settings?.displaySleep !== false : settings?.displaySleep === true)
 );
 
 function runPowerCmd(cmd, args) {
@@ -19,16 +24,27 @@ function runPowerCmd(cmd, args) {
   return proc;
 }
 
-export function sleepDisplay(settings, workload) {
-  if (!isDisplaySleepEnabled(settings)) return false;
+// Unconditional actions — callers with their own enablement gate (e.g. video
+// gen's opt-in default, see services/videoGen/displayPower.js) call these
+// directly rather than going through the opt-out gate below.
+export function sleepDisplayNow(workload) {
   runPowerCmd('pmset', ['displaysleepnow']);
   console.log(`🌙 ${workload}: slept the display to avoid the GPU-watchdog panic (mlx #3267)`);
   return true;
 }
 
-export function wakeDisplay(settings, workload) {
-  if (!isDisplaySleepEnabled(settings)) return false;
+export function wakeDisplayNow(workload) {
   runPowerCmd('caffeinate', ['-u', '-t', '5']);
   console.log(`☀️ ${workload} finished: woke the display`);
   return true;
+}
+
+export function sleepDisplay(settings, workload) {
+  if (!isDisplaySleepEnabled(settings)) return false;
+  return sleepDisplayNow(workload);
+}
+
+export function wakeDisplay(settings, workload) {
+  if (!isDisplaySleepEnabled(settings)) return false;
+  return wakeDisplayNow(workload);
 }

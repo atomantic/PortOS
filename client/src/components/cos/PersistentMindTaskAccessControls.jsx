@@ -3,10 +3,11 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 
 const normalizeCapabilities = (value) => ({
-  schemaVersion: 5,
+  schemaVersion: 7,
   createTasks: value?.createTasks === true,
   manageMind: value?.manageMind === true,
   manageEidoverse: value?.manageEidoverse === true,
+  visitEidoversePeers: value?.visitEidoversePeers === true,
   callUser: value?.callUser === true,
   readPortos: value?.readPortos === true,
   writePortos: value?.writePortos === true,
@@ -32,6 +33,11 @@ const OPTIONS = [
     key: 'createTasks',
     label: 'Allow mind to queue CoS agent tasks',
     hint: 'Queues typed tasks through isolated worktrees, capacity, budget, review, CI, and landing-policy gates.',
+  },
+  {
+    key: 'visitEidoversePeers',
+    label: 'Allow guest travel and chat with federated worlds',
+    hint: 'Lets the mind visit enabled registered peers and exchange live chat with their humans and agents. Messages cross instances; private records and secrets must stay local.',
   },
   {
     key: 'manageEidoverse',
@@ -65,7 +71,7 @@ export default function PersistentMindTaskAccessControls({
 
   useEffect(() => {
     if (!saving) setDraft(normalizeCapabilities(capabilities));
-  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.manageEidoverse, capabilities?.callUser, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
+  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
 
   const save = async (key, enabled) => {
     const previous = draft;

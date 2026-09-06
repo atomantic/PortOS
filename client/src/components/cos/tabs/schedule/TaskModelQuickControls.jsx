@@ -10,7 +10,7 @@ import ProviderModelSelector from '../../../ProviderModelSelector';
 export default function TaskModelQuickControls({ pins, providers, loading = false, disabled = false }) {
   const {
     providerId, model, effort, effectiveProviderId, defaultProviderLabel,
-    availableModels, saving, changeProvider, changeModel, changeEffort,
+    availableModels, saving, changeProvider, changeModel, changeEffort, toolFree,
   } = pins;
 
   return (
@@ -29,7 +29,8 @@ export default function TaskModelQuickControls({ pins, providers, loading = fals
         emptyModelOption="Default model"
         alwaysShowModel
         compact
-        highlightToolUse
+        highlightToolUse={!toolFree}
+        selectionPolicy={toolFree ? { provider: (provider) => provider.type === 'api' } : undefined}
         loading={loading}
         disabled={disabled || saving}
       />

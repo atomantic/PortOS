@@ -6,8 +6,10 @@ import {
   forceFullReasonFor,
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
+  needsSlashdoSubmodule,
   pythonReferencePattern,
   shardIndexes,
+  SLASHDO_GITLINK_PATH,
   splitByRunner,
   WINDOWS_CONTRACT_TESTS,
 } from './ci-test-plan.js';
@@ -31,6 +33,10 @@ const TRACKED = [
   'server/services/sprites/atlasLayout.js',
   'server/services/sprites/atlasLayout.test.js',
   'server/services/taskPromptDefaults.test.js',
+  'server/lib/slashdoLoader.js',
+  'server/lib/slashdoLoader.test.js',
+  'server/lib/slashdoInvocation.js',
+  'server/lib/slashdoInvocation.test.js',
   'server/lib/bufferedSpawn.test.js',
   'server/lib/platform.test.js',
   'server/lib/shellCd.test.js',
@@ -637,5 +643,80 @@ describe('CI test impact planner', () => {
     expect(plan.windows).toBe(true);
     expect(plan.windowsMode).toBe('files');
     expect(plan.windowsSources).toEqual([]);
+  });
+
+  describe('slashdo submodule initialization (#6263)', () => {
+    it('requests the submodule for a gitlink-only change, forced full by the unclassified path', () => {
+      const plan = buildCiTestPlan([SLASHDO_GITLINK_PATH], { trackedFiles: TRACKED });
+
+      expect(plan.full).toBe(true);
+      expect(plan.slashdo).toBe(true);
+    });
+
+    it('requests the submodule when the loader source changes, without forcing full CI', () => {
+      const plan = buildCiTestPlan(['server/lib/slashdoLoader.js'], { trackedFiles: TRACKED });
+
+      expect(plan.full).toBe(false);
+      expect(plan.server.mode).toBe('related');
+      expect(plan.server.sources).toContain('server/lib/slashdoLoader.js');
+      expect(plan.slashdo).toBe(true);
+    });
+
+    it('requests the submodule when only the adapter test file changes', () => {
+      const plan = buildCiTestPlan(['server/lib/slashdoInvocation.test.js'], { trackedFiles: TRACKED });
+
+      expect(plan.full).toBe(false);
+      expect(plan.server.files).toContain('server/lib/slashdoInvocation.test.js');
+      expect(plan.slashdo).toBe(true);
+    });
+
+    it('requests the submodule on an explicit full-CI request (nightly / release gate)', () => {
+      const plan = buildCiTestPlan(['docs/README.md'], { trackedFiles: TRACKED, forceFull: true });
+
+      expect(plan.slashdo).toBe(true);
+    });
+
+    it('does not request the submodule for an unrelated scoped change', () => {
+      const plan = buildCiTestPlan(['server/services/sprites/atlas.js'], { trackedFiles: TRACKED });
+
+      expect(plan.full).toBe(false);
+      expect(plan.slashdo).toBe(false);
+    });
+
+    it('never requests the submodule for a documentation-only change', () => {
+      const plan = buildCiTestPlan(['docs/GITHUB_ACTIONS.md'], { trackedFiles: TRACKED });
+
+      expect(plan.slashdo).toBe(false);
+    });
+  });
+});
+
+describe('needsSlashdoSubmodule', () => {
+  const basePlan = { full: false, changedFiles: [], server: { files: [], sources: [] } };
+
+  it('is false for a plan that touches neither the gitlink nor the adapter', () => {
+    expect(needsSlashdoSubmodule(basePlan)).toBe(false);
+  });
+
+  it('is true for a full plan even without an explicit slashdo change', () => {
+    expect(needsSlashdoSubmodule({ ...basePlan, full: true })).toBe(true);
+  });
+
+  it('is true when the gitlink path itself changed', () => {
+    expect(needsSlashdoSubmodule({ ...basePlan, changedFiles: [SLASHDO_GITLINK_PATH] })).toBe(true);
+  });
+
+  it('is true when a contract test file is selected', () => {
+    expect(needsSlashdoSubmodule({
+      ...basePlan,
+      server: { files: ['server/lib/slashdoLoader.test.js'], sources: [] },
+    })).toBe(true);
+  });
+
+  it('is true when a contract source file is selected', () => {
+    expect(needsSlashdoSubmodule({
+      ...basePlan,
+      server: { files: [], sources: ['server/lib/slashdoInvocation.js'] },
+    })).toBe(true);
   });
 });

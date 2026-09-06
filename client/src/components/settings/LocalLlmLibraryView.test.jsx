@@ -66,6 +66,7 @@ import {
   upgradeLocalLlmBackend,
 } from '../../services/api';
 import socket from '../../services/socket';
+import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
 import LocalLlmLibraryView from './LocalLlmLibraryView.jsx';
 
 // A realistically long HF model id — the shape that got ellipsised to
@@ -166,7 +167,7 @@ describe('LocalLlmLibraryView Ollama auto-upgrade', () => {
     await renderLibrary();
     fireEvent.change(screen.getByLabelText('Install a Ollama model by id'), { target: { value: 'llama3.2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Install' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
 
     expect(await screen.findByText('Upgrading Ollama')).toBeInTheDocument();
     expect(screen.getByText(/llama3.2 needs a newer Ollama/)).toBeInTheDocument();
@@ -248,7 +249,7 @@ describe('LocalLlmLibraryView installed models', () => {
     installLocalLlmModel.mockResolvedValue({ success: true });
     await renderLibrary();
     fireEvent.click(screen.getByRole('button', { name: `Redownload ${LONG_ID}` }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
     await waitFor(() => expect(installLocalLlmModel).toHaveBeenCalledWith(
       'ollama',
       LONG_ID,
@@ -315,7 +316,7 @@ describe('LocalLlmLibraryView installed models', () => {
     );
     await waitFor(() => expect(screen.getByText(/Installed on LM Studio/)).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: 'Redownload Qwen3.8 27B' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
     await waitFor(() => expect(installLocalLlmModel).toHaveBeenCalledWith(
       'lmstudio',
       'unsloth/Qwen3.8-27B-GGUF@UD-Q4_K_M',
@@ -418,7 +419,7 @@ describe('LocalLlmLibraryView recommendations', () => {
     await renderLibrary();
     expect(await screen.findByText('Qwen3.8 27B')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /^Redownload$/ }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
     await waitFor(() => expect(installLocalLlmModel).toHaveBeenCalledWith(
       'ollama',
       'hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M',

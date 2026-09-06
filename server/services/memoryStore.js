@@ -8,10 +8,9 @@
  * CRUD/search logic and events on top of these primitives.
  */
 
-import { rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, resolve, relative, isAbsolute } from 'path';
-import { ensureDir, ensureDirs, readJSONFile, atomicWrite, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, ensureDirs, readJSONFile, atomicWrite, rmGuarded, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 
 const MEMORY_DIR = PATHS.memory;
@@ -120,7 +119,7 @@ export async function deleteMemoryFiles(id) {
   }
 
   if (existsSync(memoryDir)) {
-    await rm(memoryDir, { recursive: true });
+    await rmGuarded(memoryDir, { recursive: true });
   }
 }
 

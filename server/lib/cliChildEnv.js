@@ -61,23 +61,39 @@ import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './
 // provider.envVars still wins below.
 const CLAUDE_LOCAL_MAX_OUTPUT_TOKENS = '65536';
 
-// Claude Code cancels a request whose first byte has not arrived within 300s
-// (`API_TIMEOUT_MS` is the override) and paints `API error · Retrying in 0s ·
-// attempt 1/10`. Against a LOCAL daemon that ceiling is shorter than the
-// PREFILL: a public-review Stage 3 prompt inlines the whole screened envelope
-// and routinely runs to ~100K tokens (#6117), which a model server on this box
-// chews through in tens of minutes, not seconds. Every attempt was therefore
-// cancelled mid-prefill — the daemon logged `500 | 6m0s | POST /v1/messages` —
-// and the retry re-sent the same prompt, so a healthy run looked frozen at
-// attempt 1/10 forever while never emitting a token.
+// A local daemon sends NOTHING — not even response headers — until prefill
+// completes (Ollama returns headers and `message_start` together with the first
+// token; a 60KB prompt measured 122s of pure silence). A public-review Stage 3
+// prompt runs to tens of thousands of tokens, which a model server on this box
+// chews through in minutes, not seconds, so the request sits in Claude Code's
+// first-byte path for the whole prefill. That path has FOUR independent
+// ceilings in Claude Code v2.1.260 (a Bun-compiled binary), each measured
+// against a fake stalled `/v1/messages` on loopback (2026-09-04):
 //
-// `localPromptBudget.js` already predicts that prefill for the run card; this is
-// the harness half of the same fact. The ceiling exists to bound a retry storm,
-// not to budget a healthy run: a request that never answers still ends, because
-// the child prints nothing and the run's own supervision reaps it. Cloud Claude
-// answers in seconds and keeps the stock 300s. A value in provider.envVars still
-// wins below.
+//   • the Bun `fetch` timeout — ~360s, `API Error: The operation timed out.`
+//     Claude Code passes `timeout: false` to fetch only when
+//     `API_FORCE_IDLE_TIMEOUT` is explicitly `0`; with it unset or `1` a silent
+//     request is re-sent every 361s regardless of every other knob. THIS is the
+//     one that froze Stage 3 at `API error · Retrying in 0s · attempt 1/10` on
+//     2026-09-03 and 09-04 (agent-e057cca7; the daemon logged
+//     `500 | 6m0s | POST /v1/messages` + `srv stop: cancel task` per attempt),
+//     which #6117's `API_TIMEOUT_MS` raise alone could not touch.
+//   • the first-byte window — `API_TIMEOUT_MS` minus a second (10min default).
+//   • the byte-stream idle watchdog, once bytes flow — 180s via a remote flag
+//     (300s without it), `API Error: stream idle: no bytes for 180000ms`;
+//     `CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS`, clamped to 30 minutes.
+//   • the stream idle timeout — 300s; `CLAUDE_STREAM_IDLE_TIMEOUT_MS`, floor
+//     300s, likewise clamped to 30 minutes.
+//
+// All four are widened for a Claude harness pointed at a LOCAL daemon — the
+// idle knobs at Claude Code's own 30-minute ceiling, the first-byte window at
+// an hour. A request that never answers still ends: `createRetryStallGate`
+// (tuiHandshake.js) fails a TUI over once its retry ladder outlives the window,
+// and the run's own supervision reaps a silent child. Cloud Claude keeps every
+// stock value.
 const CLAUDE_LOCAL_API_TIMEOUT_MS = '3600000';
+const CLAUDE_LOCAL_FORCE_IDLE_TIMEOUT = '0';
+const CLAUDE_LOCAL_STREAM_IDLE_TIMEOUT_MS = '1800000';
 
 /**
  * True for a Claude Code harness talking to a local OpenAI/Anthropic-compatible
@@ -104,12 +120,13 @@ function isLocalBackedClaude(provider) {
  * them through, and an allowlist that carries the wrapper's ENDPOINT but not its
  * TUNING is the worst of both: the stage reaches the local daemon and then runs
  * it on Claude Code's cloud-shaped ceilings. That is how Stage 3 — the stage
- * carrying the ~100K-token review envelope — sat behind a 300s first-byte
- * timeout it could never meet. Keep in lockstep with `claudeLocalEnvDefaults`;
+ * carrying the review envelope — sat behind a 6-minute fetch timeout its
+ * prefill could never meet. Keep in lockstep with `claudeLocalEnvDefaults`;
  * `cliChildEnv.test.js` fails when a knob it emits is missing from either list.
  */
 const CLAUDE_LOCAL_TUNING_ENV_KEYS = [
-  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'API_TIMEOUT_MS', 'MAX_THINKING_TOKENS',
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'API_TIMEOUT_MS', 'API_FORCE_IDLE_TIMEOUT',
+  'CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS', 'CLAUDE_STREAM_IDLE_TIMEOUT_MS', 'MAX_THINKING_TOKENS',
 ];
 
 function claudeLocalEnvDefaults(provider) {
@@ -117,6 +134,9 @@ function claudeLocalEnvDefaults(provider) {
   return {
     CLAUDE_CODE_MAX_OUTPUT_TOKENS: CLAUDE_LOCAL_MAX_OUTPUT_TOKENS,
     API_TIMEOUT_MS: CLAUDE_LOCAL_API_TIMEOUT_MS,
+    API_FORCE_IDLE_TIMEOUT: CLAUDE_LOCAL_FORCE_IDLE_TIMEOUT,
+    CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS: CLAUDE_LOCAL_STREAM_IDLE_TIMEOUT_MS,
+    CLAUDE_STREAM_IDLE_TIMEOUT_MS: CLAUDE_LOCAL_STREAM_IDLE_TIMEOUT_MS,
     // Claude Code omits the Anthropic-compatible `thinking` field when this is
     // zero, which Ollama maps to Qwen's non-thinking mode. Do not set a value
     // when enabled: Claude retains its normal adaptive budget.
@@ -144,7 +164,7 @@ function claudeLocalEnvDefaults(provider) {
  * @param {object} options
  * @param {object|null} [options.before] - layered first, so `provider.envVars`
  *   overrides it (forgeTokenEnv, claudeSettingsEnv).
- * @param {{command?:string, envVars?:object, models?:string[], defaultModel?:string|null, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, thinking?:boolean}|null} [options.provider]
+ * @param {{command?:string, envVars?:object, models?:string[], defaultModel?:string|null, ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, thinking?:boolean}|null} [options.provider]
  * @param {string|null} [options.model] - the model being run this invocation,
  *   unioned into the OpenCode declared-models map. Omit when the site has no
  *   per-call model — `provider.defaultModel` is always declared regardless.

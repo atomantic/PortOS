@@ -6,7 +6,7 @@
  * with branching follow-up questions based on responses.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -1039,7 +1039,7 @@ async function appendToAestheticsDoc(sectionId, config, questionId, answer) {
     content += entry;
   }
 
-  await writeFile(targetPath, content);
+  await atomicWrite(targetPath, content);
 }
 
 async function writeAestheticsDocument(profileSummary, completedSections) {
@@ -1062,5 +1062,5 @@ async function writeAestheticsDocument(profileSummary, completedSections) {
     }
   }
 
-  await writeFile(targetPath, content);
+  await atomicWrite(targetPath, content);
 }

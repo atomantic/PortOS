@@ -14,6 +14,7 @@
  */
 
 import { emitLog } from './cosEvents.js';
+import { isPublicReviewNoToolProfile } from '../lib/agentExecutionProfiles.js';
 import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
 import { isProviderAvailable, getFallbackProvider, getProviderStatus } from './providerStatus.js';
 import { selectModelForRole, selectModelForTask } from './agentModelSelection.js';
@@ -31,6 +32,21 @@ import { publicReviewPostureForTask, resolvePublicReviewProvider } from './publi
  * >}
  */
 export async function resolveAgentProviderAndModel(task) {
+  // Old schedules may already have queued raw issue-watcher prompts. New runs
+  // execute entirely in the server's constrained analysis boundary; an upgrade
+  // must not let the old backlog retain a general-purpose agent harness.
+  if (task?.metadata?.analysisType === 'issue-watcher') {
+    return { ok: false, permanent: true,
+      error: 'This legacy issue-watcher task cannot run in an agent. Run Issue Watcher again from the schedule to use screened, tool-free analysis.' };
+  }
+  if (['pr-watcher', 'issue-reconcile'].includes(task?.metadata?.analysisType) && task.metadata.forgeMaintenanceVersion !== 1) {
+    return { ok: false, permanent: true,
+      error: 'This legacy forge maintenance task has not passed the current author and discussion gates. Run its schedule again to gather fresh screened evidence.' };
+  }
+  if (task?.metadata?.analysisType === 'pr-reviewer' && !isPublicReviewNoToolProfile(task.metadata.executionProfile)) {
+    return { ok: false, permanent: true,
+      error: 'This legacy PR review task permits tools. Run PR Reviewer again to use the screened, tool-free review pipeline.' };
+  }
   // A public-review stage is resolved against the POSTURE it declares, not the
   // usual pin → active → fallback chain: the ordinary chain is allowed to swap
   // onto any healthy provider, and swapping untrusted contributor content onto

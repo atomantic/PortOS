@@ -29,6 +29,7 @@ const {
   listCodexModels,
   codexLogout,
   peekCodexModels,
+  peekCodexModelCatalog,
   runCodexTextTurn,
   stopCodexAppServer,
 } = await import('./codexAppServer.js');
@@ -474,6 +475,28 @@ describe('a catalog that will not stop paginating', () => {
     expect(result.models).toBeNull();
     expect(result.error.message).toMatch(/paginating/i);
     expect(peekCodexModels()).toBeNull();
+  });
+});
+
+describe('peekCodexModelCatalog', () => {
+  it('keeps never-fetched, fetched-empty, and failed apart for a picker', async () => {
+    // A picker that cannot tell these three apart either offers an empty
+    // dropdown to an offline user or claims a plan has no models (#6306).
+    expect(peekCodexModelCatalog()).toEqual({ models: null, fetchedAt: null, error: null });
+
+    const empty = listCodexModels();
+    await handshake();
+    await awaitRequest(child, 'model/list', { data: [] });
+    await empty;
+    expect(peekCodexModelCatalog()).toMatchObject({ models: [], error: null });
+    expect(peekCodexModelCatalog().fetchedAt).toEqual(expect.any(Number));
+
+    const failing = listCodexModels({ fresh: true });
+    await awaitRequest(child, 'model/list', (frame) => child.replyError(frame, { code: -32603, message: 'catalog unavailable' }));
+    await failing;
+    // The last-known-good list survives, and the error says it is not authoritative.
+    expect(peekCodexModelCatalog().models).toEqual([]);
+    expect(peekCodexModelCatalog().error.message).toMatch(/catalog unavailable/);
   });
 });
 

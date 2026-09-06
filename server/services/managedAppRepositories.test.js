@@ -6,6 +6,7 @@ const mock = vi.hoisted(() => ({
   readRemoteUrl: vi.fn(),
   execGit: vi.fn(),
   fetchOrigin: vi.fn(),
+  isFetchFresh: vi.fn(),
   resolveForgeForRepo: vi.fn(),
   execGh: vi.fn(),
 }));
@@ -22,6 +23,7 @@ vi.mock('../lib/gitRemote.js', async (importOriginal) => ({
 vi.mock('./git.js', () => ({
   execGitSafe: mock.execGit,
   fetchOrigin: mock.fetchOrigin,
+  isFetchFresh: mock.isFetchFresh,
   resolveForgeForRepo: mock.resolveForgeForRepo,
 }));
 vi.mock('./github.js', () => ({ execGh: mock.execGh }));
@@ -54,6 +56,7 @@ describe('managed app repository topology', () => {
     mock.getOriginInfo.mockResolvedValue(forkOrigin);
     mock.readRemoteUrl.mockResolvedValue(null);
     mock.fetchOrigin.mockResolvedValue(true);
+    mock.isFetchFresh.mockReturnValue(false);
     mock.resolveForgeForRepo.mockResolvedValue({ env: { GH_TOKEN: 'test-token' } });
     mock.execGh.mockImplementation(async (args) => {
       if (args[1] === 'repos/example-owner/example-app') {
@@ -128,6 +131,104 @@ describe('managed app repository topology', () => {
       expect.objectContaining({ cwd: REPO }),
     );
     expect(JSON.stringify(result)).not.toContain(REPO);
+    expect(mock.fetchOrigin).toHaveBeenCalledWith(REPO);
+  });
+
+  // The Eidoverse page runs this read on every visit, so an ungated fetch would
+  // be a network hop per mount for refs that were just refreshed.
+  it('skips the network fetch for refs already refreshed inside the freshness window', async () => {
+    mock.isFetchFresh.mockReturnValue(true);
+
+    const result = await getManagedAppRepositorySources(app);
+
+    expect(mock.fetchOrigin).not.toHaveBeenCalled();
+    expect(result.sources[0]).toMatchObject({ remoteFresh: true, remoteError: null });
+    expect(result.updateAvailable).toBe(true);
+  });
+
+  // Cloning someone else's fork of a third project is normal — Eidoverse's video
+  // checkout is `anima-research`'s fork of the canonical repo. PortOS can read
+  // that fork but never push to it, so its drift from upstream is not an update
+  // PortOS can offer, and claiming otherwise raises an advisory that no button
+  // clears (#6321).
+  it('does not call a fork it cannot push to an available update', async () => {
+    mock.execGh.mockImplementation(async (args) => {
+      if (args[1] === 'repos/example-owner/example-app') {
+        return JSON.stringify({
+          fullName: 'example-owner/example-app',
+          defaultBranch: 'main',
+          isFork: true,
+          canPush: false,
+          sourceFullName: 'example-org/example-app',
+          sourceDefaultBranch: 'main',
+        });
+      }
+      if (String(args[1]).includes('/compare/')) return JSON.stringify({ status: 'behind', ahead: 0, behind: 12 });
+      return '';
+    });
+    // The checkout itself is level with its origin; only the fork is behind.
+    mock.execGit.mockImplementation(async (args) => {
+      if (args[0] === 'status') return { stdout: '', stderr: '', exitCode: 0 };
+      if (args[0] === 'rev-list') return { stdout: '0\t0\n', stderr: '', exitCode: 0 };
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return { stdout: 'main\n', stderr: '', exitCode: 0 };
+      if (args[0] === 'rev-parse') return { stdout: `${'1'.repeat(40)}\n`, stderr: '', exitCode: 0 };
+      return { stdout: '', stderr: '', exitCode: 1 };
+    });
+
+    const result = await getManagedAppRepositorySources(app);
+
+    // The drift stays reported — it is true, and the Git tab shows it.
+    expect(result.sources[0]).toMatchObject({
+      forkSyncable: false,
+      origin: { canPush: false, isFork: true },
+      forkVsUpstream: { behind: 12, state: 'behind' },
+    });
+    expect(result.updateAvailable).toBe(false);
+    await expect(syncManagedAppFork(app)).rejects.toMatchObject({ code: 'FORK_NOT_WRITABLE', status: 403 });
+  });
+
+  // `syncManagedAppFork` only ever touches `app.repoPath`, so a companion's fork
+  // has no sync path at all — and pulling that companion from its own origin
+  // cannot move it past what the fork already has.
+  it('does not call a companion checkout fork behind upstream an available update', async () => {
+    const withCompanion = { ...app, companionRepoPaths: ['/example/companion'] };
+    mock.execGit.mockImplementation(async (args) => {
+      if (args[0] === 'status') return { stdout: '', stderr: '', exitCode: 0 };
+      if (args[0] === 'rev-list') return { stdout: '0\t0\n', stderr: '', exitCode: 0 };
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return { stdout: 'main\n', stderr: '', exitCode: 0 };
+      if (args[0] === 'rev-parse') return { stdout: `${'1'.repeat(40)}\n`, stderr: '', exitCode: 0 };
+      return { stdout: '', stderr: '', exitCode: 1 };
+    });
+    // The companion is a checkout of someone else's fork, behind its upstream.
+    mock.getOriginInfo.mockImplementation(async (repoPath) => (repoPath === '/example/companion'
+      ? { ...forkOrigin, owner: 'other-owner', repo: 'companion', fullName: 'other-owner/companion', originUrl: 'git@github.com:other-owner/companion.git' }
+      : forkOrigin));
+    mock.execGh.mockImplementation(async (args) => {
+      if (args[1] === 'repos/other-owner/companion') {
+        return JSON.stringify({
+          fullName: 'other-owner/companion',
+          defaultBranch: 'main',
+          isFork: true,
+          canPush: true,
+          sourceFullName: 'example-org/companion',
+          sourceDefaultBranch: 'main',
+        });
+      }
+      if (args[1] === 'repos/example-owner/example-app') {
+        return JSON.stringify({ fullName: 'example-owner/example-app', defaultBranch: 'main', isFork: false, canPush: true });
+      }
+      if (String(args[1]).includes('/compare/')) return JSON.stringify({ status: 'behind', ahead: 0, behind: 12 });
+      return '';
+    });
+
+    const result = await getManagedAppRepositorySources(withCompanion);
+
+    expect(result.sources[1]).toMatchObject({
+      id: 'companion-1',
+      forkSyncable: false,
+      forkVsUpstream: { behind: 12, state: 'behind' },
+    });
+    expect(result.updateAvailable).toBe(false);
   });
 
   it('resolves upstream by default while honoring an explicit origin choice', async () => {

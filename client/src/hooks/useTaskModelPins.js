@@ -59,9 +59,10 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
     onBusyChange?.(false);
   }, [onUpdate, taskType, persisted, onBusyChange]);
 
+  const toolFree = taskType === 'issue-watcher';
   const { provider, usingActive } = useMemo(
-    () => resolveEffectiveProvider(providers, pins.providerId, activeProviderId),
-    [providers, pins.providerId, activeProviderId]
+    () => resolveEffectiveProvider(providers, pins.providerId, toolFree ? null : activeProviderId),
+    [providers, pins.providerId, activeProviderId, toolFree]
   );
 
   // Provider is the only one that clears its siblings outright: a model (and the
@@ -94,7 +95,8 @@ export function useTaskModelPins({ taskType, config, providers, activeProviderId
     ...pins,
     provider,
     effectiveProviderId: provider?.id || '',
-    defaultProviderLabel: usingActive ? `Default (active: ${provider.name})` : 'Default (active provider)',
+    toolFree,
+    defaultProviderLabel: toolFree ? 'Default (Abuse Guard source policy)' : usingActive ? `Default (active: ${provider.name})` : 'Default (active provider)',
     availableModels,
     saving,
     changeProvider,

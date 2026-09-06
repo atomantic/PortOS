@@ -76,7 +76,7 @@ vi.mock('../services/videoGen/runtimes.js', async (importOriginal) => ({
   resolveByovRuntimeLoraCapable: vi.fn(async (runtime) => runtime === 'minimax_h3' && loraCapability.capable),
 }));
 
-vi.mock('../services/displayPower.js', () => ({
+vi.mock('../services/videoGen/displayPower.js', () => ({
   isDisplaySleepEnabled: vi.fn(() => false),
 }));
 
@@ -238,8 +238,13 @@ vi.mock('../lib/multipart.js', () => ({
   },
 }));
 
+const fsMock = vi.hoisted(() => ({
+  unlink: vi.fn(async () => {}),
+  copyFile: vi.fn(async () => {}),
+}));
+
 vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
+  tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: {
     root: '/mock',
     data: '/mock/data',
@@ -251,6 +256,8 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   // Route awaits ensureDir before staging the upload; no-op for tests since
   // we mock copyFile too.
   ensureDir: vi.fn(async () => {}),
+  copyFileGuarded: fsMock.copyFile,
+  unlinkGuarded: fsMock.unlink,
   // The route resolves user-supplied basenames through this helper before
   // handing them to the renderer. Mirror the real helper's basename-strip
   // + dot-segment rejection so the "strips path-traversal" test below
@@ -268,10 +275,10 @@ vi.mock('fs', () => ({
   existsSync: vi.fn(() => true),
 }));
 vi.mock('fs/promises', () => ({
-  unlink: vi.fn(async () => {}),
+  unlink: fsMock.unlink,
   // The route stages multipart uploads to data/uploads/ via copyFile. Stub
   // the copy so tests that simulate req.file don't actually touch disk.
-  copyFile: vi.fn(async () => {}),
+  copyFile: fsMock.copyFile,
 }));
 
 import { copyFile, unlink } from 'fs/promises';
@@ -419,7 +426,7 @@ describe('videoGen routes', () => {
     // macOS-only, so a live call returns false on every other runner and the
     // assertions would pass against a hardcoded false — pinning nothing.
     it('reports whether a render will sleep the display, and passes the videoGen slice', async () => {
-      const { isDisplaySleepEnabled } = await import('../services/displayPower.js');
+      const { isDisplaySleepEnabled } = await import('../services/videoGen/displayPower.js');
       const { getSettings } = await import('../services/settings.js');
 
       isDisplaySleepEnabled.mockReturnValueOnce(true);
@@ -436,6 +443,52 @@ describe('videoGen routes', () => {
       isDisplaySleepEnabled.mockReturnValueOnce(false);
       const off = await request(app).get('/api/video-gen/status');
       expect(off.body.displaySleepOnRender).toBe(false);
+    });
+
+    // #6304-follow-up — falEnabled/reactorEnabled must reflect the SAME
+    // resolver a render is gated on (isVideoModeUsable), which honors the
+    // FAL_KEY/REACTOR_API_KEY env vars. Re-deriving "has a key" from the raw
+    // settings object client-side missed the env-var case entirely, so a key
+    // set only via env var never surfaced the backend switcher.
+    it('reports fal/reactor usable when a settings key is stored', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({
+        imageGen: { local: { pythonPath: '/usr/bin/python3' } },
+        videoGen: { fal: { apiKey: 'settings-fal-key' }, reactor: { apiKey: 'settings-reactor-key' } },
+      });
+      const r = await request(app).get('/api/video-gen/status');
+      expect(r.body.falEnabled).toBe(true);
+      expect(r.body.reactorEnabled).toBe(true);
+    });
+
+    it('reports fal/reactor usable from FAL_KEY/REACTOR_API_KEY env vars with no settings key', async () => {
+      const prevFal = process.env.FAL_KEY;
+      const prevReactor = process.env.REACTOR_API_KEY;
+      process.env.FAL_KEY = 'env-fal-key';
+      process.env.REACTOR_API_KEY = 'env-reactor-key';
+      try {
+        const r = await request(app).get('/api/video-gen/status');
+        expect(r.body.falEnabled).toBe(true);
+        expect(r.body.reactorEnabled).toBe(true);
+      } finally {
+        if (prevFal === undefined) delete process.env.FAL_KEY; else process.env.FAL_KEY = prevFal;
+        if (prevReactor === undefined) delete process.env.REACTOR_API_KEY; else process.env.REACTOR_API_KEY = prevReactor;
+      }
+    });
+
+    it('reports fal/reactor unusable when neither a settings key nor an env var is present', async () => {
+      const prevFal = process.env.FAL_KEY;
+      const prevReactor = process.env.REACTOR_API_KEY;
+      delete process.env.FAL_KEY;
+      delete process.env.REACTOR_API_KEY;
+      try {
+        const r = await request(app).get('/api/video-gen/status');
+        expect(r.body.falEnabled).toBe(false);
+        expect(r.body.reactorEnabled).toBe(false);
+      } finally {
+        if (prevFal !== undefined) process.env.FAL_KEY = prevFal;
+        if (prevReactor !== undefined) process.env.REACTOR_API_KEY = prevReactor;
+      }
     });
 
     it('passes each model entry through with its registry disclosure block', async () => {
@@ -851,6 +904,7 @@ describe('videoGen routes', () => {
         'fps',
         'steps',
         'guidanceScale',
+        'batchSize',
         'seed',
         'imageStrength',
         // Not in the it.each table above: a non-default value is only legal on
@@ -2914,6 +2968,28 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/chained chunks/);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+  });
+
+
+  describe('warm video batch submission', () => {
+    it('queues one coerced batch with seed zero and rejects unsupported or overflowing requests', async () => {
+      const models = vi.mocked(videoGenService.listVideoModels);
+      models.mockReturnValue([
+        { id: 'example-h3', name: 'Example H3', runtime: 'minimax_h3', defaultFrames: 124, frameOptions: [124], fpsOptions: [24] },
+        { id: 'example-ltx', runtime: 'ltx2' },
+      ]);
+      const response = await request(app).post('/api/video-gen/').send({
+        prompt: 'Example shot', modelId: 'example-h3', batchSize: '3', seed: '0',
+      });
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.enqueueJob.mock.calls[0][0].params).toMatchObject({ batchSize: 3, seed: 0 });
+      for (const overrides of [{ batchSize: 1.5 }, { batchSize: 21 }, { seed: 2 ** 32 - 1 }, { modelId: 'example-ltx' }, { backend: 'fal' }, { chunks: 2 }, { mediaProviderPeerId: 'peer' }]) {
+        const rejected = await request(app).post('/api/video-gen/').send({ prompt: 'Example shot', modelId: 'example-h3', batchSize: 3, ...overrides });
+        expect(rejected.status).toBe(400);
+      }
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
     });
   });
 

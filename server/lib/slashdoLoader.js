@@ -1,230 +1,88 @@
-/**
- * Slashdo command/lib loading — inlines bundled slashdo markdown (submodule at
- * `lib/slashdo/`) into CoS-agent prompts WITHOUT running slashdo's own
- * per-environment installer, so this module resolves the same `!`cat``
- * include directives and `<!-- if:teams -->` conditionals that installer would
- * otherwise handle. Split out of `fileUtils.js` (a generic file-utilities
- * module) because this is one cohesive feature, not a generic file helper —
- * see `slashdoInvocation.js` for the sibling module covering invocation-style
- * resolution (how a workflow is TYPED per host CLI) rather than loading.
- */
+/** Shared slashdo rendering and immutable prompt bundles for CoS agents. */
 import { createHash } from 'crypto';
 import { join } from 'path';
+import { pathToFileURL } from 'url';
 import { atomicWrite, PATHS, tryReadFile } from './fileUtils.js';
 
-/**
- * The include name (`<name>` of `lib/<name>.md`) for a matched `!`cat`` directive,
- * with the `.md` extension dropped so callers name libs the way slashdo does
- * (`local-agent-review-loop`, not `local-agent-review-loop.md`).
- */
-function slashdoIncludeName(relPath) {
-  return relPath.replace(/^.*\//, '').replace(/\.md$/, '');
+const commandCache = new Map();
+const libCache = new Map();
+const stagedBodies = new Set();
+const isBareName = name => typeof name === 'string'
+  && /^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(name);
+const normalizedSkips = names => [...new Set(Array.isArray(names)
+  ? names.filter(name => typeof name === 'string' && name) : [])].sort();
+
+async function renderBundle(content, options) {
+  // Load only when a command is requested; an uninitialized submodule must not
+  // prevent unrelated server modules from loading. Slashdo owns reference and
+  // conditional semantics for installed skills and embedded prompts alike.
+  const { default: transformer } = await import(pathToFileURL(join(PATHS.slashdo, 'src/transformer.js')).href);
+  return transformer.buildPromptBundle(content, join(PATHS.slashdo, 'lib'), options);
 }
 
 /**
- * Resolve all `!`cat ~/.claude/lib/<name>`` include directives in `content` by
- * inlining the referenced slashdo lib file. Iterates so an inlined lib that
- * itself carries a `!`cat`` include is resolved too (bounded to avoid a cyclic
- * include spinning forever). Shared by loadSlashdoFile and loadSlashdoLib.
- *
- * `skipInclude(name)` (optional) prunes an include the run can never reach —
- * see `loadSlashdoFile`'s `skipIncludes`. A skipped include is replaced with a
- * one-line "not applicable" note rather than deleted, so the agent sees that a
- * section was intentionally withheld instead of silently reading a procedure
- * with a hole in it and improvising the missing branch.
+ * Load a command and its supporting files. Deferred bodies reference lib/*.md;
+ * children reference siblings. Read/staging failures propagate so a missing
+ * required procedure cannot silently turn into an invocation-only dispatch.
+ * Missing top-level commands return null, matching the existing loader contract.
  */
-async function resolveSlashdoIncludes(content, libDir, { skipInclude = null } = {}) {
-  for (let pass = 0; pass < 5; pass++) {
-    const matches = [...content.matchAll(/!`cat ~\/.claude\/lib\/([^`]+)`/g)];
-    if (matches.length === 0) break;
-    const replacements = await Promise.all(matches.map(async (match) => {
-      const name = slashdoIncludeName(match[1]);
-      if (skipInclude?.(name)) {
-        return { pattern: match[0], content: `_(\`${name}\` omitted — not applicable to this run.)_` };
-      }
-      const libContent = await tryReadFile(join(libDir, match[1]));
-      return { pattern: match[0], content: libContent };
-    }));
-    let changed = false;
-    for (const { pattern, content: libContent } of replacements) {
-      // Replace via a function, NOT a string: a string replacement makes
-      // String.replace interpret `$&`/`$\``/`$'`/`$n` tokens, and the shell-heavy
-      // lib files are full of `$` — a bare-string replacement both corrupts the
-      // inlined text and balloons it (a `$\`` token splices in everything before
-      // the match, blowing a 66KB command up to ~2.5MB). A function replacer
-      // inserts libContent verbatim.
-      if (libContent) { content = content.replace(pattern, () => libContent); changed = true; }
-    }
-    if (!changed) break;
-  }
-  return content;
-}
-
-/**
- * Resolve slashdo's `<!-- if:<cap> -->…<!-- else -->…<!-- /if:<cap> -->`
- * conditional blocks — the same templating slashdo's own installer resolves
- * per target environment (see `lib/slashdo/src/transformer.js`). PortOS inlines
- * slashdo markdown into CoS-agent prompts WITHOUT going through that installer,
- * so unless we resolve these here the agent receives BOTH branches verbatim
- * (e.g. the Claude-Code-only "in-process Agent tool" reviewer branch AND the
- * `claude -p` subprocess branch), which is self-contradictory and makes a
- * headless agent improvise its own reviewer invocation.
- *
- * Only the `teams` capability is recognized (matching slashdo's
- * CONDITIONAL_CAPABILITIES). `teams=false` keeps the `else` branch — the
- * subprocess (`claude -p …`) reviewer path that works from any host — which is
- * the correct choice for PortOS's headless CoS agents (they have no in-process
- * Agent tool and are not billing against an interactive Claude Code plan).
- * Unknown capabilities are left untouched so a stray comment never deletes
- * content. Blocks do not nest.
- */
-function resolveSlashdoConditionals(content, { teams = false } = {}) {
-  const blockRe = /<!--\s*if:([a-zA-Z]+)\s*-->\n?([\s\S]*?)(?:<!--\s*else\s*-->\n?([\s\S]*?))?<!--\s*\/if:\1\s*-->\n?/g;
-  return content.replace(blockRe, (match, cap, ifContent, elseContent = '') => {
-    if (cap !== 'teams') return match;
-    return teams ? ifContent : elseContent;
-  });
-}
-
-/**
- * Load a slashdo command markdown file, resolving !`cat ~/.claude/lib/...`
- * includes AND the `<!-- if:teams -->` conditional blocks (to the non-teams
- * `else` branch — see resolveSlashdoConditionals). Both are needed because
- * PortOS inlines these command bodies into headless CoS-agent prompts without
- * running slashdo's own installer: e.g. `commands/do/better.md` ships an
- * `if:teams` block, and a `/do:better` CoS dispatch would otherwise hand the
- * agent both contradictory branches. Optionally strips YAML frontmatter.
- *
- * `skipIncludes` prunes named lib includes the run can never reach (issue
- * #3110). Most of a big command body is reviewer/mode VARIANTS — `review` and
- * `better` each pull all five reviewer loops (~152KB of the 258KB body) though a
- * given run drives exactly one of them. Passing the unreachable names here is
- * where the real prompt saving comes from; each skipped include leaves a
- * one-line "not applicable" marker in its place (see `resolveSlashdoIncludes`).
- * Callers derive the set from already-resolved run settings and must default to
- * skipping NOTHING when they can't — an over-pruned prompt that drops the loop
- * the agent actually needs is far worse than a fat one.
- *
- * Cached: slashdo files are static within a server lifetime (submodule updates
- * require restart). Cache resets on process restart, which is the right behavior.
- * The cache key carries the skip set, so two runs with different reviewer sets
- * don't serve each other's pruned body.
- *
- * @param {string} commandName - bare command name (`review`)
- * @param {Object} [opts]
- * @param {boolean} [opts.stripFrontmatter=false]
- * @param {string[]} [opts.skipIncludes=[]] - lib include names to prune
- * @returns {Promise<string|null>} null when the command file doesn't exist
- */
-const slashdoFileCache = new Map();
-export async function loadSlashdoFile(commandName, { stripFrontmatter = false, skipIncludes = [] } = {}) {
-  // Sorted so `[a, b]` and `[b, a]` hit the same cache entry.
-  const skipSet = new Set(Array.isArray(skipIncludes) ? skipIncludes.filter(n => typeof n === 'string' && n) : []);
-  const skipKey = [...skipSet].sort().join(',');
-  const cacheKey = `${commandName}::${stripFrontmatter}::${skipKey}`;
-  if (slashdoFileCache.has(cacheKey)) return slashdoFileCache.get(cacheKey);
-
-  const cmdPath = join(PATHS.slashdo, 'commands/do', `${commandName}.md`);
-  let content = await tryReadFile(cmdPath);
+export async function loadSlashdoBundle(commandName, {
+  stripFrontmatter = false, skipIncludes = [], defer = true,
+} = {}) {
+  if (!isBareName(commandName)) return null;
+  const skips = normalizedSkips(skipIncludes);
+  const cacheKey = JSON.stringify([commandName, stripFrontmatter, skips, defer]);
+  if (commandCache.has(cacheKey)) return commandCache.get(cacheKey);
+  let content = await tryReadFile(join(PATHS.slashdo, 'commands/do', `${commandName}.md`));
   if (!content) return null;
-  if (stripFrontmatter) {
-    content = content.replace(/^---[\s\S]*?---\s*/, '');
-  }
-  content = await resolveSlashdoIncludes(content, join(PATHS.slashdo, 'lib'), {
-    skipInclude: skipSet.size ? (name) => skipSet.has(name) : null,
-  });
-  content = resolveSlashdoConditionals(content);
-  slashdoFileCache.set(cacheKey, content);
-  return content;
+  if (stripFrontmatter) content = content.replace(/^---[\s\S]*?---\s*/, '');
+  const bundle = await renderBundle(content, { skipIncludes: skips, teams: false, defer });
+  commandCache.set(cacheKey, bundle);
+  return bundle;
+}
+
+/** Self-contained command for consumers without file tools. */
+export async function loadSlashdoFile(commandName, options = {}) {
+  const bundle = await loadSlashdoBundle(commandName, { ...options, defer: false });
+  return bundle?.body ?? null;
 }
 
 /**
- * Write an already-loaded, fully-resolved slashdo command body to disk and return
- * its absolute path, so an agent with file tools can READ the procedure instead of
- * receiving it pasted into its prompt (issue #3110).
- *
- * Why a resolved COPY and not `lib/slashdo/commands/do/<cmd>.md` directly: the
- * shipped file's `` !`cat ~/.claude/lib/…` `` includes are unresolved and a
- * codex/grok host has no `~/.claude/lib` to resolve them against, so pointing at
- * the submodule hands the agent a procedure with holes in it.
- *
- * Takes the body rather than re-loading it, so the caller's single
- * `loadSlashdoFile` result is the one thing written *and* rendered — no way for
- * the file on disk and the size the caller measured to disagree.
- *
- * Written at most once per (command, body) per process: the path→body pair is
- * memoized, so repeat dispatches of the same command skip the write entirely.
- *
- * @param {string} commandName - bare command name (`review`)
- * @param {string} body - the resolved markdown to write
- * @param {Object} [opts]
- * @param {string[]} [opts.skipIncludes=[]] - the prune set that produced `body`;
- *   folded into the filename so two runs with different reviewer sets don't
- *   overwrite each other's copy.
- * @returns {Promise<string|null>} absolute path, or null for an empty body or a
- *   command name that isn't a bare, path-inert segment
+ * Library recipe for legacy inline callers. Follow explicit includes/reads only:
+ * expanding see-also links pulls unrelated reviewer workflows into sanitized
+ * recipes and multiplies their context. Commands use the complete graph above.
  */
-const slashdoResolvedPathCache = new Map();
-export async function writeResolvedSlashdoBody(commandName, body, { skipIncludes = [] } = {}) {
-  if (!body) return null;
-  // Callers reach here through `resolveSlashdoInvocation`, which already rejects
-  // anything that isn't a bare command — but this one WRITES a file, so it keeps
-  // its own guard rather than trusting the call site. Mirrors
-  // `isValidSlashdoCommand`'s shape (kept local to avoid an import cycle back
-  // into slashdoInvocation.js, which is a consumer of this module's loaders).
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$/.test(commandName || '')) {
-    console.warn(`⚠️ Refusing to stage a slashdo body for a non-bare command name: ${commandName}`);
-    return null;
-  }
-
-  // The skip set changes the CONTENT, so it has to change the filename too —
-  // otherwise two runs with different reviewer sets fight over one file and the
-  // second agent reads the first one's pruned procedure. A short hash keeps the
-  // common (unpruned) name clean while staying collision-free.
-  const skipKey = [...new Set(Array.isArray(skipIncludes) ? skipIncludes.filter(Boolean) : [])].sort().join(',');
-  const suffix = skipKey ? `-${createHash('sha256').update(skipKey).digest('hex').slice(0, 8)}` : '';
-  const filePath = join(PATHS.slashdoResolved, `${commandName}${suffix}.md`);
-
-  if (slashdoResolvedPathCache.get(filePath) === body) return filePath;
-  await atomicWrite(filePath, body);
-  slashdoResolvedPathCache.set(filePath, body);
-  return filePath;
-}
-
-/**
- * Load a slashdo *lib* file (`lib/slashdo/lib/<name>.md`) — the shared
- * procedure fragments that command files `!`cat``-include — for inlining
- * directly into a CoS-agent prompt. Same include + conditional resolution as
- * loadSlashdoFile; the differences are that this reads the `lib/` dir (not
- * `commands/do/`) and exposes the `teams` override (loadSlashdoFile always
- * resolves to the non-teams branch). Defaults to the non-teams (`else`) branch
- * so a headless agent gets the subprocess reviewer invocation, not both.
- */
-const slashdoLibCache = new Map();
 export async function loadSlashdoLib(libName, { teams = false } = {}) {
-  const cacheKey = `${libName}::${teams}`;
-  if (slashdoLibCache.has(cacheKey)) return slashdoLibCache.get(cacheKey);
+  if (!isBareName(libName)) return null;
+  const cacheKey = JSON.stringify([libName, teams]);
+  if (libCache.has(cacheKey)) return libCache.get(cacheKey);
+  const content = await tryReadFile(join(PATHS.slashdo, 'lib', `${libName}.md`));
+  const body = content ? (await renderBundle(content, { teams, defer: false, followReferences: false })).body : null;
+  libCache.set(cacheKey, body);
+  return body;
+}
 
-  const libDir = join(PATHS.slashdo, 'lib');
-  let content = await tryReadFile(join(libDir, `${libName}.md`));
-  // Cache the MISS too. An install whose `lib/slashdo` submodule was never
-  // initialized (`npm run install:all` is what fetches it) would otherwise
-  // re-attempt the read on every spawn that asks — and since #3733 that is every
-  // slashdo-free PR-opening agent, not just review-loop follow-ups.
-  //
-  // The cost of caching it: a user who runs `git submodule update --init` by
-  // hand against a RUNNING server keeps getting `null` until a restart, which
-  // now degrades those agents' Review Loop section rather than only follow-ups'.
-  // Accepted rather than papered over with an mtime probe — the recovery is a
-  // restart the user is already adjacent to, and re-statting a known-missing
-  // file on every spawn to catch it is the wrong trade. `clearSlashdoCaches()`
-  // is the hook to add if that ever stops being true.
-  if (!content) {
-    slashdoLibCache.set(cacheKey, null);
-    return null;
+/**
+ * Stage a resolved body and optional supporting files. Content-addressed paths
+ * keep an already-dispatched run stable across submodule updates and different
+ * reviewer selections. Publish the entrypoint only after every reference exists.
+ */
+export async function writeResolvedSlashdoBody(commandName, body, { files = {} } = {}) {
+  if (!body || !isBareName(commandName)) return null;
+  const entries = Object.entries(files).sort(([a], [b]) => a.localeCompare(b));
+  for (const [name, content] of entries) {
+    if (!/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*\.md$/.test(name) || typeof content !== 'string') {
+      throw new Error('Invalid slashdo supporting file');
+    }
   }
-  content = await resolveSlashdoIncludes(content, libDir);
-  content = resolveSlashdoConditionals(content, { teams });
-  slashdoLibCache.set(cacheKey, content);
-  return content;
+  const digest = createHash('sha256').update(JSON.stringify([body, entries])).digest('hex');
+  const directory = join(PATHS.slashdoResolved, `${commandName}-${digest}`);
+  const filePath = entries.length ? join(directory, 'workflow.md') : `${directory}.md`;
+  if (stagedBodies.has(filePath)) return filePath;
+  for (const [name, content] of entries) {
+    await atomicWrite(join(directory, 'lib', name), content);
+  }
+  await atomicWrite(filePath, body);
+  stagedBodies.add(filePath);
+  return filePath;
 }

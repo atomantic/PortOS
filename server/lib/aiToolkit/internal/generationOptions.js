@@ -28,12 +28,14 @@ const finiteNumber = (value, min, max) => {
  * top_p with it, which is how the vLLM providers shipped with every generation
  * control silently discarded on the OpenCode side (#4765).
  *
- * @param {{temperature?:unknown, topP?:unknown, thinking?:unknown, llamaBacked?:boolean, mtplxBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean}|null|undefined} provider
+ * @param {{temperature?:unknown, topP?:unknown, thinking?:unknown, lmstudioBacked?:boolean, llamaBacked?:boolean, mtplxBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean}|null|undefined} provider
  * @returns {{temperature?:number, top_p?:number, think?:boolean, chat_template_kwargs?:{enable_thinking:boolean}}}
  */
 export function apiGenerationOptions(provider) {
   const ollama = isOllamaBackedProvider(provider);
+  const lmstudio = provider?.lmstudioBacked === true;
   if (!ollama
+    && !lmstudio
     && provider?.llamaBacked !== true
     && provider?.mtplxBacked !== true
     && provider?.vllmBacked !== true
@@ -46,8 +48,11 @@ export function apiGenerationOptions(provider) {
     ...(temperature === undefined ? {} : { temperature }),
     ...(topP === undefined ? {} : { top_p: topP }),
     // Ollama takes its own native `think` boolean; llama.cpp / MTPLX / vLLM /
-    // SGLang route the toggle through the chat template instead.
-    ...(typeof provider.thinking !== 'boolean'
+    // SGLang route the toggle through the chat template instead. LM Studio takes
+    // neither — reasoning there is a property of the LOADED model instance, so
+    // a stored `thinking` would be a field nothing reads (`THINKING_STYLE` in
+    // ../../opencodeConfig.js says the same for its OpenCode wrappers).
+    ...(typeof provider.thinking !== 'boolean' || lmstudio
       ? {}
       : ollama
         ? { think: provider.thinking }

@@ -10,7 +10,7 @@ export const ACCEPTED_OLD_MD5 = {
 
 export const NEW_SHIPPED_MD5 = {
   'fableloom-generate-series-plan.md': '27336d8c64e6193aecd1ba697f52315e',
-  'fableloom-outline-episode.md': '820b8c157c1977b34eb317e44236519e',
+  'fableloom-outline-episode.md': '2ff6fb72777ff0c6fc70f3afd0ddfd53',
   'fableloom-weave-episode.md': 'abea2442af2be2039b70deee4919c00e',
 };
 

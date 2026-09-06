@@ -1,10 +1,10 @@
+import { normalizeVideoFailure } from '../../lib/videoFailure.js';
 /** Multi-chunk local-video orchestration. */
 
-import { unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { probeFrameCount, trimVideoFromFrame } from '../../lib/ffmpeg.js';
 import {
@@ -62,6 +62,9 @@ import { generateVideo, resolveVideoModel, defaultVideoModelId } from './generat
 // `prompt`. It is destructured out of `rest` on purpose so the per-chunk
 // generateVideo() calls below never receive the whole list.
 export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames, jobId: outerJobId, ...rest }) {
+  if (Number(chunks) > 1 && Number(rest.batchSize) > 1) {
+    throw new ServerError('A render batch cannot be combined with chained clips.', { status: 400, code: 'VIDEO_BATCH_CONFLICT' });
+  }
   const totalChunks = Number(chunks) || 1;
   if (totalChunks === 1) {
     return generateVideo({ jobId: outerJobId, ...rest });
@@ -226,7 +229,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     const onFailed = (e) => {
       if (e.generationId !== innerJobId) return;
       detach();
-      reject(new Error(e.error || 'chunk failed'));
+      resolve({ error: e.error || 'chunk failed', failure: e.failure });
     };
     videoGenEvents.on('progress', onProgress);
     videoGenEvents.on('completed', onCompleted);
@@ -300,7 +303,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
   // long chain doesn't leave a trail of clips in tmpdir. Best-effort and
   // fire-and-forget: a leftover temp file must never fail a finished render.
   const cleanupContextClips = () => {
-    for (const p of contextClipPaths) unlink(p).catch(() => {});
+    for (const p of contextClipPaths) unlinkGuarded(p).catch(() => {});
     contextClipPaths.length = 0;
   };
   const finishOk = (payload) => {
@@ -310,10 +313,11 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     broadcastSse(outerJob, { type: 'complete', result: payload });
     closeJobAfterDelay(videoJobState.jobs, outerJobId);
   };
-  const finishFail = (error) => {
+  const failureOptions = { prompts: [rest.prompt, rest.negativePrompt, ...(chunkPrompts || [])] };
+  const finishFail = (error, failure = normalizeVideoFailure(error, failureOptions)) => {
     if (videoJobState.activeChain === chainState) videoJobState.activeChain = null;
     cleanupContextClips();
-    videoGenEvents.emit('failed', { generationId: outerJobId, error });
+    videoGenEvents.emit('failed', { generationId: outerJobId, error, failure });
     broadcastSse(outerJob, { type: 'error', error });
     closeJobAfterDelay(videoJobState.jobs, outerJobId);
   };
@@ -328,10 +332,10 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
         return;
       }
       // eslint-disable-next-line no-await-in-loop
-      const completed = await runChunk(i).catch((err) => ({ error: err.message }));
+      const completed = await runChunk(i).catch((err) => ({ error: err.message, failure: normalizeVideoFailure(err, failureOptions) }));
       if (completed?.error) {
         await setHistoryItemsHidden(chunkIds, true);
-        finishFail(completed.error);
+        finishFail(completed.error, completed.failure);
         return;
       }
       // The chunk's output file is always <innerJobId>.mp4 under PATHS.videos
@@ -441,7 +445,7 @@ export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames
     });
   })().catch((err) => {
     console.log(`❌ chain orchestration crashed [${outerJobId.slice(0, 8)}]: ${err.message}`);
-    finishFail(err.message);
+    finishFail(err.message, normalizeVideoFailure(err, failureOptions));
   });
 
   // Match the synchronous shape of generateVideo so the route's response

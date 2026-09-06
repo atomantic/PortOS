@@ -19,7 +19,6 @@
  */
 
 import { Router } from 'express';
-import { unlink } from 'fs/promises';
 import { join, resolve } from 'path';
 import { createHash } from 'crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -38,6 +37,7 @@ import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import {
   pathExists, PATHS, sanitizeFilename, isPathInsideDir,
   SONGBOOK_ATTACHMENT_EXTENSIONS, saveBase64Upload, serveLocalFile,
+  unlinkGuarded,
 } from '../lib/fileUtils.js';
 
 const router = Router();
@@ -231,7 +231,7 @@ router.delete('/:id/attachments/:filename', asyncHandler(async (req, res) => {
 
   // Bytes may legitimately be absent on this machine (meta synced from a peer).
   if (await pathExists(filepath)) {
-    await unlink(filepath);
+    await unlinkGuarded(filepath);
   }
 
   console.log(`🗑️ Song attachment deleted: ${safeFilename}`);

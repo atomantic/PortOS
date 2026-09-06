@@ -28,7 +28,7 @@
  */
 
 import { PATHS } from '../lib/fileUtils.js';
-import { loadSlashdoFile } from '../lib/slashdoLoader.js';
+import { loadSlashdoFile, loadSlashdoLib } from '../lib/slashdoLoader.js';
 import { getTaskInterval } from './taskSchedule.js';
 import {
   DEFAULT_TASK_PROMPTS,
@@ -73,22 +73,68 @@ async function loadSlashdoCommandBody(commandName) {
   return _slashdoCache[commandName];
 }
 
+/**
+ * The slashdo review LENSES — the per-file / cross-file checklists that
+ * `/do:review` dispatches its focused reviewers with — behind the
+ * `{reviewLenses}` placeholder the public-review actions stage
+ * (`pr-reviewer-review`) carries. `review-structural-ambition` is left out on
+ * purpose: `/do:review` itself only selects it under `--strict`.
+ *
+ * That stage runs a single sandboxed agent with no network, no forge
+ * credential, no sub-agent dispatch, and — on the local wrappers it is
+ * commonly pinned to — a model server that prefills at a few hundred tokens per
+ * second. The full `/do:review` body it used to receive is ~260KB: argument
+ * parsing, reviewer-selection protocol, five reviewer LOOPS (Copilot, GitHub
+ * `@login`, local agent, Ollama, multi-reviewer), issue filing and PR posting —
+ * every one of them a procedure the stage's own contract forbids, and together
+ * ~75K prompt tokens the model had to chew through before reading the PR. On
+ * 2026-09-04 that prefill outlived Claude Code's stream-idle watchdog on every
+ * attempt, so Stage 3 sat at `API error · Retrying … attempt 1/10` forever
+ * (agent-e057cca7). The lenses are the review; the rest was the harness for a
+ * different runtime.
+ */
+const PUBLIC_REVIEW_LENS_LIBS = [
+  'review-surface-scan',
+  'review-surface-quality',
+  'review-security-audit',
+  'review-cross-file-tracing',
+  'review-cross-file-contract',
+];
+async function loadReviewLenses() {
+  const lenses = await Promise.all(PUBLIC_REVIEW_LENS_LIBS.map((name) => loadSlashdoLib(name).catch(() => null)));
+  return lenses.filter(Boolean).join('\n\n');
+}
+
+/**
+ * Substitute the prompt-level placeholders. Every replacement is FUNCTION-form:
+ * a string replacement makes `String.replace` interpret its `$`-prefixed
+ * tokens (`$&`, `$n`, the "text before the match" and "text after the match"
+ * forms) in the replacement text, and the shell-heavy slashdo bodies are full
+ * of `$`. One "text before the match" token inside the inlined `/do:review` (a
+ * regex like `^[^/]+/[^/]+#[0-9]+$` followed by a backtick) spliced EVERYTHING
+ * BEFORE THE PLACEHOLDER back into the prompt at that point — seven copies of
+ * the stage prompt inside one Stage 3 body, the same footgun
+ * `resolveSlashdoIncludes` documents for its own includes.
+ */
 async function resolvePromptPlaceholders(prompt) {
   // {worktreesRoot} → PortOS's shared worktrees dir (absolute). The claim flows
   // (plan-task, claim-issue, claim-issue-gitlab, claim-issue-jira) create their
   // agent worktree here rather than inside the managed app repo, so a worktree
-  // checkout never pollutes the target repo's working tree. Function-form
-  // replacer so a literal `$` in the path can't be read as a backreference.
+  // checkout never pollutes the target repo's working tree.
   if (prompt.includes('{worktreesRoot}')) {
     prompt = prompt.replace(/\{worktreesRoot\}/g, () => PATHS.worktrees);
   }
   if (prompt.includes('{reviewChecklist}')) {
     const checklist = await loadSlashdoCommandBody('review').catch(() => '');
-    prompt = prompt.replace(/\{reviewChecklist\}/g, checklist);
+    prompt = prompt.replace(/\{reviewChecklist\}/g, () => checklist);
+  }
+  if (prompt.includes('{reviewLenses}')) {
+    const lenses = await loadReviewLenses();
+    prompt = prompt.replace(/\{reviewLenses\}/g, () => lenses);
   }
   if (prompt.includes('{slashdoReplan}')) {
     const replan = await loadSlashdoCommandBody('replan').catch(() => '');
-    prompt = prompt.replace(/\{slashdoReplan\}/g, replan);
+    prompt = prompt.replace(/\{slashdoReplan\}/g, () => replan);
   }
   return prompt;
 }

@@ -206,7 +206,7 @@ const assertEditorialDependenciesUnchanged = (current, fingerprint, { code, mess
 };
 
 const seriesPlanDigest = (loom) => JSON.stringify({
-  storyArc: trimTo(loom.seriesPlan?.storyArc, 6000),
+  storyArc: loom.seriesPlan?.storyArc || '',
   plotPoints: asArray(loom.seriesPlan?.plotPoints),
   sideQuests: asArray(loom.seriesPlan?.sideQuests),
   deliveryOptions: loom.seriesPlan?.deliveryOptions || null,
@@ -216,7 +216,7 @@ const seriesPlanDigest = (loom) => JSON.stringify({
     id: episode.id,
     number: episode.number,
     title: episode.title,
-    synopsis: trimTo(episode.synopsis, 600),
+    synopsis: episode.synopsis || '',
     storyOutline: episode.storyOutline
       ? describeStoryOutlineForPrompt(episode.storyOutline)
       : '(missing)',
@@ -232,12 +232,14 @@ const exactGraphIdContract = (episode) => asArray(episode.nodes).flatMap((node) 
 const teleplayDigest = (loom) => asArray(loom.episodes).map((episode) => [
   `## Episode ${episode.number}: ${episode.title || 'Untitled'}`,
   `Episode id: ${episode.id}`,
-  episode.synopsis ? `Synopsis: ${trimTo(episode.synopsis, 600)}` : '',
+  episode.synopsis ? `Synopsis: ${episode.synopsis}` : '',
   episode.storyOutline
     ? `Beat outline:\n${describeStoryOutlineForPrompt(episode.storyOutline)}`
     : 'Beat outline: (missing)',
   episode.nodes.length
-    ? describeGraphForPrompt(episode, { proseLimit: 1000, participationMode: loom.participationMode })
+    // Whole-series editing and approval need each scene's payoff, not just its
+    // opening. The rendered-prompt budget below rejects oversized inputs.
+    ? describeGraphForPrompt(episode, { proseLimit: Infinity, participationMode: loom.participationMode })
     : '(no expanded teleplay scenes)',
   episode.nodes.length
     ? `Exact graph ids for patches (copy verbatim):\n${exactGraphIdContract(episode) || '(no transitions)'}`
@@ -1133,6 +1135,7 @@ export const __testing = {
   renderEditorialPrompt,
   sanitizeEvaluation,
   sanitizePlaythroughReview,
+  seriesPlanDigest,
   teleplayDigest,
   withCompletePlaythroughDigest,
 };

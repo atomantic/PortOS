@@ -88,7 +88,7 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.prompt).toContain('ARIA_V2');
     expect(result.negativePrompt).toContain('wrong aria face');
     expect(result.visualConditioning).toMatchObject({
-      status: 'locked', compilerVersion: '1.0.0', universeId: universe.id,
+      status: 'locked', compilerVersion: '1.1.0', universeId: universe.id,
       temporalSourceNodeId: 'opening',
       bindings: { inferred: false, placeId: 'place-1', objectIds: ['object-1'] },
       adapters: [{ filename: 'aria-v2.safetensors', scale: 0.75, sha256: 'a'.repeat(64) }],
@@ -96,6 +96,68 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.visualConditioning.assets[0]).toMatchObject({ role: 'temporal-predecessor', filename: 'opening.png' });
     expect(result.referenceImagePaths.every((path) => path.startsWith('/approved/'))).toBe(true);
     expect(JSON.stringify(result.visualConditioning)).not.toContain('/approved/');
+  });
+
+  it('keeps a shared set across camera cuts without carrying that room into another scene', async () => {
+    const loom = loomWith(lockedBinding);
+    const [previous, current] = loom.episodes[0].nodes;
+    previous.shot = { dramaticSceneId: 'scene-a', framing: 'Wide establishing view' };
+    current.shot = { dramaticSceneId: 'scene-a', framing: 'Close profile from the same side of the axis' };
+    const compile = () => compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', inputBudget: 6 }), ...deps(loom),
+    });
+    const result = await compile();
+    expect(result.prompt).toContain('Same dramatic scene:');
+    expect(result.prompt).toContain('room geometry');
+    expect(result.prompt).toContain(current.shot.framing);
+    expect(result.prompt).toContain('Dialogue is spoken audio only');
+    expect(result.negativePrompt).toContain('subtitles');
+    current.shot.dramaticSceneId = 'scene-b';
+    const changed = await compile();
+    expect(changed.prompt).not.toContain('Same dramatic scene:');
+    expect(changed.prompt).toContain('intentional scene change');
+  });
+
+  it('preserves complete Reactor dialogue and rejects oversize shots before rendering', async () => {
+    const loom = loomWith(lockedBinding);
+    const current = loom.episodes[0].nodes[1];
+    current.prose = 'ARIA\nThe last shuttle leaves tonight.';
+    current.videoPrompt = 'She folds the ticket.';
+    const compile = () => compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'video',
+      sourceImagePath: '/approved/storyboard.png',
+      capability: fableLoomVideoCapabilities({ backend: 'reactor', model: { supportedModes: ['image'] } }), ...deps(loom),
+    });
+    const result = await compile();
+    expect(result.prompt).toContain(current.prose);
+    expect(result.prompt).toContain('No subtitles');
+    expect(result.prompt.length).toBeLessThanOrEqual(800);
+    expect(result.visualConditioning.compiledPrompt).toBe(result.prompt);
+    current.visualCanon = { ...lockedBinding, mode: 'draft', storyboardImageApproved: false };
+    await expect(compile()).rejects.toMatchObject({ code: 'FABLELOOM_REACTOR_REFERENCE_REQUIRED' });
+    current.visualCanon = lockedBinding;
+    current.prose = 'x'.repeat(801);
+    await expect(compile()).rejects.toMatchObject({ code: 'FABLELOOM_REACTOR_PROMPT_TOO_LONG' });
+  });
+
+  it('uses the explicit draft character anchor without changing approved canon', async () => {
+    const loom = loomWith({ ...lockedBinding, mode: 'draft', characterAppearances: [{ characterId: 'char-a', referenceImage: 'draft-anchor.png' }] });
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', inputBudget: 4 }),
+      authoredPrompt: 'A cautious arrival', ...deps(loom),
+    });
+    expect(result.referenceImagePaths).toContain('/approved/draft-anchor.png');
+    expect(result.visualConditioning.status).not.toBe('locked');
+    const locked = loomWith({ ...lockedBinding, characterAppearances: [{ characterId: 'char-a', referenceImage: 'draft-anchor.png' }] });
+    const approved = await compileFableLoomVisualRequest({
+      tag: { loomId: locked.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', inputBudget: 6 }),
+      authoredPrompt: 'A cautious arrival', ...deps(locked),
+    });
+    expect(approved.referenceImagePaths).not.toContain('/approved/draft-anchor.png');
+    expect(approved.referenceImagePaths).toContain('/approved/aria-neutral.png');
   });
 
   it('renders curated style tokens once and never the writing-stage styleNotes', async () => {
@@ -183,10 +245,10 @@ describe('FableLoom visual conditioning compiler', () => {
     });
 
     expect(result.prompt).not.toContain('Character: Aria');
-    expect(result.prompt).toContain('canonical protagonist is speaking through the communicator off-screen');
+    expect(result.prompt).toContain('Aria, the canonical protagonist, is speaking through the communicator off-screen');
     expect(result.prompt).toContain('show the obstacle or environment the protagonist cannot see');
     expect(result.prompt).toContain('never use a standalone comms device as the subject');
-    expect(result.negativePrompt).toContain('visible canonical protagonist');
+    expect(result.negativePrompt).toContain('visible Aria');
     expect(result.negativePrompt).toContain('standalone communicator');
     expect(result.visualConditioning.bindings).toMatchObject({
       protagonist: { characterId: 'char-a', wardrobeId: 'wardrobe-red', presence: 'offscreen' },
@@ -195,6 +257,23 @@ describe('FableLoom visual conditioning compiler', () => {
     expect(result.visualConditioning.omitted).toContainEqual({
       role: 'character', bindingId: 'char-a', reason: 'protagonist-offscreen',
     });
+  });
+
+  it('keeps another character visible while the canonical protagonist is off-screen', async () => {
+    const loom = loomWith({ mode: 'draft', characterAppearances: [{ characterId: 'char-b', referenceImage: 'bex-neutral.png' }] });
+    loom.protagonistCharacterId = 'char-a';
+    loom.episodes[0].nodes.at(-1).protagonistPresence = 'offscreen';
+    const result = await compileFableLoomVisualRequest({
+      tag: { loomId: loom.id, episodeId: 'episode-1', nodeId: 'shot' }, kind: 'image',
+      capability: fableLoomImageCapabilities({ mode: 'codex', inputBudget: 4 }),
+      authoredPrompt: 'Close-up of Bex telling a story.', ...deps(loom),
+    });
+    expect(result.prompt).toContain('keep Aria off-screen');
+    expect(result.prompt).toContain('Show the explicitly bound cast (Bex)');
+    expect(result.prompt).not.toContain('show the obstacle or environment');
+    expect(result.negativePrompt).toContain('visible Aria');
+    expect(result.negativePrompt).not.toContain('visible Bex');
+    expect(result.referenceImagePaths).toContain('/approved/bex-neutral.png');
   });
 
   it('fails a locked render when a backend cannot preserve the bound cast', async () => {

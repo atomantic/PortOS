@@ -27,6 +27,7 @@ const renderCard = (props = {}) => {
     onStartSlotstream: vi.fn(),
     onStopSlotstream: vi.fn(),
     onSaveStartup: vi.fn(),
+    onToggleKeepLoaded: vi.fn(),
   };
   render(
     <MemoryRouter>
@@ -338,6 +339,56 @@ describe('RuntimeServersCard', () => {
       renderCard({});
       expect(screen.getByText(/Only PortOS traffic counts/)).toBeInTheDocument();
     });
+
+    it('shows the Keep loaded toggle and fires onToggleKeepLoaded when clicked', () => {
+      const handlers = renderCard({
+        mtplxStatus: { installed: true, running: true, supported: true, keepLoaded: false },
+      });
+      const checkbox = within(row('MTPLX')).getByRole('checkbox', { name: 'Keep MTPLX loaded' });
+      expect(checkbox).not.toBeChecked();
+
+      fireEvent.click(checkbox);
+      expect(handlers.onToggleKeepLoaded).toHaveBeenCalledWith('mtplx', true);
+    });
+
+    it('disables the idle release field when Keep loaded is checked', () => {
+      renderCard({
+        mtplxStatus: { installed: true, running: true, supported: true, keepLoaded: true },
+      });
+      const checkbox = within(row('MTPLX')).getByRole('checkbox', { name: 'Keep MTPLX loaded' });
+      expect(checkbox).toBeChecked();
+      expect(idleField('MTPLX')).toBeDisabled();
+    });
   });
 
+  // ===========================================================================
+  // RELEASE REASON (MEMORY PRESSURE)
+  // ===========================================================================
+  describe('release reason display', () => {
+    it('shows host memory pressure release reason when daemon is stopped', () => {
+      renderCard({
+        slotstreamStatus: {
+          installed: true,
+          running: false,
+          supported: true,
+          releaseReason: 'released at 09:14 — host memory pressure',
+        },
+      });
+      const slotstream = row('Slotstream');
+      expect(within(slotstream).getByText('released at 09:14 — host memory pressure')).toBeInTheDocument();
+    });
+
+    it('hides release reason when daemon is running', () => {
+      renderCard({
+        slotstreamStatus: {
+          installed: true,
+          running: true,
+          supported: true,
+          releaseReason: 'released at 09:14 — host memory pressure',
+        },
+      });
+      const slotstream = row('Slotstream');
+      expect(within(slotstream).queryByText('released at 09:14 — host memory pressure')).toBeNull();
+    });
+  });
 });

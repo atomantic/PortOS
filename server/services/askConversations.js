@@ -24,9 +24,9 @@
  */
 
 import { join } from 'path';
-import { readdir, stat, unlink } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
-import { PATHS, atomicWrite, ensureDir, readJSONFile, safeDate } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite, ensureDir, readJSONFile, safeDate, unlinkGuarded } from '../lib/fileUtils.js';
 
 export const ASK_DIR = join(PATHS.data, 'ask-conversations');
 export const EXPIRY_DAYS = 30;
@@ -138,7 +138,7 @@ export async function listConversations({ limit = 50 } = {}) {
     }
     if (!conv.promoted && effectiveTs && (now - effectiveTs) > expiryMs) {
       // Single-user app — no concurrency races to worry about pruning here.
-      await unlink(pathFor(id)).catch(() => {});
+      await unlinkGuarded(pathFor(id)).catch(() => {});
       continue;
     }
 
@@ -222,7 +222,7 @@ export async function appendTurn(conversationId, turn) {
 
 export async function deleteConversation(id) {
   if (!isValidId(id)) return false;
-  const removed = await unlink(pathFor(id)).then(() => true, (err) => {
+  const removed = await unlinkGuarded(pathFor(id)).then(() => true, (err) => {
     if (err.code === 'ENOENT') return false;
     throw err;
   });

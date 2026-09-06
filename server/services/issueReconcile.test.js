@@ -241,13 +241,14 @@ describe('classifyIssues', () => {
  */
 function mockGh({ issues = [], merged = [], open = [], owner = 'atomantic' }) {
   execGh.mockImplementation(async (argv) => {
-    if (argv[0] === 'issue' && argv[1] === 'list') return JSON.stringify(issues);
+    if (argv[0] === 'issue' && argv[1] === 'list') return JSON.stringify(issues.map(issue => ({ author: { login: 'trusted-author' }, ...issue })));
     if (argv[0] === 'pr' && argv.includes('merged')) return JSON.stringify(merged);
     if (argv[0] === 'pr' && argv.includes('open')) return JSON.stringify(open);
-    if (argv[0] === 'api' && argv[1] === 'user') {
+    if (argv[0] === 'api' && argv.at(-1) === 'user') {
       if (owner === null) throw new Error('gh: not authenticated');
-      return owner;
+      return JSON.stringify({ login: owner });
     }
+    if (argv[0] === 'api' && argv.at(-1).endsWith('/permission')) return JSON.stringify({ permission: 'write', user: { login: 'trusted-author' } });
     return '[]';
   });
 }
@@ -362,8 +363,21 @@ describe('reconcile', () => {
     const argvs = execGh.mock.calls.map(([argv]) => argv);
     expect(argvs.filter((a) => a.includes('--repo'))
       .every((a) => a[a.indexOf('--repo') + 1] === 'github.acme.example/acme/app')).toBe(true);
-    expect(argvs.find((a) => a[0] === 'api' && a[1] === 'user'))
+    expect(argvs.find((a) => a[0] === 'api' && a.at(-1) === 'user'))
       .toEqual(expect.arrayContaining(['--hostname', 'github.acme.example']));
+  });
+
+  it('keys every periodic GitHub read by its repository selector', async () => {
+    mockGh({ issues: [], merged: [], open: [] });
+
+    const result = await gatherIssueState('/repo');
+
+    expect(result).not.toBeNull();
+    const periodicReads = execGh.mock.calls.filter(([argv]) => argv[0] === 'issue' || argv[0] === 'pr');
+    expect(periodicReads).toHaveLength(3);
+    for (const [, , options] of periodicReads) {
+      expect(options).toEqual({ backoffKey: 'github.com/atomantic/PortOS' });
+    }
   });
 
   it('scans a custom-hostname self-hosted forge when the app pins workTracker (issue #3767)', async () => {
@@ -426,6 +440,22 @@ describe('reconcile', () => {
     });
     const result = await reconcile('/repo');
     expect(result).toBeNull();
+  });
+
+  it('excludes outsider-authored zombies and abandoned claims while retaining external live PR protection', async () => {
+    mockGh({
+      issues: [
+        { number: 7, author: { login: 'external' }, labels: [{ name: 'in-progress' }], assignees: [{ login: 'volunteer' }], updatedAt: daysAgo(30) },
+        { number: 8, author: { login: 'trusted-author' }, labels: [{ name: 'in-progress' }], assignees: [] },
+      ],
+      merged: [{ number: 17, body: 'Refs #7' }, { number: 18, body: 'Refs #8' }],
+      open: [{ number: 20, author: { login: 'external' }, body: 'Refs #8', headRefName: 'claim/issue-8' }],
+    });
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.zombies).toEqual([]);
+    expect(result.abandoned).toEqual([]);
+    expect(result.live.map(issue => issue.number)).toEqual([8]);
   });
 
   it('empty in-progress list is a valid answer (no zombies), not a skip', async () => {
@@ -875,7 +905,7 @@ describe('formatZombiesForPrompt', () => {
       { fullName: 'atomantic/PortOS', autoClose: true }
     );
     expect(md).toContain('#2220');
-    expect(md).toContain('CDO');
+    expect(md).not.toContain('CDO');
     expect(md).toContain('merged PR #2234');
   });
   it('autoClose:true surfaces the close+file-new arm in the header directive', () => {

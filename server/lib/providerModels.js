@@ -121,7 +121,7 @@ export const EFFORT_LEVELS = Object.freeze([...new Set([
   ...CURSOR_EFFORT_LEVELS,
 ])]);
 
-const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']);
+const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra']);
 
 const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model || '').trim().toLowerCase())
   ? CODEX_ULTRA_EFFORT_LEVELS
@@ -386,6 +386,7 @@ export function effortLevelsForProvider(provider, model = null) {
     if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;
     return perModel.length ? perModel : null;
   }
+  if (commandBasename(provider.command) === 'pi') return ['low', 'medium', 'high', 'xhigh', 'max'];
   if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
   if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   if (isClaudeProvider(provider)) return CLAUDE_EFFORT_LEVELS;
@@ -438,7 +439,9 @@ export const CODEX_EFFORT_KEY = 'model_reasoning_effort';
 // provider args gets a SECOND, injected `--effort <level>` appended. Grok's
 // parser accepts the duplicate and takes the last one, so their explicit pin
 // would be silently overridden — the exact opposite of the contract below.
-const EFFORT_FLAG_NAMES = Object.freeze(['--effort', '--reasoning-effort']);
+// Pi's --thinking is also a value-taking effort pin; shared stripping keeps
+// per-run overrides consistent when switching providers.
+const EFFORT_FLAG_NAMES = Object.freeze(['--effort', '--reasoning-effort', '--thinking']);
 
 /**
  * True when the user has already baked an effort override into the provider's
@@ -485,6 +488,7 @@ export function hasEffortFlag(args) {
 export function buildEffortArgs(effort, provider, existingArgs = [], model = null) {
   const effectiveEffort = resolveCliEffort(effort, provider, model);
   if (!effectiveEffort || hasEffortFlag(existingArgs)) return [];
+  if (commandBasename(provider?.command) === 'pi') return ['--thinking', effectiveEffort];
   if (isCursorProvider(provider)) return []; // rides `--model`, not a flag — see above
   return isCodexProvider(provider)
     ? ['-c', `${CODEX_EFFORT_KEY}=${effectiveEffort}`]
@@ -619,6 +623,13 @@ export function isOpencodeCommand(command) {
 export const OPENCODE_PUBLIC_REVIEW_AGENT = 'plan';
 
 /**
+ * OpenCode's built-in tool-enabled agent — the one an attachable Stage 3
+ * session runs as (`providerVendors.js`) and the one `hardenOpencodeConfigForNoTool`
+ * must still empty. Homed here for the same import-graph reason as above.
+ */
+export const OPENCODE_BUILD_AGENT = 'build';
+
+/**
  * OpenCode addresses models as `provider/model` (e.g. `ollama/qwen2.5:7b`). The
  * OpenCode Ollama provider declares its local daemon under the config-provider
  * key `ollama` (via OPENCODE_CONFIG_CONTENT), so the bare Ollama model id stored
@@ -633,7 +644,7 @@ export const OPENCODE_PUBLIC_REVIEW_AGENT = 'plan';
  * already-qualified id (`openai/gpt-4o`, `anthropic/claude-sonnet`), and blindly
  * prefixing `ollama/` would route it to the wrong backend. No-op for
  * non-local / non-OpenCode providers and empty models.
- * @param {{command?:string, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, orcarouterBacked?:boolean}} provider
+ * @param {{command?:string, ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, orcarouterBacked?:boolean}} provider
  * @param {string|null|undefined} model
  * @returns {string|null|undefined}
  */
@@ -660,11 +671,12 @@ export function prefixOpencodeModel(provider, model) {
  * opted into one. Structural markers avoid deriving a backend from an editable
  * display name or endpoint and preserve the legacy Ollama outcome if a malformed
  * record carries both markers.
- * @param {{ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean}|null|undefined} provider
- * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string|null}
+ * @param {{ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean}|null|undefined} provider
+ * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|string|null}
  */
 export function getOpencodeLocalProviderNamespace(provider) {
   if (provider?.ollamaBacked === true) return 'ollama';
+  if (provider?.lmstudioBacked === true) return 'lmstudio';
   if (provider?.mtplxBacked === true) return 'mtplx';
   if (provider?.llamaBacked === true) return 'llama';
   if (provider?.vllmBacked === true) return 'vllm';
@@ -689,11 +701,66 @@ export function getOpencodeLocalProviderNamespace(provider) {
  * it wraps.
  *
  * @param {object|null|undefined} provider
- * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|null}
+ * @returns {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|null}
  */
 export function localRuntimeNamespace(provider) {
   const namespace = getOpencodeLocalProviderNamespace(provider);
   return namespace && !isGatewayNamespace(namespace) ? namespace : null;
+}
+
+/**
+ * The Codex CLI's own `--local-provider` values, mapped from PortOS's
+ * local-runtime marker axis (`localRuntimeNamespace` in providerModels.js).
+ *
+ * Codex 0.153.0+ ships `--oss` / `--local-provider <lmstudio|ollama>`, so
+ * running the Codex harness on a local model is a pair of flags rather than a
+ * rewrite of the user's `~/.codex/config.toml` — the flags are per-invocation
+ * and leave every other `codex` run on the machine untouched.
+ *
+ * Deliberately a TABLE, not a passthrough: PortOS's marker axis carries five
+ * local runtimes (ollama / mtplx / llama / vllm / sglang) and Codex serves two
+ * of them by name. Forwarding an unmapped namespace would hand codex a value it
+ * rejects, and forwarding nothing would silently run the record against the
+ * OpenAI cloud — which is why `codexUnsupportedLocalRuntime` below exists.
+ *
+ * Both of Codex's values are mapped: `lmstudio` joined the axis with the
+ * `lmstudioBacked` marker (#6309). The remaining three (mtplx / vllm / sglang)
+ * have no Codex spelling at all, which is what `codexUnsupportedLocalRuntime`
+ * below is for.
+ */
+export const CODEX_OSS_LOCAL_PROVIDERS = Object.freeze({ ollama: 'ollama', lmstudio: 'lmstudio' });
+
+/**
+ * The first Codex CLI release that ships `--oss` / `--local-provider`. Used
+ * only to NAME the requirement in a prerequisite finding — the gate itself is a
+ * `codex exec --help` flag probe (`services/codexOssSupport.js`), because a
+ * version string is a proxy for the contract and the help text IS the contract.
+ */
+export const CODEX_OSS_MIN_VERSION = '0.153.0';
+
+/**
+ * The `--local-provider` value for `provider`, or `null` when this record is not
+ * backed by a local runtime Codex can serve.
+ * @param {object|null|undefined} provider
+ * @returns {string|null}
+ */
+export function codexOssLocalProvider(provider) {
+  const namespace = localRuntimeNamespace(provider);
+  return (namespace && CODEX_OSS_LOCAL_PROVIDERS[namespace]) || null;
+}
+
+/**
+ * The local runtime this codex record is marked with but Codex cannot serve
+ * (`vllm`, `sglang`, …), or `null`. A definite negative: the marker is on the
+ * record, and no credential or config makes `--local-provider vllm` exist. The
+ * prerequisite layer turns it into a finding rather than letting the row spawn
+ * against the OpenAI cloud while the card claims it is local.
+ * @param {object|null|undefined} provider
+ * @returns {string|null}
+ */
+export function codexUnsupportedLocalRuntime(provider) {
+  const namespace = localRuntimeNamespace(provider);
+  return namespace && !CODEX_OSS_LOCAL_PROVIDERS[namespace] ? namespace : null;
 }
 
 /**

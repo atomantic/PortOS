@@ -16,9 +16,9 @@
  */
 
 import { join, basename } from 'path';
-import { copyFile, readFile, writeFile, stat } from 'fs/promises';
+import { readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { PATHS, ensureDir, atomicWrite, readJSONFile, sha256File } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, atomicWrite, readJSONFile, sha256File, copyFileGuarded } from '../../lib/fileUtils.js';
 import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, bucketBlobIndexPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
@@ -148,12 +148,12 @@ async function copyAssetIfPresent(filename, kind, bucketPath, cache) {
     if (cache) cache[cacheKey] = hash;
   }
   const blobPath = bucketBlobPath(bucketPath, hash);
-  if (!existsSync(blobPath)) await copyFile(sourcePath, blobPath);
+  if (!existsSync(blobPath)) await copyFileGuarded(sourcePath, blobPath);
   if (kind === 'image') {
     const sidecarSource = join(sourceDir, imageSidecarName(base));
     if (existsSync(sidecarSource)) {
       const sidecarTarget = bucketBlobSidecarPath(bucketPath, hash);
-      if (!existsSync(sidecarTarget)) await copyFile(sidecarSource, sidecarTarget);
+      if (!existsSync(sidecarTarget)) await copyFileGuarded(sidecarSource, sidecarTarget);
     }
   }
   return { kind, ref: base, hash };

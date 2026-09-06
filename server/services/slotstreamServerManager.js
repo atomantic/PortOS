@@ -167,6 +167,7 @@ export async function getSlotstreamServerStatus() {
     supported,
     unsupportedReason: supported ? null : SLOTSTREAM_UNSUPPORTED_REASON,
     idleMinutes: await configuredIdleMinutes(),
+    keepLoaded: await configuredKeepLoaded(),
     launch: saved,
     memoryPlan,
     cachedModels: (cache.models || []).map((m) => m?.id).filter(Boolean),
@@ -405,9 +406,11 @@ export function _resetSlotstreamServerStateForTests({
   relaunchReadyTimeout,
   relaunchPoll,
   idleMinutes = 0,
+  keepLoaded = null,
   logFiles,
 } = {}) {
   idleMinutesOverride = idleMinutes;
+  keepLoadedOverride = keepLoaded;
   slotstreamLogFiles = logFiles ? {
     stdout: logFiles.stdout || DEFAULT_SLOTSTREAM_LOG_FILES.stdout,
     stderr: logFiles.stderr || DEFAULT_SLOTSTREAM_LOG_FILES.stderr,
@@ -421,8 +424,14 @@ export function _resetSlotstreamServerStateForTests({
   relaunchPollMs = Number.isFinite(relaunchPoll) ? relaunchPoll : 1000;
 }
 
+// Test hook for pinning
+export function _setSlotstreamKeepLoadedOverrideForTests(val) {
+  keepLoadedOverride = val;
+}
+
 const readSettings = () => import('./settings.js').then((m) => m.getSettings()).catch(() => null);
 let idleMinutesOverride = null;
+let keepLoadedOverride = null;
 
 async function configuredIdleMinutes() {
   if (idleMinutesOverride !== null) return idleMinutesOverride;
@@ -431,9 +440,17 @@ async function configuredIdleMinutes() {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
 }
 
+async function configuredKeepLoaded() {
+  if (keepLoadedOverride !== null) return keepLoadedOverride;
+  const settings = await readSettings();
+  return Boolean(settings?.localLlm?.slotstream?.keepLoaded ?? settings?.localLlm?.slotstream?.pinned);
+}
+
 registerIdleDaemon({
   name: SLOTSTREAM_APP,
   getIdleMs: async () => idleWindowMs(await configuredIdleMinutes()),
+  isPinned: async () => configuredKeepLoaded(),
+  isRunning: async () => Boolean((await getAppStatusStrict(SLOTSTREAM_APP))?.status === 'online'),
   stop: () => stopSlotstreamServer(),
 });
 

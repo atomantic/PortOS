@@ -1,4 +1,5 @@
-import RouteTabsHeader from '../ui/RouteTabsHeader';
+import { getSectionNavTabs } from '../../../../server/lib/navManifest.js';
+import SectionTabsHeader from '../ui/SectionTabsHeader';
 
 // Shared sub-nav for the top-level Models section.
 //
@@ -15,27 +16,14 @@ import RouteTabsHeader from '../ui/RouteTabsHeader';
 // Models is a gallery of generated meshes, and `/3d` is the render flow that
 // consumes the runtimes listed here.
 //
-// Playground keeps its own `/local-llm/playground` path — it predates this
-// section and the path is in ⌘K history — but it renders this header too, so
-// selecting it does not strand the user outside the tab bar.
+// Providers (`/ai`), Usage (`/devtools/usage`) and Playground
+// (`/local-llm/playground`) keep their legacy paths, but render this header too,
+// so selecting any Models destination does not strand the user outside the tab bar.
 //
-// Keep this list alphabetical by label, matching the sidebar convention.
-// RouteTabsHeader collapses a list this long to a `<select>` under `sm` on its
-// own — no per-section flag to remember.
-export const TABS = [
-  { id: '3d', label: '3D', to: '/models/3d' },
-  { id: 'code-reviewers', label: 'Code Reviewers', to: '/models/code-reviewers' },
-  { id: 'embeddings', label: 'Embeddings', to: '/models/embeddings' },
-  { id: 'harnesses', label: 'Harnesses', to: '/models/harnesses' },
-  { id: 'llms', label: 'LLMs', to: '/models/llms' },
-  { id: 'loras', label: 'LoRAs', to: '/models/loras' },
-  { id: 'media', label: 'Media', to: '/models/media' },
-  { id: 'performance', label: 'Performance', to: '/models/performance' },
-  { id: 'playground', label: 'Playground', to: '/local-llm/playground' },
-  { id: 'status', label: 'Status', to: '/models/status' },
-  { id: 'training', label: 'Training', to: '/models/training' },
-];
+// The manifest owns this list. Keep the export for page tests and callers that
+// need to enumerate the section, but never hand-maintain a second route list.
+export const TABS = getSectionNavTabs('Models');
 
 export default function ModelsTabsHeader({ activeTab }) {
-  return <RouteTabsHeader tabs={TABS} activeTab={activeTab} ariaLabel="Models sections" />;
+  return <SectionTabsHeader activeTab={activeTab} fallbackSection="Models" />;
 }

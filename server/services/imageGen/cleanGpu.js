@@ -78,10 +78,9 @@ export async function enqueueGpuClean({
   const initName = `init-${randomUUID()}.png`;
   const initAbsPath = join(PATHS.imageCleanTmp, initName);
   // Normalize to PNG so the runner's init-image decode is stable regardless of
-  // the source format, then write the raw bytes (atomicWrite is JSON-only).
+  // the source format, then write the raw bytes.
   const initPng = await sharp(initBuffer).png().toBuffer();
-  const { writeFile } = await import('node:fs/promises');
-  await writeFile(initAbsPath, initPng);
+  await atomicWrite(initAbsPath, initPng);
 
   // Conservative default for an arbitrary upload (no SynthID-bearing lineage
   // to key on) — mirrors the lightbox's resolveRegenStrengthDefault({}).
@@ -116,8 +115,8 @@ export async function enqueueGpuClean({
   // means the composite is skipped, never a failed enqueue.
   let hasMask = false;
   if (Buffer.isBuffer(originalBuffer) && Buffer.isBuffer(maskBuffer)) {
-    await writeFile(join(PATHS.imageCleanTmp, `${jobId}-original.png`), originalBuffer).catch(() => {});
-    await writeFile(join(PATHS.imageCleanTmp, `${jobId}-mask.png`), maskBuffer).catch(() => {});
+    await atomicWrite(join(PATHS.imageCleanTmp, `${jobId}-original.png`), originalBuffer).catch(() => {});
+    await atomicWrite(join(PATHS.imageCleanTmp, `${jobId}-mask.png`), maskBuffer).catch(() => {});
     hasMask = true;
   }
   await atomicWrite(cleanMetaPath(jobId), { hasMask, feather, initName }).catch(() => {});

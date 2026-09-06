@@ -6,7 +6,7 @@
  * only when the operator installed it on Models → LLMs → Abuse Guard — the
  * pinned Prompt Guard classifier in a dedicated offline Python environment. The
  * classifier receives no tools, agent prompt, repository checkout,
- * credentials, or network access.
+ * credentials, or network requests. Offline library flags are not an OS sandbox.
  */
 
 import { existsSync } from 'node:fs';
@@ -31,6 +31,7 @@ import {
   MODEL_ABUSE_GUARD_MAX_OUTPUT_CHARS,
   MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE,
   MODEL_ABUSE_GUARD_PYTHON_IMPORTS,
+  MODEL_ABUSE_GUARD_PYTHON_PACKAGES,
   MODEL_ABUSE_GUARD_REQUIRED_FILES,
   MODEL_ABUSE_GUARD_TIMEOUT_MS,
   detectDeterministicModelAbuseSignals,
@@ -41,7 +42,7 @@ import {
   normalizeLinkedIssues,
   normalizeModelAbuseGuardResult,
 } from '../lib/modelAbuseGuard.js';
-import { findCachedRepoFiles } from '../lib/hfCache.js';
+import { findCachedRepoFiles, getHfCacheRoot } from '../lib/hfCache.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { publicReviewProviderBlock, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
@@ -66,7 +67,6 @@ const FALLBACK_GUARD_PYTHON = IS_WIN
   : join(homedir(), '.portos', 'venv-prompt-guard', 'bin', 'python3');
 const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'run_prompt_guard.py');
 const RUNTIME_PROBE_TIMEOUT_MS = 30_000;
-const STDERR_TAIL_CHARS = 2_000;
 const MAX_SCAN_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_INSTALL_EVENT_CHARS = 300;
 const MAX_PUBLIC_REVIEW_SNAPSHOT_CHARS = MODEL_ABUSE_GUARD_MAX_INPUT_CHARS * 3;
@@ -74,6 +74,7 @@ const PUBLIC_REVIEW_INPUT_DIR = join(PATHS.cos, 'public-review-inputs');
 export const PUBLIC_REVIEW_PATCH_MANIFEST_FILENAME = 'PORTOS_PUBLIC_REVIEW_PATCHES.json';
 
 let cachedRuntime = null;
+let selfTestFailed = false;
 let installInFlight = null;
 let installKill = null;
 
@@ -327,20 +328,28 @@ function probeScript() {
   const imports = MODEL_ABUSE_GUARD_PYTHON_IMPORTS
     .map((name) => `import ${name}`)
     .join('; ');
-  return `${imports}; print('{"ready":true}')`;
+  const expected = Object.fromEntries(MODEL_ABUSE_GUARD_PYTHON_PACKAGES.map(spec => spec.split('==')));
+  return `${imports}; import importlib.metadata as metadata; expected = ${JSON.stringify(expected)}; ready = all(metadata.version(name).split('+')[0] == version for name, version in expected.items()); print('{"ready":true}' if ready else '{"ready":false}')`;
 }
 
-// A benign sentence the helper must classify end to end before the guard
-// reports ready. Importing the packages proves the venv, not the classifier:
+async function isBasePythonSupported(pythonPath) {
+  if (!pythonPath) return false;
+  return execFileAsync(pythonPath, ['-c', 'import sys; print("supported" if sys.version_info >= (3, 10) else "unsupported")'],
+    safeChildProcessOptions({ env: buildModelAbuseGuardEnv(), timeout: 5_000, maxBuffer: 1000 }))
+    .then(({ stdout }) => stdout.trim() === 'supported').catch(() => false);
+}
+
+// A benign sentence the helper must classify end to end before the installer
+// reports success. Importing packages proves prerequisites, not classification:
 // a helper that loads the model and then dies on the first window (the
 // unbatched-tensor bug that failed every Stage 1 scan on transformers 4.57)
 // passed the import probe and only surfaced as a bare
 // `security-guard-process-failed` at scan time.
 const RUNTIME_CANARY_TEXT = 'The quick brown fox jumps over the lazy dog.';
 
-async function isRuntimeReady(pythonPath, modelDir = null) {
+async function isRuntimeReady(pythonPath) {
   if (!pythonPath) return false;
-  if (cachedRuntime?.pythonPath === pythonPath && cachedRuntime.modelDir === modelDir && cachedRuntime.ready === true) return true;
+  if (cachedRuntime?.pythonPath === pythonPath && Date.now() - cachedRuntime.checkedAt < 60_000) return true;
   const importsReady = await execFileAsync(
     pythonPath,
     ['-c', probeScript()],
@@ -351,9 +360,8 @@ async function isRuntimeReady(pythonPath, modelDir = null) {
     }),
   ).then(({ stdout }) => stdout.trim().split(/\r?\n/).pop() === '{"ready":true}')
     .catch(() => false);
-  const ready = importsReady && (!modelDir || await canaryPasses(pythonPath, modelDir));
-  if (ready) cachedRuntime = { pythonPath, modelDir, ready: true };
-  return ready;
+  if (importsReady) cachedRuntime = { pythonPath, checkedAt: Date.now() };
+  return importsReady;
 }
 
 async function canaryPasses(pythonPath, modelDir) {
@@ -378,15 +386,21 @@ export async function getModelAbuseGuardStatus() {
   ]);
   const modelCached = Array.isArray(files);
   const venvReady = Boolean(pythonPath);
-  const pythonAvailable = Boolean(detectVenvBasePythonSync());
-  const runtimeReady = await isRuntimeReady(pythonPath, modelCached && files[0] ? dirname(files[0]) : null);
-  const { stages, ready } = modelAbuseGuardStageReadiness({
+  const pythonAvailable = await isBasePythonSupported(detectVenvBasePythonSync());
+  // Status is observational: importing packages is permitted, inference and
+  // downloads run only from an explicit install or a requested content scan.
+  const runtimeReady = await isRuntimeReady(pythonPath);
+  const { stages, ready: prerequisitesReady } = modelAbuseGuardStageReadiness({
     huggingfaceTokenPresent,
     pythonAvailable,
     venvReady,
     runtimeReady,
     modelCached,
   });
+  const ready = prerequisitesReady && !selfTestFailed;
+  const installationPresent = modelCached || venvReady || existsSync(GUARD_VENV_DIR)
+    || existsSync(dirname(dirname(FALLBACK_GUARD_PYTHON)))
+    || existsSync(join(getHfCacheRoot(), `models--${MODEL_ABUSE_GUARD.repository.replaceAll('/', '--')}`));
   return {
     ...MODEL_ABUSE_GUARD,
     modelCached,
@@ -395,6 +409,11 @@ export async function getModelAbuseGuardStatus() {
     venvReady,
     stages,
     ready,
+    selfTestFailed,
+    setupState: ready ? 'ready' : installationPresent ? 'incomplete' : 'not-installed',
+    classifierMode: 'required',
+    minBenignScore: MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE,
+    maxInputChars: MODEL_ABUSE_GUARD_MAX_INPUT_CHARS,
   };
 }
 
@@ -412,14 +431,16 @@ export function installModelAbuseGuard({ onEvent } = {}) {
     // only after setup has changed the install.
     if (!(await getHfToken())) return failure('security-guard-huggingface-token-required');
     const basePython = detectVenvBasePythonSync();
-    if (!basePython) return failure('security-guard-python-unavailable');
+    if (!await isBasePythonSupported(basePython)) return failure('security-guard-python-unavailable');
     await ensureDir(dirname(GUARD_VENV_DIR));
     emitInstall(onEvent, 'stage', 'Preparing the dedicated Prompt Guard runtime…', 'venv');
-    const pythonPath = await createVenv(basePython, GUARD_VENV_DIR);
+    const clear = existsSync(GUARD_PYTHON) && !await isBasePythonSupported(GUARD_PYTHON);
+    const pythonPath = await createVenv(basePython, GUARD_VENV_DIR, { clear });
     cachedRuntime = null;
+    selfTestFailed = false;
 
     emitInstall(onEvent, 'stage', 'Installing the fixed classifier runtime packages…', 'packages');
-    const packageRun = installPackages(pythonPath, [...MODEL_ABUSE_GUARD_PYTHON_IMPORTS], ({ type, message }) => {
+    const packageRun = installPackages(pythonPath, [...MODEL_ABUSE_GUARD_PYTHON_PACKAGES], ({ type, message }) => {
       if (type === 'complete') emitInstall(onEvent, 'stage', 'Classifier runtime packages are ready.', 'packages');
       else if (type === 'error') emitInstall(onEvent, 'error', 'Classifier runtime package installation failed.', 'packages');
       else if (message && /install|uninstall/i.test(message)) emitInstall(onEvent, 'stage', 'Installing classifier runtime packages…', 'packages');
@@ -450,6 +471,12 @@ export function installModelAbuseGuard({ onEvent } = {}) {
 
     const status = await getModelAbuseGuardStatus();
     if (!status.ready) return failure('security-guard-install-incomplete');
+    const files = await findCachedRepoFiles(MODEL_ABUSE_GUARD.repository, MODEL_ABUSE_GUARD_REQUIRED_FILES, { revision: MODEL_ABUSE_GUARD.revision });
+    if (!files?.[0] || !await canaryPasses(pythonPath, dirname(files[0]))) {
+      cachedRuntime = null;
+      selfTestFailed = true;
+      return failure('security-guard-self-test-failed');
+    }
     emitInstall(onEvent, 'complete', 'Prompt Guard is ready for model-abuse screening.');
     return { ok: true, ...status };
   })()
@@ -468,7 +495,6 @@ export function cancelModelAbuseGuardInstall() {
 function runClassifier({ pythonPath, modelDir, content, timeoutMs }) {
   return new Promise((resolve) => {
     let stdout = '';
-    let stderr = '';
     let stderrSize = 0;
     let settled = false;
     let timer = null;
@@ -476,8 +502,8 @@ function runClassifier({ pythonPath, modelDir, content, timeoutMs }) {
       pythonPath,
       [HELPER_SCRIPT, '--model-dir', modelDir],
       safeChildProcessOptions({
-        cwd: PATHS.root,
-        env: withSpawnCwdEnv(buildModelAbuseGuardEnv(), PATHS.root),
+        cwd: dirname(pythonPath),
+        env: withSpawnCwdEnv(buildModelAbuseGuardEnv(), dirname(pythonPath)),
         stdio: ['pipe', 'pipe', 'pipe'],
       }),
     );
@@ -497,9 +523,8 @@ function runClassifier({ pythonPath, modelDir, content, timeoutMs }) {
     proc.stdout.on('data', appendStdout);
     proc.stderr.on('data', (chunk) => {
       stderrSize += chunk.length;
-      // Keep only a bounded tail: the helper never echoes its input, and the
-      // last line is the `Prompt Guard failed: <reason>` the operator needs.
-      stderr = (stderr + chunk.toString()).slice(-STDERR_TAIL_CHARS);
+      // Dependency exceptions may contain source text or private local paths.
+      // Count their output for bounds, but never retain or log it.
       if (stderrSize > MODEL_ABUSE_GUARD_MAX_OUTPUT_CHARS) {
         proc.kill('SIGTERM');
         finish({ ok: false, code: 'security-guard-output-too-large' });
@@ -510,8 +535,7 @@ function runClassifier({ pythonPath, modelDir, content, timeoutMs }) {
     proc.on('close', (code) => {
       if (settled) return;
       if (code !== 0) {
-        const reason = stderr.trim().split('\n').filter(Boolean).pop() || 'no stderr';
-        console.error(`❌ Prompt Guard helper exited with code ${code}: ${reason.slice(0, 300)}`);
+        console.error(`❌ Prompt Guard helper exited with code ${code}`);
         finish({ ok: false, code: 'security-guard-process-failed' });
         return;
       }
@@ -550,7 +574,16 @@ const deterministicVerdict = (findings, classifier) => ({
  * persist in a report or pass as metadata: it contains no source text and no
  * raw subprocess/model response.
  */
-export async function runModelAbuseScan({ content, timeoutMs = MODEL_ABUSE_GUARD_TIMEOUT_MS } = {}) {
+export async function runModelAbuseScan({
+  content,
+  timeoutMs = MODEL_ABUSE_GUARD_TIMEOUT_MS,
+  classifierMode = 'required',
+  minBenignScore = MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE,
+} = {}) {
+  if (!['required', 'optional'].includes(classifierMode)
+    || !Number.isFinite(minBenignScore) || minBenignScore < MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE || minBenignScore > 1) {
+    return failure('security-guard-policy-invalid');
+  }
   if (typeof content !== 'string' || !content.trim()) return failure('security-guard-empty-input');
   if (content.length > MODEL_ABUSE_GUARD_MAX_INPUT_CHARS) return failure('security-guard-input-too-large');
 
@@ -559,13 +592,15 @@ export async function runModelAbuseScan({ content, timeoutMs = MODEL_ABUSE_GUARD
     return deterministicVerdict(deterministicFindings, 'not-run');
   }
 
-  // The classifier is an OPTIONAL second layer, managed on Models → LLMs →
-  // Abuse Guard. The deterministic checks above are the boundary Stage 1
-  // exists for (content hidden from a human reader, obvious model-directed
-  // harm); an install that never provisioned the gated Prompt Guard weights
-  // still gets that boundary instead of a scan that can never complete.
+  // Only an explicit policy can omit a never-installed classifier. A broken
+  // or partial installation is never silently downgraded to fewer layers.
   const status = await getModelAbuseGuardStatus();
-  if (!status.ready) return deterministicVerdict([], 'not-installed');
+  if (!status.ready) {
+    if (classifierMode === 'optional' && status.setupState === 'not-installed') return deterministicVerdict([], 'not-installed');
+    return failure('security-guard-not-ready', {
+      layers: { deterministic: 'passed', classifier: status.setupState, verdict: 'blocked' },
+    });
+  }
   const modelFiles = await findCachedRepoFiles(
     MODEL_ABUSE_GUARD.repository,
     MODEL_ABUSE_GUARD_REQUIRED_FILES,
@@ -586,7 +621,7 @@ export async function runModelAbuseScan({ content, timeoutMs = MODEL_ABUSE_GUARD
     revision: MODEL_ABUSE_GUARD.revision,
   });
   const verdict = normalizeModelAbuseGuardResult(processResult.parsed, {
-    minBenignScore: MODEL_ABUSE_GUARD_MIN_BENIGN_SCORE,
+    minBenignScore,
   });
   if (!verdict.ok) return failure(verdict.code, {
     guardId: MODEL_ABUSE_GUARD_ID,

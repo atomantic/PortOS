@@ -27,8 +27,7 @@
  */
 
 import { join } from 'path';
-import { copyFile } from 'fs/promises';
-import { PATHS, pathExists } from '../../lib/fileUtils.js';
+import { PATHS, pathExists, copyFileGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getVideoModels, requiredModelCacheGroups } from '../../lib/mediaModels.js';
 import { inspectModelCache, findCachedRepoFiles } from '../../lib/hfCache.js';
@@ -380,7 +379,7 @@ export async function collectLocalAnimationClip({ jobId, videoAbs, label }) {
     return false;
   }
   try {
-    await copyFile(renderedAbs, videoAbs);
+    await copyFileGuarded(renderedAbs, videoAbs);
     return true;
   } catch (err) {
     console.error(`❌ ${label} could not stage the local clip into its run: ${err?.message || err}`);

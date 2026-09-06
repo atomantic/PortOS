@@ -14,9 +14,8 @@
  * from here, so importing it back would close a load-order cycle.
  */
 
-import { rm } from 'fs/promises';
 import { existsSync } from 'fs';
-import { sha256File } from '../../lib/fileUtils.js';
+import { sha256File, rmGuarded } from '../../lib/fileUtils.js';
 import { deleteSyncBaseHash, withBaseHashFlushBatch } from '../../lib/conflictJournal.js';
 import { writersRoomStore } from './store.js';
 import {
@@ -68,7 +67,7 @@ export async function pruneTombstonedWorks(olderThanMs) {
   await withBaseHashFlushBatch(async () => {
     for (const id of ids) {
       if (typeof id !== 'string' || !WORK_ID_RE.test(id)) continue;
-      await rm(wrWorkDir(id), { recursive: true, force: true }).catch(() => {});
+      await rmGuarded(wrWorkDir(id), { recursive: true, force: true }).catch(() => {});
       await deleteSyncBaseHash(WRITERS_ROOM_WORK_KIND, id);
     }
   });

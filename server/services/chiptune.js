@@ -14,11 +14,11 @@
  *     repo owns its own git — we only write files.
  */
 
-import { unlink, stat } from 'fs/promises';
-import { join, resolve, isAbsolute } from 'path';
+import { stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
+import { join, resolve, isAbsolute } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { PATHS, atomicWrite, isPathInsideDir } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite, isPathInsideDir, unlinkGuarded } from '../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../lib/ffmpeg.js';
 import { chiptuneScoreSchema, CHIPTUNE_LIMITS, CHIPTUNE_NOISE_PRESETS, scoreDurationSec } from '../lib/chiptuneScore.js';
 import { renderScoreToWav } from '../lib/chiptuneRender.js';
@@ -128,16 +128,16 @@ async function renderScoreToFile(score, dir, basename) {
     // WAV fallback: drop any stale <slug>.ogg from an earlier ffmpeg-equipped
     // publish, or a game still referencing it would play the old composition
     // while the score JSON says otherwise.
-    await unlink(oggPath).catch(() => {});
+    await unlinkGuarded(oggPath).catch(() => {});
     return `${basename}.wav`;
   }
   const result = await runFfmpegProcess({ bin, args: ['-y', '-i', wavPath, '-c:a', 'libvorbis', '-q:a', '5', oggPath] });
   if (!result.ok) {
     console.error(`❌ Chiptune OGG encode failed (keeping WAV): ${result.reason}`);
-    await unlink(oggPath).catch(() => {}); // stale or partial encode output
+    await unlinkGuarded(oggPath).catch(() => {}); // stale or partial encode output
     return `${basename}.wav`;
   }
-  await unlink(wavPath).catch(() => {});
+  await unlinkGuarded(wavPath).catch(() => {});
   return `${basename}.ogg`;
 }
 

@@ -4,11 +4,12 @@
 // Split out of validation.js (#5698), which re-exports this module so every
 // existing consumer's import specifier keeps working.
 //
-// Cycle rule: this module must import ONLY zod. Importing back from
-// validation.js would TDZ — ESM hoists its `export * from` line, so this file
-// evaluates before validation.js's body runs.
+// Cycle rule: only import zod or dependency-free leaf contracts. Importing
+// back from validation.js would TDZ — ESM hoists its `export * from` line,
+// so this file evaluates before validation.js's body runs.
 
 import { z } from 'zod';
+import { EIDOVERSE_LABEL_ALIAS_KEY } from './eidoverseWorldLabels.js';
 
 // Eidoverse identities are currently name-based when no archipelago session is
 // present. Keep the PortOS-side contract deliberately conservative: names and
@@ -188,6 +189,9 @@ const eidoverseAssetSlotsSchema = z.object({
   peer: eidoverseAssetSlotSchema,
   activity: eidoverseAssetSlotSchema,
   district: eidoverseAssetSlotSchema,
+  desk: eidoverseAssetSlotSchema.optional(),
+  barrel: eidoverseAssetSlotSchema.optional(),
+  tree: eidoverseAssetSlotSchema.optional(),
 }).strict();
 
 const eidoverseResolvedAssetsSchema = z.record(z.string().trim().min(1).max(40), eidoverseAssetPathSchema)
@@ -228,7 +232,7 @@ const eidoverseProjectionEnvironmentSchema = z.object({
 }).strict();
 
 const eidoverseProjectionRecipeV2Schema = z.object({
-  version: z.literal(2),
+  version: z.union([z.literal(2), z.literal(3)]),
   name: z.string().trim().min(1).max(80),
   maxEntities: z.number().int().min(1).max(48),
   includes: eidoverseProjectionIncludesSchema,
@@ -250,7 +254,7 @@ const eidoverseProjectionRecipeV2Schema = z.object({
     nodes: z.array(eidoverseVector3Schema).min(1).max(8),
   }).strict()).max(16),
   environment: eidoverseProjectionEnvironmentSchema,
-  assetRecipe: z.object({ version: z.literal(2), slots: eidoverseAssetSlotsSchema }).strict(),
+  assetRecipe: z.object({ version: z.union([z.literal(2), z.literal(3)]), slots: eidoverseAssetSlotsSchema }).strict(),
   assets: eidoverseResolvedAssetsSchema,
 }).strict();
 
@@ -294,6 +298,7 @@ export const eidoverseWorldConfigPatchSchema = z.object({
   assetOverrides: z.partialRecord(
     z.enum([
       'nexus', 'app', 'agent', 'task', 'goal', 'memory', 'storage', 'peer', 'activity', 'district',
+      'desk', 'barrel', 'tree',
       // V1 used resource-kind keys. Keep accepting them so an upgraded install
       // can round-trip its preserved custom paths while the V2 semantic slots
       // become the preferred editing surface.
@@ -301,6 +306,10 @@ export const eidoverseWorldConfigPatchSchema = z.object({
     ]),
     eidoverseModelAssetOverrideSchema,
   ).optional(),
+  labelAliases: z.record(
+    z.string().regex(EIDOVERSE_LABEL_ALIAS_KEY),
+    z.string().trim().min(1).max(72).regex(/^[^\u0000-\u001f\u007f]+$/),
+  ).refine((aliases) => Object.keys(aliases).length <= 128, 'at most 128 display aliases may be configured').optional(),
   refreshAssets: z.boolean().optional(),
   reset: z.object({
     scope: z.enum(['all', 'assets', 'district']),
@@ -310,4 +319,20 @@ export const eidoverseWorldConfigPatchSchema = z.object({
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['districtId'], message: 'districtId is required for a district reset' });
     }
   }).optional(),
+}).strict();
+
+
+const eidoverseTicketSchema = z.string().regex(/^[a-f0-9]{48}$/);
+export const eidoverseChatReadSchema = z.object({ after: z.number().int().min(-1).default(-1) }).strict();
+export const eidoverseTravelVisitSchema = z.object({ peerId: z.string().min(1).max(80).regex(/^[a-zA-Z0-9_-]+$/) }).strict();
+export const eidoverseVisitChatSchema = z.object({ visitId: eidoverseTicketSchema, after: z.number().int().min(-1).default(-1), text: z.string().trim().min(1).max(2000).optional() }).strict();
+export const eidoverseVisitLeaveSchema = z.object({ visitId: eidoverseTicketSchema }).strict();
+export const eidoverseGuestAdmissionSchema = z.object({ agent: z.boolean().default(false) }).strict();
+export const eidoverseGuestChatSchema = eidoverseVisitChatSchema.omit({ visitId: true }).extend({ sessionId: eidoverseTicketSchema });
+export const eidoverseGuestLeaveSchema = z.object({ sessionId: eidoverseTicketSchema }).strict();
+export const eidoverseChatResultSchema = z.object({
+  messages: z.array(z.object({
+    seq: z.number().int().min(0), actor: z.string().max(64), text: z.string().max(2000), textTruncated: z.boolean().optional(),
+  }).strict()).max(20),
+  cursor: z.number().int().min(-1), hasMore: z.boolean(), truncated: z.boolean(),
 }).strict();

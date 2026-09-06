@@ -52,6 +52,9 @@
   "fableloom-outline-episode": [
     "server/services/fableLoom/weave.js"
   ],
+  "fableloom-plan-shots": [
+    "server/services/fableLoom/shots.js"
+  ],
   "fableloom-play-turn": [
     "server/services/fableLoom/weave.js"
   ],
@@ -72,6 +75,9 @@
   ],
   "fableloom-review-series-teleplay": [
     "server/services/fableLoom/weave.js"
+  ],
+  "fableloom-review-shots": [
+    "server/services/fableLoom/shots.js"
   ],
   "fableloom-weave-episode": [
     "server/services/fableLoom/weave.js"

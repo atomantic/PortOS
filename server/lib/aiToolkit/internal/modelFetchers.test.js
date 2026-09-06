@@ -15,15 +15,22 @@ const SHIPPED = JSON.parse(readFileSync(resolve(__dirname, '../../../../data.ref
 // failure mode is silent in both directions (a button that 404s, or a feature
 // that vanishes with no error at all).
 const SHIPPED_REFRESHABLE = [
+  'pi-cli', 'pi-tui',
   'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
   'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
   'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',
+  'slotstream',
   'opencode-llama-tui',
   'opencode-mtplx', 'opencode-mtplx-tui', 'opencode-ollama', 'opencode-ollama-tui',
   'opencode-orcarouter', 'opencode-orcarouter-tui', 'orcarouter',
   // Every hosted gateway refreshes through the same sibling `/models` probe —
   // one MODEL_FETCHERS row covers all of them (internal/gateways.js).
   'opencode-openrouter', 'opencode-openrouter-tui', 'openrouter',
+  'codex', 'codex-tui',
+  // The local-backed Codex wrapper resolves through the OLLAMA row, not codex's:
+  // `ollamaBacked` sits in the first pass, and the tool-capable local catalog is
+  // exactly what its harness needs — the static OpenAI list would be wrong.
+  'codex-ollama',
   // OpenCode Zen's API record is an ordinary OpenAI-compatible endpoint, so it
   // refreshes through the same `/models` probe. Its CLI/TUI wrappers do NOT:
   // they carry no namespace marker at all, which is what makes OpenCode resolve
@@ -31,6 +38,10 @@ const SHIPPED_REFRESHABLE = [
   // that, and Models → Harnesses ("Refresh models") is where it comes from.
   'opencode-zen',
   'opencode-vllm', 'opencode-vllm-tui',
+  // LM Studio publishes its downloaded catalog on the same OpenAI-compatible
+  // `/v1/models` endpoint the bare `lmstudio` API record already refreshes from,
+  // so the `lmstudioBacked` wrappers refresh through it too.
+  'opencode-lmstudio', 'opencode-lmstudio-tui', 'codex-lmstudio',
   // SGLang publishes its served catalog through the same OpenAI-compatible
   // `/v1/models` contract as the vLLM pair, so its wrappers refresh too.
   'opencode-sglang', 'opencode-sglang-tui',
@@ -40,7 +51,7 @@ const SHIPPED_REFRESHABLE = [
   'claude-sglang', 'claude-sglang-tui',
 ];
 const SHIPPED_NOT_REFRESHABLE = [
-  'claude-code-tui', 'claude-code-tui-bedrock', 'codex', 'codex-tui',
+  'claude-code-tui', 'claude-code-tui-bedrock',
   'grok-cli', 'grok-tui', 'kimi-cli', 'kimi-tui',
   'opencode-zen-cli', 'opencode-zen-tui',
 ];
@@ -188,21 +199,32 @@ describe('resolveModelFetcher — the ordering the old chains encoded in prose',
     expect(resolveModelFetcher({ id: 'x', type: 'cli', command: 'cursor', name: 'Cursor' })).toBeNull();
   });
 
+  it('serves codex commands and names', () => {
+    expect(resolveModelFetcher({ id: 'codex', type: 'cli', command: 'codex', name: 'Codex CLI' }).fetch)
+      .toBe('_fetchCodexModels');
+    expect(resolveModelFetcher({ id: 'x', type: 'cli', command: '/opt/homebrew/bin/codex', name: 'Custom' }).fetch)
+      .toBe('_fetchCodexModels');
+    expect(resolveModelFetcher({ id: 'x', type: 'cli', command: 'weird', name: 'Codex Custom' }).fetch)
+      .toBe('_fetchCodexModels');
+  });
+
   it('returns null for a CLI no vendor claims — the caller throws its own 400', () => {
-    for (const command of ['codex', 'kimi', 'grok']) {
+    for (const command of ['kimi', 'grok']) {
       expect(resolveModelFetcher({ id: command, type: 'cli', command, name: `${command} CLI` })).toBeNull();
     }
   });
 });
 
 describe('resolveModelFetcher — the TUI arm never consults the display name', () => {
-  it('serves the three vendors whose --model applies to the interactive session', () => {
+  it('serves the vendors whose --model applies to the interactive session', () => {
     expect(resolveModelFetcher({ id: 'claude-ollama-tui', type: 'tui', ollamaBacked: true }).fetch)
       .toBe('_fetchOllamaToolCapableModels');
     expect(resolveModelFetcher({ id: 'x', type: 'tui', command: '/opt/bin/agy' }).fetch)
       .toBe('_fetchAntigravityModels');
     expect(resolveModelFetcher({ id: 'x', type: 'tui', command: 'cursor-agent' }).fetch)
       .toBe('_fetchCursorModels');
+    expect(resolveModelFetcher({ id: 'x', type: 'tui', command: 'codex' }).fetch)
+      .toBe('_fetchCodexModels');
   });
 
   it('serves an MTPLX-backed OpenCode TUI from its local endpoint', () => {
@@ -217,6 +239,8 @@ describe('resolveModelFetcher — the TUI arm never consults the display name', 
       .toBe('_fetchCursorModels');
     expect(resolveModelFetcher({ id: 'antigravity-tui', type: 'tui', command: '/opt/bin/agy-wrap' }).fetch)
       .toBe('_fetchAntigravityModels');
+    expect(resolveModelFetcher({ id: 'codex-tui', type: 'tui', command: '/opt/bin/codex-wrap' }).fetch)
+      .toBe('_fetchCodexModels');
     expect(resolveModelFetcher({ id: 'custom-tui', type: 'tui', command: '/opt/bin/cursor-wrap' })).toBeNull();
   });
 
@@ -241,7 +265,7 @@ describe('canRefreshModels', () => {
 
 describe('withRefreshCapability', () => {
   it('returns a copy — the caller\'s (possibly cached, about-to-be-saved) record is untouched', () => {
-    const provider = { id: 'codex', type: 'cli', command: 'codex', name: 'Codex CLI' };
+    const provider = { id: 'kimi-cli', type: 'cli', command: 'kimi', name: 'Kimi CLI' };
     const decorated = withRefreshCapability(provider);
     expect(decorated).not.toBe(provider);
     expect(decorated.canRefreshModels).toBe(false);
@@ -256,7 +280,7 @@ describe('withRefreshCapability', () => {
   it('decorates every entry of a list', () => {
     const list = withRefreshCapabilityList([
       { id: 'a', type: 'api' },
-      { id: 'b', type: 'cli', command: 'codex', name: 'Codex' },
+      { id: 'b', type: 'cli', command: 'kimi', name: 'Kimi CLI' },
     ]);
     expect(list.map((p) => p.canRefreshModels)).toEqual([true, false]);
   });

@@ -39,6 +39,36 @@ export const ORCHESTRATION_ROLES = Object.freeze(['architect', 'implementer', 'r
  */
 export const PRIMARY_ORCHESTRATION_ROLE = 'architect';
 
+/**
+ * Starter orchestration profiles shipped by default. Each configures distinct
+ * reasoning effort per role while leaving provider and model selection to the
+ * install/task defaults. User-defined profiles can override or extend these.
+ */
+export const BUILT_IN_ORCHESTRATION_PROFILES = Object.freeze([
+  Object.freeze({
+    id: 'heavy-planner',
+    name: 'Heavy Planning / Lean Execution',
+    description: 'High reasoning effort for the architect pass, standard effort for implementer and reviewer.',
+    profile: Object.freeze({
+      architect: Object.freeze({ effort: 'high' }),
+      implementer: Object.freeze({ effort: 'low' }),
+      reviewer: Object.freeze({ effort: 'medium' }),
+    }),
+    isBuiltin: true,
+  }),
+  Object.freeze({
+    id: 'max-deliberation',
+    name: 'Max Deliberation',
+    description: 'Maximum reasoning effort across all roles for complex architectural tasks.',
+    profile: Object.freeze({
+      architect: Object.freeze({ effort: 'max' }),
+      implementer: Object.freeze({ effort: 'high' }),
+      reviewer: Object.freeze({ effort: 'high' }),
+    }),
+    isBuiltin: true,
+  }),
+]);
+
 const MAX_PROVIDER_ID_LENGTH = 120;
 const MAX_MODEL_ID_LENGTH = 300;
 

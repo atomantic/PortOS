@@ -44,6 +44,11 @@ const JOB_RECORD_FILE = 'job.json';
 // built from a caller-supplied id.
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// A user cancel is recorded by `cancelFineTuningJob` and, when the abort reaches
+// the child before the caller returns, by the child's terminal handler. One
+// shape so whichever writes first leaves the same record.
+const CANCELLED_OUTCOME = Object.freeze({ status: 'cancelled', error: 'Cancelled by user' });
+
 const jobRecordPath = (profileId, jobId) =>
   join(profileArtifactDirectory(profileId), 'fine-tune', jobId, JOB_RECORD_FILE);
 
@@ -271,25 +276,31 @@ export async function startFineTuningJob({
     }
   });
 
-  child.on('close', (code) => {
+  // Only the FIRST terminal event may write the outcome. An aborted spawn fires
+  // BOTH — `error` with an AbortError, then `close(null, 'SIGTERM')` — and
+  // `cancelFineTuningJob` records 'cancelled' synchronously before either
+  // arrives, so an unguarded `error` handler lands a user cancel on disk (and in
+  // the next status poll) as 'failed'.
+  const settle = (outcome) => {
     if (jobState.status === 'running') {
-      if (code === 0) {
-        jobState.status = 'completed';
-        jobState.progress = 100;
-      } else {
-        jobState.status = abortController.signal.aborted ? 'cancelled' : 'failed';
-        jobState.error = abortController.signal.aborted ? 'Cancelled by user' : `Process exited with code ${code}`;
-      }
-      jobState.completedAt = new Date().toISOString();
+      Object.assign(jobState, outcome, { completedAt: new Date().toISOString() });
     }
     finalizeJob(jobState);
+  };
+
+  child.on('close', (code, signal) => {
+    if (code === 0) return settle({ status: 'completed', progress: 100 });
+    if (abortController.signal.aborted) return settle(CANCELLED_OUTCOME);
+    // A killed child reports a null code — an OOM reap during a long training
+    // run is the likely cause, so name the signal rather than "code null".
+    settle({
+      status: 'failed',
+      error: code === null ? `Process terminated by signal ${signal}` : `Process exited with code ${code}`,
+    });
   });
 
   child.on('error', (err) => {
-    jobState.status = 'failed';
-    jobState.error = err.message;
-    jobState.completedAt = new Date().toISOString();
-    finalizeJob(jobState);
+    settle(abortController.signal.aborted ? CANCELLED_OUTCOME : { status: 'failed', error: err.message });
   });
 
   return {
@@ -323,8 +334,7 @@ export function cancelFineTuningJob(jobId) {
   }
   if (job.status === 'running') {
     job.controller.abort();
-    job.status = 'cancelled';
-    job.completedAt = new Date().toISOString();
+    Object.assign(job, CANCELLED_OUTCOME, { completedAt: new Date().toISOString() });
   }
   return { ok: true, jobId, status: job.status };
 }

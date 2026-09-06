@@ -6,6 +6,7 @@
  * evaluating readiness gates, and verifying exact-input provenance.
  */
 
+import { analyzeEpisodeShots } from './fableLoomShots.js';
 import { computeGraphLayers } from './fableLoomGraph.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { validateAudioOccupancy } from './fableLoomPlayback.js';
@@ -578,7 +579,7 @@ export function buildEpisodeProductionPlan({
   for (const node of orderedNodes) {
     const depth = depthById.get(node.id) ?? 0;
     const preds = predecessorsByNodeId.get(node.id) || [];
-    const nodeBlockers = [];
+    const nodeBlockers = analyzeEpisodeShots({ nodes: [node] }).issues.map((issue) => issue.message);
     const visualCanon = node.visualCanon || null;
     const lockedCanon = isLockedCanon(node);
     const universeCharacters = Array.isArray(universe?.characters) ? universe.characters : [];

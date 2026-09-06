@@ -15,14 +15,27 @@ const applyTheme = (id) => {
   const theme = getTheme(id);
   const style = document.documentElement.style;
   const vars = { ...theme.colors, ...theme.tokens };
+  // A theme only declares the tokens it uses (the optional --port-fx-* effect
+  // tokens especially), and an inline property on <html> outlives a theme
+  // switch — so drop every --port-* the next theme does not declare, or Kestrel
+  // Neon's multiply-blend scanlines would still tint Classic Midnight after the
+  // user switched away. Read off the DOM rather than remembered, so it also
+  // clears what an earlier bundle left behind.
+  for (const prop of Array.from(style)) {
+    if (prop.startsWith('--port-') && !(prop in vars)) style.removeProperty(prop);
+  }
   for (const [prop, value] of Object.entries(vars)) {
     style.setProperty(prop, value);
   }
-  document.documentElement.dataset.portTheme = theme.id;
-  document.documentElement.dataset.portThemeFamily = theme.family;
-  document.documentElement.dataset.portThemeDensity = theme.density;
-  document.documentElement.dataset.portThemeMode = theme.mode;
-  document.documentElement.style.colorScheme = theme.colorScheme ?? 'dark';
+  const root = document.documentElement;
+  root.dataset.portTheme = theme.id;
+  root.dataset.portThemeFamily = theme.family;
+  root.dataset.portThemeDensity = theme.density;
+  root.dataset.portThemeMode = theme.mode;
+  // Space-separated so index.css can key on html[data-port-theme-effects~="x"].
+  if (theme.effects?.length) root.dataset.portThemeEffects = theme.effects.join(' ');
+  else delete root.dataset.portThemeEffects;
+  root.style.colorScheme = theme.colorScheme ?? 'dark';
   return theme.id;
 };
 

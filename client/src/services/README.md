@@ -52,6 +52,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiLogs.js` | PM2 system logs: fetch a process's recent log tail (process list comes from `apiCommands.getProcessesList`). |
 | `apiPorts.js` | Port scan/detect wrappers (no current UI callers; module kept for the catalog). |
 | `apiHarnesses.js` | Coding-agent harness (CLI/TUI) inventory for Models → Harnesses: installed vs latest version, the providers riding on each, and the model-catalog refresh. Install/update/remove is an SSE stream driven by `RuntimeInstallModal`, not a call here. |
+| `apiModelComparison.js` | Sourced model comparison catalog, provider discovery and validated observation import. |
 | `apiProviders.js` | AI provider configuration, plus provider-runtime (CLI) install readiness for the per-card Install buttons, and the Codex / ChatGPT-subscription account calls (`getCodexAccount`, `startCodexLogin`, `cancelCodexLogin`, `codexLogout`) — sign-in STATE only, never a token. |
 | `apiPrompts.js` | Prompt Manager: stage templates, variables, and job-skill templates (providers list reuses `apiProviders.getProviders`). |
 | `apiReferenceRepos.js` | Per-app reference-repo registry. |
@@ -107,6 +108,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiFableLoom.js` | FableLoom branching narratives — loom/episode/scene-node/transition CRUD, deterministic graph validation, AI authoring lanes, and the bounded editorial/playthrough autopilot lifecycle. |
 | `apiGames.js` | Game studio records, managed-app binding, reusable sprite/music bindings, deterministic asset-bundle compilation/integrity preflight, and AI feedback history. |
 | `apiMusicVideo.js` | Music Video projects + scene board + audio analysis. |
+| `apiContinuousVideo.js` | Continuous-video episode generation: client-side-callable lint preview of a scene draft, queue-episode submit, and the SSE progress-events URL. |
 | `apiSprites.js` | Sprite Manager records, asset library, production-set import (#2895), reference workflow: create/generate/lock (#2896), directional walk and per-track generation/approval, animation-type definition CRUD (#3153), trim/postprocess, and per-run source-frame listing for the Loop Trimmer's re-derive (#2980), and animation render-provider readiness (#4876). |
 | `apiShell.js` | Shell sessions over HTTP: hand a photo (plus a message) to the agent TUI running in a session. Keystrokes/output stay on the `shell:*` socket protocol. |
 | `apiThreejsModels.js` | Procedural Three.js model workspaces: gallery-image generation, refinement, source export, deletion, and the subject-family checklist options. |

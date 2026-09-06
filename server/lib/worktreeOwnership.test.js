@@ -43,6 +43,16 @@ describe('worktree ownership', () => {
     // A root that demands an agent id refuses the claim basename on that ground.
     expect(worktreeOwnershipReason({ path: claim, roots: [{ path: COS_ROOT, requireAgentId: true }] }))
       .toBe('worktree-missing-agent-id');
+    // …unless the caller opted into live-claim adoption, which lets a claim
+    // basename through the agent-id root gate so the claim test below it (not
+    // this one) decides the verdict.
+    expect(worktreeOwnershipReason({
+      path: claim, roots: [{ path: COS_ROOT, requireAgentId: true }], allowLiveClaim: true
+    })).toBeNull();
+    // A non-claim, non-agent basename still can't ride that carve-out through.
+    expect(worktreeOwnershipReason({
+      path: `${COS_ROOT}/next-issue-42`, roots: [{ path: COS_ROOT, requireAgentId: true }], allowLiveClaim: true
+    })).toBe('worktree-missing-agent-id');
   });
 
   it('fails closed when agent liveness is unknown and permits an explicitly non-agent root', () => {

@@ -39,6 +39,7 @@ import { normalizeDomainBudgets, remainingActionBudget } from '../lib/domainBudg
 import { mergePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { mergePersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { mergePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkingPresets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 // Dependency-free leaf holding the shared agent maps + the runner-mode flag,
@@ -246,6 +247,7 @@ export async function updateConfig(updates) {
     const priorPersistentMindCapabilities = current.persistentMindCapabilities;
     const priorPersistentMindProfile = current.persistentMindProfile;
     const priorPersistentMindPrompt = current.persistentMindPrompt;
+    const priorPersistentMindThinkingPresets = current.persistentMindThinkingPresets;
     const next = { ...current, ...updates };
     if (updates.domainAutonomy !== undefined) {
       next.domainAutonomy = normalizeDomainAutonomy({
@@ -275,6 +277,18 @@ export async function updateConfig(updates) {
         updates.persistentMindCapabilities,
       );
     }
+    if (updates.persistentMindThinkingPresets !== undefined) {
+      next.persistentMindThinkingPresets = mergePersistentMindThinkingPresets(
+        priorPersistentMindThinkingPresets,
+        updates.persistentMindThinkingPresets,
+      );
+    }
+    if (updates.persistentMindCapabilities?.thinkingPresetAllowlist !== undefined) {
+      const { approvePersistentMindThinkingPresets } = await import('./persistentMindThinkingRequests.js');
+      next.persistentMindCapabilities.thinkingPresetGrants = await approvePersistentMindThinkingPresets(
+        next, next.persistentMindCapabilities.thinkingPresetAllowlist,
+      );
+    }
     if (updates.persistentMindPrompt !== undefined) {
       next.persistentMindPrompt = mergePersistentMindPrompt(
         priorPersistentMindPrompt,
@@ -283,6 +297,10 @@ export async function updateConfig(updates) {
     }
     return saveConfig(next);
   });
+  if (updates.persistentMindCapabilities !== undefined || updates.persistentMindThinkingPresets !== undefined) {
+    const { cancelPersistentMindThinkingRequest } = await import('./persistentMindThinkingRequests.js');
+    await cancelPersistentMindThinkingRequest({ ifRevoked: true });
+  }
   const improveKeys = ['improvementEnabled', 'selfImprovementEnabled', 'appImprovementEnabled'];
   const improvePatch = Object.fromEntries(
     improveKeys.filter((key) => Object.prototype.hasOwnProperty.call(updates, key)).map((key) => [key, updates[key]]),

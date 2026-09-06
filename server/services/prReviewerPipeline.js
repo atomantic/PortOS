@@ -10,7 +10,7 @@
  */
 
 import { MODEL_ABUSE_GUARD_ID, isSha256Hex, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
-import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
 import { createPrReviewerDefaultStages } from './taskScheduleRegistry.js';
 import {
   isTaskOutputPayload as isIssueWatcherPayload,
@@ -40,9 +40,8 @@ function stageWithContract(stage, role) {
       guardId: MODEL_ABUSE_GUARD_ID,
     };
   }
-  const executionProfile = role === 'eligibility'
-    ? PUBLIC_REVIEW_GATE_EXECUTION_PROFILE
-    : PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE;
+  // Review yields a validated proposal. Screened code is never safe to execute.
+  const executionProfile = PUBLIC_REVIEW_GATE_EXECUTION_PROFILE;
   return {
     ...base,
     promptKey: role === 'eligibility' ? 'pr-reviewer-eligibility' : 'pr-reviewer-review',

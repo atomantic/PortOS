@@ -74,17 +74,16 @@ export const STAGE_EXECUTION_PROFILE_POSTURES = Object.freeze({
   'public-review-actions': PUBLIC_REVIEW_ACTIONS_POSTURE,
 });
 
-// Role fallback for a stage persisted before profiles were stored: the server
-// reasserts the profile on the next dispatch, but the picker has to gate
-// correctly on what is on disk right now.
+// PR roles override stored profiles, including legacy action stages. The server
+// reasserts a tool-free profile on dispatch; the picker must match before saving.
 const PR_REVIEWER_ROLE_POSTURES = Object.freeze({
   eligibility: PUBLIC_REVIEW_NO_TOOL_POSTURE,
-  actions: PUBLIC_REVIEW_ACTIONS_POSTURE,
+  actions: PUBLIC_REVIEW_NO_TOOL_POSTURE,
 });
 
 export function stagePublicReviewPosture(stage) {
-  return STAGE_EXECUTION_PROFILE_POSTURES[stage?.executionProfile]
-    || PR_REVIEWER_ROLE_POSTURES[prReviewerStageRole(stage)]
+  return PR_REVIEWER_ROLE_POSTURES[prReviewerStageRole(stage)]
+    || STAGE_EXECUTION_PROFILE_POSTURES[stage?.executionProfile]
     || null;
 }
 
@@ -92,7 +91,7 @@ export function stagePublicReviewPosture(stage) {
 // just a display label. The server sanitizes and reasserts the same contract;
 // this copy lets the schedule UI add it without manufacturing a weaker stage.
 export const PR_REVIEWER_ACTIONS_STAGE_DEFAULTS = Object.freeze({
-  name: 'Code Review & Actions',
+  name: 'Code Review & Validated Actions',
   role: 'actions',
   promptKey: 'pr-reviewer-review',
   readOnly: true,
@@ -103,7 +102,7 @@ export const PR_REVIEWER_ACTIONS_STAGE_DEFAULTS = Object.freeze({
   discardWorktree: true,
   noCodeOutput: true,
   managed: true,
-  executionProfile: 'public-review-actions',
+  executionProfile: 'public-review-gate',
 });
 
 export function togglePrReviewerActions(stages, enabled) {

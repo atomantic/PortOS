@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import useTheme from './useTheme.js';
-import { DEFAULT_THEME_ID, THEME_IDS } from '../themes/portosThemes.js';
+import { DEFAULT_THEME_ID, THEME_IDS, THEMES } from '../themes/portosThemes.js';
 
 // Pick any non-default valid theme to prove in-memory switching still works.
 const OTHER_THEME_ID = THEME_IDS.find((id) => id !== DEFAULT_THEME_ID);
@@ -15,8 +15,38 @@ afterEach(() => {
   vi.restoreAllMocks();
   document.documentElement.removeAttribute('style');
   document.documentElement.removeAttribute('data-port-theme');
+  document.documentElement.removeAttribute('data-port-theme-effects');
   window.localStorage.clear();
   window.history.replaceState({}, '', '/');
+});
+
+describe('useTheme applies the manifest to <html>', () => {
+  const withEffects = THEMES['kestrel-neon'];
+  const withoutEffects = THEMES[DEFAULT_THEME_ID];
+  // Declared only by the effects theme — it must not survive the switch.
+  const privateToken = '--port-fx-overlay-blend';
+
+  it('publishes the effects list and clears it again for a theme with none', () => {
+    const { result } = renderHook(() => useTheme());
+    act(() => result.current.setTheme(withEffects.id));
+    expect(document.documentElement.dataset.portThemeEffects).toBe(withEffects.effects.join(' '));
+
+    act(() => result.current.setTheme(withoutEffects.id));
+    expect(document.documentElement.dataset.portThemeEffects).toBeUndefined();
+  });
+
+  it('removes custom properties the next theme does not declare', () => {
+    expect(privateToken in withEffects.tokens).toBe(true);
+    expect(privateToken in withoutEffects.tokens).toBe(false);
+    const { result } = renderHook(() => useTheme());
+    act(() => result.current.setTheme(withEffects.id));
+    expect(document.documentElement.style.getPropertyValue(privateToken)).not.toBe('');
+
+    act(() => result.current.setTheme(withoutEffects.id));
+    expect(document.documentElement.style.getPropertyValue(privateToken)).toBe('');
+    expect(document.documentElement.style.getPropertyValue('--port-accent'))
+      .toBe(withoutEffects.colors['--port-accent']);
+  });
 });
 
 describe('useTheme localStorage resilience', () => {

@@ -20,11 +20,12 @@ import { resolveSpecModelPath } from './specDecodeModels.js';
 import { getModelsDir as getOllamaModelsDir } from './ollamaManager.js';
 import { getModelsDir as getLmStudioModelsDir } from './lmStudioManager.js';
 import { slotstreamCacheDir } from '../lib/slotstreamModels.js';
-// Side-effect import: constructing the module is what registers its download
+// Side-effect imports: constructing a module is what registers its download
 // slot with `isAnyDownloadInFlight`, and an unregistered slot's live shards are
 // unprotected from the sweep below. `orphanedPartialGc.test.js` fails if a
 // module calling `createDownloadSlot` stops being reachable from here.
 import './slotstreamModelManager.js';
+import './loras.js';
 import { createSweepScheduler } from './sweepScheduler.js';
 
 export { ORPHANED_PARTIAL_MAX_AGE_MS };
@@ -65,9 +66,7 @@ export async function sweepOrphanedDownloadPartials({
 } = {}) {
   const targets = dirs || await collectPartialSweepDirs();
   // One predicate for every runtime: each download slot registers itself, so a
-  // path that claims a slot is protected without a clause added here. (A path
-  // that claims none — `loras.js`, which writes into `PATHS.loras` above — is
-  // not; migrating it is issue #6190.)
+  // path that claims a slot is protected without a clause added here.
   return sweepOrphanedPartials(targets, { now, maxAgeMs, isProtected: isAnyDownloadInFlight });
 }
 

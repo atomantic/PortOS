@@ -52,6 +52,7 @@ describe('PostSessionResults drill breakdown', () => {
 
     expect(within(container.querySelector('table')).getAllByText('123')).not.toHaveLength(0);
     expect(container.querySelector('.lucide-chevron-up')).toBeInTheDocument();
+    expect(container.querySelector('.lg\\:col-span-2')).toBeInTheDocument();
   });
 
   it('leaves non-digit-span drills collapsed by default', () => {

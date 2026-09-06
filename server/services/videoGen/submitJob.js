@@ -19,6 +19,7 @@ import {
   fableLoomVideoCapabilities,
 } from '../fableLoom/visualConditioning.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import { VIDEO_GEN_MODE } from './modes.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import {
   cleanupMultipartTemp,
@@ -53,6 +54,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       ['IC-LoRA references', body.icReferenceVideoIds?.length || body.icReferenceImageFiles?.length],
       ['LoRA weights', body.loraFilenames?.length],
       ['chained chunks', body.chunks > 1],
+      ['warm render batches', body.batchSize > 1],
       ['the Grok backend', body.backend === 'grok'],
       ['a FableLoom scene tag', body.fableLoom],
       // Inspire is a per-runtime capability the caller cannot prove for a peer.
@@ -115,7 +117,11 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
   if (body.fableLoom) {
     const conditioningModel = backend === IMAGE_GEN_MODE.GROK
       ? { id: 'grok-video', supportedModes: ['image'] }
-      : prepared.effectiveModel;
+      : backend === VIDEO_GEN_MODE.FAL
+        ? { id: 'fal-video', supportedModes: ['text', 'image'] }
+        : backend === VIDEO_GEN_MODE.REACTOR
+          ? { id: 'reactor-video', supportedModes: ['text', 'image'] }
+          : prepared.effectiveModel;
     const compiled = await compileFableLoomVisualRequest({
       tag: body.fableLoom,
       kind: 'video',
@@ -189,6 +195,63 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     };
   }
 
+  if (backend === VIDEO_GEN_MODE.FAL) {
+    const { sourceImagePath, uploadedTempPath } = prepared;
+    const { jobId, position, status } = await enqueue({
+      mode: VIDEO_GEN_MODE.FAL,
+      videoMode: sourceImagePath ? 'image' : 'text',
+      modelId: body.falModelId,
+      aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
+      prompt: body.prompt,
+      negativePrompt: body.negativePrompt || '',
+      width: body.width,
+      height: body.height,
+      duration: body.falDuration,
+      sourceImagePath,
+      uploadedTempPath,
+      ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
+      ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
+      ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
+    });
+    return {
+      jobId,
+      generationId: jobId,
+      filename: `${jobId}.mp4`,
+      model: 'fal',
+      mode: 'fal',
+      status,
+      position,
+    };
+  }
+
+  if (backend === VIDEO_GEN_MODE.REACTOR) {
+    const { sourceImagePath, uploadedTempPath } = prepared;
+    const { jobId, position, status } = await enqueue({
+      mode: VIDEO_GEN_MODE.REACTOR,
+      videoMode: sourceImagePath ? 'image' : 'text',
+      prompt: body.prompt,
+      negativePrompt: body.negativePrompt || '',
+      continueFromClipId: body.reactorClipId,
+      seconds: body.reactorSeconds,
+      seed: body.reactorSeed,
+      aspect: body.reactorAspect,
+      sourceImagePath,
+      uploadedTempPath,
+      ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
+      ...(body.fableLoom ? { fableLoom: body.fableLoom } : {}),
+      ...(body.visualConditioning ? { visualConditioning: body.visualConditioning } : {}),
+    });
+    return {
+      jobId,
+      generationId: jobId,
+      filename: `${jobId}.mp4`,
+      model: 'reactor',
+      mode: 'reactor',
+      status,
+      position,
+    };
+  }
+
   const {
     pythonPath, effectiveModelId, effectiveNumFrames, mode,
     sourceImagePath, lastImagePath, audioFilePath, icReferencePaths,
@@ -211,6 +274,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     steps: body.steps,
     guidanceScale: body.guidanceScale,
     seed: body.seed,
+    ...(body.batchSize > 1 ? { batchSize: body.batchSize } : {}),
     tiling: body.tiling || 'auto',
     // Default-valued delivery controls stay absent from persisted params so a
     // resumed form cannot restore a knob that never changed the render.
@@ -218,6 +282,11 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     ...(isDefaultSpeedProfile(body.speedProfileId) ? {} : { speedProfileId: body.speedProfileId }),
     ...(isFullDecode(body.draftDecode) ? {} : { draftDecode: body.draftDecode }),
     disableAudio: body.disableAudio === true || body.disableAudio === 'true',
+    // Absent means "use the settings.videoGen.displaySleep default" — only
+    // forward it when the form actually sent an explicit choice.
+    ...(body.displaySleep !== undefined
+      ? { displaySleep: body.displaySleep === true || body.displaySleep === 'true' }
+      : {}),
     sourceImagePath,
     audioFilePath,
     audioStartSec: body.audioStartSec,

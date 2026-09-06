@@ -5,9 +5,16 @@ import {
   eidoverseResetAssetSlotsForDistrict,
 } from '../../client/src/lib/eidoverseWorldReset.js';
 import { EIDOVERSE_ASSET_SLOTS_BY_DISTRICT } from './eidoverseWorldDesign.js';
-import { EIDOVERSE_PROJECTION_KINDS } from '../services/eidoverseWorldProjection.js';
+import { COMPONENT_ROUTE_BY_KIND, EIDOVERSE_PROJECTION_KINDS } from '../services/eidoverseWorldProjection.js';
+import { EIDOVERSE_SOURCE_ROUTES } from '../../client/src/lib/eidoverseFrame.js';
 
-describe('Eidoverse reset client/server parity', () => {
+describe('Eidoverse client/server contract parity', () => {
+  it('allows every projected source route through the frame bridge', () => {
+    expect(EIDOVERSE_SOURCE_ROUTES).toEqual(Object.fromEntries(
+      EIDOVERSE_PROJECTION_KINDS.map(({ source, kind }) => [source, COMPONENT_ROUTE_BY_KIND[kind]]),
+    ));
+  });
+
   it('keeps district asset reset slots aligned with the server contract', () => {
     expect(EIDOVERSE_RESET_ASSET_SLOTS).toEqual(EIDOVERSE_ASSET_SLOTS_BY_DISTRICT);
   });

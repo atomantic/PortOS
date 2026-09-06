@@ -43,6 +43,19 @@ beforeEach(() => {
 });
 
 describe('resolveAgentProviderAndModel', () => {
+  it('blocks pre-upgrade issue-watcher prompts before selecting any agent provider', async () => {
+    expect(await resolveAgentProviderAndModel({ id: 'legacy', metadata: { analysisType: 'issue-watcher', provider: 'cli' } }))
+      .toMatchObject({ ok: false, permanent: true, error: expect.stringContaining('tool-free') });
+    expect(getActiveProvider).not.toHaveBeenCalled();
+    expect(getProviderById).not.toHaveBeenCalled();
+  });
+  it('blocks old trusted-maintenance tasks that predate author and discussion screening', async () => {
+    for (const analysisType of ['pr-watcher', 'issue-reconcile']) {
+      expect(await resolveAgentProviderAndModel({ id: 'legacy', metadata: { analysisType } })).toMatchObject({ ok: false, permanent: true });
+    }
+    expect(getActiveProvider).not.toHaveBeenCalled();
+  });
+
   it('fails when no active provider is configured', async () => {
     getActiveProvider.mockResolvedValue(null);
     const r = await resolveAgentProviderAndModel(TASK);
@@ -353,7 +366,7 @@ describe('resolveAgentProviderAndModel', () => {
 // exact failure this branch exists to prevent. These pin that the eligible set
 // comes from the install's own enabled providers instead.
 describe('resolveAgentProviderAndModel — public-review stages', () => {
-  const CODEX = { id: 'codex-cli', type: 'cli', command: 'codex' };
+  const CLAUDE = { id: 'claude-code', type: 'cli', command: 'claude' };
   const GROK = { id: 'grok-cli', type: 'cli', command: 'grok' };
   const OPENCODE = { id: 'opencode', type: 'cli', command: 'opencode' };
   const gateTask = (metadata = {}) => ({
@@ -369,10 +382,16 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     expect(getFallbackProvider).not.toHaveBeenCalled();
   });
 
+  it('blocks queued legacy PR review tasks before any unsafe provider selection', async () => {
+    const result = await resolveAgentProviderAndModel({ id: 'old-pr', metadata: { analysisType: 'pr-reviewer', executionProfile: 'public-review-actions' } });
+    expect(result).toMatchObject({ ok: false, permanent: true });
+    expect(getAllProviders).not.toHaveBeenCalled();
+  });
+
   it('ignores a stage pin that is not eligible for the posture', async () => {
-    getAllProviders.mockResolvedValue({ providers: [OPENCODE, CODEX], activeProvider: null });
+    getAllProviders.mockResolvedValue({ providers: [OPENCODE, CLAUDE], activeProvider: null });
     const r = await resolveAgentProviderAndModel(gateTask({ provider: 'opencode' }));
-    expect(r).toMatchObject({ ok: true, provider: { id: 'codex-cli' } });
+    expect(r).toMatchObject({ ok: true, provider: { id: 'claude-code' } });
   });
 
   // `selectModelForTask`'s real precedence: `task.metadata.model` wins outright
@@ -387,15 +406,15 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
 
   it('keeps a model pin only on the provider it was chosen for', async () => {
     useRealisticModelSelection();
-    getAllProviders.mockResolvedValue({ providers: [CODEX, GROK], activeProvider: null });
+    getAllProviders.mockResolvedValue({ providers: [CLAUDE, GROK], activeProvider: null });
     await expect(resolveAgentProviderAndModel(gateTask({ provider: 'grok-cli', model: 'grok-4' })))
       .resolves.toMatchObject({ provider: { id: 'grok-cli' }, selectedModel: 'grok-4' });
     // Pinned for a DIFFERENT provider — falls back to that provider's own model.
-    // The posture swap above landed on codex-cli, and grok's model id must not
+    // The posture swap above landed on claude-code, and grok's model id must not
     // ride along with it; leaving the pin on the task let `selectModelForTask`
     // hand it straight back, so the swap silently kept the foreign model.
     await expect(resolveAgentProviderAndModel(gateTask({ provider: 'opencode', model: 'grok-4' })))
-      .resolves.toMatchObject({ provider: { id: 'codex-cli' }, selectedModel: 'm-default' });
+      .resolves.toMatchObject({ provider: { id: 'claude-code' }, selectedModel: 'm-default' });
   });
 
   // A stage pin outlives edits to the provider's own model list: the live
@@ -460,7 +479,7 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     expect(r.error).toMatch(/no-tool/);
   });
 
-  it('runs the actions stage on any enabled binary provider but never on an api one', async () => {
+  it('requires a maintained actions recipe for binary providers and rejects API spawns', async () => {
     const OPENCODE = { id: 'opencode', type: 'cli', command: 'opencode' };
     getAllProviders.mockResolvedValue({ providers: [OPENCODE], activeProvider: { id: 'opencode' } });
     // opencode has no no-tool recipe, so the gate fails closed; the actions
@@ -468,7 +487,7 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     await expect(resolveAgentProviderAndModel({ id: 't', metadata: { executionProfile: 'public-review-gate' } }))
       .resolves.toMatchObject({ ok: false, permanent: true });
     await expect(resolveAgentProviderAndModel({ id: 't', metadata: { executionProfile: 'public-review-actions' } }))
-      .resolves.toMatchObject({ ok: true, provider: { id: 'opencode' } });
+      .resolves.toMatchObject({ ok: false, permanent: true });
 
     getAllProviders.mockResolvedValue({ providers: [{ id: 'ollama', type: 'api' }], activeProvider: { id: 'ollama' } });
     await expect(resolveAgentProviderAndModel({ id: 't', metadata: { executionProfile: 'public-review-actions' } }))

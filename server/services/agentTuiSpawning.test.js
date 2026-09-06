@@ -251,6 +251,8 @@ import {
   OOM_NUDGE_COOLDOWN_MS,
   OOM_NUDGE_MAX_ATTEMPTS,
   OOM_NUDGE_TEXT,
+  RETRY_STALL_MS,
+  TOOL_PERMISSION_NUDGE_TEXT,
 } from '../lib/tuiHandshake.js';
 // Real module, not a mock: the flag is a plain process-local boolean, so driving
 // it directly exercises the same code path production does.
@@ -1777,6 +1779,85 @@ describe('spawnTuiAgent runtime', () => {
         error: expect.stringContaining('GPU memory'),
       })
     );
+  });
+
+  // ── Retry stall: the provider keeps failing the same request ───────────────
+  // agent-e057cca7 (2026-09-04): a Stage 3 prefill the harness cancelled every
+  // ~6 minutes and re-sent verbatim. The screen repaints on every attempt, so
+  // every reaper saw a busy session and the run held its lane until the
+  // max-runtime ceiling.
+  it('fails over a session whose retry banner keeps advancing past the stall window', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    await driveAgyToSubmittedPrompt();
+
+    const retryCycleMs = RETRY_STALL_MS / 2 + 60_000;
+    for (const attempt of [1, 2]) {
+      await capturedOnData(Buffer.from(`API error · Retrying in 0s · attempt ${attempt}/10\n`));
+      await flushMicrotasks();
+      // The retried request is in flight: the title bar flickers, nothing else
+      // paints. Two attempts alone are not a verdict, however long they span.
+      await vi.advanceTimersByTimeAsync(retryCycleMs);
+      await flushMicrotasks();
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+    }
+
+    await capturedOnData(Buffer.from('API error · Retrying in 0s · attempt 3/10\n'));
+    await flushMicrotasks();
+    // Acted on by the 5s provider-signal poll, like the other gates.
+    await vi.advanceTimersByTimeAsync(5000);
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        completionReason: 'fallback-signal',
+        error: expect.stringContaining('retried it 3 times'),
+      })
+    );
+  });
+
+  // ── Tool-permission dialog: decline, then nudge ───────────────────────────
+  // agent-e057cca7 (2026-09-04): under the sandboxed acceptEdits recipe a local
+  // model asked to Read an absolute path outside the worktree, and the dialog
+  // sat unanswered for the rest of the run.
+  it('declines a tool-permission dialog and nudges the session once it goes quiet', async () => {
+    // A claude session: the dialog is Claude Code chrome, and the spawner only
+    // watches claude sessions for it.
+    runSpawn({ tuiConfig: claudeTuiConfig });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from(`${PASTE_OFF}Claude Code v2.1.260\n`));
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from(PASTE_ON));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(400);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+    await capturedOnData(Buffer.from('do the thing\n'));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(4000);
+    await flushMicrotasks();
+    vi.mocked(shellService.writeToSession).mockClear();
+    vi.mocked(shellService.pasteToSession).mockClear();
+
+    await capturedOnData(Buffer.from(' Read(/data.reference/providers.json) Doyouwanttoproceed? ❯1. Yes 2. Yes,allowreadingfrom/data.referenceduringthissession 3. No Esc to cancel · Tab to amend '));
+    await flushMicrotasks();
+    // Option 1 is highlighted; "No" is option 3: down, down, Enter.
+    expect(shellService.writeToSession).toHaveBeenCalledWith(SESSION_ID, '\x1b[B\x1b[B\r');
+
+    // The decline ends the turn; once the session is quiet the nudge goes out.
+    await vi.advanceTimersByTimeAsync(OOM_NUDGE_SETTLE_MS + 10000);
+    await flushMicrotasks();
+    expect(shellService.pasteToSession).toHaveBeenCalledWith(
+      SESSION_ID,
+      TOOL_PERMISSION_NUDGE_TEXT,
+      expect.objectContaining({ label: expect.stringContaining('permission') }),
+    );
+    expect(shellService.pasteToSession).toHaveBeenCalledTimes(1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
   });
 
   // ── 1b. Submit-Enter retries ─────────────────────────────────────────────────

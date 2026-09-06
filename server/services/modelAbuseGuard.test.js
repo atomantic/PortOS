@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
 
 const listModels = vi.fn();
 const getModelCapabilities = vi.fn();
@@ -8,7 +9,9 @@ vi.mock('./localLlm.js', () => ({ listModels }));
 vi.mock('./ollamaManager.js', () => ({ getModelCapabilities }));
 vi.mock('./hfToken.js', () => ({ getHfToken }));
 // No cached Prompt Guard weights → the classifier layer is "not installed".
-vi.mock('../lib/hfCache.js', () => ({ findCachedRepoFiles: vi.fn().mockResolvedValue(null) }));
+vi.mock('../lib/hfCache.js', () => ({ findCachedRepoFiles: vi.fn().mockResolvedValue(null), getHfCacheRoot: () => '/nonexistent/example-hf-cache' }));
+vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal(), existsSync: vi.fn().mockReturnValue(false) }));
+vi.mock('../lib/pythonSetup.js', () => ({ detectVenvBasePythonSync: vi.fn().mockReturnValue(null), createVenv: vi.fn(), installPackages: vi.fn() }));
 
 const {
   DETERMINISTIC_ONLY_GUARD_MODEL,
@@ -21,10 +24,30 @@ const {
 describe('runModelAbuseScan without the optional classifier installed', () => {
   beforeEach(() => {
     getHfToken.mockResolvedValue(null);
+    existsSync.mockReturnValue(false);
   });
 
-  it('passes clean content on the deterministic layer alone and says the classifier did not run', async () => {
-    await expect(runModelAbuseScan({ content: 'docs: fix a typo in the socket-ui skill' })).resolves.toMatchObject({
+  it('blocks missing setup by default and refuses malformed or weakened policy', async () => {
+    await expect(runModelAbuseScan({ content: 'Fix the import dialog.' })).resolves.toMatchObject({
+      ok: false, passed: false, code: 'security-guard-not-ready',
+    });
+    for (const policy of [{ classifierMode: 'disabled' }, { minBenignScore: 0.5 }, { minBenignScore: '0.99' }]) {
+      await expect(runModelAbuseScan({ content: 'Fix the import dialog.', ...policy })).resolves.toMatchObject({
+        ok: false, passed: false, code: 'security-guard-policy-invalid',
+      });
+    }
+  });
+
+  it('never silently skips an incomplete installation under optional policy', async () => {
+    existsSync.mockImplementation((path) => path.endsWith('venv-prompt-guard'));
+    await expect(runModelAbuseScan({ content: 'Fix the import dialog.', classifierMode: 'optional' })).resolves.toMatchObject({
+      ok: false, passed: false, code: 'security-guard-not-ready',
+      layers: { classifier: 'incomplete' },
+    });
+  });
+
+  it('allows explicitly optional clean content and says the classifier did not run', async () => {
+    await expect(runModelAbuseScan({ content: 'docs: fix a typo in the socket-ui skill', classifierMode: 'optional' })).resolves.toMatchObject({
       ok: true,
       passed: true,
       safe: true,

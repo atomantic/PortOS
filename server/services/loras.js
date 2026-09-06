@@ -17,18 +17,19 @@
  */
 
 import { existsSync } from 'fs';
-import { link, readFile, rename, rm, stat, unlink } from 'fs/promises';
+import { link, readFile, rename, stat } from 'fs/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import {
   assessDownloadPreflight,
   assertDownloadFits,
+  createDownloadSlot,
   etagPathFor,
   probeRemoteSize,
   siblingDownloadMeta,
   streamResumableDownload,
 } from '../lib/downloadPreflight.js';
-import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, sha256File, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, ensureDir, listDirectoryByExtension, sha256File, PATHS, rmGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { verifySafetensorsStructure } from '../lib/hfCache.js';
 import { isPlainObject } from '../lib/objects.js';
 import { readCachedLoraEffectReport } from '../lib/loraEffect.js';
@@ -81,6 +82,14 @@ const loraMetadataCache = new Map();
 // submit shares the original result instead of racing it to the same destination
 // files, while two explicitly different versions remain independent.
 const civitaiInstalls = createSingleFlight();
+
+// Keyed on the resolved destination path — what `isAnyDownloadInFlight` (and the
+// orphaned-partial GC sweep) asks about, and what a second install of the same
+// file would otherwise race. Not `exclusive`: LoRA files are small relative to a
+// checkpoint, so installing several at once is normal, not a hazard. Cancel
+// discards the `.partial` (`keepPartialOnCancel` defaults false) — a single
+// abandoned file, not a multi-shard checkpoint worth resuming.
+const downloadSlot = createDownloadSlot({ codePrefix: 'LORA' });
 
 const sidecarPath = (loraFilename) => join(PATHS.loras, `${loraFilename}${SIDECAR_SUFFIX}`);
 const invalidateLoraMetadataCache = (filename) => {
@@ -338,8 +347,8 @@ export const deleteLora = async (filename) => {
       (contents) => contents,
       (err) => (err.code === 'ENOENT' ? null : Promise.reject(err)),
     );
-    if (metadata !== null) await rm(metadataPath);
-    const modelRemovalError = await rm(filePath).then(() => null, (err) => err);
+    if (metadata !== null) await rmGuarded(metadataPath);
+    const modelRemovalError = await rmGuarded(filePath).then(() => null, (err) => err);
     if (modelRemovalError) {
       if (metadata !== null) await atomicWrite(metadataPath, metadata);
       throw modelRemovalError;
@@ -465,70 +474,88 @@ const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} ,
     throw new ServerError(`${label} download failed: ${res.status} ${res.statusText}`, { status: 502, code });
   };
 
-  let lastEmit = 0;
-  let lastTick = { received: 0, total: 0 };
-  const { tmpPath } = await streamResumableDownload({
-    url,
-    destPath,
-    headers,
-    fetchImpl,
-    signal,
-    finalize: false,
-    isCancelled: () => Boolean(signal?.aborted),
-    onHttpError,
-    onBytes: onProgress
-      ? (received, total) => {
+  // Claim before the first await: two presses landing inside the same tick
+  // would otherwise both pass the caller's existsSync pre-check and start a
+  // parallel transfer of the same file. Released in the finally below.
+  const slot = downloadSlot.claim(destPath, {
+    busyMessage: `${basename(destPath)} is already downloading`,
+  });
+  // An external abort signal (SSE client-disconnect) cancels through the slot
+  // rather than its own controller, so the typed CANCELLED/STALLED error from
+  // `wrapError` below applies uniformly regardless of who triggered the abort.
+  const onExternalAbort = () => downloadSlot.cancel(destPath);
+  if (signal) {
+    if (signal.aborted) onExternalAbort();
+    else signal.addEventListener('abort', onExternalAbort, { once: true });
+  }
+  const emitProgress = onProgress
+    ? slot.throttle((received, total) => onProgress({ received, total }))
+    : null;
+  try {
+    let lastTick = { received: 0, total: 0 };
+    const { tmpPath } = await streamResumableDownload({
+      url,
+      destPath,
+      headers,
+      fetchImpl,
+      finalize: false,
+      onHttpError,
+      onBytes: (received, total) => {
         lastTick = { received, total };
-        const now = Date.now();
-        if (now - lastEmit < 150) return;
-        lastEmit = now;
-        onProgress({ received, total });
-      }
-      : undefined,
-  });
-  // `finalize: false` means streamResumableDownload never had a chance to
-  // clean up its own etag sidecar (that only happens on ITS finalize path).
-  // Reaching here means the stream completed successfully — every branch
-  // below either moves or deletes tmpPath outright, never leaves it for a
-  // future resume, so the sidecar describing it is equally done.
-  await rm(etagPathFor(destPath), { force: true }).catch(() => {});
-  if (onProgress) onProgress(lastTick);
-  // Atomic no-clobber finalize: `link` is POSIX-atomic and fails with EEXIST
-  // when destPath already exists (concurrent install that snuck past our
-  // pre-check). On success we unlink the tmp; on EEXIST we clean up and
-  // throw CIVITAI_ALREADY_INSTALLED. For other link errors (cross-device
-  // EXDEV, read-only fs, etc.) fall back to rename, which is the only
-  // portable option on those platforms.
-  const linkErr = await link(tmpPath, destPath).catch((e) => e);
-  if (!linkErr) {
-    await unlink(tmpPath).catch(() => {});
-    return;
+        slot.track(received, total);
+        if (emitProgress) emitProgress(received, total);
+      },
+      ...slot.downloadOptions(),
+    });
+    // `finalize: false` means streamResumableDownload never had a chance to
+    // clean up its own etag sidecar (that only happens on ITS finalize path).
+    // Reaching here means the stream completed successfully — every branch
+    // below either moves or deletes tmpPath outright, never leaves it for a
+    // future resume, so the sidecar describing it is equally done.
+    await rmGuarded(etagPathFor(destPath), { force: true }).catch(() => {});
+    if (onProgress) onProgress(lastTick);
+    // Atomic no-clobber finalize: `link` is POSIX-atomic and fails with EEXIST
+    // when destPath already exists (concurrent install that snuck past our
+    // pre-check). On success we unlink the tmp; on EEXIST we clean up and
+    // throw CIVITAI_ALREADY_INSTALLED. For other link errors (cross-device
+    // EXDEV, read-only fs, etc.) fall back to rename, which is the only
+    // portable option on those platforms.
+    const linkErr = await link(tmpPath, destPath).catch((e) => e);
+    if (!linkErr) {
+      await unlinkGuarded(tmpPath).catch(() => {});
+      return;
+    }
+    if (linkErr.code === 'EEXIST') {
+      await rmGuarded(tmpPath, { force: true }).catch(() => {});
+      const basename_ = basename(destPath);
+      throw new ServerError(
+        `Already installed: ${basename_}. Delete it first or pick a different version.`,
+        { status: 409, code: 'CIVITAI_ALREADY_INSTALLED' },
+      );
+    }
+    // EXDEV or similar — fall back to rename. Re-check destPath right before
+    // the rename so a concurrent install that landed between our link attempt
+    // and now can't be silently clobbered (POSIX rename overwrites). Treat
+    // late-arriving dest as CIVITAI_ALREADY_INSTALLED, matching the EEXIST
+    // path above.
+    if (existsSync(destPath)) {
+      await rmGuarded(tmpPath, { force: true }).catch(() => {});
+      const basename_ = basename(destPath);
+      throw new ServerError(
+        `Already installed: ${basename_}. Delete it first or pick a different version.`,
+        { status: 409, code: 'CIVITAI_ALREADY_INSTALLED' },
+      );
+    }
+    await rename(tmpPath, destPath).catch(async (err) => {
+      await rmGuarded(tmpPath, { force: true }).catch(() => {});
+      throw err;
+    });
+  } catch (err) {
+    throw slot.wrapError(err);
+  } finally {
+    if (signal) signal.removeEventListener('abort', onExternalAbort);
+    slot.release();
   }
-  if (linkErr.code === 'EEXIST') {
-    await rm(tmpPath, { force: true }).catch(() => {});
-    const basename_ = basename(destPath);
-    throw new ServerError(
-      `Already installed: ${basename_}. Delete it first or pick a different version.`,
-      { status: 409, code: 'CIVITAI_ALREADY_INSTALLED' },
-    );
-  }
-  // EXDEV or similar — fall back to rename. Re-check destPath right before
-  // the rename so a concurrent install that landed between our link attempt
-  // and now can't be silently clobbered (POSIX rename overwrites). Treat
-  // late-arriving dest as CIVITAI_ALREADY_INSTALLED, matching the EEXIST
-  // path above.
-  if (existsSync(destPath)) {
-    await rm(tmpPath, { force: true }).catch(() => {});
-    const basename_ = basename(destPath);
-    throw new ServerError(
-      `Already installed: ${basename_}. Delete it first or pick a different version.`,
-      { status: 409, code: 'CIVITAI_ALREADY_INSTALLED' },
-    );
-  }
-  await rename(tmpPath, destPath).catch(async (err) => {
-    await rm(tmpPath, { force: true }).catch(() => {});
-    throw err;
-  });
 };
 
 // After a LoRA finishes downloading, verify the on-disk `.safetensors` before
@@ -547,7 +574,7 @@ const verifyDownloadedLora = async (destPath, { expectedSha256 = null, source = 
   const st = await stat(destPath).catch(() => null);
   const structural = await verifySafetensorsStructure(destPath, st?.size ?? 0);
   if (!structural.ok) {
-    await rm(destPath, { force: true }).catch(() => {});
+    await rmGuarded(destPath, { force: true }).catch(() => {});
     throw new ServerError(
       `${label} LoRA download is corrupt (${structural.reason}) — the partial file was deleted. Retry the install.`,
       { status: 502, code },
@@ -559,7 +586,7 @@ const verifyDownloadedLora = async (destPath, { expectedSha256 = null, source = 
   if (/^[0-9a-f]{64}$/.test(want)) {
     const actual = await sha256File(destPath).catch(() => null);
     if (actual && actual.toLowerCase() !== want) {
-      await rm(destPath, { force: true }).catch(() => {});
+      await rmGuarded(destPath, { force: true }).catch(() => {});
       throw new ServerError(
         `${label} LoRA failed SHA-256 verification (expected ${want.slice(0, 12)}…, got ${actual.slice(0, 12)}…) — the file was deleted. Retry the install.`,
         { status: 502, code },

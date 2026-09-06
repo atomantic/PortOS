@@ -1,7 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import messagesRoutes from './messages.js';
+
+vi.mock('../services/messageEvaluator.js', () => ({ evaluateMessages: vi.fn(), generateReplyBody: vi.fn() }));
+import { generateReplyBody } from '../services/messageEvaluator.js';
+import { ServerError, errorEvents } from '../lib/errorHandler.js';
+const observeError = () => {};
+beforeAll(() => errorEvents.on('error', observeError));
+afterAll(() => errorEvents.off('error', observeError));
 
 // Mock the services
 vi.mock('../services/messageAccounts.js', () => ({
@@ -382,6 +389,20 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(201);
       expect(response.body.generatedBy).toBe('ai');
+    });
+
+    it('returns screening/setup failures without persisting or announcing a fake AI draft', async () => {
+      const emit = vi.fn();
+      app.set('io', { emit });
+      messageAccounts.getAccount.mockResolvedValue({ id: VALID_UUID, type: 'gmail' });
+      messageSync.getMessage.mockResolvedValue({ id: 'message-example', bodyText: 'Example message.' });
+      generateReplyBody.mockRejectedValue(new ServerError('Configure a local API provider in Models > LLMs > Abuse Guard.', { status: 422, code: 'untrusted-content-provider-unavailable' }));
+      const response = await request(app).post('/api/messages/drafts/generate').send({ accountId: VALID_UUID, replyToMessageId: 'message-example' });
+      expect(response.status).toBe(422);
+      expect(response.body.code).toBe('untrusted-content-provider-unavailable');
+      expect(response.body.error).toContain('Abuse Guard');
+      expect(messageDrafts.createDraft).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalledWith('messages:draft:created', expect.anything());
     });
 
     it('should return 404 if account not found', async () => {

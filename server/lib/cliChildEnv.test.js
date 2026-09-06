@@ -417,21 +417,34 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
     }).CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
   });
 
-  // The 300s default is a first-byte deadline, and a local daemon spends longer
-  // than that PREFILLING a ~100K-token review envelope before it can emit one.
-  // Every attempt was cancelled mid-prefill and re-sent, so the run sat at
-  // `API error · Retrying … attempt 1/10` forever without ever being unhealthy.
-  it('raises the Claude request timeout past a local prefill, never for a cloud model', () => {
+  // A local daemon sends nothing until prefill completes, and Claude Code has
+  // four independent ceilings on that silence — the binding one being the Bun
+  // fetch timeout (~360s) that only `API_FORCE_IDLE_TIMEOUT=0` disables. With
+  // any of them at its stock value every attempt is cancelled mid-prefill and
+  // re-sent, so the run sits at `API error · Retrying … attempt 1/10` forever
+  // without ever being unhealthy (agent-e057cca7, 2026-09-04).
+  it('widens every Claude request ceiling past a local prefill, never for a cloud model', () => {
     const localClaude = { command: '/usr/local/bin/claude', ollamaBacked: true, envVars: {} };
-    expect(composeProviderEnv({ provider: localClaude }).API_TIMEOUT_MS).toBe('3600000');
+    expect(composeProviderEnv({ provider: localClaude })).toMatchObject({
+      API_TIMEOUT_MS: '3600000',
+      API_FORCE_IDLE_TIMEOUT: '0',
+      CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS: '1800000',
+      CLAUDE_STREAM_IDLE_TIMEOUT_MS: '1800000',
+    });
     expect(composeProviderEnv({
-      provider: { ...localClaude, envVars: { API_TIMEOUT_MS: '900000' } },
-    }).API_TIMEOUT_MS).toBe('900000');
+      provider: { ...localClaude, envVars: { API_TIMEOUT_MS: '900000', API_FORCE_IDLE_TIMEOUT: '1' } },
+    })).toMatchObject({ API_TIMEOUT_MS: '900000', API_FORCE_IDLE_TIMEOUT: '1' });
 
-    expect(composeProviderEnv({ provider: { command: 'claude', envVars: {} } }).API_TIMEOUT_MS).toBeUndefined();
-    expect(composeProviderEnv({
-      provider: { command: 'opencode', ollamaBacked: true, envVars: {} },
-    }).API_TIMEOUT_MS).toBeUndefined();
+    for (const provider of [
+      { command: 'claude', envVars: {} },
+      { command: 'opencode', ollamaBacked: true, envVars: {} },
+    ]) {
+      const env = composeProviderEnv({ provider });
+      expect(env.API_TIMEOUT_MS).toBeUndefined();
+      expect(env.API_FORCE_IDLE_TIMEOUT).toBeUndefined();
+      expect(env.CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS).toBeUndefined();
+      expect(env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBeUndefined();
+    }
   });
 
   it('disables Claude/Ollama thinking when the provider requests it', () => {
@@ -497,7 +510,7 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
   it('widens the Claude output ceiling for any LOCAL backend, never a hosted one', () => {
     const forClaude = (extra) => composeProviderEnv({ provider: { command: 'claude', envVars: {}, ...extra } });
 
-    for (const marker of ['ollamaBacked', 'sglangBacked', 'llamaBacked', 'mtplxBacked', 'vllmBacked']) {
+    for (const marker of ['ollamaBacked', 'lmstudioBacked', 'sglangBacked', 'llamaBacked', 'mtplxBacked', 'vllmBacked']) {
       expect(forClaude({ [marker]: true }).CLAUDE_CODE_MAX_OUTPUT_TOKENS, marker).toBe('65536');
     }
     // OrcaRouter is a hosted gateway whose upstream models own their own output
@@ -659,6 +672,7 @@ describe('no spawn site rebuilds the CLI child env by hand', () => {
     // composer, and the dormancy is why its missing CLAUDECODE strip / OpenCode
     // map is not a live PortOS gap someone needs to chase.
     ['lib/aiToolkit/runner.js', 'vendored toolkit — must not import out to other PortOS modules, and its spawn is dormant under PortOS\'s setCliRunner override'],
+    ['lib/aiToolkit/providers.js', 'vendored toolkit — must not import out to other PortOS modules; capability probe only (codex app-server), runs no models'],
   ]);
 
   // Two independent markers, because either one alone has a blind spot: a new

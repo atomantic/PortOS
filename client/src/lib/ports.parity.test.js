@@ -23,7 +23,7 @@ describe('client/src/lib/ports.js mirror parity', () => {
   });
 
   it('mirrors only the UI-facing subset', () => {
-    expect(Object.keys(PORTS).sort()).toEqual(['API', 'API_LOCAL', 'UI']);
+    expect(Object.keys(PORTS).sort()).toEqual(['API', 'API_LOCAL', 'FLEET_LLM', 'UI']);
   });
 
   it('defaults a new peer to the API port', () => {

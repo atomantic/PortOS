@@ -7,12 +7,11 @@
  */
 
 import { Router } from 'express';
-import { rm } from 'fs/promises';
 import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 import { startTrainingRunSchema, validateRequest } from '../lib/validation.js';
-import { assertSafeFilename } from '../lib/fileUtils.js';
+import { assertSafeFilename, rmGuarded } from '../lib/fileUtils.js';
 import { resolveFlux2Python, isFlux2VenvHealthy, resolveMfluxPython } from '../lib/pythonSetup.js';
 import { getSettings } from '../services/settings.js';
 import { attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
@@ -115,7 +114,7 @@ router.delete('/runs/:id', asyncHandler(async (req, res) => {
   }
   // Artifact dir is server-derived from the run id (uuid) — confined under
   // PATHS.trainingRuns by construction.
-  await rm(runDir(run.id), { recursive: true, force: true });
+  await rmGuarded(runDir(run.id), { recursive: true, force: true });
   if (req.query.deleteLora === 'true' && run.output?.loraFilename) {
     await deleteLora(run.output.loraFilename).catch((err) => {
       console.log(`⚠️ trained LoRA delete skipped: ${err?.message}`);

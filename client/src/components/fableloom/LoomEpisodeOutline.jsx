@@ -10,6 +10,7 @@
 
 import { useMemo } from 'react';
 import { ArrowRight, ChevronRight, Flag, Play, Waypoints } from 'lucide-react';
+import LoomReferenceReview from './LoomReferenceReview';
 import { sceneProseClass } from './fieldStyles';
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
@@ -63,6 +64,7 @@ function SceneBlock({ node, number, episode, format, byId, onSelectNode }) {
             />
             <div className="min-w-0">
               <h3 className="font-semibold text-port-text break-words">{node.title || 'Untitled scene'}</h3>
+              {node.shot && <p className="text-xs text-port-accent">{node.shot.durationSeconds}s · {node.shot.framing}</p>}
               <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-port-text-muted">
                 {isStart && <span className="inline-flex items-center gap-1 text-port-accent"><Play size={11} /> Opening</span>}
                 {node.isEnding && (
@@ -81,10 +83,12 @@ function SceneBlock({ node, number, episode, format, byId, onSelectNode }) {
               </div>
             </div>
           </div>
-          <span className="shrink-0 text-[11px] text-port-text-muted">Scene {number}</span>
+          <span className="shrink-0 text-[11px] text-port-text-muted">{node.shot ? 'Shot' : 'Scene'} {number}</span>
         </summary>
 
         <div className="space-y-3 border-t border-port-border p-4">
+          {onSelectNode && <button type="button" className="min-h-11 text-sm text-port-accent hover:underline" aria-label={`Edit ${node.shot ? 'shot' : 'scene'}: ${node.title || 'Untitled scene'}`} onClick={() => onSelectNode(node.id)}>Edit {node.shot ? 'shot' : 'scene'}</button>}
+          <LoomReferenceReview episode={episode} node={node} onSelectNode={onSelectNode} />
           {node.prose?.trim() ? (
             <div className={`${sceneProseClass(format)} text-port-text`}>
               {node.prose}
@@ -170,6 +174,16 @@ export default function LoomEpisodeOutline({ loom, episode, onSelectNode }) {
   const { reachable, unreachable, byId } = useMemo(() => orderEpisodeNodes(episode), [episode]);
   const nodes = asArray(episode?.nodes);
   const endingCount = nodes.filter((node) => node.isEnding).length;
+  const shotGroups = useMemo(() => {
+    if (!reachable.length || reachable.some((node) => !node.shot)) return null;
+    const groups = new Map();
+    for (const node of reachable) {
+      const key = node.shot.dramaticSceneId;
+      if (!groups.has(key)) groups.set(key, { id: key, title: node.shot.dramaticSceneTitle, nodes: [] });
+      groups.get(key).nodes.push(node);
+    }
+    return [...groups.values()];
+  }, [reachable]);
   const numberedNodes = useMemo(() => {
     const numbers = new Map();
     [...reachable, ...unreachable].forEach((node, index) => numbers.set(node.id, index + 1));
@@ -205,30 +219,29 @@ export default function LoomEpisodeOutline({ loom, episode, onSelectNode }) {
               <h2 className="mt-1 text-xl font-semibold">{episode.title || 'Untitled episode'}</h2>
             </div>
             <span className="shrink-0 text-xs text-port-text-muted">
-              {nodes.length} scene{nodes.length === 1 ? '' : 's'} · {endingCount} ending{endingCount === 1 ? '' : 's'}
+              {nodes.length} {shotGroups ? 'shot' : 'scene'}{nodes.length === 1 ? '' : 's'} · {endingCount} ending{endingCount === 1 ? '' : 's'}
             </span>
           </div>
-          {episode.synopsis && <p className="mt-2 max-w-3xl text-sm text-port-text-muted">{episode.synopsis}</p>}
+          {episode.synopsis && <details className="mt-2 text-sm text-port-text-muted" open={shotGroups ? undefined : true}><summary className="cursor-pointer">Episode synopsis</summary><p className="mt-2 max-w-3xl">{episode.synopsis}</p></details>}
         </header>
 
-        {episode.storyOutline?.scenes?.length ? <BeatOutline outline={episode.storyOutline} /> : null}
+        {!shotGroups && episode.storyOutline?.scenes?.length ? <BeatOutline outline={episode.storyOutline} /> : null}
 
         {reachable.length || unreachable.length ? (
           <>
-            <p className="text-xs uppercase tracking-wide text-port-text-muted">Expanded teleplay scenes</p>
-            <ol className="space-y-4 border-l border-port-border pl-0">
-              {reachable.map((node) => (
-                <SceneBlock
-                  key={node.id}
-                  node={node}
-                  number={numberedNodes.get(node.id)}
-                  episode={episode}
-                  format={loom.format}
-                  byId={numberedById}
-                  onSelectNode={onSelectNode}
-                />
-              ))}
-            </ol>
+            <p className="text-xs uppercase tracking-wide text-port-text-muted">{shotGroups ? `${shotGroups.length} dramatic scenes · ${reachable.length} camera shots` : 'Expanded teleplay scenes'}</p>
+            {shotGroups ? <div className="space-y-2">{shotGroups.map((group) => (
+              <details key={group.id} className="rounded-lg border border-port-border bg-port-card p-2">
+                <summary className="cursor-pointer min-h-11 font-semibold text-sm">{group.title} · {group.nodes.length} shots · {group.nodes.reduce((seconds, node) => seconds + node.shot.durationSeconds, 0)}s</summary>
+                <ol className="space-y-3 mt-3">
+                  {group.nodes.map((node) => <SceneBlock key={node.id} node={node} number={numberedNodes.get(node.id)} episode={episode} format={loom.format} byId={numberedById} onSelectNode={onSelectNode} />)}
+                </ol>
+              </details>
+            ))}</div> : (
+              <ol className="space-y-4 border-l border-port-border pl-0">
+                {reachable.map((node) => <SceneBlock key={node.id} node={node} number={numberedNodes.get(node.id)} episode={episode} format={loom.format} byId={numberedById} onSelectNode={onSelectNode} />)}
+              </ol>
+            )}
           </>
         ) : (
           <p className="rounded border border-port-border p-4 text-sm text-port-text-muted">No teleplay scenes yet. Expand the validated beat outline from Episode setup.</p>

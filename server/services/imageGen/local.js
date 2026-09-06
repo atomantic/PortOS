@@ -14,12 +14,12 @@
 
 import { spawn } from '../../lib/childProcess.js';
 import sharp from 'sharp';
-import { writeFile, readFile, readdir, stat, unlink, rm, mkdtemp } from 'fs/promises';
+import { readFile, readdir, stat, mkdtemp } from 'fs/promises';
 import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile } from '../../lib/fileUtils.js';
+import { atomicWrite, assertSafeFilename, detectImageFormat, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveImageInputPath, tryReadFile, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
@@ -668,7 +668,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   const heavyClaim = await claimHeavyLocalJob({ kind: 'local image generation', id: jobId });
   if (!heavyClaim.ok) {
     jobs.delete(jobId);
-    await rm(stepwiseDir, { recursive: true, force: true });
+    await rmGuarded(stepwiseDir, { recursive: true, force: true });
     throw new ServerError(heavyClaim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: heavyClaim.holder } });
   }
   const releaseHeavyClaim = () => heavyClaim.release()
@@ -700,7 +700,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     if (!claimHandedOff) {
       await releaseHeavyClaim();
       jobs.delete(jobId);
-      await rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
+      await rmGuarded(stepwiseDir, { recursive: true, force: true }).catch(() => {});
     }
     throw err;
   }
@@ -723,7 +723,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     activeProcess = null;
     activeJob = null;
     void releaseHeavyClaim();
-    rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
+    rmGuarded(stepwiseDir, { recursive: true, force: true }).catch(() => {});
     closeJobAfterDelay(jobs, jobId);
   });
 
@@ -908,7 +908,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     activeJob = null;
     void releaseHeavyClaim();
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
-    rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
+    rmGuarded(stepwiseDir, { recursive: true, force: true }).catch(() => {});
     // Degenerate-frame gate (#4173): a runner can exit 0 having written a PNG
     // that decodes fine and holds no content (a solid-black frame from a run
     // that produced nothing). Fail the job instead of saving a black tile —
@@ -1008,7 +1008,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
           .toBuffer()
           .catch((err) => { console.warn(`⚠️ Regen upscale failed for ${filename}: ${err?.message || err}`); return null; });
         if (resized) {
-          await writeFile(outputPath, resized).catch(() => {});
+          await atomicWrite(outputPath, resized).catch(() => {});
           meta.renderWidth = meta.width;
           meta.renderHeight = meta.height;
           meta.width = targetW;
@@ -1143,7 +1143,7 @@ export async function saveUploadedGalleryImage(base64Data) {
   const png = await sharp(buffer, { limitInputPixels: MAX_GALLERY_UPLOAD_PIXELS }).rotate().png().toBuffer();
   const filename = `upload-${randomUUID().slice(0, 8)}.png`;
   await ensureDir(PATHS.images);
-  await writeFile(join(PATHS.images, filename), png);
+  await atomicWrite(join(PATHS.images, filename), png);
   console.log(`📥 Saved uploaded gallery image: ${filename} (${(png.length / 1024).toFixed(0)}KB PNG, from ${detected.mime})`);
   return { filename, path: `/data/images/${filename}` };
 }
@@ -1172,9 +1172,9 @@ export async function listGallery() {
 
 export async function deleteImage(filename) {
   assertGalleryFilename(filename);
-  await unlink(join(PATHS.images, filename)).catch(() => {});
-  await unlink(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
-  await unlink(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
+  await unlinkGuarded(join(PATHS.images, filename)).catch(() => {});
+  await unlinkGuarded(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
+  await unlinkGuarded(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
   // Drop the derived index row with the file (#2738). Without this the row
   // survives until the next boot reconcile, so anything counting the index
   // (the Character sheet's Auteur skill / Media Assets tile) reads high in

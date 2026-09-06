@@ -41,12 +41,14 @@ describe('#3620: providers route decorates canRefreshModels without persisting i
   it('GET / carries the flag per provider — true for a refreshable CLI, false otherwise', async () => {
     await createProvider({ id: 'claude-code', name: 'Claude Code CLI', type: 'cli', command: 'claude' });
     await createProvider({ id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex' });
+    await createProvider({ id: 'unsupported-cli', name: 'Unsupported CLI', type: 'cli', command: 'unsupported' });
 
     const res = await request(app).get('/api/providers');
     expect(res.status).toBe(200);
     const byId = Object.fromEntries(res.body.providers.map((p) => [p.id, p]));
     expect(byId['claude-code'].canRefreshModels).toBe(true);
-    expect(byId.codex.canRefreshModels).toBe(false);
+    expect(byId.codex.canRefreshModels).toBe(true);
+    expect(byId['unsupported-cli'].canRefreshModels).toBe(false);
   });
 
   it('never writes the field to providers.json — not on create, not on update', async () => {
@@ -72,15 +74,15 @@ describe('#3620: providers route decorates canRefreshModels without persisting i
 
   it('a POSTed canRefreshModels is not stored either, and does not fake the answer', async () => {
     const res = await createProvider({
-      id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', canRefreshModels: true,
+      id: 'unsupported-cli', name: 'Unsupported CLI', type: 'cli', command: 'unsupported', canRefreshModels: true,
     });
     expect(res.status).toBe(201);
-    // Derived from the table, which has no codex row — the client's button
+    // Derived from the table, which has no row for unsupported — the client's button
     // must stay hidden regardless of what the payload claimed.
     expect(res.body.canRefreshModels).toBe(false);
 
     const stored = await readStored();
-    expect(stored.providers.codex).not.toHaveProperty('canRefreshModels');
+    expect(stored.providers['unsupported-cli']).not.toHaveProperty('canRefreshModels');
   });
 
   it('decorates GET /samples — a sample answers as the provider it will become', async () => {
@@ -92,7 +94,8 @@ describe('#3620: providers route decorates canRefreshModels without persisting i
     }
     const byId = Object.fromEntries(res.body.providers.map((p) => [p.id, p]));
     expect(byId['claude-code']?.canRefreshModels).toBe(true);
-    expect(byId.codex?.canRefreshModels).toBe(false);
+    expect(byId.codex?.canRefreshModels).toBe(true);
+    expect(byId['kimi-cli']?.canRefreshModels).toBe(false);
   });
 
   it('decorates GET /:id and GET /active too, so every read agrees', async () => {

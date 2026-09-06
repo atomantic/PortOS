@@ -20,8 +20,7 @@
  */
 
 import { join, dirname, relative, sep } from 'path';
-import { rm } from 'fs/promises';
-import { readJSONFile } from '../../lib/fileUtils.js';
+import { readJSONFile, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   spriteDir, resolveSpriteAssetPath, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL,
@@ -83,7 +82,7 @@ async function deleteSpriteAssetImpl(recordId, relPath) {
   // double-click / already-gone file is a no-op success, not a 500.
   const removed = versionMatch ? versionMatch[1] : normalized;
   const removeAbs = versionMatch ? join(dir, versionMatch[1]) : abs;
-  await rm(removeAbs, { recursive: true, force: true });
+  await rmGuarded(removeAbs, { recursive: true, force: true });
   console.log(`🗑️ sprite asset deleted for ${recordId} → ${removed}`);
   return { deleted: true, removed };
 }

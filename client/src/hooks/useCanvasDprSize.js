@@ -10,6 +10,10 @@ import { useEffect, useRef } from 'react';
 // observer is created once per height and never torn down just because the
 // draw closure was recreated.
 //
+// `height` is a fixed CSS px value; pass `undefined` to follow the container's
+// own height instead (the canvas then keeps its CSS size from its classes and
+// only the bitmap is resized — the Core Assembly avatar fills an aspect box).
+//
 // Returns a ref holding the current CSS width — the draw code reads it
 // instead of measuring the DOM per frame.
 export default function useCanvasDprSize(wrapRef, canvasRef, height, drawRef) {
@@ -20,18 +24,24 @@ export default function useCanvasDprSize(wrapRef, canvasRef, height, drawRef) {
     if (!el) return undefined;
     const resize = () => {
       const w = Math.floor(el.clientWidth);
-      if (!w) return;
+      const h = height ?? Math.floor(el.clientHeight);
+      if (!w || !h) return;
       widthRef.current = w;
       const canvas = canvasRef.current;
       if (!canvas) return;
       const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
       canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(height * dpr);
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${height}px`;
+      canvas.height = Math.round(h * dpr);
+      if (height !== undefined) {
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${height}px`;
+      }
       const ctx = canvas.getContext('2d');
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawRef.current();
+      // A caller that installs its draw in a LATER effect (the Core Assembly
+      // avatar's rAF loop) has nothing to paint yet on the mount resize; its
+      // own loop paints the first frame a tick later.
+      drawRef.current?.();
     };
     resize();
     const ro = new ResizeObserver(resize);

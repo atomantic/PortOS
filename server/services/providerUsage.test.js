@@ -194,6 +194,27 @@ describe('mapCodexQuota', () => {
     expect(quota.error).toBeUndefined();
   });
 
+  // The meters describe the signed-in ChatGPT account. When the install's own
+  // ~/.codex/config.toml re-points model routing, PortOS's runs may not be
+  // going there — the card must say so rather than present the numbers as if
+  // they covered its own work (#6304).
+  it('caveats the note when the user config overrides Codex routing, and names no base URL', () => {
+    const quota = mapCodexQuota(SAMPLE_RATE_LIMITS, '2026-01-02T00:00:00Z', {
+      now: SAMPLE_NOW,
+      routingOverridden: true,
+    });
+    expect(quota.note).toContain('2026-01-02T00:00:00Z');
+    expect(quota.note).toContain('~/.codex/config.toml overrides Codex model routing');
+    expect(quota.note).not.toMatch(/https?:\/\//);
+    expect(quota.limits).toHaveLength(2);
+
+    const clean = mapCodexQuota(SAMPLE_RATE_LIMITS, '2026-01-02T00:00:00Z', {
+      now: SAMPLE_NOW,
+      routingOverridden: false,
+    });
+    expect(clean.note).not.toContain('config.toml');
+  });
+
   it('renders a fully-spent window as a 100%-used meter, not an empty card', () => {
     const spent = { ...SAMPLE_RATE_LIMITS, primary: null, secondary: { used_percent: 100, window_minutes: 10080, resets_at: 1767830400 } };
     const quota = mapCodexQuota(spent, '2026-01-02T00:00:00Z', { now: SAMPLE_NOW });

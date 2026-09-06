@@ -1,5 +1,4 @@
 import { OAuth2Client } from 'google-auth-library';
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -63,7 +62,7 @@ function attachTokenPersistence(client) {
 
 export async function clearAuth() {
   await ensureAuthDir();
-  await writeFile(TOKENS_FILE, '{}').catch(() => {});
+  await atomicWrite(TOKENS_FILE, {}).catch(() => {});
   oAuth2Client = null;
   console.log('📅 Google OAuth tokens cleared');
 }

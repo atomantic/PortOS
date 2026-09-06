@@ -41,14 +41,10 @@
  *
  * Under the runner it fires from the shared primitives in `fileCore.js` /
  * `jsonIo.js` (`atomicWrite`, `ensureDir`'s create path, `writeFileGuarded`,
- * `appendFileGuarded`, `copyFileGuarded`, `appendJSONLine`) and from
- * `collectionStore`'s record delete. It is NOT yet universal: roughly forty
- * services still reach `PATHS.*` with raw `fs` calls of their own (see
- * `sharing/importer.js`, `videoUpload.js`, `catalogMedia.js`, `genome.js`),
- * and on a populated install their target directories already exist, so
- * `ensureDir`'s create-path check is a no-op for them. Routing those onto the
- * guarded wrappers is tracked as follow-up work — do not read this module as
- * proof that every write is covered.
+ * `appendFileGuarded`, `copyFileGuarded`, `rmGuarded`, `unlinkGuarded`,
+ * `createWriteStreamGuarded`, `appendJSONLine`) and from
+ * `collectionStore`'s record delete. All services mutating files under `data/`
+ * route through these guarded wrappers (#6203).
  *
  * A suite that genuinely needs a data root redirects it with
  * `createTempDataRoot()` + `makePathsProxy()` from `lib/mockPathsDataRoot.js`;

@@ -68,11 +68,12 @@ vi.mock('./agentState.js', () => ({
   metaStringOr: (value, fallback) => (typeof value === 'string' && value) ? value : fallback,
 }));
 vi.mock('../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
+  tryReadFile: vi.fn().mockResolvedValue(null),
   safeJSONParse: (str, fallback) => { try { return JSON.parse(str); } catch { return fallback; } },
   // agentSentinel builds the per-agent sentinel filename with this — a mock
   // missing it makes doneSentinelPath throw inside the close handler.
   sanitizeFilename: (name) => String(name).replace(/[^a-zA-Z0-9._-]/g, '_'),
+  writeFileGuarded: vi.fn().mockResolvedValue(undefined),
   PATHS: { root: '/tmp', cosAgents: '/tmp/agents', data: '/tmp/data' },
 }));
 vi.mock('../lib/codexCliOutput.js', () => ({ createCodexStderrFormatter: vi.fn() }));
@@ -455,17 +456,21 @@ describe('buildCliSpawnConfig', () => {
       expect(config.args[config.args.indexOf('--effort') + 1]).toBe('high');
     });
 
-    it('never emits the claude-shaped --effort for a renamed codex provider (detection and emission agree)', () => {
-      // id !== 'codex' routes this into the default (claude-style) branch, but
-      // the effort arg shape must still follow the binary, not the branch.
+    it('routes a renamed codex provider through the codex recipe, effort shape included', () => {
+      // The vendor registry used to match codex by provider ID alone, so any
+      // record but the shipped `codex` fell through to claude's
+      // unconditionally-true row — claude-shaped argv on the codex binary, with
+      // only the effort pair keyed off the command. Now the whole recipe follows
+      // the binary (#6305, which needed a SECOND codex record to build codex argv).
       const config = buildCliSpawnConfig(
-        { id: 'my-codex', command: '/opt/homebrew/bin/codex' },
+        { id: 'my-codex', command: '/opt/tools/codex' },
         null,
         {},
         { effort: 'xhigh' },
       );
+      expect(config.args[0]).toBe('exec');
       expect(config.args).not.toContain('--effort');
-      expect(config.args[config.args.indexOf('-c') + 1]).toBe('model_reasoning_effort=xhigh');
+      expect(config.args.join(' ')).toContain('-c model_reasoning_effort=xhigh');
     });
 
     it('respects a user-baked --effort pin in provider args (mirrors the --model rule)', () => {
@@ -992,6 +997,21 @@ describe('stream error containment', () => {
 
       expect(emittedLines()).not.toContain('[stderr] ');
       expect(emittedLines().some((line) => line.trim() === '')).toBe(false);
+    });
+
+    it('drops the claude CLI SDK unrecognized-model telemetry line from the surfaced tail', async () => {
+      const spawnPromise = spawnDirectly(textArgs());
+      await new Promise((r) => setTimeout(r, 10));
+
+      fakeProcess.stderr.emit('data', Buffer.from(
+        '[claude-code:unrecognized_model] {"model":"gemma3:27b","query_source":"sdk"}\n'
+      ));
+      await new Promise((r) => setTimeout(r, 30));
+
+      fakeProcess.emit('close', 0);
+      await spawnPromise.catch(() => {});
+
+      expect(emittedLines().join('')).not.toMatch(/unrecognized_model/);
     });
 
     it('still records a colors-only chunk as run output — it is proof the child is alive', async () => {

@@ -63,6 +63,7 @@ describe('LocalLlmPlayground', () => {
   it('shows model size, memory requirements, and use-case tags in the selector', async () => {
     renderPlayground();
 
+    expect(screen.getByRole('tab', { name: 'Playground' })).toHaveAttribute('aria-selected', 'true');
     await waitFor(() => expect(screen.getAllByText('command-r-plus:104b').length).toBeGreaterThan(0));
 
     expect(getLocalLlmCatalog).toHaveBeenCalledWith('ollama');

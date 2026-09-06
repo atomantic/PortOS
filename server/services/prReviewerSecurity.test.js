@@ -5,6 +5,9 @@ const ensureForgeReachableMock = vi.fn()
 const getSelfLoginMock = vi.fn()
 const getOriginInfoMock = vi.fn()
 const runModelAbuseScanMock = vi.fn()
+const isTrustedMock = vi.fn()
+
+vi.mock('./forgeActorTrust.js', () => ({ createGithubActorTrust: async () => ({ isTrusted: (...args) => isTrustedMock(...args) }) }))
 
 vi.mock('./github.js', () => ({
   execGh: (...args) => execGhMock(...args),
@@ -13,8 +16,8 @@ vi.mock('./github.js', () => ({
 vi.mock('./prWatcher.js', () => ({
   getSelfLogin: (...args) => getSelfLoginMock(...args),
 }))
-vi.mock('./modelAbuseGuard.js', () => ({
-  runModelAbuseScan: (...args) => runModelAbuseScanMock(...args),
+vi.mock('./untrustedContent.js', () => ({
+  screenUntrustedContent: async args => ({ screening: await runModelAbuseScanMock(args) }),
 }))
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: (...args) => getOriginInfoMock(...args),
@@ -68,6 +71,7 @@ const listedPr = (number, authorLogin, headRefOid, overrides = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  isTrustedMock.mockImplementation(async login => ['maintainer', 'example', 'trusted-collaborator'].includes(login.toLowerCase()))
   ensureForgeReachableMock.mockResolvedValue({ ok: true })
   getOriginInfoMock.mockResolvedValue({ host: 'github.com', fullName: 'example/repo' })
   getSelfLoginMock.mockResolvedValue('maintainer')
@@ -80,6 +84,7 @@ describe('pr-reviewer model-abuse preflight', () => {
       .mockResolvedValueOnce('main')
       .mockResolvedValueOnce(JSON.stringify([
         listedPr(11, 'maintainer', 'a'.repeat(40)),
+        listedPr(13, 'trusted-collaborator', 'c'.repeat(40)),
         listedPr(12, 'Contributor-A', 'b'.repeat(40)),
       ]))
 
@@ -96,6 +101,16 @@ describe('pr-reviewer model-abuse preflight', () => {
       'pr', 'list', '--repo', 'github.com/example/repo', '--base', 'main', '--state', 'open',
       '--limit', '200', '--json', 'number,author,url,headRefOid,updatedAt,title,body',
     ])
+  })
+
+  it('refuses linked requirements that were clipped before screening', async () => {
+    const result = await runPrReviewerSecurityScan({ app, target: {
+      ok: true, repoFullName: 'example/repo', repoSpec: 'github.com/example/repo', defaultBranch: 'main',
+      prs: [{ number: 12, authorLogin: 'external', headRefOid: 'a'.repeat(40), inputComplete: false }],
+    } })
+    expect(result).toMatchObject({ ok: false, code: 'security-scan-linked-issue-too-large' })
+    expect(runModelAbuseScanMock).not.toHaveBeenCalled()
+    expect(execGhMock).not.toHaveBeenCalled()
   })
 
   it('records only current open issues assigned to the PR opener as eligibility facts', async () => {

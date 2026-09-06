@@ -10,6 +10,7 @@
 // synchronously at module scope for form defaults and static help text, before
 // any API round-trip could resolve.
 export const PORTS = Object.freeze({
+  FLEET_LLM: 18022, // Queued, authenticated model host API
   API: 5555,       // Express API server (HTTPS when a Tailscale cert is active)
   API_LOCAL: 5553, // Loopback-only HTTP mirror of API — binds only when HTTPS is on
   UI: 5554,        // Vite dev server (client)

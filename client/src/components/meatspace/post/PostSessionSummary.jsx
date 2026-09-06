@@ -143,7 +143,7 @@ export default function PostSessionSummary({ drillResults = [], sessionScore = 0
               (result.score || 0) >= 50 ? 'text-port-warning' : 'text-port-error';
 
             return (
-              <div key={i}>
+              <div key={i} className={isExpanded ? 'lg:col-span-2' : ''}>
                 <button
                   onClick={() => setExpandedDrill(isExpanded ? null : i)}
                   className="w-full flex items-center justify-between hover:bg-port-bg/50 rounded px-1 py-1 transition-colors"

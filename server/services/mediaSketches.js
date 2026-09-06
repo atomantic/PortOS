@@ -27,8 +27,8 @@
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { unlink, access } from 'fs/promises';
-import { PATHS, atomicWrite, readJSONFile, ensureDir, tryReadFile } from '../lib/fileUtils.js';
+import { access } from 'fs/promises';
+import { PATHS, atomicWrite, readJSONFile, ensureDir, tryReadFile, unlinkGuarded } from '../lib/fileUtils.js';
 import { isValidKey as isValidMediaKey, parseKey } from '../lib/mediaItemKey.js';
 
 const SKETCH_DIR = join(PATHS.data, 'media-sketches');
@@ -171,7 +171,7 @@ export async function saveSketch(key, input) {
   // A re-save that carries only vectors (no PNG) must drop any prior flattened
   // export, otherwise `hasPng:false` in the JSON disagrees with a stale
   // `<id>.png` that getSketchPng() would keep streaming.
-  else await unlink(pngPathFor(key)).catch(() => {});
+  else await unlinkGuarded(pngPathFor(key)).catch(() => {});
   const record = {
     key,
     width: clean.width,
@@ -187,6 +187,6 @@ export async function saveSketch(key, input) {
 /** Remove a key's sidecar (json + png). Idempotent. */
 export async function removeSketch(key) {
   if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
-  await unlink(jsonPathFor(key)).catch(() => {});
-  await unlink(pngPathFor(key)).catch(() => {});
+  await unlinkGuarded(jsonPathFor(key)).catch(() => {});
+  await unlinkGuarded(pngPathFor(key)).catch(() => {});
 }

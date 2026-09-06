@@ -6,12 +6,12 @@
  * git worktree/branch and runs on a schedule.
  */
 
-import { writeFile, readFile, readdir, rm } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { cosEvents } from './cosEvents.js';
-import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
 import { getAppById } from './apps.js';
@@ -160,7 +160,7 @@ export async function deleteFeatureAgent(id) {
     }
     // Remove the entire data directory (runs, etc.)
     if (existsSync(agentDir)) {
-      await rm(agentDir, { recursive: true, force: true }).catch(err => {
+      await rmGuarded(agentDir, { recursive: true, force: true }).catch(err => {
         console.log(`⚠️ Feature agent data cleanup failed: ${err.message}`);
       });
     }
@@ -432,9 +432,9 @@ export async function recordRunCompletion(id, runData) {
     const runDir = join(FA_DIR, id, 'runs');
     await ensureDir(runDir);
     const runId = `run-${Date.now()}`;
-    await writeFile(
+    await atomicWrite(
       join(runDir, `${runId}.json`),
-      JSON.stringify({ id: runId, ...runData, completedAt: new Date().toISOString() }, null, 2)
+      { id: runId, ...runData, completedAt: new Date().toISOString() }
     );
 
     cosEvents.emit(`${EVT}:run-complete`, { id, runId, name: agent.name, status: runData.status });

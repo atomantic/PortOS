@@ -13,9 +13,8 @@
  * `character.referenceSheetImageRef` once the render completes.
  */
 
-import { copyFile, unlink } from 'fs/promises';
 import { join, basename } from 'path';
-import { PATHS, ensureDir, shortId, assertSafeFilename } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, shortId, assertSafeFilename, copyFileGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
@@ -588,7 +587,7 @@ export async function onSheetComplete({ universeId, entryId, jobId, sourceFilena
   // ALWAYS copy the file — even superseded renders are kept on disk for
   // rollback/comparison (they live at `data/image-refs/<...>-<token>-<job>.png`
   // with a unique per-job filename).
-  await copyFile(srcPath, destPath);
+  await copyFileGuarded(srcPath, destPath);
   console.log(`📸 ${variantConfig.label} copied to image-refs: ${destFilename}`);
 
   // If a newer render has been started for this character+variant while ours
@@ -679,7 +678,7 @@ export async function deleteCharacterReferenceSheet(universeId, entryId, { varia
   // cleanup, sample-data reset). The pointer-purge below is the canonical
   // clean and runs regardless.
   let fileDeleted = true;
-  await unlink(target).catch((err) => {
+  await unlinkGuarded(target).catch((err) => {
     if (err?.code === 'ENOENT') { fileDeleted = false; return; }
     throw err;
   });

@@ -21,9 +21,8 @@
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { writeFile, unlink } from 'fs/promises';
 import { ServerError } from '../lib/errorHandler.js';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, atomicWrite, unlinkGuarded } from '../lib/fileUtils.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { generateThumbnail, probeVideoDuration } from '../lib/ffmpeg.js';
 import { mutateVideoHistory } from './videoGen/history.js';
@@ -85,7 +84,7 @@ export async function saveUploadedGalleryVideoBuffer(buffer, originalName = '') 
   const filename = `${id}.${ext}`;
   await ensureDir(PATHS.videos);
   const outPath = join(PATHS.videos, filename);
-  await writeFile(outPath, buffer);
+  await atomicWrite(outPath, buffer);
   try {
     // Both best-effort: a missing ffmpeg/ffprobe degrades to a thumbnail-less
     // entry (normalizeVideo renders a no-preview tile), never a failed upload.
@@ -107,7 +106,7 @@ export async function saveUploadedGalleryVideoBuffer(buffer, originalName = '') 
     // A throw between the byte write and the history write would orphan a
     // large file in data/videos with nothing pointing at it — mirror
     // downloadVideoIntoLibrary's cleanup-then-rethrow.
-    await unlink(outPath).catch(() => {});
+    await unlinkGuarded(outPath).catch(() => {});
     throw err;
   }
 }

@@ -1,11 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { getTaskStatusGroup, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, togglePrReviewerActions } from './scheduleConstants';
+import { getTaskStatusGroup, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, stagePublicReviewPosture, togglePrReviewerActions } from './scheduleConstants';
 
 describe('pr-reviewer pipeline helpers', () => {
   it('recognizes semantic roles and legacy prompt-key stages', () => {
     expect(prReviewerStageRole({ role: 'eligibility' })).toBe('eligibility');
     expect(prReviewerStageRole({ promptKey: 'pr-reviewer-review' })).toBe('actions');
     expect(prReviewerStageRole({ promptKey: 'other' })).toBeNull();
+  });
+
+  it('enforces tool-free PR roles over legacy profiles while preserving generic profiles', () => {
+    expect(stagePublicReviewPosture({ role: 'actions', executionProfile: 'public-review-actions' })).toBe('no-tool');
+    expect(stagePublicReviewPosture({ promptKey: 'pr-reviewer-review', executionProfile: 'public-review-actions' })).toBe('no-tool');
+    expect(stagePublicReviewPosture({ role: 'eligibility', executionProfile: 'public-review-actions' })).toBe('no-tool');
+    expect(stagePublicReviewPosture({ promptKey: 'custom-review', executionProfile: 'public-review-actions' })).toBe('sandboxed-actions');
   });
 
   it('removes only the optional actions stage and restores its full safe posture', () => {
@@ -20,7 +27,7 @@ describe('pr-reviewer pipeline helpers', () => {
       expect.objectContaining({
         role: 'actions',
         promptKey: 'pr-reviewer-review',
-        executionProfile: 'public-review-actions',
+        executionProfile: 'public-review-gate',
         discardWorktree: true,
         noCodeOutput: true,
       }),

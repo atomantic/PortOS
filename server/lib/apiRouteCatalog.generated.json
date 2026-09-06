@@ -35,6 +35,7 @@
     "/api/commands",
     "/api/conflict-journal",
     "/api/contacts",
+    "/api/continuous-video",
     "/api/cos",
     "/api/cos/gsd",
     "/api/creative-commission",
@@ -51,6 +52,7 @@
     "/api/digital-twin/autobiography",
     "/api/digital-twin/identity",
     "/api/digital-twin/social-accounts",
+    "/api/eidoverse/travel",
     "/api/eidoverse/world",
     "/api/fableloom",
     "/api/feature-agents",
@@ -105,6 +107,7 @@
     "/api/privacy",
     "/api/prompts",
     "/api/providers",
+    "/api/providers/comparison",
     "/api/quota-burn",
     "/api/rapid-reader",
     "/api/remote-desktop",
@@ -3495,6 +3498,30 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/continuous-video",
+      "mountPath": "/api/continuous-video",
+      "sources": [
+        "server/routes/continuousVideoEpisode.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/continuous-video/:jobId/events",
+      "mountPath": "/api/continuous-video",
+      "sources": [
+        "server/routes/continuousVideoEpisode.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/continuous-video/lint",
+      "mountPath": "/api/continuous-video",
+      "sources": [
+        "server/routes/continuousVideoEpisode.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/cos",
       "mountPath": "/api/cos",
@@ -4321,6 +4348,14 @@
     {
       "method": "POST",
       "path": "/api/cos/mind/stop",
+      "mountPath": "/api/cos",
+      "sources": [
+        "server/routes/cosMindRoutes.js"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/cos/mind/thinking-request",
       "mountPath": "/api/cos",
       "sources": [
         "server/routes/cosMindRoutes.js"
@@ -6416,6 +6451,62 @@
     },
     {
       "method": "POST",
+      "path": "/api/eidoverse/travel/depart",
+      "mountPath": "/api/eidoverse/travel",
+      "sources": [
+        "server/routes/eidoverseTravelRoutes.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/eidoverse/travel/destinations",
+      "mountPath": "/api/eidoverse/travel",
+      "sources": [
+        "server/routes/eidoverseTravelRoutes.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/eidoverse/travel/federation/capabilities",
+      "mountPath": "/api/eidoverse/travel",
+      "sources": [
+        "server/routes/eidoverseTravelRoutes.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/travel/federation/chat",
+      "mountPath": "/api/eidoverse/travel",
+      "sources": [
+        "server/routes/eidoverseTravelRoutes.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/travel/federation/leave",
+      "mountPath": "/api/eidoverse/travel",
+      "sources": [
+        "server/routes/eidoverseTravelRoutes.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/eidoverse/travel/federation/visit",
+      "mountPath": "/api/eidoverse/travel",
+      "sources": [
+        "server/routes/eidoverseTravelRoutes.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/eidoverse/travel/guest",
+      "mountPath": "/api/eidoverse/travel",
+      "sources": [
+        "server/routes/eidoverseTravelRoutes.js"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/eidoverse/world/augment",
       "mountPath": "/api/eidoverse/world",
       "sources": [
@@ -6769,6 +6860,22 @@
     {
       "method": "POST",
       "path": "/api/fableloom/:id/episodes/:episodeId/sessions/preflight",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        "server/routes/fableLoom.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/shots/apply",
+      "mountPath": "/api/fableloom",
+      "sources": [
+        "server/routes/fableLoom.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/fableloom/:id/episodes/:episodeId/shots/plan",
       "mountPath": "/api/fableloom",
       "sources": [
         "server/routes/fableLoom.js"
@@ -10535,6 +10642,22 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/media-jobs/holds",
+      "mountPath": "/api/media-jobs",
+      "sources": [
+        "server/routes/mediaJobs.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/media-jobs/holds/:holdId/resume",
+      "mountPath": "/api/media-jobs",
+      "sources": [
+        "server/routes/mediaJobs.js"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/media-jobs/prompt-from-media",
       "mountPath": "/api/media-jobs",
@@ -13790,6 +13913,78 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/api/providers/comparison",
+      "mountPath": "/api/providers/comparison",
+      "sources": [
+        "server/routes/modelComparison.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/comparison/discover",
+      "mountPath": "/api/providers/comparison",
+      "sources": [
+        "server/routes/modelComparison.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/comparison/import",
+      "mountPath": "/api/providers/comparison",
+      "sources": [
+        "server/routes/modelComparison.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/comparison/sync-aa",
+      "mountPath": "/api/providers/comparison",
+      "sources": [
+        "server/routes/modelComparison.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/providers/fleet-host",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/fleet-host/key",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/fleet-host/setup",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/providers/fleet-peer-hosts",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/fleet-peer-hosts/:peerId/key",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/api/providers/opencode/install",
       "mountPath": "/api/providers",
@@ -14425,6 +14620,38 @@
     {
       "method": "GET",
       "path": "/api/settings/media-share-candidates",
+      "mountPath": "/api/settings",
+      "sources": [
+        "server/routes/settings.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/settings/orchestration-profiles",
+      "mountPath": "/api/settings",
+      "sources": [
+        "server/routes/settings.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/settings/orchestration-profiles",
+      "mountPath": "/api/settings",
+      "sources": [
+        "server/routes/settings.js"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/settings/orchestration-profiles/:id",
+      "mountPath": "/api/settings",
+      "sources": [
+        "server/routes/settings.js"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/api/settings/orchestration-profiles/:id",
       "mountPath": "/api/settings",
       "sources": [
         "server/routes/settings.js"
@@ -15316,6 +15543,14 @@
       "mountPath": "/api/sync",
       "sources": [
         "server/routes/dataSync.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/system-resources/duplicates/rectify",
+      "mountPath": "/api/system-resources",
+      "sources": [
+        "server/routes/systemResources.js"
       ]
     },
     {
@@ -16560,6 +16795,14 @@
     },
     {
       "method": "GET",
+      "path": "/api/video-gen/reactor/token",
+      "mountPath": "/api/video-gen",
+      "sources": [
+        "server/routes/videoGen.js"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/api/video-gen/setup/runtime-install",
       "mountPath": "/api/video-gen",
       "sources": [
@@ -17544,9 +17787,9 @@
     }
   ],
   "stats": {
-    "mounts": 147,
-    "operations": 2173,
-    "declarations": 2181,
-    "sourceFiles": 230
+    "mounts": 150,
+    "operations": 2203,
+    "declarations": 2211,
+    "sourceFiles": 233
   }
 }

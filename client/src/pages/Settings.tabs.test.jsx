@@ -35,6 +35,10 @@ describe('Settings — Instance Features tab', () => {
     expect(TABS.some(t => t.id === 'code-reviewers')).toBe(false);
   });
 
+  it('does not list Providers after it moved to Models', () => {
+    expect(TABS.some(t => t.id === 'providers')).toBe(false);
+  });
+
   it('is listed in the settings sub-nav', () => {
     const tab = TABS.find(t => t.id === 'features');
     expect(tab?.to).toBe('/settings/features');
@@ -66,5 +70,12 @@ describe('Settings — Credentials tab', () => {
     await act(async () => {});
     expect(screen.getByTestId('credentials-tab')).toBeTruthy();
     expect(screen.queryByTestId('general-tab')).toBeNull();
+  });
+});
+
+describe('Settings — Orchestration tab', () => {
+  it('is listed in the settings sub-nav', () => {
+    const tab = TABS.find(t => t.id === 'orchestration');
+    expect(tab?.to).toBe('/settings/orchestration');
   });
 });

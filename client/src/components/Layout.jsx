@@ -289,6 +289,7 @@ export const NAV_PRESENTATION = {
   '/models/llms': { icon: Cpu },
   '/models/loras': { icon: Sparkles },
   '/models/media': { icon: HardDrive },
+  '/models/comparison': { icon: Gauge },
   '/models/performance': { icon: Gauge },
   '/local-llm/playground': { icon: FlaskConical },
   '/models/status': { icon: Activity },
@@ -305,6 +306,7 @@ export const NAV_PRESENTATION = {
   '/settings/general': { icon: Settings },
   '/settings/mortalloom': { icon: Activity },
   '/openclaw': { icon: MessagesSquare },
+  '/settings/orchestration': { icon: Cpu },
   '/prompts': { icon: FileText },
   '/ai': { icon: Bot },
   '/settings/security': { icon: Lock },
@@ -552,7 +554,8 @@ const EXACT_FULL_WIDTH_PATHS = [
   // OpenClaw lives under the Settings nav group; it's a full-bleed
   // chat surface (sidebar + message pane) that owns its own internal
   // scroll, so it needs the bare full-width main like the other
-  // Settings pages (/ai, /prompts, /settings/*).
+  // Full-width Settings pages (/prompts, /settings/*) and the Models Providers
+  // page at /ai.
   '/openclaw',
   '/prompts',
   '/review',

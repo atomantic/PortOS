@@ -59,3 +59,46 @@ export function GatewayKeyHint({ gateway, sibling, className = '', onEdit }) {
     </div>
    );
 }
+
+/**
+ * "Your own `~/.codex/config.toml` is re-pointing this provider's model
+ * routing."
+ *
+ * A third-party bridge installs itself by writing top-level routing keys into
+ * that file, and the Codex CLI honors it on every invocation — so PortOS's runs
+ * go wherever the file says while this page reports the signed-in ChatGPT
+ * account's readiness and quota. Choosing such a bridge is legitimate; being
+ * unable to SEE it is the bug, which is why this is an informational notice and
+ * not a NEEDS SETUP state.
+ *
+ * `advisory.baseUrl` is machine-local (it can embed a host name or a port), so
+ * it renders here and is never logged, persisted or federated.
+ */
+export function CodexRoutingNotice({ advisory, className = '', onEdit }) {
+  if (!advisory) return null;
+  return (
+    <div className={`text-xs rounded-md border border-port-accent/40 bg-port-accent/10 px-2.5 py-2 leading-relaxed ${className}`}>
+      <p className="text-port-accent font-medium">Model routing is overridden by your Codex config</p>
+      <p className="mt-1 text-gray-300 break-words">
+        <code className="font-mono">~/.codex/config.toml</code> sets{' '}
+        {advisory.keys.map((key, index) => (
+          <span key={key}>
+            {index > 0 ? ', ' : ''}<code className="font-mono">{key}</code>
+          </span>
+        ))}
+        {advisory.baseUrl ? <> — Codex traffic goes to <code className="font-mono break-all">{advisory.baseUrl}</code></> : null}.
+        PortOS runs on this provider follow that route, so the account and usage figures below
+        may not describe the work PortOS actually sent.
+      </p>
+      {onEdit && (
+        <button
+          type="button"
+          onClick={onEdit}
+          className="mt-2 text-port-accent hover:text-port-accent/80 underline underline-offset-2"
+        >
+          Pin PortOS runs to this provider’s own account
+        </button>
+      )}
+    </div>
+  );
+}

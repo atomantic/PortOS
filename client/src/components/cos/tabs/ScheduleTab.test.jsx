@@ -98,4 +98,58 @@ describe('ScheduleTab on-demand feedback', () => {
     expect(screen.getByText('Pending On-Demand Tasks')).toBeVisible();
     expect(screen.getByText(/review \(Example App\) - requested/)).toBeVisible();
   });
+
+  it('warns instead of celebrating a queued request when the CoS daemon is stopped', async () => {
+    const user = userEvent.setup();
+    const request = {
+      id: 'request-2',
+      taskType: 'review',
+      appId: 'app-1',
+      requestedAt: '2026-09-01T12:00:00.000Z',
+    };
+    api.getCodeReviewDefaults.mockResolvedValue({});
+    api.getCosSchedule
+      .mockResolvedValueOnce({
+        improvementEnabled: true,
+        tasks: {
+          review: {
+            type: 'on-demand',
+            enabled: true,
+            enabledAppCount: 1,
+            totalAppCount: 1,
+            invocation: { userInvokable: true },
+          },
+        },
+        onDemandRequests: [],
+      })
+      // Hold the background refresh so this assertion proves the
+      // optimistically-painted request (and its daemon-stopped warning)
+      // stays visible without waiting on a second round trip.
+      .mockReturnValueOnce(new Promise(() => {}));
+    api.triggerCosOnDemandTask.mockResolvedValue({ success: true, request });
+
+    render(
+      <MemoryRouter>
+        <ScheduleTab
+          apps={[{ id: 'app-1', name: 'Example App' }]}
+          providers={[]}
+          activeProviderId={null}
+          daemonRunning={false}
+        />
+      </MemoryRouter>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /Run on App/i }));
+    await user.click(screen.getByRole('button', { name: 'Example App' }));
+
+    await waitFor(() => expect(api.triggerCosOnDemandTask).toHaveBeenCalledWith(
+      'review',
+      'app-1',
+      { silent: true },
+    ));
+    expect(toast.error).toHaveBeenCalledWith(
+      'Queued review request for Example App — but the CoS daemon is stopped, so it will not run until you start it',
+    );
+    expect(await screen.findByText(/CoS daemon is stopped/)).toBeVisible();
+  });
 });

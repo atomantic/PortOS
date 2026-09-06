@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { listJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
+import { listJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, listVideoHolds, resumeVideoHold, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
 import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
 import { promptFromMedia } from '../services/mediaPromptFromMedia.js';
 import { CODEX_EFFORT_LEVELS } from '../lib/providerModels.js';
@@ -53,6 +53,13 @@ const refinePromptSchema = z.object({
     const v = (s ?? '').trim();
     return v.length > 0 ? v : undefined;
   }),
+  // Hard character cap the SELECTED render backend enforces on the prompt it
+  // receives — reactor.inc's fast-h3 rejects a prompt over 800 characters
+  // outright instead of truncating it, so an enhancement that ignores the cap
+  // produces a prompt that cannot be rendered. The caller sends the budget
+  // (cap minus whatever a style preset prefixes), the refiner instructs the
+  // model with it and clamps the answer. Omitted when the backend has no cap.
+  maxPromptLength: z.number().int().positive().max(8000).optional(),
   renderConfig: z.record(z.any())
     .refine((obj) => {
       // JSON.stringify throws on BigInt / circular refs. z.record(z.any())
@@ -89,6 +96,11 @@ const promptFromMediaSchema = z.object({
     const v = (s ?? '').trim();
     return v.length > 0 ? v : undefined;
   }),
+  // Same cap as `refinePromptSchema.maxPromptLength`, but scoped to the VIDEO
+  // prompt: the caller sends it when the video backend it is composing for
+  // rejects an over-length prompt (reactor.inc fast-h3). The image prompt has
+  // no equivalent cap on any current backend.
+  maxVideoPromptLength: z.number().int().positive().max(8000).optional(),
 }).superRefine((data, ctx) => {
   // A gallery video resolves by history id (the gallery flow) OR by on-disk
   // filename (a mood-board video item's `video:<filename>` ref — #4188).
@@ -127,6 +139,21 @@ router.post('/refine-prompt', asyncHandler(async (req, res) => {
 router.post('/prompt-from-media', asyncHandler(async (req, res) => {
   const data = validateRequest(promptFromMediaSchema, req.body);
   res.json(await promptFromMedia(data));
+}));
+
+const resumeHoldParamsSchema = z.object({ holdId: z.string().uuid() });
+const resumeHoldBodySchema = z.object({}).strict();
+router.get('/holds', asyncHandler(async (_req, res) => {
+  res.json(listVideoHolds());
+}));
+
+router.post('/holds/:holdId/resume', asyncHandler(async (req, res) => {
+  const { holdId } = validateRequest(resumeHoldParamsSchema, req.params);
+  validateRequest(resumeHoldBodySchema, req.body ?? {});
+  if (!await resumeVideoHold(holdId)) {
+    throw new ServerError('Hold no longer exists', { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json({ resumed: true });
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {

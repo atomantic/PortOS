@@ -157,6 +157,35 @@ describe('editorial prompt graph contract', () => {
     expect(digest).toContain('transition=take-left sourceNode=opening targetNode=left');
     expect(digest).toContain('transition=right-end sourceNode=right targetNode=ending');
   });
+
+  it('reviews complete narrative fields and rejects excess context instead of clipping their payoffs', async () => {
+    const loom = makeLoom();
+    loom.seriesPlan.storyArc = `${'The traveler follows the signal. '.repeat(220)}The beacon is their own warning.`;
+    const episode = loom.episodes[0];
+    episode.synopsis = `${'The two routes approach the beacon. '.repeat(25)}Both reveal who sent the warning.`;
+    const ending = episode.nodes.at(-1);
+    ending.prose = `${'The traveler climbs toward the light. '.repeat(40)}They recognize their own voice and turn the beacon off.`;
+    ending.videoPrompt = `${'Follow the traveler up the stairs. '.repeat(40)}End on the extinguished beacon.`;
+    const variables = {
+      seriesPlanJson: __testing.seriesPlanDigest(loom),
+      teleplayDigest: __testing.teleplayDigest(loom),
+    };
+    const plan = JSON.parse(variables.seriesPlanJson);
+    expect(plan.storyArc).toBe(loom.seriesPlan.storyArc);
+    expect(plan.episodes[0].synopsis).toBe(episode.synopsis);
+    expect(variables.teleplayDigest).toContain(episode.synopsis);
+    expect(variables.teleplayDigest).toContain(ending.prose);
+    expect(variables.teleplayDigest).toContain(ending.videoPrompt);
+
+    const rendered = Object.values(variables).join('\n\n');
+    const buildPromptFn = async () => rendered;
+    await expect(__testing.renderEditorialPrompt(
+      'fableloom-review-playthroughs', variables, rendered.length, { buildPromptFn },
+    )).resolves.toBe(rendered);
+    await expect(__testing.renderEditorialPrompt(
+      'fableloom-review-playthroughs', variables, rendered.length - 1, { buildPromptFn },
+    )).rejects.toMatchObject({ code: 'FABLELOOM_EDITORIAL_CONTEXT_TOO_LARGE' });
+  });
 });
 
 describe('applyFableLoomEditorialPatch', () => {

@@ -480,6 +480,59 @@ describe('prepareAgentWorkspace — the branch is checked out in another worktre
     expect(updateTask).not.toHaveBeenCalled();
   });
 
+  // A resolve-and-merge follow-up's whole purpose is landing THIS branch, so the
+  // user's own trigger is the signal to take over whatever a `/do:next` claim
+  // left checked out on it — instead of retrying against it until the task gives
+  // up and strands the PR the follow-up exists to land (#6243).
+  it('opts into adopting a live /claim worktree for a review-loop follow-up', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/claim-issue-42', agentId: 'claim-issue-42' });
+    adoptWorktree.mockResolvedValue({
+      worktreePath: '/mock/worktrees/agent-new', branchName: 'cos/task-x/agent-y',
+      baseBranch: null, existingBranch: true, adopted: true
+    });
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task: followUpTask() });
+
+    const [, , opts] = findAdoptableWorktreeForBranch.mock.calls.at(-1);
+    expect(opts.allowLiveClaim).toBe(true);
+    expect(r.outcome).toBe('ready');
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // A PR-remediation follow-up is the same shape one step further out (its
+  // commits land on the contributor's own branch) and hits the identical #6243
+  // bug when that branch is checked out in a claim tree, so it carries the same
+  // carve-out via the shared isNonCommittingCoordinatorTask predicate.
+  it('opts into adopting a live /claim worktree for a PR-remediation follow-up', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue({ path: '/mock/worktrees/claim-issue-99', agentId: 'claim-issue-99' });
+    adoptWorktree.mockResolvedValue({
+      worktreePath: '/mock/worktrees/agent-new', branchName: 'contributor/fix-thing',
+      baseBranch: null, existingBranch: true, adopted: true
+    });
+    const task = {
+      id: 't-remediation', taskType: 'internal',
+      metadata: { useWorktree: true, prRemediationFollowUp: true, existingBranch: 'contributor/fix-thing' }
+    };
+
+    const r = await prepareAgentWorkspace({ agentId: 'agent-new', task });
+
+    const [, , opts] = findAdoptableWorktreeForBranch.mock.calls.at(-1);
+    expect(opts.allowLiveClaim).toBe(true);
+    expect(r.outcome).toBe('ready');
+  });
+
+  // A plain resume never targets a claim tree — its pointer names a CoS
+  // `agent-*` worktree — so it must not carry the same carve-out.
+  it('does not opt into live-claim adoption for a plain resume', async () => {
+    findAdoptableWorktreeForBranch.mockResolvedValue(null);
+    const task = { id: 't-resume', taskType: 'user', metadata: { useWorktree: true, existingBranch: 'cos/t-resume/agent-dead' } };
+
+    await prepareAgentWorkspace({ agentId: 'agent-new', task });
+
+    const [, , opts] = findAdoptableWorktreeForBranch.mock.calls.at(-1);
+    expect(opts.allowLiveClaim).toBe(false);
+  });
+
   // Adoption MOVES the directory, so the protected set has to cover every agent
   // that still needs its tree — including a PAUSED one, whose worktree is
   // deliberately preserved as resume context and which is absent from the

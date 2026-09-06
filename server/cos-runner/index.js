@@ -24,6 +24,7 @@ import { commandExists } from '../lib/commandExists.js';
 import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
+import { isKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
 import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
@@ -569,7 +570,8 @@ app.post('/spawn', async (req, res) => {
     // A chunk that decolors down to whitespace was pure terminal control
     // (`opencode run` emits a bare reset per progress redraw). Tagging it
     // `[stderr]` would add one blank noise line to the tail per redraw.
-    if (!decolored.trim()) return;
+    const trimmedDecolored = decolored.trim();
+    if (!trimmedDecolored || isKnownCliStderrNoise(trimmedDecolored)) return;
     const text = `[stderr] ${decolored}`;
     if (agent) agent.outputBuffer += text;
     emitToServer('agent:output', { agentId, text });

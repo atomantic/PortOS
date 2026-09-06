@@ -12,9 +12,8 @@
 // replica hashes the file when it federates.
 
 import { randomUUID } from 'crypto';
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getIngredient, attachMedia } from './catalogDB.js';
 import { saveUploadedGalleryImage } from './imageGen/local.js';
@@ -53,7 +52,7 @@ export function classifyUploadMime(mimeType) {
 async function persistLibraryFile(buffer, dir, ext) {
   const filename = `upload-${randomUUID().slice(0, 8)}.${ext}`;
   await ensureDir(dir);
-  await writeFile(join(dir, filename), buffer);
+  await atomicWrite(join(dir, filename), buffer);
   return filename;
 }
 

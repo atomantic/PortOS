@@ -60,27 +60,40 @@ def main() -> int:
     if not token_ids:
         raise ValueError("text has no model tokens")
 
+    if tokenizer.num_special_tokens_to_add(pair=False) != 2:
+        raise ValueError("model tokenizer window format changed")
+    # The supported tokenizer API works with both older installed runtimes
+    # and the pinned Transformers 5 runtime (prepare_for_model was removed).
+    # Overflow windows cover the entire input; truncation here splits windows
+    # and never discards the tail. The expected window count is checked below.
+    windows = tokenizer(
+        text,
+        add_special_tokens=True,
+        truncation=True,
+        max_length=MAX_CHUNK_TOKENS + 2,
+        stride=CHUNK_OVERLAP,
+        return_overflowing_tokens=True,
+        return_attention_mask=True,
+    )
+
     id_to_label = getattr(model.config, "id2label", {}) or {}
     step = max(1, MAX_CHUNK_TOKENS - CHUNK_OVERLAP)
     chunks = []
     start = 0
     index = 0
+    expected_windows = 1 + max(0, (len(token_ids) - MAX_CHUNK_TOKENS + step - 1) // step)
+    if len(windows["input_ids"]) != expected_windows or expected_windows > MAX_CHUNKS:
+        raise ValueError("incomplete tokenizer windows")
     with torch.inference_mode():
         while start < len(token_ids):
             if index >= MAX_CHUNKS:
                 raise ValueError("text produced too many model windows")
             end = min(len(token_ids), start + MAX_CHUNK_TOKENS)
-            encoded = tokenizer.prepare_for_model(
-                token_ids[start:end],
-                add_special_tokens=True,
-                return_attention_mask=True,
-                return_tensors="pt",
-            )
-            # prepare_for_model returns unbatched [seq] tensors; the encoder
-            # indexes input_shape[1], so add the batch axis it expects.
+            if len(windows["input_ids"][index]) != end - start + 2:
+                raise ValueError("invalid tokenizer window length")
             model_inputs = {
-                key: value.unsqueeze(0) if value.dim() == 1 else value
-                for key, value in encoded.items()
+                key: torch.tensor([value[index]])
+                for key, value in windows.items()
                 if key in {"input_ids", "attention_mask", "token_type_ids"}
             }
             probabilities = torch.softmax(model(**model_inputs).logits[0], dim=-1)
@@ -98,7 +111,7 @@ def main() -> int:
                 break
             start += step
 
-    json.dump({"chunks": chunks}, sys.stdout, separators=(",", ":"))
+    json.dump({"schemaVersion": 1, "complete": True, "tokenCount": len(token_ids), "chunks": chunks}, sys.stdout, separators=(",", ":"))
     sys.stdout.write("\n")
     return 0
 
@@ -106,6 +119,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as error:  # noqa: BLE001 - CLI boundary must fail closed.
-        print(f"Prompt Guard failed: {error}", file=sys.stderr)
+    except Exception:  # noqa: BLE001 - CLI boundary must fail closed without leaking input or paths.
+        print("Prompt Guard failed; verify the dedicated runtime and pinned model snapshot.", file=sys.stderr)
         raise SystemExit(1)

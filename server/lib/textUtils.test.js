@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countWords, escapeRegExp, trimTo } from './textUtils.js';
+import { clampToCharLimit, countWords, escapeRegExp, trimTo } from './textUtils.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -38,6 +38,26 @@ describe('trimTo', () => {
     expect(trimTo(' short ', 20)).toBe('short');
     expect(trimTo(null, 20)).toBe('');
     expect(trimTo(42, 20)).toBe('');
+  });
+});
+
+describe('clampToCharLimit', () => {
+  it('passes text through when there is no cap or it already fits', () => {
+    expect(clampToCharLimit('a neon alley', 800)).toEqual({ text: 'a neon alley', truncated: false });
+    expect(clampToCharLimit('a neon alley', 0)).toEqual({ text: 'a neon alley', truncated: false });
+    expect(clampToCharLimit(null, 10)).toEqual({ text: '', truncated: false });
+  });
+
+  it('cuts on the last sentence end when one sits deep in the allowance', () => {
+    const { text, truncated } = clampToCharLimit('Wide shot of a rain-slick alley. Then the camera pushes in hard.', 45);
+    expect(truncated).toBe(true);
+    expect(text).toBe('Wide shot of a rain-slick alley.');
+  });
+
+  it('falls back to a word boundary rather than cutting mid-word', () => {
+    // No sentence end deep enough in the allowance — a mid-word cut would
+    // change what the tail asks the renderer for.
+    expect(clampToCharLimit('alpha bravo charlie delta', 14)).toEqual({ text: 'alpha bravo', truncated: true });
   });
 });
 

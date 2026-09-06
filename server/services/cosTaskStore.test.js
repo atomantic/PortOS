@@ -308,6 +308,45 @@ describe('cosTaskStore.getAllTasks / getTasks / getTaskById', () => {
     expect(found.taskType).toBe('internal');
   });
 
+  it('looks up one task without cloning either backlog, and isolates returned metadata', async () => {
+    const { generateTasksMarkdown } = await import('../lib/taskParser.js');
+    const tasks = Array.from({ length: 1000 }, (_, index) => ({
+      id: `task-${index}`, description: `Example task ${index}`, status: 'pending',
+      priority: 'MEDIUM', metadata: { prompt: 'Example prompt', reviewers: ['codex'] }
+    }));
+    mock.files.set(USER_FILE, generateTasksMarkdown(tasks));
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    const found = await getTaskById('task-999');
+    expect(clone.mock.calls.map(([value]) => value.id)).toEqual(['task-999']);
+    clone.mockRestore();
+    found.metadata.reviewers.push('changed');
+    expect((await getTaskById('task-999')).metadata.reviewers).toEqual(['codex']);
+    expect(mock.parseCalls).toBe(1);
+  });
+
+  it('preserves user-first and first-duplicate precedence with custom paths and IDs', async () => {
+    mock.state.config = { userTasksFile: 'custom/user.md', cosTasksFile: 'custom/system.md' };
+    const { generateTasksMarkdown } = await import('../lib/taskParser.js');
+    const task = { id: 'sys-legacy', description: 'first', status: 'pending', priority: 'HIGH', metadata: {} };
+    mock.files.set(join('/root', 'custom/user.md'), generateTasksMarkdown([task, { ...task, description: 'duplicate' }]));
+    mock.files.set(join('/root', 'custom/system.md'), generateTasksMarkdown([{ ...task, description: 'internal' }]));
+    expect(await getTaskById(task.id)).toMatchObject({ description: 'first', taskType: 'user' });
+    mock.files.delete(join('/root', 'custom/user.md'));
+    expect(await getTaskById(task.id)).toMatchObject({ description: 'internal', taskType: 'internal' });
+  });
+
+  it('invalidates the ID index after store mutations, external edits, and deletion', async () => {
+    await addTask({ id: 'task-index', description: 'before' }, 'user');
+    expect((await getTaskById('task-index')).description).toBe('before');
+    await updateTask('task-index', { description: 'after' }, 'user');
+    expect((await getTaskById('task-index')).description).toBe('after');
+    mock.files.set(USER_FILE, mock.files.get(USER_FILE).replace('after', 'external'));
+    mock.mtimes.set(USER_FILE, mock.mtimes.get(USER_FILE) + 5000);
+    expect((await getTaskById('task-index')).description).toBe('external');
+    await deleteTask('task-index', 'user');
+    expect(await getTaskById('task-index')).toBeNull();
+  });
+
   it('getTaskById returns null when no source has the id', async () => {
     expect(await getTaskById('nope')).toBeNull();
   });
@@ -1444,9 +1483,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const STORE_SRC = realReadFileSync(join(__dirname, 'cosTaskStore.js'), 'utf-8');
 
 describe('parsed-task cache — no bypass (source guards, #3497)', () => {
-  // Everything outside the two cache accessors. Any fs call the rest of the
+  // Everything outside the cache accessors. Any fs call the rest of the
   // module makes to the task files is a bypass by definition.
-  const ACCESSOR_START = 'async function readTaskFile';
+  const ACCESSOR_START = 'async function readTaskSnapshot';
   const ACCESSOR_END = '/** Test hook: forget every cached parse. */';
   const outsideAccessors = (() => {
     const start = STORE_SRC.indexOf(ACCESSOR_START);
@@ -1462,7 +1501,7 @@ describe('parsed-task cache — no bypass (source guards, #3497)', () => {
     expect(outsideAccessors, `anchors "${ACCESSOR_START}" / "${ACCESSOR_END}" not found in order`).not.toBeNull();
   });
 
-  it('every task-file read goes through readTaskFile', () => {
+  it('every task-file read goes through the snapshot cache', () => {
     // A read path calling readFile + parseTasksMarkdown directly still works,
     // but pays the full parse the cache exists to avoid and skips the
     // copy-on-read that keeps a caller's in-place mutations out of the cache.

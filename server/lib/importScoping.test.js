@@ -39,6 +39,8 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 // Each row: the entry that was narrowed, the module it must no longer
 // statically reach, and why the entry only ever needed a slice of it.
 const NARROWED = [
+  ['services/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
+    'loads version and catalog parsers only when probing a harness'],
   ['lib/db.js', 'lib/db/schema/index.js',
     'the DDL composer is boot-only — ensureSchemaImpl() imports it lazily'],
   ['lib/pipelineValidation.js', 'lib/editorial/checkRegistry.js',
@@ -161,9 +163,23 @@ describe('deferred imports stay deferred (#6156)', () => {
  *
  * History, over the test files under `server/` only — the same denominator
  * #6009 reported, and what `serverTestFiles()` below walks:
- *   115,519 before #6009 · 96,233 after · 83,439 after #6156.
+ *   115,519 before #6009 · 96,233 after · 83,439 after #6156 · 85,105 after #5992 (orchestration profiles service & routes).
+ *
+ * Raised to 88,000 in #6305. The budget had drifted to within single digits of
+ * the measured total, so the next ordinary addition was always going to trip it
+ * — #6305's own share is ~43 (two new suites, plus one leaf service module,
+ * `services/codexOssSupport.js`, reached by the 14 suites that cross
+ * `services/providerPrerequisites.js`). That is the ordinary growth this budget
+ * is documented to tolerate, not the shape it exists to catch, so the fix is to
+ * restore the ~1.5k headroom the number is supposed to carry rather than to
+ * inch it up by a hundred each time. It stays thousands below what ONE eager
+ * edge into a heavy subtree costs, which is what actually has to fail here.
  */
-const MAX_STATIC_INSTANTIATIONS = 85000;
+// #6350: Pi's vendor leaf is necessarily reached by the shared dispatcher.
+// Deferring catalog/version parsers removes 296 instantiations (88,360 →
+// 88,064). Restore the documented ~1.5k allowance for ordinary leaf growth;
+// keep the negative runtime-installer guard above so eager parsing cannot return.
+const MAX_STATIC_INSTANTIATIONS = 89500;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {

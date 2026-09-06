@@ -6,11 +6,15 @@ import {
   RotateCcw,
   Settings,
   SlidersHorizontal,
+  Tags,
 } from 'lucide-react';
 import { Link } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
+import useEidoverseFrame from '../hooks/useEidoverseFrame';
 import EidoverseWorldDrawer from '../components/eidoverse/EidoverseWorldDrawer';
+import EidoverseTravel from '../components/eidoverse/EidoverseTravel';
+import EidoverseUpdateBanner from '../components/eidoverse/EidoverseUpdateBanner';
 import {
   EIDOVERSE_SOURCE_KIND as SOURCE_KIND,
   eidoverseResetAssetSlotsForDistrict,
@@ -44,16 +48,21 @@ const FRESH_WORLD_VISIBLE_CHECKPOINTS = new Set([
 const failedStart = (result) => Object.values(result?.results || {})
   .find((entry) => entry?.success === false);
 
+// Prefer the PortOS-owned bridge whenever its scheme matches this page's. The
+// bridge answers the renderer's `/embed-config` with this page's origin, which
+// is the only thing that arms the frame bridge — a direct `:uiPort` load leaves
+// the renderer with no trusted parent and it never replies to the handshake.
+// An HTTP page in front of an HTTPS-only bridge is the one case that still goes
+// direct: the shared certificate covers the MagicDNS name, so an iframe pointed
+// at `https://localhost:5563` would fail on the certificate instead. There the
+// scene renders and the handshake stays dormant, as the contract intends.
 export const hostUrlFor = (host, setup, location = window.location, identity = null) => {
-  let baseUrl;
-  if (location.protocol === 'https:') {
-    if (host.protocol !== 'https') {
-      throw new Error('PortOS is using HTTPS, but the Eidoverse host could not load the shared certificate.');
-    }
-    baseUrl = `https://${location.hostname}:${host.port}/`;
-  } else {
-    baseUrl = `http://${location.hostname}:${setup.uiPort}/`;
+  if (location.protocol === 'https:' && host.protocol !== 'https') {
+    throw new Error('PortOS is using HTTPS, but the Eidoverse host could not load the shared certificate.');
   }
+  const baseUrl = location.protocol === 'https:' || host.protocol === 'http'
+    ? `${host.protocol}://${location.hostname}:${host.port}/`
+    : `http://${location.hostname}:${setup.uiPort}/`;
   if (!identity) return baseUrl;
 
   const url = new URL(baseUrl);
@@ -146,6 +155,15 @@ function reconcileResetAssetOverrides(current, submitted, after, reset, sources 
   );
 }
 
+function reconcileResetAliases(current, submitted, after, reset, sources) {
+  if (reset.scope === 'all') return reconcileActionDraft(current, submitted, submitted, after);
+  if (reset.scope !== 'district') return current;
+  const kinds = sources.map((source) => SOURCE_KIND[source]).filter(Boolean);
+  const keys = new Set([...Object.keys(current), ...Object.keys(submitted), ...Object.keys(after)]);
+  return mergeSubmittedKeys(current, submitted, after,
+    [...keys].filter((key) => kinds.some((kind) => key.startsWith(`${kind}-`))));
+}
+
 export default function Eidoverse() {
   const requestGeneration = useRef(0);
   const configDraftRevision = useRef(0);
@@ -163,12 +181,16 @@ export default function Eidoverse() {
   const [humanName, setHumanName] = useState('');
   const [recipeDraft, setRecipeDraft] = useState(null);
   const [assetOverridesDraft, setAssetOverridesDraft] = useState({});
+  const [labelAliasesDraft, setLabelAliasesDraft] = useState({});
   const [projectionStatus, setProjectionStatus] = useState('idle');
   const [projectionError, setProjectionError] = useState('');
   const [configStatus, setConfigStatus] = useState('');
   const [draftDirty, setDraftDirty] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
+
+  const travelRef = useRef(null);
+  const frame = useEidoverseFrame(hostUrl, worldState?.projection?.lastSummary?.objects, (peerId) => travelRef.current?.(peerId));
 
   const applyWorldResponse = useCallback((updated, { replaceDraft = true } = {}) => {
     setWorldState((current) => current
@@ -177,6 +199,7 @@ export default function Eidoverse() {
     if (replaceDraft) {
       if (updated?.recipe) setRecipeDraft(updated.recipe);
       setAssetOverridesDraft(updated?.design?.userOverrides?.assets || {});
+      setLabelAliasesDraft(updated?.design?.labelAliases || {});
       if (updated?.world) setWorldName(updated.world);
       if (updated?.identity?.name || updated?.human?.name) setHumanName(updated.identity?.name || updated.human.name);
       savedDraftRevision.current = configDraftRevision.current;
@@ -189,6 +212,9 @@ export default function Eidoverse() {
     const isCurrent = () => requestGeneration.current === generation;
     const updatePhase = (next) => { if (isCurrent()) setPhase(next); };
 
+    // `appId` deliberately survives this reset: an update dispatched from
+    // <EidoverseUpdateBanner> re-prepares the page on completion, and clearing
+    // the id here would unmount that banner mid-report and drop its re-check.
     setPhase('loading');
     setError('');
     setHostUrl('');
@@ -198,6 +224,7 @@ export default function Eidoverse() {
     setWorldState(null);
     setRecipeDraft(null);
     setAssetOverridesDraft({});
+    setLabelAliasesDraft({});
     setProjectionStatus('idle');
     setProjectionError('');
     setConfigStatus('');
@@ -245,6 +272,7 @@ export default function Eidoverse() {
       setHumanName(result.world?.identity?.name || result.world?.human?.name || '');
       setRecipeDraft(result.world?.recipe || null);
       setAssetOverridesDraft(result.world?.design?.userOverrides?.assets || {});
+      setLabelAliasesDraft(result.world?.design?.labelAliases || {});
       setHostUrl(result.hostUrl || '');
     }, (reason) => {
       if (!isCurrent()) return;
@@ -288,6 +316,7 @@ export default function Eidoverse() {
       if (replaceDraft && result.recipe) {
         setRecipeDraft(result.recipe);
         setAssetOverridesDraft(result.design?.userOverrides?.assets || {});
+        setLabelAliasesDraft(result.design?.labelAliases || {});
       }
       setProjectionStatus('complete');
       return result;
@@ -342,6 +371,16 @@ export default function Eidoverse() {
     });
   }, [markConfigDirty]);
 
+  const mutateLabelAlias = useCallback((key, value) => {
+    markConfigDirty();
+    setLabelAliasesDraft((current) => {
+      const next = { ...current };
+      if (value.trim()) next[key] = value;
+      else delete next[key];
+      return next;
+    });
+  }, [markConfigDirty]);
+
   const saveWorldConfig = useCallback(async () => {
     if (!recipeDraft) return;
     const submittedRevision = configDraftRevision.current;
@@ -351,6 +390,7 @@ export default function Eidoverse() {
       humanName: humanName.trim() || null,
       recipe: recipeDraft,
       assetOverrides: assetOverridesDraft,
+      labelAliases: labelAliasesDraft,
     }, silent).catch((reason) => {
       setConfigStatus(reason?.message || 'Could not save the Eidoverse world configuration.');
       return null;
@@ -365,13 +405,14 @@ export default function Eidoverse() {
       : hostUrl;
     if (nextHostUrl !== hostUrl) setHostUrl(nextHostUrl);
     else void runProjection().catch(() => {});
-  }, [applyWorldResponse, assetOverridesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, setupState, worldName]);
+  }, [applyWorldResponse, assetOverridesDraft, labelAliasesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, setupState, worldName]);
 
   const runConfigAction = useCallback(async (payload) => {
     const submittedRevision = configDraftRevision.current;
     const submittedDraftWasClean = submittedRevision === savedDraftRevision.current;
     const submittedRecipeDraft = recipeDraft;
     const submittedAssetOverrides = assetOverridesDraft;
+    const submittedAliases = labelAliasesDraft;
     const serverRecipeBeforeAction = worldState?.recipe;
     const serverAssetOverridesBefore = worldState?.design?.userOverrides?.assets || {};
     setConfigStatus('saving');
@@ -386,6 +427,10 @@ export default function Eidoverse() {
     if (replaceDraft) configDraftRevision.current += 1;
     applyWorldResponse(updated, { replaceDraft });
     if (!replaceDraft && payload.reset) {
+      setLabelAliasesDraft((current) => reconcileResetAliases(
+        current, submittedAliases, updated.design?.labelAliases || {}, payload.reset,
+        updated.recipe?.districts?.find(({ id }) => id === payload.reset.districtId)?.sources || [],
+      ));
       if (updated.recipe) {
         setRecipeDraft((current) => reconcileResetRecipe(
           current,
@@ -419,12 +464,22 @@ export default function Eidoverse() {
     }
     setConfigStatus(replaceDraft ? 'saved' : '');
     void runProjection().catch(() => {});
-  }, [applyWorldResponse, assetOverridesDraft, recipeDraft, runProjection, worldState]);
+  }, [applyWorldResponse, assetOverridesDraft, labelAliasesDraft, recipeDraft, runProjection, worldState]);
 
   const actions = (
     <>
       {phase === 'ready' && (
         <>
+          <button
+            type="button"
+            aria-label="Show object labels"
+            aria-pressed={frame.labelVisibility !== 'off'}
+            onClick={() => frame.changeLabelVisibility(frame.labelVisibility === 'off' ? 'nearby' : 'off')}
+            title="Toggle object labels for this visit"
+            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent hover:text-white aria-pressed:border-port-accent aria-pressed:text-port-accent"
+          >
+            <Tags size={16} aria-hidden="true" />Labels
+          </button>
           <button
             type="button"
             aria-label="Refresh world"
@@ -483,6 +538,12 @@ export default function Eidoverse() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-port-bg">
+      <EidoverseTravel travelRef={travelRef} beforeDeparture={frame.leaveWorld} enabled={Boolean(hostUrl)} objects={worldState?.projection?.lastSummary?.objects || []}
+        onDestinationsChange={() => {
+          if (projectionStatus === 'running' || draftDirty) return false;
+          if (worldState?.recipe?.includes?.peers !== false) void runProjection().catch(() => {});
+          return true;
+        }} />
       <PageHeader
         icon={Orbit}
         title="Eidoverse Worlds"
@@ -491,15 +552,20 @@ export default function Eidoverse() {
         className="bg-port-bg"
       />
 
+      {appId && phase !== 'setup' && (
+        <EidoverseUpdateBanner appId={appId} onUpdated={prepare} />
+      )}
+
       {phase === 'ready' && (
         <main className="relative min-h-0 flex-1 overflow-hidden bg-port-bg">
           <iframe
+            ref={frame.frameRef}
             src={hostUrl}
             title="Eidoverse Worlds"
             className="absolute inset-0 h-full w-full border-0 bg-port-bg"
             allow="camera; microphone; fullscreen; gamepad; xr-spatial-tracking"
             allowFullScreen
-            onLoad={() => setIframeReady(true)}
+            onLoad={() => { setIframeReady(true); frame.onFrameLoad(); }}
           />
 
           {showLoadingCurtain && (
@@ -566,6 +632,12 @@ export default function Eidoverse() {
         setHumanName={setHumanName}
         recipeDraft={recipeDraft}
         assetOverridesDraft={assetOverridesDraft}
+        labelAliasesDraft={labelAliasesDraft}
+        mutateLabelAlias={mutateLabelAlias}
+        frameConnection={frame.connection}
+        labelVisibility={frame.labelVisibility}
+        onLabelVisibilityChange={frame.changeLabelVisibility}
+        appId={appId}
         mutateRecipe={mutateRecipe}
         mutateAssetOverride={mutateAssetOverride}
         markDirty={markConfigDirty}

@@ -42,7 +42,7 @@ describe('eligiblePublicReviewProviders', () => {
     // The actions stage is open to every binary provider — opencode has no
     // sandbox recipe but runs headless in the disposable worktree; the api
     // provider has no binary at all.
-    expect((await eligiblePublicReviewProviders('sandboxed-actions')).map((p) => p.id)).toEqual(['grok-cli', 'opencode']);
+    expect((await eligiblePublicReviewProviders('sandboxed-actions')).map((p) => p.id)).toEqual(['grok-cli']);
   });
 
   it('excludes providers the user has switched off', async () => {
@@ -52,8 +52,8 @@ describe('eligiblePublicReviewProviders', () => {
 
   it('keeps a momentarily-unavailable provider selectable', async () => {
     isProviderAvailable.mockReturnValue(false);
-    seed([CODEX]);
-    expect((await eligiblePublicReviewProviders('no-tool')).map((p) => p.id)).toEqual(['codex-cli']);
+    seed([GROK]);
+    expect((await eligiblePublicReviewProviders('no-tool')).map((p) => p.id)).toEqual(['grok-cli']);
   });
 });
 
@@ -70,15 +70,15 @@ describe('resolvePublicReviewProvider', () => {
   });
 
   it('drops an INELIGIBLE pin instead of running the stage on it', async () => {
-    seed([OPENCODE, CODEX], { id: 'opencode' });
+    seed([OPENCODE, GROK], { id: 'opencode' });
     const resolved = await resolvePublicReviewProvider({ posture: 'no-tool', pinnedProviderId: 'opencode' });
-    expect(resolved).toMatchObject({ ok: true, pinHonored: false, provider: { id: 'codex-cli' } });
+    expect(resolved).toMatchObject({ ok: true, pinHonored: false, provider: { id: 'grok-cli' } });
   });
 
-  it('honors any enabled binary provider as an actions-stage pin', async () => {
+  it('rejects a worktree-only actions pin and selects an enforced provider', async () => {
     seed([OPENCODE, CODEX], { id: 'codex-cli' });
     const resolved = await resolvePublicReviewProvider({ posture: 'sandboxed-actions', pinnedProviderId: 'opencode' });
-    expect(resolved).toMatchObject({ ok: true, pinHonored: true, provider: { id: 'opencode' } });
+    expect(resolved).toMatchObject({ ok: true, pinHonored: false, provider: { id: 'codex-cli' } });
   });
 
   it('prefers an available provider over an unavailable earlier one', async () => {
@@ -90,9 +90,9 @@ describe('resolvePublicReviewProvider', () => {
 
   it('still resolves when every eligible provider is momentarily unavailable', async () => {
     isProviderAvailable.mockReturnValue(false);
-    seed([CODEX]);
+    seed([GROK]);
     await expect(resolvePublicReviewProvider({ posture: 'no-tool' }))
-      .resolves.toMatchObject({ ok: true, provider: { id: 'codex-cli' } });
+      .resolves.toMatchObject({ ok: true, provider: { id: 'grok-cli' } });
   });
 
   it('fails closed with an actionable reason when nothing on this install qualifies', async () => {

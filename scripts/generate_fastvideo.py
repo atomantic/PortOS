@@ -119,8 +119,15 @@ def advance_phase(line: str, current: str) -> str:
     return phase
 
 
-def translate_line(line: str) -> str:
+def translate_line(line: str, *, conversion: bool = False) -> str:
     """Translate one upstream output line into PortOS's progress protocol."""
+    # Preserve terminal cause evidence before progress formatting can hide it.
+    # The queue deliberately ignores STATUS lines and generic child exit codes.
+    if (re.match(r"^[\w.]*(?:Error|Exception):", line)
+            or re.search(r"\bkIOGPUCommandBufferCallbackError(?:OutOfMemory|InnocentVictim|Timeout|ImpactingInteractivity)\b", line)):
+        return line
+    if conversion:
+        return f"STATUS:{line}"
     step_match = _DENOISE_STEP_PATTERN.search(line)
     if step_match:
         cur, total = int(step_match.group(1)), int(step_match.group(2))
@@ -257,7 +264,7 @@ def ensure_mlx_checkpoint(repo_dir: Path, model_root: Path, fmt: str, env: dict,
          "--model-root", str(transformer),
          "--out", str(out_base),
          "--formats", fmt],
-        env, repo_dir, lambda line: f"STATUS:{line}",
+        env, repo_dir, lambda line: translate_line(line, conversion=True),
     )
     if code != 0:
         raise RuntimeError(f"FastH3 MLX conversion exited with code {code}")

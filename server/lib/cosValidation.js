@@ -131,16 +131,26 @@ const claimOverrideContextSchema = z.preprocess(
 // on update ''/null survives as null so the store can clear the pin
 // (absent-vs-cleared, AGENTS.md).
 const orchestrationRoleSchema = z.object({
-  provider: z.string().trim().min(1).max(120).optional(),
-  model: z.string().trim().min(1).max(300).optional(),
+  provider: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(120).optional()),
+  model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(300).optional()),
   // Per-role reasoning effort. The architect's own rung for its planning pass;
   // for the implementer it is the DEFAULT a spec's `REASONING:` line overrides.
-  effort: z.enum(EFFORT_LEVELS).optional(),
+  effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional()),
 }).strict();
 
 export const orchestrationProfileSchema = z.object(
   Object.fromEntries(ORCHESTRATION_ROLES.map(role => [role, orchestrationRoleSchema.optional()]))
 ).strict();
+
+export const namedOrchestrationProfileSchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  name: z.string().trim().min(1).max(100),
+  description: z.preprocess(emptyToUndefined, z.string().max(500).optional()),
+  profile: orchestrationProfileSchema,
+  isBuiltin: z.boolean().optional(),
+}).strict();
+
+export const orchestrationProfilesSettingsSchema = z.array(namedOrchestrationProfileSchema);
 
 const orchestrationModeInputSchema = z.preprocess(emptyToUndefined, z.enum(ORCHESTRATION_MODES).optional());
 const orchestrationModeUpdateSchema = z.preprocess(emptyToNull, z.enum(ORCHESTRATION_MODES).nullable().optional());
@@ -778,7 +788,7 @@ const ALLOWED_TASK_METADATA_KEYS = [
 // user (the PortOS operator / their automation); 'others' = everyone else;
 // 'any' = no gate. Kept here so both the sanitizer and the prWatcher service
 // agree on the vocabulary.
-export const PR_AUTHOR_FILTERS = ['any', 'self', 'others'];
+export const PR_AUTHOR_FILTERS = ['trusted', 'any', 'self', 'others'];
 
 // claim-issue author-gate values. 'self' = only claim issues YOU filed (the
 // gh/glab-authenticated `@me` account — the slashdo `/do:next --self` security

@@ -6,7 +6,7 @@
  */
 
 import { join } from 'path';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { spawn } from '../lib/childProcess.js';
 import { homedir } from 'os';
@@ -24,8 +24,9 @@ import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import { normalizeReviewers } from '../lib/validation.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
-import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { safeJSONParse, PATHS, writeFileGuarded } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
+import { isKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
 import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
@@ -650,7 +651,7 @@ export async function spawnDirectly({
           const lines = streamParser.processChunk(text);
           for (const line of lines) outputBuffer += line + '\n';
           outputBatcher.push(lines);
-          await writeFile(outputFile, outputBuffer).catch(() => {});
+          await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
         } else {
           // Non-stream providers: emit stdout as-is once decolored. A chunk that
           // was purely terminal control has nothing left to show. Unlike stderr
@@ -658,7 +659,7 @@ export async function spawnDirectly({
           // formatting when it isn't wearing an `[stderr]` tag.
           if (!text) return;
           outputBuffer += text;
-          await writeFile(outputFile, outputBuffer).catch(() => {});
+          await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
           outputBatcher.push(text);
         }
       });
@@ -680,15 +681,16 @@ export async function spawnDirectly({
           const lines = codexStderrFormatter.processChunk(text);
           for (const line of lines) outputBuffer += line + '\n';
           outputBatcher.push(lines);
-          await writeFile(outputFile, outputBuffer).catch(() => {});
+          await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
           return;
         }
         // A chunk that decolors down to whitespace was pure terminal control
         // (`opencode run` emits a bare reset per progress redraw). Tagging it
         // `[stderr]` would add one blank noise line to the tail per redraw.
-        if (!text.trim()) return;
+        const trimmed = text.trim();
+        if (!trimmed || isKnownCliStderrNoise(trimmed)) return;
         outputBuffer += `[stderr] ${text}`;
-        await writeFile(outputFile, outputBuffer).catch(() => {});
+        await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
         outputBatcher.push(`[stderr] ${text}`);
       });
     } catch (err) {
@@ -814,7 +816,7 @@ export async function spawnDirectly({
     // below too, since output.txt is written next).
     await outputBatcher.flush();
 
-    await writeFile(outputFile, outputBuffer).catch(() => {});
+    await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
 
     // Paused agents are finalized in `markAgentPaused` (which already released
     // the lane + execution). Return BEFORE `releaseAgentLane` below — re-running

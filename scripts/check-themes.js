@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_THEME_ID,
   LEGACY_THEME_ALIASES,
+  THEME_EFFECTS,
   THEME_IDS,
   THEMES,
   getTheme,
@@ -82,6 +83,18 @@ const REQUIRED_TOKEN_VARS = [
   '--port-motion-slow',
 ];
 
+// --port-fx-* token prefix → the effect(s) that read it.
+const FX_TOKEN_OWNERS = [
+  ['--port-fx-scanline-', ['scanlines']],
+  ['--port-fx-overlay-', ['scanlines', 'vignette']],
+  ['--port-fx-vignette-', ['vignette']],
+  ['--port-fx-sweep-', ['sweep']],
+  ['--port-fx-grid-floor-', ['grid-floor']],
+  ['--port-fx-glitch-', ['glitch']],
+  ['--port-fx-aurora-', ['aurora']],
+  ['--port-fx-grain-', ['grain']],
+];
+
 const REQUIRED_DOC_SECTIONS = [
   '## Intent',
   '## Integration Rules',
@@ -123,6 +136,27 @@ async function main() {
     assert(theme.accent?.startsWith('#'), `${id} needs a hex accent`);
     assert(Array.isArray(theme.swatches) && theme.swatches.length >= 4, `${id} needs at least four swatches`);
 
+    const effects = theme.effects ?? [];
+    for (const effect of effects) {
+      assert(THEME_EFFECTS.includes(effect), `${id} lists unknown effect ${effect}`);
+    }
+    // `aurora` and `grid-floor` are both below-content full-screen layers at the
+    // same depth, so listing both stacks them and washes the grid out. Documented
+    // in index.css and the themes README; asserted here so it can't drift.
+    assert(
+      !(effects.includes('aurora') && effects.includes('grid-floor')),
+      `${id} lists both aurora and grid-floor — they occupy the same below-content depth`,
+    );
+    // A --port-fx-* token tunes exactly one effect (the overlay tokens tune the
+    // two overlay effects); declaring one for an effect the theme does not list
+    // would silently paint nothing.
+    for (const token of Object.keys(theme.tokens ?? {})) {
+      const owner = FX_TOKEN_OWNERS.find(([prefix]) => token.startsWith(prefix));
+      if (!token.startsWith('--port-fx-')) continue;
+      assert(owner, `${id} declares ${token}, which no effect reads`);
+      assert(owner[1].some((effect) => effects.includes(effect)), `${id} declares ${token} without listing ${owner[1].join(' or ')}`);
+    }
+
     assert(isPlainObject(theme.colors), `${id} colors must be a plain object`);
     assert(isPlainObject(theme.tokens), `${id} tokens must be a plain object`);
 
@@ -149,6 +183,9 @@ async function main() {
     );
   }
   assert(css.includes('data-port-theme'), 'index.css must include the theme runtime layer');
+  for (const effect of THEME_EFFECTS) {
+    assert(css.includes(`data-port-theme-effects~="${effect}"`), `index.css has no shared block for effect ${effect}`);
+  }
 
   console.log(`Theme contract OK: ${THEME_IDS.join(', ')}`);
 }

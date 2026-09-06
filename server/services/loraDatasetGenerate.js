@@ -15,10 +15,10 @@
  * timeout. See that module for the rationale on each piece.
  */
 
-import { copyFile, readFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join, basename } from 'path';
 import sharp from 'sharp';
-import { PATHS, ensureDir, shortId } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, shortId, copyFileGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { buildVariationMatrix } from '../lib/loraDataset.js';
@@ -244,7 +244,7 @@ async function onRenderComplete({ datasetId, imageId, file, sourceFilename }) {
   }
   await ensureDir(datasetImagesDir(datasetId));
   const srcPath = join(PATHS.images, basename(sourceFilename));
-  await copyFile(srcPath, datasetImagePath(datasetId, file));
+  await copyFileGuarded(srcPath, datasetImagePath(datasetId, file));
   await setImageStatus(datasetId, imageId, 'ready');
   console.log(`📸 Dataset ${shortId(datasetId)} ← render ${file}`);
 }

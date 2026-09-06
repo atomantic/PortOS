@@ -29,11 +29,11 @@
  * only difference is the `assetResolver`.
  */
 
-import { createReadStream, createWriteStream } from 'fs';
-import { rename, unlink } from 'fs/promises';
+import { createReadStream } from 'fs';
+import { rename } from 'fs/promises';
 import { join } from 'path';
 import { Writable } from 'stream';
-import { PATHS, getMimeType, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, getMimeType, ensureDir, createWriteStreamGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { isTopLevelEntryName } from '../lib/pathSafety.js';
 import { parseZip, collectZipEntry, MAX_ZIP_MEMBER_BYTES } from '../lib/zipStream.js';
 import { parseExport, importConversations, assetPointerId } from './chatgptImport.js';
@@ -153,15 +153,25 @@ const UNSAFE_MEMBER_WARNING = '⚠️ ChatGPT import: skipped a ZIP member with 
 // Resolves with the sniffed extension (or null when the magic bytes aren't
 // recognized — the caller then falls back to the friendly name / `.bin`).
 const streamAssetToFile = (entry, filePath, max) => new Promise((resolve, reject) => {
-  const out = createWriteStream(filePath);
+  const outPromise = createWriteStreamGuarded(filePath);
+  let out = null;
   const head = [];
   let headLen = 0;
   let size = 0;
   let done = false;
-  const fail = (err) => { if (done) return; done = true; out.destroy(); reject(err); };
-  out.on('error', fail);
+  const fail = (err) => { if (done) return; done = true; out?.destroy(); reject(err); };
+  outPromise.then((stream) => {
+    // `sink` can already have failed (and destroyed `out`, which was still
+    // null at that point) before this resolves — the fd it just opened would
+    // otherwise never be closed. Destroy it immediately rather than wiring it
+    // into a promise that already settled.
+    if (done) { stream.destroy(); return; }
+    out = stream;
+    out.on('error', fail);
+    out.on('finish', () => { if (done) return; done = true; resolve(sniffExtension(Buffer.concat(head))); });
+  }).catch(fail);
   const sink = new Writable({
-    write(chunk, _enc, cb) {
+    async write(chunk, _enc, cb) {
       size += chunk.length;
       if (size > max) { cb(new Error(`ZIP member exceeds ${max} byte limit`)); return; }
       if (headLen < SNIFF_BYTES) {
@@ -171,13 +181,24 @@ const streamAssetToFile = (entry, filePath, max) => new Promise((resolve, reject
         head.push(slice);
         headLen += slice.length;
       }
-      if (out.write(chunk)) cb();
-      else out.once('drain', cb);
+      try {
+        const stream = await outPromise;
+        if (stream.write(chunk)) cb();
+        else stream.once('drain', cb);
+      } catch (err) {
+        cb(err);
+      }
     },
-    final(cb) { out.end(cb); },
+    async final(cb) {
+      try {
+        const stream = await outPromise;
+        stream.end(cb);
+      } catch (err) {
+        cb(err);
+      }
+    },
   });
   sink.on('error', fail);
-  out.on('finish', () => { if (done) return; done = true; resolve(sniffExtension(Buffer.concat(head))); });
   entry.pipe(sink);
 });
 
@@ -309,7 +330,7 @@ export async function extractChatgptZip(zipPath, { assetDir = PATHS.brainImportA
       if (!isTopLevelEntryName(fileName)) {
         console.warn(UNSAFE_MEMBER_WARNING);
         // eslint-disable-next-line no-await-in-loop -- same sequential loop
-        await unlink(tempPath).catch(() => {});
+        await unlinkGuarded(tempPath).catch(() => {});
         continue;
       }
       const filePath = join(assetDir, fileName);
@@ -379,7 +400,7 @@ export function makeAssetResolver(assets) {
 // served files behind, and repeated bad uploads could fill the disk.
 async function cleanupExtractedAssets(assets, assetDir = PATHS.brainImportAssets) {
   await Promise.all(
-    [...assets.values()].map((a) => unlink(`${assetDir}/${a.file}`).catch(() => {}))
+    [...assets.values()].map((a) => unlinkGuarded(`${assetDir}/${a.file}`).catch(() => {}))
   );
 }
 
@@ -388,7 +409,7 @@ async function cleanupExtractedAssets(assets, assetDir = PATHS.brainImportAssets
 // partial/aborted import doesn't leave orphaned temp files behind. Already-
 // renamed temps no longer exist — the unlink simply no-ops on them.
 async function cleanupTempFiles(tempPaths) {
-  await Promise.all([...tempPaths].map((p) => unlink(p).catch(() => {})));
+  await Promise.all([...tempPaths].map((p) => unlinkGuarded(p).catch(() => {})));
 }
 
 /**

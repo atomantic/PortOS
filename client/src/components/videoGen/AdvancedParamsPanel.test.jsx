@@ -56,7 +56,7 @@ describe('AdvancedParamsPanel', () => {
   it('fires onRandomSeed from the dice button', () => {
     const onRandomSeed = vi.fn();
     renderPanel({ onRandomSeed });
-    fireEvent.click(screen.getByTitle('Randomize seed'));
+    fireEvent.click(screen.getByRole('button', { name: 'Randomize seed' }));
     expect(onRandomSeed).toHaveBeenCalled();
   });
 
@@ -531,4 +531,21 @@ describe('AdvancedParamsPanel — draft decode', () => {
     expect(select.disabled).toBe(true);
     expect(screen.getByText(/Example Delivery is a delivery model/)).toBeTruthy();
   });
+});
+
+it('offers a bounded batch selector and explains unsupported models and chaining', () => {
+  const onBatchSizeChange = vi.fn();
+  const props = { ...baseProps, currentModel: { ...baseProps.currentModel, supportsWarmBatch: true }, batchSize: 3, onBatchSizeChange };
+  const { rerender } = render(<AdvancedParamsPanel {...props} />);
+  const picker = screen.getByLabelText('Renders in batch');
+  expect(picker.value).toBe('3');
+  fireEvent.change(picker, { target: { value: '5' } });
+  expect(onBatchSizeChange).toHaveBeenCalledWith(5);
+  expect(screen.getByText(/Blank seed: random each time/)).toBeTruthy();
+  rerender(<AdvancedParamsPanel {...props} chainingActive />);
+  expect(picker.disabled).toBe(true);
+  expect(picker.value).toBe('1');
+  rerender(<AdvancedParamsPanel {...props} currentModel={baseProps.currentModel} />);
+  expect(picker.disabled).toBe(true);
+  expect(screen.getByText(/available for local MiniMax H3/)).toBeTruthy();
 });

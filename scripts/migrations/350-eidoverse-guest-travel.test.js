@@ -1,0 +1,21 @@
+import { afterEach, expect, it } from 'vitest';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import migration from './350-eidoverse-guest-travel.js';
+let rootDir;
+afterEach(async () => { if (rootDir) await rm(rootDir, { recursive: true, force: true }); });
+it('adds default-off travel without widening existing local grants or overwriting deliberate travel authority', async () => {
+  rootDir = await mkdtemp(join(tmpdir(), 'portos-guest-migration-'));
+  expect(await migration.up({ rootDir })).toEqual({ updated: 0 });
+  const folder = join(rootDir, 'data', 'cos');
+  await mkdir(folder, { recursive: true });
+  const path = join(folder, 'config.json');
+  const prior = { schemaVersion: 6, manageEidoverse: true, readPortos: true, chooseThinkingPreset: true, thinkingPresetAllowlist: ['example-local'] };
+  await writeFile(path, JSON.stringify({ unrelated: true, persistentMindCapabilities: prior }));
+  await migration.up({ rootDir });
+  expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ unrelated: true, persistentMindCapabilities: { ...prior, schemaVersion: 7, visitEidoversePeers: false } });
+  await writeFile(path, JSON.stringify({ persistentMindCapabilities: { ...prior, visitEidoversePeers: true } }));
+  await migration.up({ rootDir });
+  expect(JSON.parse(await readFile(path, 'utf8')).persistentMindCapabilities.visitEidoversePeers).toBe(true);
+});

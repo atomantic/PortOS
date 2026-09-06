@@ -26,7 +26,7 @@
  */
 
 import { join } from 'path';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { cosEvents, emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450) — see the note in
@@ -46,7 +46,7 @@ import { MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isRetryHeld } from '../lib/taskRetryHold.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
-import { ensureDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, sleep, tryReadFile, writeFileGuarded } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
@@ -444,7 +444,7 @@ async function runAgentSpawn(task) {
     // patch and runs the repo's tests — so it is the one an operator actually
     // wants to attach to and steer. It may run as an interactive session when
     // its configured provider is a TUI record AND that vendor declares an
-    // attachable recipe (`tui: true`), which keeps every enforcement flag and
+    // attachable recipe (`tuiSpawnArgs`), which keeps every enforcement flag and
     // drops only the headless output flags.
     //
     // Everything else stays headless. The `no-tool` postures (Stage 1's
@@ -707,11 +707,11 @@ async function runAgentSpawn(task) {
     }
 
     // Save prompt to file
-    await writeFile(join(agentDir, 'prompt.txt'), prompt);
+    await writeFileGuarded(join(agentDir, 'prompt.txt'), prompt);
     let systemPromptFile = null;
     if (systemPrompt) {
       systemPromptFile = join(agentDir, 'system-prompt.md');
-      await writeFile(systemPromptFile, systemPrompt);
+      await writeFileGuarded(systemPromptFile, systemPrompt);
     }
 
     // Create run entry for usage tracking

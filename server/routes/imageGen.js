@@ -11,7 +11,6 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { unlink, copyFile } from 'fs/promises';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
   validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
@@ -26,7 +25,7 @@ import { recordUserAction } from '../services/userActions.js';
 import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
-import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
 import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModel } from '../services/imageGen/prepareParams.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { join, basename } from 'node:path';
@@ -535,7 +534,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // the client drops the connection mid-flight.
   if (uploadedTempPaths.length) {
     res.on('close', () => {
-      for (const p of uploadedTempPaths) unlink(p).catch(() => {});
+      for (const p of uploadedTempPaths) unlinkGuarded(p).catch(() => {});
     });
   }
   // Local + codex both go through mediaJobQueue (separate lanes — codex
@@ -970,7 +969,7 @@ router.post('/:filename/regenerate', asyncHandler(async (req, res) => {
   if (annotatedSketchPath) {
     await ensureDir(PATHS.imageRefs);
     initImageAbsPath = join(PATHS.imageRefs, `init-${randomUUID()}.png`);
-    await copyFile(annotatedSketchPath, initImageAbsPath);
+    await copyFileGuarded(annotatedSketchPath, initImageAbsPath);
   }
 
   // Provider-aware default (issue #912): SynthID-bearing sources keep the

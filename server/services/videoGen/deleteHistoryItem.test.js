@@ -30,6 +30,7 @@ vi.mock('../../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn(async () => []),
   atomicWrite: vi.fn(async () => {}),
   assertSafeFilename: vi.fn(),
+  unlinkGuarded: (...args) => unlink(...args),
   UUID_RE: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
 }));
 

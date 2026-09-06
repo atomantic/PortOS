@@ -29,13 +29,13 @@
  */
 
 import { join } from 'path';
-import { readdir, rm, stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { emitLog, cosEvents } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
 import { initProviderStatus } from './providerStatus.js';
 import { onCosRunnerEvent, initCosRunnerConnection, isRunnerAvailable, isRunnerReachable } from './cosRunnerClient.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, rmGuarded } from '../lib/fileUtils.js';
 import { loadSlashdoFile } from '../lib/slashdoLoader.js';
 import { getRunnerOutputBatcher, flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { syncRunnerAgents } from './agentRunnerSync.js';
@@ -269,7 +269,7 @@ async function runInitSpawner() {
       const runDir = join(RUNS_DIR, entry.name);
       const dirStat = await stat(runDir).catch(() => null);
       if (dirStat && dirStat.mtime.getTime() < cutoff) {
-        await rm(runDir, { recursive: true }).catch(() => {});
+        await rmGuarded(runDir, { recursive: true }).catch(() => {});
         pruned++;
       }
     }

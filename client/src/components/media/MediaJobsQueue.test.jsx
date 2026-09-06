@@ -7,6 +7,8 @@ import { retypeSettled } from '../../test/settledInput';
 // the network. useAutoRefetch calls the fetcher on mount.
 const listMediaJobs = vi.fn();
 const retryMediaJob = vi.fn();
+const resumeMediaVideoHold = vi.fn();
+const listMediaVideoHolds = vi.fn();
 vi.mock('../../services/apiMediaJobs.js', () => ({
   listMediaJobs: (...a) => listMediaJobs(...a),
   cancelMediaJob: vi.fn(),
@@ -14,6 +16,8 @@ vi.mock('../../services/apiMediaJobs.js', () => ({
   deleteMediaJob: vi.fn(),
   retryMediaJob: (...a) => retryMediaJob(...a),
   runMediaJobNow: vi.fn(),
+  resumeMediaVideoHold: (...a) => resumeMediaVideoHold(...a),
+  listMediaVideoHolds: (...a) => listMediaVideoHolds(...a),
 }));
 
 const getVideoGenStatus = vi.fn();
@@ -51,6 +55,8 @@ const trainingJob = {
 
 beforeEach(() => {
   listMediaJobs.mockReset();
+  listMediaVideoHolds.mockReset().mockResolvedValue([]);
+  resumeMediaVideoHold.mockReset();
   listLoraTrainingCheckpoints.mockReset();
   retryMediaJob.mockReset();
   retryMediaJob.mockResolvedValue({ jobId: 'new-job-1234' });
@@ -127,12 +133,15 @@ describe('MediaJobsQueue — Creative Director renders', () => {
 });
 
 describe('MediaJobsQueue — video render lanes', () => {
-  it('shows local, Grok, and remote work in separate queues', async () => {
+  it('files each job under the lane the server scheduled it into', async () => {
+    // The lane comes from the server's own classifier (`executionLane`), so a
+    // cloud backend the client has never heard of still lands in Cloud renders.
     listMediaJobs.mockResolvedValue([
       {
         id: 'localvideo0001',
         kind: 'video',
         status: 'running',
+        executionLane: 'gpu',
         queuedAt: '2026-06-19T10:00:00Z',
         params: { prompt: 'an invented local shot', mode: 'text', modelId: 'local-video' },
       },
@@ -140,27 +149,101 @@ describe('MediaJobsQueue — video render lanes', () => {
         id: 'grokvideo0001',
         kind: 'video',
         status: 'running',
+        executionLane: 'cloud',
         queuedAt: '2026-06-19T10:01:00Z',
-        params: { prompt: 'an invented cloud shot', mode: 'grok' },
+        params: { prompt: 'an invented grok shot', mode: 'grok' },
+      },
+      {
+        id: 'falvideo00001',
+        kind: 'video',
+        status: 'running',
+        executionLane: 'cloud',
+        queuedAt: '2026-06-19T10:01:30Z',
+        params: { prompt: 'an invented fal shot', mode: 'fal', modelId: 'provider/video-model' },
+      },
+      {
+        id: 'reactorvideo01',
+        kind: 'video',
+        status: 'queued',
+        executionLane: 'cloud',
+        queuedAt: '2026-06-19T10:01:45Z',
+        params: { prompt: 'an invented reactor shot', mode: 'reactor' },
       },
       {
         id: 'remotevideo001',
         kind: 'video',
         status: 'queued',
-        queuedAt: '2026-06-19T10:02:00Z',
+        executionLane: 'remote',
         renderer: 'remote',
+        queuedAt: '2026-06-19T10:02:00Z',
         params: { prompt: 'an invented peer shot', mode: 'text', modelId: 'peer-video' },
       },
     ]);
 
     render(<MediaJobsQueue kind="video" />);
 
-    expect(await screen.findByRole('region', { name: 'Local machine video queue' })).toHaveTextContent('an invented local shot');
-    expect(screen.getByRole('region', { name: 'Grok video queue' })).toHaveTextContent('an invented cloud shot');
+    const local = await screen.findByRole('region', { name: 'Local machine video queue' });
+    expect(local).toHaveTextContent('an invented local shot');
+    expect(local).not.toHaveTextContent('an invented fal shot');
+
+    const cloud = screen.getByRole('region', { name: 'Cloud renders video queue' });
+    expect(cloud).toHaveTextContent('an invented grok shot');
+    expect(cloud).toHaveTextContent('an invented fal shot');
+    expect(cloud).toHaveTextContent('an invented reactor shot');
+
     expect(screen.getByRole('region', { name: 'Remote machines video queue' })).toHaveTextContent('an invented peer shot');
-    expect(screen.getByRole('heading', { name: 'Local machine' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Grok' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Remote machines' })).toBeInTheDocument();
+  });
+
+  it('badges a cloud provider render with its provider, not the local engine', async () => {
+    listMediaJobs.mockResolvedValue([{
+      id: 'falvideo00001',
+      kind: 'video',
+      status: 'running',
+      executionLane: 'cloud',
+      queuedAt: '2026-06-19T10:00:00Z',
+      params: { prompt: 'an invented fal shot', mode: 'fal', modelId: 'provider/video-model' },
+    }]);
+
+    render(<MediaJobsQueue kind="video" />);
+
+    expect(await screen.findByTitle('provider/video-model')).toHaveTextContent('fal.ai / provider/video-model');
+    expect(screen.queryByText(/local \//)).not.toBeInTheDocument();
+  });
+
+  it('derives the lane from mode + renderer when the response predates executionLane', async () => {
+    // A rebuilt bundle can be served briefly by a server process that has not
+    // restarted onto the new projection yet; the queue must not fall back to
+    // filing every cloud render under Local machine while that window is open.
+    listMediaJobs.mockResolvedValue([
+      {
+        id: 'legacylocal01',
+        kind: 'video',
+        status: 'running',
+        queuedAt: '2026-06-19T10:00:00Z',
+        params: { prompt: 'an invented legacy local shot', mode: 'text', modelId: 'local-video' },
+      },
+      {
+        id: 'legacyfal0001',
+        kind: 'video',
+        status: 'running',
+        queuedAt: '2026-06-19T10:01:00Z',
+        params: { prompt: 'an invented legacy fal shot', mode: 'fal' },
+      },
+      {
+        id: 'legacyremote1',
+        kind: 'video',
+        status: 'queued',
+        renderer: 'remote',
+        queuedAt: '2026-06-19T10:02:00Z',
+        params: { prompt: 'an invented legacy peer shot', mode: 'text', modelId: 'peer-video' },
+      },
+    ]);
+
+    render(<MediaJobsQueue kind="video" />);
+
+    expect(await screen.findByRole('region', { name: 'Local machine video queue' })).toHaveTextContent('an invented legacy local shot');
+    expect(screen.getByRole('region', { name: 'Cloud renders video queue' })).toHaveTextContent('an invented legacy fal shot');
+    expect(screen.getByRole('region', { name: 'Remote machines video queue' })).toHaveTextContent('an invented legacy peer shot');
   });
 });
 
@@ -626,5 +709,63 @@ describe('MediaJobsQueue — video retry decode override (#5449)', () => {
     await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
     const [, overrides] = retryMediaJob.mock.calls.at(-1);
     expect(overrides.draftDecode).toBeNull();
+  });
+});
+
+describe('MediaJobsQueue — local video holds', () => {
+  it('makes the scope of damaged-hold recovery explicit before resuming', async () => {
+    listMediaJobs.mockResolvedValue([]);
+    listMediaVideoHolds.mockResolvedValue([{ id: 'recovery-hold', scope: 'local-video', modelId: '*', runtime: '*',
+      cause: 'Saved video holds are damaged.', heldJobCount: 0 }]);
+    const user = userEvent.setup();
+    render(<MediaJobsQueue kind="video" />);
+    expect(await screen.findByText('All local video')).toBeInTheDocument();
+    expect(screen.queryByText(/Three matching failures/)).not.toBeInTheDocument();
+    resumeMediaVideoHold.mockResolvedValue({ resumed: true });
+    listMediaVideoHolds.mockResolvedValue([]);
+    await user.click(screen.getByRole('button', { name: 'Resume all local video' }));
+    await waitFor(() => expect(screen.queryByText('All local video')).not.toBeInTheDocument());
+    expect(resumeMediaVideoHold).toHaveBeenCalledWith('recovery-hold', { silent: true });
+  });
+
+  it('retains held state on a failed resume and clears it only after a successful response', async () => {
+    const hold = { id: 'example-hold', modelId: 'example-mlx', runtime: 'mlx_video', cause: 'Shader compilation failed', heldJobCount: 2 };
+    const jobs = ['held-1', 'held-2'].map((id) => ({ id, kind: 'video', status: 'queued', hold, params: {} }));
+    listMediaJobs.mockResolvedValue(jobs);
+    listMediaVideoHolds.mockResolvedValue([hold]);
+    resumeMediaVideoHold.mockRejectedValueOnce(new Error('Resume unavailable'));
+    const user = userEvent.setup();
+    render(<MediaJobsQueue kind="video" />);
+    expect(await screen.findByText('2 video jobs held')).toBeInTheDocument();
+    expect(screen.getByText('Shader compilation failed')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled());
+    expect(screen.getByText('2 video jobs held')).toBeInTheDocument();
+    let finishResume;
+    resumeMediaVideoHold.mockImplementationOnce(() => new Promise((resolve) => { finishResume = resolve; }));
+    await user.click(screen.getByRole('button', { name: 'Resume' }));
+    expect(screen.getByRole('button', { name: 'Resuming…' })).toBeDisabled();
+    expect(screen.getByText('2 video jobs held')).toBeInTheDocument();
+    listMediaJobs.mockResolvedValue(jobs.map((job) => ({ ...job, hold: undefined })));
+    listMediaVideoHolds.mockResolvedValue([]);
+    await act(async () => { finishResume({ resumed: true }); });
+    await waitFor(() => expect(screen.queryByText('2 video jobs held')).not.toBeInTheDocument());
+    expect(resumeMediaVideoHold).toHaveBeenLastCalledWith('example-hold', { silent: true });
+    expect(retryMediaJob).not.toHaveBeenCalled();
+  });
+
+  it('offers resume for an active hold after all retained jobs were canceled', async () => {
+    listMediaJobs.mockResolvedValue([]);
+    listMediaVideoHolds.mockResolvedValue([{ id: 'empty-hold', modelId: 'example-mlx', runtime: 'mlx_video',
+      cause: 'Shader compilation failed', heldJobCount: 0 }]);
+    const user = userEvent.setup();
+    render(<MediaJobsQueue kind="video" />);
+    expect(await screen.findByText('0 video jobs held')).toBeInTheDocument();
+    resumeMediaVideoHold.mockResolvedValue({ resumed: true });
+    listMediaVideoHolds.mockResolvedValue([]);
+    await user.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(screen.queryByText('0 video jobs held')).not.toBeInTheDocument());
+    expect(resumeMediaVideoHold).toHaveBeenCalledWith('empty-hold', { silent: true });
+    expect(retryMediaJob).not.toHaveBeenCalled();
   });
 });

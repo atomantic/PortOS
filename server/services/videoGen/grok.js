@@ -22,11 +22,11 @@
  */
 
 import { spawn } from '../../lib/childProcess.js';
-import { copyFile, mkdir, open, rename, rm, stat, unlink } from 'fs/promises';
+import { mkdir, open, stat } from 'fs/promises';
 import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS, copyFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
@@ -209,12 +209,12 @@ async function runGrokVideo(job, jobId, bin, args, {
   // scratch-dir spawn telling the child one consistent story about where it is.
   const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
-  const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+  const removeScratch = () => rmGuarded(scratchDir, { recursive: true, force: true }).catch(() => {});
   // The route stages a multipart source image into data/uploads and hands us
   // its path — the provider owns unlinking it on every terminal path (same
   // contract as videoGen/local.js; the queue only cleans up when the
   // provider throws before spawning, or on boot-restore of a dead job).
-  const removeUpload = () => { if (uploadedTempPath) unlink(uploadedTempPath).catch(() => {}); };
+  const removeUpload = () => { if (uploadedTempPath) unlinkGuarded(uploadedTempPath).catch(() => {}); };
 
   if (useStdin) {
     proc.stdin.on('error', () => {});
@@ -276,12 +276,8 @@ async function runGrokVideo(job, jobId, bin, args, {
         const prefix = harvested.invalid ? 'Grok wrote a non-MP4 file at the directed path. ' : '';
         return finalizeError(job, jobId, proc, `${prefix}${noVideoReason(stdoutTail)}`);
       }
-      // Move, not copy (metadata-only when tmp and the videos dir share a
-      // filesystem); copy+unlink is the cross-device fallback.
-      await rename(stagingPath, outputPath).catch(async () => {
-        await copyFile(stagingPath, outputPath);
-        await unlink(stagingPath).catch(() => {});
-      });
+      await copyFileGuarded(stagingPath, outputPath);
+      await unlinkGuarded(stagingPath).catch(() => {});
       removeScratch();
       removeUpload();
       if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);

@@ -17,10 +17,9 @@
  */
 
 import { createHash } from 'crypto';
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { PATHS, ensureDir, detectImageFormat } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, detectImageFormat, writeFileGuarded } from '../../lib/fileUtils.js';
 import { normalizePinterestFeedUrl, parsePinterestRss } from '../../lib/pinterestFeed.js';
 import { fetchPublicText, fetchPublicBinary } from '../../lib/safeUrlFetch.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
@@ -57,7 +56,7 @@ async function downloadPinImage({ pinUrl, imageUrl, imageUrlOriginal }) {
   const fmt = detectImageFormat(res.buffer);
   if (!fmt) return null;
   const filename = `pinterest-${createHash('sha1').update(pinUrl).digest('hex').slice(0, 16)}${fmt.ext}`;
-  await writeFile(join(PATHS.images, filename), res.buffer);
+  await writeFileGuarded(join(PATHS.images, filename), res.buffer);
   return `/data/images/${filename}`;
 }
 

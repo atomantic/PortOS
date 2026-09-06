@@ -126,4 +126,29 @@ describe('VideoGen federated render target', () => {
     expect(screen.getByText(/cannot take/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Generate$/ })).toBeDisabled();
   });
+
+  it.each([
+    ['Grok', { settings: { imageGen: { grok: { enabled: true } } }, status: {} }],
+    ['fal.ai', { status: { falEnabled: true } }],
+    ['Reactor.inc', { status: { reactorEnabled: true } }],
+  ])('hides generation target picker when %s external service is selected', async (label, config) => {
+    if (config.settings) state.settings = config.settings;
+    if (config.status) {
+      state.getVideoGenStatus.mockResolvedValue(videoGenStatus([MODEL], config.status));
+    }
+    await startRender();
+
+    // Target picker is visible initially on the Local backend
+    expect(screen.getByRole('combobox', { name: /generation target/i })).toBeInTheDocument();
+
+    // Switch to the external backend
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${label}$`, 'i') }));
+
+    // Target picker should now be hidden
+    expect(screen.queryByRole('combobox', { name: /generation target/i })).not.toBeInTheDocument();
+
+    // Switch back to Local backend — target picker reappears
+    fireEvent.click(screen.getByRole('button', { name: /^Local$/ }));
+    expect(screen.getByRole('combobox', { name: /generation target/i })).toBeInTheDocument();
+  });
 });

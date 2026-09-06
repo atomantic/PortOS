@@ -322,6 +322,13 @@ export default function LocalLlmRuntimesView() {
       ? `${idleRuntimeLabel[runtime] || runtime} will stay loaded while idle`
       : `${idleRuntimeLabel[runtime] || runtime} releases its model after ${minutes} idle minute${minutes === 1 ? '' : 's'}`
   ).then(runtime === 'llama' ? loadLlamaStatus : runtime === 'slotstream' ? loadSlotstreamStatus : loadMtplxStatus);
+  const toggleKeepLoaded = (runtime, nextPinned) => runAction(
+    `runtime-keep-loaded-${runtime}`,
+    () => patchSettingsSlice(`localLlm.${runtime}`, { keepLoaded: nextPinned }),
+    nextPinned
+      ? `${idleRuntimeLabel[runtime] || runtime} is pinned and will stay loaded`
+      : `${idleRuntimeLabel[runtime] || runtime} will follow idle and pressure release policies`
+  ).then(runtime === 'llama' ? loadLlamaStatus : runtime === 'slotstream' ? loadSlotstreamStatus : loadMtplxStatus);
   const runtimeInstallSlotstream = () => runAction(
     'runtime-install-slotstream',
     () => installSlotstream(),
@@ -656,6 +663,7 @@ export default function LocalLlmRuntimesView() {
         onStopSlotstream={runtimeStopSlotstream}
         onSaveStartup={saveRuntimeStartup}
         onSaveIdleWindow={saveIdleWindow}
+        onToggleKeepLoaded={toggleKeepLoaded}
       />
 
       {/* Backends — model catalog, default marker, cross-backend import */}

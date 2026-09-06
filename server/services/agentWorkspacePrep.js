@@ -41,6 +41,7 @@ import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { resolveTaskForkHead } from '../lib/forkHead.js';
 import { getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
+import { isNonCommittingCoordinatorTask } from './taskTypeHooks.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -101,10 +102,15 @@ async function getProtectedAgentIds() {
  *
  * `findAdoptableWorktreeForBranch` refuses every holder PortOS doesn't own
  * outright, so this can never move the user's checkout or a live agent's tree.
+ * The one caller-gated exception is `allowLiveClaim`: a non-committing
+ * coordinator follow-up (`isNonCommittingCoordinatorTask` — a review-loop
+ * resolve-and-merge or a PR-remediation follow-up) may take over a `claim-*`
+ * holder too, because its whole deliverable names that exact branch as the one
+ * to finish and land.
  *
  * @returns {Promise<{ worktreeInfo: object, adoptedFrom: string }|null>}
  */
-async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId }) {
+async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, preferredPath = null, taskId, allowLiveClaim = false }) {
   // Fail CLOSED on an unreadable agent list: an empty protected set would read as
   // "nothing is running", which is the one wrong answer here — it would move a
   // live run's directory. The caller's timed pause is the safe outcome instead.
@@ -114,7 +120,7 @@ async function adoptWorktreeHoldingBranch({ agentId, workspacePath, branchName, 
   });
   if (!activeAgentIds) return null;
 
-  const holder = await findAdoptableWorktreeForBranch(workspacePath, branchName, { activeAgentIds, preferredPath });
+  const holder = await findAdoptableWorktreeForBranch(workspacePath, branchName, { activeAgentIds, preferredPath, allowLiveClaim });
   if (!holder) return null;
 
   const worktreeInfo = await adoptWorktree(agentId, workspacePath, holder.path, branchName).catch(err => {
@@ -150,6 +156,16 @@ async function prepareRequestedWorktree({
   // same safe adoption path review-loop follow-ups use, rather than cutting a
   // fresh branch merely because a cached path could not be moved.
   const resumeWorktreePath = existingBranch ? task.metadata?.resumeWorktreePath : null;
+  // A review-loop / PR-remediation follow-up's whole purpose is landing THIS
+  // branch, and the user's own "resolve and merge" trigger (or pr-reviewer's own
+  // dispatch) is the signal to finish whatever a `/do:next` claim left on it — so
+  // these are the callers allowed to take over a `claim-*` holder instead of
+  // retrying against it until the task gives up (#6243). `isNonCommittingCoordinatorTask`
+  // is the shared predicate for exactly this "same shape" set (taskTypeHooks.js) —
+  // reused here rather than re-listing the flags, so a future follow-up type of the
+  // same shape inherits the carve-out too. A plain resume never targets a claim tree
+  // (its pointer names a CoS `agent-*` worktree) and doesn't set either follow-up
+  // flag, so the predicate is a no-op there.
   const takeoverPromise = existingBranch
     ? adoptWorktreeHoldingBranch({
       agentId,
@@ -157,6 +173,7 @@ async function prepareRequestedWorktree({
       branchName: existingBranch,
       preferredPath: resumeWorktreePath,
       taskId: task.id,
+      allowLiveClaim: isNonCommittingCoordinatorTask(task),
     })
     : Promise.resolve(null);
 

@@ -14,9 +14,9 @@
  * because a GPU clean completes and is fetched in seconds-to-minutes.
  */
 
-import { readdir, stat, unlink } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, unlinkGuarded } from '../lib/fileUtils.js';
 import { listJobs } from './mediaJobQueue/index.js';
 import { createSweepScheduler } from './sweepScheduler.js';
 
@@ -92,7 +92,7 @@ export async function sweepImageCleanTmp({
       keptYoung += 1;
       continue;
     }
-    const removed = await unlink(join(tmpDir, name)).then(() => true).catch(() => false);
+    const removed = await unlinkGuarded(join(tmpDir, name)).then(() => true).catch(() => false);
     if (removed) deleted += 1;
   }
   return { deleted, keptYoung, keptActive };

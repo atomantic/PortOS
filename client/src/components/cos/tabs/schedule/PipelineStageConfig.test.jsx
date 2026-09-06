@@ -104,17 +104,19 @@ function renderStages(stages = STAGES, onUpdate = vi.fn().mockResolvedValue(unde
 }
 
 describe('PipelineStageConfig — pr-reviewer', () => {
-  it('uses shared capability policies for the gate and sandbox-capable action providers', () => {
+  it('requires tool-free providers for both PR stages and marks an unsafe saved pin unavailable', () => {
     renderStages();
 
     const providerSelects = screen.getAllByLabelText('Provider');
     expect([...providerSelects[0].options].map((option) => option.value)).toEqual(['', 'claude-ollama']);
-    expect([...providerSelects[1].options].map((option) => option.value)).toEqual(['', 'codex-cli', 'antigravity-cli']);
+    expect([...providerSelects[1].options].map((option) => option.value)).toEqual(['', 'claude-ollama', 'codex-cli']);
+    expect(providerSelects[1].querySelector('option[value="codex-cli"]')).toBeDisabled();
 
     const modelSelects = screen.getAllByLabelText('Model');
     expect([...modelSelects[0].options].map((option) => option.value)).toEqual(['', 'safe-model']);
     expect([...modelSelects[1].options].map((option) => option.value)).toEqual(['', 'gpt-5.6']);
-    expect(screen.getByText(/maintained OS sandbox/i)).toBeInTheDocument();
+    expect(screen.getByText(/^Tool-free review\./)).toBeInTheDocument();
+    expect(screen.queryByText(/applies only the screened patch/)).not.toBeInTheDocument();
   });
 
   it('removes the optional actions stage without changing the mandatory gate', async () => {
@@ -139,7 +141,7 @@ describe('PipelineStageConfig — pr-reviewer', () => {
             expect.objectContaining({
               role: 'actions',
               promptKey: 'pr-reviewer-review',
-              executionProfile: 'public-review-actions',
+              executionProfile: 'public-review-gate',
               discardWorktree: true,
               noCodeOutput: true,
             }),
@@ -184,7 +186,7 @@ describe('PipelineStageConfig — posture-driven eligibility', () => {
     // A non-local provider's own catalog is selectable — the installed-local
     // model list only applies where PortOS can probe capabilities.
     expect(screen.getByText(/^Tool-free stage\./)).toBeInTheDocument();
-    expect(screen.getByText(/^Sandboxed stage\./)).toBeInTheDocument();
+    expect(screen.getByText(/^Tool-free review\./)).toBeInTheDocument();
   });
 
   // The bug behind #5906's blocked run: the CLI records were disabled and the
@@ -202,43 +204,32 @@ describe('PipelineStageConfig — posture-driven eligibility', () => {
     expect([...providerSelects[1].options].map((o) => o.value)).toEqual(['', 'codex-tui']);
     // The dropdown IS the eligible list; the note must not re-name providers,
     // least of all the disabled ones.
-    const note = screen.getByText(/^Sandboxed stage\./);
+    const note = screen.getByText(/^Tool-free review\./);
     expect(note.textContent).not.toContain('Grok Build CLI');
     expect(note.textContent).not.toContain('Codex CLI');
   });
 
   it('warns instead of silently offering nothing when a stage has no eligible provider', () => {
     renderWith([
-      { id: 'claude-ollama', name: 'Local Claude', type: 'cli', command: 'claude', endpoint: 'http://127.0.0.1:11434', models: ['safe-model'], publicReviewPostures: ['no-tool'] },
+      { id: 'actions-only', name: 'Actions Only', type: 'cli', command: 'example', models: ['example-model'], publicReviewPostures: ['sandboxed-actions'] },
     ]);
-    expect(screen.getByText(/No enabled AI provider on this install can enforce the sandboxed-actions posture/)).toBeInTheDocument();
+    expect(screen.getAllByText(/No enabled AI provider on this install can enforce the tool-free posture/)).toHaveLength(2);
   });
 
-  // Stage 3 offers every enabled binary provider the server publishes as
-  // runnable, and the note separates the vendor-sandboxed ones from those the
-  // disposable worktree alone isolates.
-  it('offers a worktree-only provider for the actions stage and says which providers are OS-sandboxed', () => {
+  it('excludes worktree-only providers from both PR stages despite a legacy action profile', () => {
     renderWith([
       { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', models: ['gpt-5.6'], publicReviewPostures: ['no-tool', 'sandboxed-actions'], publicReviewEnforcedPostures: ['no-tool', 'sandboxed-actions'] },
       { id: 'opencode-tui', name: 'OpenCode TUI', type: 'tui', command: 'opencode', models: ['x'], publicReviewPostures: ['sandboxed-actions'], publicReviewEnforcedPostures: [] },
     ]);
     const providerSelects = screen.getAllByLabelText('Provider');
     expect([...providerSelects[0].options].map((o) => o.value)).toEqual(['', 'codex-tui']);
-    expect([...providerSelects[1].options].map((o) => o.value)).toEqual(['', 'codex-tui', 'opencode-tui']);
-    const note = screen.getByText(/^Sandboxed stage\./);
-    // The eligible set is the dropdown's job; the note only separates the
-    // vendor-sandboxed providers from the worktree-only ones.
-    expect(note.textContent).not.toContain('Eligible on this install');
-    expect(note.textContent).toContain("OS-sandboxed by the vendor's own recipe: Codex TUI.");
-    expect(note.textContent).toContain('isolated by the disposable worktree only: OpenCode TUI.');
+    expect([...providerSelects[1].options].map((o) => o.value)).toEqual(['', 'codex-tui']);
+    expect(screen.queryByText(/^Sandboxed stage\./)).not.toBeInTheDocument();
   });
 
-  // A local runtime's daemon is the authority on what it serves; the provider
-  // record's `models` array is a cached snapshot. The tool-free gate already
-  // read the daemon, but the sandboxed actions stage read the snapshot — so a
-  // stage on a local provider could only be pinned to models that had since
-  // been removed, and never to one just pulled.
-  it('offers the installed local models for a local-backed ACTIONS stage', () => {
+  // A saved model that now advertises tools must remain visible as unavailable,
+  // while newly installed models without tools are offered immediately.
+  it('requires installed no-tool local models for the final PR review', () => {
     const localProvider = {
       id: 'opencode-ollama-tui',
       name: 'OpenCode Ollama TUI',
@@ -267,16 +258,15 @@ describe('PipelineStageConfig — posture-driven eligibility', () => {
 
     const modelSelects = screen.getAllByLabelText('Model');
     // The daemon's installed models, NOT the record's `stale-cached-model`.
-    expect([...modelSelects[1].options].map((o) => o.value)).toEqual(['', 'safe-model', 'tool-model']);
+    expect([...modelSelects[1].options].map((o) => o.value)).toEqual(['', 'tool-model', 'safe-model']);
+    expect(modelSelects[1].querySelector('option[value="tool-model"]')).toBeDisabled();
+    expect(modelSelects[1].querySelector('option[value="safe-model"]')).not.toBeDisabled();
   });
 });
 
 // `useLocalModels` reports "not fetched yet" and "the daemon listed nothing"
 // identically, as `[]` — so an empty list is not evidence the daemon serves no
-// models. The actions stage has no capability gate, so it must fall back to the
-// record's catalog rather than render an empty picker that also drops the
-// stage's own saved pin. The tool-free gate deliberately does NOT: a model with
-// no probeable capability report is not selectable there at all.
+// models. Neither PR stage may offer cached models without capability reports.
 describe('PipelineStageConfig — local daemon unreachable', () => {
   const LOCAL = {
     id: 'opencode-ollama-tui',
@@ -288,7 +278,7 @@ describe('PipelineStageConfig — local daemon unreachable', () => {
     publicReviewEnforcedPostures: ['no-tool'],
   };
 
-  it('falls back to the record catalog for the actions stage, but not for the gate', () => {
+  it('rejects unverified cached models in both PR stages while keeping saved pins visibly unavailable', () => {
     localModels = { ollama: [], lmstudio: [], capabilitiesByBackend: {}, loading: false };
     render(
       <MemoryRouter>
@@ -312,9 +302,8 @@ describe('PipelineStageConfig — local daemon unreachable', () => {
     // rather than blanking the control, and `cached-b` proves the list itself
     // was not consulted.
     expect([...modelSelects[0].options].map((o) => o.value)).toEqual(['', 'cached-a']);
-    // The actions stage gets the whole record catalog instead of an empty
-    // picker that would also drop its own saved pin (nothing re-adds it there:
-    // its policy allows every model, so the disallowed affordance never fires).
-    expect([...modelSelects[1].options].map((o) => o.value)).toEqual(['', 'cached-a', 'cached-b']);
+    expect([...modelSelects[1].options].map((o) => o.value)).toEqual(['', 'cached-a']);
+    expect(modelSelects[0].querySelector('option[value="cached-a"]')).toBeDisabled();
+    expect(modelSelects[1].querySelector('option[value="cached-a"]')).toBeDisabled();
   });
 });

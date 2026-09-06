@@ -29,6 +29,11 @@ vi.mock('./local.js', () => ({
   DEFAULT_NUM_FRAMES: 121,
 }));
 
+const { unlinkMock, copyFileMock } = vi.hoisted(() => ({
+  unlinkMock: vi.fn(async () => {}),
+  copyFileMock: vi.fn(async () => {}),
+}));
+
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: {
     root: '/mock',
@@ -45,12 +50,14 @@ vi.mock('../../lib/fileUtils.js', () => ({
     if (!safe || safe === '.' || safe === '..') return null;
     return `/mock/images/${safe}`;
   }),
+  unlinkGuarded: unlinkMock,
+  copyFileGuarded: copyFileMock,
 }));
 
 vi.mock('fs', () => ({ existsSync: vi.fn(() => true) }));
 vi.mock('fs/promises', () => ({
-  unlink: vi.fn(async () => {}),
-  copyFile: vi.fn(async () => {}),
+  unlink: unlinkMock,
+  copyFile: copyFileMock,
 }));
 
 import { unlink } from 'fs/promises';

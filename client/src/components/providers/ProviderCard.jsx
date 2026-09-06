@@ -19,6 +19,7 @@ import {
   filterHardwareCompatibleProviderModels,
   isApiProvider,
   isCodexSubscriptionProvider,
+  codexRoutingAdvisory,
   gatewayForProvider,
   isPrivateNetworkEndpoint,
   isFleetProvider,
@@ -35,7 +36,7 @@ import { formatContextLength } from '../../utils/formatters';
 import { isHttpsUrl } from '../../utils/urlNormalize';
 import ProviderRuntimeStatus from './ProviderRuntimeStatus';
 import ProviderReadiness from './ProviderReadiness';
-import { GatewayKeyHint } from './ProviderNotices';
+import { CodexRoutingNotice, GatewayKeyHint } from './ProviderNotices';
 
 // One phrasing for "this command isn't on the CoS Agent Runner's allowlist".
 // The editor states the same thing in its own inline banner, in prose.
@@ -118,6 +119,9 @@ export default function ProviderCard({
   onCodexEnable,
 }) {
   const style = CARD_STATE_STYLES[cardState.state];
+  // Non-blocking: it never touches `cardState`, only what the card SAYS about
+  // where this provider's runs actually go.
+  const routingAdvisory = codexRoutingAdvisory(provider);
   const compatibleModels = filterHardwareCompatibleProviderModels(provider.models, provider);
   const fleetProvider = isFleetProvider(provider);
   const fleetHost = fleetProvider && URL.canParse(provider.endpoint)
@@ -316,8 +320,14 @@ export default function ProviderCard({
       {/* Card body — full width, below the header row rather than beside the
           action buttons. */}
       <div className="mt-3 space-y-2">
+        <CodexRoutingNotice
+          advisory={routingAdvisory}
+          className="max-w-3xl"
+          onEdit={() => onEdit(provider)}
+        />
         {codexSubscription && (
           <CodexSubscriptionPanel
+            routingOverridden={Boolean(routingAdvisory)}
             account={codexAccount}
             models={codexModels}
             loading={codexAccountLoading}
@@ -549,6 +559,7 @@ function CodexSubscriptionPanel({
   onCopyCode,
   subscriptionEnabled,
   onEnable,
+  routingOverridden = false,
 }) {
   const status = account?.status || 'unknown';
   const login = account?.login;
@@ -577,6 +588,12 @@ function CodexSubscriptionPanel({
       </div>
       <p className="text-gray-400">{action}</p>
       {windows.length > 0 && <p className="text-gray-400">{windows.join(' · ')}</p>}
+      {routingOverridden && (
+        <p className="text-port-warning">
+          These are this ChatGPT account’s limits. Your Codex config re-points model routing, so PortOS
+          runs on this provider may not be counted here.
+        </p>
+      )}
       {typeof account?.checkedAt === 'number' && <p className="text-gray-500">Last usage refresh: {new Date(account.checkedAt).toLocaleString()}</p>}
       {catalogCount !== null && <p className="text-gray-500">Subscription catalog: {catalogCount} model{catalogCount === 1 ? '' : 's'} available.</p>}
       {modelError && <p className="text-port-warning">Using the last known model catalog while a refresh is unavailable.</p>}

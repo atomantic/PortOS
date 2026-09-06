@@ -24,9 +24,9 @@
  */
 
 import { createHash } from 'node:crypto';
-import { cp, stat, writeFile } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { atomicWrite, ensureDir, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, writeFileGuarded, copyFileGuarded } from '../lib/fileUtils.js';
 import { isAgentScratchPath } from '../lib/agentScratchPaths.js';
 import { kebabCase } from '../lib/textUtils.js';
 import { execGitSafe } from './git.js';
@@ -112,7 +112,7 @@ async function copyUntracked(worktreePath, destDir) {
       await ensureDir(parent);
       created.add(parent);
     }
-    const ok = await cp(source, destination).then(() => true, () => false);
+    const ok = await copyFileGuarded(source, destination).then(() => true, () => false);
     if (ok) {
       copied.push(rel);
       total += size;
@@ -141,7 +141,7 @@ export async function backupSupersededBranch(repoPath, branch, { defaultBranch =
   const commitsPath = join(dir, 'commits.patch');
   const commits = await gitText(['format-patch', `${defaultBranch}..${branch.branch}`, '--stdout'], repoPath);
   const hasCommits = Boolean(commits.trim());
-  if (hasCommits) await writeFile(commitsPath, commits);
+  if (hasCommits) await writeFileGuarded(commitsPath, commits);
 
   const diffPath = join(dir, 'worktree.diff');
   let hasDiff = false;
@@ -149,7 +149,7 @@ export async function backupSupersededBranch(repoPath, branch, { defaultBranch =
   if (branch.worktreePath) {
     const worktreeDiff = await gitText(['diff', 'HEAD', '--binary'], branch.worktreePath);
     hasDiff = Boolean(worktreeDiff.trim());
-    if (hasDiff) await writeFile(diffPath, worktreeDiff);
+    if (hasDiff) await writeFileGuarded(diffPath, worktreeDiff);
     // No upfront mkdir: copyUntracked creates each parent lazily, so a worktree
     // with nothing untracked leaves no empty directory behind.
     untracked = await copyUntracked(branch.worktreePath, join(dir, 'untracked'));

@@ -3,7 +3,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { pathExists, safeJSONParse } from '../lib/fileUtils.js';
 import { getOriginInfo, parseGitRemoteUrl, readRemoteUrl } from '../lib/gitRemote.js';
 import { githubApiHost, hostToWorkTracker, isGithubHost } from '../lib/workTracker.js';
-import { execGitSafe, fetchOrigin, resolveForgeForRepo } from './git.js';
+import { execGitSafe, fetchOrigin, isFetchFresh, resolveForgeForRepo } from './git.js';
 import { execGh } from './github.js';
 
 const GH_TIMEOUT_MS = 60_000;
@@ -55,6 +55,7 @@ async function githubRepositoryMetadata(repoPath, origin) {
     'api', ...(host === 'github.com' ? [] : ['--hostname', host]),
     `repos/${origin.fullName}`, '--jq',
     '{fullName: .full_name, defaultBranch: .default_branch, isFork: .fork, '
+      + 'canPush: .permissions.push, '
       + 'parentFullName: .parent.full_name, parentDefaultBranch: .parent.default_branch, '
       + 'sourceFullName: .source.full_name, sourceDefaultBranch: .source.default_branch}',
   ], GH_TIMEOUT_MS, {
@@ -74,7 +75,13 @@ async function githubRepositoryMetadata(repoPath, origin) {
 export async function resolveRepositoryTopology(repoPath) {
   const origin = await getOriginInfo(repoPath);
   if (!origin.hasOrigin) {
-    return { origin, upstream: null, isFork: false, available: false, error: 'No origin remote configured' };
+    return {
+      origin: { ...origin, canPush: null },
+      upstream: null,
+      isFork: false,
+      available: false,
+      error: 'No origin remote configured',
+    };
   }
 
   const [metadata, upstreamUrl] = await Promise.all([
@@ -96,8 +103,17 @@ export async function resolveRepositoryTopology(repoPath) {
     ? (metadata.sourceDefaultBranch || metadata.parentDefaultBranch || metadata.defaultBranch || 'main')
     : metadata?.defaultBranch || null;
 
+  // `canPush` is tri-state on purpose: `false` only when the forge answered and
+  // said no, `null` when nothing answered. A fork PortOS cannot push to cannot
+  // be fast-forwarded, and an unknown answer must not silently retract a sync
+  // PortOS has always offered.
   return {
-    origin: { ...origin, isFork, isUpstream: upstream ? !isFork : null },
+    origin: {
+      ...origin,
+      isFork,
+      isUpstream: upstream ? !isFork : null,
+      canPush: typeof metadata?.canPush === 'boolean' ? metadata.canPush : null,
+    },
     upstream: upstream ? { ...upstream, branch: defaultBranch } : null,
     isFork,
     available: Boolean(upstream),
@@ -156,12 +172,20 @@ async function inspectCheckout({ id, label, repoPath }) {
   const branch = branchName && branchName !== 'HEAD' ? branchName : null;
   const head = headResult.exitCode === 0 ? headResult.stdout.trim() : null;
   const clean = worktreeResult.exitCode === 0 ? worktreeResult.stdout.trim().length === 0 : null;
-  const fetchResult = topology.origin.hasOrigin
-    ? await fetchOrigin(repoPath).then(
-      () => ({ fresh: true, error: topology.error }),
-      () => ({ fresh: false, error: 'Could not refresh the origin repository' }),
-    )
-    : { fresh: false, error: topology.error };
+  // Skip the network hop when this checkout's remote refs were already
+  // refreshed inside the freshness window — the refs really are current, so
+  // `fresh: true` stays truthful. This read used to be reachable only from the
+  // app's Git tab; the Eidoverse page now runs it on every visit, where an
+  // ungated fetch would cost two `git fetch`es per mount (twice that under
+  // React StrictMode) for an answer that cannot have changed.
+  const fetchResult = !topology.origin.hasOrigin
+    ? { fresh: false, error: topology.error }
+    : isFetchFresh(repoPath)
+      ? { fresh: true, error: topology.error }
+      : await fetchOrigin(repoPath).then(
+        () => ({ fresh: true, error: topology.error }),
+        () => ({ fresh: false, error: 'Could not refresh the origin repository' }),
+      );
 
   const originRef = branch ? `refs/remotes/origin/${branch}` : null;
   const [originHeadResult, countsResult] = originRef
@@ -200,6 +224,26 @@ async function inspectCheckout({ id, label, repoPath }) {
   return { ...checkout, forkVsUpstream: await compareForkWithUpstream(checkout, repoPath) };
 }
 
+/**
+ * Can a managed update fast-forward THIS checkout's origin fork from canonical
+ * upstream? Only when all three hold:
+ *
+ * - it is the primary checkout — `syncManagedAppFork` only ever touches
+ *   `app.repoPath`, so a companion's fork has no sync path at all;
+ * - the credential can push to that fork — cloning someone else's fork of a
+ *   third project is normal (Eidoverse's video checkout is `anima-research`'s
+ *   fork), and PortOS can never move a repository it can only read;
+ * - the fork has not diverged — a diverged fork cannot be fast-forwarded.
+ *
+ * This is what separates "behind, and one click fixes it" from "behind, and
+ * nothing PortOS can do will change that" — an out-of-date advisory raised for
+ * the latter is unactionable and never clears (#6321).
+ */
+const isForkSyncable = (source) => source.id === 'primary'
+  && Boolean(source.origin?.isFork)
+  && source.origin?.canPush !== false
+  && source.forkVsUpstream?.state !== 'diverged';
+
 function sourceDescriptors(app) {
   const companions = Array.isArray(app?.companionRepoPaths)
     ? [...new Set(app.companionRepoPaths)].filter((path) => path && path !== app.repoPath)
@@ -228,7 +272,8 @@ function publicTarget(repository, role) {
 
 export async function getManagedAppRepositorySources(app) {
   const descriptors = sourceDescriptors(app);
-  const sources = await Promise.all(descriptors.map(inspectCheckout));
+  const inspected = await Promise.all(descriptors.map(inspectCheckout));
+  const sources = inspected.map((source) => ({ ...source, forkSyncable: isForkSyncable(source) }));
   const primary = sources[0] || null;
   const originTarget = publicTarget(primary?.origin, 'origin');
   const upstreamTarget = publicTarget(primary?.upstream, 'upstream');
@@ -236,8 +281,12 @@ export async function getManagedAppRepositorySources(app) {
   return {
     kind: 'managed-app',
     checkedAt: new Date().toISOString(),
+    // Only what a managed update can actually pull forward: any checkout behind
+    // its own origin, plus a fork behind upstream that PortOS is allowed to
+    // fast-forward. A fork PortOS can only read stays visible on the Git tab
+    // but never claims an update is available.
     updateAvailable: sources.some((source) => source.localVsOrigin?.behind > 0
-      || (source.forkVsUpstream?.behind || 0) > 0),
+      || (source.forkSyncable && (source.forkVsUpstream?.behind || 0) > 0)),
     updatePullsAll: true,
     updateRestartsApp: Array.isArray(app?.pm2ProcessNames) && app.pm2ProcessNames.length > 0,
     issueTargets: {
@@ -275,6 +324,13 @@ export async function syncManagedAppFork(app) {
   }
   if (!topology.isFork) {
     throw new ServerError(`The origin is already the canonical ${origin.fullName} repository.`, { status: 400, code: 'ALREADY_UPSTREAM' });
+  }
+  if (origin.canPush === false) {
+    throw new ServerError(
+      `The ${origin.fullName} fork belongs to someone else — PortOS can read it but cannot push to it, `
+      + `so it cannot be fast-forwarded from ${upstream.fullName}. Ask its owner to sync it, or point this app at a fork you control.`,
+      { status: 403, code: 'FORK_NOT_WRITABLE' },
+    );
   }
   const branch = upstream.branch || null;
   const forge = await resolveForgeForRepo(app.repoPath).catch(() => null);

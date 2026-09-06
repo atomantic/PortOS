@@ -14,9 +14,9 @@
  * care which one wrote the bytes.
  */
 
-import { stat, copyFile, unlink } from 'fs/promises';
+import { stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, extname, basename } from 'path';
+import { join, basename, extname } from 'path';
 import { randomUUID } from 'crypto';
 import {
   PATHS,
@@ -24,6 +24,8 @@ import {
   assertSafeFilename,
   isSafeFilename,
   listDirectoryByExtension,
+  copyFileGuarded,
+  unlinkGuarded,
 } from '../../lib/fileUtils.js';
 
 // Mirror of the sanitizer's MUSIC_SOURCES set in `services/pipeline/issues.js`.
@@ -142,8 +144,8 @@ export async function importUploadedTrack(tempPath, originalName) {
   // os.tmpdir(), which may sit on a different filesystem (rename across
   // devices throws EXDEV on Linux). Copy works regardless; the temp file
   // unlink is best-effort cleanup.
-  await copyFile(tempPath, dest);
-  await unlink(tempPath).catch(() => {});
+  await copyFileGuarded(tempPath, dest);
+  await unlinkGuarded(tempPath).catch(() => {});
   const s = await stat(dest).catch(() => null);
   return { filename, sizeBytes: s?.size ?? 0 };
 }
@@ -175,7 +177,7 @@ export async function deleteMusicTrack(filename) {
   assertSafeMusicFilename(filename);
   const full = join(PATHS.music, filename);
   try {
-    await unlink(full);
+    await unlinkGuarded(full);
     return true;
   } catch (err) {
     if (err.code === 'ENOENT') return false;

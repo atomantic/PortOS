@@ -10,11 +10,10 @@
 
 import { Router } from 'express';
 import { existsSync } from 'fs';
-import { rm } from 'fs/promises';
 import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, rmGuarded } from '../lib/fileUtils.js';
 import { getHfCacheRoot } from '../lib/hfCache.js';
 import {
   getImageModels,
@@ -175,7 +174,7 @@ router.delete('/hf/:dirName', asyncHandler(async (req, res) => {
   const fullPath = join(HF_HUB_DIR(), dirName);
   if (!existsSync(fullPath)) throw new ServerError('Model not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`🗑️ Deleting HF model cache: ${dirName}`);
-  await rm(fullPath, { recursive: true, force: true });
+  await rmGuarded(fullPath, { recursive: true, force: true });
   res.json({ ok: true });
 }));
 
@@ -187,7 +186,7 @@ router.delete('/lora/:filename', asyncHandler(async (req, res) => {
   const filePath = join(PATHS.loras, filename);
   if (!existsSync(filePath)) throw new ServerError('LoRA not found', { status: 404, code: 'NOT_FOUND' });
   console.log(`🗑️ Deleting LoRA: ${filename}`);
-  await rm(filePath, { force: true });
+  await rmGuarded(filePath, { force: true });
   res.json({ ok: true });
 }));
 

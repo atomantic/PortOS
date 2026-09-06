@@ -1,11 +1,10 @@
 /** Video frame extraction and evaluation-frame sampling. */
 
 import { existsSync, statSync } from 'fs';
-import { unlink, writeFile, copyFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { spawn } from '../../lib/childProcess.js';
-import { ensureDir, PATHS, UUID_RE, tryReadFile } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS, UUID_RE, tryReadFile, copyFileGuarded, writeFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   findFfmpeg, safeUnder, extractEvaluationFrames, runFfmpegProcess,
@@ -32,7 +31,7 @@ async function decodeTailCandidates(ffmpeg, videoPath, candidateDir) {
   // Clear first: a crashed prior run can leave a longer numbered run behind,
   // and the by-name enumeration below would read those stale frames as this
   // clip's candidates.
-  await rm(candidateDir, { recursive: true, force: true }).catch(() => {});
+  await rmGuarded(candidateDir, { recursive: true, force: true }).catch(() => {});
   await ensureDir(candidateDir);
   const outPattern = join(candidateDir, 'cand-%03d.png');
   // Through the catalog helper rather than a hand-rolled spawn: it already
@@ -158,7 +157,7 @@ export async function extractLastFrame(historyId) {
       kind: 'extracted-frame',
       createdAt: new Date().toISOString(),
     };
-    await writeFile(sidecarPath, JSON.stringify(meta, null, 2), { flag: 'wx' }).catch(() => {});
+    await writeFileGuarded(sidecarPath, JSON.stringify(meta, null, 2), { flag: 'wx' }).catch(() => {});
   };
 
   // A cached anchor the fallback produced WITHOUT a scan is provisional: serving
@@ -179,7 +178,7 @@ export async function extractLastFrame(historyId) {
     await writeSidecar();
     return { filename: frameFilename, path: `/data/images/${frameFilename}` };
   }
-  if (cachedSize === 0) await unlink(framePath).catch(() => {});
+  if (cachedSize === 0) await unlinkGuarded(framePath).catch(() => {});
 
   // ── Scored pick over the tail window ──────────────────────────────────────
   // Everything here degrades to the single-seek fallback below rather than
@@ -205,7 +204,7 @@ export async function extractLastFrame(historyId) {
   // ffmpeg write below has always had, not a new class.)
   const expectedSize = best ? safeStatSize(best.path) : null;
   const installed = best
-    ? await copyFile(best.path, framePath).then(() => {
+    ? await copyFileGuarded(best.path, framePath).then(() => {
         const written = safeStatSize(framePath);
         if (written && (expectedSize == null || written === expectedSize)) return true;
         console.log(`⚠️ Anchor install wrote ${written ?? 'nothing'} of ${expectedSize ?? '?'} bytes — discarding`);
@@ -215,18 +214,18 @@ export async function extractLastFrame(historyId) {
         return false;
       })
     : false;
-  if (best && !installed) await unlink(framePath).catch(() => {});
+  if (best && !installed) await unlinkGuarded(framePath).catch(() => {});
   // Drop the whole candidate dir either way — they're temp decodes and the
   // winner is already copied into data/images/ by now. `item.id` is validated
   // UUID/`upload-<uuid8>` above, so the recursive remove can't escape tmpdir.
-  await rm(candidateDir, { recursive: true, force: true }).catch(() => {});
+  await rmGuarded(candidateDir, { recursive: true, force: true }).catch(() => {});
 
   // Both extraction paths below know the truth about this anchor, so they must
   // be able to REPLACE a sidecar written by an earlier attempt — `wx` alone
   // would leave a stale provisional marker in place and re-scan forever. This
   // is the extraction path (the cache hit already returned), so an unconditional
   // drop is right: whatever is written next is authoritative.
-  await unlink(sidecarPath).catch(() => {});
+  await unlinkGuarded(sidecarPath).catch(() => {});
 
   if (installed) {
     // Offset derived from the candidates actually decoded, not from a nominal
@@ -272,7 +271,7 @@ export async function extractLastFrame(historyId) {
           // A 0-byte file is a partial extraction, not a cache-worthy result —
           // delete it so the next call retries instead of returning a broken
           // image from the cache hit above.
-          if (writtenSize === 0) await unlink(framePath).catch(() => {});
+          if (writtenSize === 0) await unlinkGuarded(framePath).catch(() => {});
           return reject(new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' }));
         }
         // A scan that RAN and found nothing usable is a property of the clip —

@@ -11,7 +11,7 @@ const DEFAULT_AGENT_CONTEXT = {
   enabled: false,
   profile: 'metadata',
   scopes: ['navigation', 'workspaces'],
-  actions: { readPortos: false, writePortos: false, manageEidoverse: false },
+  actions: { readPortos: false, writePortos: false, manageEidoverse: false, visitEidoversePeers: false },
 };
 const AGENT_CONTEXT_SCOPES = [
   { id: 'navigation', label: 'Navigation', hint: 'PortOS page labels, aliases, and paths.' },
@@ -313,6 +313,14 @@ export function ApiAccessTab() {
               onChange={(value) => patchAgentContextAction('writePortos', value)}
               label="Allow semantic PortOS updates"
               hint="Typed Brain, journal, goals, health-log, and feed-state actions; no raw routes or shell."
+            />
+            <Toggle
+              id="agent-context-action-eidoverse-travel"
+              checked={agentContext.actions.visitEidoversePeers}
+              disabled={savingId !== null}
+              onChange={(value) => patchAgentContextAction('visitEidoversePeers', value)}
+              label="Allow federated Eidoverse guest travel and chat"
+              hint="Visit registered peers as a guest and exchange live chat. This explicitly allows cross-instance messaging."
             />
             <Toggle
               id="agent-context-action-eidoverse"

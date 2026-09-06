@@ -54,6 +54,7 @@ import ModelDisclosure from '../components/videoGen/ModelDisclosure';
 import ModelRepairBanner from '../components/videoGen/ModelRepairBanner';
 import RenderStatusCard from '../components/videoGen/RenderStatusCard';
 import VideoGenGallery from '../components/videoGen/VideoGenGallery';
+import EpisodeComposer from '../components/videoGen/EpisodeComposer';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
@@ -90,10 +91,16 @@ import {
   getSettings,
   getVideoGenRuntimeStatus,
   listLorasFull,
+  getLoom,
 } from '../services/api';
+import { loomEpisodeToDraftScenes } from '../lib/episodeSceneImport.js';
 import LoraPicker from '../components/imageGen/LoraPicker';
 import { VIDEO_RESOLUTIONS, resolutionOptionsForModel } from '../lib/videoGenResolutions';
 import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
+import { REACTOR_MAX_PROMPT_LENGTH } from '../lib/reactorVideoClip.js';
+import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
+import ReactorPanel from '../components/videoGen/ReactorPanel';
+import { timeAgo } from '../utils/formatters';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC_LORA_MODES } from '../lib/videoGenParams.js';
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
@@ -115,10 +122,41 @@ export default function VideoGen() {
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
   const closeSettings = () => {
     setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('settings'); return n; });
-    // The drawer hosts the Grok enable toggle — re-read it so the
-    // Local/Grok backend switch appears/disappears without a reload.
+    // The drawer hosts the Grok enable toggle plus the fal.ai/reactor.inc API
+    // key fields — re-read both so the backend switch appears/disappears
+    // without a reload.
     refreshGrokEnabled();
+    refreshStatus();
   };
+
+  // Episode Composer (#6228) — multi-scene continuous-video authoring, opened
+  // either directly or as a FableLoom entry point carrying loomId/episodeId
+  // (LoomSettingsDrawer's "Open Episode Composer" link).
+  const episodeOpen = searchParams.get('episode') === '1';
+  const episodeLoomId = searchParams.get('loomId');
+  const episodeEpisodeId = searchParams.get('episodeId');
+  const openEpisodeComposer = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('episode', '1'); return n; });
+  const closeEpisodeComposer = () => {
+    setSearchParams(prev => {
+      const n = new URLSearchParams(prev);
+      n.delete('episode'); n.delete('loomId'); n.delete('episodeId');
+      return n;
+    });
+    // The composer unmounts on close (conditional render below) — clear the
+    // import so a later open with no loomId/episodeId doesn't inherit it.
+    setEpisodeImportScenes(null);
+  };
+  const [episodeImportScenes, setEpisodeImportScenes] = useState(null);
+  useEffect(() => {
+    if (!episodeOpen || !episodeLoomId || !episodeEpisodeId) return;
+    getLoom(episodeLoomId, { silent: true }).then((loom) => {
+      const episode = loom?.episodes?.find((e) => e.id === episodeEpisodeId);
+      const draftScenes = loomEpisodeToDraftScenes(episode, { format: loom?.format });
+      if (draftScenes.length) setEpisodeImportScenes(draftScenes);
+    }).catch(() => {});
+    // Only re-run when a fresh loom/episode is targeted, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [episodeOpen, episodeLoomId, episodeEpisodeId]);
 
   // `/status` owns connectivity ONLY. It shells out to python on every call
   // (~1-2s), so nothing the form needs to render may wait on it.
@@ -134,6 +172,13 @@ export default function VideoGen() {
   // user enabled Grok in Settings → Image Gen (one toggle covers image +
   // video). 'local' keeps every existing flow untouched.
   const [grokEnabled, setGrokEnabled] = useState(false);
+  // fal.ai (#6213) / reactor.inc (#6214) usability comes off GET /status
+  // instead of the raw settings object — the server-side `isVideoModeUsable`
+  // it's computed from also honors the FAL_KEY/REACTOR_API_KEY env vars, which
+  // the client can't see, so a key set only via env var (no Settings-form
+  // entry) still surfaces the backend switcher below.
+  const falEnabled = status?.falEnabled === true;
+  const reactorEnabled = status?.reactorEnabled === true;
   // The jobId of the render this tab's Generate button currently owns —
   // threaded into cancelVideoGen so cancellation is job-scoped.
   const activeJobIdRef = useRef(null);
@@ -154,10 +199,20 @@ export default function VideoGen() {
   // outright — the clip is rendered there and imported back — so it feeds the
   // payload builder rather than sitting beside it.
   const remoteTarget = useFederatedMediaTarget('video');
+  // `null` = no per-render override yet — follow the install default
+  // (settings.videoGen.displaySleep, /status-reported so it can't drift from
+  // the server's own opt-in read). Set once the user touches the checkbox
+  // below. Computed before the form hook call because it feeds
+  // buildGeneratePayload() the same way `remoteSubmissionFields` does.
+  const [displaySleepOverride, setDisplaySleepOverride] = useState(null);
+  const displaySleepEnabled = displaySleepOverride ?? !!status?.displaySleepOnRender;
   // Every field the form submits, plus the payload builder both submit paths
   // share. See client/src/hooks/useVideoGenForm.js.
   const {
-    backend, isGrok, handleBackendChange, grokDuration, setGrokDuration,
+    backend, isGrok, isFal, isReactor, handleBackendChange, grokDuration, setGrokDuration,
+    falDuration, setFalDuration, falModelId, setFalModelId,
+    reactorClipId, setReactorClipId, reactorSeconds, setReactorSeconds, reactorSeed, setReactorSeed,
+    reactorAspect, setReactorAspect,
     mode, handleModeChange,
     prompt, setPrompt, envelopedPrompt, negativePrompt, setNegativePrompt, stylePreset, setStylePreset,
     selectedUniverse, setSelectedUniverse, remixModelFallback,
@@ -173,6 +228,7 @@ export default function VideoGen() {
 
     speedProfileId, setSpeedProfileId,
     draftDecode, setDraftDecode,
+    batchSize, setBatchSize,
     seed, setSeed, handleRandomSeed, tiling, setTiling,
     textEncoderId, setTextEncoderId, textEncoderOptions,
     disableAudio, setDisableAudio, noMusic, setNoMusic,
@@ -192,8 +248,9 @@ export default function VideoGen() {
     icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
     applyRemix, applyFinish, applyResumedParams, buildGeneratePayload,
   } = useVideoGenForm({
-    models, modelContext, availableLoras, grokEnabled,
+    models, modelContext, availableLoras, grokEnabled, falEnabled, reactorEnabled,
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
+    displaySleepEnabled,
   });
 
   // Conditioning the selected peer model cannot take. The server refuses a job
@@ -216,6 +273,8 @@ export default function VideoGen() {
     const model = remoteTarget.model;
     const present = [
       ['the Grok backend', isGrok],
+      ['the fal.ai backend', isFal],
+      ['the reactor.inc backend', isReactor],
       // Each remaining pipeline semantic has its own input listed below, but the
       // mode can be set before that input is filled — so gate the mode too
       // rather than letting an a2v render reach the peer as plain text-to-video.
@@ -242,7 +301,7 @@ export default function VideoGen() {
       return `${model?.modelName || 'The selected peer model'} renders only from a source image — add a start frame, or pick a text-to-video model.`;
     }
     return null;
-  }, [remoteTarget.isRemote, remoteTarget.model, remoteTarget.acceptsInput, isGrok, mode, sourceImageFile, sourceImageUpload,
+  }, [remoteTarget.isRemote, remoteTarget.model, remoteTarget.acceptsInput, isGrok, isFal, isReactor, mode, sourceImageFile, sourceImageUpload,
     lastImageFile, lastImageUpload, keyframesActive, extendFromVideoId, audioFile, icReferenceFile,
     icReferenceVideoId, icReferenceImageFiles, selectedLoras, chunks]);
   // One reading for the Generate button, the enqueue guard and the caption.
@@ -251,6 +310,15 @@ export default function VideoGen() {
     : null;
   const localResolutionOptions = resolutionOptionsForModel(currentModel);
   const localResolutionBounds = videoEdgeBoundsForModel(currentModel);
+
+  // Can THIS render put the display to sleep at all? The model says whether
+  // its runtime needs the mitigation (mlx only); the other clauses rule out
+  // backends the mitigation never applies to. UI-only: buildGeneratePayload()
+  // decides independently (from currentModel alone) whether to attach the
+  // choice, since its grok/fal/reactor/remote branches already return first.
+  const canSleepDisplay = !!currentModel?.sleepsDisplayDuringRender
+    && !remoteTarget.isRemote && !isGrok && !isFal && !isReactor;
+  const rendersSleepDisplay = canSleepDisplay && displaySleepEnabled;
 
   // Every gallery-image slot on this page (both frame panels, each multi-keyframe
   // row, each IC-LoRA reference row) opens the SAME GalleryImagePicker modal the
@@ -273,8 +341,29 @@ export default function VideoGen() {
   // after `previewItems` below so the resolver can match against it.
   const [showHidden, setShowHidden] = useState(false);
 
+  // 'loading' until the first fetch settles, then 'loaded' or 'error'. A
+  // sentinel rather than `history.length` — the Remix handoff below has to tell
+  // "history is still in flight / failed to load" apart from "history loaded
+  // and has no such record", and an empty array is a legitimate loaded state.
+  //
+  // The mount fetch and the completion refresh share this one sentinel, so the
+  // handoff also needs to know whether ANOTHER fetch is still running before it
+  // trusts an 'error': a transient failure on a background refresh must not
+  // strand a handoff that the in-flight mount fetch is about to satisfy. The
+  // count is a ref because only the effects read it, and they run after commit.
+  const [historyLoad, setHistoryLoad] = useState('loading');
+  const historyInFlightRef = useRef(0);
+  // `silent` — this page owns the failure UI (the Remix banner below, and the
+  // gallery simply staying empty), so the shared toast would double it.
   const refreshHistory = useCallback(() => {
-    listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
+    historyInFlightRef.current += 1;
+    return listVideoHistory({ silent: true })
+      .then((items) => {
+        setHistory(Array.isArray(items) ? items : []);
+        setHistoryLoad('loaded');
+      })
+      .catch(() => setHistoryLoad('error'))
+      .finally(() => { historyInFlightRef.current -= 1; });
   }, []);
   useMediaCompletionRefresh({ onVideoCompleted: refreshHistory });
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
@@ -359,6 +448,91 @@ export default function VideoGen() {
     applyRemix(raw);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [applyRemix]);
+
+  // Cross-page Remix (#6290). Media History (and every other MediaPreview
+  // surface) hands this page a RECORD ID rather than a render-settings bundle,
+  // so the restore runs through the same `applyRemix` the in-page gallery uses
+  // — one implementation that knows every field the record carries, instead of
+  // a URL enumeration that silently dropped the encoder, speed profile, draft
+  // decode and LoRAs. `history` is the unfiltered load, so a hidden record
+  // resolves too.
+  //
+  // One ref carries the whole "has this handoff been dealt with?" question, and
+  // it holds the handoff ID rather than a boolean, so a SECOND handoff arriving
+  // on the same mount is still honored. It is what makes the restore one-shot —
+  // not the stripped parameter, which lands on an async router update a
+  // completion refresh in the same tick could beat, re-applying the handoff over
+  // edits the user has made since.
+  //
+  // A FAILED fetch settles the handoff too, deliberately: the restore then waits
+  // for the explicit Retry (which clears the ref) instead of riding in on the
+  // next background refresh, since a render completing minutes later would
+  // otherwise replay it over a form the user has been editing the whole time.
+  const remixHandoffId = searchParams.get('remix');
+  const settledRemixHandoffRef = useRef(null);
+  // null while nothing is wrong; otherwise 'error' (the history fetch failed,
+  // retryable) or 'missing' (history loaded and holds no such record).
+  const [remixHandoffProblem, setRemixHandoffProblem] = useState(null);
+  // The restore waits on a history round trip, so unlike the old URL bundle
+  // (applied synchronously on mount) there is a window in which the form still
+  // holds the page defaults and is about to be replaced wholesale. Announce it
+  // and hold Generate: rendering here would spend GPU time on the defaults while
+  // the user believes they are looking at the clip's settings. The window runs
+  // from the parameter appearing until the handoff either restores (which strips
+  // it) or reports a problem — which also covers the wait on a sibling fetch
+  // below, with no second sentinel. Retry re-enters it by clearing the problem.
+  const remixHandoffPending = !!remixHandoffId && !remixHandoffProblem;
+  const consumeRemixHandoff = useCallback(() => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('remix');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+  useEffect(() => {
+    // No handoff in the URL — including right after this one consumed its own.
+    // Clearing the settled id here is what lets the NEXT handoff through, even
+    // when it names the same record.
+    if (!remixHandoffId) { settledRemixHandoffRef.current = null; return; }
+    if (settledRemixHandoffRef.current === remixHandoffId) return;
+    // Still fetching: say nothing. Reporting "no such record" here would be a
+    // lie every time the page is opened faster than the history round trip.
+    // Any banner still up belongs to a previous handoff, so it goes.
+    if (historyLoad === 'loading') { setRemixHandoffProblem(null); return; }
+    // The sentinel is shared with the completion refresh, so an 'error' may
+    // belong to a background fetch that failed alongside the one this handoff is
+    // actually waiting on. Keep waiting while any fetch is still running, or a
+    // transient blip on the sibling would strand a handoff the in-flight request
+    // is about to satisfy.
+    if (historyLoad === 'error' && historyInFlightRef.current > 0) return;
+    settledRemixHandoffRef.current = remixHandoffId;
+    if (historyLoad === 'error') {
+      // Keep the param in the URL — Retry resolves this same handoff.
+      setRemixHandoffProblem('error');
+      return;
+    }
+    const record = history.find((v) => String(v.id) === remixHandoffId);
+    if (record) {
+      applyRemix(record);
+      setRemixHandoffProblem(null);
+    } else {
+      setRemixHandoffProblem('missing');
+    }
+    consumeRemixHandoff();
+  }, [remixHandoffId, historyLoad, history, applyRemix, consumeRemixHandoff]);
+  // Back to 'loading' first, so a retry that fails again still moves the state
+  // ('loading' → 'error') and re-runs the effect above.
+  const retryRemixHandoff = useCallback(() => {
+    settledRemixHandoffRef.current = null;
+    setHistoryLoad('loading');
+    setRemixHandoffProblem(null);
+    refreshHistory();
+  }, [refreshHistory]);
+  const dismissRemixHandoff = useCallback(() => {
+    settledRemixHandoffRef.current = remixHandoffId;
+    setRemixHandoffProblem(null);
+    consumeRemixHandoff();
+  }, [remixHandoffId, consumeRemixHandoff]);
 
   // Finish a draft (#3696): same restore as Remix, but switched to the delivery
   // model the draft's registry entry declares. Prefill only — the user presses
@@ -508,6 +682,9 @@ export default function VideoGen() {
       // attachJobEvents runs.
       if (runTokenRef.current > 0 || eventSourceRef.current) return;
       applyResumedParams(job.params || {});
+      // The form hook doesn't own this page-level toggle — restore it directly
+      // so a reload mid-render shows the choice that render is actually keeping.
+      if (job.params?.displaySleep !== undefined) setDisplaySleepOverride(!!job.params.displaySleep);
       setGenerating(true);
       setPhase(job.status === 'queued' ? 'queued' : null);
       // The worker's own start time, so a reload keeps a truthful elapsed clock
@@ -606,14 +783,14 @@ export default function VideoGen() {
     startEncoderWhenIdle(option && !option.builtIn ? textEncoderDownloadId(id) : null);
   }, [setTextEncoderId, textEncoderOptions, startEncoderWhenIdle]);
   const icWeightStatus = icSpec ? modelDownload.getStatus(icSpec.mode) : null;
-  const modelWeightsBlocked = !isGrok
+  const modelWeightsBlocked = !isGrok && !isFal && !isReactor
     && (statusLoading || !modelId || !currentModel || modelDownload.loading
       || modelStatus === null || modelStatus?.cached === false);
-  const textEncoderWeightsBlocked = !isGrok && usesSharedTextEncoder
+  const textEncoderWeightsBlocked = !isGrok && !isFal && !isReactor && usesSharedTextEncoder
     && (modelDownload.loading || textEncoderStatus === null || textEncoderStatus?.cached === false);
-  const icWeightsBlocked = !isGrok && icModeActive
+  const icWeightsBlocked = !isGrok && !isFal && !isReactor && icModeActive
     && (modelDownload.loading || icWeightStatus === null || icWeightStatus?.cached === false);
-  const textEncoderOptionBlocked = !isGrok && !!textEncoderOptionDownloadId
+  const textEncoderOptionBlocked = !isGrok && !isFal && !isReactor && !!textEncoderOptionDownloadId
     && (modelDownload.loading || textEncoderOptionStatus === null || textEncoderOptionStatus?.cached === false);
   const weightsGateBlocked = modelWeightsBlocked || textEncoderWeightsBlocked
     || textEncoderOptionBlocked || icWeightsBlocked;
@@ -679,14 +856,6 @@ export default function VideoGen() {
     && dismissedIcIntegrityKey !== icIntegrityKey && !modelDownload.downloading;
 
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
-
-  // Will this render put the display to sleep? Both halves are server-owned so
-  // the warning can't drift from the behaviour: the model says whether its
-  // runtime needs the mitigation, and /status says whether this install will
-  // actually apply it (macOS, and the user hasn't opted out).
-  const rendersSleepDisplay = !!status?.displaySleepOnRender
-    && !!currentModel?.sleepsDisplayDuringRender
-    && !remoteTarget.isRemote && !isGrok;
 
   // Run a single payload through the SSE pipeline. Returns a promise that
   // resolves when the job completes (or rejects on error / cancel). The
@@ -831,12 +1000,73 @@ export default function VideoGen() {
   const modelFieldVisible = !modelsLoading || modelContextLoading;
   const notConnected = !!status && status.connected === false && !needsByovProbe;
 
+  // reactor.inc rejects a prompt over 800 characters outright, and the limit
+  // applies to what PortOS SUBMITS — style presets prefix the user's text, so
+  // the counter measures the same string buildVideoGenSubmission builds rather
+  // than the textarea. Gating Generate on it turns a post-click 400 into a
+  // number the user can watch while writing.
+  const submittedPromptLength = useMemo(
+    () => (isReactor
+      ? styledVideoPrompt(prompt, { negativePrompt, stylePreset, selectedUniverse }).length
+      : prompt.length),
+    [isReactor, prompt, negativePrompt, stylePreset, selectedUniverse],
+  );
+  const promptOverLimit = isReactor && submittedPromptLength > REACTOR_MAX_PROMPT_LENGTH;
+
+  // Budget the AI enhancer writes inside. It's the backend cap MINUS the style
+  // preset / universe prefix, because that prefix is part of what PortOS
+  // submits — enhancing to exactly 800 characters would still be rejected once
+  // the preset is prepended. `undefined` for a backend with no cap (and for the
+  // degenerate case where the prefix alone already fills the allowance, which
+  // the counter above is already flagging).
+  const enhancePromptBudget = useMemo(() => {
+    if (!isReactor) return undefined;
+    const overhead = submittedPromptLength - prompt.length;
+    const budget = REACTOR_MAX_PROMPT_LENGTH - Math.max(0, overhead);
+    return budget > 0 ? budget : undefined;
+  }, [isReactor, submittedPromptLength, prompt]);
+
+  // Only grok folds a negative prompt into its request (as an "Avoid:" line);
+  // fal's queue body and reactor's enqueue command have no such field, and a
+  // CFG-distilled local model ignores one. Hide the box rather than showing a
+  // dead field that quietly does nothing. A federated render is the PEER's
+  // model to judge, so the local selection's gate must not take away a field
+  // that lane does submit.
+  const negativePromptSupported = isGrok || remoteTarget.isRemote
+    || (!isFal && !isReactor && currentModel?.supportsNegativePrompt !== false);
+
+  // Every completed reactor render stamps its fast-h3 clip id on the history
+  // record; those ids are the only thing continue_from_clip_id can address, so
+  // the picker is built from them rather than asking the user to know one.
+  const reactorContinuableClips = useMemo(() => visibleHistory
+    .filter((v) => v.clipId && String(v.modelId || '').startsWith('reactor:'))
+    .slice(0, 50)
+    .map((v) => ({
+      clipId: v.clipId,
+      label: `${(v.prompt || v.filename || v.clipId).slice(0, 60)} · ${timeAgo(v.createdAt, 'unknown')}`,
+    })), [visibleHistory]);
+
+  // A selection the picker no longer offers must not survive in state: the
+  // deleted clip's option is gone, so the select falls back to displaying
+  // "Start a fresh shot" while the submission would still carry the stale id.
+  // Image mode clears it for the same reason — a continuation and a starting
+  // frame are exclusive, and the field is disabled there.
+  useEffect(() => {
+    if (!reactorClipId) return;
+    if (mode === 'image' || !reactorContinuableClips.some((clip) => clip.clipId === reactorClipId)) {
+      setReactorClipId('');
+    }
+  }, [reactorClipId, mode, reactorContinuableClips, setReactorClipId]);
+
   // A federated render answers to the PEER’s readiness, not to this machine’s
   // runtime gates — none of the local probes below describe the hardware it
   // will actually run on.
-  const canEnqueue = prompt.trim() && (remoteTarget.isRemote
+  const effectiveBatchSize = !isGrok && !isFal && !isReactor && !remoteTarget.isRemote
+    && currentModel?.supportsWarmBatch && !chainingActive ? batchSize : 1;
+
+  const canEnqueue = prompt.trim() && !remixHandoffPending && !promptOverLimit && (remoteTarget.isRemote
     ? remoteBlocked === null
-    : (isGrok || (!notConnected && !extendModeBlocked
+    : (isGrok || isFal || isReactor || (!notConnected && !extendModeBlocked
       && !a2vModeBlocked && !icLoraModeBlocked && !byovGateBlocked
       && !weightsGateBlocked && !keyframesBlocked)));
 
@@ -872,6 +1102,14 @@ export default function VideoGen() {
             title="Refresh status" aria-label="Refresh status"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${statusLoading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            type="button"
+            onClick={openEpisodeComposer}
+            className="flex items-center gap-1.5 px-2 py-1 text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50"
+            title="Compose a multi-scene continuous-video episode"
+          >
+            <Film className="w-3.5 h-3.5" /> Episode
           </button>
           <button
             type="button"
@@ -911,12 +1149,18 @@ export default function VideoGen() {
       })()}
 
       {/* Backend switch — shown only when the user enabled Grok in Settings →
-          Image Gen. Grok's image_to_video supports text (image-first) and
-          image modes only, so switching to it snaps an unsupported mode back
-          to the nearest one. */}
-      {grokEnabled && (
+          Image Gen and/or configured a fal.ai or reactor.inc API key. Every
+          cloud backend's image-to-video only supports text (image-first) and
+          image modes, so switching to one snaps an unsupported mode back to
+          the nearest one. */}
+      {(grokEnabled || falEnabled || reactorEnabled) && (
         <div className="bg-port-card border border-port-border rounded-xl p-1 flex gap-1" role="group" aria-label="Video generation backend">
-          {[{ id: 'local', label: 'Local' }, { id: 'grok', label: 'Grok' }].map(({ id, label }) => (
+          {[
+            { id: 'local', label: 'Local' },
+            ...(grokEnabled ? [{ id: 'grok', label: 'Grok' }] : []),
+            ...(falEnabled ? [{ id: 'fal', label: 'fal.ai' }] : []),
+            ...(reactorEnabled ? [{ id: 'reactor', label: 'Reactor.inc' }] : []),
+          ].map(({ id, label }) => (
             <button
               key={id}
               type="button"
@@ -925,7 +1169,13 @@ export default function VideoGen() {
               className={`flex-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                 backend === id ? 'bg-port-accent text-white shadow' : 'text-gray-400 hover:text-white hover:bg-port-border/40'
               }`}
-              title={id === 'grok' ? 'Render via the Grok Build CLI (image_gen → image_to_video). Counts against your Grok plan.' : 'Render on this machine with the local runtimes.'}
+              title={id === 'grok'
+                ? 'Render via the Grok Build CLI (image_gen → image_to_video). Counts against your Grok plan.'
+                : id === 'fal'
+                  ? 'Render via the fal.ai queue API. Counts against your fal.ai balance.'
+                  : id === 'reactor'
+                    ? 'Render via the reactor.inc fast-h3 API. Counts against your reactor.inc balance.'
+                    : 'Render on this machine with the local runtimes.'}
             >
               {label}
             </button>
@@ -939,7 +1189,7 @@ export default function VideoGen() {
           WAI-ARIA Tabs, since the mode-specific inputs aren't structured as
           tabpanels and we don't implement roving-tabindex/arrow-key focus. */}
       <div className="bg-port-card border border-port-border rounded-xl p-1 flex flex-wrap gap-1" role="group" aria-label="Video generation mode">
-        {(isGrok ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
+        {((isGrok || isFal || isReactor) ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
           const active = mode === id;
           return (
             <button
@@ -963,7 +1213,48 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
-          {!isGrok && byovRuntimeMissing && (
+          {/* A cross-page Remix that could not be restored (#6290). Silence
+              would be the worst outcome here: the user pressed Remix, landed on
+              a form holding whatever it held before, and would start a render
+              with the wrong settings believing they were the clip's. */}
+          {remixHandoffPending && (
+            <p role="status" className="rounded-lg border border-port-border bg-port-bg px-3 py-2 text-xs text-gray-400">
+              Restoring this render's settings — the form below is about to be replaced with them.
+            </p>
+          )}
+          {remixHandoffProblem && (
+            <div
+              role="status"
+              className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
+            >
+              <div>
+                {remixHandoffProblem === 'error'
+                  ? "Couldn't load your render history, so this clip's settings weren't restored."
+                  : 'That render is no longer in your history, so its settings could not be restored.'}
+                {' '}The form still holds its previous values.
+              </div>
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                {remixHandoffProblem === 'error' && (
+                  <button
+                    type="button"
+                    onClick={retryRemixHandoff}
+                    className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/80"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Retry
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={dismissRemixHandoff}
+                  className="text-gray-400 hover:text-gray-200 text-xs"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+          {!isGrok && !isFal && !isReactor && byovRuntimeMissing && (
             <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div>
                 <strong className="font-semibold">{byovStatus.label}</strong> {byovStatus.upgradeAvailable ? 'has an update available.' : "isn't installed yet."}
@@ -1050,7 +1341,7 @@ export default function VideoGen() {
             value={stylePreset?.id || ''}
             onChange={setStylePreset}
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className={`grid grid-cols-1 gap-3 ${negativePromptSupported ? 'md:grid-cols-2' : ''}`}>
             <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <AutoSizeTextarea
                 value={prompt}
@@ -1059,19 +1350,38 @@ export default function VideoGen() {
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
                 placeholder="Describe the video you want to generate..."
               />
+              {/* The count is the SUBMITTED length, so a style preset that
+                  pushes a short-looking prompt past reactor's cap is visible
+                  here instead of surfacing as a 400 after Generate. */}
+              <p className={`mt-1 text-[11px] leading-snug ${promptOverLimit ? 'text-port-error' : 'text-gray-500'}`}>
+                {isReactor
+                  ? `${submittedPromptLength} / ${REACTOR_MAX_PROMPT_LENGTH} characters`
+                  : `${submittedPromptLength} characters`}
+              </p>
+              {/* Only crossing the cap is worth announcing; the count itself
+                  changes on every keystroke and would be pure noise. */}
+              {promptOverLimit && (
+                <p className="mt-1 text-[11px] text-port-error leading-snug" role="status">
+                  Reactor will reject this — shorten the prompt. Style presets count toward the limit.
+                </p>
+              )}
+              {!negativePromptSupported && !isFal && !isReactor && (
+                <p className="mt-1 text-[11px] text-gray-500 leading-snug">
+                  This model does not use a negative prompt.
+                </p>
+              )}
             </FormField>
-            <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <AutoSizeTextarea
-                value={negativePrompt}
-                onChange={(e) => setNegativePrompt(e.target.value)}
-                disabled={!isGrok && currentModel?.supportsNegativePrompt === false}
-                rows={3}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
-                placeholder={!isGrok && currentModel?.supportsNegativePrompt === false
-                  ? 'This CFG-distilled model does not use a negative prompt.'
-                  : 'What to avoid...'}
-              />
-            </FormField>
+            {negativePromptSupported && (
+              <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                <AutoSizeTextarea
+                  value={negativePrompt}
+                  onChange={(e) => setNegativePrompt(e.target.value)}
+                  rows={3}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
+                  placeholder="What to avoid..."
+                />
+              </FormField>
+            )}
           </div>
 
           {/* Keep Enhance live while a render is in flight so the next clip
@@ -1081,9 +1391,10 @@ export default function VideoGen() {
             kind="video"
             prompt={prompt}
             setPrompt={setPrompt}
-            negativePrompt={negativePrompt}
-            setNegativePrompt={setNegativePrompt}
+            negativePrompt={negativePromptSupported ? negativePrompt : ''}
+            setNegativePrompt={negativePromptSupported ? setNegativePrompt : undefined}
             renderConfig={{ stylePreset: stylePreset?.id, mode, model: modelId }}
+            maxPromptLength={enhancePromptBudget}
           />
 
           {mode === 'fflf' && keyframesSupported && (
@@ -1220,11 +1531,13 @@ export default function VideoGen() {
             />
           )}
 
-          <RemoteMediaTargetPicker
-            target={remoteTarget}
-            kind="video"
-            localBlockedReason={remoteUnsupportedInputs}
-          />
+          {!isGrok && !isFal && !isReactor && (
+            <RemoteMediaTargetPicker
+              target={remoteTarget}
+              kind="video"
+              localBlockedReason={remoteUnsupportedInputs}
+            />
+          )}
 
           {isGrok ? (
             <div className="grid grid-cols-2 gap-3">
@@ -1251,6 +1564,45 @@ export default function VideoGen() {
                 <code className="text-gray-400"> image_to_video </code> tool. Model, frames, and seed are chosen by Grok; renders count against your Grok plan.
               </p>
             </div>
+          ) : isFal ? (
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="fal.ai model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                <input
+                  type="text"
+                  value={falModelId}
+                  onChange={(e) => setFalModelId(e.target.value)}
+                  placeholder="fal-ai/minimax/hailuo-02/standard/text-to-video"
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                />
+              </FormField>
+              <FormField label="Clip length (sec)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={falDuration}
+                  onChange={(e) => setFalDuration(e.target.value)}
+                  placeholder="model default"
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                />
+              </FormField>
+              <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
+                Renders on fal.ai's queue API — leave the model blank to use PortOS's default (text-to-video, or image-to-video in Image mode). Counts against your fal.ai balance.
+              </p>
+            </div>
+          ) : isReactor ? (
+            <ReactorPanel
+              clipId={reactorClipId}
+              onClipIdChange={setReactorClipId}
+              continuableClips={reactorContinuableClips}
+              imageModeActive={mode === 'image'}
+              seconds={reactorSeconds}
+              onSecondsChange={setReactorSeconds}
+              seed={reactorSeed}
+              onSeedChange={setReactorSeed}
+              aspect={reactorAspect}
+              onAspectChange={setReactorAspect}
+            />
           ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {/* The peer advertises its own models; the local list would name
@@ -1400,11 +1752,11 @@ export default function VideoGen() {
           <ModelDisclosure
             backend={backend}
             backendDisclosures={status?.backendDisclosures}
-            model={isGrok ? null : currentModel}
+            model={(isGrok || isFal || isReactor) ? null : currentModel}
             systemMemoryGb={modelContext?.systemMemoryGb}
           />
 
-          {!isGrok && (
+          {!isGrok && !isFal && !isReactor && (
             <AdvancedParamsPanel
               mode={mode}
               currentModel={currentModel}
@@ -1413,6 +1765,7 @@ export default function VideoGen() {
               chunkPrompts={chunkPrompts} onChunkPromptChange={setChunkPromptAt} chainingActive={chainingActive}
               contextFrames={contextFrames} onContextFramesChange={setContextFrames}
               fps={fps} onFpsChange={setFps}
+              batchSize={batchSize} onBatchSizeChange={setBatchSize}
               seed={seed} onSeedChange={setSeed} onRandomSeed={handleRandomSeed}
               steps={steps} onStepsChange={setSteps}
               guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
@@ -1461,7 +1814,7 @@ export default function VideoGen() {
                     : undefined
                 }
               >
-                <Sparkles className="w-4 h-4" /> Generate
+                <Sparkles className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Generate ${effectiveBatchSize} videos` : 'Generate'}
               </button>
             )}
             <button
@@ -1474,7 +1827,7 @@ export default function VideoGen() {
                   : weightsGateBlocked ? 'Finish required model downloads before queueing'
                     : 'Complete the required inputs before queueing'}
             >
-              <ListPlus className="w-4 h-4" /> Add to queue
+              <ListPlus className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Add ${effectiveBatchSize} videos to queue` : 'Add to queue'}
             </button>
             {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
             {(generating || error) && (
@@ -1483,6 +1836,30 @@ export default function VideoGen() {
               </span>
             )}
           </div>
+
+          {/* Visible per-render control rather than a settings-only default (off by
+              default — see ImageGenTab's videoGenDisplaySleep) — a GPU-watchdog
+              crash on this model is rare enough that most renders shouldn't pay for
+              the mitigation, but the option needs to be one click away right here. */}
+          {canSleepDisplay && (
+            <label htmlFor="video-gen-display-sleep" className="flex items-start gap-2 text-xs text-gray-400 cursor-pointer">
+              <input
+                id="video-gen-display-sleep"
+                type="checkbox"
+                checked={displaySleepEnabled}
+                onChange={(e) => setDisplaySleepOverride(e.target.checked)}
+                disabled={generating}
+                className="mt-0.5 accent-port-accent"
+              />
+              <span>
+                Sleep display during this render
+                <span className="block text-[11px] text-gray-500">
+                  Reduces WindowServer GPU contention on affected Apple silicon. Change the install-wide
+                  default under Settings &rarr; Media Generation.
+                </span>
+              </span>
+            </label>
+          )}
 
           {/* Said BEFORE the button is pressed, not after the screen is already
               dark. A user who first learns about the sleep by watching their
@@ -1493,9 +1870,9 @@ export default function VideoGen() {
             <p className="flex items-start gap-1.5 text-[11px] text-port-warning">
               <MonitorOff className="w-3.5 h-3.5 mt-px shrink-0" />
               <span>
-                This model renders with your display asleep. The screen will go dark shortly
-                after you start — that is expected, and waking it can crash the render. Disable it
-                under Settings &rarr; Media Generation if you would rather keep the screen on.
+                This render will put your display to sleep. The screen will go dark shortly
+                after you start — that is expected, and waking it can crash the render. Uncheck
+                the option above if you would rather keep the screen on.
               </span>
             </p>
           )}
@@ -1507,7 +1884,8 @@ export default function VideoGen() {
             kindDefault="both"
             applyKind="video"
             setPrompt={setPrompt}
-            setNegativePrompt={setNegativePrompt}
+            setNegativePrompt={negativePromptSupported ? setNegativePrompt : undefined}
+            maxVideoPromptLength={enhancePromptBudget}
             alwaysOpen
           />
         </div>
@@ -1562,6 +1940,10 @@ export default function VideoGen() {
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings" size="lg">
         <ImageGenTab />
+      </Drawer>
+
+      <Drawer open={episodeOpen} onClose={closeEpisodeComposer} title="Episode Composer" size="xl" closeOnBackdrop={false}>
+        {episodeOpen && <EpisodeComposer initialScenes={episodeImportScenes} onQueued={refreshHistory} />}
       </Drawer>
 
       <RuntimeInstallModal

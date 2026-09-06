@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
+vi.mock('./UntrustedContentPolicyPanel.jsx', () => ({ default: () => <div>Content safety policies</div> }));
+
 vi.mock('../../services/api', () => ({
   getModelAbuseGuardStatus: vi.fn(),
   getHfTokenStatus: vi.fn(),
@@ -55,10 +57,21 @@ const renderPanel = async () => {
 };
 
 describe('ModelAbuseGuardPanel', () => {
+  it('offers repair for partial setup and disables installation without Python', async () => {
+    getModelAbuseGuardStatus.mockResolvedValueOnce({
+      ready: false, setupState: 'incomplete', venvReady: true, pythonAvailable: false, stages: STAGES,
+    });
+    await renderPanel();
+    expect(screen.getByText('Setup incomplete')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Repair model-abuse guard' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refresh status' })).toBeEnabled();
+    expect(screen.getByRole('status')).toHaveTextContent('A partial or failed installation blocks screening');
+  });
+
   it('tracks each install stage separately from the chat catalog', async () => {
     await renderPanel();
 
-    expect(screen.getByText('Optional second layer · managed classifier')).toBeInTheDocument();
+    expect(screen.getByText('Required by default · local classifier')).toBeInTheDocument();
     expect(screen.getByRole('list', { name: 'Abuse guard setup stages' })).toBeInTheDocument();
     expect(screen.getByTestId('abuse-guard-stage-huggingface-token')).toHaveAttribute('data-ready', 'true');
     expect(screen.getByTestId('abuse-guard-stage-python')).toHaveAttribute('data-ready', 'true');

@@ -46,6 +46,27 @@ pulls the independent Video checkout from its own origin and branch, installs
 Worlds' frozen Bun dependencies, and restarts only Eidoverse. Video is therefore
 managed as a version-visible sidecar, not pinned as a PortOS submodule.
 
+That topology is only visible to someone who goes looking for it, so freshness
+is also reported where a user actually lives. Opening **Eidoverse** runs the
+same repository-source check once per visit and, when a checkout or its fork is
+behind something the update can pull it forward from, raises an advisory above
+the world naming what is behind and offering the same one-click managed update.
+Dismissing it silences that revision only — the next Eidoverse release raises it
+again. The check is scoped to this page rather than added to the global PortOS
+update banner because it costs a `git fetch` on both checkouts plus GitHub fork
+metadata, which is not a price every screen should pay.
+
+The advisory reports only drift an update can actually clear. The Video checkout
+is cloned from a third party's *fork* of the canonical project, and PortOS can
+read that fork but never push to it — so when it falls behind its own upstream,
+neither `gh repo sync` nor a pull from its origin can move it, and an advisory
+raised for that drift would never clear. PortOS therefore counts a fork toward
+"update available" only when it is the application checkout's own fork, the
+credential can push to it, and it has not diverged (`isForkSyncable` in
+`server/services/managedAppRepositories.js`, surfaced to the client as each
+source's `forkSyncable`). The drift is still reported on the app's **Git** tab,
+where the card explains why no button there clears it.
+
 ## Runtime and data ownership
 
 The managed app uses port `8940` and starts with the Bun executable found or
@@ -114,6 +135,48 @@ private Eidoverse world** grant in both the Persistent Mind controls and the
 local Agent Tools (MCP) controls; generic PortOS write access does not imply it.
 This makes both the human and CoS roles durable in the Eidoverse world rather
 than browser-session conveniences.
+
+## World Design V3: PortOS Commons
+
+Commons arranges eight inward-facing halls around a grassy arrival park.
+A broad circular promenade and short paths link rounded gathering terraces;
+trees, planted beds, and timber seating soften the edges. The center stays
+clear for pedestrian agents, Persistent Mind avatars, and human guests.
+Buildings use Eidoverse's existing `comp.structure` grammar: tiled floors,
+glass frontage, open archways, walls, and roofs, with native collision.
+Large district landmarks sit on rooftop plinths behind the frontage. Their
+measured bottom and animation clearance keep the entrance and physical sign
+visible. Accent-edged paths and shallow entrance canopies connect each hall
+to the promenade. These geometry changes reconcile through the existing V3
+projection without resetting user overrides or visitor-authored objects.
+A deterministic GLB adds walking surfaces, decorative seating, and physical
+district signs through Eidoverse's ordinary content-addressed upload API.
+Each install reuses the verified recipe-derived asset on later projections.
+
+Library geometry summaries are measured once per resolved path and retained
+in the asset locks. Placement compensates model-origin offsets and fits a
+semantic size envelope; native structure anchors and the city surface retain
+their authored coordinates. Desktop computers sit at the measured desk height.
+
+The portable recipe resolves desks, retro terminals, crates, barrels, palms,
+and streetlights from each install's own library. Furniture stays inside the
+buildings or beside entrances. Arcade computers sit on individual desks, with the first eight workstations
+inside the hall and overflow on its terrace. Other bounded live signals occupy
+distinct bays beside the entrance aisle, sharing the existing 48-signal budget. Decorative furniture
+has no floating label. Semantic landmarks and signals keep their optional
+annotations, hidden at the start of each visit until the user activates the
+Labels toolbar toggle or chooses a label mode in World controls.
+
+V1 and V2 defaults remain immutable migration baselines. The V3 migration
+preserves explicit overrides, aliases, and the last successfully applied
+version. Changed asset slots invalidate their resolution fingerprints;
+unchanged locks remain reusable. Existing managed identifiers stay stable,
+obsolete trail markers are retired by normal reconciliation, and unrelated
+visitor-built entities remain untouched. Failure compensation restores native
+structure components through the existing component rollback path.
+
+No Eidoverse framework change is required. Physical signs are authored scene geometry; camera-facing clickable labels are
+a separate, optional renderer capability. Building room labels describe topology and do not render signs.
 
 ## World Design V2: Luminous Systems Garden
 
@@ -198,7 +261,7 @@ are exhausted. Catalog entries without byte metadata remain usable with
 
 ## Versioning, updates, and recovery
 
-`data/eidoverse/portos-world.json` schema V2 records
+`data/eidoverse/portos-world.json` schema V3 records
 `selectedDesignVersion`, `lastAppliedDesignVersion`, `pendingDesignVersion`,
 `userOverrides`, `assetRecipeVersion`, `assetResolutions`, `migrationReport`,
 and the reconciliation checkpoint/error. The immutable V1 and V2 registries are
@@ -296,13 +359,21 @@ an empty join token; do not expose this configuration to the public internet.
 An instance that needs a broader trust model should configure Eidoverse access
 control in that project before starting it.
 
-Eidoverse itself remains a plain-HTTP service on `:8940`. For an HTTPS PortOS
-session, the embedded page lazily opens a PortOS-owned HTTPS/WebSocket bridge on
-`:5563`, using the same machine certificate as `:5555` and forwarding to
-`127.0.0.1:8940`. This avoids browser mixed-content rejection while leaving both
-external repositories unchanged. The bridge starts only when the page is
-opened, waits for the managed app to answer before mounting the iframe, and
-returns an explicit unavailable state when the runtime does not become ready.
+Eidoverse itself remains a plain-HTTP service on `:8940`. The embedded page
+lazily opens a PortOS-owned HTTP/WebSocket bridge on `:5563` that forwards to
+`127.0.0.1:8940`; when a machine certificate is present it serves HTTPS using
+the same certificate as `:5555`, which is what avoids browser mixed-content
+rejection. Both external repositories stay unchanged. The bridge starts only
+when the page is opened, waits for the managed app to answer before mounting the
+iframe, and returns an explicit unavailable state when the runtime does not
+become ready.
+
+The page embeds through that bridge whenever the bridge's scheme matches the
+page's, because the bridge is also what arms the renderer's frame bridge (see
+below). The single exception is a plain-HTTP page in front of an HTTPS bridge —
+the loopback `:5553` mirror and the Vite dev server — where the shared
+certificate does not cover the hostname in use; there the iframe points straight
+at `:8940`, the scene renders normally, and the frame handshake stays dormant.
 
 Projection protocol and asset preflight target the same runtime. The default
 HTTP library origin is derived from `EIDOVERSE_WS_URL` by mapping `ws`/`wss` to
@@ -316,3 +387,192 @@ The hosted page, identity bridge, projection service, and CoS tools are explicit
 PortOS adapters across the two projects' public protocols. They remain
 deterministic and install-local: opening PortOS does not call an AI provider,
 and no raw Eidoverse world log is copied to another machine by federation.
+
+
+## Object labels, aliases, and the saved legend
+
+PortOS emits a generic `comp.label` beside each owned object's `comp.portos`:
+`{name, description?, visibility: 'nearby' | 'always' | 'inspect', offset?}`.
+District and world landmarks use `always`, bounded by the renderer's range;
+live indicators use `nearby`; walkway markers use `inspect`. Ordinary refresh
+adds labels to existing worlds. One projector helper updates the label and the
+saved object legend together, including stale retained indicators. Repeating an
+unchanged projection emits no label verbs. Removed managed entities take their
+labels with them; foreign entities and their labels are preserved.
+
+**World controls → Districts & Data** shows the last successful projection by
+district: semantic name, meaning, label mode, model path, and resolution reason.
+Search matches and catalog/recipe fallbacks are explicitly called fallbacks.
+A retained model whose path differs from the current resolution lock reports
+unverified provenance. The link to **Appearance & Assets** uses the existing
+asset override, refresh, and reset controls. The legend remains readable with
+floating labels off and on older renderers. Agent-tool, scheduled-job, and boot projection results use the service's compact
+response: operation summary, object count, and presence. The full legend remains
+in saved projection state for the drawer.
+
+Optional aliases name individual live indicators using stable opaque resource
+keys, never private record IDs or titles. The configuration accepts at most 128
+aliases, each plain text of at most 72 characters. Clear the field to restore
+the generic label. Every alias field displays its opaque resource reference,
+including when multiple objects share a display name. Aliases for absent objects
+remain editable in **Saved aliases without a current object**, so users can free
+slots without resetting a district or losing aliases during a temporary outage.
+Saving an alias explicitly publishes that display text into
+the private world's append-only history; removing it changes the current label,
+not older history. Asset resets preserve aliases; district/all resets clear the
+matching aliases. Migration 343 upgrades existing config to schema V3, preserving
+custom recipes and asset locks, and initializes an empty alias map without
+reading private records. No config seed or raw-data backfill ships. Older PortOS
+versions reject the newer config schema rather than discarding the aliases.
+
+## Renderer capabilities and frame contract V1
+
+The external Worlds checkout remains the sole renderer. Its half of this
+contract shipped in
+[Worlds issue 5](https://github.com/atomantic/eidoverse-worlds/issues/5) and
+[Worlds issue 7](https://github.com/atomantic/eidoverse-worlds/issues/7).
+End-to-end label/picking/touch/keyboard acceptance requires that companion;
+producer and frame-contract tests alone do not establish it, so
+`scripts/eidoverse-frame-acceptance.mjs` drives the whole exchange against a
+disposable synthetic world in a real browser. It is deliberately outside CI —
+it needs the installed checkout, Bun, Playwright and a real Chrome — and it
+never touches the install's own world under `data/eidoverse/worlds`.
+
+`GET /version` advertises independently versioned capabilities alongside its
+existing build identity:
+
+```json
+{"sha":"example-build","commitTime":"2026-01-01T00:00:00Z","capabilities":{"objectLabels":1,"portosNavigation":1,"labelPreferences":1}}
+```
+
+Missing, malformed, or unknown capability versions do not block projection.
+The drawer shows an update/reload action when label support or the frame bridge
+is unavailable. Updating the managed checkout preserves PortOS design settings,
+explicit aliases, and asset overrides. The actual frame handshake takes
+precedence over the server capability report, so a stale browser bundle cannot
+pretend it supports the updated runtime.
+
+After each iframe load, PortOS posts to its **exact hosted origin**:
+
+```json
+{"type":"portos:connect","version":1,"nonce":"fresh-opaque-session","capabilities":{"portosNavigation":1,"labelPreferences":1},"labelVisibility":"nearby"}
+```
+
+The renderer validates `event.source === parent` and the embedding PortOS origin,
+then replies to that exact origin with `eidoverse:ready`, echoing `version` and
+`nonce` and advertising its supported capabilities. The renderer must obtain
+the expected parent origin from its trusted embedding configuration; accepting
+an arbitrary opener as the parent is not sufficient.
+
+**PortOS supplies that configuration.** The renderer reads it from
+`GET /embed-config`, which the bridge on `:5563` answers itself rather than
+forwarding: the hostname is the one the browser just used to reach the bridge,
+and the scheme and port are PortOS's own. The checkout's static
+`EMBED_PARENT_ORIGIN` is deliberately left unset, because one install is
+reachable as `localhost`, as a LAN address and as a MagicDNS name, and a single
+configured origin could only ever match one of them — an unmatched origin leaves
+the frame bridge silently dormant. A request whose `Host` is unusable resolves
+to no embedder rather than to a repaired guess, since the browser compares
+origins with `===` and a repair would be a silent mismatch at handshake time. Each later message carries
+the same version and nonce. A reload invalidates the prior session. Unsupported
+clients simply ignore the handshake and continue rendering.
+
+For a user-triggered **Open in PortOS**, the renderer sends
+`{type:'eidoverse:navigate', version:1, nonce, entityId, route}`. PortOS requires
+all of: the current iframe window, its exact origin, the current nonce, a V1
+navigation-capable handshake, an entity present in the saved projection legend,
+and exact equality between the requested route and that object's known PortOS
+section route. Only the fixed source-section routes (plus `/eidoverse`) are
+allowed. URLs, query strings, encoded/relative paths, record payloads, and
+unknown entities cannot navigate. No URL proxy is exposed.
+
+The Eidoverse framework leaves object labels off by default. PortOS explicitly enables
+them through its trusted frame session only after the user enables Labels. Each
+visit starts with `off`; an older stored always-on preference does not enable
+an overlay. The toggle and World controls change only this visit's view.
+Labels are positioned over their objects; clicking or tapping one opens its semantic
+name and description, with Open in PortOS supplied only by our fork. The old detached
+object dropdown and armed inspection buttons are removed.
+
+Floating-label preference is browser-only: `nearby` respects authored modes,
+`all-nearby` includes authored inspect-only objects within 60 metres,
+and `off` hides floating labels while keeping selected-object details accessible.
+PortOS sends `portos:label-preference` with `version`, `nonce`, and
+`labelVisibility` only after the frame advertises V1 preference support. A
+preference change never sends a world verb or rewrites configuration. The
+renderer owns distance culling, object picking, and accessible selected details.
+
+## Federated guest travel
+
+The Federation Terminal gives every connected, guest-capable peer a walk-in
+visitor chamber. Chambers are infrastructure rather than sampled health signals,
+so the live signal cap cannot silently omit a destination. Inspect a chamber
+and choose **Teleport as guest**, or use the destination buttons above the world.
+With an `objectInteraction: 1` renderer, approach a visible pod within three
+metres and press **E**, or tap its action prompt. This works with labels hidden.
+The local controls name the destination; the authored chamber uses an opaque
+reference rather than writing machine names into the world log. Destination
+changes refresh the projection while the page is open and its draft is saved.
+
+Departure checks the saved peer and its current capabilities, admits a fresh
+visitor identity, and opens that host's `/eidoverse/guest` page. Before navigation, PortOS
+requires the departing renderer's `worldDeparture: 1` acknowledgement
+when supported: presence and reconnect attempts stop, then the socket closes.
+PortOS waits for a blank replacement frame before navigating in the same tab;
+older renderers use that frame teardown as their compatibility path. Returning
+through browser history restores the home frame. This moves the human visitor;
+the install's resident CoS presence continues to belong to its home world.
+The guest shell
+loads its renderer without owner controls or private PortOS bootstrap requests,
+including when the destination uses the optional instance password. An existing
+Eidoverse browser login cannot replace the guest identity. **Leave world** returns
+to the previous page. Admission links expire after 30 minutes.
+
+Both ends need updated PortOS, Eidoverse enabled and running, and a renderer that
+advertises `guestEntry: 1`; the host needs its resident CoS presence enabled to
+admit visitors. Older runtimes remain unavailable for travel until updated.
+
+For the Persistent Mind, enable **Allow guest travel and chat with federated
+worlds** in its tool permissions. This is the separate `visitEidoversePeers` grant,
+which defaults off and does not follow from local world-management permission.
+The corresponding semantic MCP grant is available in API Access settings.
+
+| Tool | Purpose |
+| --- | --- |
+| `eidoverse.destinations` | Discover connected registered guest worlds. |
+| `eidoverse.visit` | Join a destination by its opaque `peerId`; returns a `visitId`. |
+| `eidoverse.visit-chat` | Read live replies after a cursor; optional `text` sends one message. |
+| `eidoverse.leave` | Disconnect the guest visit. |
+| `eidoverse.chat` | Read the resident's live local chat (`readPortos`). |
+| `eidoverse.say` | Reply locally as the resident (`manageEidoverse`, unchanged). |
+
+Visits do not move the resident presence or give a visitor construction rights.
+Guest chat starts with the visit, is bounded and cursor-based for the Mind, and
+never automatically exports stored conversation history or private records.
+Incoming chat makes no AI call and is never an instruction or permission grant.
+The [guest-conversation ADR](../decisions/2026-09-05-eidoverse-guest-chat.md)
+documents this narrowly scoped exception to the machine-local record policy.
+
+### Object controls
+
+The Commons island extends into an irregular grassy shoreline, a sandy beach,
+an eight-kilometre ocean horizon, and distant mountain islands. This is bounded
+authored scenery, not an infinite terrain-streaming or swimming system. It uses
+the same portable generated GLB as the city, without texture downloads or AI
+calls. Renderers advertising `largeWorldColliders: 1` receive the larger scene
+for the default terrain and district layout. Customized terrain or district
+positions retain the compact city so scenery cannot cover authored buildings;
+custom labels and assets remain supported. Older runtimes also retain the
+compact city until upgraded. The renderer indexes
+large landscape colliders once and uses their triangle BVH for local queries.
+
+Worlds already supports `use {id, action}` and authored server-side behaviors.
+The renderer's contextual control exposes a primary `comp.interaction` action
+or a sole existing reaction. Switches can use a behavior to emit an ordinary
+logged `light` or `comp` change; the world remains authoritative and late joiners
+see the resulting state. PortOS pods use the validated frame bridge instead of
+sending a world verb or embedding destination URLs in scene data. Keyboard
+repeat, chat focus, overlays, distance, and occlusion suppress accidental use.
+The renderer implementation and a toggle-lamp example live in the separate
+Worlds repository. Controller support is tracked in
+[Worlds #11](https://github.com/atomantic/eidoverse-worlds/issues/11).

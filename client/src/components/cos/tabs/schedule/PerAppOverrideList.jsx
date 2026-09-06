@@ -10,7 +10,7 @@ export default function PerAppOverrideList({ taskType, config, apps, providers, 
   // that pins nothing of its own actually runs on.
   const inheritedProviderText = config.providerId
     ? providerModelLabel(providers || [], config.providerId, config.model)
-    : 'the active provider';
+    : taskType === 'issue-watcher' ? 'Abuse Guard source policy' : 'the active provider';
 
   if (activeApps.length === 0) return null;
 

@@ -184,6 +184,7 @@ describe('provisionVllmQwenProject', () => {
         { id: 'opencode-vllm', vllmBacked: true, apiKey: '' },
         { id: 'opencode-vllm-tui', vllmBacked: true, apiKey: '' },
         { id: 'anthropic', apiKey: 'untouched' },
+        { id: 'remote-vllm', vllmBacked: true, endpoint: 'http://host-XXXX.example.ts.net:18022/v1', apiKey: 'remote-secret' },
       ],
     });
     stageFreshProject();

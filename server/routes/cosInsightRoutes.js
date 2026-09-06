@@ -134,22 +134,38 @@ router.get('/actionable-insights', asyncHandler(async (req, res) => {
     });
   }
 
-  // 4b. Leftover idle branches (#5596) — propose-only; Run Now deep-links to the schedule.
+  // 4b. Leftover idle branches (#5596). The detector never enacts; the card is
+  // where the operator does. It therefore has to name WHICH apps are holding the
+  // branches — a bare total plus a link to the schedule page left them to guess
+  // which app to run branch-reconcile for, so `apps` carries the per-app
+  // breakdown the banner expands into per-app Run Now buttons.
   if (Array.isArray(leftoverFindings) && leftoverFindings.length > 0) {
-    const leftoverCount = leftoverFindings.reduce((sum, finding) => sum + finding.leftoverCount, 0);
-    const first = leftoverFindings[0];
-    const single = leftoverFindings.length === 1;
+    const apps = leftoverFindings.map(({ appId, appName, leftoverCount, states, branches, lastUserReconcileAt }) => ({
+      appId,
+      appName: appName || appId,
+      leftoverCount,
+      states: states || {},
+      branches: branches || [],
+      lastUserReconcileAt: lastUserReconcileAt || null
+    }));
+    const leftoverCount = apps.reduce((sum, app) => sum + app.leftoverCount, 0);
+    const first = apps[0];
+    const single = apps.length === 1;
+    const branchLabel = (n) => `${n} leftover branch${n === 1 ? '' : 'es'}`;
     insights.push({
       type: 'leftover-branches',
       priority: 'medium',
       icon: 'AlertTriangle',
       title: single
-        ? `${first.leftoverCount} leftover branches on ${first.appId}, agents idle. Run branch-reconcile?`
-        : `${leftoverCount} leftover branches across ${leftoverFindings.length} apps, agents idle. Run branch-reconcile?`,
-      description: first.lastUserReconcileAt
-        ? `Last manual reconcile ${first.lastUserReconcileAt}. Propose a Run Now — never enact.`
-        : 'No manual reconcile in the last 14 days. Propose a Run Now — never enact.',
-      action: { label: 'Run Now', route: '/cos/schedule' },
+        ? `${branchLabel(first.leftoverCount)} on ${first.appName}, agents idle. Run branch-reconcile?`
+        : `${branchLabel(leftoverCount)} across ${apps.length} apps, agents idle. Run branch-reconcile?`,
+      description: single
+        ? `${first.lastUserReconcileAt
+            ? `Last manual reconcile on ${String(first.lastUserReconcileAt).slice(0, 10)}`
+            : 'No manual reconcile in the last 14 days'}. Run Now queues branch-reconcile for ${first.appName}.`
+        : apps.map(app => `${app.appName} (${app.leftoverCount})`).join(' · '),
+      action: { label: 'Run Now', route: '/cos/schedule?task=branch-reconcile' },
+      apps,
       count: leftoverCount
     });
   }

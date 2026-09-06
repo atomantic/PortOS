@@ -104,6 +104,7 @@ const providerRuntimeRequirements = Object.freeze({
 });
 
 const localProvider = (provider) => provider?.ollamaBacked
+  || provider?.lmstudioBacked
   || provider?.llamaBacked
   || provider?.mtplxBacked
   || provider?.vllmBacked

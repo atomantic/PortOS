@@ -38,6 +38,7 @@ import {
   isOpencodeCommand,
   prefixOpencodeModel,
   parseOpencodeConfigContent,
+  OPENCODE_BUILD_AGENT,
   OPENCODE_PUBLIC_REVIEW_AGENT,
 } from './providerModels.js';
 import { PROVIDER_GATEWAYS, PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './providerGateways.js';
@@ -59,6 +60,13 @@ const OPENCODE_LOCAL_BASE_PROVIDERS = {
     npm: '@ai-sdk/openai-compatible',
     name: 'Ollama (local)',
     options: { baseURL: 'http://localhost:11434/v1' },
+  },
+  lmstudio: {
+    npm: '@ai-sdk/openai-compatible',
+    name: 'LM Studio (local)',
+    // LM Studio's own app default, not a PortOS-assigned port — it is not in
+    // `PORTS` for the same reason 11434 (Ollama) is not.
+    options: { baseURL: 'http://localhost:1234/v1' },
   },
   mtplx: {
     npm: '@ai-sdk/openai-compatible',
@@ -95,7 +103,7 @@ const OPENCODE_LOCAL_BASE_PROVIDERS = {
  * — what a spawned OpenCode talks to when the provider stores no config of its
  * own. Read by `lib/localProviderRuntime.js` so the readiness probe and the
  * spawn agree on the endpoint instead of keeping two copies of these ports.
- * @param {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|string} providerKey
+ * @param {'ollama'|'lmstudio'|'mtplx'|'llama'|'vllm'|'sglang'|string} providerKey
  * @returns {string|null}
  */
 export const opencodeLocalBaseUrl = (providerKey) =>
@@ -166,6 +174,13 @@ export function toBareModelIds(models, providerKey = 'ollama') {
  */
 const THINKING_STYLE = {
   ollama: 'think',
+  // LM Studio exposes reasoning as a LOAD-TIME property of the model instance
+  // chosen in the app (or through `lms load`), not as a per-request field its
+  // OpenAI-compatible endpoint documents. Offering a toggle here would pin a
+  // value nothing reads — the same reason the gateways get `null` below. The
+  // temperature/top_p controls above it are ordinary OpenAI fields and do
+  // forward.
+  lmstudio: null,
   mtplx: 'chatTemplate',
   llama: 'chatTemplate',
   // vLLM routes it through the chat template exactly as MTPLX and llama.cpp do
@@ -408,14 +423,14 @@ function hardenOpencodeConfigForNoTool(config) {
   config.permission = DENY_ALL_PERMISSIONS;
   config.tools = { ...DENY_ALL_TOOLS };
   const agents = asObject(config.agent);
-  const agentNames = new Set([...Object.keys(agents), 'build', OPENCODE_PUBLIC_REVIEW_AGENT]);
+  const agentNames = new Set([...Object.keys(agents), OPENCODE_BUILD_AGENT, OPENCODE_PUBLIC_REVIEW_AGENT]);
   // `buildAgentGeneration` writes the stage's temperature / topP / thinking /
   // reasoningEffort onto `agent.build` — OpenCode's default agent — but this
   // profile runs `--agent plan`. Seed the review agent from `build` so the
   // stage's configured effort actually reaches the model that runs, instead of
   // silently falling back to the backend default. An explicit `agent.plan` in
   // the user's own config still wins (it is spread after).
-  const generationSource = asObject(agents.build);
+  const generationSource = asObject(agents[OPENCODE_BUILD_AGENT]);
   config.agent = Object.fromEntries([...agentNames].map((name) => [name, {
     ...(name === OPENCODE_PUBLIC_REVIEW_AGENT ? generationSource : {}),
     ...asObject(agents[name]),
@@ -465,7 +480,7 @@ export function buildOpencodeConfigContent(models, base = null, providerKey = 'o
  * model, and the model being run this invocation — so whichever namespaced
  * `--model` the spawner passes is always accepted.
  *
- * @param {{command?:string, ollamaBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, models?:string[], defaultModel?:string|null, apiKey?:string, orcarouterApiKey?:string, envVars?:object}} provider
+ * @param {{command?:string, ollamaBacked?:boolean, lmstudioBacked?:boolean, mtplxBacked?:boolean, llamaBacked?:boolean, vllmBacked?:boolean, sglangBacked?:boolean, gatewayBacked?:string, orcarouterBacked?:boolean, models?:string[], defaultModel?:string|null, apiKey?:string, orcarouterApiKey?:string, envVars?:object}} provider
  * @param {string|null|undefined} model - the model being run (may differ from defaultModel)
  * @param {{safetyProfile?:string|null}} [options] - a `no-tool` public-review
  *   profile applies `hardenOpencodeConfigForNoTool`, which IS OpenCode's

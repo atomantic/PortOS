@@ -8,6 +8,7 @@ vi.mock('./shell.js', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { screenshots: '/opt/portos/data/screenshots' },
   saveImageUpload: vi.fn(),
+  unlinkGuarded: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { buildImageDropText, dropImageIntoShellSession } from './shellImageDrop.js';

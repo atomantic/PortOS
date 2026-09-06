@@ -41,6 +41,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   ensureDirs: vi.fn(),
   readJSONFile: vi.fn(),
   atomicWrite: vi.fn().mockResolvedValue(undefined),
+  rmGuarded: vi.fn().mockResolvedValue(undefined),
   PATHS: { memory: '/tmp/test/memory' }
 }));
 
@@ -73,9 +74,8 @@ vi.mock('./memoryConfig.js', () => ({
   decrementAgentPendingApproval: vi.fn().mockResolvedValue(undefined)
 }));
 
-import { rm } from 'fs/promises';
 import { existsSync } from 'fs';
-import { ensureDir, ensureDirs, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+import { ensureDir, ensureDirs, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import * as memoryBM25 from './memoryBM25.js';
 import * as notifications from './notifications.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
@@ -665,7 +665,7 @@ describe('memory service', () => {
       const result = await deleteMemory('mem-1');
 
       expect(result).toEqual({ success: true, id: 'mem-1' });
-      expect(rm).not.toHaveBeenCalled();
+      expect(rmGuarded).not.toHaveBeenCalled();
       // The memory should have been saved with archived status
       const memorySaveCall = atomicWrite.mock.calls.find(c => c[0].includes('memory.json'));
       expect(memorySaveCall).toBeDefined();
@@ -681,7 +681,7 @@ describe('memory service', () => {
       const result = await deleteMemory('mem-1', true);
 
       expect(result).toEqual({ success: true, id: 'mem-1' });
-      expect(rm).toHaveBeenCalled();
+      expect(rmGuarded).toHaveBeenCalled();
       expect(memoryBM25.removeMemoryFromIndex).toHaveBeenCalledWith('mem-1');
     });
 
@@ -785,7 +785,7 @@ describe('memory service', () => {
       const result = await rejectMemory('mem-1');
 
       expect(result.success).toBe(true);
-      expect(rm).toHaveBeenCalled();
+      expect(rmGuarded).toHaveBeenCalled();
       expect(notifications.removeByMetadata).toHaveBeenCalledWith('memoryId', 'mem-1');
       expect(decrementAgentPendingApproval).toHaveBeenCalledWith('agent-1');
     });

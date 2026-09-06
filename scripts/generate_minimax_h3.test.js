@@ -1223,3 +1223,43 @@ describe.skipIf(!pyBin)('generate_minimax_h3.py', () => {
     });
   });
 });
+
+it.skipIf(!pyBin)('renders a batch on one pipeline with one encode and preserves earlier outputs on failure', () => {
+  const output = runPython(`${importRunner}
+import contextlib, io, tempfile
+from types import SimpleNamespace as NS
+runner.heartbeat = lambda *_: contextlib.nullcontext()
+runner._install_h3_stepwise_preview = lambda *_: None
+calls, encodes, saves = [], [], []
+encoder = NS(encode=lambda *a, **k: encodes.append(a) or ('embeddings', 'tags'))
+def render(prompt, **kwargs):
+    encoded = encoder.encode(prompt, kwargs['images'])
+    calls.append((kwargs['seed'], encoded))
+    if kwargs['seed'] == 2:
+        raise RuntimeError('render failed')
+    return NS(video=NS(shape=[124]), fps=24, audio=None, sample_rate=32000)
+class Pipe:
+    text_encoder = encoder
+    def __call__(self, *a, **kw): return render(*a, **kw)
+def save(path, *args):
+    saves.append(path.name)
+    path.write_bytes(b'example-video')
+with tempfile.TemporaryDirectory() as tmp:
+    args = NS(output=str(Path(tmp) / 'clip.mp4'), seed=0, prompt='Example shot', num_frames=124, steps=8, anchor=[], height=768, width=1344)
+    frames = io.StringIO()
+    with contextlib.redirect_stdout(frames):
+        try:
+            runner.render_outputs(Pipe(), args, [], save, [0, 1, 2, 3])
+        except RuntimeError as exc:
+            assert str(exc) == 'render failed'
+    results = [runner.json.loads(line) for line in frames.getvalue().splitlines()]
+    assert [r['seed'] for r in results] == [0, 1]
+    assert [r['batch_index'] for r in results] == [0, 1]
+    assert saves == ['clip.mp4', 'clip-2.mp4']
+    assert len(encodes) == 1
+    assert [seed for seed, _ in calls] == [0, 1, 2]
+    assert all(embeds is calls[0][1] for _, embeds in calls)
+print('OK')
+`);
+  expect(output.trim()).toBe('OK');
+});

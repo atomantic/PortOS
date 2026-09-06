@@ -18,7 +18,12 @@ router.get('/repos', asyncHandler(async (req, res) => {
  */
 router.post('/repos/sync', asyncHandler(async (req, res) => {
   const data = await githubService.syncRepos();
-  res.json({ repos: data.repos, lastRepoSync: data.lastRepoSync });
+  res.json({
+    repos: data.repos,
+    lastRepoSync: data.lastRepoSync,
+    githubUser: data.githubUser,
+    truncated: data.truncated,
+  });
 }));
 
 /**

@@ -53,3 +53,10 @@ export const promptFromMedia = (data, options) => request('/media-jobs/prompt-fr
   body: JSON.stringify(data),
   ...options,
 });
+
+// Holds outlive queued jobs, so status stays available when a batch is canceled.
+export const listMediaVideoHolds = (options = {}) => request('/media-jobs/holds', options);
+
+// Resume only the retained jobs covered by this local video hold.
+export const resumeMediaVideoHold = (holdId, options = {}) =>
+  request(`/media-jobs/holds/${encodeURIComponent(holdId)}/resume`, { method: 'POST', ...options });

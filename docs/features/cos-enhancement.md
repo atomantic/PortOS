@@ -106,7 +106,7 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 
 1. **Mission Autonomy**: Full autonomy - COS can implement changes, run tests, commit without approval for managed apps
 2. **Model Usage**: Local-first with LM Studio, no cloud API costs for thinking
-3. **Self-Modification**: Full autonomy - COS can change its own base thinking model without user approval
+3. **Persistent Mind model control**: The default profile is human-owned. An optional grant permits one approved local preset on a self-directed wake; the mind cannot rewrite provider configuration.
 4. **Failure Investigation**: Unattended by default - an `[Auto] Investigate agent failure` task runs without approval, because an isolated agent failure is exactly the work CoS exists to diagnose for itself. Approval is reserved for a failure *loop*, where another unattended agent would only repeat what already didn't work: the same cause investigated again within 24h (`repeat-fingerprint`), or the circuit-breaker hour already one slot from its cap (`failure-storm`). The reason is stamped on the task as the producer-agnostic `metadata.approvalReason` (`investigation-loop:<signal>`), which the Tasks UI turns into a hint on the APPROVE button. See `resolveInvestigationApproval` in `server/services/agentErrorAnalysis.js`.
 
 ## Persistent Mind task filing
@@ -199,3 +199,37 @@ opening line. Off by default.
 - [Chief of Staff](./chief-of-staff.md) - Core orchestration
 - [Memory System](./memory-system.md) - Memory search integration
 - [Error Handling](./error-handling.md) - Error recovery integration
+
+
+## Self-directed local thinking presets
+
+In the Mind settings drawer, **Models → Self-directed local thinking** lets the
+user enable `chooseThinkingPreset` and approve exact local presets. It defaults
+to off on new and upgraded installs and is independent of task-agent model
+permissions. Saving preferences and loading the catalog perform no inference.
+
+Only configured direct local API runtimes qualify. Account-backed routes,
+CLI/TUI wrappers, and unknown routes are excluded. Approval binds the preset,
+provider name, endpoint and runtime; editing these requires renewed approval.
+Removing a model, preset, or supported effort refuses the pending selection.
+
+The semantic actions `mind.thinking-presets` and
+`mind.request-thinking-preset` expose the approved catalog and a bounded
+`{ presetId, reason }` request. One request borrows a preset for the next
+self-directed wake; queued human messages and the current turn keep their own
+routes. The default profile, memories, and identity are unchanged.
+
+Only one request may be pending or active. At most three are accepted per
+rolling 24 hours, with a 30-minute gap. Admission also advances the recorded
+attempt time so a delayed wake cannot evade these limits. Cancellation, failed
+admission, interruption and restart do not refund allowance. Failed attempts
+retire the alternate and schedule an ordinary wake on the default profile.
+Existing endpoint slots, CoS capacity, autonomy and per-call budgets still gate
+every execution. No tool can extend its own session or edit these permissions.
+
+The same Models panel cancels pending requests and shows recent concise reasons
+and outcomes. Disabling the grant cancels the pending request; revoking it during
+execution refuses further provider calls. Execution receipts in Sessions show
+the actual route and outcome without exposing hidden reasoning. Durable request
+records live alongside the existing machine-local mind state; migration 348
+preserves prior profiles, grants, and counters.

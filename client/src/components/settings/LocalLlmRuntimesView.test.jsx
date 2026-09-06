@@ -64,6 +64,7 @@ import {
   patchSettingsSlice,
 } from '../../services/api';
 import socket from '../../services/socket';
+import { clickStartDownload } from '../../test/downloadPreflightConfirm.js';
 import LocalLlmRuntimesView from './LocalLlmRuntimesView.jsx';
 import {
   appleGpuBudgetGib,
@@ -265,7 +266,7 @@ describe('LocalLlmRuntimesView runtime servers', () => {
 
     await renderRuntimes();
     fireEvent.click(screen.getByRole('button', { name: /Download default checkpoint/ }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/no space left on device/)));
     expect(toast.success).not.toHaveBeenCalled();
@@ -280,7 +281,7 @@ describe('LocalLlmRuntimesView runtime servers', () => {
 
     await renderRuntimes();
     fireEvent.click(screen.getByRole('button', { name: /Download default checkpoint/ }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
 
     // `null` (not a repo id the card invented) = MTPLX's own verified default.
     await waitFor(() => expect(pullMtplxModel).toHaveBeenCalledWith(null));
@@ -626,7 +627,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     expect(screen.getByText(/Downloaded \(1\.1 GB\)/)).toBeInTheDocument();
     const downloadBtn = screen.getByRole('button', { name: /^Download$/ });
     fireEvent.click(downloadBtn);
-    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
 
     await waitFor(() => {
       expect(downloadSpecDecodeModel).toHaveBeenCalledWith('qwen3.8-27b-dspark', 'model', { silent: true });
@@ -653,7 +654,7 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     await renderRuntimes();
 
     fireEvent.click(await screen.findByRole('button', { name: /^Download$/ }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
 
     await waitFor(() => {
       expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/still running in the background/));

@@ -347,7 +347,7 @@ describe('IssuesTab', () => {
     await renderTab();
 
     await screen.findByText('Crash on save');
-    fireEvent.change(screen.getByLabelText(/Override context or instructions/), {
+    fireEvent.change(screen.getByLabelText(/Extra context/), {
       target: { value: 'Prefer a small, focused fix and add a regression test.' }
     });
     fireEvent.click(screen.getByRole('button', { name: /Claim/ }));

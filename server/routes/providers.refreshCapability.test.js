@@ -21,6 +21,7 @@ const CLAUDE_OLLAMA = {
   secretEnvVars: ['ANTHROPIC_BASE_URL'],
 };
 const CODEX = { id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', envVars: {} };
+const UNREFRESHABLE = { id: 'kimi-cli', name: 'Kimi CLI', type: 'cli', command: 'kimi', envVars: {} };
 
 function appWith(providerService) {
   const toolkit = { services: { providers: providerService }, routes: { providers: Router() } };
@@ -34,14 +35,15 @@ function appWith(providerService) {
 describe('#3620: sanitized PortOS provider routes carry canRefreshModels', () => {
   it('GET / decorates each provider and still strips the apiKey', async () => {
     const app = appWith({
-      getAllProviders: vi.fn().mockResolvedValue({ activeProvider: 'codex', providers: [CLAUDE_OLLAMA, CODEX] }),
+      getAllProviders: vi.fn().mockResolvedValue({ activeProvider: 'codex', providers: [CLAUDE_OLLAMA, CODEX, UNREFRESHABLE] }),
     });
 
     const res = await request(app).get('/api/providers');
     expect(res.status).toBe(200);
     const byId = Object.fromEntries(res.body.providers.map((p) => [p.id, p]));
     expect(byId['claude-ollama'].canRefreshModels).toBe(true);
-    expect(byId.codex.canRefreshModels).toBe(false);
+    expect(byId.codex.canRefreshModels).toBe(true);
+    expect(byId['kimi-cli'].canRefreshModels).toBe(false);
     expect(byId['claude-ollama'].apiKey).toBeUndefined();
     expect(byId['claude-ollama'].hasApiKey).toBe(true);
   });
@@ -60,7 +62,7 @@ describe('#3620: sanitized PortOS provider routes carry canRefreshModels', () =>
   });
 
   it('decorates GET /active as well', async () => {
-    const app = appWith({ getActiveProvider: vi.fn().mockResolvedValue(CODEX) });
+    const app = appWith({ getActiveProvider: vi.fn().mockResolvedValue(UNREFRESHABLE) });
 
     const res = await request(app).get('/api/providers/active');
     expect(res.status).toBe(200);
@@ -68,17 +70,17 @@ describe('#3620: sanitized PortOS provider routes carry canRefreshModels', () =>
   });
 
   it('decorates the PUT /:id response without persisting the field', async () => {
-    const updateProvider = vi.fn().mockResolvedValue({ ...CODEX, enabled: false });
+    const updateProvider = vi.fn().mockResolvedValue({ ...UNREFRESHABLE, enabled: false });
     const app = appWith({
-      getProviderById: vi.fn().mockResolvedValue(CODEX),
+      getProviderById: vi.fn().mockResolvedValue(UNREFRESHABLE),
       updateProvider,
     });
 
     const res = await request(app)
-      .put('/api/providers/codex')
+      .put('/api/providers/kimi-cli')
       .send({ enabled: false, canRefreshModels: true });
     expect(res.status).toBe(200);
-    // Derived, not echoed: the table has no codex row.
+    // Derived, not echoed: the table has no kimi row.
     expect(res.body.canRefreshModels).toBe(false);
     // `providerSchema.partial()` strips the unknown key before it reaches the
     // service, so it can never be written to providers.json.

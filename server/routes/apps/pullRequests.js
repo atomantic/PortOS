@@ -111,7 +111,11 @@ async function resolveReviewEligibility(app, result) {
     console.error(`❌ app-pull-requests: could not resolve pr-reviewer scope: ${err.message}`);
     return null;
   });
-  return pullRequest => isReviewablePullRequest(scope, pullRequest);
+  const eligible = new Set();
+  await Promise.all((result.pullRequests || []).map(async pullRequest => {
+    if (await isReviewablePullRequest(scope, pullRequest)) eligible.add(pullRequest.number);
+  }));
+  return pullRequest => eligible.has(pullRequest.number);
 }
 
 function actionFor(pullRequest, tasks, appId) {
@@ -322,7 +326,7 @@ router.post('/:id/pull-requests/:number/review', loadApp, asyncHandler(async (re
   const pullRequest = target.prs.find(candidate => candidate.number === number);
   if (!pullRequest) {
     throw new ServerError(
-      `Pull request #${number} is not reviewable — PR review covers open GitHub pull requests against the default branch that were opened by someone else`,
+      `Pull request #${number} is not reviewable — PR review covers open GitHub pull requests against the default branch from an untrusted contributor`,
       { status: 409, code: 'PULL_REQUEST_NOT_REVIEWABLE' },
     );
   }

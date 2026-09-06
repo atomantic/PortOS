@@ -48,6 +48,27 @@ describe('PersistentMindTools', () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
   });
 
+  it('updates executable tool access after changing a grant', async () => {
+    api.getPersistentMindTools.mockResolvedValue(response({ semanticTools: [{
+      name: 'eidoverse.augment', description: 'Build a private world', granted: false,
+      input_schema: { type: 'object' }, policy: { requiredCapabilities: ['manageEidoverse'] },
+    }] }));
+    renderPage();
+    expect(await screen.findByText('eidoverse.augment · Disabled')).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('checkbox', { name: 'Allow private Eidoverse world management' }));
+    expect(await screen.findByText('eidoverse.augment · Granted')).toBeInTheDocument();
+  });
+
+  it('saves peer travel as a separate default-off grant', async () => {
+    renderPage();
+    const toggle = await screen.findByRole('checkbox', { name: 'Allow guest travel and chat with federated worlds' });
+    expect(toggle).not.toBeChecked();
+    await userEvent.setup().click(toggle);
+    await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
+      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 7, visitEidoversePeers: true, manageEidoverse: false }),
+    }, { silent: true }));
+  });
+
   it('renders the server-described authority inventory and hard boundaries', async () => {
     renderPage();
 
@@ -75,7 +96,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 5, createTasks: true, manageMind: false, manageEidoverse: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 7, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -95,10 +116,11 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 5,
+        schemaVersion: 7,
         createTasks: false,
         manageMind: true,
         manageEidoverse: false,
+        visitEidoversePeers: false,
         callUser: false,
         readPortos: false,
         writePortos: false,
@@ -130,10 +152,11 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 5,
+        schemaVersion: 7,
         createTasks: true,
         manageMind: false,
         manageEidoverse: false,
+        visitEidoversePeers: false,
         callUser: false,
         readPortos: false,
         writePortos: false,
@@ -194,10 +217,11 @@ describe('PersistentMindTools', () => {
     await user.click(callToggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 5,
+        schemaVersion: 7,
         createTasks: false,
         manageMind: false,
         manageEidoverse: false,
+        visitEidoversePeers: false,
         callUser: true,
         readPortos: false,
         writePortos: false,

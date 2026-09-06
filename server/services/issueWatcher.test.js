@@ -34,6 +34,15 @@ vi.mock('./modelAbuseGuard.js', async (importOriginal) => ({
   runModelAbuseScan: (...args) => runModelAbuseScanMock(...args),
 }));
 
+const runUntrustedContentAnalysisMock = vi.fn();
+vi.mock('./untrustedContent.js', () => ({
+  runUntrustedContentAnalysis: (...args) => runUntrustedContentAnalysisMock(...args),
+  screenUntrustedContent: async ({ content }) => {
+    const screening = await runModelAbuseScanMock({ content });
+    return { ok: screening.ok && screening.safe === true, screening };
+  },
+}));
+
 const spawnPrRemediationFollowUpMock = vi.fn();
 const PR_REMEDIATION_SPAWN = { QUEUED: 'queued', ALREADY_QUEUED: 'already-queued', FAILED: 'failed' };
 vi.mock('./prRemediationFollowUp.js', () => ({
@@ -52,7 +61,8 @@ vi.mock('./apps.js', () => ({
 }));
 
 import {
-  buildTaskInput,
+  gatherIssueWatcherInput as buildTaskInput,
+  buildTaskInput as runScheduledIssueIntake,
   classifyChecks,
   isIssueClaimRequest,
   isTaskOutputPayload,
@@ -104,6 +114,7 @@ function installDefaultGhMock({
   pr = pullRequest(), issueRows = [[]], commentRows = [[]], reviews = [[]], issueDetails = {}, heldRuns = [],
 } = {}) {
   execGhMock.mockImplementation(async (args) => {
+    if (args[0] === 'api' && args.includes('user')) return JSON.stringify({ login: 'owner' });
     if (args[0] === 'api' && args.some((arg) => String(arg).includes('/actions/runs?'))) return JSON.stringify({ workflow_runs: heldRuns });
     if (args[0] === 'api' && args.some((arg) => String(arg).includes('/actions/runs/'))) return '';
     if (args[0] === 'api' && args.includes('repos/o/r') && !args.some((arg) => String(arg).includes('/issues'))
@@ -111,12 +122,21 @@ function installDefaultGhMock({
       return JSON.stringify({ owner: { login: 'owner', type: 'User' }, default_branch: 'main' });
     }
     if (args[0] === 'api' && args.some((arg) => String(arg).endsWith('/issues'))) return JSON.stringify(issueRows);
+    if (args[0] === 'api' && args.some((arg) => /^repos\/o\/r\/issues\/comments\/\d+$/.test(String(arg)))) {
+      const id = Number(String(args.find((arg) => /^repos\/o\/r\/issues\/comments\/\d+$/.test(String(arg)))).split('/').at(-1));
+      return JSON.stringify(commentRows.flat().find((comment) => comment.id === id) || {});
+    }
     if (args[0] === 'api' && args.some((arg) => String(arg).includes('/comments'))) return JSON.stringify(commentRows);
     const issueDetail = args
       .map((arg) => String(arg))
       .map((arg) => arg.match(/^repos\/o\/r\/issues\/(\d+)$/))
       .find(Boolean);
-    if (args[0] === 'api' && issueDetail) return JSON.stringify(issueDetails[issueDetail[1]] || {});
+    if (args[0] === 'api' && issueDetail) return JSON.stringify(
+      issueDetails[issueDetail[1]] || (() => {
+        const found = issueRows.flat().find((item) => item.number === Number(issueDetail[1]));
+        return found ? { state: 'open', ...found } : {};
+      })(),
+    );
     // `pr: null` = no open external PRs, so a test can exercise the issue side
     // alone without hand-rolling a replacement mock.
     if (args[0] === 'pr' && args[1] === 'list') {
@@ -145,6 +165,7 @@ beforeEach(() => {
   getOriginInfoMock.mockResolvedValue({ hasOrigin: true, host: 'github.com', owner: 'o', repo: 'r', fullName: 'o/r', isGithub: true });
   addNotificationMock.mockReset();
   addNotificationMock.mockResolvedValue({ id: 'notification-1' });
+  runUntrustedContentAnalysisMock.mockReset();
   runModelAbuseScanMock.mockReset();
   runModelAbuseScanMock.mockResolvedValue({
     ok: true,
@@ -175,6 +196,8 @@ describe('issue-watcher pure contracts', () => {
     "I can't take this issue",
     'I can take a look at the logs',
     'This looks good to me',
+    '> I can take this issue',
+    '```text\nAssign this to me\n```',
   ])('does not infer ownership from: %s', (body) => {
     expect(isIssueClaimRequest(body)).toBe(false);
   });
@@ -235,27 +258,12 @@ describe('buildTaskInput', () => {
     });
   }
 
-  it('baselines issue comments but still reviews an existing unreviewed external PR', async () => {
+  it('leaves existing external PR review to pr-reviewer', async () => {
     installDefaultGhMock();
-
     const result = await buildTaskInput({ app: APP });
-
-    expect(result.skip).toBeUndefined();
-    expect(result.prompt).toContain('Issue Watcher reasoning pass');
-    expect(result.prompt).toContain('PR #7: Contributor update');
-    expect(result.prompt).toContain('behind base: 2 commit(s)');
-    expect(result.prompt).toContain('ciPolicy: "skippable"');
-    expect(result.prompt).toContain('"summary": "brief completion summary"');
-    expect(result.prompt).toContain('"blocking": true');
-    expect(result.hookMetadata.issueWatcher.pullRequests).toEqual([
-      {
-        number: 7,
-        headSha: 'a'.repeat(40),
-        diffTruncated: false,
-        contentFingerprint: pullRequestContentFingerprint(pullRequest(), DIFF),
-      },
-    ]);
-    expect(result.hookMetadata.issueWatcher.issueComments).toEqual([]);
+    expect(result).toEqual({ skip: { reason: 'baselined' } });
+    expect(ghCalls('pr', 'list')).toEqual([]);
+    expect(runModelAbuseScanMock).not.toHaveBeenCalled();
   });
 
   it('assigns an explicit volunteer without spending a cognition run', async () => {
@@ -410,7 +418,7 @@ describe('buildTaskInput', () => {
 
     const result = await buildTaskInput({ app: apps.get(APP.id) });
 
-    expect(result.prompt).toContain('Issue #6072: Still open');
+    expect(JSON.parse(result.analysisContent).issueComments).toEqual([expect.objectContaining({ issueNumber: 6072, issueTitle: 'Still open' })]);
     expect(apps.get(APP.id).issueWatcherState.pendingIssueComments).toEqual([{ ...pending, ticks: 0 }]);
   });
 
@@ -423,7 +431,7 @@ describe('buildTaskInput', () => {
 
     const result = await buildTaskInput({ app: apps.get(APP.id) });
 
-    expect(result.prompt).toContain('Issue #12: Small task');
+    expect(JSON.parse(result.analysisContent).issueComments).toEqual([expect.objectContaining({ issueNumber: 12, issueTitle: 'Small task' })]);
     expect(result.hookMetadata.issueWatcher.issueComments).toEqual([{
       issueNumber: 12,
       commentId: 99,
@@ -1305,5 +1313,101 @@ describe('handing back a PR the coordinator could not merge', () => {
     expect(spawnPrRemediationFollowUpMock).toHaveBeenCalledWith(expect.objectContaining({
       reason: expect.stringContaining('stopped polling'),
     }));
+  });
+});
+
+
+describe('scheduled issue intake trust boundary', () => {
+  const externalIssue = { number: 42, state: 'open', title: 'Example bug', body: 'The example button does not save.', user: { login: 'visitor' }, assignees: [] };
+  const replies = () => execGhMock.mock.calls.filter(([args]) => args[0] === 'issue' && args[1] === 'comment');
+  const decision = { issueComments: [{ issueNumber: 42, commentId: 0, action: 'reply', body: 'Please include the expected result and reproduction steps.' }], pullRequests: [] };
+
+  it('triages an external issue without comments through the direct no-tools runner and deterministic output', async () => {
+    installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
+    runUntrustedContentAnalysisMock.mockResolvedValue({ ok: true, value: decision });
+    const result = await runScheduledIssueIntake({ app: APP });
+    expect(result).toEqual({ skip: { reason: 'issue-activity-processed' } });
+    const args = runUntrustedContentAnalysisMock.mock.calls[0][0];
+    expect(args.source).toBe('github-issue');
+    expect(args.prompt).not.toContain(externalIssue.body);
+    expect(JSON.parse(args.content).issueComments).toEqual([expect.objectContaining({ issueNumber: 42, commentId: 0, issueBody: externalIssue.body })]);
+    expect(replies()).toHaveLength(1);
+    expect(execGhMock.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'list')).toBe(false);
+    expect(apps.get(APP.id).issueWatcherState.issueSnapshots[42]).toEqual(expect.any(String));
+    // A follow-up comment updates the issue timestamp without changing its body.
+    // The same issue report must not be sent back for another triage pass.
+    runUntrustedContentAnalysisMock.mockClear();
+    await runScheduledIssueIntake({ app: apps.get(APP.id) });
+    expect(runUntrustedContentAnalysisMock).not.toHaveBeenCalled();
+  });
+
+  it('routes verified collaborator issue bodies away while retaining outsider comments on them', async () => {
+    const collaboratorIssue = { ...externalIssue, user: { login: 'maintainer' } };
+    installDefaultGhMock({ issueRows: [[collaboratorIssue]], commentRows: [[
+      { id: 99, user: { login: 'visitor' }, body: 'Can you explain the expected behavior?', created_at: '2026-08-30T00:00:00Z' },
+      { id: 100, user: { login: 'maintainer' }, body: 'Trusted follow-up.', created_at: '2026-08-30T00:00:00Z' },
+    ]] });
+    const base = execGhMock.getMockImplementation();
+    execGhMock.mockImplementation((args) => args.includes('repos/o/r/collaborators/maintainer/permission')
+      ? JSON.stringify({ user: { login: 'maintainer' }, permission: 'write' }) : base(args));
+    const input = await buildTaskInput({ app: APP });
+    expect(JSON.parse(input.analysisContent).issueComments).toEqual([expect.objectContaining({ commentId: 99, commentAuthor: 'visitor' })]);
+  });
+
+  it('withholds every action on unavailable analysis, forged IDs, and issue edits after screening', async () => {
+    installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: externalIssue } });
+    runUntrustedContentAnalysisMock.mockResolvedValueOnce({ ok: false, code: 'untrusted-content-provider-unavailable' });
+    expect(await runScheduledIssueIntake({ app: APP })).toEqual({ skip: { reason: 'untrusted-content-provider-unavailable' } });
+    expect(replies()).toHaveLength(0);
+
+    runUntrustedContentAnalysisMock.mockResolvedValueOnce({ ok: true, value: { ...decision, issueComments: [{ ...decision.issueComments[0], issueNumber: 43 }] } });
+    expect(await runScheduledIssueIntake({ app: apps.get(APP.id) })).toEqual({ skip: { reason: 'incomplete-issue-response' } });
+    expect(replies()).toHaveLength(0);
+
+    runUntrustedContentAnalysisMock.mockImplementationOnce(async () => {
+      installDefaultGhMock({ issueRows: [[externalIssue]], issueDetails: { 42: { ...externalIssue, body: 'Changed after scan' } } });
+      return { ok: true, value: decision };
+    });
+    expect(await runScheduledIssueIntake({ app: apps.get(APP.id) })).toEqual({ skip: { reason: 'issue-response-incomplete' } });
+    expect(replies()).toHaveLength(0);
+  });
+});
+
+
+describe('issue intake progress and duplicate suppression', () => {
+  it('keeps a duplicate scheduled run out until the active direct analysis finishes', async () => {
+    const issue = { number: 42, state: 'open', title: 'Example bug', body: 'Reproduction', user: { login: 'visitor' } };
+    installDefaultGhMock({ issueRows: [[issue]], issueDetails: { 42: issue } });
+    let entered;
+    let finish;
+    const analysisStarted = new Promise((resolve) => { entered = resolve; });
+    runUntrustedContentAnalysisMock.mockImplementationOnce(() => {
+      entered();
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    const first = runScheduledIssueIntake({ app: APP });
+    await analysisStarted;
+    expect(await runScheduledIssueIntake({ app: APP })).toEqual({ skip: { reason: 'issue-analysis-in-progress' } });
+    finish({ ok: true, value: { issueComments: [{ issueNumber: 42, commentId: 0, action: 'none', body: '' }], pullRequests: [] } });
+    expect(await first).toEqual({ skip: { reason: 'issue-activity-processed' } });
+    expect(runUntrustedContentAnalysisMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('quarantines a bounded batch so blocked comments cannot starve later activity', async () => {
+    const pending = Array.from({ length: 26 }, (_, index) => ({
+      issueNumber: index + 1, commentId: index + 1,
+      issueTitle: 'Example issue', issueBody: '', commentAuthor: 'visitor',
+      commentBody: index < 25 ? 'withhold this test item' : 'Useful question',
+      claimRequest: false, claimAssignable: false,
+    }));
+    apps.set(APP.id, { ...APP, issueWatcherState: { cursor: '2026-08-29T00:00:00.000Z', pendingIssueComments: pending } });
+    installDefaultGhMock({ pr: null, issueDetails: Object.fromEntries(pending.map((item) => [item.issueNumber, { state: 'open' }])) });
+    runModelAbuseScanMock.mockImplementation(async ({ content }) => ({
+      ok: true, safe: !content.includes('withhold'), code: content.includes('withhold') ? 'security-guard-blocked' : 'security-guard-passed', findings: [],
+    }));
+    expect(await buildTaskInput({ app: apps.get(APP.id) })).toEqual({ skip: { reason: 'model-abuse-content-withheld' } });
+    expect(runModelAbuseScanMock).toHaveBeenCalledTimes(25);
+    expect(apps.get(APP.id).issueWatcherState.pendingIssueComments).toEqual([expect.objectContaining({ commentId: 26 })]);
+    expect(JSON.parse((await buildTaskInput({ app: apps.get(APP.id) })).analysisContent).issueComments).toEqual([expect.objectContaining({ commentId: 26 })]);
   });
 });

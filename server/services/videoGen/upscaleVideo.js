@@ -1,10 +1,9 @@
 /** Non-destructive 2x upscaling for video-history items. */
 
 import { existsSync } from 'fs';
-import { unlink, copyFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, UUID_RE } from '../../lib/fileUtils.js';
+import { PATHS, UUID_RE, copyFileGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { safeUnder, generateThumbnail, upscaleVideo2x } from '../../lib/ffmpeg.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
@@ -50,11 +49,11 @@ export async function upscaleHistoryItem(historyId) {
   // Copy first, then upscale-in-place — keeps the upscaler's atomic-rename
   // contract intact and means a mid-process kill leaves the source clip
   // untouched.
-  await copyFile(sourcePath, newPath);
+  await copyFileGuarded(sourcePath, newPath);
   console.log(`🔍 Upscaling video [${historyId.slice(0, 8)} → ${newId.slice(0, 8)}]: 2×`);
   const result = await upscaleVideo2x(newPath);
   if (!result.ok) {
-    await unlink(newPath).catch(() => {});
+    await unlinkGuarded(newPath).catch(() => {});
     throw new ServerError(`Upscale failed: ${result.reason}`, { status: 500, code: 'FFMPEG_FAILED' });
   }
   const thumbnail = await generateThumbnail(newPath, newId);

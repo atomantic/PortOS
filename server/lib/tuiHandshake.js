@@ -17,6 +17,7 @@
 // PROVIDER_VENDORS registry (#3618), consumed by every dispatch site that
 // used to duplicate its own vendor if-chain.
 import { inferTuiCommand, applyCommandDefaults, injectTuiModelAndEffort } from './providerVendors.js';
+import { detectTuiRetryBanner, describeTuiRetryStall } from './aiToolkit/errorDetection.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
 
@@ -962,7 +963,7 @@ export { applyCommandDefaults };
  */
 export function buildTuiInvocation(provider, model) {
   const command = provider?.command || inferTuiCommand(provider?.id);
-  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
+  const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])], provider);
   const effort = provider?.effort || null;
   return {
     command,
@@ -1045,32 +1046,250 @@ export const OOM_NUDGE_TEXT = 'continue';
  *             takeNudge: (nowMs: number, lastOutputAtMs: number) => number }}
  */
 export function createOomNudgeGate() {
-  let armed = null; // { analysis, armedAt }
+  const gate = createSilenceNudgeGate({
+    cooldownMs: OOM_NUDGE_COOLDOWN_MS,
+    settleMs: OOM_NUDGE_SETTLE_MS,
+    armWindowMs: OOM_NUDGE_ARM_WINDOW_MS,
+    maxAttempts: OOM_NUDGE_MAX_ATTEMPTS,
+  });
+  return {
+    arm: (analysis, nowMs) => (analysis ? gate.arm(nowMs) : null),
+    takeNudge: gate.takeNudge,
+  };
+}
+
+/**
+ * The "wait for silence, then nudge" policy the OOM gate and the
+ * tool-permission gate share: dedupe sightings inside `cooldownMs` (a TUI
+ * repaints an error box for many chunks), fire once the session has been quiet
+ * for `settleMs`, drop an arm the session outran (`armWindowMs` — it recovered
+ * on its own), and report `'exhausted'` once `maxAttempts` nudges have already
+ * been spent on a condition that keeps coming back.
+ *
+ * `arm(nowMs)` returns `'armed'`, `'exhausted'`, or null for a sighting inside
+ * the cooldown or while a nudge is already pending. `inCooldown(nowMs)` lets a consumer skip its detector while a
+ * just-handled sighting is still repainting. `takeNudge(nowMs, lastOutputAtMs)`
+ * returns the 1-based nudge number when one is due, or 0 — disarming either
+ * way, on a nudge because it fired and on an expired window because the
+ * session never went quiet.
+ */
+export function createSilenceNudgeGate({ cooldownMs, settleMs, armWindowMs, maxAttempts }) {
+  let armedAt = null;
   let lastArmedAt = null;
   let attempts = 0;
   return {
-    arm(analysis, nowMs) {
-      if (!analysis || armed) return null;
-      if (lastArmedAt !== null && nowMs - lastArmedAt < OOM_NUDGE_COOLDOWN_MS) return null;
+    inCooldown: (nowMs) => lastArmedAt !== null && nowMs - lastArmedAt < cooldownMs,
+    arm(nowMs) {
+      // A sighting while a nudge is already pending is the same condition
+      // still on screen: it neither restarts the window (a box that repaints
+      // forever must still expire it) nor refreshes the cooldown (or a repaint
+      // outlasting the window could never re-arm once it stops).
+      if (armedAt !== null) return null;
+      if (lastArmedAt !== null && nowMs - lastArmedAt < cooldownMs) return null;
       lastArmedAt = nowMs;
-      // Budget spent: this is a genuinely NEW OOM (it cleared the cooldown)
+      // Budget spent: this is a genuinely NEW sighting (it cleared the cooldown)
       // after the nudges already bought the run more than one recovery. Hand the
       // verdict back rather than arming a window nobody will act on.
-      if (attempts >= OOM_NUDGE_MAX_ATTEMPTS) return 'exhausted';
-      armed = { analysis, armedAt: nowMs };
+      if (attempts >= maxAttempts) return 'exhausted';
+      armedAt = nowMs;
       return 'armed';
     },
-    // Returns the 1-based attempt number when the session has been quiet long
-    // enough to nudge, or 0. Disarms either way — on a nudge because it fired,
-    // and on an expired window because the session never went quiet, which is
-    // itself evidence it recovered without help.
     takeNudge(nowMs, lastOutputAtMs) {
-      if (!armed) return 0;
-      if (nowMs - armed.armedAt > OOM_NUDGE_ARM_WINDOW_MS) { armed = null; return 0; }
-      if (nowMs - lastOutputAtMs < OOM_NUDGE_SETTLE_MS) return 0;
-      armed = null;
+      if (armedAt === null) return 0;
+      if (nowMs - armedAt > armWindowMs) { armedAt = null; return 0; }
+      if (nowMs - lastOutputAtMs < settleMs) return 0;
+      armedAt = null;
       attempts += 1;
       return attempts;
     },
+  };
+}
+
+// How long one request's retry sequence may span before the run is failed over.
+//
+// Long enough that Claude Code's own retry ladder for a transient cloud fault
+// (ten attempts, seconds of backoff each) always finishes inside it — that
+// ladder either recovers or ends in a terminal gutter line the idle reaper
+// handles — and short enough that a request the provider can never answer is
+// not left to burn a lane for the run's whole 3h ceiling. The gate also demands
+// the banner ADVANCE at least twice (attempt N → N+2): a single sighting is
+// often chrome that recovered a second later, and one advance can be a fault
+// that cleared on the next try, but a third attempt of the same request ten
+// minutes on is a request this provider is not going to answer.
+export const RETRY_STALL_MS = 10 * 60 * 1000;
+export const RETRY_STALL_MIN_ADVANCES = 2;
+// Carry-over kept across chunks so a banner split by a PTY chunk boundary still
+// matches. Spans the longest banner (`Retrying in 999s · attempt 10/10`) plus
+// the cursor-positioning residue stripping leaves around it.
+const RETRY_STALL_CARRY_CAP = 96;
+
+/**
+ * State machine for "the TUI keeps retrying the same request and it never
+ * answers" — the incident is told once, on TUI_RETRY_BANNER_PATTERN in
+ * aiToolkit/errorDetection.js.
+ *
+ * Feed it every ANSI-stripped chunk after the prompt is in via
+ * `observe(strippedText, nowMs)`; poll `takeStall(nowMs)` on whatever timer the
+ * consumer already runs. It tracks one EPISODE at a time — the retry sequence
+ * of a single request, recognised by its attempt counter climbing. A counter
+ * that goes back down is the next request's ladder (Claude Code numbers each
+ * request's retries from 1), and a banner more than RETRY_STALL_MS after the
+ * last one is a new episode too, so a run that hit a blip, recovered, and did
+ * an hour of work before the next blip is never judged across both.
+ *
+ * The verdict is decided AT A SIGHTING, never by the clock alone: a ladder
+ * that climbed to attempt 10 in two minutes and then succeeded must not turn
+ * into a stall ten quiet minutes later. Only a banner painted RETRY_STALL_MS
+ * or more after the episode began — the provider failing this request yet
+ * again — counts. It is handed back once (the episode is cleared with it), so
+ * a consumer acting on it fails over exactly once.
+ *
+ * @returns {{ observe: (strippedText: string, nowMs: number) => void,
+ *             takeStall: (nowMs: number) => object|null }}
+ */
+export function createRetryStallGate() {
+  let episode = null; // { firstSeenAt, lastSeenAt, firstAttempt, lastAttempt }
+  let verdict = null;
+  let tail = '';
+  return {
+    observe(strippedText, nowMs) {
+      if (typeof strippedText !== 'string' || !strippedText) return;
+      const window = tail + strippedText;
+      const banner = detectTuiRetryBanner(window);
+      // Consume through the match so the carry-over cannot re-sight the same
+      // banner on the next chunk; without one, keep only the cap.
+      tail = (banner ? window.slice(banner.endIndex) : window).slice(-RETRY_STALL_CARRY_CAP);
+      if (!banner) return;
+      const isNewEpisode = !episode
+        || banner.attempt < episode.lastAttempt
+        || nowMs - episode.lastSeenAt > RETRY_STALL_MS;
+      if (isNewEpisode) {
+        episode = { firstSeenAt: nowMs, lastSeenAt: nowMs, firstAttempt: banner.attempt, lastAttempt: banner.attempt };
+        return;
+      }
+      episode.lastSeenAt = nowMs;
+      episode.lastAttempt = banner.attempt;
+      const spanMs = nowMs - episode.firstSeenAt;
+      if (episode.lastAttempt - episode.firstAttempt < RETRY_STALL_MIN_ADVANCES || spanMs < RETRY_STALL_MS) return;
+      verdict = describeTuiRetryStall({ attempts: episode.lastAttempt - episode.firstAttempt + 1, spanMs });
+      episode = null;
+    },
+    // The stall analysis to fail over with, once, or null.
+    takeStall() {
+      const analysis = verdict;
+      verdict = null;
+      return analysis;
+    },
+  };
+}
+
+// Claude Code's tool-permission dialog, as the ANSI-stripped screen renders it
+// (spaces between cursor-positioned glyphs can vanish, hence `\s*`):
+//
+//   Read(/data.reference/providers.json)
+//   Do you want to proceed?
+//   ❯ 1. Yes
+//     2. Yes, allow reading from /data.reference during this session
+//     3. No
+//   Esc to cancel · Tab to amend
+//
+// It paints whenever a tool call falls outside what the launch posture
+// pre-approved — under the hardened public-review recipe (`--permission-mode
+// acceptEdits` + sandbox) that is any read or write outside the worktree, which
+// a local model reaches for the moment it hallucinates an absolute path
+// (agent-e057cca7, 2026-09-04, sat on one for 30+ minutes while the spinner kept
+// the idle reaper happy). Nobody is at the keyboard, and the posture already
+// decided the answer: an unattended run never widens its own scope, so the
+// dialog is DECLINED. "No" is always the last numbered option, but its number
+// varies with the tool (two options for some, three for most), so it is read
+// off the screen. The question pattern is shared with the post-mortem
+// analyzer's AWAITING_INPUT_MARKERS so live and after-the-fact detection cannot
+// drift apart.
+export const TUI_TOOL_PERMISSION_PROMPT_PATTERN = /do\s*you\s*want\s*to\s*proceed\?/i;
+const TUI_TOOL_PERMISSION_NO_OPTION_PATTERN = /(\d+)\.\s*No\b/i;
+const TUI_TOOL_PERMISSION_CALL_PATTERN = /([A-Z][A-Za-z]*\([^\n]{0,300}?\))\s*do\s*you\s*want\s*to\s*proceed\?/i;
+// Screen around the question: how far back the tool-call header may sit, and
+// how far ahead the option list may span before it is judged not painted yet.
+const TUI_TOOL_PERMISSION_CALL_LEAD = 400;
+const TUI_TOOL_PERMISSION_OPTIONS_SPAN = 600;
+
+/**
+ * The tool-permission dialog on screen, or null. Null also while the question
+ * has painted but the option list has not — the consumer waits for the next
+ * repaint rather than guessing which key declines.
+ *
+ * @returns {{ noOption: number, toolCall: string|null }|null}
+ */
+export function detectToolPermissionPrompt(strippedText) {
+  if (typeof strippedText !== 'string' || !strippedText) return null;
+  const question = TUI_TOOL_PERMISSION_PROMPT_PATTERN.exec(strippedText);
+  if (!question) return null;
+  const options = strippedText.slice(question.index, question.index + TUI_TOOL_PERMISSION_OPTIONS_SPAN);
+  const no = TUI_TOOL_PERMISSION_NO_OPTION_PATTERN.exec(options);
+  if (!no) return null;
+  const lead = strippedText.slice(Math.max(0, question.index - TUI_TOOL_PERMISSION_CALL_LEAD), question.index + question[0].length);
+  const call = TUI_TOOL_PERMISSION_CALL_PATTERN.exec(lead);
+  return { noOption: Number(no[1]), toolCall: call ? call[1].replace(/\s+/g, ' ') : null };
+}
+
+// A declined dialog keeps repainting for a few chunks and the keystrokes take a
+// moment to land; sightings this close to a decline are the same dialog.
+export const TOOL_PERMISSION_REPAINT_COOLDOWN_MS = 15000;
+// Declining a tool call ends the assistant turn in current Claude Code builds
+// ("What should Claude do instead?"), so the session then needs a message to
+// carry on. It rides the OOM nudge's silence policy (OOM_NUDGE_SETTLE_MS /
+// OOM_NUDGE_ARM_WINDOW_MS): sent only once the session has gone quiet, so a
+// build that instead hands the model a rejection and lets it continue is left
+// alone. A model still reaching outside its scope after this many DECLINES —
+// whether or not each one needed a nudge — is not going to finish inside it;
+// the caller fails the run rather than looping until the max-runtime ceiling.
+export const TOOL_PERMISSION_DECLINE_MAX = 8;
+export const TOOL_PERMISSION_NUDGE_TEXT = 'That tool call reached outside this run\'s allowed scope, so it was declined. Nobody is watching this session and no permission can be granted. Everything you need is inside your worktree and your prompt; continue using paths under the worktree only, and write the completion sentinel when you are done.';
+
+/**
+ * "Decline every tool-permission dialog, then get the session moving again":
+ * the dialog detector with a carry-over tail, on top of createSilenceNudgeGate.
+ * Feed it every ANSI-stripped chunk after the prompt is in via
+ * `observe(strippedText, nowMs)`: it returns the dialog to decline
+ * (`{ noOption, toolCall, count }`) once per dialog, `'exhausted'` once
+ * TOOL_PERMISSION_DECLINE_MAX dialogs have been declined, or null. Poll
+ * `takeNudge(nowMs, lastOutputAtMs)` on the consumer's existing timer. The
+ * tail is dropped after a decline so that dialog cannot be re-sighted from the
+ * carry-over, but keeps accumulating through the repaint cooldown: a DIFFERENT
+ * dialog painted seconds after a decline (the model's very next call is also
+ * out of scope) must still be seen once the cooldown lifts, or the session
+ * hangs on it exactly as it did before this gate existed.
+ *
+ * @returns {{ observe: (strippedText: string, nowMs: number) => object|'exhausted'|null,
+ *             takeNudge: (nowMs: number, lastOutputAtMs: number) => number }}
+ */
+export function createToolPermissionGate() {
+  const nudge = createSilenceNudgeGate({
+    cooldownMs: TOOL_PERMISSION_REPAINT_COOLDOWN_MS,
+    settleMs: OOM_NUDGE_SETTLE_MS,
+    armWindowMs: OOM_NUDGE_ARM_WINDOW_MS,
+    // The budget is counted in declines (below), not nudges: a build that lets
+    // the model continue after a rejection never goes quiet, so a nudge budget
+    // would never be spent while the declines climbed forever.
+    maxAttempts: Infinity,
+  });
+  let tail = '';
+  let declines = 0;
+  return {
+    observe(strippedText, nowMs) {
+      if (typeof strippedText !== 'string' || !strippedText) return null;
+      tail = (tail + strippedText).slice(-1024);
+      if (nudge.inCooldown(nowMs)) return null;
+      const dialog = detectToolPermissionPrompt(tail);
+      if (!dialog) return null;
+      tail = '';
+      if (declines >= TOOL_PERMISSION_DECLINE_MAX) return 'exhausted';
+      declines += 1;
+      // A null here means a nudge is already pending from the previous decline;
+      // it will fire on the same silence and covers this one too.
+      nudge.arm(nowMs);
+      return { ...dialog, count: declines };
+    },
+    takeNudge: nudge.takeNudge,
   };
 }

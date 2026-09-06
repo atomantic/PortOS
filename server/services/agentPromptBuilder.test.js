@@ -85,9 +85,14 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
 });
 vi.mock('../lib/slashdoLoader.js', async (importOriginal) => {
   const actual = await importOriginal();
+  const loadFile = vi.fn().mockResolvedValue(null);
   return {
     ...actual,
-    loadSlashdoFile: vi.fn().mockResolvedValue(null),
+    loadSlashdoFile: loadFile,
+    loadSlashdoBundle: vi.fn(async (...args) => {
+      const body = await loadFile(...args);
+      return body == null ? null : { body, files: {} };
+    }),
     loadSlashdoLib: vi.fn().mockResolvedValue(null),
     // #3110 — staging the resolved copy is real disk I/O; mocked so tests can
     // assert the pointer path without writing under data/.
@@ -112,7 +117,7 @@ import { buildPrompt } from './promptService.js'; // mocked above — inspect ca
 import { getMemorySection } from './memoryRetriever.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { getToolsSummaryForPrompt } from './tools.js';
-import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js'; // mocked above — control the inlined body
+import { loadSlashdoFile, loadSlashdoLib, loadSlashdoBundle, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js'; // mocked above — control the inlined body
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
@@ -1388,7 +1393,7 @@ describe('buildLightContextPrompt', () => {
         });
       expect(prompt).toMatch(/### CLI Reviewer Procedure \(codex\)/);
       expect(prompt).toMatch(/RECIPE: codex --sandbox read-only review/);
-      expect(prompt).toMatch(/do NOT probe the CLI/);
+      expect(prompt).toMatch(/verify isolation flags with the installed CLI/);
     });
 
     it('points an over-budget CLI-reviewer recipe at its staged file instead of pasting 40KB', () => {
@@ -2320,6 +2325,35 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/agent-prev-1[\\/]output\.txt/);
     });
 
+    it('keeps a stage inside its worktree when the previous output is inlined in full', () => {
+      // The pointer names a file under data/cos/agents — outside every agent
+      // worktree. Under a sandboxed permission posture reading it is a dialog
+      // nobody answers (agent-e057cca7), and the text is already in the prompt.
+      const inlined = buildLightContextPrompt(makeTask({
+        metadata: { pipeline: {
+          previousStageAgentId: 'agent-prev-1',
+          previousStageOutput: JSON.stringify({ eligibility: 'passed', eligibleNumbers: [6223] }),
+          currentStage: 2,
+          stages: [{ name: 'scan' }, { name: 'gate' }, { name: 'review' }],
+        }}
+      }), '/r', null, isTruthyMeta);
+      expect(inlined).toMatch(/hand-off is inlined below in full/);
+      expect(inlined).not.toMatch(/output\.txt/);
+      expect(inlined).toMatch(/"eligibleNumbers":\[6223\]/);
+
+      // A clipped inline says so, and still never points outside the worktree.
+      const clipped = buildLightContextPrompt(makeTask({
+        metadata: { pipeline: {
+          previousStageAgentId: 'agent-prev-1',
+          previousStageOutput: 'x'.repeat(12_001),
+          currentStage: 2,
+          stages: [{ name: 'scan' }, { name: 'gate' }, { name: 'review' }],
+        }}
+      }), '/r', null, isTruthyMeta);
+      expect(clipped).toMatch(/clipped to its first 12000 characters/);
+      expect(clipped).not.toMatch(/output\.txt/);
+    });
+
     it('renders a direct preflight summary when the previous stage has no agent', () => {
       const prompt = buildLightContextPrompt(makeTask({
         metadata: { pipeline: {
@@ -3044,7 +3078,7 @@ describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', (
       expect(out).toContain('CLI Reviewer Procedure');
       expect(out).toContain(LOOP_SENTINEL);
       // The vague invocation step points the agent at the inlined procedure.
-      expect(out).toMatch(/do NOT probe the CLI/i);
+      expect(out).toMatch(/verify isolation flags with the installed CLI/i);
     });
   }
 
@@ -3339,6 +3373,40 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     expect(prompt).toContain('do-review');
   });
 
+  it('stages a small deferred entrypoint so its references resolve outside the managed app', async () => {
+    const body = 'Read lib/audit.md when auditing.';
+    const files = { 'audit.md': 'Audit procedure' };
+    vi.mocked(loadSlashdoBundle).mockResolvedValueOnce({ body, files });
+    const prompt = await buildAgentPrompt(
+      slashdoTask({ reviewers: ['codex'] }), {}, '/managed-app', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'codex' });
+    expect(writeResolvedSlashdoBody).toHaveBeenCalledWith('review', body, { files });
+    expect(prompt).toContain('/install/data/cos/slashdo-resolved/review.md');
+    expect(prompt).toContain('relative to the file containing that reference');
+    expect(prompt).not.toContain(body);
+    expect(prompt).toContain('--review-with codex');
+  });
+
+  it('rebuilds an eager body if a deferred bundle cannot be staged', async () => {
+    vi.mocked(loadSlashdoBundle).mockResolvedValueOnce({
+      body: 'Read lib/audit.md', files: { 'audit.md': 'Audit procedure' },
+    });
+    vi.mocked(loadSlashdoFile).mockResolvedValueOnce('Complete inline audit procedure');
+    vi.mocked(writeResolvedSlashdoBody).mockRejectedValueOnce(new Error('EACCES'));
+    const prompt = await buildAgentPrompt(
+      slashdoTask(), {}, '/managed-app', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'codex' });
+    expect(prompt).toContain('Complete inline audit procedure');
+    expect(prompt).not.toContain('Read lib/audit.md');
+  });
+
+  it('rejects a missing required procedure instead of dispatching an invocation alone', async () => {
+    vi.mocked(loadSlashdoBundle).mockRejectedValueOnce(new Error('Missing required slashdo library: audit.md'));
+    await expect(buildAgentPrompt(
+      slashdoTask(), {}, '/r', null, isTruthyMeta,
+      { providerType: 'cli', providerId: 'codex' })).rejects.toThrow('Missing required slashdo library');
+  });
+
   it('inlines the body when it is under budget, and stages no file', async () => {
     vi.mocked(loadSlashdoFile).mockResolvedValue(UNDER);
     const prompt = await buildAgentPrompt(
@@ -3553,13 +3621,90 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
       // Two review sources ⇒ the multi-reviewer wrapper is reachable.
       expect(skipped).not.toContain('multi-reviewer-loop');
     });
+  });
 
-    it('keys the staged file on the prune set so two reviewer sets do not share a copy', async () => {
-      await buildAgentPrompt(
-        slashdoTask({ reviewers: ['codex'] }), {}, '/r', null, isTruthyMeta,
+  // slashdo puts an explicit `--review-with` above every saved or inherited
+  // default (lib/review-config-defaults.md), and PortOS passes `slashdoArgs`
+  // through verbatim — so the flag in the invocation is what the run WILL use.
+  // Pruning the body (or pinning a reviewer) from task metadata instead is how a
+  // prompt requests one reviewer, omits its loop, and names another. #6261.
+  describe('an explicit --review-with in slashdoArgs', () => {
+    const skipArg = () => vi.mocked(loadSlashdoFile).mock.calls.at(-1)[1].skipIncludes;
+
+    it('prunes for the explicit flag, not for the task metadata behind it', async () => {
+      const prompt = await buildAgentPrompt(
+        slashdoTask({ slashdoArgs: '--review-with ollama', reviewers: ['codex'] }),
+        {}, '/r', null, isTruthyMeta,
         { providerType: 'cli', providerId: 'codex' });
-      const [, , opts] = vi.mocked(writeResolvedSlashdoBody).mock.calls.at(-1);
-      expect(opts.skipIncludes).toContain('copilot-review-loop');
+      const skipped = skipArg();
+      // The reviewer the run will actually invoke keeps its loop…
+      expect(skipped).not.toContain('ollama-review-loop');
+      // …and the metadata reviewer's is what drops out.
+      expect(skipped).toContain('local-agent-review-loop');
+      // Naming codex here would tell the agent to use a reviewer whose loop was
+      // just pruned away.
+      expect(prompt).not.toContain('--review-with codex');
+    });
+
+    it('preserves an explicit `none` opt-out inherited from Code Review Defaults', async () => {
+      vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['codex'] });
+      const prompt = await buildAgentPrompt(
+        slashdoTask({ slashdoArgs: '--review-with none' }), {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(prompt).toContain('--review-with none');
+      // `none` sets REVIEW_AGENTS=[] with no fallback, so no loop is reachable.
+      expect(skipArg()).toEqual(expect.arrayContaining([
+        'copilot-review-loop', 'github-reviewer-loop', 'local-agent-review-loop',
+        'ollama-review-loop', 'multi-reviewer-loop',
+      ]));
+      expect(prompt).not.toContain('--review-with codex');
+    });
+
+    it('states each suffix exactly once — in the invocation, not again as a pin', async () => {
+      const args = '--review-with agy[gemini-3.8-flash]~opt~max=1~effort=medium';
+      const prompt = await buildAgentPrompt(
+        // The metadata names a DIFFERENT loop variant, so a metadata-derived pin
+        // would both prune away agy's loop and add a second set of suffixes.
+        slashdoTask({ slashdoArgs: args, reviewers: ['ollama'], reviewerEfforts: { ollama: 'high' } }),
+        {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(prompt).not.toContain('--review-with ollama');
+      expect(skipArg()).not.toContain('local-agent-review-loop');
+      expect(prompt.split('~effort=').length - 1).toBe(1);
+      expect(prompt.split('~max=').length - 1).toBe(1);
+      expect(prompt.split('~opt').length - 1).toBe(1);
+    });
+
+    it('reads the equals form the same as the spaced one', async () => {
+      const prompt = await buildAgentPrompt(
+        slashdoTask({ slashdoArgs: '--review-with=ollama', reviewers: ['codex'] }),
+        {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(skipArg()).not.toContain('ollama-review-loop');
+      expect(skipArg()).toContain('local-agent-review-loop');
+      expect(prompt).not.toContain('--review-with codex');
+    });
+
+    it('prunes and pins NOTHING when the explicit value cannot be safely read', async () => {
+      vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['codex'] });
+      const prompt = await buildAgentPrompt(
+        // A slug outside the grammar PortOS mirrors: guessing which loop it needs
+        // is how the run loses the one it reaches.
+        slashdoTask({ slashdoArgs: '--review-with some-future-reviewer' }),
+        {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(skipArg()).toEqual([]);
+      expect(prompt).toContain('--review-with some-future-reviewer');
+      expect(prompt).not.toContain('--review-with codex');
+    });
+
+    it('leaves the metadata contract in charge when the args name no reviewer', async () => {
+      const prompt = await buildAgentPrompt(
+        slashdoTask({ slashdoArgs: '--issues 42', reviewers: ['codex'] }),
+        {}, '/r', null, isTruthyMeta,
+        { providerType: 'cli', providerId: 'codex' });
+      expect(prompt).toContain('--review-with codex');
+      expect(skipArg()).toContain('copilot-review-loop');
     });
   });
 });

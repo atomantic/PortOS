@@ -574,6 +574,69 @@ export function createLocalRuntimeOomDetector({ maxBuffer = 512 } = {}) {
   };
 }
 
+// Claude Code's in-TUI retry banner, painted while it re-sends a failed request:
+// `API error · Retrying in 0s · attempt 1/10` (the prefix varies — `Request timed
+// out`, `Overloaded` — so only the retry suffix is matched). The whitespace is
+// `\s*` everywhere for the same reason TERMINAL_REQUEST_TIMEOUT_PATTERN's is: the
+// ANSI-stripped screen can drop the spaces between cursor-positioned glyphs.
+//
+// A banner is NOT a failure by itself — Claude Code retries transient 429/5xx
+// on its own and usually succeeds. It becomes one when the SAME request keeps
+// failing: on 2026-09-04 a Stage 3 review whose ~100K-token prefill outlived the
+// harness's stream-idle window was cancelled and re-sent every 6 minutes, so the
+// session sat at this banner for the run's whole lifetime while every reaper
+// saw a busy TUI (agent-e057cca7). `createRetryStallGate` in tuiHandshake.js
+// owns the "keeps failing" judgement; this only reads the banner.
+const TUI_RETRY_BANNER_PATTERN = /Retrying\s*in\s*(\d+)\s*s\s*[·•]\s*attempt\s*(\d+)\s*\/\s*(\d+)/gi;
+
+/**
+ * The LAST retry banner in `text`, or null. A repaint often carries two ticks
+ * of the same countdown (`Retrying in 1s` then `0s`); the newest is the state.
+ *
+ * @returns {{ attempt: number, maxAttempts: number, retryInSeconds: number, endIndex: number }|null}
+ */
+export function detectTuiRetryBanner(text) {
+  if (!text) return null;
+  let last = null;
+  for (const match of String(text).matchAll(TUI_RETRY_BANNER_PATTERN)) {
+    last = {
+      retryInSeconds: Number(match[1]),
+      attempt: Number(match[2]),
+      maxAttempts: Number(match[3]),
+      endIndex: match.index + match[0].length,
+    };
+  }
+  return last;
+}
+
+/**
+ * The fail-over analysis for a request the TUI kept retrying without ever
+ * getting a response — same shape as `detectImmediateFallbackSignal` returns, so
+ * a consumer hands it straight to its fail-over path.
+ *
+ * A FIXED sentence, deliberately not the banner text: this message becomes the
+ * run error, then a failure reason a CoS task body can quote, and a TUI echoes
+ * a pasted prompt back through the very detector above — so it must not match
+ * TUI_RETRY_BANNER_PATTERN (it carries no `Retrying in Ns · attempt`).
+ */
+export function describeTuiRetryStall({ attempts, spanMs }) {
+  const minutes = Math.max(1, Math.round(spanMs / 60000));
+  return {
+    hasError: true,
+    category: ERROR_CATEGORIES.TIMEOUT,
+    message: `Provider kept failing the same request: the TUI retried it ${attempts} times over ${minutes} minutes without a response`,
+    waitTime: null,
+    requiresFallback: true,
+    // Nothing a human has to fix before a retry can succeed elsewhere: the
+    // request is too slow for THIS provider's harness window (a long prefill on
+    // a local model server, a stalled upstream), and a fallback can serve it now.
+    actionable: false,
+    graceMs: 0,
+    suggestedFix: 'Every retry re-sent the same request and none answered — typically a prompt whose prefill outlives the harness\'s stream-idle window on a local model server. Shrink the prompt, widen the idle window, or pin the stage to a faster provider.',
+    origin: 'provider',
+  };
+}
+
 export function extractWaitTime(text) {
   if (!text) return null;
 

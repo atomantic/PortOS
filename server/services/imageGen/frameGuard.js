@@ -21,9 +21,8 @@
  * PNG lands, so each of them calls the gate from its own completion handler.
  */
 
-import { unlink } from 'fs/promises';
 import { basename } from 'path';
-import { tryReadFile } from '../../lib/fileUtils.js';
+import { tryReadFile, unlinkGuarded } from '../../lib/fileUtils.js';
 import { describeFrameStats, isDegenerateFrame } from '../../lib/imageFrameStats.js';
 import { describeDegenerateFrame } from './noImageReason.js';
 
@@ -49,6 +48,6 @@ export async function degenerateFrameReason(pngPath) {
  */
 export async function rejectDegenerateFrame(pngPath) {
   const reason = await degenerateFrameReason(pngPath);
-  if (reason) await unlink(pngPath).catch(() => {});
+  if (reason) await unlinkGuarded(pngPath).catch(() => {});
   return reason;
 }

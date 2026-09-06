@@ -135,7 +135,7 @@ function isContentEdit(updates, existingMetadata = {}) {
 //   2. Every write through `writeTaskFile` DROPS the entry outright. mtime can
 //      be as coarse as one second on some filesystems, so a write-then-read in
 //      the same tick must not depend on the stamp having moved.
-const parsedTaskCache = new Map(); // filePath -> { stamp, tasks }
+const parsedTaskCache = new Map(); // filePath -> { stamp, tasks, byId? }
 
 // `null` = could not stat (missing/unreadable) → do not cache, distinct from a
 // legitimately empty file, which stamps normally and caches its empty parse.
@@ -144,24 +144,35 @@ const taskFileStamp = async (filePath) => {
   return stats ? `${stats.mtimeMs}:${stats.size}` : null;
 };
 
-/**
- * Read + parse a task markdown file, serving the cached parse when the file is
- * unchanged on disk.
- *
- * Always returns a DEEP COPY. Callers (`addTask`, `updateTask`, `reorderTasks`,
- * the sweeps) mutate both the array and the task objects in place; handing out
- * the cached originals would let one caller's in-flight edits leak into every
- * later reader — including edits that were never persisted.
- */
-async function readTaskFile(filePath) {
+// Private snapshots never leave this module: list readers clone the array,
+// while ID lookups clone only the matching task. Both share invalidation.
+async function readTaskSnapshot(filePath) {
   const stamp = await taskFileStamp(filePath);
   const cached = parsedTaskCache.get(filePath);
-  if (stamp && cached?.stamp === stamp) return structuredClone(cached.tasks);
+  if (stamp && cached?.stamp === stamp) return cached;
 
-  const tasks = parseTasksMarkdown(await readFile(filePath, 'utf-8'));
-  if (stamp) parsedTaskCache.set(filePath, { stamp, tasks });
+  const snapshot = { stamp, tasks: parseTasksMarkdown(await readFile(filePath, 'utf-8')) };
+  if (stamp) parsedTaskCache.set(filePath, snapshot);
   else parsedTaskCache.delete(filePath);
-  return structuredClone(tasks);
+  return snapshot;
+}
+
+async function readTaskFile(filePath) {
+  return structuredClone((await readTaskSnapshot(filePath)).tasks);
+}
+
+async function findTaskInFile(filePath, taskId) {
+  if (!existsSync(filePath)) return null;
+  const snapshot = await readTaskSnapshot(filePath);
+  if (!snapshot.byId) {
+    snapshot.byId = new Map();
+    for (const task of snapshot.tasks) {
+      // Preserve Array.find's first-match behavior for hand-edited duplicate IDs.
+      if (!snapshot.byId.has(task.id)) snapshot.byId.set(task.id, task);
+    }
+  }
+  const task = snapshot.byId.get(taskId);
+  return task ? structuredClone(task) : null;
 }
 
 /**
@@ -231,19 +242,14 @@ export const getTasks = getUserTasks;
  * Get a specific task by ID from any task source
  */
 export async function getTaskById(taskId) {
-  const { user: userTasks, cos: cosTasks } = await getAllTasks();
+  const { config } = await loadState();
+  // Keep user-first precedence, including legacy/custom IDs. Do not infer the
+  // source from a prefix or prepare grouped copies of both queues for one ID.
+  const userTask = await findTaskInFile(join(ROOT_DIR, config.userTasksFile), taskId);
+  if (userTask) return { ...userTask, taskType: 'user' };
 
-  // Search user tasks
-  const userTask = userTasks.tasks?.find(t => t.id === taskId);
-  if (userTask) {
-    return { ...userTask, taskType: 'user' };
-  }
-
-  // Search CoS internal tasks
-  const cosTask = cosTasks.tasks?.find(t => t.id === taskId);
-  if (cosTask) {
-    return { ...cosTask, taskType: 'internal' };
-  }
+  const cosTask = await findTaskInFile(join(ROOT_DIR, config.cosTasksFile), taskId);
+  if (cosTask) return { ...cosTask, taskType: 'internal' };
 
   return null;
 }

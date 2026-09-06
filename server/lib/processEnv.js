@@ -65,7 +65,7 @@ const CLI_PROVIDER_AUTH_RULES = Object.freeze({
   cursor: { keys: ['CURSOR_API_KEY'], prefixes: [] },
 });
 
-const LOCAL_PROVIDER_MARKERS = ['ollamaBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked'];
+const LOCAL_PROVIDER_MARKERS = ['ollamaBacked', 'lmstudioBacked', 'mtplxBacked', 'llamaBacked', 'vllmBacked', 'sglangBacked'];
 
 /**
  * Build the non-secret provider metadata needed to classify ambient CLI auth

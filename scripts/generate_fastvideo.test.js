@@ -3,10 +3,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { resolveTestPython } from '../server/lib/testHelper.js';
+import { createVideoDiagnosticTail } from '../server/lib/videoFailure.js';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'generate_fastvideo.py');
 const pyBin = resolveTestPython();
-const runPython = (source) => execFileSync(pyBin, ['-c', source, script], { encoding: 'utf8' });
+const runPython = (source) => execFileSync(pyBin, ['-c', source, script], {
+  encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+});
 const lines = (output) => output.trim().split('\n').map((line) => line.trimEnd());
 
 const importRunner = [
@@ -19,6 +22,33 @@ const importRunner = [
 ].join('\n');
 
 describe.skipIf(!pyBin)('generate_fastvideo.py', () => {
+  it.each(['ValueError: loading converted tensors failed', 'kIOGPUCommandBufferCallbackErrorTimeout', null])('preserves converter cause evidence (%s) without inventing it from an exit code', (cause) => {
+    const output = runPython(`${importRunner}\n${[
+      'import tempfile',
+      'from contextlib import redirect_stderr',
+      'from unittest.mock import patch',
+      'with tempfile.TemporaryDirectory() as tmp:',
+      '    root = Path(tmp)',
+      '    (root / "model" / "transformer").mkdir(parents=True)',
+      '    converter = root.joinpath(*runner._CONVERTER_SCRIPT)',
+      '    converter.parent.mkdir(parents=True)',
+      '    converter.touch()',
+      '    with patch.object(runner.subprocess, "Popen") as spawn, redirect_stderr(sys.stdout):',
+      `        spawn.return_value.stdout = ${JSON.stringify(['Loading weights', ...(cause ? [cause] : [])])}`,
+      '        spawn.return_value.wait.return_value = 1',
+      '        try:',
+      '            runner.ensure_mlx_checkpoint(root, root / "model", "int4", {}, root / "cache")',
+      '        except RuntimeError as error:',
+      '            print(f"❌ {error}")',
+    ].join('\n')}`);
+    expect(output).toContain('STATUS:Loading weights');
+    const tail = createVideoDiagnosticTail();
+    tail.push('stderr', output);
+    if (cause?.startsWith('kIOGPU')) expect(tail.failure()).toMatchObject({ classification: 'metal-command-buffer', cause: 'Metal command buffer failed: Timeout' });
+    else if (cause) expect(tail.failure()).toMatchObject({ classification: 'valueerror', cause: 'loading converted tensors failed' });
+    else expect(tail.failure()).toBeNull();
+  });
+
   it('reports only denoising steps as render progress', () => {
     const output = runPython(`${importRunner}\n${[
       'print(runner.translate_line("Loading checkpoint: 100%|##########| 10/10"))',

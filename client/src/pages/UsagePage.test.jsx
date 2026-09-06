@@ -55,6 +55,7 @@ describe('UsagePage subscription savings', () => {
   it('renders the savings editor from the report payload', async () => {
     api.getUsage.mockResolvedValue({ ...usage, subscriptionSavings: savings });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    expect(screen.getByRole('tab', { name: 'Usage' })).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByText('Subscription vs. API Cost')).toBeInTheDocument();
   });
 

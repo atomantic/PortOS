@@ -222,6 +222,6 @@ describe('cos-runner output — ANSI decoloring parity with spawnDirectly', () =
   });
 
   it('drops a chunk that was only terminal control instead of emitting a blank line', () => {
-    expect(RUNNER_SRC).toMatch(/if \(!decolored\.trim\(\)\) return;/);
+    expect(RUNNER_SRC).toMatch(/if \(!trimmedDecolored \|\| isKnownCliStderrNoise\(trimmedDecolored\)\) return;/);
   });
 });

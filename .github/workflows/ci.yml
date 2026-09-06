@@ -47,6 +47,7 @@ jobs:
       lint_files: ${{ steps.plan.outputs.lint_files }}
       build: ${{ steps.plan.outputs.build }}
       smoke: ${{ steps.plan.outputs.smoke }}
+      slashdo: ${{ steps.plan.outputs.slashdo }}
       windows: ${{ steps.plan.outputs.windows }}
       windows_mode: ${{ steps.plan.outputs.windows_mode }}
       windows_files: ${{ steps.plan.outputs.windows_files }}
@@ -96,6 +97,7 @@ jobs:
           LINT_MODE: ${{ steps.plan.outputs.lint_mode }}
           BUILD_MODE: ${{ steps.plan.outputs.build }}
           SMOKE_MODE: ${{ steps.plan.outputs.smoke }}
+          SLASHDO_MODE: ${{ steps.plan.outputs.slashdo }}
           WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
           WINDOWS_TEST_MODE: ${{ steps.plan.outputs.windows_mode }}
           SERVER_SHARDS: ${{ steps.plan.outputs.server_shards }}
@@ -113,6 +115,7 @@ jobs:
             echo "- Client lint: \`${LINT_MODE}\`"
             echo "- Client build: \`${BUILD_MODE}\`"
             echo "- Server smoke: \`${SMOKE_MODE}\`"
+            echo "- Slashdo submodule: \`${SLASHDO_MODE}\`"
             echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`, shards \`${WINDOWS_SHARDS}\`)"
             echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -274,6 +277,16 @@ jobs:
       - name: Check server entry-point syntax
         run: node --check server/index.js
 
+      # The submodule ships no source into this checkout by default (see
+      # AGENTS.md "Slashdo Commands"), so the planner's `slashdo` output is
+      # the only signal that the selected tests need it — an unrelated scoped
+      # PR must not pay for the fetch. `CI_EXPECT_SLASHDO_SUBMODULE` below
+      # tells the two contract suites to fail instead of skip if this step
+      # somehow leaves the checkout without it.
+      - name: Initialize slashdo submodule
+        if: needs.impact.outputs.slashdo == 'true'
+        run: git submodule update --init lib/slashdo
+
       - name: Run server tests
         if: needs.impact.outputs.server_mode != 'skip'
         env:
@@ -281,6 +294,7 @@ jobs:
           CI_TEST_FILES: ${{ needs.impact.outputs.server_files }}
           CI_TEST_SOURCES: ${{ needs.impact.outputs.server_sources }}
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          CI_EXPECT_SLASHDO_SUBMODULE: ${{ needs.impact.outputs.slashdo }}
           # Keep successful-test output signal-dense. Developers can reproduce
           # locally without this flag when assertion context needs app logs.
           PORTOS_TEST_QUIET: 1

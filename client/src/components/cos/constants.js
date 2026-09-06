@@ -17,6 +17,7 @@ import {
   MessageCircle
 } from 'lucide-react';
 import { normalizeReviewerSlug, REVIEWER_VALUES } from '../../lib/reviewerPins';
+import { AVATAR_STYLE_LABELS } from '../../lib/avatarStyles';
 import { inPlaceClipName } from '../../utils/animationClips';
 
 export const TABS = [
@@ -287,6 +288,7 @@ export function pinnedPrCompletion(metadata) {
 // Copy only — the ROSTER is `REVIEWER_VALUES` in `client/src/lib/reviewerPins.js`,
 // which the server suite pins against the server's own enum.
 const REVIEWER_COPY = {
+  pi: { label: 'Pi', description: 'Pi Coding Agent CLI reviews the supplied diff without tools' },
   copilot: { label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
   claude: { label: 'Claude', description: 'Claude CLI reviews the PR diff (optional model on Models → Code Reviewers; supports an Ollama-backed Claude for local-only setups)' },
   antigravity: { label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },
@@ -350,14 +352,10 @@ export {
   sanitizeReviewerModelInput
 } from '../../lib/reviewerPins';
 
-// pr-watcher author gate (taskMetadata.prAuthorFilter). Mirrors
-// PR_AUTHOR_FILTERS in server/lib/validation.js. 'self' = PRs opened by the
-// gh-authenticated operator (or their automation); 'others' = external
-// contributors; 'any' = react to every opened PR.
+// pr-watcher owns trusted remediation. Legacy filter values remain accepted
+// server-side for compatibility; every dispatch enforces collaborator trust.
 export const PR_AUTHOR_FILTER_OPTIONS = [
-  { value: 'any', label: 'Any author', description: 'React to every PR opened on the default branch' },
-  { value: 'self', label: 'Opened by me', description: 'Only PRs opened by the gh-authenticated user (or their automation)' },
-  { value: 'others', label: 'Opened by others', description: 'Only PRs opened by someone other than the gh-authenticated user' }
+  { value: 'trusted', label: 'Owner and write collaborators', description: 'Verified repository collaborators and the signed-in operator; external PRs use PR Reviewer' }
 ];
 
 // claim-issue author gate (taskMetadata.issueAuthorFilter). Mirrors
@@ -536,18 +534,7 @@ export const getDomainBudget = (config, domainId) => {
 };
 
 // Avatar style labels for display
-export const AVATAR_STYLE_LABELS = {
-  svg: 'Digital (SVG)',
-  cyber: 'Cyberpunk (3D)',
-  sigil: 'Arcane Sigil (3D)',
-  esoteric: 'Esoteric (3D)',
-  nexus: 'Neural Nexus (3D)',
-  muse: 'Cyber Muse (3D)',
-  // Bundled CC0 Kenney Mini Characters — animated rigged GLB avatars.
-  miniMaleC: 'Mini Character — Male (3D)',
-  miniFemaleD: 'Mini Character — Female (3D)',
-  ascii: 'Minimalist (ASCII)'
-};
+export { AVATAR_STYLE_LABELS };
 
 // Dynamic avatar rules - maps task context to avatar styles
 // Priority order: provider > analysisType > taskType > priority > fallback

@@ -72,6 +72,24 @@ describe('Eidoverse world routes', () => {
     expect(mocks.updateConfig).toHaveBeenCalledWith({ humanName: 'Example User' });
   });
 
+  it('accepts explicit opaque-key aliases and rejects raw identities and unbounded text', async () => {
+    const key = 'app-0123456789ab';
+    const valid = await request(makeApp()).put('/api/eidoverse/world/config').send({ labelAliases: { [key]: '  Example observatory  ' } });
+    expect(valid.status).toBe(200);
+    expect(mocks.updateConfig).toHaveBeenLastCalledWith({ labelAliases: { [key]: 'Example observatory' } });
+    const clear = await request(makeApp()).put('/api/eidoverse/world/config').send({ labelAliases: {} });
+    expect(clear.status).toBe(200);
+    mocks.updateConfig.mockClear();
+    for (const labelAliases of [
+      { 'Example private app': 'Alias' }, { [key]: 'x'.repeat(73) }, { [key]: '' }, { [key]: 'line\nbreak' },
+      Object.fromEntries(Array.from({ length: 129 }, (_, i) => [`app-${i.toString(16).padStart(12, '0')}`, 'Alias'])),
+    ]) {
+      const rejected = await request(makeApp()).put('/api/eidoverse/world/config').send({ labelAliases });
+      expect(rejected.status).toBe(400);
+    }
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
   it('validates scoped reset and asset-refresh actions', async () => {
     const district = await request(makeApp()).put('/api/eidoverse/world/config').send({
       reset: { scope: 'district', districtId: 'apps' },
@@ -99,6 +117,9 @@ describe('Eidoverse world routes', () => {
     const payload = {
       assetOverrides: {
         app: 'store/example-local-asset',
+        desk: 'store/example-desk',
+        barrel: 'store/example-barrel',
+        tree: 'store/example-tree',
         operations: 'eidoverse/assets/models/example-legacy-operations.glb',
       },
     };

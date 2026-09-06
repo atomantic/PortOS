@@ -13,11 +13,10 @@
  * pure helpers in `lib/loraDataset.js`.
  */
 
-import { copyFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import sharp from 'sharp';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, copyFileGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 import { assertGalleryFilename } from './imageGen/local.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import {
@@ -345,7 +344,7 @@ export async function addUploadedImage(id, { tmpPath, originalname = '' }) {
   const file = `${imageId}.png`;
   await ensureDir(datasetImagesDir(id));
   const destPath = datasetImagePath(id, file);
-  const cleanup = () => unlink(tmpPath).catch(() => {});
+  const cleanup = () => unlinkGuarded(tmpPath).catch(() => {});
   const info = await sharp(tmpPath).rotate().png().toFile(destPath).catch(async (err) => {
     await cleanup();
     throw new ServerError(
@@ -406,7 +405,7 @@ export async function importGalleryImages(id, { filenames = [] } = {}) {
   if (failure) {
     // All transcodes have settled now, so `written` is complete — no late write
     // can re-orphan a file after this cleanup.
-    await Promise.all(written.map((p) => unlink(p).catch(() => {})));
+    await Promise.all(written.map((p) => unlinkGuarded(p).catch(() => {})));
     throw failure.reason;
   }
   const entries = results.map((r) => r.value);
@@ -488,7 +487,7 @@ export async function deleteImage(id, imageId) {
     }
     return { ...current, images: current.images.filter((img) => img.id !== imageId) };
   });
-  await unlink(datasetImagePath(id, removed.file)).catch(() => {});
+  await unlinkGuarded(datasetImagePath(id, removed.file)).catch(() => {});
   return { ok: true, imageId };
 }
 
@@ -525,7 +524,7 @@ export async function reconcileRenderingImages(id, { jobLookup = getJob } = {}) 
     await ensureDir(datasetImagesDir(id));
     // basename() so a hand-edited media-jobs.json filename can't traverse
     // out of the gallery (mirrors onRenderComplete in loraDatasetGenerate).
-    await copyFile(join(PATHS.images, basename(res.sourceFilename)), datasetImagePath(id, img.file))
+    await copyFileGuarded(join(PATHS.images, basename(res.sourceFilename)), datasetImagePath(id, img.file))
       .catch((err) => {
         console.error(`❌ Dataset ${id} reconcile copy failed [${imageId}]: ${err?.message}`);
         resolutions.set(imageId, { status: 'failed' });

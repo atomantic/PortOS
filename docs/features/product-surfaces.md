@@ -132,7 +132,7 @@ Capture thoughts, build personal memory graphs, model your identity and taste, p
 | **Third-Party Import** | `/brain/import` | Ingests ChatGPT and OpenAI export archives into structured Brain memory. | — |
 | **Activity Timeline** | `/timeline` | Unified chronological human activity ledger aggregating events from iMessage, Signal, WhatsApp, Spotify, Discord, YouTube, and Calendar. | — |
 | **Tribe Relationship Manager** | `/tribe` | Dunbar-number social network management, relationship health scores, care cadence reminders, and contact resolution. | — |
-| **Multi-Scale Calendar** | `/calendar/*` | Time management across Agenda, Day, Week, Month, and Lifetime perspectives, periodic reflection reviews, and external sync (iCal/CalDAV/Google). | — |
+| **Multi-Scale Calendar** | `/calendar/*` | Time management across Agenda, Day, Week, Month, and Lifetime perspectives, periodic reflection reviews, external sync (iCal/CalDAV/Google), and a one-click **Join meeting** action on event details for Google Calendar events that carry a conference link. | — |
 | **Digital Twin Profile & Identity** | `/digital-twin/overview`, `/digital-twin/identity`, `/digital-twin/autobiography`, `/digital-twin/personas`, `/digital-twin/taste`, `/digital-twin/goals` | Core identity attributes, autobiography, dynamic personas (professional, casual, creative), quantified aesthetic taste, and personal goals. | [Digital Twin](./digital-twin.md), [Identity System](./identity-system.md) |
 | **Twin Presence & Avatars** | `/digital-twin/appearance`, `/digital-twin/avatar-bio`, `/digital-twin/voice` | Visual appearance reference photos, live avatar bios (HeyGen, Tavus, Simli, ElevenLabs), and comparative spoken-vs-written voice fingerprinting. | [Digital Twin](./digital-twin.md) |
 | **Personality & Assessment** | `/digital-twin/personality`, `/digital-twin/test` | Big Five (OCEAN) quantitative trait scoring, values hierarchy, model sycophancy comparison radar, and automated behavioral test suites. | [Digital Twin](./digital-twin.md), [Soul System](./soul-system.md) |
@@ -194,7 +194,7 @@ Local AI model acceleration, multi-machine peer federation, storage classificati
 
 | Surface / Area | Route(s) | Key Capabilities & Workflows | Related Guides |
 |---|---|---|---|
-| **Local LLM Runtimes** | `/models/llms` | Management of local model servers: Ollama, LM Studio, vLLM, SGLang, and llama.cpp / llama-server. | [Claude on Ollama](./claude-ollama.md) |
+| **Local LLM Runtimes** | `/models/llms` | Management of local model servers: Ollama, LM Studio, vLLM, SGLang, llama.cpp / llama-server, MTPLX, and Slotstream (SSD-streaming MoE for checkpoints larger than RAM). | [Claude on Ollama](./claude-ollama.md), [MTPLX](./mtplx.md), [Slotstream](./slotstream.md) |
 | **Speculative Decoding** | `/models/llms` | Accelerated token generation using DSpark, DFlash 2, and MTPLX speculative drafting pairs. | [DFlash2 & DSpark](./dflash2.md), [MTPLX](./mtplx.md), [RTX 3090 vLLM](./qwen38-rtx3090.md), [SGLang Qwen](./sglang-qwen38.md) |
 | **Embeddings Management** | `/models/embeddings` | Local text embedding models (Nomic, Ollama) and pgvector semantic index configuration. | [STORAGE.md](../STORAGE.md) |
 | **LoRAs & Model Training** | `/models/loras`, `/models/training` | LoRA adapter discovery, Civitai downloads, image captioning, and local FLUX LoRA training dataset management. | — |

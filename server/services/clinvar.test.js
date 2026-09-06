@@ -8,6 +8,15 @@ const NO_GENOME_ERROR = 'No genome data uploaded.';
 // compact index + meta via tryReadFile and writes/deletes via fs/promises.
 const fileStore = new Map();
 
+const unlinkMock = vi.fn(async (path) => {
+  if (!fileStore.has(toPosix(path))) {
+    const err = new Error('ENOENT');
+    err.code = 'ENOENT';
+    throw err;
+  }
+  fileStore.delete(toPosix(path));
+});
+
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { meatspace: '/mock/meatspace' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
@@ -18,7 +27,11 @@ vi.mock('../lib/fileUtils.js', () => ({
     } catch {
       return fallback;
     }
-  }
+  },
+  unlinkGuarded: unlinkMock,
+  atomicWrite: vi.fn(async (path, data) => {
+    fileStore.set(toPosix(path), typeof data === 'string' ? data : JSON.stringify(data));
+  }),
 }));
 
 vi.mock('fs/promises', () => ({

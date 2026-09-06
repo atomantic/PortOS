@@ -109,7 +109,32 @@ export const isGrokProvider = (provider) => {
  */
 export const isCodexSubscriptionProvider = (provider) =>
   (provider?.type === 'cli' || provider?.type === 'tui')
-  && commandBasename(provider?.command) === 'codex';
+  && commandBasename(provider?.command) === 'codex'
+  // A local-runtime-backed codex record (`codex --oss --local-provider ollama`)
+  // generates its tokens on this machine and authenticates against nothing, so
+  // it must not be painted "No ChatGPT account is signed in" — or parked in
+  // UNKNOWN waiting on an account read that will never matter.
+  && localRuntimeNamespace(provider) === null;
+
+/**
+ * The 'your own ~/.codex/config.toml is re-pointing this provider' advisory the
+ * server publishes on `GET /api/providers`, or `null`.
+ *
+ * Deliberately NOT part of `missingPrerequisites`: pointing Codex at a local
+ * bridge is a legitimate choice, so it must never bucket a card as NEEDS SETUP.
+ * What it fixes is PortOS reporting a ChatGPT account's readiness and quota for
+ * work that account never served. `advisory.baseUrl` is machine-local — render
+ * it here and nowhere else.
+ *
+ * SERVER-ONLY, with no client fallback: the browser cannot read the user's
+ * config file, so an older server publishing nothing correctly yields `null`.
+ * @returns {{code:string,label:string,keys:string[],baseUrl:string|null}|null}
+ */
+export const codexRoutingAdvisory = (provider) => (
+  Array.isArray(provider?.prerequisiteAdvisories)
+    ? provider.prerequisiteAdvisories.find((entry) => entry?.code === 'codexRoutingOverridden') || null
+    : null
+);
 
 /**
  * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
@@ -410,7 +435,7 @@ export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhi
 // `max` clamps to `xhigh` here exactly as it does on the server.
 export const GROK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
 
-const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']);
+const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra']);
 
 const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model || '').trim().toLowerCase())
   ? CODEX_ULTRA_EFFORT_LEVELS
@@ -418,8 +443,8 @@ const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model
 
 /**
  * True when an OpenCode process provider runs against one of the local
- * OpenAI-compatible backends (Ollama / MTPLX / llama.cpp / vLLM) or a hosted
- * gateway (OrcaRouter / OpenRouter)
+ * OpenAI-compatible backends (Ollama / LM Studio / MTPLX / llama.cpp / vLLM) or
+ * a hosted gateway (OrcaRouter / OpenRouter)
  * rather than a vendor cloud model. MIRROR of `isOpencodeProvider(p) &&
  * getOpencodeLocalProviderNamespace(p)` in server/lib/providerModels.js, which
  * is exactly what gates the effort ladder there — so a backend marker missing
@@ -429,12 +454,7 @@ const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model
 export const isOpencodeLocalProvider = (provider) =>
   (['opencode', 'opencode-tui'].includes(String(provider?.id || '').toLowerCase())
     || commandBasename(provider?.command) === 'opencode')
-  && (provider?.ollamaBacked === true
-    || provider?.mtplxBacked === true
-    || provider?.llamaBacked === true
-    || provider?.vllmBacked === true
-    || provider?.sglangBacked === true
-    || isGatewayBackedProvider(provider));
+  && (localRuntimeNamespace(provider) !== null || isGatewayBackedProvider(provider));
 
 /**
  * Antigravity base-model ↔ effort-suffix split — MIRROR of
@@ -544,22 +564,118 @@ export const withStaleAntigravityPin = (provider, models, selectedModel) => {
 };
 
 /**
+ * The model ids in a signed-in ChatGPT account's catalog, or `null` when the
+ * catalog is not a SUCCESSFUL read.
+ *
+ * The server ships `{ models, fetchedAt, error }` on a Codex-subscription
+ * provider (`codexModelCatalog`), and all three states are distinct:
+ * `models: null` = never fetched, a set `error` = the last read failed (the
+ * list, if any, is only last-known-good), and `[]` = this account genuinely
+ * exposes no models. Only the last two of those are answers about the account,
+ * so a never-fetched or failed read collapses to `null` here and the caller
+ * keeps its shipped list — an offline or signed-out user must never be handed
+ * an empty dropdown.
+ *
+ * CLIENT-ONLY (no server mirror).
+ * @param {{codexModelCatalog?:{models?:unknown, error?:unknown}}|null|undefined} provider
+ * @returns {string[]|null}
+ */
+export const codexCatalogModelIds = (provider) => {
+  if (!isCodexSubscriptionProvider(provider)) return null;
+  const catalog = provider?.codexModelCatalog;
+  if (!catalog || catalog.error || !Array.isArray(catalog.models)) return null;
+  return catalog.models
+    .map((entry) => (typeof entry === 'string' ? entry : entry?.id))
+    .filter((id) => typeof id === 'string' && id !== '');
+};
+
+/**
+ * The RAW model list a picker should read for a provider, before any
+ * sentinel/effort/hardware filtering: the signed-in ChatGPT account's own
+ * catalog when one has been fetched, otherwise the provider's configured
+ * `models` — falling back to its `defaultModel` when that list is empty (a
+ * cloud/manual provider configured with only a default; `[]` is truthy, so a
+ * bare `||` would leave such a picker empty).
+ *
+ * This is the single place the account catalog enters a picker, so a caller
+ * that reads `provider.models` directly is the one bug this exists to prevent
+ * (#6306). A successfully-read EMPTY catalog is returned as `[]` and must not
+ * fall through to `defaultModel`: the account really has no models, and
+ * offering its default would put back the un-runnable option.
+ *
+ * CLIENT-ONLY (no server mirror).
+ * @param {{models?:unknown[], defaultModel?:string}|null|undefined} provider
+ * @returns {unknown[]}
+ */
+export const providerModelList = (provider) => {
+  const catalog = codexCatalogModelIds(provider);
+  if (catalog) return catalog;
+  return provider?.models?.length ? provider.models : [provider?.defaultModel];
+};
+
+/** Where a picker's option list came from. */
+export const MODEL_SOURCE = Object.freeze({
+  /** The provider's shipped/configured `models` array. */
+  shipped: 'shipped',
+  /** The signed-in ChatGPT account's own catalog. */
+  account: 'account',
+  /** The account was read successfully and exposes no models. */
+  accountEmpty: 'account-empty',
+});
+
+/**
+ * The option list for a picker, plus WHERE it came from.
+ *
+ * For a Codex-subscription provider whose account catalog has been fetched, the
+ * options are that account's real models — so a tier the plan cannot run is not
+ * selectable and cannot be queued against a worktree that would only fail later.
+ * Every other state (never fetched, failed read, non-Codex provider) falls back
+ * to the shipped list unchanged.
+ *
+ * ADDITIVE: a stored `selectedModel` the catalog no longer lists is retained as
+ * its own option and reported via `unlistedSelection`, so an existing task
+ * template renders what it actually holds instead of silently changing model.
+ *
+ * CLIENT-ONLY (no server mirror).
+ * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
+ * @param {string|null|undefined} selectedModel
+ * @returns {{models: unknown[], source: string, unlistedSelection: boolean}}
+ */
+export const resolveProviderModelOptions = (provider, selectedModel) => {
+  const shipped = withStaleAntigravityPin(
+    provider,
+    filterSelectableModels(selectableModelsForProvider(provider, provider?.models)),
+    selectedModel,
+  );
+  const catalog = codexCatalogModelIds(provider);
+  if (!catalog) return { models: shipped, source: MODEL_SOURCE.shipped, unlistedSelection: false };
+  const models = filterSelectableModels(catalog);
+  const unlistedSelection = !!selectedModel
+    && !isConfiguredDefaultModel(selectedModel)
+    && !models.includes(selectedModel);
+  return {
+    models: unlistedSelection ? [...models, selectedModel] : models,
+    source: models.length > 0 ? MODEL_SOURCE.account : MODEL_SOURCE.accountEmpty,
+    unlistedSelection,
+  };
+};
+
+/**
  * The option list for a picker that renders an effort control but reads
  * `provider.models` directly (no `useProviderModels`): base models, sentinels
  * stripped, plus any legacy suffixed pin so the stored value stays visible.
  * The hook's own list is assembled from the same two primitives, so the two
- * paths can't drift.
+ * paths can't drift. Codex-subscription providers resolve through
+ * `resolveProviderModelOptions`, so every picker offers the same account-aware
+ * answer without each one reimplementing the fallback.
  *
  * CLIENT-ONLY (no server mirror).
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null|undefined} selectedModel
  * @returns {unknown[]}
  */
-export const effortAwareModelOptions = (provider, selectedModel) => withStaleAntigravityPin(
-  provider,
-  filterSelectableModels(selectableModelsForProvider(provider, provider?.models)),
-  selectedModel,
-);
+export const effortAwareModelOptions = (provider, selectedModel) =>
+  resolveProviderModelOptions(provider, selectedModel).models;
 
 /**
  * The model a run will ACTUALLY use: the explicit pin, else the provider's own
@@ -617,6 +733,7 @@ export const effortLevelsForProvider = (provider, model = null) => {
     return perModel.length ? perModel : null;
   }
   if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
+  if (commandBasename(provider.command) === 'pi') return ['low', 'medium', 'high', 'xhigh', 'max'];
   if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
   const id = String(provider.id || '').toLowerCase();
   if (id.startsWith('claude-code') || commandBasename(provider.command) === 'claude') return CLAUDE_EFFORT_LEVELS;
@@ -795,7 +912,7 @@ export const isToolUseModel = (id) =>
  * @returns {{toolCapable:boolean}|null}
  */
 export const localToolUseHint = (id, provider, toolUseIdsByProvider = null) =>
-  (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.mtplxBacked === true || provider?.llamaBacked === true || provider?.vllmBacked === true || provider?.sglangBacked === true)
+  (localBackendForProvider(provider) || isOllamaBackedProvider(provider) || provider?.lmstudioBacked === true || provider?.mtplxBacked === true || provider?.llamaBacked === true || provider?.vllmBacked === true || provider?.sglangBacked === true)
     && typeof id === 'string' && id.length > 0
     ? { toolCapable: toolUseIdsByProvider?.[provider?.id]?.has(id) === true || isToolUseModel(id) }
     : null;
@@ -1031,6 +1148,59 @@ export const isLocalInstanceProvider = (provider) => {
  */
 export const isFleetProvider = (provider) =>
   !isLocalInstanceProvider(provider) && isPrivateNetworkEndpoint(provider?.endpoint);
+
+/**
+ * Has this fleet host already been configured as a provider on this instance?
+ *
+ * @param {{endpoint?: string, peerHost?: string, peerAddress?: string}|null|undefined} host
+ * @param {Array<object>} providers
+ * @returns {boolean}
+ */
+export const isFleetHostConfigured = (host, providers = []) => {
+  if (!host || !Array.isArray(providers)) return false;
+  const hostEndpoint = typeof host.endpoint === 'string' ? host.endpoint.toLowerCase().replace(/\/+$/, '') : '';
+  const hostHostname = (host.peerHost || (host.endpoint && URL.canParse(host.endpoint) ? new URL(host.endpoint).hostname : ''))?.toLowerCase();
+  const hostAddress = (host.peerAddress || '')?.toLowerCase();
+
+  return providers.some((p) => {
+    // 1. Direct endpoint string equality
+    const pEndpoint = typeof p?.endpoint === 'string' ? p.endpoint.toLowerCase().replace(/\/+$/, '') : '';
+    if (hostEndpoint && pEndpoint === hostEndpoint) return true;
+
+    // 2. Parsed hostname/IP match
+    if (pEndpoint && URL.canParse(pEndpoint)) {
+      const pUrl = new URL(pEndpoint);
+      const pHost = pUrl.hostname.toLowerCase();
+      if ((hostHostname && pHost === hostHostname) || (hostAddress && pHost === hostAddress)) {
+        return true;
+      }
+    }
+
+    // 3. OpenCode TUI provider configuration check
+    if (p?.envVars?.OPENCODE_CONFIG_CONTENT) {
+      try {
+        const config = typeof p.envVars.OPENCODE_CONFIG_CONTENT === 'string'
+          ? JSON.parse(p.envVars.OPENCODE_CONFIG_CONTENT)
+          : p.envVars.OPENCODE_CONFIG_CONTENT;
+        const vllmBaseUrl = config?.provider?.vllm?.options?.baseURL;
+        if (typeof vllmBaseUrl === 'string') {
+          const normBase = vllmBaseUrl.toLowerCase().replace(/\/+$/, '');
+          if (hostEndpoint && normBase === hostEndpoint) return true;
+          if (URL.canParse(normBase)) {
+            const bHost = new URL(normBase).hostname.toLowerCase();
+            if ((hostHostname && bHost === hostHostname) || (hostAddress && bHost === hostAddress)) {
+              return true;
+            }
+          }
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
+
+    return false;
+  });
+};
 
 export const isLikelyLargeContextProvider = (provider) => {
   if (isProcessProvider(provider)) return true;
@@ -1407,6 +1577,27 @@ export const gatewayForProvider = (provider) => {
 export const isGatewayBackedProvider = (provider) => gatewayForProvider(provider) !== null;
 
 /**
+ * The LOCAL daemon namespace a provider is marked with, or null. Structural
+ * markers only — a hosted gateway is an OpenCode namespace and a remote API, so
+ * it is deliberately NOT one of these.
+ *
+ * MIRROR of `localRuntimeNamespace` in server/lib/providerModels.js — keep in
+ * lockstep. The order matters: a malformed record carrying two markers keeps its
+ * legacy Ollama outcome on both sides.
+ * @param {{ollamaBacked?:boolean,mtplxBacked?:boolean,llamaBacked?:boolean,vllmBacked?:boolean,sglangBacked?:boolean}|null|undefined} provider
+ * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|null}
+ */
+export const localRuntimeNamespace = (provider) => {
+  if (provider?.ollamaBacked === true) return 'ollama';
+  if (provider?.lmstudioBacked === true) return 'lmstudio';
+  if (provider?.mtplxBacked === true) return 'mtplx';
+  if (provider?.llamaBacked === true) return 'llama';
+  if (provider?.vllmBacked === true) return 'vllm';
+  if (provider?.sglangBacked === true) return 'sglang';
+  return null;
+};
+
+/**
  * True when a provider launches the Claude Code binary, whatever backend it is
  * pointed at (`claude-code`, `claude-ollama`, `claude-sglang`, or any renamed
  * record whose command resolves to `claude`).
@@ -1444,7 +1635,12 @@ export const isClaudeCommandProvider = (provider) => commandBasename(provider?.c
  */
 export const generationControlsFor = (provider) => {
   const gateway = isGatewayBackedProvider(provider);
+  // LM Studio forwards temperature/top_p like any OpenAI-compatible endpoint,
+  // but reasoning there belongs to the LOADED model instance — see
+  // THINKING_STYLE.lmstudio on the server, which resolves to no toggle.
+  const lmstudio = provider?.lmstudioBacked === true;
   const local = isOllamaBackedProvider(provider)
+    || lmstudio
     || provider?.llamaBacked === true
     || provider?.mtplxBacked === true
     || provider?.vllmBacked === true
@@ -1465,7 +1661,8 @@ export const generationControlsFor = (provider) => {
       ? { temperature: false, topP: false, thinking: true }
       : null;
   }
-  return { temperature: true, topP: true, thinking: !gateway };
+  // LM Studio joins the gateways in having no forwardable thinking signal.
+  return { temperature: true, topP: true, thinking: !gateway && !lmstudio };
 };
 
 // Environment variables whose names are conventionally credentials. The

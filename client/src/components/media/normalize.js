@@ -1,4 +1,5 @@
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { normalizeVideoTiling } from '../../lib/videoTilingOptions';
 
 // Friendly display name for a LoRA basename. The on-disk filenames look like
 // `lora-realstagram-v7.safetensors` — strip the `lora-` prefix, the version
@@ -193,7 +194,7 @@ export function getRenderConfigForItem(item) {
       // video models and must survive the round-trip back into the queued payload.
       guidanceScale: raw.guidanceScale ?? raw.guidance_scale ?? raw.guidance,
       seed: raw.seed,
-      tiling: raw.tiling,
+      tiling: normalizeVideoTiling(raw.tiling),
       disableAudio: raw.disableAudio ?? raw.disable_audio,
       textEncoderId: raw.textEncoderId,
       // The named sampler schedule (#4875), when the record was rendered with

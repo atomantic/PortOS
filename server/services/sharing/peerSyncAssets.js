@@ -560,7 +560,7 @@ export async function buildFableLoomAssetManifest(loom) {
     .flatMap((episode) => (Array.isArray(episode?.nodes) ? episode.nodes : []));
   const dedup = new Map();
   const imageNames = [...new Set(
-    nodes.map((node) => (isStr(node?.image) ? node.image : null)).filter(Boolean),
+    nodes.flatMap((node) => [node?.image, ...(node?.visualCanon?.characterAppearances || []).map((appearance) => appearance.referenceImage)]).filter(isStr),
   )];
   for (const entry of await Promise.all(imageNames.map((name) => hashImageForManifest(name)))) {
     if (entry) dedup.set(`${entry.kind}:${entry.filename}`, entry);

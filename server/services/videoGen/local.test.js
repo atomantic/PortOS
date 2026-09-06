@@ -69,12 +69,26 @@ async function waitForStitch() {
   }
 }
 
+const fsPromisesMock = vi.hoisted(() => ({
+  unlink: vi.fn(async () => {}),
+  writeFile: vi.fn(async () => {}),
+  copyFile: vi.fn(async () => {}),
+  rm: vi.fn(async () => {}),
+  readFile: vi.fn(async () => Buffer.from('')),
+  mkdtemp: vi.fn(async (prefix) => `${prefix}mock`),
+  rename: vi.fn(async () => {}),
+}));
+
 vi.mock('../../lib/fileUtils.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
+  tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(async () => {}),
   PATHS: MOCK_PATHS,
   readJSONFile: vi.fn(async () => []),
   atomicWrite: vi.fn(async () => {}),
+  copyFileGuarded: fsPromisesMock.copyFile,
+  writeFileGuarded: fsPromisesMock.writeFile,
+  unlinkGuarded: fsPromisesMock.unlink,
+  rmGuarded: fsPromisesMock.rm,
   // resolveVideoLoras → assertSafeLoraFilename → assertSafeFilename; the
   // filename safety check is unit-tested in loras.test.js, so a no-op here
   // lets the LoRA-arg test focus on the spawn-args plumbing.
@@ -385,17 +399,7 @@ vi.mock('../loraEffectProbe.js', () => ({
   probeLoraEffect: vi.fn(async (filename) => loraEffectState.reportByFilename[filename] || loraEffectState.defaultReport),
 }));
 
-vi.mock('fs/promises', () => ({
-  unlink: vi.fn(async () => {}),
-  writeFile: vi.fn(async () => {}),
-  copyFile: vi.fn(async () => {}),
-  rm: vi.fn(async () => {}),
-  readFile: vi.fn(async () => Buffer.from('')),
-  mkdtemp: vi.fn(async (prefix) => `${prefix}mock`),
-  // Unused by the code under test, but lib/ffmpeg.js imports it and the ffmpeg
-  // mock above pulls the real module in for buildTrimConcatArgs.
-  rename: vi.fn(async () => {}),
-}));
+vi.mock('fs/promises', () => fsPromisesMock);
 
 // Fake EventEmitter-like process that completes immediately with exit code 0.
 // Shared shape for both the child_process spawn mock (ffmpeg/probe) and the
@@ -3364,6 +3368,24 @@ describe('generateVideo — BYOV missing-python-module failure path (#1833 regre
   // re-exported (`export * from './runtimes.js'`) but NOT bound in local.js's
   // own scope — which would make the reference here throw a ReferenceError, so
   // the terminal 'failed' event never carries the venv-specific reason.
+  it('classifies the first emitted missing-venv failure before the render rejects', async () => {
+    vi.resetModules();
+    const { generateVideo: gv } = await import('./local.js');
+    const { videoGenEvents: events } = await import('./events.js');
+    const { BYOV_RUNTIME_INFO } = await import('./runtimes.js');
+    const { existsSync } = await import('fs');
+    const originalExists = vi.mocked(existsSync).getMockImplementation();
+    vi.mocked(existsSync).mockImplementation((path) => path !== BYOV_RUNTIME_INFO.ltx2.venvPython);
+    const failed = new Promise((resolve) => events.once('failed', resolve));
+    try {
+      await expect(gv({ jobId: 'example-missing-venv', modelId: 'ltx2_unified', prompt: 'invented clip',
+        width: 512, height: 512, numFrames: 25, fps: 24, mode: 'text' })).rejects.toMatchObject({ code: 'LTX2_VENV_MISSING' });
+      expect((await failed).failure).toMatchObject({ classification: 'ltx2_venv_missing' });
+    } finally {
+      vi.mocked(existsSync).mockImplementation(originalExists);
+    }
+  });
+
   it('emits a failed event naming the runtime venv when the child reports ModuleNotFoundError', async () => {
     vi.resetModules();
     const { spawnDetached } = await import('../../lib/detachedSpawn.js');
@@ -3598,6 +3620,62 @@ describe('generateVideo — signal-death diagnosis (#3101)', () => {
     ctrl.fireClose(null, signal);
     return failed;
   }
+
+  it.each(['stdout', 'stderr'])('keeps a chunked final %s exception in the ordinary exit cause', async (stream) => {
+    vi.resetModules();
+    const { generateVideo: gv } = await import('./local.js');
+    const { videoGenEvents: events } = await import('./events.js');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const ctrl = makeSignalProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => ctrl.proc);
+    const failed = new Promise((resolve) => events.once('failed', resolve));
+    await gv({ jobId: 'example-diagnostic', pythonPath: '/mock/python', modelId: 'ltx2_unified',
+      prompt: 'invented clip', width: 512, height: 512, numFrames: 25, fps: 24, mode: 'text' });
+    const emit = stream === 'stdout' ? ctrl.emitStdout : ctrl.emitStderr;
+    emit('Traceback (most recent call last):\n  File "/mock/runtime.py", line 42, in render\n');
+    emit('RuntimeError: shader comp');
+    emit('ilation failed');
+    await ctrl.fireClose(1, null);
+    expect((await failed).error).toBe('Exit code 1: RuntimeError: shader compilation failed');
+  });
+
+  it('classifies distinct Metal abort evidence and leaves signal-only advice unclassified', async () => {
+    const failures = [];
+    for (const cause of ['OutOfMemory', 'InnocentVictim', null]) {
+      failures.push(await failWithSignal(`signal-evidence-${cause}`, 'SIGABRT', {
+        onStarted: (ctrl) => { if (cause) ctrl.emitStderr(`kIOGPUCommandBufferCallbackError${cause}\n`); },
+      }));
+    }
+    expect(failures[0].failure.cause).toBe('Metal command buffer failed: OutOfMemory');
+    expect(failures[1].failure.signature).not.toBe(failures[0].failure.signature);
+    expect(failures[2].failure).toBeNull();
+  });
+
+  it('preserves classified child failure evidence on a chained render', async () => {
+    vi.resetModules();
+    const { generateChainedVideo: chain } = await import('./local.js');
+    const { videoGenEvents: events } = await import('./events.js');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const ctrl = makeSignalProc();
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => {
+      setImmediate(() => {
+        ctrl.emitStderr("AttributeError: 'Tokenizer' object has no attribute 'encode'\n");
+        ctrl.fireClose(1, null);
+      });
+      return ctrl.proc;
+    });
+    const failed = new Promise((resolve) => {
+      const onFailed = (event) => {
+        if (event.generationId !== 'example-failed-chain') return;
+        events.off('failed', onFailed);
+        resolve(event);
+      };
+      events.on('failed', onFailed);
+    });
+    await chain({ chunks: 2, jobId: 'example-failed-chain', pythonPath: '/mock/python', modelId: 'ltx2_unified',
+      prompt: 'invented clip', width: 512, height: 512, numFrames: 25, fps: 24, mode: 'text' });
+    expect((await failed).failure).toMatchObject({ classification: 'attributeerror', signature: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  });
 
   it('SIGABRT names the macOS Metal command-buffer watchdog with a resolution/frame-count next step', async () => {
     const evt = await failWithSignal('signal-sigabrt', 'SIGABRT');
@@ -5712,5 +5790,72 @@ describe('generateVideo — MiniMax H3 draft decode (#5423)', () => {
     // Still a real H3 render, just on the model's own decoder.
     expect(args).toContain('--model-repo');
     expect(meta.draftDecode).toBeUndefined();
+  });
+});
+
+describe('resident video batches', () => {
+  it.each([
+    { exitCode: 0, outputs: 2, complete: true },
+    { exitCode: 1, outputs: 0, complete: false, invalidOutput: true },
+    { exitCode: 1, outputs: 1, complete: false },
+    { exitCode: 0, outputs: 1, complete: false },
+    { exitCode: null, signal: 'SIGTERM', outputs: 1, complete: false },
+  ])('persists finished outputs and ends the queue job once ($exitCode, $signal, $outputs outputs)', async ({ exitCode, signal = null, outputs, complete, invalidOutput }) => {
+    const { EventEmitter } = await import('node:events');
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const { atomicWrite } = await import('../../lib/fileUtils.js');
+    const { planVideoBatch } = await import('./batch.js');
+    const { videoJobState } = await import('./jobState.js');
+    const proc = Object.assign(new EventEmitter(), {
+      pid: 12345, exitCode: null, signalCode: null, killed: false,
+      stdout: new EventEmitter(), stderr: new EventEmitter(), kill: vi.fn(),
+    });
+    vi.mocked(spawnDetached).mockResolvedValueOnce(proc);
+    vi.mocked(atomicWrite).mockClear();
+    const jobId = randomUUID();
+    const batch = planVideoBatch({ jobId, batchSize: 2, seed: 0 });
+    const completed = vi.fn();
+    const failed = vi.fn();
+    videoGenEvents.on('completed', completed);
+    videoGenEvents.on('failed', failed);
+    settingsState.acceptedModelTerms = [H3_TERMS];
+    await generateVideo({
+      jobId, prompt: 'Example shot', batchSize: 2, seed: 0,
+      modelId: 'minimax_h3_8bit', width: 1344, height: 768,
+      numFrames: 124, fps: 24, displaySleep: false,
+    });
+    const job = videoJobState.jobs.get(jobId);
+    const args = vi.mocked(spawnDetached).mock.calls.at(-1)[1];
+    expect(JSON.parse(args[args.indexOf('--batch-seeds') + 1])).toEqual([0, 1]);
+    if (invalidOutput) {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify({ video_path: join(MOCK_PATHS.videos, 'other.mp4'), batch_index: 0, seed: 99 }) + '\n'));
+    }
+    if (complete) vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    for (const item of batch.slice(0, outputs)) {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify({ video_path: join(MOCK_PATHS.videos, item.filename), batch_index: item.index, seed: item.seed }) + '\n'));
+      if (complete && item.index === 0) {
+        await vi.advanceTimersByTimeAsync(40_001);
+        vi.useRealTimers();
+        expect(proc.kill).not.toHaveBeenCalled();
+      }
+    }
+    await vi.waitFor(() => expect(atomicWrite).toHaveBeenCalledTimes(outputs));
+    expect(job.status).toBe('running');
+    expect(completed).not.toHaveBeenCalled();
+    proc.exitCode = exitCode;
+    proc.signalCode = signal;
+    proc.emit('close', exitCode, signal);
+    await vi.waitFor(() => expect(complete ? completed : failed).toHaveBeenCalledTimes(1));
+    expect(complete ? failed : completed).not.toHaveBeenCalled();
+    const saved = vi.mocked(atomicWrite).mock.calls.at(-1)?.[1] || [];
+    expect(saved.filter((item) => item.batchId === jobId)).toHaveLength(outputs);
+    if (outputs) {
+      expect(saved[0].seed).toBe(outputs - 1);
+      expect(saved[0].id).toMatch(/^[a-f0-9-]{36}$/);
+    }
+    const terminal = (complete ? completed : failed).mock.calls[0][0];
+    expect(terminal.results.map((item) => item.seed)).toEqual(complete ? [0, 1] : outputs ? [0] : []);
+    if (invalidOutput) expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    else expect(proc.kill).not.toHaveBeenCalled();
   });
 });

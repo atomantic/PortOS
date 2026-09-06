@@ -5,9 +5,9 @@ import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
-import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
+import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow, listMediaVideoHolds, resumeMediaVideoHold } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
-import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, supportsCloudModelOverride, modeLabel } from '../../lib/imageGenBackends';
+import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, supportsCloudModelOverride, modeLabel, mediaJobLane, isCloudVideoMode } from '../../lib/imageGenBackends';
 import { ANTIGRAVITY_CONFIGURED_DEFAULT, CODEX_EFFORT_LEVELS, isConfiguredDefaultModel } from '../../utils/providers';
 import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import {
@@ -46,20 +46,16 @@ const KIND_ICON = { video: Film, image: ImageIcon, training: Cpu };
 
 // Video jobs are scheduled by the server into independent execution lanes.
 // Keep the UI labels aligned with the user-facing targets rather than exposing
-// implementation names such as "gpu" and "cloud". Remote jobs are already
-// projected with renderer="remote"; Grok video jobs carry the Grok mode while
-// local video jobs carry their pipeline mode (text/image/etc.).
+// implementation names such as "gpu" and "cloud". The lane a row belongs to is
+// the server's own scheduling decision, read via `mediaJobLane` — the queue
+// must never keep a second list of cloud backends, which is exactly how fal.ai
+// and Reactor renders ended up filed under Local machine. The three cloud
+// providers share one scheduler lane, so they share one section.
 const VIDEO_QUEUE_LANES = Object.freeze([
-  { id: 'local', label: 'Local machine', description: 'Local GPU renders run one at a time.' },
-  { id: 'grok', label: 'Grok', description: 'Grok renders use a cloud lane in parallel with local work.' },
+  { id: 'gpu', label: 'Local machine', description: 'Local GPU renders run one at a time.' },
+  { id: 'cloud', label: 'Cloud renders', description: 'Cloud provider renders share a lane that runs in parallel with local work.' },
   { id: 'remote', label: 'Remote machines', description: 'Each selected peer owns the queue for work it receives.' },
 ]);
-
-const videoQueueLane = (job) => {
-  if (job?.renderer === 'remote') return 'remote';
-  if (job?.kind === 'video' && job.params?.mode === IMAGE_GEN_MODE.GROK) return 'grok';
-  return 'local';
-};
 
 // Creative Director scene renders use the same durable media queue as manual
 // Video Gen renders, but carry an owner tag so the orchestrator can reconcile
@@ -112,6 +108,15 @@ function modelLabel(params, renderer) {
       ? `agy / ${model}`
       : 'agy / configured default';
   }
+  if (renderer !== 'remote' && isCloudVideoMode(params.mode)) {
+    // fal.ai / Reactor renders happen in the provider's cloud on a model id the
+    // provider owns, so the row must name the provider rather than fall through
+    // to the local-engine badge below (grok video is caught by the mode branch
+    // above, which adds its aspect ratio).
+    const cloudModel = (params.modelId || '').trim();
+    const provider = modeLabel(params.mode);
+    return cloudModel ? `${provider} / ${cloudModel}` : provider;
+  }
   const id = (params.modelId || '').trim();
   // A federated render ran on a peer, so it must not wear the local badge. The
   // server projects `job.renderer` (and rebuilds `modelId` off the wire request)
@@ -128,22 +133,28 @@ function modelLabel(params, renderer) {
 // cards on the gen page already, so listing them here is duplicate noise.
 export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' }) {
   const [jobs, setJobs] = useState([]);
+  const [holds, setHolds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [hasSnapshot, setHasSnapshot] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
+  const [resumingHold, setResumingHold] = useState(null);
 
   const fetchJobs = useCallback(async () => {
-    const outcome = await listMediaJobs(kind ? { kind } : {}).then(
+    const outcome = await Promise.all([
+      listMediaJobs(kind ? { kind } : {}),
+      !kind || kind === 'video' ? listMediaVideoHolds() : [],
+    ]).then(
       (value) => ({ value }),
       () => ({ error: true }),
     );
-    if (outcome.error || !Array.isArray(outcome.value)) {
+    if (outcome.error || !outcome.value.every(Array.isArray)) {
       setLoadError(true);
       setLoading(false);
       return;
     }
-    setJobs(outcome.value);
+    setJobs(outcome.value[0]);
+    setHolds(outcome.value[1]);
     setHasSnapshot(true);
     setLoadError(false);
     setLoading(false);
@@ -186,7 +197,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
   const videoLanes = useMemo(() => {
     if (kind !== 'video') return [];
     return VIDEO_QUEUE_LANES
-      .map((lane) => ({ ...lane, jobs: live.filter((job) => videoQueueLane(job) === lane.id) }))
+      .map((lane) => ({ ...lane, jobs: live.filter((job) => mediaJobLane(job) === lane.id) }))
       .filter((lane) => lane.jobs.length > 0);
   }, [kind, live]);
 
@@ -210,6 +221,19 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
       fetchJobs();
     })
     .catch((err) => toast.error(err?.message || 'Run-now failed'));
+
+  const handleResume = (id) => {
+    setResumingHold(id);
+    return resumeMediaVideoHold(id, { silent: true })
+      .then(() => {
+        setJobs((previous) => previous.map((job) => job.hold?.id === id ? { ...job, hold: undefined } : job));
+        setHolds((previous) => previous.filter((hold) => hold.id !== id));
+        toast.success('Retained video jobs resumed');
+        fetchJobs();
+      })
+      .catch((error) => toast.error(error?.message || 'Resume failed'))
+      .finally(() => setResumingHold(null));
+  };
 
   const handleDelete = (id) => deleteMediaJob(id, { silent: true })
     .then(() => {
@@ -269,6 +293,19 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
           Queue refresh failed. Showing the last known snapshot.
         </div>
       )}
+
+      {holds.map((hold) => (
+        <div key={hold.id} role="status" className="rounded border border-port-warning/30 bg-port-warning/10 p-3 text-sm">
+          <div className="font-medium text-port-warning">{hold.heldJobCount} video job{hold.heldJobCount === 1 ? '' : 's'} held</div>
+          <div className="text-xs text-port-text-muted break-words">{hold.scope === 'local-video' ? 'All local video' : `${hold.modelId} · ${hold.runtime}`}</div>
+          <p className="mt-1 break-words">{hold.cause}</p>
+          {hold.scope !== 'local-video' && <p className="mt-1 text-xs text-port-text-muted">Three matching failures. Repair the runtime, then resume the retained jobs.</p>}
+          <button type="button" disabled={resumingHold !== null} onClick={() => handleResume(hold.id)}
+            className="mt-2 min-h-[44px] rounded border border-port-border px-3 py-2 text-sm hover:bg-port-border disabled:opacity-50">
+            {resumingHold === hold.id ? 'Resuming…' : hold.scope === 'local-video' ? 'Resume all local video' : 'Resume'}
+          </button>
+        </div>
+      ))}
 
       {loading && !hasSnapshot ? (
         <div className="text-xs"><BrailleSpinner text="Loading…" /></div>
@@ -480,7 +517,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className={`text-xs px-2 py-0.5 rounded ${STATUS_BADGE[job.status] || ''}`}>{job.status}</span>
+          <span className={`text-xs px-2 py-0.5 rounded ${STATUS_BADGE[job.status] || ''}`}>{job.hold ? 'held' : job.status}</span>
           {job.cancelRequested && (
             <span className="text-xs text-port-warning" title="Cancellation requested — waiting for worker">cancelling…</span>
           )}

@@ -18,7 +18,7 @@
  * The route handlers become: validate → read source → call helper → res.json.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, PATHS } from '../../lib/fileUtils.js';
@@ -99,7 +99,7 @@ export async function persistVariant({
   const untimedVariantMeta = omitRenderTiming(variantMeta);
 
   await Promise.all([
-    writeFile(outPath, data),
+    atomicWrite(outPath, data),
     atomicWrite(sidecarPath, untimedVariantMeta),
   ]);
 

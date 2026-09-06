@@ -12,7 +12,7 @@
  */
 
 import { spawn } from '../../lib/childProcess.js';
-import { copyFile, mkdir, open, rename, rm, stat, unlink } from 'fs/promises';
+import { mkdir, open, stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
@@ -24,7 +24,7 @@ import {
   prepareAntigravityPrompt,
 } from '../../lib/antigravity.js';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
-import { atomicWrite, detectImageFormat, ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGuarded, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
@@ -320,7 +320,7 @@ async function runAgy(job, jobId, bin, args, {
   // scratch-dir spawn telling the child one consistent story about where it is.
   const proc = spawn(command, spawnArgs, { cwd: scratchDir, env: withSpawnCwdEnv(process.env, scratchDir), shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
-  const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
+  const removeScratch = () => rmGuarded(scratchDir, { recursive: true, force: true }).catch(() => {});
   let stdoutTail = '';
   let stderrTail = '';
   const timeoutTimer = setTimeout(() => {
@@ -367,12 +367,11 @@ async function runAgy(job, jobId, bin, args, {
         return finalizeError(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
       }
       if (harvested.format === 'png') {
-        await rename(stagingPath, outputPath).catch(async () => {
-          await copyFile(stagingPath, outputPath);
-          await unlink(stagingPath).catch(() => {});
-        });
+        await copyFileGuarded(stagingPath, outputPath);
+        await unlinkGuarded(stagingPath).catch(() => {});
       } else {
-        await sharp(stagingPath).png().toFile(outputPath);
+        const pngBytes = await sharp(stagingPath).png().toBuffer();
+        await atomicWrite(outputPath, pngBytes);
       }
       removeScratch();
       // Degenerate-frame gate (#4173) — before the sidecar, so a decodable but

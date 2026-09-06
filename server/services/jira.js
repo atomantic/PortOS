@@ -8,7 +8,7 @@ import { createBoundedStateMap } from '../lib/boundedStateMap.js';
 import { createHttpClient } from '../lib/httpClient.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import path from 'path';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { hostFromOriginUrl } from '../lib/workTracker.js';
 import { countConfiguredInstances } from '../lib/instanceFeatureRegistry.js';
 
@@ -74,12 +74,7 @@ export async function getInstances() {
  * Save JIRA instances configuration
  */
 export async function saveInstances(config) {
-  await ensureDir(path.dirname(JIRA_CONFIG_FILE));
-  await fs.writeFile(
-    JIRA_CONFIG_FILE,
-    JSON.stringify(config, null, 2),
-    'utf-8'
-  );
+  await atomicWrite(JIRA_CONFIG_FILE, config);
 }
 
 /**

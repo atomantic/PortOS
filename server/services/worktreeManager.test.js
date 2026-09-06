@@ -832,6 +832,17 @@ describe('findAdoptableWorktreeForBranch (take over the tree that holds the bran
     expect(await findAdoptableWorktreeForBranch(REPO, BRANCH)).toBeNull();
   });
 
+  // A review-loop resolve-and-merge follow-up is the one caller that names this
+  // exact branch as the thing it exists to finish and land, so it opts in via
+  // `allowLiveClaim` instead of retrying `git worktree add` against a branch a
+  // `/do:next` claim already holds (#6243).
+  it('adopts a human /claim worktree when the caller opts into allowLiveClaim', async () => {
+    scriptWorktrees([{ path: cosTree('claim-issue-42'), branch: `refs/heads/${BRANCH}` }]);
+
+    expect(await findAdoptableWorktreeForBranch(REPO, BRANCH, { allowLiveClaim: true }))
+      .toEqual({ path: cosTree('claim-issue-42'), agentId: 'claim-issue-42' });
+  });
+
   it('refuses a non-agent directory in the managed root', async () => {
     scriptWorktrees([{ path: cosTree('next-issue-42'), branch: `refs/heads/${BRANCH}` }]);
 

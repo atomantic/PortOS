@@ -87,6 +87,13 @@ const WINDOWS_RISK_RULES = [
   /^server\/services\/(?:shell|pm2|appBuilder)\b/,
   /^server\/services\/agentTuiSpawning(?:\.test)?\.js$/,
   /^server\/services\/autonomousJobs\/execution\.shellSpawn/,
+  // The voice fine-tuning service spawns a real Python trainer and settles the
+  // job from its `close`/`error` events, so its assertions are the child-process
+  // contract, not platform-independent logic. Nothing here was Windows-tagged,
+  // so the shard only saw it on a full-matrix run — which is where it failed,
+  // with an interpreter-startup budget mistaken for a state-machine defect
+  // (#6268).
+  /^server\/services\/voice\/fineTuning(?:\.test)?\.js$/,
   /^server\/routes\/apps\//,
   /^server\/routes\/scaffoldVite\.js$/,
 ];
@@ -138,6 +145,7 @@ export const WINDOWS_CONTRACT_TESTS = [
   'server/services/agentTuiSpawning.test.js',
   'server/services/agentImportCycles.test.js',
   'server/services/twinImportCycles.test.js',
+  'server/services/voice/fineTuning.test.js',
 ];
 
 // Contract guards that run on EVERY plan, whatever the impact scope selects.
@@ -206,6 +214,49 @@ const DOCUMENTATION_RULES = [
   /^(?:README|CHANGELOG|CONTRIBUTING|LICENSE)(?:\.|$)/i,
   /\.(?:md|mdx|png|jpe?g|gif|webp|svg|ico)$/i,
 ];
+
+// The bundled slashdo submodule (see AGENTS.md "Slashdo Commands") ships no
+// source into the tree the planner scans — `git diff` reports only the gitlink
+// pointer at this path, never the files inside it — so it can't be detected the
+// way an ordinary source change is. The two contract suites below exercise the
+// real bundled renderer and only mean anything with the submodule checked out,
+// so CI initializes it (see ci.yml) exactly when one of them is set to run.
+export const SLASHDO_GITLINK_PATH = 'lib/slashdo';
+export const SLASHDO_CONTRACT_TEST_FILES = [
+  'server/lib/slashdoLoader.test.js',
+  'server/lib/slashdoInvocation.test.js',
+];
+const SLASHDO_CONTRACT_SOURCE_FILES = [
+  'server/lib/slashdoLoader.js',
+  'server/lib/slashdoInvocation.js',
+];
+
+/**
+ * Whether this plan's server job needs `lib/slashdo` initialized.
+ *
+ * The `changedFiles` check is currently unreachable from `buildCiTestPlan`
+ * itself: `SLASHDO_GITLINK_PATH` has no recognized extension, so a real
+ * gitlink change already hits the "unclassified changed file" rule and forces
+ * `plan.full = true` first, which the `plan.full` clause above already
+ * covers. It stays as a direct, defense-in-depth check — independent of that
+ * incidental classification — and is what the unit tests below exercise
+ * against a hand-built plan.
+ *
+ * This only catches a literal edit to the two source files, not an indirect
+ * one: a shared dependency of `slashdoLoader.js`/`slashdoInvocation.js`
+ * changing would not set this, even though Vitest's real `related` selection
+ * can still transitively pull the contract tests in — in which case they run
+ * without the submodule and take the documented skip. In practice a
+ * sufficiently shared dependency changing also tends to select enough tests
+ * to exceed MAX_TARGETED_TEST_FILES and force a full plan, which does trigger
+ * this; a narrowly-shared one is the remaining gap.
+ */
+export const needsSlashdoSubmodule = (plan) => Boolean(
+  plan.full
+  || plan.changedFiles.includes(SLASHDO_GITLINK_PATH)
+  || plan.server.files.some((path) => SLASHDO_CONTRACT_TEST_FILES.includes(path))
+  || plan.server.sources.some((path) => SLASHDO_CONTRACT_SOURCE_FILES.includes(path))
+);
 
 const RUNNER_ROOTS = {
   server: [
@@ -603,6 +654,7 @@ export function buildCiTestPlan(changedFiles, {
 /** The derived fields every plan carries: per-suite reasons and shard matrices. */
 const finishPlan = (plan, options) => ({
   ...plan,
+  slashdo: needsSlashdoSubmodule(plan),
   suiteReasons: suiteReasonsFor(plan, options),
   shards: {
     server: shardIndexes(plan.server.mode, FULL_SUITE_SHARDS.server),
@@ -659,6 +711,7 @@ export function emitGitHubPlan(plan) {
     lint_files: JSON.stringify(plan.lint.files),
     build: plan.build,
     smoke: plan.smoke,
+    slashdo: plan.slashdo,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),

@@ -3,11 +3,10 @@
  * Supports multiple DataDog instances with API/App key authentication
  */
 
-import fs from 'fs/promises';
 import { createHttpClient } from '../lib/httpClient.js';
 import { countConfiguredInstances } from '../lib/instanceFeatureRegistry.js';
 import path from 'path';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 
 const DATADOG_CONFIG_FILE = path.join(PATHS.data, 'datadog.json');
 
@@ -48,12 +47,7 @@ export async function hasConfiguredInstances() {
  * Save DataDog instances configuration
  */
 export async function saveInstances(config) {
-  await ensureDir(path.dirname(DATADOG_CONFIG_FILE));
-  await fs.writeFile(
-    DATADOG_CONFIG_FILE,
-    JSON.stringify(config, null, 2),
-    'utf-8'
-  );
+  await atomicWrite(DATADOG_CONFIG_FILE, config);
 }
 
 /**

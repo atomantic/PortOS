@@ -12,3 +12,7 @@ export const VIDEO_TILING_OPTIONS = [
 ];
 
 export const VIDEO_TILING_ENUM_SET = new Set(VIDEO_TILING_OPTIONS.map((o) => o.value));
+
+export function normalizeVideoTiling(value) {
+  return typeof value === 'string' && VIDEO_TILING_ENUM_SET.has(value) ? value : undefined;
+}

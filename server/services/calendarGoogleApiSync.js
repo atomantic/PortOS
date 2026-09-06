@@ -51,7 +51,25 @@ export async function apiSyncAccount(accountId, io) {
         status: item.status || 'confirmed',
         // Attendee/organizer identities feed Tribe touchpoint auto-logging (#2033).
         organizer: item.organizer || null,
-        attendees: item.attendees || []
+        attendees: item.attendees || [],
+        // Conference metadata feeds the cached `meetingUrl` join link (#6289).
+        // Both keys are emitted UNCONDITIONALLY — an explicit null is what makes
+        // a direct API response authoritative enough to clear a stale link,
+        // where an omitted key would (correctly) preserve it. Only the entry
+        // type + URI are carried forward; Google's conference passwords and
+        // dial-in codes are dropped here rather than travelling any further.
+        hangoutLink: item.hangoutLink || null,
+        conferenceData: item.conferenceData
+          ? {
+            // Passed through unflattened — `selectMeetingUrl` owns every
+            // "is this usable?" decision, so this layer only decides what is
+            // allowed to travel at all.
+            entryPoints: (item.conferenceData.entryPoints || []).map(ep => ({
+              entryPointType: ep.entryPointType ?? null,
+              uri: ep.uri ?? null
+            }))
+          }
+          : null
       })));
       pageToken = response.data.nextPageToken;
     } while (pageToken);

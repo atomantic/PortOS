@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../services/api';
-import { filterSelectableModels, selectableModelsForProvider, isAntigravityProvider, isCursorProvider, isGrokBuildCli, isKimiProvider, antigravityModelEffortLevels } from '../utils/providers';
+import { filterSelectableModels, selectableModelsForProvider, commandBasename, isAntigravityProvider, isCursorProvider, isGrokBuildCli, isKimiProvider, antigravityModelEffortLevels } from '../utils/providers';
 import { MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
 import { reviewerEffortLevels, normalizeReviewerSlug } from '../lib/reviewerPins';
 import { LOCAL_LLM_BACKENDS } from '../lib/localLlmBackends';
@@ -53,6 +53,7 @@ const REVIEWER_PROVIDER_MATCHERS = Object.freeze({
   // default — the broad predicate follows it for an install that only kept the TUI.
   grok: [(p) => p.id === 'grok-cli', isGrokBuildCli],
   cursor: [(p) => p.id === 'cursor-cli', isCursorProvider],
+  pi: [(p) => p.id === 'pi-cli', (p) => ['cli', 'tui'].includes(p.type) && commandBasename(p.command) === 'pi'],
   kimi: [(p) => p.id === 'kimi-cli', isKimiProvider],
   opencode: [(p) => p.id === 'opencode-zen-cli', (p) => p.id === 'opencode-zen-tui'],
   mtplx: [(p) => p.id === 'mtplx'],
@@ -207,6 +208,7 @@ export default function useReviewerModelOptions() {
       // regardless because grok, like every CLI reviewer, is free-text.
       grok: providerTiers('grok'),
       cursor: providerTiers('cursor'),
+      pi: providerTiers('pi'),
       // Legitimately empty, for grok's documented reason: the shipped kimi
       // provider carries only the configured-default sentinel, which
       // `filterSelectableModels` strips. Free-text keeps the cell usable.
@@ -228,6 +230,8 @@ export default function useReviewerModelOptions() {
       antigravity: providerDefault('antigravity'),
       grok: providerDefault('grok'),
       cursor: providerDefault('cursor'),
+      pi: null, // A bare reviewer uses Pi's own configured default.
+
       kimi: providerDefault('kimi'),
       // Deliberately null even though the Zen records carry one: the reviewer
       // spawns a BARE `opencode`, which falls back to whatever the user's own

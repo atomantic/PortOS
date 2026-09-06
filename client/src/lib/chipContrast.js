@@ -23,8 +23,9 @@ import { THEMES } from '../themes/portosThemes.js';
 import { clamp } from '../utils/formatters.js';
 import { evictOldest } from './boundedMap.js';
 
-// `"234 228 219"` (the `--port-*` color-var form) → `{ r, g, b }`.
-const parseTriple = (triple) => {
+// `"234 228 219"` (the `--port-*` color-var form) → `{ r, g, b }` (NaN channels
+// for anything else — callers validate with Number.isFinite).
+export const parseTriple = (triple) => {
   const [r, g, b] = String(triple).trim().split(/\s+/).map(Number);
   return { r, g, b };
 };

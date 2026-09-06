@@ -22,7 +22,35 @@ const parseNav = () => {
 describe('useMediaPreviewActions.handleRemix', () => {
   beforeEach(() => navigate.mockReset());
 
-  it('sends a video back to /media/video with prompt and render settings', () => {
+  // #6290: a saved video hands over its RECORD ID, not a render-settings
+  // bundle. The bundle was a second restore implementation that had to be
+  // extended for every new render field and wasn't — it silently dropped the
+  // conditioner, speed profile, draft decode and LoRAs — so the same clip came
+  // back with different settings from History than from the Video Gen gallery.
+  // Enumerating fields here again would re-open exactly that drift.
+  it('sends a saved video back to /media/video by record id, with no settings bundle', () => {
+    const { result } = renderHook(() => useMediaPreviewActions());
+    result.current.handleRemix({
+      kind: 'video',
+      id: 'vid-1',
+      prompt: 'a fox in rain',
+      negativePrompt: 'blurry',
+      modelId: 'ltx2-dev',
+      width: 768,
+      height: 512,
+      numFrames: 121,
+      fps: 24,
+      raw: { seed: 42, steps: 8, guidanceScale: 3, tiling: 'none', disableAudio: true },
+    });
+    const { path, params } = parseNav();
+    expect(path).toBe('/media/video');
+    expect(params.get('remix')).toBe('vid-1');
+    expect([...params.keys()]).toEqual(['remix']);
+  });
+
+  // Records that never got an id (and links already out in the wild) keep the
+  // legacy field bundle. It is deliberately not extended with new fields.
+  it('falls back to the legacy field bundle for a video with no record id', () => {
     const { result } = renderHook(() => useMediaPreviewActions());
     result.current.handleRemix({
       kind: 'video',
@@ -37,6 +65,7 @@ describe('useMediaPreviewActions.handleRemix', () => {
     });
     const { path, params } = parseNav();
     expect(path).toBe('/media/video');
+    expect(params.get('remix')).toBeNull();
     expect(params.get('prompt')).toBe('a fox in rain');
     expect(params.get('negativePrompt')).toBe('blurry');
     expect(params.get('modelId')).toBe('ltx2-dev');
@@ -51,7 +80,7 @@ describe('useMediaPreviewActions.handleRemix', () => {
     expect(params.get('disableAudio')).toBe('1');
   });
 
-  it('skips the (no prompt) placeholder so a remixed clip does not seed that literal', () => {
+  it('skips the (no prompt) placeholder so an id-less remixed clip does not seed that literal', () => {
     const { result } = renderHook(() => useMediaPreviewActions());
     result.current.handleRemix({ kind: 'video', prompt: '(no prompt)', width: 512, height: 512 });
     const { params } = parseNav();

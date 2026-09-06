@@ -54,6 +54,10 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
           granted: Array.isArray(capabilities.allowedAppIds) ? capabilities.allowedAppIds.includes(app.id) : true,
         })),
       } : null,
+      semanticTools: (current.semanticTools || []).map((tool) => ({
+        ...tool,
+        granted: tool.policy.requiredCapabilities.every((capability) => capabilities[capability] === true),
+      })),
       tools: (current.tools || []).map((tool) => ({
         ...tool,
         granted: capabilities[tool.capability] === true,
@@ -72,6 +76,19 @@ export default function PersistentMindTools({ onCapabilitiesChange, onSavingChan
             <div className="flex justify-center py-12"><BrailleSpinner text="Loading persistent mind tools" /></div>
           ) : data ? (
             <>
+              <details className="rounded border border-port-border bg-port-card p-4">
+                <summary className="cursor-pointer text-base font-semibold text-port-text">Executable tools ({data.semanticTools?.length || 0})</summary>
+                <p className="mt-1 text-xs text-port-text-muted">The exact semantic actions available to this mind. Expand a tool to inspect its arguments.</p>
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  {(data.semanticTools || []).map((tool) => (
+                    <details key={tool.name} className="min-w-0 rounded border border-port-border p-2 text-xs">
+                      <summary className="cursor-pointer break-words font-medium text-port-text">{tool.name} · {tool.granted ? 'Granted' : 'Disabled'}</summary>
+                      <p className="mt-2 text-port-text-muted">{tool.description}</p>
+                      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-port-text-muted">{JSON.stringify(tool.input_schema, null, 2)}</pre>
+                    </details>
+                  ))}
+                </div>
+              </details>
               <section aria-labelledby="tools-summary-heading" className="rounded border border-port-border bg-port-card p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>

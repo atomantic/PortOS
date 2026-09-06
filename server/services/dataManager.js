@@ -1,9 +1,9 @@
-import { readdir, stat, lstat, rm, writeFile as fsWriteFile } from 'fs/promises';
+import { readdir, stat, lstat } from 'fs/promises';
 import { join, relative, resolve, isAbsolute } from 'path';
 import { existsSync } from 'fs';
 import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
-import { PATHS, ensureDir, isTopLevelEntryName } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import {
   federatedMediaInboxBusy, imageCleanTmpBusy, trainingRunsBusy, updateDetachedBusy,
@@ -110,6 +110,7 @@ export const CATEGORIES = {
   'pipeline-series-review': { label: 'Series Review', description: 'Cached series reviews — re-running them costs LLM calls', archivable: true, deletable: false },
   'privacy': { label: 'Privacy', description: 'Data-broker opt-out records and request history', archivable: true, deletable: false },
   'prompts': { label: 'Prompts', description: 'AI prompt templates', archivable: false, deletable: false },
+  'venvs': { label: 'Optional SDK Runtimes', description: 'Explicitly installed Python environments for media SDKs; reinstall with the corresponding setup command', archivable: false, deletable: false },
   'python': { label: 'Python Runtime', description: 'Managed virtualenv for local ML tooling — rebuilt on the next Python-backed run (re-downloads several GB of wheels)', archivable: false, deletable: true, purgeScope: 'category' },
   // A pasted or URL-fetched book is the user's only copy — the shelf is not a
   // cache of anything re-fetchable, so it is neither archivable nor deletable.
@@ -322,12 +323,12 @@ export async function archiveCategory(categoryKey, options = {}) {
 
     // Write file list to temp file to avoid shell argument limits
     const listPath = join(backupDir, `.filelist-${Date.now()}.txt`);
-    await fsWriteFile(listPath, oldFiles.join('\n'));
+    await writeFileGuarded(listPath, oldFiles.join('\n'));
     await execFileAsync('tar', ['-czf', archivePath, '-C', dirPath, '-T', listPath], { timeout: 120000 });
-    await rm(listPath).catch(() => {});
+    await rmGuarded(listPath).catch(() => {});
 
     for (const f of oldFiles) {
-      await rm(join(dirPath, f)).catch(() => {});
+      await rmGuarded(join(dirPath, f)).catch(() => {});
     }
 
     const archiveStat = await stat(archivePath).catch(() => null);
@@ -418,11 +419,11 @@ export async function purgeCategory(categoryKey, options = {}) {
         );
       }
     }
-    await rm(resolvedTarget, { recursive: !itemScoped, force: true });
+    await rmGuarded(resolvedTarget, { recursive: !itemScoped, force: true });
     console.log(`🗑️ Purged item from data/${categoryKey}`);
   } else {
     const entries = await readdir(dirPath).catch(() => []);
-    await Promise.all(entries.map(entry => rm(join(dirPath, entry), { recursive: true, force: true })));
+    await Promise.all(entries.map(entry => rmGuarded(join(dirPath, entry), { recursive: true, force: true })));
     console.log(`🗑️ Purged all ${entries.length} entries from data/${categoryKey}`);
   }
 
@@ -467,6 +468,6 @@ export async function deleteBackup(filename) {
   if (!fullPath.startsWith(backupDir)) {
     throw new ServerError('Path traversal not allowed', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  await rm(fullPath);
+  await rmGuarded(fullPath);
   return { deleted: filename };
 }

@@ -111,7 +111,13 @@ export function ImageGenTab() {
   // never rendered, only round-tripped at save time so sibling keys
   // (defaultModelId) survive the settings PUT's wholesale slice replace.
   const [videoGenMode, setVideoGenMode] = useState('');
-  const [videoGenDisplaySleep, setVideoGenDisplaySleep] = useState(true);
+  const [videoGenDisplaySleep, setVideoGenDisplaySleep] = useState(false);
+  // fal.ai queue REST API key (#6213) — usability-gated on this being set
+  // (settings, or the FAL_KEY env var server-side). No enabled toggle: the
+  // key's presence IS the opt-in, same shape as loras.js's Civitai key.
+  const [falApiKey, setFalApiKey] = useState('');
+  // reactor.inc fast-h3 API key (#6214) — same usability-gate shape as fal above.
+  const [reactorApiKey, setReactorApiKey] = useState('');
   const videoGenSliceRef = useRef({});
   const [sdapiUrl, setSdapiUrl] = useState('');
   const [pythonPath, setPythonPath] = useState('');
@@ -176,7 +182,9 @@ export function ImageGenTab() {
     denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false },
     renderDefaultsJson: '{}',
     videoGenMode: '',
-    videoGenDisplaySleep: true,
+    videoGenDisplaySleep: false,
+    falApiKey: '',
+    reactorApiKey: '',
   });
 
   const [status, setStatus] = useState(null);
@@ -248,7 +256,9 @@ export function ImageGenTab() {
         // ('auto'/blank → '', i.e. no pin) for the select.
         const vg = (s?.videoGen && typeof s.videoGen === 'object') ? s.videoGen : {};
         const vgMode = normalizeRenderPinValue(vg.mode) || '';
-        const vgDisplaySleep = vg.displaySleep !== false;
+        const vgDisplaySleep = vg.displaySleep === true;
+        const vgFalApiKey = vg.fal?.apiKey || '';
+        const vgReactorApiKey = vg.reactor?.apiKey || '';
         const m = ig.mode || IMAGE_GEN_MODE.EXTERNAL;
         const url = normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl);
         const py = ig.local?.pythonPath || '';
@@ -284,6 +294,8 @@ export function ImageGenTab() {
         setRenderDefaults(rd);
         setVideoGenMode(vgMode);
         setVideoGenDisplaySleep(vgDisplaySleep);
+        setFalApiKey(vgFalApiKey);
+        setReactorApiKey(vgReactorApiKey);
         videoGenSliceRef.current = vg;
         setSdapiUrl(url);
         setPythonPath(py);
@@ -312,6 +324,8 @@ export function ImageGenTab() {
           renderDefaultsJson: JSON.stringify(rd),
           videoGenMode: vgMode,
           videoGenDisplaySleep: vgDisplaySleep,
+          falApiKey: vgFalApiKey,
+          reactorApiKey: vgReactorApiKey,
         });
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
         setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
@@ -403,7 +417,9 @@ export function ImageGenTab() {
     || denoiseByMode.external !== saved.denoiseByMode.external
     || JSON.stringify(renderDefaults) !== saved.renderDefaultsJson
     || videoGenMode !== saved.videoGenMode
-    || videoGenDisplaySleep !== saved.videoGenDisplaySleep;
+    || videoGenDisplaySleep !== saved.videoGenDisplaySleep
+    || falApiKey !== saved.falApiKey
+    || reactorApiKey !== saved.reactorApiKey;
 
   const handleSave = async () => {
     setSaving(true);
@@ -448,7 +464,13 @@ export function ImageGenTab() {
       ),
       // Install-wide video pin (#3231 Phase 4). Spread over the loaded slice so
       // sibling keys (defaultModelId) survive the wholesale slice replace.
-      videoGen: { ...videoGenSliceRef.current, mode: videoGenMode || null, displaySleep: videoGenDisplaySleep },
+      videoGen: {
+        ...videoGenSliceRef.current,
+        mode: videoGenMode || null,
+        displaySleep: videoGenDisplaySleep,
+        fal: { ...videoGenSliceRef.current.fal, apiKey: falApiKey.trim() || undefined },
+        reactor: { ...videoGenSliceRef.current.reactor, apiKey: reactorApiKey.trim() || undefined },
+      },
     };
     try {
       await updateSettings(patch, { silent: true });
@@ -466,6 +488,8 @@ export function ImageGenTab() {
         renderDefaultsJson: JSON.stringify(patch.renderDefaults),
         videoGenMode,
         videoGenDisplaySleep,
+        falApiKey: falApiKey.trim(),
+        reactorApiKey: reactorApiKey.trim(),
       });
       // Reflect the pruned no-op entries back into the editor state so the
       // dirty check compares like against like after a save.
@@ -767,9 +791,37 @@ export function ImageGenTab() {
           />
           <span>
             <span className="block font-medium text-white">Sleep display during local MLX video renders</span>
-            <span className="block text-xs text-gray-500 mt-0.5">Keeps the system awake while reducing WindowServer GPU contention on affected Apple silicon. Turn off only when another headless workflow manages display power.</span>
+            <span className="block text-xs text-gray-500 mt-0.5">Off by default. Keeps the system awake while putting the screen to sleep, which reduces WindowServer GPU contention on affected Apple silicon. Turn on only if you hit the GPU-watchdog crash during a render — this is also settable per-render on the Video Gen page.</span>
           </span>
         </label>
+        <FormField
+          label={<>fal.ai API key<span className="block text-xs text-gray-500 mt-0.5">Enables the fal.ai queue video backend on the Video Gen page and in FableLoom. Get a key at fal.ai/dashboard/keys, or set the FAL_KEY environment variable instead.</span></>}
+          labelClassName="text-sm text-gray-300"
+        >
+          <input
+            id="fal-api-key"
+            type="password"
+            autoComplete="off"
+            value={falApiKey}
+            onChange={(e) => setFalApiKey(e.target.value)}
+            placeholder="fal-key-..."
+            className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+          />
+        </FormField>
+        <FormField
+          label={<>reactor.inc API key<span className="block text-xs text-gray-500 mt-0.5">Enables the reactor.inc fast-h3 video backend on the Video Gen page and in FableLoom, or set the REACTOR_API_KEY environment variable instead.</span></>}
+          labelClassName="text-sm text-gray-300"
+        >
+          <input
+            id="reactor-api-key"
+            type="password"
+            autoComplete="off"
+            value={reactorApiKey}
+            onChange={(e) => setReactorApiKey(e.target.value)}
+            placeholder="reactor-key-..."
+            className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+          />
+        </FormField>
         <div className="space-y-3">
           {RENDER_TARGET_OPTIONS.map(({ id, label, video }) => {
             const entry = renderDefaults[id] || {};

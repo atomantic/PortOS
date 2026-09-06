@@ -404,3 +404,18 @@ export function resolveTestPython() {
     }
   }) || null;
 }
+
+/**
+ * Fail the CI job — rather than silently skip — when `lib/slashdo` was
+ * expected to be initialized but isn't (issue #6263). ci.yml sets
+ * `CI_EXPECT_SLASHDO_SUBMODULE` on the "Run server tests" step whenever the
+ * impact planner selected slashdo's bundled adapter contracts; a missing
+ * submodule there means the "Initialize slashdo submodule" step failed. With
+ * the env var unset — a local or intentionally minimal checkout — this is a
+ * no-op and the caller's own skip/early-return applies instead.
+ */
+export function requireSlashdoSubmoduleInCi(hasSubmodule) {
+  if (process.env.CI_EXPECT_SLASHDO_SUBMODULE === 'true' && !hasSubmodule) {
+    throw new Error('lib/slashdo submodule is missing but this CI job expected it to be initialized');
+  }
+}

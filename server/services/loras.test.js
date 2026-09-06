@@ -25,9 +25,33 @@ let lorasService;
 let civitaiLib;
 let atomicWriteHook;
 
+// Sidecar writes the service has enqueued but not yet finished (#6265).
+//
+// `listLoras()` heals a stale/absent `keyLayout` (and `fluxVariant`) by firing
+// `patchLoraSidecar(...).catch(() => {})` — deliberately fire-and-forget, so
+// listing never blocks or fails on a cache write. That promise outlives the
+// test that started it — two tests here were observed still holding a queued
+// write at teardown — so `afterEach` rm -rf's the temp root while a queued
+// read-modify-write is still walking it, and the next `beforeEach` calls
+// `vi.resetModules()` with that work in flight. Both races widen under load,
+// which matches #6265: the file passes on its own and read two just-written
+// sidecars as `{}` inside a contended full-suite shard.
+//
+// The queue itself is the only complete seam: every heal goes through
+// `createKeyedFileWriteQueue()` regardless of which `listLoras()` call site
+// started it, and the queued promise covers the whole stat → read → atomicWrite
+// cycle (hooking `atomicWrite` would miss a task that has not reached its write
+// yet). Wrapping the factory lets `afterEach` await exactly the work the test
+// started — a drain, not a sleep or a retry.
+const pendingSidecarWrites = new Set();
+const drainSidecarWrites = async () => {
+  while (pendingSidecarWrites.size) await Promise.all([...pendingSidecarWrites]);
+};
+
 beforeEach(async () => {
   tmpRoot = mkdtempSync(join(tmpdir(), 'portos-loras-test-'));
   tmpLoras = join(tmpRoot, 'loras');
+  pendingSidecarWrites.clear();
 
   vi.resetModules();
   vi.doMock('../lib/fileUtils.js', async () => {
@@ -40,17 +64,50 @@ beforeEach(async () => {
         : actual.atomicWrite(...args),
     };
   });
+  vi.doMock('../lib/fileWriteQueue.js', async () => {
+    const actual = await vi.importActual('../lib/fileWriteQueue.js');
+    return {
+      ...actual,
+      createKeyedFileWriteQueue: (...factoryArgs) => {
+        const queue = actual.createKeyedFileWriteQueue(...factoryArgs);
+        return (key, fn) => {
+          const write = queue(key, fn);
+          // Track a silenced copy: a rejected sidecar write is a real product
+          // outcome several tests assert on, and the drain must not re-throw it
+          // out of `afterEach`.
+          const tracked = write.catch(() => {});
+          pendingSidecarWrites.add(tracked);
+          tracked.finally(() => pendingSidecarWrites.delete(tracked));
+          return write; // callers still see the real resolve/reject
+        };
+      },
+    };
+  });
   // Stub settings so resolveCivitaiKey doesn't read the real data/settings.json.
   vi.doMock('./settings.js', () => ({
     getSettings: async () => ({}),
   }));
   lorasService = await import('./loras.js');
   civitaiLib = await import('../lib/civitai.js');
+
+  // Module identity at the read, asserted once per test. Every fixture below
+  // writes through the raw `tmpLoras` path while the service resolves its own
+  // `PATHS.loras` out of the mocked module — if those two ever diverge (a
+  // reused mock instance, a factory that did not re-run), the symptom is a
+  // silent empty read many tests later, because `readSidecar` collapses "wrong
+  // directory" into the same `null` it returns for "no sidecar". Fail here,
+  // naming both paths, instead.
+  const { PATHS } = await import('../lib/fileUtils.js');
+  expect(PATHS.loras).toBe(tmpLoras);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Before removing the tree the writes are aimed at, and before the next
+  // `beforeEach` resets the module graph out from under them.
+  await drainSidecarWrites();
   atomicWriteHook = null;
   vi.doUnmock('../lib/fileUtils.js');
+  vi.doUnmock('../lib/fileWriteQueue.js');
   vi.doUnmock('./settings.js');
   rmSync(tmpRoot, { recursive: true, force: true });
 });
@@ -988,25 +1045,76 @@ describe('installFromHuggingface', () => {
     expect(ticks[ticks.length - 1]).toEqual({ received: 10, total: 0 });
   });
 
-  it('forwards an AbortSignal to the download fetch so an SSE disconnect can cancel it', async () => {
+  it('lets an external AbortSignal cancel the in-flight weights download so an SSE disconnect stops it', async () => {
+    // The download claims a slot keyed on destPath and downloads through the
+    // SLOT's own AbortController (so a stall/cancel gets the same typed error
+    // regardless of who triggered it) — an external `signal` (the route's
+    // res.on('close') controller) is wired to cancel THROUGH the slot rather
+    // than being handed to fetch directly. Prove the wiring by aborting mid-
+    // transfer and asserting the actual weights fetch's signal aborts too.
     const controller = new AbortController();
     let sawSignal;
     const fetchImpl = async (url, opts) => {
       if (url.startsWith('https://huggingface.co/api/models/')) return mockJsonResponse(HF_MODEL);
       if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
         sawSignal = opts?.signal;
-        const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(validSafetensors())); c.close(); } });
-        return { ok: true, status: 200, body: stream };
+        // Never closes on its own: this stream only ends when the abort
+        // listener below errors it, mirroring how real fetch aborts an
+        // in-flight response body when its signal fires.
+        const stream = new ReadableStream({
+          start(c) {
+            c.enqueue(new Uint8Array(validSafetensors().slice(0, 8)));
+            sawSignal.addEventListener('abort', () => c.error(new Error('aborted')), { once: true });
+          },
+        });
+        return { ok: true, status: 200, body: stream, headers: new Map([['content-length', String(validSafetensors().length)]]) };
       }
       throw new Error(`unexpected fetch: ${url}`);
     };
-    await lorasService.installFromHuggingface(
+    const install = lorasService.installFromHuggingface(
       { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
       { fetchImpl, signal: controller.signal },
     );
-    // The controller's signal must reach the actual weights download (not just
-    // the metadata fetch) — that's the transfer a disconnect needs to cancel.
-    expect(sawSignal).toBe(controller.signal);
+    await vi.waitFor(() => expect(sawSignal).toBeDefined());
+    expect(sawSignal.aborted).toBe(false);
+    controller.abort();
+    expect(sawSignal.aborted).toBe(true);
+    const err = await install.catch((e) => e);
+    expect(err.message).toMatch(/cancel/i);
+    expect(err.code).toBe('LORA_DOWNLOAD_CANCELLED');
+  });
+
+  it('refuses a second install of the same destination while the first is still downloading', async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const full = validSafetensors();
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://huggingface.co/api/models/')) return mockJsonResponse(HF_MODEL);
+      if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
+        const stream = new ReadableStream({
+          start(c) {
+            c.enqueue(new Uint8Array(full.slice(0, 8)));
+            gate.then(() => { c.enqueue(new Uint8Array(full.slice(8))); c.close(); });
+          },
+        });
+        return { ok: true, status: 200, body: stream, headers: new Map([['content-length', String(full.length)]]) };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const first = lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
+      { fetchImpl },
+    );
+    const destPath = join(tmpLoras, 'lora-fal-ltx2.3-audio-reactive-lora-hf.safetensors');
+    await vi.waitFor(() => expect(existsSync(`${destPath}.partial`)).toBe(true));
+    const err = await lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
+      { fetchImpl },
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.code).toBe('LORA_DOWNLOAD_IN_FLIGHT');
+    release();
+    await first;
   });
 
   it('installs a Flux.2 Klein 9B collection as flux2 and picks the klein9b file', async () => {
@@ -1113,6 +1221,56 @@ describe('installFromHuggingface', () => {
   });
 });
 
+// #6190: loras.js is the third `streamResumableDownload` caller to register a
+// slot — the orphaned-partial GC sweeps PATHS.loras but, before this, couldn't
+// see a live LoRA download's `.partial` because loras.js claimed no slot.
+describe('loras.js download-slot registration with the orphaned-partial GC', () => {
+  const HF_MODEL = {
+    id: 'fal/ltx2.3-audio-reactive-lora',
+    tags: ['ltxv', 'lora'],
+    cardData: { base_model: 'Lightricks/LTX-2.3', instance_prompt: 'audio reactive' },
+    siblings: [
+      { rfilename: 'README.md' },
+      { rfilename: 'pytorch_lora_weights.safetensors' },
+    ],
+  };
+  const ANCIENT = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+  it('protects a live LoRA download from the sweep even once its .partial is aged past the gate', async () => {
+    const { sweepOrphanedDownloadPartials } = await import('./orphanedPartialGc.js');
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://huggingface.co/api/models/')) return mockJsonResponse(HF_MODEL);
+      if (url.includes('/resolve/main/pytorch_lora_weights.safetensors')) {
+        const full = validSafetensors();
+        const stream = new ReadableStream({
+          start(c) {
+            c.enqueue(new Uint8Array(full.slice(0, 8)));
+            gate.then(() => { c.enqueue(new Uint8Array(full.slice(8))); c.close(); });
+          },
+        });
+        return { ok: true, status: 200, body: stream, headers: new Map([['content-length', String(full.length)]]) };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const install = lorasService.installFromHuggingface(
+      { url: 'https://huggingface.co/fal/ltx2.3-audio-reactive-lora', token: 'hf_test' },
+      { fetchImpl },
+    );
+    const partialPath = join(tmpLoras, 'lora-fal-ltx2.3-audio-reactive-lora-hf.safetensors.partial');
+    await vi.waitFor(() => expect(existsSync(partialPath)).toBe(true));
+    const fs = await import('fs/promises');
+    await fs.utimes(partialPath, ANCIENT, ANCIENT);
+
+    expect(await sweepOrphanedDownloadPartials({ dirs: [tmpLoras] })).toMatchObject({ deleted: 0, keptProtected: 1 });
+    expect(existsSync(partialPath)).toBe(true);
+
+    release();
+    await install;
+  });
+});
+
 describe('LoRA key layout', () => {
   const writeLora = async (name, header) => {
     const fs = await import('fs/promises');
@@ -1127,11 +1285,11 @@ describe('LoRA key layout', () => {
     });
     const list = await lorasService.listLoras();
     expect(list.find((l) => l.filename === 'lora-comfy.safetensors').keyLayout).toBe('comfyui');
-    // Sidecar write is fire-and-forget; wait for it to complete.
-    await vi.waitFor(async () => {
-      const sidecar = JSON.parse(await fs.readFile(join(tmpLoras, 'lora-comfy.safetensors.metadata.json'), 'utf-8'));
-      expect(sidecar.keyLayout).toBe('comfyui');
-    });
+    // Sidecar write is fire-and-forget; drain the queue it was enqueued on
+    // rather than polling for the file to appear.
+    await drainSidecarWrites();
+    const sidecar = JSON.parse(await fs.readFile(join(tmpLoras, 'lora-comfy.safetensors.metadata.json'), 'utf-8'));
+    expect(sidecar.keyLayout).toBe('comfyui');
   });
 
   it('prefers the stored sidecar layout over re-reading the header', async () => {

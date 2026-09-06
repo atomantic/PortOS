@@ -45,6 +45,28 @@ describe('useOnDemandTaskToast — idle outcome', () => {
     fire({ taskType: 'layered-intelligence', appName: 'App One', outcome: 'idle', reason: null });
     expect(toastSpy.mock.calls[0][0]).toMatch(/nothing to do right now/);
   });
+
+  it('surfaces the pr-reviewer skip reason (security guard not ready) instead of "nothing to do"', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'pr-reviewer', appName: 'PortOS', outcome: 'idle', reason: 'security-guard-not-ready' });
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+    const [msg, opts] = toastSpy.mock.calls[0];
+    expect(msg).toMatch(/model-abuse classifier.*isn't ready/i);
+    expect(msg).not.toMatch(/nothing to do/);
+    expect(opts.icon).toBe('⚠️');
+  });
+
+  it('falls back to the raw reason string for an unglossed pr-reviewer code', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'pr-reviewer', appName: 'PortOS', outcome: 'idle', reason: 'some-future-code' });
+    expect(toastSpy.mock.calls[0][0]).toMatch(/some-future-code/);
+  });
+
+  it('falls back to the generic idle toast for a pr-reviewer idle result with no reason', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({ taskType: 'pr-reviewer', appName: 'PortOS', outcome: 'idle', reason: null });
+    expect(toastSpy.mock.calls[0][0]).toMatch(/nothing to do right now/);
+  });
 });
 
 describe('useOnDemandTaskToast — transient outcome', () => {

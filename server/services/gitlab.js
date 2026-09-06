@@ -18,16 +18,17 @@ const DEFAULT_EXEC_GLAB_TIMEOUT_MS = 60000;
  * — callers treat null as "unavailable / transient", mirroring the
  * `.catch(() => null)` pattern used around `execGh`.
  *
- * Module-local on purpose: every PortOS caller wants JSON, so they go through
- * `execGlabJson`, which owns the output flag (see lib/glabArgs.js). Export this
- * only when a genuine non-JSON `glab` call appears.
+ * Most PortOS callers want JSON and go through `execGlabJson`, which owns the
+ * output flag (see lib/glabArgs.js). This is exported for the genuine non-JSON
+ * `glab` calls — mutations like `issue update --unlabel` / `issue note`, which
+ * return human text on success (see `blockedIssueReconcile.js`).
  *
  * @param {string[]} args - glab arguments (e.g. ['issue', 'list', '--output', 'json'])
  * @param {string} cwd - repo root the glab command runs in
  * @param {number} [timeoutMs] - kills the child and resolves null past this
  * @returns {Promise<string|null>}
  */
-function execGlab(args, cwd, timeoutMs = DEFAULT_EXEC_GLAB_TIMEOUT_MS) {
+export function execGlab(args, cwd, timeoutMs = DEFAULT_EXEC_GLAB_TIMEOUT_MS) {
   return new Promise((resolve) => {
     const child = spawn('glab', args, { cwd, shell: false });
     let stdout = '';

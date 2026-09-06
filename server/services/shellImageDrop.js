@@ -17,8 +17,7 @@
  * and over, and a second drop must not overwrite bytes the agent hasn't read yet.
  */
 
-import { unlink } from 'fs/promises';
-import { PATHS, saveImageUpload } from '../lib/fileUtils.js';
+import { PATHS, saveImageUpload, unlinkGuarded } from '../lib/fileUtils.js';
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -76,7 +75,7 @@ export async function dropImageIntoShellSession({ sessionId, filename, data, mes
   // with the screenshot uploads, so an orphan here is indistinguishable from a
   // real one. Best-effort: a failed unlink must not mask the 404.
   if (!pasteToSession(sessionId, buildImageDropText(saved.filePath, message), { label: 'image drop' })) {
-    await unlink(saved.filePath).catch(() => {});
+    await unlinkGuarded(saved.filePath).catch(() => {});
     throw new ServerError('Session not found', { status: 404, code: 'NOT_FOUND' });
   }
 

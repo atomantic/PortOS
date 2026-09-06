@@ -4,12 +4,13 @@
  */
 
 import { Router } from 'express';
-import { unlink, readdir, stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   pathExists, PATHS, sanitizeFilename, getFileExtension, getMimeType,
   ATTACHMENT_ALLOWED_EXTENSIONS, isPathInsideDir, saveBase64Upload, serveLocalFile,
+  unlinkGuarded,
 } from '../lib/fileUtils.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
 import { validateRequest, attachmentUploadRequestSchema } from '../lib/validation.js';
@@ -65,7 +66,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
     throw new ServerError('Attachment not found', { status: 404, code: 'NOT_FOUND' });
   }
 
-  await unlink(filepath);
+  await unlinkGuarded(filepath);
 
   console.log(`🗑️ Attachment deleted: ${safeFilename}`);
 

@@ -9,6 +9,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
   tryReadFile: vi.fn(async (path) => (fileStore.has(path) ? fileStore.get(path) : null)),
+  unlinkGuarded: vi.fn(async (path) => { fileStore.delete(path); }),
 }));
 
 vi.mock('fs/promises', () => ({

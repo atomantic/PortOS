@@ -6,6 +6,7 @@ import { getAllProviders } from './providers.js';
 import { getSettings } from './settings.js';
 import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { selectMeetingUrl } from '../lib/meetingUrl.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Google Calendar sync is driven through an MCP-capable CLI provider — the
@@ -49,6 +50,11 @@ export function normalizeGoogleEvent(event, subcalendarId, subcalendarName) {
     endTime: endDateTime || (endDate ? `${endDate}T00:00:00` : null),
     isAllDay,
     isCancelled: event.status === 'cancelled',
+    // Three-state (see `lib/meetingUrl.js`): a string to cache, `null` to
+    // clear, or `undefined` when this producer never described conferencing at
+    // all. Only the chosen URL is ever retained — never the surrounding
+    // conference object, its passwords, or its dial-in codes (#6289).
+    meetingUrl: selectMeetingUrl(event),
     organizer: event.organizer
       ? { name: event.organizer.displayName || '', email: event.organizer.email || '' }
       : null,
@@ -118,10 +124,18 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
       existing.organizer = event.organizer;
       existing.attendees = event.attendees;
       existing.myStatus = event.myStatus;
+      // `undefined` means this producer never described the event's
+      // conferencing — a legacy push, or an MCP payload predating the field —
+      // so the cached link stands. Anything else is the current snapshot:
+      // replace it, or clear it to null when the meeting no longer has one.
+      // Without this gate an older client silently drops a working Join action.
+      if (event.meetingUrl !== undefined) existing.meetingUrl = event.meetingUrl;
       existing.syncedAt = event.syncedAt;
       updatedCount++;
     } else {
-      cache.events.push(event);
+      // A newly cached event always carries the key, so `meetingUrl` is absent
+      // from the cache only for records written before this shipped.
+      cache.events.push({ ...event, meetingUrl: event.meetingUrl ?? null });
       newCount++;
     }
   }
@@ -166,6 +180,27 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
   return { newEvents: newCount, updated: updatedCount, pruned, total: cache.events.length, status };
 }
 
+/**
+ * Make an MCP-relayed raw event AUTHORITATIVE about its conferencing (#6289).
+ *
+ * The MCP prompt asks for Google's `events.list` items verbatim, and Google
+ * simply OMITS `hangoutLink` / `conferenceData` on an event that has no
+ * conference. Relayed unchanged, that omission hits `selectMeetingUrl` as "this
+ * producer never described conferencing" and the cached link is preserved — so
+ * a meeting whose organizer removed the video call would keep a dead Join
+ * button forever, with no sync able to clear it. Stamping explicit nulls says
+ * what a complete Google response actually means, matching what the direct-API
+ * mapper emits for the same reason.
+ *
+ * Only a COMPLETE payload earns this. A partial one (the CLI died mid-stream)
+ * is relayed untouched, so a truncated event that lost its conference fields
+ * reads as "unknown" rather than "cleared" — the same rule that already stops a
+ * partial payload from driving a prune. Clearing a link is destructive too.
+ */
+function withExplicitConferenceFields(event) {
+  return { ...event, hangoutLink: event?.hangoutLink ?? null, conferenceData: event?.conferenceData ?? null };
+}
+
 const mcpSyncLock = new Map();
 
 export async function mcpSyncAccount(accountId, io) {
@@ -197,7 +232,7 @@ For EACH calendar, call gcal_list_events with the calendarId, timeMin, and timeM
 After fetching ALL calendars, output ONLY a single JSON object (no markdown fences, no explanation) with this exact structure:
 {"calendars":[{"calendarId":"...","calendarName":"...","events":[...raw events from gcal_list_events response...]}]}
 
-Include the full events arrays as returned by gcal_list_events. Output NOTHING else — just the JSON.`;
+Include the full events arrays as returned by gcal_list_events, with every field each event carries — do NOT abbreviate, summarize, or drop fields. In particular keep "conferenceData" and "hangoutLink" exactly as returned, and omit them only when the event itself does not have them. Output NOTHING else — just the JSON.`;
 
   const runSync = async () => {
     const result = await runConfiguredMcp(prompt, io, accountId);
@@ -229,7 +264,7 @@ Include the full events arrays as returned by gcal_list_events. Output NOTHING e
         accountId,
         cal.calendarId,
         cal.calendarName || cal.calendarId,
-        cal.events,
+        partial ? cal.events : cal.events.map(withExplicitConferenceFields),
         null,
         { prune: !partial, status },
       );

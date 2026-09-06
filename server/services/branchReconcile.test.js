@@ -764,6 +764,24 @@ describe('unreachable forge (#3358)', () => {
     expect(res.inFlight).toEqual([]);
   });
 
+  it('opts the `gh pr list` read into execGh\'s consecutive-failure backoff, keyed by repo spec', async () => {
+    // The actual backoff/cooldown mechanics live in execGh itself (github.js,
+    // mocked wholesale here) so every polling caller shares one implementation —
+    // this only proves branch-reconcile hands it the right key. See
+    // github.test.js for the backoff behavior itself.
+    git.getBranches.mockResolvedValue([
+      { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    git.isBranchMergedInto.mockResolvedValue(false);
+    execGh.mockResolvedValue('[]');
+
+    await reconcile('/repo');
+
+    const [, , options] = execGh.mock.calls.find(([callArgs]) => callArgs[0] === 'pr' && callArgs[1] === 'list');
+    expect(options).toMatchObject({ backoffKey: 'github.com/atomantic/PortOS' });
+  });
+
   it('reuses the successful origin read for PR state instead of reopening a fail-closed gap', async () => {
     git.getBranches.mockResolvedValue([
       { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
@@ -1414,6 +1432,9 @@ describe('desiredEndState', () => {
     expect(instruction).toContain('`server/services/agentWorktreeCleanup.js`');
     expect(instruction).toContain('SUPERSEDED');
     expect(instruction).toContain('still needed');
+    expect(instruction).toMatch(/[\\/]repo[\\/]data[\\/]cos[\\/]branch-reconcile-verdicts\.json/);
+    expect(instruction).toContain('immediately-following drain pass');
+    expect(instruction).toContain('ledger inside the abandoned worktree is invisible');
     // Ordering: the gate precedes any instruction to commit/rebase/resolve.
     const gateAt = instruction.indexOf('still needed');
     for (const later of ['/do:pr', 'resolve all conflicts', 'commit it on this branch']) {
@@ -1441,13 +1462,22 @@ describe('desiredEndState', () => {
     expect(instruction).toContain('Never push a branch whose tests you have not seen pass');
   });
 
-  it('tells ABANDONED_WIP to read the worktree first, refuse a half-finished commit, then ship', () => {
+  it('tells ABANDONED_WIP to read and finish the whole worktree, then ship', () => {
     const instruction = desiredEndState('ABANDONED_WIP', {}, { worktreePath: '/wt/agent-deadbeef' });
     expect(instruction).toContain('/wt/agent-deadbeef');
     expect(instruction).toContain('UNCOMMITTED');
-    expect(instruction).toContain('do not commit it and do not delete it');
+    expect(instruction).toContain('finish incomplete code');
+    expect(instruction).toContain('Do not merely inventory unfinished work');
+    expect(instruction).toContain('exceptional blocked outcome');
     expect(instruction).toContain('/do:pr --no-merge');
     expect(instruction).toContain('gh pr merge <num> --merge --delete-branch');
+  });
+
+  it('tells NEEDS_PR to finish incomplete work instead of leaving it for another run', () => {
+    const instruction = desiredEndState('NEEDS_PR', {});
+    expect(instruction).toContain('If it is incomplete, finish it on this branch');
+    expect(instruction).toContain('do not merely report it for another run');
+    expect(instruction).toContain('genuinely impossible');
   });
 
   it('stops ABANDONED_WIP at an open PR when autoMerge is off', () => {

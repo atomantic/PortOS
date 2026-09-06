@@ -1,3 +1,4 @@
+// @vitest-environment-options {"settings":{"navigation":{"disableChildFrameNavigation":true}}}
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -5,8 +6,11 @@ import { MemoryRouter } from 'react-router';
 
 vi.mock('../services/api', () => ({
   getApp: vi.fn(),
+  getAppRepositorySources: vi.fn(),
   getEidoverseWorldProjectionStatus: vi.fn(),
   getEidoverseWorldStatus: vi.fn(),
+  getEidoverseDestinations: vi.fn(async () => ({ destinations: [] })),
+  departEidoverse: vi.fn(),
   getInstanceFeatures: vi.fn(),
   projectEidoverseWorld: vi.fn(),
   startApp: vi.fn(),
@@ -118,6 +122,7 @@ describe('Eidoverse hosted page', () => {
     vi.clearAllMocks();
     api.getInstanceFeatures.mockResolvedValue(featureResponse());
     api.getApp.mockResolvedValue({ id: setup.appId, overallStatus: 'online' });
+    api.getAppRepositorySources.mockResolvedValue({ updateAvailable: false, sources: [] });
     api.startApp.mockResolvedValue({ success: true, results: {} });
     api.startEidoverseHost.mockResolvedValue({ running: true, protocol: 'http', port: 5563 });
     api.getEidoverseWorldStatus.mockResolvedValue(worldResponse);
@@ -144,15 +149,21 @@ describe('Eidoverse hosted page', () => {
     renderPage();
 
     const frame = await screen.findByTitle('Eidoverse Worlds');
-    expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:8940/?world=portos&name=example-portos-user`);
+    expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:5563/?world=portos&name=example-portos-user`);
     expect(screen.getByRole('button', { name: 'Refresh world' }))
       .toHaveAttribute('aria-label', 'Refresh world');
     expect(screen.getByRole('button', { name: 'Refresh world' })).not.toHaveClass('port-media-overlay');
+    const labels = screen.getByRole('button', { name: 'Show object labels' });
+    expect(labels).toHaveAttribute('aria-pressed', 'false');
+    await user.click(labels);
+    expect(labels).toHaveAttribute('aria-pressed', 'true');
+    await user.click(labels);
+    expect(labels).toHaveAttribute('aria-pressed', 'false');
     expect(screen.queryByText('Your PortOS, made spatial')).not.toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'PortOS district legend' })).not.toBeInTheDocument();
     expect(screen.queryByText('12/48 live signals')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Eidoverse without PortOS controls' }))
-      .toHaveAttribute('href', `http://${window.location.hostname}:8940/?world=portos&name=example-portos-user`);
+      .toHaveAttribute('href', `http://${window.location.hostname}:5563/?world=portos&name=example-portos-user`);
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
     expect(screen.getByRole('link', { name: 'Manage Eidoverse app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
 
@@ -162,6 +173,113 @@ describe('Eidoverse hosted page', () => {
     await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
     expect(screen.getByText(/12 are shown now; the 48-indicator limit keeps the scene legible/)).toBeInTheDocument();
     expect(screen.getByText('App Terraces')).toBeInTheDocument();
+  });
+
+  it('keeps label visibility browser-only and saves or clears explicit aliases from the object legend', async () => {
+    const user = userEvent.setup();
+    const key = 'app-0123456789ab';
+    const object = {
+      id: 'portos-design-v2-signal-app-example', kind: 'app', resourceKey: key,
+      districtId: 'apps', name: 'Managed app 012345', description: 'An app this install manages. Data is current.',
+      visibility: 'nearby', route: '/apps',
+      asset: { slot: 'app', path: 'eidoverse/assets/models/orb.glb', reason: 'catalog-fallback' },
+    };
+    const summary = { ...worldResponse.projection.lastSummary, objects: [object] };
+    api.projectEidoverseWorld.mockResolvedValue({
+      success: true, recipe, design, projection: { lastSummary: summary },
+    });
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    api.projectEidoverseWorld.mockClear();
+    await user.selectOptions(screen.getByLabelText('Floating labels'), 'off');
+    expect(api.updateEidoverseWorldConfig).not.toHaveBeenCalled();
+    expect(api.projectEidoverseWorld).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
+    const legend = screen.getByRole('region', { name: 'Projected object labels' });
+    expect(within(legend).getByText('Managed app 012345')).toBeInTheDocument();
+    expect(within(legend).getByText('Fallback — available library asset')).toBeInTheDocument();
+    const alias = screen.getByLabelText('Display alias for app 0123456789ab');
+    expect(alias).toHaveValue('');
+    await user.type(alias, 'Example tower');
+    api.updateEidoverseWorldConfig.mockRejectedValueOnce(new Error('Example save failure'));
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    expect(await screen.findByText('Example save failure')).toBeInTheDocument();
+    expect(alias).toHaveValue('Example tower');
+    expect(api.updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ labelAliases: { [key]: 'Example tower' } }), { silent: true },
+    );
+    expect(api.projectEidoverseWorld).not.toHaveBeenCalled();
+    await user.clear(alias);
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ labelAliases: {} }), { silent: true },
+    ));
+  });
+
+  it('clears aliases for absent objects without resetting and distinguishes identical display names', async () => {
+    const user = userEvent.setup();
+    const keys = ['app-0123456789ab', 'app-abcdef012345'];
+    const absentKey = 'agent-0123456789ab';
+    const labelAliases = { [keys[0]]: 'Example tower', [keys[1]]: 'Example tower', [absentKey]: 'Example retired beacon' };
+    const objects = keys.map((resourceKey) => ({
+      id: `example-${resourceKey}`, resourceKey, kind: 'app', districtId: 'apps',
+      name: 'Example tower', description: 'An app this install manages.', visibility: 'nearby',
+    }));
+    const saved = { ...worldResponse, design: { ...design, labelAliases }, projection: { lastSummary: { objects } } };
+    api.getEidoverseWorldStatus.mockResolvedValueOnce(saved);
+    api.projectEidoverseWorld.mockResolvedValueOnce({ success: true, ...saved });
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
+    expect(screen.getByLabelText('Display alias for app 0123456789ab')).toHaveValue('Example tower');
+    expect(screen.getByLabelText('Display alias for app abcdef012345')).toHaveValue('Example tower');
+    const savedAliases = screen.getByRole('region', { name: 'Saved aliases without a current object' });
+    const absentAlias = within(savedAliases).getByLabelText('Display alias for agent 0123456789ab');
+    await user.clear(absentAlias);
+    expect(absentAlias).toHaveFocus();
+    expect(absentAlias).toBeInTheDocument();
+    await user.type(absentAlias, 'Example renamed beacon');
+    expect(absentAlias).toHaveValue('Example renamed beacon');
+    await user.clear(absentAlias);
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalled());
+    const patch = api.updateEidoverseWorldConfig.mock.calls.at(-1)[0];
+    expect(patch.labelAliases).toEqual({ [keys[0]]: 'Example tower', [keys[1]]: 'Example tower' });
+    expect(patch).not.toHaveProperty('reset');
+  });
+
+  it('preserves saved aliases when the initial projection fails and another setting is saved', async () => {
+    const user = userEvent.setup();
+    const labelAliases = { 'app-0123456789ab': 'Example saved tower' };
+    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+      ...worldResponse, design: { ...design, labelAliases },
+    });
+    api.projectEidoverseWorld.mockRejectedValueOnce(new Error('Example initial projection failure'));
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    expect(await screen.findByText('Example initial projection failure')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('My Eidoverse name'), '-edited');
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ labelAliases, humanName: 'example-portos-user-edited' }), { silent: true },
+    ));
+  });
+
+  it('shows a renderer update link while preserving the saved recipe on older clients', async () => {
+    const user = userEvent.setup();
+    const oldDesign = { ...design, reconciliation: { ...design.reconciliation,
+      runtimeVersion: { sha: 'example-old-build', capabilities: { objectLabels: null } } } };
+    api.projectEidoverseWorld.mockResolvedValue({ success: true, recipe, design: oldDesign });
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    expect(await screen.findByText(/does not report object-label support/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Manage renderer updates' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
+    expect(screen.getByText('Luminous Systems Garden')).toBeInTheDocument();
   });
 
   it('keeps an unknown indicator count distinct from a projected empty world', async () => {
@@ -192,6 +310,32 @@ describe('Eidoverse hosted page', () => {
     await screen.findByTitle('Eidoverse Worlds');
     expect(api.startApp).toHaveBeenCalledWith('app-eidoverse', { silent: true });
     expect(api.startEidoverseHost).toHaveBeenCalledAfter(api.startApp);
+  });
+
+  it('raises the out-of-date advisory here, where a user living in the world will see it', async () => {
+    api.getAppRepositorySources.mockResolvedValue({
+      updateAvailable: true,
+      sources: [{
+        id: 'primary',
+        label: 'Eidoverse Worlds',
+        origin: { hasOrigin: true, isFork: false, isUpstream: true, head: 'a'.repeat(40) },
+        localVsOrigin: { ahead: 0, behind: 2, state: 'behind' },
+      }],
+    });
+    renderPage();
+
+    await screen.findByTitle('Eidoverse Worlds');
+    expect(api.getAppRepositorySources).toHaveBeenCalledWith('app-eidoverse', { silent: true });
+    expect(await screen.findByText(/Eidoverse Worlds is 2 commits behind its origin/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Update Eidoverse/ })).toBeInTheDocument();
+  });
+
+  it('never checks freshness for an install that has no Eidoverse yet', async () => {
+    api.getInstanceFeatures.mockResolvedValue(featureResponse({ installed: false, appId: 'app-eidoverse' }));
+    renderPage();
+
+    await screen.findByRole('link', { name: 'Open Features' });
+    expect(api.getAppRepositorySources).not.toHaveBeenCalled();
   });
 
   it('sends an uninstalled user to Features', async () => {
@@ -227,6 +371,25 @@ describe('Eidoverse hosted page', () => {
       setup,
       { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net' },
     )).toThrow(/shared certificate/);
+  });
+
+  // Only the bridge answers the renderer's /embed-config with this page's
+  // origin, and without that answer the renderer never completes the frame
+  // handshake — so a plain-HTTP install has to go through it too. The one
+  // exception is an HTTP page in front of an HTTPS-only bridge (the loopback
+  // mirror, the dev server): the shared certificate does not cover those
+  // hostnames, so the iframe would fail on the certificate instead.
+  it('routes a plain-HTTP page through the bridge, and only falls back when the bridge is HTTPS', () => {
+    expect(hostUrlFor(
+      { running: true, protocol: 'http', port: 5563 },
+      setup,
+      { protocol: 'http:', hostname: 'host-alpha.example-tailnet.ts.net' },
+    )).toBe('http://host-alpha.example-tailnet.ts.net:5563/');
+    expect(hostUrlFor(
+      { running: true, protocol: 'https', port: 5563 },
+      setup,
+      { protocol: 'http:', hostname: 'localhost' },
+    )).toBe(`http://localhost:${setup.uiPort}/`);
   });
 
   it('keeps a successful local save visible when projection fails', async () => {
@@ -278,7 +441,7 @@ describe('Eidoverse hosted page', () => {
 
     await waitFor(() => expect(screen.getByTitle('Eidoverse Worlds')).toHaveAttribute(
       'src',
-      `http://${window.location.hostname}:8940/?world=portos-two&name=example-portos-user`,
+      `http://${window.location.hostname}:5563/?world=portos-two&name=example-portos-user`,
     ));
   });
 
@@ -444,6 +607,13 @@ describe('Eidoverse hosted page', () => {
 
   it('merges a scoped reset into the draft without discarding unrelated unsaved edits', async () => {
     const user = userEvent.setup();
+    const objects = ['app', 'agent'].map((kind) => ({
+      id: `portos-design-v2-signal-${kind}-example`, kind, resourceKey: `${kind}-0123456789ab`,
+      districtId: `${kind}s`, name: `Example ${kind} signal`, visibility: 'nearby',
+      description: 'An example aggregate signal.', asset: { path: 'store/example', reason: 'user-override' },
+    }));
+    api.projectEidoverseWorld.mockResolvedValue({ success: true, recipe, design,
+      projection: { lastSummary: { ...worldResponse.projection.lastSummary, objects } } });
     renderPage();
     await screen.findByTitle('Eidoverse Worlds');
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledOnce());
@@ -454,6 +624,8 @@ describe('Eidoverse hosted page', () => {
     await user.clear(sunHour);
     await user.type(sunHour, '8.4');
     await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
+    await user.type(screen.getByLabelText('Display alias for app 0123456789ab'), 'Unsaved app alias');
+    await user.type(screen.getByLabelText('Display alias for agent 0123456789ab'), 'Keep agent alias');
     const appsSection = screen.getByRole('heading', { name: 'App Terraces' }).closest('section');
     const appsLimit = within(appsSection).getByRole('spinbutton', { name: 'Cap' });
     await user.clear(appsLimit);
@@ -477,6 +649,7 @@ describe('Eidoverse hosted page', () => {
     await user.click(save);
     await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledTimes(2));
     const saved = api.updateEidoverseWorldConfig.mock.calls.at(-1)[0];
+    expect(saved.labelAliases).toEqual({ 'agent-0123456789ab': 'Keep agent alias' });
     expect(saved.recipe.environment.sky.hours).toBe(8.4);
     expect(saved.recipe.limits.apps).toBe(8);
   });

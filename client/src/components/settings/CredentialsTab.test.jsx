@@ -62,4 +62,29 @@ describe('CredentialsTab', () => {
     expect(screen.queryByText(/hf_/)).toBeNull();
     expect(JSON.stringify(PAYLOAD)).not.toMatch(/hf_this/);
   });
+
+  it('renders verification failures as unknown instead of not configured', async () => {
+    mock.getCredentialInventory.mockResolvedValue({
+      headline: 'Credential status',
+      credentials: [{
+        id: 'github',
+        label: 'GitHub',
+        unlocks: 'Repositories',
+        tier: 'free',
+        configured: null,
+        source: 'none',
+        verification: 'unavailable',
+        unavailableFeatures: [],
+      }],
+    });
+
+    render(
+      <MemoryRouter>
+        <CredentialsTab />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Could not verify')).toBeInTheDocument();
+    expect(screen.queryByText('Not configured')).not.toBeInTheDocument();
+  });
 });

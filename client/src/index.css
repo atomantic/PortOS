@@ -40,6 +40,12 @@
 
 /* Default theme CSS vars (Classic Midnight) - overridden by JS on load */
 :root {
+  /* Heading typography — every theme may override; the effects layer's glitch
+     rests on --port-heading-glow so it never dictates a theme's title look. */
+  --port-heading-tracking: 0;
+  --port-heading-glow: none;
+  --port-title-tracking: var(--port-heading-tracking);
+  --port-title-transform: none;
   --port-bg: 15 15 15;
   --port-card: 26 26 26;
   --port-border: 42 42 42;
@@ -122,6 +128,27 @@
   --port-chart-3: 245 158 11;
   --port-chart-4: 236 72 153;
   --port-chart-grid: 64 64 64;
+  /* Surface & control tokens — same "tokens over per-theme selector blocks"
+     pattern as the heading tokens above. Card border/alpha default to the
+     generic border tokens so an unset theme renders identically to the plain
+     `.border-port-border` rule; the rest default to a true no-op (`none` /
+     `auto`) so an unset theme paints nothing extra. */
+  --port-card-border-color: var(--port-border);
+  --port-card-border-alpha: var(--port-border-alpha);
+  --port-card-surface-image: none;
+  --port-card-surface-size: auto;
+  --port-focus-shadow: 0 0 0 4px rgb(var(--port-focus-ring) / 0.2);
+  /* Only read by the theme-scoped focus rule below (Lumen Glass, Lumen Glass
+     Day, Kestrel Neon) — deliberately separate from --port-focus-shadow so a
+     theme's stronger glow can't leak onto the [role="button"]/[tabindex="0"]
+     elements the generic rule also covers. */
+  --port-focus-glow: none;
+  --port-nav-active-rule: none;
+  /* `inherit`, not `none` — `text-shadow` is naturally inherited, and Black
+     ICE's body-wide glow used to reach this element through that inheritance.
+     Declaring `none` here would silently cancel it for every theme. */
+  --port-nav-active-glow: inherit;
+  --port-code-glow: none;
 }
 
 /* Self-hosted UI/mono webfonts.
@@ -321,11 +348,26 @@ html[data-port-theme] kbd {
   font-family: var(--port-font-mono);
 }
 
+/* Code/input glow + caret, tokenized (#6248) — was Kestrel-only (a
+   `data-port-theme-family` rule plus a per-mode text-shadow); the caret now
+   tracks the accent everywhere, and `--port-code-glow` (default `none`) lets
+   any theme add the text-shadow Black ICE (both modes) and Kestrel Neon use. */
+html[data-port-theme] :is(pre, code, textarea, input) {
+  caret-color: rgb(var(--port-accent));
+  text-shadow: var(--port-code-glow);
+}
+
 html[data-port-theme] h1,
 html[data-port-theme] h2,
 html[data-port-theme] h3 {
   font-family: var(--port-font-display);
-  letter-spacing: 0;
+  letter-spacing: var(--port-heading-tracking);
+  text-shadow: var(--port-heading-glow);
+}
+
+html[data-port-theme] h1 {
+  letter-spacing: var(--port-title-tracking);
+  text-transform: var(--port-title-transform);
 }
 
 html[data-port-theme] .bg-port-bg {
@@ -850,6 +892,29 @@ html[data-port-theme] :is(
   box-shadow: var(--port-shadow-card);
 }
 
+/* Card top wash, tokenized (#6248) — was 8 near-identical per-theme selector
+   blocks differing only in a border alpha and a background-image. The image
+   half is safe to share unconditionally (default `none`/`auto` is a true
+   no-op). The border half is NOT shared here — see the theme-scoped rule
+   below: an unconditional `border-color` here would out-specificity a
+   component's own semantic border class (`border-port-accent` for a
+   "selected" card, `border-port-error`, …) on every theme, not just the ones
+   that used to override it. */
+html[data-port-theme] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
+  background-image: var(--port-card-surface-image);
+  background-size: var(--port-card-surface-size);
+}
+
+/* Card border tint, tokenized (#6248) — scoped to the exact themes that
+   overrode it before (specificity matters here: this selector shape is what
+   let the theme tint win over `.border-port-border` while still losing to a
+   component's own semantic border class at equal specificity elsewhere). A
+   theme not listed here never applied this override and still doesn't. */
+html:is([data-port-theme="lumen-glass"], [data-port-theme="lumen-glass-day"], [data-port-theme="black-ice-terminal"], [data-port-theme="black-ice-terminal-day"], [data-port-theme-family="blueprint"], [data-port-theme-family="kestrel"])
+  :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
+  border-color: rgb(var(--port-card-border-color) / var(--port-card-border-alpha)) !important;
+}
+
 html[data-port-theme] :is(.shadow-lg, .shadow-xl, .shadow-2xl) {
   box-shadow: var(--port-shadow-elevated) !important;
 }
@@ -880,6 +945,15 @@ html[data-port-theme] [class~="bg-port-accent/10"],
 html[data-port-theme] [class~="bg-port-accent/20"],
 html[data-port-theme] aside nav [aria-current="page"] {
   background: var(--port-active-bg) !important;
+}
+
+/* Active-nav accent rule + glow, tokenized (#6248) — was 4 near-identical
+   per-theme `aside nav [aria-current="page"]` blocks (a border-left color and,
+   for Kestrel Neon only, a text-shadow). Doesn't touch `background` — that
+   stays on the `!important` rule above. */
+html[data-port-theme] aside nav [aria-current="page"] {
+  border-left: var(--port-nav-active-rule);
+  text-shadow: var(--port-nav-active-glow);
 }
 
 /* Tonal semantic surfaces keep their alpha/background treatment, but legacy
@@ -1011,59 +1085,12 @@ html[data-port-theme="lumen-glass"] main {
     linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 240px);
 }
 
-html[data-port-theme="lumen-glass"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
-  border-color: rgb(var(--port-border) / 0.28) !important;
-}
-
-html[data-port-theme="lumen-glass"] :is(input, textarea, select):focus,
-html[data-port-theme="lumen-glass"] button:focus-visible,
-html[data-port-theme="lumen-glass"] a:focus-visible {
-  box-shadow: 0 0 0 4px rgb(var(--port-focus-ring) / 0.18), 0 0 36px rgb(var(--port-focus-ring) / 0.12);
-}
-
 html[data-port-theme="black-ice-terminal"] body {
   text-shadow: 0 0 12px rgb(var(--port-accent) / 0.08);
 }
 
-html[data-port-theme="black-ice-terminal"] body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 9998;
-  pointer-events: none;
-  background: repeating-linear-gradient(
-    180deg,
-    rgb(255 255 255 / 0.025) 0,
-    rgb(255 255 255 / 0.025) 1px,
-    transparent 1px,
-    transparent 5px
-  );
-  mix-blend-mode: screen;
-  opacity: 0.22;
-}
-
-html[data-port-theme="black-ice-terminal"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
-  border-color: rgb(var(--port-border) / 0.34) !important;
-  background-image: linear-gradient(180deg, rgb(var(--port-accent) / 0.035), transparent 38px);
-}
-
 html[data-port-theme="black-ice-terminal"] :is(h1, h2, h3, h4, .text-lg, .text-xl, .text-2xl, .text-3xl) {
   color: rgb(var(--port-text));
-}
-
-html[data-port-theme="black-ice-terminal"] :is(pre, code, textarea, input) {
-  text-shadow: 0 0 10px rgb(var(--port-accent) / 0.1);
-}
-
-html[data-port-theme="black-ice-terminal"] aside nav [aria-current="page"] {
-  border-left: 2px solid rgb(var(--port-accent));
-}
-
-html[data-port-theme="blueprint-ops"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
-  background-image:
-    linear-gradient(90deg, rgb(var(--port-border) / 0.045) 1px, transparent 1px),
-    linear-gradient(180deg, rgb(var(--port-border) / 0.035) 1px, transparent 1px);
-  background-size: 20px 20px;
 }
 
 html[data-port-theme="blueprint-ops"] :is(h1, h2, h3) {
@@ -1372,32 +1399,23 @@ html[data-port-theme="classic-noon"] .bg-port-card {
 }
 
 /* === Lumen Glass Day === */
-/* Same card set as the base elevation rule above — every fill opacity, not just
-   `/50` — so this theme's softened border lands on all of its cards. */
+/* This theme's card-border coverage predates the shared card-border rule
+   above and was always wider — every `bg-port-card/NN` fill opacity, not just
+   `.bg-port-card`/`/50` — so it stays as its own selector rather than
+   widening the shared rule (and changing the other 7 themes' rarer alpha
+   variants along with it). Still token-driven now: no literal alpha left
+   here. `box-shadow` isn't restated — the wide-list elevation rule above
+   already applies `--port-shadow-card` to every one of these classes. */
 html[data-port-theme="lumen-glass-day"] :is(
-  .bg-port-card,
   [class~="bg-port-card/30"],
   [class~="bg-port-card/40"],
-  [class~="bg-port-card/50"],
   [class~="bg-port-card/60"],
   [class~="bg-port-card/70"],
   [class~="bg-port-card/80"],
   [class~="bg-port-card/90"],
   [class~="bg-port-card/95"]
 ):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
-  border-color: rgb(var(--port-border) / 0.22) !important;
-  box-shadow: var(--port-shadow-card);
-}
-
-html[data-port-theme="lumen-glass-day"] :is(input, textarea, select):focus,
-html[data-port-theme="lumen-glass-day"] button:focus-visible,
-html[data-port-theme="lumen-glass-day"] a:focus-visible {
-  box-shadow: 0 0 0 3px rgb(var(--port-focus-ring) / 0.22), 0 0 24px rgb(var(--port-focus-ring) / 0.16);
-}
-
-html[data-port-theme="lumen-glass-day"] aside nav [aria-current="page"] {
-  background: rgb(var(--port-accent) / 0.16);
-  color: rgb(var(--port-accent));
+  border-color: rgb(var(--port-card-border-color) / var(--port-card-border-alpha)) !important;
 }
 
 html[data-port-theme="lumen-glass-day"] body::before {
@@ -1441,44 +1459,7 @@ html[data-port-theme="black-ice-terminal-day"] body {
   text-shadow: 0 0 8px rgb(var(--port-accent) / 0.04);
 }
 
-html[data-port-theme="black-ice-terminal-day"] body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 9998;
-  pointer-events: none;
-  background: repeating-linear-gradient(
-    180deg,
-    rgb(10 60 30 / 0.04) 0,
-    rgb(10 60 30 / 0.04) 1px,
-    transparent 1px,
-    transparent 5px
-  );
-  mix-blend-mode: multiply;
-  opacity: 0.4;
-}
-
-html[data-port-theme="black-ice-terminal-day"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
-  border-color: rgb(var(--port-border) / 0.32) !important;
-  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.5), transparent 38px);
-}
-
-html[data-port-theme="black-ice-terminal-day"] :is(pre, code, textarea, input) {
-  text-shadow: 0 0 6px rgb(var(--port-accent) / 0.06);
-}
-
-html[data-port-theme="black-ice-terminal-day"] aside nav [aria-current="page"] {
-  border-left: 2px solid rgb(var(--port-accent));
-}
-
 /* === Drafting Paper (Blueprint Day) === */
-html[data-port-theme="blueprint-ops-day"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
-  background-image:
-    linear-gradient(90deg, rgb(var(--port-border) / 0.05) 1px, transparent 1px),
-    linear-gradient(180deg, rgb(var(--port-border) / 0.04) 1px, transparent 1px);
-  background-size: 20px 20px;
-}
-
 html[data-port-theme="blueprint-ops-day"] :is(h1, h2, h3) {
   border-left: 3px solid rgb(var(--port-accent) / 0.72);
   padding-left: 0.55rem;
@@ -1488,6 +1469,209 @@ html[data-port-theme="blueprint-ops-day"] aside :is(h1, h2, h3),
 html[data-port-theme="blueprint-ops-day"] header :is(h1, h2, h3) {
   border-left: 0;
   padding-left: 0;
+}
+
+/* === Theme effects layer ===
+   A theme opts into full-screen effects by listing them in `effects` in
+   portosThemes.js (registry: THEME_EFFECTS; catalogue and tokens:
+   docs/themes/README.md). useTheme publishes that list as
+   html[data-port-theme-effects="scanlines vignette …"], and each block below
+   keys on the ~= attribute selector, parameterized by --port-fx-* tokens the
+   theme declares (defaults here).
+
+   Everything paints on the dedicated <div class="port-fx-layer"> main.jsx
+   renders beside the app, never on body/#root pseudo-elements a theme might
+   also style. Its two pseudo-elements are the shared slots: ::before is
+   below-content (grid floor), ::after the static above-content overlay
+   (scanlines + vignette, composed in one background list — an unlisted effect
+   resolves to a transparent layer). Its three children are the effects that
+   need an opacity or an animation of their own, since the overlay has exactly
+   one of each for its whole list: .port-fx-aurora is the second below-content
+   slot (mutually exclusive with the grid floor), .port-fx-sweep the moving
+   band, .port-fx-grain the static noise tile. The sweep and the aurora animate
+   transform only, so they stay on the compositor instead of repainting a
+   blended full-screen layer. A child is an inert empty <span> until its effect
+   is listed — the rules below are what give it a position at all. */
+:root {
+  --port-fx-scanline-color: rgb(255 255 255 / 0.025);
+  --port-fx-scanline-period: 5px;
+  --port-fx-overlay-blend: screen;
+  --port-fx-overlay-opacity: 0.22;
+  --port-fx-vignette-color: rgb(0 0 0 / 0.55);
+  --port-fx-sweep-color: rgb(var(--port-accent) / 0.07);
+  --port-fx-sweep-duration: 7s;
+  --port-fx-grid-floor-x: rgb(var(--port-accent-2) / 0.18);
+  --port-fx-grid-floor-y: rgb(var(--port-accent) / 0.18);
+  --port-fx-grid-floor-opacity: 0.45;
+  --port-fx-grid-floor-duration: 3s;
+  --port-fx-glitch-period: 9s;
+  /* Ambient bloom (aurora) and material noise (grain) paint on their own
+     children of .port-fx-layer rather than sharing the overlay, so each keeps
+     an independent opacity — the overlay's is one value for the whole list. */
+  --port-fx-aurora-a: rgb(var(--port-accent) / 0.5);
+  --port-fx-aurora-b: rgb(var(--port-accent-2) / 0.4);
+  --port-fx-aurora-opacity: 0.5;
+  --port-fx-aurora-blur: 70px;
+  --port-fx-aurora-duration: 38s;
+  --port-fx-grain-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23g)'/></svg>");
+  --port-fx-grain-size: 160px 160px;
+  /* `overlay` is the canonical film-grain blend and the one default that reads
+     on a dark page as well as a light one. All three themes that currently list
+     `grain` are light and override it to `multiply`, which is what print stock
+     actually does to ink — that is a per-theme choice, not a sign this default
+     is wrong for the next dark theme to adopt the effect. */
+  --port-fx-grain-blend: overlay;
+  --port-fx-grain-opacity: 0.06;
+}
+
+html[data-port-theme-effects~="scanlines"] { --port-fx-scanline-active: var(--port-fx-scanline-color); }
+html[data-port-theme-effects~="vignette"] { --port-fx-vignette-active: var(--port-fx-vignette-color); }
+
+.port-fx-layer,
+.port-fx-aurora,
+.port-fx-grain,
+.port-fx-sweep {
+  pointer-events: none;
+}
+
+html:is([data-port-theme-effects~="scanlines"], [data-port-theme-effects~="vignette"]) .port-fx-layer::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at center, transparent 58%, var(--port-fx-vignette-active, transparent) 100%),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0 calc(var(--port-fx-scanline-period) - 1px),
+      var(--port-fx-scanline-active, transparent) calc(var(--port-fx-scanline-period) - 1px) var(--port-fx-scanline-period)
+    );
+  mix-blend-mode: var(--port-fx-overlay-blend);
+  opacity: var(--port-fx-overlay-opacity);
+}
+
+html[data-port-theme-effects~="sweep"] .port-fx-sweep {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 18vh;
+  z-index: 9998;
+  background: linear-gradient(180deg, transparent, var(--port-fx-sweep-color), transparent);
+  transform: translate3d(0, -100%, 0);
+  will-change: transform;
+  animation: portos-fx-sweep var(--port-fx-sweep-duration) linear infinite;
+}
+
+@keyframes portos-fx-sweep {
+  to { transform: translate3d(0, 100vh, 0); }
+}
+
+/* Perspective grid floor: three viewports wide and one tall, hinged at its
+   bottom edge and tilted away so the near rows stay full size while the far
+   rows converge toward a horizon about a quarter of the way up the screen.
+   The extra width keeps the foreshortened far edge wider than the viewport.
+   Motion is a plane-local translate of exactly one row, so the loop is
+   seamless and the masked texture is rasterized once. */
+html[data-port-theme-effects~="grid-floor"] .port-fx-layer::before {
+  content: "";
+  position: fixed;
+  left: -100%;
+  right: -100%;
+  bottom: -6%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, var(--port-fx-grid-floor-x) 1px, transparent 1px) 0 0 / 60px 100%,
+    linear-gradient(0deg, var(--port-fx-grid-floor-y) 1px, transparent 1px) 0 0 / 100% 40px;
+  transform: perspective(1200px) rotateX(60deg) translateY(0);
+  transform-origin: 50% 100%;
+  mask-image: linear-gradient(180deg, transparent 30%, #000 75%);
+  -webkit-mask-image: linear-gradient(180deg, transparent 30%, #000 75%);
+  opacity: var(--port-fx-grid-floor-opacity);
+  will-change: transform;
+  animation: portos-fx-gridmove var(--port-fx-grid-floor-duration) linear infinite;
+}
+
+@keyframes portos-fx-gridmove {
+  to { transform: perspective(1200px) rotateX(60deg) translateY(40px); }
+}
+
+/* Ambient aurora: two slow, heavily blurred color blooms drifting behind the
+   app. The below-content sibling of the grid floor — a theme picks one or the
+   other, never both, so they never fight for the same depth. */
+html[data-port-theme-effects~="aurora"] .port-fx-aurora {
+  position: fixed;
+  inset: -20vh -20vw;
+  z-index: -1;
+  background:
+    radial-gradient(38vw 38vw at 24% 26%, var(--port-fx-aurora-a) 0%, transparent 62%),
+    radial-gradient(44vw 44vw at 78% 78%, var(--port-fx-aurora-b) 0%, transparent 62%);
+  filter: blur(var(--port-fx-aurora-blur));
+  opacity: var(--port-fx-aurora-opacity);
+  will-change: transform;
+  animation: portos-fx-aurora var(--port-fx-aurora-duration) ease-in-out infinite alternate;
+}
+
+@keyframes portos-fx-aurora {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to { transform: translate3d(5vw, -4vh, 0) scale(1.14); }
+}
+
+/* Material grain: a static monochrome noise tile blended over the app, so a
+   paper or frosted-glass theme reads as a surface instead of flat fill. Its
+   own element, and its own opacity, so a theme can run it under scanlines at
+   a different strength. */
+html[data-port-theme-effects~="grain"] .port-fx-grain {
+  position: fixed;
+  inset: 0;
+  z-index: 9997;
+  background-image: var(--port-fx-grain-image);
+  background-size: var(--port-fx-grain-size);
+  mix-blend-mode: var(--port-fx-grain-blend);
+  opacity: var(--port-fx-grain-opacity);
+}
+
+/* Page titles glitch every few seconds: at rest (the theme's own heading glow)
+   for most of the cycle, then a two-step chromatic split between the accents. */
+html[data-port-theme-effects~="glitch"] h1 {
+  animation: portos-fx-glitch var(--port-fx-glitch-period) steps(2) infinite;
+}
+
+@keyframes portos-fx-glitch {
+  0%, 92%, 100% { text-shadow: var(--port-heading-glow); transform: none; }
+  94% { text-shadow: -3px 0 rgb(var(--port-accent-2)), 3px 0 rgb(var(--port-accent)); transform: translate(-1px, 1px); }
+  96% { text-shadow: 4px 0 rgb(var(--port-accent-2)), -4px 0 rgb(var(--port-accent)); transform: translate(2px, -1px); }
+  98% { text-shadow: -1px 0 rgb(var(--port-accent-2)), 1px 0 rgb(var(--port-accent)); transform: translate(1px, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-port-theme-effects] .port-fx-sweep,
+  html[data-port-theme-effects] .port-fx-aurora,
+  html[data-port-theme-effects] .port-fx-layer::before,
+  html[data-port-theme-effects] h1 {
+    animation: none;
+  }
+}
+
+/* === Kestrel (CRT boot terminal) — shared by Neon and Dawn === */
+/* Card border color/image and the nav-active rule are identical for both
+   Kestrel themes, so they live once in kestrelShellTokens (portosThemes.js)
+   rather than as a `data-port-theme-family` selector — the shared rules above
+   already read them. Only the border ALPHA differs night vs. dawn, so it's
+   the one thing still set per-theme here (was --port-kestrel-card-border-alpha). */
+html[data-port-theme="kestrel-neon"] {
+  --port-card-border-alpha: 0.3;
+}
+
+html[data-port-theme="kestrel-neon-day"] {
+  --port-card-border-alpha: 0.26;
+}
+
+html[data-port-theme="kestrel-neon"] body {
+  text-shadow: 0 0 10px rgb(var(--port-accent) / 0.08);
 }
 
 /* Accessibility: Global focus styles for keyboard navigation */
@@ -1519,7 +1703,28 @@ a:focus-visible,
 [tabindex="0"]:focus-visible {
   outline: 2px solid rgb(var(--port-focus-ring));
   outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgb(var(--port-focus-ring) / 0.2);
+  box-shadow: var(--port-focus-shadow);
+}
+
+/* Field + button/link focus glow, tokenized (#6248) — was 3 per-theme copies
+   of this exact `:is(input, textarea, select):focus, button:focus-visible,
+   a:focus-visible` block. Kept theme-scoped rather than folded into the bare
+   `button:focus-visible` rule above: that rule's specificity is lower than
+   `.bg-port-accent`'s `box-shadow: var(--port-shadow-interactive)`, so an
+   accent-colored button would lose its focus glow to the interactive shadow.
+   Keeping the per-theme selector SHAPE (specificity, not the values) is what
+   lets the listed themes' stronger glow win.
+   The list is opt-in and must stay in sync with the manifests: `--port-focus-glow`
+   defaults to `none`, so adding a theme here without declaring the token would
+   replace its accent button's interactive shadow with nothing on focus.
+   A DIFFERENT token than the generic rule's `--port-focus-shadow` on purpose
+   — that rule also covers `[role="button"]`/`[tabindex="0"]`, which this
+   selector (matching the original) never did, so reusing the same token
+   would leak the stronger glow onto elements it was never meant to reach. */
+html:is([data-port-theme-family="glass"], [data-port-theme-family="terminal"], [data-port-theme="blueprint-ops"], [data-port-theme="kestrel-neon"]) :is(input, textarea, select):focus,
+html:is([data-port-theme-family="glass"], [data-port-theme-family="terminal"], [data-port-theme="blueprint-ops"], [data-port-theme="kestrel-neon"]) button:focus-visible,
+html:is([data-port-theme-family="glass"], [data-port-theme-family="terminal"], [data-port-theme="blueprint-ops"], [data-port-theme="kestrel-neon"]) a:focus-visible {
+  box-shadow: var(--port-focus-glow);
 }
 
 /* DRY pointer cursor for interactive elements. Tailwind v4 dropped the

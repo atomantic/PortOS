@@ -11,11 +11,13 @@ Black ICE Terminal is PortOS as an operator console: dense, fast, cyberpunk, and
 - Keep forms and controls keyboard-friendly. Focus must be obvious.
 - Use terminal tokens for log/code regions: `var(--port-terminal-bg)` and `var(--port-terminal-text)`.
 - Avoid large soft gradients inside content panels. The theme uses sharp borders, scanlines, and restrained glow.
+- Night runs the full CRT: `scanlines`, `vignette`, `sweep`, and `glitch`. Its overlay blends at `normal` rather than `screen`, because the same background list carries the black vignette and screening black is a no-op — straight alpha compositing still lifts the phosphor line on a near-black page. Phosphor Paper (day) runs `scanlines`, a warm `vignette`, and `grain`; the paper tooth is the shared grain effect, not a data-URI in `--port-body-texture`.
 
 ## Component Notes
 
 - Panels use harder corners and visible borders.
 - Active nav and tabs should have both accent color and a shape/border cue.
+- `h1` renders uppercase with wide tracking in both modes — a console banner. Keep page titles short, and check that they wrap rather than truncate in narrow headers.
 - Neutral controls should use the control fill tokens, not the neon border color as a solid background.
 - Tables, logs, and event streams should feel especially strong in this theme.
 - Media-heavy pages should keep media neutral; do not tint generated images or previews.

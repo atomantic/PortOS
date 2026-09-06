@@ -20,6 +20,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [PORTS.md](./PORTS.md) | Port allocation (5553–5561) and how 5555/5553/5554 relate |
 | [PM2.md](./PM2.md) | Recommended PM2 ecosystem patterns for sub-projects |
 | [QUOTA-BURN.md](./QUOTA-BURN.md) | Quota-burn automation — spending subscription-backed CLI quota before expiry |
+| [MODEL-COMPARISON.md](./MODEL-COMPARISON.md) | Sourced provider/model/effort comparisons, cost estimates and CoS research refresh |
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
@@ -43,9 +44,9 @@ Chief of Staff: [chief-of-staff](./features/chief-of-staff.md) · [cos-agent-run
 
 Identity & self: [digital-twin](./features/digital-twin.md) · [identity-system](./features/identity-system.md) · [soul-system](./features/soul-system.md) · [privacy-center](./features/privacy-center.md) · [post](./features/post.md) (insights design spike: [plans/2026-06-03](./plans/2026-06-03-cross-domain-insights-engine.md))
 
-Knowledge: [brain-system](./features/brain-system.md) · [messages-security](./features/messages-security.md)
+Knowledge: [brain-system](./features/brain-system.md) · [untrusted messages and GitHub automation](./features/messages-security.md)
 
-Create: [writers-room](./features/writers-room.md) · [fableloom](./features/fableloom.md) · [Eidoverse Worlds integration](./features/eidoverse.md) · [OpenWorld historical reference](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md)
+Create: [writers-room](./features/writers-room.md) · [fableloom](./features/fableloom.md) · [Eidoverse Worlds integration](./features/eidoverse.md) · [OpenWorld historical reference](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md) · [video-render-batches](./features/video-render-batches.md)
 
 Comms & voice: [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md)
 

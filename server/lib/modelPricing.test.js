@@ -99,6 +99,23 @@ describe('resolveModelRates', () => {
     expect(resolveModelRates('antigravity-cli', 'antigravity-configured-default')).toMatchObject({ rateModel: 'gemini-3.1-pro-preview', matched: 'family' });
   });
 
+  it('prices GPT-6 Astra at standard rates with derived cache tiers', () => {
+    expect(resolveModelRates('codex', 'gpt-6-astra')).toMatchObject({
+      rateModel: 'gpt-6-astra',
+      inputPer1M: 10,
+      outputPer1M: 50,
+      cacheReadPer1M: 1.0,
+      cacheWritePer1M: 12.5,
+      matched: 'exact',
+    });
+    expect(resolveModelRates('codex', 'astra')).toMatchObject({
+      rateModel: 'gpt-6-astra',
+      inputPer1M: 10,
+      outputPer1M: 50,
+      matched: 'family',
+    });
+  });
+
   it('resolves suffixed gpt-5.6 ids to their base rates', () => {
     expect(resolveModelRates('codex', 'gpt-5.6-terra-2026-06-01')).toMatchObject({ rateModel: 'gpt-5.6-terra', matched: 'family' });
   });

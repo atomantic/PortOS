@@ -38,9 +38,9 @@
  */
 
 import { join } from 'path';
-import { readdir, rm } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import { randomUUID } from 'crypto';
-import { atomicWrite, ensureDir, pathExists, readJSONFile, sha256File } from '../../lib/fileUtils.js';
+import { atomicWrite, ensureDir, pathExists, readJSONFile, sha256File, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { executeTuiRun } from '../tuiPromptRunner.js';
 import { GROK_TUI_ID } from '../../lib/grok.js';
@@ -607,7 +607,7 @@ async function invalidateTrackDirectionImpl(
   const approved = loaded?.directions?.[direction] || finalizedSet?.directions?.[direction];
   if (approved?.status !== 'approved') return false;
   const selection = loaded || { ...seedSelection(row, recordId), directions: { ...(finalizedSet?.directions || {}) } };
-  if (finalizedSet) await rm(join(spriteDir(recordId), trackSetRelPath(row.id, recordId)), { force: true });
+  if (finalizedSet) await rmGuarded(join(spriteDir(recordId), trackSetRelPath(row.id, recordId)), { force: true });
   delete selection.directions[direction];
   selection.status = 'in-progress';
   await ensureDir(join(spriteDir(recordId), row.id));

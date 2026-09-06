@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { posixPath } from '../../lib/testHelper.js';
 
-vi.mock('node:fs/promises', async (importOriginal) => ({
-  ...(await importOriginal()),
+const { rm, writeFile } = vi.hoisted(() => ({
   rm: vi.fn(() => Promise.resolve()),
   writeFile: vi.fn(() => Promise.resolve()),
 }));
@@ -13,6 +12,8 @@ vi.mock('../../lib/fileUtils.js', () => ({
     filename === 'missing.png' ? null : `/mock/data/images/${filename}`
   )),
   ensureDir: vi.fn(() => Promise.resolve()),
+  rmGuarded: rm,
+  writeFileGuarded: writeFile,
 }));
 
 vi.mock('./targets.js', () => ({
@@ -66,7 +67,6 @@ vi.mock('./db.js', () => ({
   recoverInterruptedModels: vi.fn(),
 }));
 
-import { rm, writeFile } from 'node:fs/promises';
 import { ensureDir } from '../../lib/fileUtils.js';
 import { resolveTarget, renderOptionSupportFor } from './targets.js';
 import { isTrellis2Installed, runTrellis2Generate } from './trellis2.js';

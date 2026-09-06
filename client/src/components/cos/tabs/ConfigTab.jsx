@@ -528,6 +528,7 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, r
           </div>
           <div className="rounded-lg border border-port-border bg-port-card p-4">
             <h5 className="text-sm font-medium text-port-text">Task files</h5>
+            <p className="mt-1 text-xs text-port-text-muted">Editable Markdown queues. Changes made in these files are picked up automatically.</p>
             <div className="mt-3 space-y-2 text-xs">
               <div className="flex items-center gap-2 rounded-md bg-port-bg px-3 py-2">
                 <FileText size={14} className="text-port-text-muted" />

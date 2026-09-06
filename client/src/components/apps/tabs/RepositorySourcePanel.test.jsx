@@ -23,6 +23,7 @@ const source = ({
   origin,
   localVsOrigin = { ahead: 0, behind: 0, state: 'current' },
   forkVsUpstream = null,
+  forkSyncable,
 }) => ({
   id,
   label,
@@ -44,6 +45,12 @@ const source = ({
   },
   localVsOrigin,
   forkVsUpstream,
+  // Mirrors the server's `isForkSyncable` so fixtures carry the payload the
+  // client actually reads (server/services/managedAppRepositories.js).
+  forkSyncable: forkSyncable ?? (id === 'primary'
+    && Boolean(origin?.isFork)
+    && origin?.canPush !== false
+    && forkVsUpstream?.state !== 'diverged'),
   remoteFresh: true,
   remoteError: null,
 });
@@ -145,6 +152,45 @@ describe('managed app repository sources', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sync fork' }));
     await waitFor(() => expect(api.syncAppRepositoryFork).toHaveBeenCalledWith('app-example', { silent: true }));
     expect(useAppOperation.mock.results[0].value.startUpdate).not.toHaveBeenCalled();
+  });
+
+  // Eidoverse's video checkout is cloned from `anima-research`'s fork of a third
+  // project. The drift from upstream is real and worth reporting, but PortOS can
+  // only read that fork — so the panel must say so instead of offering a sync
+  // that would 403 and a badge that reads like a pending chore (#6321).
+  it('reports a read-only fork\'s drift without offering a sync it cannot perform', async () => {
+    const status = canonicalStatus();
+    status.updateAvailable = false;
+    status.sources[0] = source({
+      id: 'primary',
+      label: 'Example App',
+      branch: 'main',
+      head: '1'.repeat(40),
+      origin: { fullName: 'anima-research/example-app', isUpstream: true, isFork: false },
+    });
+    status.sources[1] = source({
+      id: 'companion-1',
+      label: 'example-runtime',
+      branch: 'prod-serving',
+      head: '2'.repeat(40),
+      origin: {
+        fullName: 'other-owner/example-runtime',
+        isUpstream: false,
+        isFork: true,
+        canPush: false,
+      },
+      forkVsUpstream: { available: true, ahead: 0, behind: 12, state: 'behind', error: null },
+    });
+    api.getAppRepositorySources.mockResolvedValue(status);
+    render(<RepositorySourcePanel appId="app-example" appName="Example App" />);
+
+    const companion = await screen.findByTestId('repository-source-companion-1');
+    expect(companion).toHaveTextContent('Fork is 12 commits behind');
+    expect(companion).toHaveTextContent('cannot push to it');
+    // Not "Fork 12 behind": that badge is a call to action, and there is none.
+    expect(within(companion).getByText('Custom origin')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sync fork' })).toBeNull();
+    expect(screen.getByText('All checkouts are current.')).toBeInTheDocument();
   });
 
   it('confirms that one managed update syncs the fork and updates every checkout', async () => {

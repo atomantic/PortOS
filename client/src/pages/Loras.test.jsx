@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { clickStartDownload } from '../test/downloadPreflightConfirm.js';
 import Loras from './Loras';
 import {
   listLorasFull, deleteLoraFull, installLoraFromHuggingfaceStream, probeLoraEffect,
@@ -134,7 +135,7 @@ describe('Loras HuggingFace family picker', () => {
     const input = await screen.findByLabelText('HuggingFace LoRA URL');
     fireEvent.change(input, { target: { value: 'https://huggingface.co/Alissonerdx/CharacterSheet' } });
     fireEvent.submit(input.closest('form'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
     expect(await screen.findByRole('button', { name: 'Install as Flux 2' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Install as Flux 1' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Install as LTX-Video' })).toBeInTheDocument();
@@ -191,7 +192,7 @@ describe('Loras suggestion card busy state', () => {
     // "Installing…", not have reverted to "Quick install" already.
     expect(await screen.findByRole('button', { name: 'Installing…' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
     expect(await screen.findByRole('button', { name: 'Installing…' })).toBeInTheDocument();
 
     resolveInstall({ name: 'lora-example.safetensors' });
@@ -247,7 +248,7 @@ describe('Loras video suggestion quick-install preflight', () => {
     }));
     expect(installLoraFromHuggingfaceStream).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start download' }));
+    await clickStartDownload();
     await waitFor(() => expect(installLoraFromHuggingfaceStream).toHaveBeenCalledWith(
       expect.objectContaining({ url: VIDEO_CARD.installUrl, family: VIDEO_CARD.runnerFamily, file: VIDEO_CARD.file }),
     ));

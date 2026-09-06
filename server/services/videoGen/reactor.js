@@ -1,0 +1,337 @@
+/** Reactor FastH3 renders one bounded SDK/WebRTC session per job. */
+import { randomUUID } from 'crypto';
+import { stat, rm } from 'fs/promises';
+import { spawn } from '../../lib/childProcess.js';
+import { join } from 'path';
+import { ensureDir, PATHS } from '../../lib/fileUtils.js';
+import { ServerError } from '../../lib/errorHandler.js';
+import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { videoGenEvents } from './events.js';
+import { finalizeGeneratedVideo } from './generateVideoHelpers.js';
+import { mutateVideoHistory } from './history.js';
+import { getSettings } from '../settings.js';
+import {
+  REACTOR_MAX_PROMPT_LENGTH, REACTOR_MAX_CLIP_ID_LENGTH,
+  REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_DEFAULT_CLIP_LENGTH,
+  REACTOR_ASPECTS, reactorCanvas,
+} from '../../lib/reactorVideoClip.js';
+import { extractEvaluationFrames } from '../../lib/ffmpeg.js';
+import { describeFrameStats, isDegenerateFrame } from '../../lib/imageFrameStats.js';
+import { ensureReactorRuntime } from './reactorRuntime.js';
+import { prepareReactorStartingFrame } from '../../lib/reactorStartingFrame.js';
+
+export const REACTOR_API_BASE = 'https://api.reactor.inc';
+export const REACTOR_MODEL_ID = 'fast-h3';
+
+const REACTOR_TOKEN_TIMEOUT_MS = 15_000;
+const REACTOR_RENDER_TIMEOUT_MS = (() => {
+  const n = Number(process.env.REACTOR_VIDEO_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 20 * 60 * 1000;
+})();
+
+// Per-job state uses the common cloud-lane SSE contract.
+const jobs = new Map();
+// Cancellation terminates the SDK session process and its remote connection.
+const activeRequests = new Map();
+const activeJobs = new Map();
+
+export const getActiveJob = () => {
+  const entries = [...activeJobs.values()];
+  return entries.length ? entries[entries.length - 1] : null;
+};
+
+export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
+
+/**
+ * Resolve the reactor.inc API key: settings override, else the
+ * `REACTOR_API_KEY` env var (same settings-wins-over-env precedence as
+ * `videoGen/fal.js`'s `resolveFalApiKey`).
+ */
+export function resolveReactorApiKey(settings) {
+  const fromSettings = (settings?.videoGen?.reactor?.apiKey || '').trim();
+  if (fromSettings) return fromSettings;
+  const fromEnv = (process.env.REACTOR_API_KEY || '').trim();
+  return fromEnv || null;
+}
+
+/**
+ * Mint a short-lived session JWT scoped to `reactor/fast-h3`, bounded to one
+ * concurrent session. Called by the `/api/video-gen/reactor/token` route AND
+ * internally before every submit — the raw API key never leaves this module.
+ */
+export async function mintReactorToken(apiKey) {
+  if (!apiKey) {
+    throw new ServerError('No reactor.inc API key configured — set it in Settings > Video Gen or the REACTOR_API_KEY env var', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
+  }
+  const res = await fetchWithTimeout(`${REACTOR_API_BASE}/tokens`, {
+    method: 'POST',
+    headers: { 'Reactor-API-Key': apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      authorization_details: [{ type: 'session', resources: { models: { match: [`reactor/${REACTOR_MODEL_ID}`] } }, constraints: { max_sessions: 1 } }],
+    }),
+  }, REACTOR_TOKEN_TIMEOUT_MS);
+  const payload = await res.json().catch(() => null);
+  if (!res.ok || !payload?.jwt) {
+    const reason = `HTTP ${res.status}`;
+    throw new ServerError(`reactor.inc token minting failed: ${reason}`, { status: 502, code: 'REACTOR_TOKEN_FAILED' });
+  }
+  return { jwt: payload.jwt, expiresAt: payload.expires_at || null };
+}
+
+export const cancel = (jobId) => {
+  if (!jobId) {
+    throw new Error("videoGen/reactor.cancel requires a jobId — use cancelAll() to terminate every in-flight render");
+  }
+  const entry = activeRequests.get(jobId);
+  if (!entry) return false;
+  entry.aborted = true;
+  entry.stop?.('Canceled');
+  return true;
+};
+
+export const cancelAll = () => {
+  const ids = [...activeRequests.keys()];
+  if (ids.length === 0) return false;
+  for (const id of ids) cancel(id);
+  return true;
+};
+
+export function validateReactorRequest({
+  prompt, continueFromClipId, sourceImagePath, seconds = REACTOR_DEFAULT_CLIP_LENGTH, seed, aspect,
+}) {
+  if (typeof prompt !== 'string' || !prompt.trim() || prompt.trim().length > REACTOR_MAX_PROMPT_LENGTH) {
+    throw new ServerError(`Reactor prompts must contain 1–${REACTOR_MAX_PROMPT_LENGTH} characters; shorten the shot prompt before rendering`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (continueFromClipId) {
+    // A clip id addresses a clip fast-h3 already rendered, so continuation and
+    // a starting frame are two ways to say the same thing — accepting both
+    // would leave which one wins up to the SDK.
+    if (sourceImagePath) {
+      throw new ServerError('Reactor renders continue from a clip OR start from an image, not both; clear one before rendering', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    if (typeof continueFromClipId !== 'string' || continueFromClipId.length > REACTOR_MAX_CLIP_ID_LENGTH) {
+      throw new ServerError('Reactor clip id must be a string identifying a previous Reactor render', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
+  if (!Number.isFinite(Number(seconds)) || Number(seconds) < REACTOR_MIN_CLIP_SECONDS || Number(seconds) > REACTOR_MAX_CLIP_SECONDS) {
+    throw new ServerError(`Reactor duration must be between ${REACTOR_MIN_CLIP_SECONDS} and ${REACTOR_MAX_CLIP_SECONDS} seconds`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (seed != null && seed !== '' && (!Number.isSafeInteger(Number(seed)) || Number(seed) < 0)) {
+    throw new ServerError('Reactor seed must be a non-negative integer', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  // An absent aspect is the request to DERIVE the canvas from the starting
+  // frame (see lib/reactorStartingFrame.js) — a text render falls back to the
+  // default there. An unrecognized one is rejected rather than silently
+  // rendered on 16:9, which is how every render used to land there.
+  if (aspect != null && aspect !== '' && !REACTOR_ASPECTS.includes(aspect)) {
+    throw new ServerError(`Reactor canvas aspect must be one of ${REACTOR_ASPECTS.join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  return {
+    prompt: prompt.trim(),
+    seconds: Number(seconds),
+    ...(continueFromClipId ? { continueFromClipId } : {}),
+    ...(seed != null && seed !== '' ? { seed: Number(seed) } : {}),
+    ...(aspect ? { aspect } : {}),
+  };
+}
+
+function captureClip(entry, input, pythonPath, job, jobId) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonPath, [join(PATHS.root, 'scripts', 'reactor-render.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let buffer = '';
+    let outputBytes = 0;
+    let complete = null;
+    let failure = null;
+    let killTimer;
+    let stopping = false;
+    const stop = (reason) => {
+      if (stopping) return;
+      stopping = true;
+      failure ||= new Error(reason);
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
+      killTimer.unref?.();
+    };
+    entry.stop = stop;
+    const timeout = setTimeout(() => stop('Reactor render timed out'), REACTOR_RENDER_TIMEOUT_MS);
+    timeout.unref?.();
+    const countOutput = (chunk) => {
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > 1024 * 1024) stop('Reactor renderer exceeded its output limit');
+    };
+    child.stdout.on('data', (chunk) => {
+      countOutput(chunk);
+      if (failure) return;
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const message = JSON.parse(line);
+          if (message.type === 'complete' && typeof message.clipId === 'string' && Number.isFinite(message.seconds)) complete = message;
+          if (message.type === 'error' && message.code === 'INVALID_FRAME_BUFFER') failure = new Error('Reactor supplied an invalid video frame buffer; expected width × height × 4 bytes');
+          if (!failure && message.type === 'error' && /^[a-z]+$/.test(message.phase) && /^[A-Za-z]+$/.test(message.errorType)) failure = new Error(`Reactor ${message.phase} failed (${message.errorType})`);
+          if (message.type === 'status') {
+            if (typeof message.message === 'string' && /^Captured [0-9.]+ of [0-9.]+ frames; audio=(True|False)$/.test(message.message)) console.log(`🎬 ${message.message}`);
+            broadcastSse(job, { type: 'status', message: 'Reactor session rendering…' });
+            videoGenEvents.emit('activity', { generationId: jobId });
+          }
+        } catch {
+          stop('Reactor renderer returned malformed output');
+        }
+      }
+    });
+    // SDK diagnostics can contain credentials or local paths. Bound and discard them.
+    child.stderr.on('data', countOutput);
+    child.stdin.on('error', () => stop('Could not send request to Reactor renderer'));
+    child.on('error', () => {
+      failure ||= new Error('Could not start Reactor renderer; retry the render to verify its runtime');
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      clearTimeout(killTimer);
+      entry.stop = null;
+      if (failure || code !== 0 || !complete) reject(failure || new Error('Reactor renderer failed before completing a clip; check the installed SDK runtime'));
+      else resolve(complete);
+    });
+    child.stdin.end(JSON.stringify(input));
+    if (entry.aborted) stop('Canceled');
+  });
+}
+
+export async function generateVideo({
+  settings, prompt = '', negativePrompt,
+  continueFromClipId, seconds, seed, aspect,
+  sourceImagePath = null, jobId: providedJobId = null,
+}) {
+  const request = validateReactorRequest({ prompt, continueFromClipId, sourceImagePath, seconds, seed, aspect });
+  await ensureDir(PATHS.videos);
+  const renderStartedAtMs = Date.now();
+
+  if (!prompt?.trim()) {
+    throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  // The reactor API key stays server-side: re-resolve live settings here
+  // (mirrors videoGen/fal.js's precedent) rather than threading the secret
+  // through job.params, where it would sit in plaintext in media-jobs.json.
+  const effectiveSettings = settings || await getSettings().catch(() => null);
+  const apiKey = resolveReactorApiKey(effectiveSettings);
+  if (!apiKey) {
+    throw new ServerError('No reactor.inc API key configured — set it in Settings > Video Gen or the REACTOR_API_KEY env var', { status: 400, code: 'REACTOR_NOT_CONFIGURED' });
+  }
+
+  const jobId = providedJobId || randomUUID();
+  const filename = `${jobId}.mp4`;
+  const outputPath = join(PATHS.videos, filename);
+
+  const meta = {
+    id: jobId,
+    prompt: prompt.trim(),
+    negativePrompt: negativePrompt || '',
+    modelId: `reactor:${REACTOR_MODEL_ID}`,
+    ...(continueFromClipId ? { continueFromClipId } : {}),
+    ...(seconds ? { seconds } : {}),
+    filename,
+    createdAt: new Date().toISOString(),
+    mode: sourceImagePath ? 'image' : 'text',
+  };
+  const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
+  jobs.set(jobId, job);
+
+  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] reactor (${REACTOR_MODEL_ID}): ${prompt.slice(0, 60)}…`);
+  videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
+  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
+  broadcastSse(job, { type: 'status', message: 'Preparing Reactor runtime…' });
+
+  runReactorVideo(job, jobId, {
+    apiKey, ...request, sourceImagePath, outputPath, filename, meta,
+  }).catch((err) => {
+    console.log(`❌ reactor video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+  });
+
+  return {
+    jobId, filename, path: `/data/videos/${filename}`, generationId: jobId,
+    mode: 'reactor',
+    status: 'running',
+  };
+}
+
+async function runReactorVideo(job, jobId, {
+  apiKey, prompt, seconds, seed, aspect, continueFromClipId, sourceImagePath, outputPath, filename, meta,
+}) {
+  const entry = { aborted: false, stop: null };
+  activeRequests.set(jobId, entry);
+  // Declared outside the try so the finally can still delete a fitted frame
+  // whose render failed after it was written.
+  let frame = { aspect, canvas: reactorCanvas(aspect), framePath: sourceImagePath, fittedPath: null };
+  try {
+    // Resolved before the token is minted, so a starting frame PortOS could not
+    // fit costs nothing on the reactor side.
+    frame = await prepareReactorStartingFrame(sourceImagePath, aspect, outputPath);
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+    // The shared install may finish for another job after this one is canceled.
+    // Cancellation stops this job immediately, without opening a paid session.
+    const pythonPath = await new Promise((resolve, reject) => {
+      entry.stop = () => reject(new Error('Canceled'));
+      ensureReactorRuntime().then(resolve, reject);
+      if (entry.aborted) entry.stop();
+    });
+    entry.stop = null;
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+    videoGenEvents.emit('activity', { generationId: jobId });
+    broadcastSse(job, { type: 'status', message: 'Minting reactor.inc session…' });
+    const { jwt } = await mintReactorToken(apiKey);
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+    const result = await captureClip(entry, {
+      jwt, prompt, seconds, seed, continueFromClipId, aspect: frame.aspect, sourceImagePath: frame.framePath, outputPath,
+    }, pythonPath, job, jobId);
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+    const output = await stat(outputPath).catch(() => null);
+    if (!output?.isFile() || !output.size) throw new Error('Reactor completed without a playable output file');
+    const samples = await extractEvaluationFrames(outputPath, `${jobId}-capture`, 5);
+    try {
+      const verdicts = await Promise.all(samples.map((name) => describeFrameStats(join(PATHS.videoThumbnails, name))));
+      if (verdicts.length && verdicts.every(isDegenerateFrame)) {
+        throw new Error(`Reactor streamed ${result.frames ?? Math.round(result.seconds * 24)} frames but every sampled frame was blank`);
+      }
+    } finally {
+      await Promise.all(samples.map((name) => rm(join(PATHS.videoThumbnails, name), { force: true }).catch(() => {})));
+    }
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+    await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, aspect: frame.aspect, width: frame.canvas.width, height: frame.canvas.height, clipId: result.clipId, seconds: result.seconds }, actualSeed: seed ?? null, mutateHistory: mutateVideoHistory });
+    closeJobAfterDelay(jobs, jobId);
+  } catch (err) {
+    await rm(outputPath, { force: true }).catch(() => {});
+    // A continuation names a clip reactor rendered in an EARLIER session, and
+    // reactor decides whether it still holds it. Say so on the failure rather
+    // than leaving the user re-reading a prompt that was never the problem.
+    const continuationHint = continueFromClipId
+      ? ' — reactor may no longer hold that clip; clear "Continue from clip" and render fresh, or start from an image'
+      : '';
+    finalizeError(job, jobId, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}${continuationHint}`, { force: true });
+  } finally {
+    await rm(`${outputPath}.capture`, { recursive: true, force: true }).catch(() => {});
+    if (frame.fittedPath) await rm(frame.fittedPath, { force: true }).catch(() => {});
+    if (entry.aborted) await rm(outputPath, { force: true }).catch(() => {});
+    activeRequests.delete(jobId);
+    activeJobs.delete(jobId);
+  }
+}
+
+const finalizeCanceled = (job, jobId) => finalizeError(job, jobId, 'Canceled', { force: true });
+
+const finalizeError = (job, jobId, reason, { force = false } = {}) => {
+  if (!force && (job.status === 'error' || job.status === 'complete')) return;
+  activeRequests.delete(jobId);
+  activeJobs.delete(jobId);
+  job.status = 'error';
+  console.log(`❌ reactor video generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
+  broadcastSse(job, { type: 'error', error: reason });
+  videoGenEvents.emit('failed', { generationId: jobId, error: reason });
+  closeJobAfterDelay(jobs, jobId);
+};
+
+// Test-only handles.
+export const _internals = { validateRequest: validateReactorRequest };

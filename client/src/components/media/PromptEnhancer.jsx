@@ -18,6 +18,12 @@ export default function PromptEnhancer({
   negativePrompt = '',
   setNegativePrompt,
   renderConfig = {},
+  // Hard character cap the selected render backend enforces on the prompt it
+  // receives (reactor.inc fast-h3: 800, minus whatever a style preset prefixes).
+  // Passed to the refiner so the model writes inside the budget instead of
+  // handing back a richer prompt the renderer rejects outright. Omit when the
+  // backend has no cap.
+  maxPromptLength,
   disabled = false,
 }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -89,6 +95,7 @@ export default function PromptEnhancer({
         model: selectedModel || undefined,
         effort: effort || undefined,
         renderConfig,
+        maxPromptLength: maxPromptLength > 0 ? maxPromptLength : undefined,
       });
 
       if (result?.prompt) {
@@ -96,7 +103,13 @@ export default function PromptEnhancer({
         if (setNegativePrompt && result.negativePrompt != null) {
           setNegativePrompt(result.negativePrompt);
         }
-        toast.success('Prompt enhanced!');
+        // Say so when the model overshot the backend's cap and the server had
+        // to cut the tail — otherwise the trim reads as the AI losing detail.
+        if (result.truncated) {
+          toast.warning(`Prompt enhanced, then trimmed to fit the ${maxPromptLength} character render limit`);
+        } else {
+          toast.success('Prompt enhanced!');
+        }
       }
     } catch {
       // refineMediaPrompt routes through request() which already toasts on error
@@ -149,6 +162,12 @@ export default function PromptEnhancer({
           <div className="text-xs font-semibold text-gray-300 flex items-center justify-between">
             <span>AI Prompt Enhancer Settings</span>
           </div>
+
+          {maxPromptLength > 0 && (
+            <p className="text-[11px] text-gray-500 leading-snug">
+              The enhanced prompt will be kept within {maxPromptLength} characters — this render backend rejects a longer prompt.
+            </p>
+          )}
 
           <ProviderModelSelector
             providers={providers}

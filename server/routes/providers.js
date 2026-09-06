@@ -26,6 +26,7 @@ import { isCodexSubscriptionProvider } from '../lib/codexAccount.js';
 import {
   cancelCodexChatGptLogin,
   peekCodexAccountReadiness,
+  peekCodexModelCatalog,
   codexLogout,
   listCodexModels,
   getCodexAccountReadiness,
@@ -161,6 +162,40 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
  */
 export function createPortOSProviderRoutes(aiToolkit) {
   const router = Router();
+
+  router.get('/fleet-host', asyncHandler(async (req, res) => {
+    const { getFleetLlmHostStatus } = await import('../services/fleetLlmHost.js');
+    res.set('Cache-Control', 'no-store').json(await getFleetLlmHostStatus());
+  }));
+  router.get('/fleet-peer-hosts', asyncHandler(async (req, res) => {
+    const { getFleetPeerHosts } = await import('../services/fleetLlmHost.js');
+    res.set('Cache-Control', 'no-store').json(await getFleetPeerHosts());
+  }));
+  router.post('/fleet-peer-hosts/:peerId/key', asyncHandler(async (req, res) => {
+    const { revealFleetPeerHostKey } = await import('../services/fleetLlmHost.js');
+    res.set('Cache-Control', 'no-store').json(await revealFleetPeerHostKey(req.params.peerId));
+  }));
+  // Explicit reveal; secrets are never included in status, URLs or install logs.
+  router.post('/fleet-host/key', asyncHandler(async (req, res) => {
+    const { revealFleetLlmKey } = await import('../services/fleetLlmHost.js');
+    res.set('Cache-Control', 'no-store').json({ apiKey: await revealFleetLlmKey() });
+  }));
+  router.post('/fleet-host/setup', asyncHandler(async (req, res) => {
+    const { configureFleetLlmHost } = await import('../services/fleetLlmHost.js');
+    if (runtimeSetupInFlight) throw new ServerError('Another model setup is running.', { status: 409, code: 'SETUP_BUSY' });
+    runtimeSetupInFlight = true;
+    const { send, safeEnd } = openSseStream(res);
+    let clientGone = false;
+    onClientDisconnect(req, res, () => { clientGone = true; });
+    const result = await configureFleetLlmHost({
+      emit: (message) => send({ type: 'log', message }),
+      isCancelled: () => clientGone,
+    }).catch((err) => ({ success: false, error: err.message }))
+      .finally(() => { runtimeSetupInFlight = false; resetProviderReadinessCache(); });
+    send(result.success ? { type: 'complete', message: 'Host configured. Check model readiness below.' } : { type: 'error', message: result.error });
+    safeEnd();
+  }));
+
   const providerService = aiToolkit.services.providers;
   const providerStatusService = aiToolkit.services.providerStatus;
 
@@ -189,13 +224,23 @@ export function createPortOSProviderRoutes(aiToolkit) {
     // `null` here means NOT PROBED, and the dedicated `/codex/account` fetch is
     // what fills it — a card renders "unknown", never "signed out", until then.
     const codexAccount = peekCodexAccountReadiness();
+    // Same cache-only contract, for the CoS/model pickers (#6306): the signed-in
+    // account's real catalog when one has been fetched, otherwise the three-state
+    // shape that tells the client to keep showing its shipped list. Rendering a
+    // picker must never be what starts `codex app-server`.
+    const codexModelCatalog = peekCodexModelCatalog();
     res.json({
       activeProvider: data.activeProvider,
       providers: data.providers.map((provider) => ({
         ...presentProvider(provider, capabilities),
         prerequisitesMet: prerequisites[provider.id]?.met ?? true,
         missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
-        ...(isCodexSubscriptionProvider(provider) ? { codexAccount } : {}),
+        // NON-blocking notices — today only 'this install's own ~/.codex/config.toml
+        // re-points Codex model routing'. Kept OUT of `missingPrerequisites` so a
+        // legitimate user choice never buckets a card as NEEDS SETUP; the card
+        // renders it as a badge and caveats the subscription quota with it.
+        prerequisiteAdvisories: prerequisites[provider.id]?.advisories ?? [],
+        ...(isCodexSubscriptionProvider(provider) ? { codexAccount, codexModelCatalog } : {}),
       })),
       runnerAllowedCommands: RUNNER_ALLOWED_COMMANDS
     });

@@ -1,6 +1,37 @@
 {
   "activeProvider": "claude-code-tui",
   "providers": {
+    "pi-cli": {
+      "id": "pi-cli",
+      "name": "Pi Coding Agent CLI",
+      "type": "cli",
+      "command": "pi",
+      "args": [
+        "--print",
+        "--approve"
+      ],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
+    "pi-tui": {
+      "id": "pi-tui",
+      "name": "Pi Coding Agent TUI",
+      "type": "tui",
+      "command": "pi",
+      "args": [
+        "--approve"
+      ],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
     "claude-code": {
       "id": "claude-code",
       "name": "Claude Code CLI",
@@ -110,6 +141,42 @@
       "enabled": false,
       "envVars": {
         "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"ollama\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"Ollama (local)\",\"options\":{\"baseURL\":\"http://localhost:11434/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500
+    },
+    "opencode-lmstudio": {
+      "id": "opencode-lmstudio",
+      "name": "OpenCode LM Studio (local model)",
+      "type": "cli",
+      "command": "opencode",
+      "args": ["run"],
+      "models": [],
+      "defaultModel": null,
+      "lmstudioBacked": true,
+      "numCtx": 32768,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"lmstudio\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"LM Studio (local)\",\"options\":{\"baseURL\":\"http://localhost:1234/v1\"}}}}"
+      },
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
+    "opencode-lmstudio-tui": {
+      "id": "opencode-lmstudio-tui",
+      "name": "OpenCode LM Studio TUI (local model)",
+      "type": "tui",
+      "command": "opencode",
+      "args": [],
+      "models": [],
+      "defaultModel": null,
+      "lmstudioBacked": true,
+      "numCtx": 32768,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "OPENCODE_CONFIG_CONTENT": "{\"permission\":\"allow\",\"provider\":{\"lmstudio\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"LM Studio (local)\",\"options\":{\"baseURL\":\"http://localhost:1234/v1\"}}}}"
       },
       "secretEnvVars": [],
       "tuiPromptDelayMs": 2500
@@ -463,7 +530,7 @@
       "type": "cli",
       "command": "codex",
       "args": [],
-      "models": ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.3-codex-spark"],
+      "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"],
       "defaultModel": "gpt-5.6-terra",
       "lightModel": "gpt-5.6-luna",
       "mediumModel": "gpt-5.6-terra",
@@ -472,6 +539,7 @@
       "timeout": 300000,
       "enabled": true,
       "textTransport": "codex-app-server",
+      "ignoreUserConfig": false,
       "envVars": {},
       "secretEnvVars": []
     },
@@ -481,7 +549,7 @@
       "type": "tui",
       "command": "codex",
       "args": ["--dangerously-bypass-approvals-and-sandbox"],
-      "models": ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.3-codex-spark"],
+      "models": ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"],
       "defaultModel": "gpt-5.6-terra",
       "lightModel": "gpt-5.6-luna",
       "mediumModel": "gpt-5.6-terra",
@@ -490,9 +558,44 @@
       "timeout": 600000,
       "enabled": false,
       "textTransport": "codex-app-server",
+      "ignoreUserConfig": false,
       "envVars": {},
       "secretEnvVars": [],
       "tuiPromptDelayMs": 2500
+    },
+    "codex-ollama": {
+      "id": "codex-ollama",
+      "name": "Codex Ollama (local model)",
+      "type": "cli",
+      "command": "codex",
+      "args": [],
+      "endpoint": "http://localhost:11434",
+      "models": [],
+      "defaultModel": null,
+      "ollamaBacked": true,
+      "numCtx": 131072,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "headlessArgs": []
+    },
+    "codex-lmstudio": {
+      "id": "codex-lmstudio",
+      "name": "Codex LM Studio (local model)",
+      "type": "cli",
+      "command": "codex",
+      "args": [],
+      "endpoint": "http://localhost:1234/v1",
+      "models": [],
+      "defaultModel": null,
+      "lmstudioBacked": true,
+      "numCtx": 32768,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "headlessArgs": []
     },
     "claude-code-tui": {
       "id": "claude-code-tui",
@@ -633,6 +736,19 @@
       "apiKey": "",
       "models": ["mtplx-qwen38-27b-optimized-speed"],
       "defaultModel": "mtplx-qwen38-27b-optimized-speed",
+      "timeout": 300000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
+    "slotstream": {
+      "id": "slotstream",
+      "name": "Slotstream (SSD-streaming MoE)",
+      "type": "api",
+      "endpoint": "http://127.0.0.1:5564/v1",
+      "apiKey": "",
+      "models": ["qwen3-235b-a22b-4bit", "gpt-oss-120b-mxfp4", "qwen3-30b-a3b-4bit"],
+      "defaultModel": "qwen3-235b-a22b-4bit",
       "timeout": 300000,
       "enabled": false,
       "envVars": {},

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle, Box, Download, HardDrive, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router';
+import DuplicateModelWeights from './DuplicateModelWeights.jsx';
 import MemoryManagement from '../settings/MemoryManagement.jsx';
 import Banner from '../ui/Banner.jsx';
 import CleanupControl from '../system-resources/CleanupControl.jsx';
@@ -60,6 +61,8 @@ export default function ModelsPanel({ report, loading, onRunReport, cleanup }) {
   return (
     <div className="space-y-4">
       <MemoryManagement onLoadedModelsChange={setResidency} />
+
+      <DuplicateModelWeights key={report?.generatedAt} duplicates={report?.modelDuplicates} locked={loading || cleanup.locked} onRefresh={onRunReport} />
 
       {!report ? <InventoryEmpty loading={loading} onRun={onRunReport} /> : (
         <section className="rounded-2xl border border-port-border bg-port-card p-4 sm:p-5">

@@ -32,7 +32,7 @@
  *     with no limit window in flight is never mistaken for a broken fetch.
  */
 
-import { commandBasename } from './providerModels.js';
+import { commandBasename, localRuntimeNamespace } from './providerModels.js';
 
 /**
  * The one invocation PortOS is allowed to spawn. Fixed argv, never assembled
@@ -104,7 +104,15 @@ export const isCodexSubscriptionProvider = (provider) => {
   if (provider?.type !== 'cli' && provider?.type !== 'tui') return false;
   const command = typeof provider?.command === 'string' ? provider.command.trim() : '';
   if (command === '') return false;
-  return commandBasename(command) === CODEX_APP_SERVER_COMMAND;
+  if (commandBasename(command) !== CODEX_APP_SERVER_COMMAND) return false;
+  // A local-runtime-backed codex record (`codex --oss --local-provider ollama`)
+  // generates its tokens on this machine and authenticates against nothing, so
+  // the ChatGPT account is not one of its prerequisites. Without this it would
+  // paint "No ChatGPT account is signed in" on a provider that needs no account
+  // — and the card would sit in UNKNOWN until an account read that will never
+  // matter answers. MIRROR of `isCodexSubscriptionProvider` in
+  // client/src/utils/providers.js.
+  return localRuntimeNamespace(provider) === null;
 };
 
 /**

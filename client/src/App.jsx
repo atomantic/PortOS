@@ -1,4 +1,5 @@
 import { Suspense, useEffect } from 'react';
+import { isPublicGuestRoute } from './lib/publicGuestRoutes';
 import { Routes, Route, Navigate, useLocation } from 'react-router';
 import Layout from './components/Layout';
 import { getSettings, updateSettings, getSelfInstance, PORTOS_APP_ID } from './services/api';
@@ -130,6 +131,7 @@ const PipelineContinuityBible = lazyWithReload(() => import('./pages/PipelineCon
 const PipelineManuscriptEditor = lazyWithReload(() => import('./pages/PipelineManuscriptEditor'));
 const PipelineExport = lazyWithReload(() => import('./pages/PipelineExport'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
+const EidoverseGuest = lazyWithReload(() => import('./pages/EidoverseGuest'));
 const Login = lazyWithReload(() => import('./pages/Login'));
 const NotFound = lazyWithReload(() => import('./pages/NotFound'));
 
@@ -244,13 +246,14 @@ function useDocumentTitle(enabled = true) {
 
 export default function App() {
   const { pathname } = useLocation();
-  const isHostedAudienceRoute = pathname.replace(/\/+$/, '') === '/fableloom/join';
+  const isHostedAudienceRoute = isPublicGuestRoute(pathname);
   useTimezoneBootstrap(!isHostedAudienceRoute);
   useDocumentTitle(!isHostedAudienceRoute);
 
   const routeContent = (
     <Suspense fallback={<PageLoader />}>
       <Routes>
+        <Route path="/eidoverse/guest" element={<EidoverseGuest />} />
         <Route path="/login" element={<Login />} />
         <Route path="/ambient" element={<Ambient />} />
         {/* Hosted audience devices need the full dynamic viewport, without the

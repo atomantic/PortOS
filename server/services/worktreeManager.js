@@ -584,7 +584,8 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
  *   - the primary checkout, or any tree outside `data/cos/worktrees/` — moving
  *     the user's own checkout out from under them is exactly the branch-jacking
  *     guarded against everywhere else;
- *   - a human `/claim` tree (`claim-*`), owned by the claim flow's cleanup;
+ *   - a human `/claim` tree (`claim-*`), owned by the claim flow's cleanup —
+ *     unless the caller passes `allowLiveClaim` (see below);
  *   - a tree whose agent is still running — it is mid-edit in that directory;
  *   - a locked worktree, whose lock means "don't touch" regardless of owner.
  *
@@ -593,11 +594,21 @@ async function createWorktreeUnlocked(agentId, sourceWorkspace, taskId, options 
  * @param {object} [options]
  * @param {Set<string>} [options.activeAgentIds] - agents currently running
  * @param {string} [options.preferredPath] - cached holder path to validate first
+ * @param {boolean} [options.allowLiveClaim=false] - treat a `claim-*` holder as
+ *   adoptable rather than off-limits. The claim flow keeps no durable agent id
+ *   for its branch, so this can't distinguish an idle claim tree from a live
+ *   `/do:next` session in it — pass it only for a task whose whole purpose IS
+ *   that exact branch (a review-loop resolve-and-merge follow-up, or a PR-
+ *   remediation follow-up — `isNonCommittingCoordinatorTask` in taskTypeHooks.js),
+ *   where the task's own deliverable is the signal that the claim's work should
+ *   be finished and landed. Mirrors `branchReconcile.resolveLiveOwnerReason`'s
+ *   dispatch-side carve-out for the same directory shape (#6243).
  * @returns {Promise<{ path: string, agentId: string }|null>}
  */
 export async function findAdoptableWorktreeForBranch(sourceWorkspace, branchName, {
   activeAgentIds = new Set(),
   preferredPath = null,
+  allowLiveClaim = false,
 } = {}) {
   if (!sourceWorkspace || !branchName) return null;
 
@@ -618,6 +629,7 @@ export async function findAdoptableWorktreeForBranch(sourceWorkspace, branchName
     activeAgentIds,
     roots: [{ path: WORKTREES_DIR, requireAgentId: true }],
     requireKnownLiveness: true,
+    allowLiveClaim,
   });
   if (ownershipReason) return null;
 

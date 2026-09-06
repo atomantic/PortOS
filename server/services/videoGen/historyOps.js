@@ -1,7 +1,6 @@
 /** User-facing video-history mutations. */
 
-import { unlink } from 'fs/promises';
-import { PATHS } from '../../lib/fileUtils.js';
+import { PATHS, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
@@ -47,17 +46,17 @@ export async function deleteHistoryItem(id) {
   // Same path-traversal guard as extractLastFrame — unlink only if the
   // filename resolves to inside the expected dir.
   const videoFile = safeUnder(PATHS.videos, item.filename);
-  if (videoFile) await unlink(videoFile).catch(() => {});
+  if (videoFile) await unlinkGuarded(videoFile).catch(() => {});
   if (item.thumbnail) {
     const thumbFile = safeUnder(PATHS.videoThumbnails, item.thumbnail);
-    if (thumbFile) await unlink(thumbFile).catch(() => {});
+    if (thumbFile) await unlinkGuarded(thumbFile).catch(() => {});
   }
   // Delete evaluation frame thumbnails written by sampleEvaluationFrames:
   // `${jobId}-f1.jpg` … `${jobId}-f9.jpg` (max count in sampleEvaluationFrames is 5,
   // but 9 is a safe upper bound to catch any future increase).
   for (let i = 1; i <= 9; i++) {
     const frameFile = safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`);
-    if (frameFile) await unlink(frameFile).catch(() => {});
+    if (frameFile) await unlinkGuarded(frameFile).catch(() => {});
   }
   // Serialized removal through the shared tail (re-filters the freshest list),
   // so a concurrent download/render append isn't dropped by this save.

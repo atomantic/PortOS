@@ -85,7 +85,7 @@ describe('ensurePrReviewerPipeline', () => {
         providerId: 'codex-cli',
         model: 'gpt-5.6',
         effort: 'high',
-        executionProfile: 'public-review-actions',
+        executionProfile: 'public-review-gate',
       }),
     ]);
   });

@@ -11,6 +11,7 @@ import {
   getLlamaServerUpdateStatus,
   upgradeLlamaServer,
   _resetLlamaServerStateForTests,
+  _setLlamaKeepLoadedOverrideForTests,
   LLAMA_APP,
 } from './llamaServerManager.js';
 import * as processEnv from '../lib/processEnv.js';
@@ -1523,6 +1524,15 @@ describe('llamaServerManager', () => {
       mockHelp('--sleep-idle-seconds SECONDS  number of seconds of idleness');
 
       await startLlamaServer({ model: modelPath, draftModel: null, specType: '', port: 8080, sleepIdleMinutes: 0 });
+
+      expect(startArgs()).not.toContain('--sleep-idle-seconds');
+    });
+
+    it('leaves the flag off when keepLoaded is configured', async () => {
+      mockHelp('--sleep-idle-seconds SECONDS  number of seconds of idleness');
+      _setLlamaKeepLoadedOverrideForTests(true);
+
+      await startLlamaServer({ model: modelPath, draftModel: null, specType: '', port: 8080, sleepIdleMinutes: 30 });
 
       expect(startArgs()).not.toContain('--sleep-idle-seconds');
     });

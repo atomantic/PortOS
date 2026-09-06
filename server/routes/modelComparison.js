@@ -1,0 +1,44 @@
+import { Router } from 'express';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest, modelComparisonImportSchema, modelComparisonDiscoverySchema, modelComparisonSyncSchema } from '../lib/validation.js';
+import { getModelComparison, importModelComparison } from '../services/modelComparison.js';
+import { syncArtificialAnalysisCatalog } from '../services/artificialAnalysis.js';
+import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
+import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
+import { providerCatalogSlugs } from '../lib/comparisonModelScope.js';
+
+export function createModelComparisonRoutes(providerService) {
+  const router = Router();
+  router.get('/', asyncHandler(async (req, res) => {
+    const [catalog, { providers }] = await Promise.all([getModelComparison(), providerService.getAllProviders()]);
+    const inventory = providers.filter(p => p.enabled !== false).map(p => ({
+      id: p.id, name: p.name, type: p.type, canDiscover: canRefreshModels(p),
+      models: filterSelectableModels(p.models).filter(m => typeof m === 'string' && m).map(model => ({
+        model, efforts: effortLevelsForProvider(p, model) || [],
+      })),
+    }));
+    // Benchmark rows the user can act on: the chart defaults to the models their
+    // own providers can dispatch, with the rest of the index one click away.
+    res.json({ ...catalog, inventory, availableModels: [...providerCatalogSlugs(inventory)].sort() });
+  }));
+  // Explicit read-only catalog discovery: no model inference or provider writes.
+  router.post('/discover', asyncHandler(async (req, res) => {
+    const { providerId } = validateRequest(modelComparisonDiscoverySchema, req.body);
+    const { providers } = await providerService.getAllProviders();
+    const provider = providers.find(p => p.id === providerId && p.enabled !== false);
+    if (!provider || !canRefreshModels(provider)) throw new ServerError('Provider is unavailable for model discovery', { status: 400 });
+    const catalog = await providerService.fetchProviderModelCatalog(provider.id);
+    if (!catalog) throw new ServerError('Provider model discovery returned no catalog', { status: 502 });
+    res.json({ providerId: provider.id, models: filterSelectableModels(catalog.models).map(model => ({
+      model, efforts: effortLevelsForProvider({ ...provider, models: catalog.models }, model) || [],
+    })) });
+  }));
+  router.post('/import', asyncHandler(async (req, res) => {
+    res.json(await importModelComparison(validateRequest(modelComparisonImportSchema, req.body)));
+  }));
+  router.post('/sync-aa', asyncHandler(async (req, res) => {
+    const { apiKey } = validateRequest(modelComparisonSyncSchema, req.body || {});
+    res.json(await syncArtificialAnalysisCatalog({ apiKey }));
+  }));
+  return router;
+}

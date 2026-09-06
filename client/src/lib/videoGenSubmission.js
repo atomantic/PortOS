@@ -23,6 +23,16 @@ const stylePresetsFor = (selectedUniverse, stylePreset) => [
   stylePreset,
 ].filter(Boolean);
 
+/**
+ * The prompt the cloud lanes actually submit: the user's text with any universe
+ * / style-preset prompt folded in front of it. Exported because reactor.inc caps
+ * the SUBMITTED prompt at 800 characters — the form's counter has to measure the
+ * same string this module builds, not the raw textarea, or a preset silently
+ * pushes a "safe" prompt over the cap.
+ */
+export const styledVideoPrompt = (text, { negativePrompt, stylePreset, selectedUniverse } = {}) =>
+  composeStyledPrompt(text, negativePrompt, stylePresetsFor(selectedUniverse, stylePreset)).prompt;
+
 export function envelopVideoPrompt(text, {
   currentModel, negativePrompt, stylePreset, selectedUniverse, noMusic, disableAudio,
 }) {
@@ -34,10 +44,12 @@ export function envelopVideoPrompt(text, {
 }
 
 export function buildVideoGenSubmission({
-  isGrok, grokDuration, remoteSubmissionFields,
+  isGrok, grokDuration, isFal, falDuration, falModelId,
+  isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
+  displaySleepEnabled,
   prompt, negativePrompt, stylePreset, selectedUniverse,
   width, height, mode, sourceImageFile, sourceImageUpload,
-  numFrames, fps, steps, guidanceScale, seed,
+  numFrames, fps, steps, guidanceScale, seed, batchSize = 1,
   currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
   disableAudio, noMusic, imageStrength, i2vReferenceMode,
   keyframesActive, keyframes, loraFamily, selectedLoras,
@@ -71,6 +83,52 @@ export function buildVideoGenSubmission({
     };
   }
 
+  if (isFal) {
+    return {
+      backend: 'fal',
+      prompt: composed.prompt,
+      // No negativePrompt: fal's buildRequestBody never sends one, so posting it
+      // only stamped a promise on the history record that nothing honored.
+      falDuration,
+      falModelId: falModelId || undefined,
+      width: clampImageEdge(width, VIDEO_EDGE_BOUNDS),
+      height: clampImageEdge(height, VIDEO_EDGE_BOUNDS),
+      mode: mode === 'image' ? 'image' : 'text',
+      sourceImageFile: mode === 'image' ? (sourceImageFile || '') : '',
+      sourceImage: mode === 'image' ? (sourceImageUpload || '') : '',
+    };
+  }
+
+  if (isReactor) {
+    return {
+      backend: 'reactor',
+      prompt: composed.prompt,
+      // No negativePrompt: fast-h3's enqueue command has no such field (same as
+      // the fal lane above).
+      // The clip id chains this render onto a previous reactor clip via
+      // continue_from_clip_id; the picker only offers ids off completed reactor
+      // history records. Dropped in Image mode because continuation and a
+      // starting frame are exclusive — the service rejects a request carrying
+      // both, and the picker is already disabled there.
+      reactorClipId: (mode === 'image' ? '' : reactorClipId) || undefined,
+      reactorSeconds: reactorSeconds || undefined,
+      // Unlike falDuration/falModelId, a seed of 0 is a real, meaningful
+      // value — `|| undefined` would silently drop it (the reactor route
+      // and reactor.js's own buildRequestBody already preserve 0 correctly,
+      // so only the client-side send needs the nullish check).
+      reactorSeed: reactorSeed === '' || reactorSeed === null || reactorSeed === undefined ? undefined : reactorSeed,
+      // No width/height: fast-h3's resolution is its session CANVAS, and every
+      // canvas holds a 768px short edge, so the aspect string is the whole
+      // choice. '' is the picker's Auto entry — sending nothing asks the server
+      // to derive the canvas from the starting frame instead of opening the
+      // 16:9 session that squeezed a portrait image into a landscape render.
+      reactorAspect: reactorAspect || undefined,
+      mode: mode === 'image' ? 'image' : 'text',
+      sourceImageFile: mode === 'image' ? (sourceImageFile || '') : '',
+      sourceImage: mode === 'image' ? (sourceImageUpload || '') : '',
+    };
+  }
+
   if (remoteSubmissionFields) {
     return {
       backend: 'local',
@@ -83,7 +141,7 @@ export function buildVideoGenSubmission({
       fps,
       steps: steps || '',
       guidanceScale: guidanceScale || '',
-      seed: seed || '',
+      seed: seed ?? '',
       ...remoteSubmissionFields,
     };
   }
@@ -101,7 +159,8 @@ export function buildVideoGenSubmission({
     fps,
     steps: steps || '',
     guidanceScale: guidanceScale || '',
-    seed: seed || '',
+    seed: seed ?? '',
+    ...(currentModel?.supportsWarmBatch && !chainingActive && batchSize > 1 ? { batchSize } : {}),
     tiling: currentModel?.supportsTiling === false ? 'auto' : tiling,
     textEncoderId: normalizeTextEncoderForModel(textEncoderId, currentModel) === STOCK_TEXT_ENCODER_ID
       ? undefined
@@ -118,6 +177,11 @@ export function buildVideoGenSubmission({
       ? undefined
       : draftDecode,
     disableAudio: effectiveDisableAudio ? 'true' : 'false',
+    // Only meaningful on a runtime the GPU-watchdog mitigation applies to —
+    // absent otherwise so an unrelated model's render never carries a stale
+    // choice. The grok/fal/reactor/remote branches above already returned, so
+    // reaching here already means none of those apply.
+    ...(currentModel?.sleepsDisplayDuringRender ? { displaySleep: displaySleepEnabled ? 'true' : 'false' } : {}),
     mode,
     imageStrength: imageStrength || '',
     i2vReferenceMode: isDefaultI2vReferenceMode(i2vReferenceMode) ? '' : i2vReferenceMode,

@@ -166,7 +166,8 @@ describe('CoS Insight Routes', () => {
       cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
       productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
       detectIdleLeftoverBranches.mockResolvedValueOnce([{
-        appId: 'app-acme', leftoverCount: 3, lastUserReconcileAt: null, agentsIdle: true,
+        appId: 'app-acme', appName: 'Acme', leftoverCount: 3, states: { NEEDS_PR: 3 },
+        branches: ['claim/one'], lastUserReconcileAt: null, agentsIdle: true,
       }]);
 
       const response = await request(app).get('/api/cos/actionable-insights');
@@ -176,10 +177,40 @@ describe('CoS Insight Routes', () => {
         type: 'leftover-branches',
         priority: 'medium',
         icon: 'AlertTriangle',
-        title: '3 leftover branches on app-acme, agents idle. Run branch-reconcile?',
-        action: { label: 'Run Now', route: '/cos/schedule' },
+        title: '3 leftover branches on Acme, agents idle. Run branch-reconcile?',
+        // The deep link opens the branch-reconcile task itself, not the bare page.
+        action: { label: 'Run Now', route: '/cos/schedule?task=branch-reconcile' },
+        apps: [{
+          appId: 'app-acme', appName: 'Acme', leftoverCount: 3,
+          states: { NEEDS_PR: 3 }, branches: ['claim/one'], lastUserReconcileAt: null,
+        }],
         count: 3,
       }));
+    });
+
+    // A bare cross-app total ("20 branches across 6 apps") left the operator with
+    // no way to know which app to run branch-reconcile for — the card now names
+    // every app and carries the per-app rows the banner runs from.
+    it('names each app holding leftover branches in the multi-app card', async () => {
+      cos.getAllTasks.mockResolvedValue({
+        user: { grouped: { pending: [], blocked: [] } },
+        cos: { awaitingApproval: [], grouped: { pending: [], blocked: [] } }
+      });
+      taskLearning.getLearningInsights.mockResolvedValue({ skippedTypes: [] });
+      cos.runHealthCheck.mockResolvedValue({ issues: [] });
+      cos.getPendingAgentFeedbackCount.mockResolvedValue(0);
+      productivity.getOptimalTimeInfo.mockResolvedValue({ hasData: false });
+      detectIdleLeftoverBranches.mockResolvedValueOnce([
+        { appId: 'app-acme', appName: 'Acme', leftoverCount: 4, states: { NEEDS_PR: 4 }, branches: [], lastUserReconcileAt: null, agentsIdle: true },
+        { appId: 'app-beta', appName: 'Beta', leftoverCount: 1, states: { WIP: 1 }, branches: [], lastUserReconcileAt: '2026-08-28T10:00:00.000Z', agentsIdle: true },
+      ]);
+
+      const response = await request(app).get('/api/cos/actionable-insights');
+
+      const insight = response.body.insights.find(i => i.type === 'leftover-branches');
+      expect(insight.title).toBe('5 leftover branches across 2 apps, agents idle. Run branch-reconcile?');
+      expect(insight.description).toBe('Acme (4) · Beta (1)');
+      expect(insight.apps.map(app => app.appId)).toEqual(['app-acme', 'app-beta']);
     });
 
     // The health insight filtered on a `severity` field runHealthCheck never

@@ -1,10 +1,10 @@
-import { createWriteStream, createReadStream } from 'fs';
-import { writeFile, stat, unlink } from 'fs/promises';
+import { createReadStream } from 'fs';
+import { stat } from 'fs/promises';
 import { join } from 'path';
 import { createGunzip } from 'zlib';
 import { createInterface } from 'readline';
 import { pipeline } from 'stream/promises';
-import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile, createWriteStreamGuarded, unlinkGuarded } from '../lib/fileUtils.js';
 
 const GENOME_DIR = PATHS.meatspace;
 const CLINVAR_GZ = join(GENOME_DIR, 'clinvar-raw.txt.gz');
@@ -65,7 +65,7 @@ async function downloadClinvar(onProgress) {
   }
 
   const totalBytes = parseInt(response.headers.get('content-length') || '0', 10);
-  const writer = createWriteStream(CLINVAR_GZ);
+  const writer = await createWriteStreamGuarded(CLINVAR_GZ);
   const reader = response.body.getReader();
 
   let downloaded = 0;
@@ -264,7 +264,7 @@ export async function syncClinvar(onProgress) {
 
   // Save compact index
   const indexJson = JSON.stringify(index);
-  await writeFile(CLINVAR_INDEX, indexJson);
+  await atomicWrite(CLINVAR_INDEX, indexJson);
 
   // Save metadata
   const meta = {
@@ -277,7 +277,7 @@ export async function syncClinvar(onProgress) {
   await atomicWrite(CLINVAR_META, meta);
 
   // Clean up the raw gz file to save disk space
-  await unlink(CLINVAR_GZ).catch(() => {});
+  await unlinkGuarded(CLINVAR_GZ).catch(() => {});
 
   console.log(`🧬 ClinVar sync complete: ${meta.variantCount.toLocaleString()} variants indexed (${(meta.indexSize / 1024 / 1024).toFixed(1)}MB)`);
 
@@ -370,9 +370,9 @@ export async function scanClinvar(snpIndex) {
  * Delete ClinVar data (index + meta + raw).
  */
 export async function deleteClinvar() {
-  await unlink(CLINVAR_GZ).catch(() => {});
-  await unlink(CLINVAR_INDEX).catch(() => {});
-  await unlink(CLINVAR_META).catch(() => {});
+  await unlinkGuarded(CLINVAR_GZ).catch(() => {});
+  await unlinkGuarded(CLINVAR_INDEX).catch(() => {});
+  await unlinkGuarded(CLINVAR_META).catch(() => {});
   clinvarIndex = null;
   console.log('🧬 ClinVar data deleted');
   return { success: true };

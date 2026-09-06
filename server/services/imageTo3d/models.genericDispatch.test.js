@@ -16,6 +16,8 @@ vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: { imageTo3d: '/mock/data/image-to-3d' },
   resolveGalleryImage: vi.fn((filename) => `/mock/data/images/${filename}`),
   ensureDir: vi.fn(() => Promise.resolve()),
+  rmGuarded: vi.fn(() => Promise.resolve()),
+  writeFileGuarded: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('./targets.js', () => ({

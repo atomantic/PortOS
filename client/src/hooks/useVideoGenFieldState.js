@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { GROK_VIDEO_DEFAULT_DURATION } from '../lib/grokVideoClip.js';
+import { REACTOR_DEFAULT_CLIP_LENGTH } from '../lib/reactorVideoClip.js';
 import { DEFAULT_I2V_REFERENCE_MODE } from '../lib/videoReferenceModes.js';
 import {
   DEFAULT_CONTEXT_FRAMES,
@@ -21,6 +22,14 @@ export function useVideoGenFieldState({
 }) {
   const [backend, setBackend] = useState('local');
   const [grokDuration, setGrokDuration] = useState(GROK_VIDEO_DEFAULT_DURATION);
+  const [falDuration, setFalDuration] = useState('');
+  const [falModelId, setFalModelId] = useState('');
+  const [reactorClipId, setReactorClipId] = useState('');
+  const [reactorSeconds, setReactorSeconds] = useState(REACTOR_DEFAULT_CLIP_LENGTH);
+  const [reactorSeed, setReactorSeed] = useState('');
+  // '' is the picker's Auto entry: submit no aspect and let the server derive
+  // the fast-h3 canvas from the starting frame (text renders fall back to 16:9).
+  const [reactorAspect, setReactorAspect] = useState('');
   const [mode, setMode] = useState(incomingAudioFilename ? 'a2v' : (incomingSourceImage ? 'image' : 'text'));
   const [prompt, setPrompt] = useState(incomingPrompt || '');
   const [negativePrompt, setNegativePrompt] = useState(incomingNegativePrompt || '');
@@ -41,6 +50,7 @@ export function useVideoGenFieldState({
   const [guidanceScale, setGuidanceScale] = useState('');
   const [imageStrength, setImageStrength] = useState('');
   const [i2vReferenceMode, setI2vReferenceMode] = useState(DEFAULT_I2V_REFERENCE_MODE);
+  const [batchSize, setBatchSize] = useState(1);
   const [seed, setSeed] = useState('');
   const [tiling, setTiling] = useState('auto');
   const [textEncoderId, setTextEncoderId] = useState(STOCK_TEXT_ENCODER_ID);
@@ -82,6 +92,12 @@ export function useVideoGenFieldState({
     extendFromVideoId, setExtendFromVideoId,
     fps, setFps,
     grokDuration, setGrokDuration,
+    falDuration, setFalDuration,
+    falModelId, setFalModelId,
+    reactorClipId, setReactorClipId,
+    reactorSeconds, setReactorSeconds,
+    reactorSeed, setReactorSeed,
+    reactorAspect, setReactorAspect,
     guidanceScale, setGuidanceScale,
     height, setHeight,
     i2vReferenceMode, setI2vReferenceMode,
@@ -104,7 +120,7 @@ export function useVideoGenFieldState({
     prompt, setPrompt,
     remixModelFallback, setRemixModelFallback,
     remixSourceModel, setRemixSourceModel,
-    seed, setSeed,
+    seed, setSeed, batchSize, setBatchSize,
     selectedLoras, setSelectedLoras,
     selectedUniverse, setSelectedUniverse,
     sizeManuallySetRef,

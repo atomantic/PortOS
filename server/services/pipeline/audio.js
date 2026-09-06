@@ -14,10 +14,9 @@
  * `engine:` prefix is interpreted as the active engine's voice.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, atomicWrite } from '../../lib/fileUtils.js';
 import { synthesize, listVoices, VALID_ENGINES } from '../voice/tts.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
@@ -249,7 +248,7 @@ export async function synthesizeToFile({ text, voiceId, profileId, route = 'stud
   // UUID filename keeps two simultaneous renders from colliding; the line's
   // audioJobId-or-audioFilename binding lives in stages.audio.lines[].
   const filename = `vo-${randomUUID()}.wav`;
-  await writeFile(join(PATHS.audio, filename), wav);
+  await atomicWrite(join(PATHS.audio, filename), wav);
   return {
     filename,
     latencyMs,

@@ -19,10 +19,10 @@
  */
 
 import { join } from 'path';
-import { readdir, rm, stat } from 'fs/promises';
+import { readdir, stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import {
-  ensureDir, atomicWrite, readJSONFile, pathExists, sha256File,
+  ensureDir, atomicWrite, readJSONFile, pathExists, sha256File, rmGuarded,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { executeTuiRun } from '../tuiPromptRunner.js';
@@ -1843,7 +1843,7 @@ async function assertDirectionReDerivable(recordId, walkState, direction, { ackn
 // walk-complete record with no frozen set behind it. Shared by unlock (re-opens
 // all directions) and reopen (re-opens one).
 async function dropFinalizedWalkSet(recordId, recordStatus = 'reference-complete') {
-  await rm(join(spriteDir(recordId), walkSetRelPath(recordId)), { force: true });
+  await rmGuarded(join(spriteDir(recordId), walkSetRelPath(recordId)), { force: true });
   await updateRecord(recordId, { status: recordStatus });
 }
 

@@ -1,3 +1,4 @@
+/** Pi uses --print --approve, --thinking, and a trailing argv prompt (not stdin). */
 /**
  * Per-CLI argv conventions for stdin-based prompt delivery.
  *

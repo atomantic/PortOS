@@ -26,6 +26,21 @@ const normalizeReviewerValue = (value) => normalizeReviewerSlug(value);
 // older build either.
 const CUSTOM_MODEL_OPTION = '[custom]';
 
+// Shared row grid, one template for the header and every row so their columns
+// cannot drift apart. The wide form keeps minimum tracks for order, provider,
+// model, effort, optional, max, and remove — together ~32rem, so the collapse is
+// keyed to a CONTAINER query (`@xl`), not a viewport one: this picker also
+// renders inside a narrow dashboard tile on a wide screen, where a viewport
+// `sm:` was unconditionally true and forced the wide grid into a ~250px column.
+// Below `@xl` a row collapses to a stacked 2-column label/value block, so a
+// narrow container never scrolls horizontally. The header is wide-only — in the
+// stacked form each cell carries its own inline label, since a header far above
+// a stacked row doesn't associate.
+const WIDE_TRACKS = '@xl:grid-cols-[2.5rem_minmax(5rem,1fr)_minmax(8rem,2fr)_minmax(7rem,1fr)_auto_3.25rem_auto]';
+const ROW_CLASS = `grid grid-cols-[auto_1fr] ${WIDE_TRACKS} items-center gap-x-2 gap-y-1 px-1.5 py-1.5 rounded border border-port-border bg-port-bg @xl:border-transparent @xl:bg-transparent @xl:py-0.5 @xl:rounded-none`;
+const CELL_LABEL_CLASS = '@xl:hidden text-[10px] uppercase tracking-wide text-gray-600';
+const HEADER_CLASS = `hidden @xl:grid ${WIDE_TRACKS} items-center gap-x-2 px-1.5 text-[10px] uppercase tracking-wide text-gray-600`;
+
 /**
  * Ordered multi-reviewer picker, rendered as one row per reviewer with the five
  * per-reviewer controls as columns: **Provider | Model | Effort | Optional | Max
@@ -58,10 +73,33 @@ const CUSTOM_MODEL_OPTION = '[custom]';
  * - **Max Iterations** → the numeric `~max=<n>` round cap (blank = slashdo's
  *   built-in default, `0` = loop until clean).
  *
- * Controlled: emits the full next shape via onChange so the parent can store
+ * Controlled: emits the next shape via onChange so the parent can store
  * `reviewers` / `usernames` / `optionalReviewers` / `reviewerModels` /
  * `reviewerEfforts` / `reviewerMaxRounds` / `reviewStopMode` / `reviewerApplies`
  * however it persists them.
+ *
+ * `defaults` is the resolved fallback the parent seeded the props from (the
+ * install-wide Code Review Defaults, as token-keyed maps for the pins). When
+ * provided, `emit()` OMITS any key whose value is deep-equal to
+ * `defaults[key]` — a field the user never touched stays absent from the
+ * payload, which is exactly what `resolveReviewerConfig` reads as "inherit".
+ * Without it the picker would freeze the defaults-of-that-moment into a
+ * permanent task override on first touch (#6208). Omit the prop where a full
+ * emit is correct — the surface that edits the defaults themselves has no
+ * fallback to inherit from.
+ *
+ * Absent keeps meaning inherit and an explicitly-empty value keeps meaning
+ * "clear": the comparison is against the resolved default, never against
+ * emptiness, so `{}` / `[]` equal only a matching default and are otherwise
+ * emitted as a real override that clears it. (One key is exempt: the server
+ * drops an empty `reviewers` list before persisting, so `reviewers: []`
+ * resolves to the default chain either way — pre-existing server behavior.)
+ *
+ * Known trade-off: the diff is against the CURRENT default, so an override
+ * that happens to equal it (e.g. set before the default changed to match) is
+ * indistinguishable from "never touched" and reverts to inherit the next time
+ * any other field is edited. The effective reviewers are unchanged at that
+ * moment — the pin only stops shadowing future default changes.
  *
  * `modelOptions` is the resolved model-picker data, shaped like
  * `useReviewerModelOptions()`'s return: `{ optionsByReviewer, defaultModels,
@@ -101,6 +139,7 @@ export default function ReviewerPicker({
   installed = null,
   stopMode = DEFAULT_REVIEW_STOP_MODE,
   reviewerApplies = false,
+  defaults = null,
   onChange,
   disabled = false,
   showRunFlags = true
@@ -221,17 +260,68 @@ export default function ReviewerPicker({
     ? addable
     : addable.filter(opt => !hiddenAddable.includes(opt));
 
-  const emit = (next) => onChange?.({
-    reviewers: selected,
-    usernames: selectedUsernames,
-    optionalReviewers: optionalTokens,
-    reviewerMaxRounds: maxRoundsMap,
-    reviewerModels: modelsMap,
-    reviewerEfforts: effortsMap,
-    stopMode,
-    reviewerApplies,
-    ...next
-  });
+  // Case-insensitive equality for the token lists (reviewer slugs are already
+  // lowercased; GitHub usernames are case-insensitive). Order matters ONLY for
+  // `reviewers` — the chain runs in click order — so the username lists compare
+  // as sorted sets; otherwise a same-membership reorder would over-emit.
+  const listsEqual = (a, b, ordered) => {
+    if (!Array.isArray(a) || !Array.isArray(b)) return a === b;
+    if (a.length !== b.length) return false;
+    const left = a.map((value) => String(value).toLowerCase());
+    const right = b.map((value) => String(value).toLowerCase());
+    if (!ordered) {
+      left.sort();
+      right.sort();
+    }
+    return left.every((value, index) => value === right[index]);
+  };
+  // Case-insensitive-key equality for the token-keyed pin maps. Values compare
+  // strictly: `0` (loop until clean) must never equal absent, and `{}` equals
+  // only a matching default so an explicit clear is still emitted.
+  const mapsEqual = (a, b) => {
+    const entries = (map) => {
+      if (!map || typeof map !== 'object' || Array.isArray(map)) return map;
+      return Object.entries(map)
+        .map(([key, value]) => [key.toLowerCase(), value])
+        .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+    };
+    const left = entries(a);
+    const right = entries(b);
+    if (!Array.isArray(left) || !Array.isArray(right)) return left === right;
+    if (left.length !== right.length) return false;
+    return left.every(([key, value], index) => right[index][0] === key && right[index][1] === value);
+  };
+  const equalsBaseline = (key, value, baseline) => {
+    if (key === 'reviewers') return listsEqual(value, baseline, true);
+    if (key === 'usernames' || key === 'optionalReviewers') return listsEqual(value, baseline, false);
+    if (key === 'reviewerMaxRounds' || key === 'reviewerModels' || key === 'reviewerEfforts') return mapsEqual(value, baseline);
+    return value === baseline;
+  };
+
+  const emit = (next) => {
+    const full = {
+      reviewers: selected,
+      usernames: selectedUsernames,
+      optionalReviewers: optionalTokens,
+      reviewerMaxRounds: maxRoundsMap,
+      reviewerModels: modelsMap,
+      reviewerEfforts: effortsMap,
+      stopMode,
+      reviewerApplies,
+      ...next
+    };
+    // No baseline (the surface editing the defaults themselves): full snapshot,
+    // exactly as before.
+    if (!defaults || typeof defaults !== 'object') {
+      onChange?.(full);
+      return;
+    }
+    const partial = {};
+    for (const key of Object.keys(full)) {
+      if (!equalsBaseline(key, full[key], defaults[key])) partial[key] = full[key];
+    }
+    onChange?.(partial);
+  };
 
   const toggleOptional = (token) => emit({
     optionalReviewers: isOptional(token) ? withoutToken(token) : [...optionalTokens, token]
@@ -572,18 +662,8 @@ export default function ReviewerPicker({
     emit({ reviewers: next });
   };
 
-  // Shared row grid. Desktop keeps minimum tracks for order, provider, model,
-  // effort, optional, max, and remove; under `sm` it collapses to a stacked
-  // 2-column label/value block so a narrow screen never needs horizontal
-  // scrolling. The header row is desktop-only — on mobile each cell carries
-  // its own inline label, since a header far above a stacked row doesn't
-  // associate.
-  const ROW_CLASS = 'grid grid-cols-[auto_1fr] sm:grid-cols-[2.5rem_minmax(5rem,1fr)_minmax(8rem,2fr)_minmax(7rem,1fr)_auto_3.25rem_auto] items-center gap-x-2 gap-y-1 px-1.5 py-1.5 rounded border border-port-border bg-port-bg sm:border-transparent sm:bg-transparent sm:py-0.5 sm:rounded-none';
-  const CELL_LABEL_CLASS = 'sm:hidden text-[10px] uppercase tracking-wide text-gray-600';
-  const HEADER_CLASS = 'hidden sm:grid sm:grid-cols-[2.5rem_minmax(5rem,1fr)_minmax(8rem,2fr)_minmax(7rem,1fr)_auto_3.25rem_auto] items-center gap-x-2 px-1.5 text-[10px] uppercase tracking-wide text-gray-600';
-
   return (
-    <div className="flex flex-col gap-2 w-full">
+    <div className="@container flex flex-col gap-2 w-full">
       <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">Reviewers (in order):</span>
         {selected.length > 0 && (
@@ -597,14 +677,14 @@ export default function ReviewerPicker({
               <span className="text-center">Max</span>
               <span className="sr-only">Remove</span>
             </div>
-            <div className="flex flex-col gap-1.5 sm:gap-0.5">
+            <div className="flex flex-col gap-1.5 @xl:gap-0.5">
               {selected.map((value, index) => (
                 <div
                   key={value}
                   className={ROW_CLASS}
                   title={REVIEWER_OPTIONS.find(o => o.value === value)?.description}
                 >
-                  <div className="flex items-center gap-0.5 col-span-2 sm:col-span-1">
+                  <div className="flex items-center gap-0.5 col-span-2 @xl:col-span-1">
                     <span className="text-port-accent font-mono text-xs">{index + 1}.</span>
                     <button
                       type="button"
@@ -625,7 +705,7 @@ export default function ReviewerPicker({
                       <ChevronDown size={12} />
                     </button>
                   </div>
-                  <span className="flex items-center gap-1 min-w-0 col-span-2 sm:col-span-1">
+                  <span className="flex items-center gap-1 min-w-0 col-span-2 @xl:col-span-1">
                     <span className="text-xs text-gray-300 truncate">{reviewerLabel(value)}</span>
                     {renderUnavailableBadge(value)}
                   </span>
@@ -641,7 +721,7 @@ export default function ReviewerPicker({
                   </div>
                   <span className={CELL_LABEL_CLASS}>Max iterations</span>
                   <div>{renderMaxRounds(value, reviewerLabel(value))}</div>
-                  <div className="col-span-2 sm:col-span-1 justify-self-end">
+                  <div className="col-span-2 @xl:col-span-1 justify-self-end">
                     <button
                       type="button"
                       disabled={disabled}
@@ -712,15 +792,15 @@ export default function ReviewerPicker({
       <div className="flex flex-col gap-1.5 pt-1 border-t border-port-border/50">
         <span className="text-xs text-gray-500">GitHub reviewers (gate merge):</span>
         {selectedUsernames.length > 0 ? (
-          <div className="flex flex-col gap-1.5 sm:gap-0.5">
+          <div className="flex flex-col gap-1.5 @xl:gap-0.5">
             {selectedUsernames.map((value) => (
               <div
                 key={value}
                 className={ROW_CLASS}
                 title="GitHub username requested as a PR reviewer to gate the merge"
               >
-                <span className="text-port-accent font-mono text-xs col-span-2 sm:col-span-1">@</span>
-                <span className="text-xs text-gray-300 col-span-2 sm:col-span-1 truncate">{value}</span>
+                <span className="text-port-accent font-mono text-xs col-span-2 @xl:col-span-1">@</span>
+                <span className="text-xs text-gray-300 col-span-2 @xl:col-span-1 truncate">{value}</span>
                 <span className={CELL_LABEL_CLASS}>Model</span>
                 <div className="min-w-0">{renderModelCell(`@${value}`)}</div>
                 <span className={CELL_LABEL_CLASS}>Effort</span>
@@ -733,7 +813,7 @@ export default function ReviewerPicker({
                 </div>
                 <span className={CELL_LABEL_CLASS}>Max iterations</span>
                 <div>{renderMaxRounds(`@${value}`, `@${value}`)}</div>
-                <div className="col-span-2 sm:col-span-1 justify-self-end">
+                <div className="col-span-2 @xl:col-span-1 justify-self-end">
                   <button
                     type="button"
                     disabled={disabled}

@@ -314,7 +314,7 @@ For HTTPS (recommended — required for the in-browser microphone away from loop
 npm run setup:cert                   # Tailscale + Let's Encrypt (trusted)
 npm run setup:guide                  # show the next setup action + correct URL
 npm run setup:cert -- --self-signed  # fallback if you don't have Tailscale
-pm2 restart ecosystem.config.cjs
+npm run pm2:restart
 ```
 
 After that, `https://<machine>.<tailnet>.ts.net:5555` is the user-facing URL on every device. The same `:5555` is used for both HTTP and HTTPS — only the scheme changes. When HTTPS is enabled a loopback-only HTTP mirror also spawns at `http://localhost:5553` so local curl/scripts skip cert warnings (override with `PORTOS_HTTP_PORT`).
@@ -323,7 +323,7 @@ After that, `https://<machine>.<tailnet>.ts.net:5555` is the user-facing URL on 
 
 The same walkthrough is always available in **Settings → Setup**. It verifies one runnable AI provider as well as secure remote access, and links directly to every action PortOS cannot perform at the account level. The Dashboard and Instances page surface the same network state; Unix and Windows update scripts retry certificate provisioning and print the guide after every update. See the [complete setup guide](./docs/SETUP.md).
 
-PM2 keeps PortOS running in the background and auto-restarts on reboot (with `pm2 save` + `pm2 startup`).
+PM2 keeps PortOS running in the background. To configure startup after a reboot, run `npm run pm2:startup` from the repository root and follow the platform-specific instructions it prints, then run `npm run pm2:save` to save the process list. `npm start` already saves the process list, but does not install the startup service.
 
 ### Development Mode
 
@@ -373,13 +373,15 @@ PortOS/
 
 ## PM2 Commands
 
+Run these from the repository root after setup. They use the PM2 bundled with PortOS, so a global `pm2` command is not required.
+
 ```bash
-pm2 start ecosystem.config.cjs    # Start PortOS
-pm2 status                         # View status
-pm2 logs portos-server --lines 100 # View server logs
-pm2 restart portos-server portos-ui # Restart processes
-pm2 stop portos-server portos-ui   # Stop processes
-pm2 save                           # Save process list (survives reboot)
+npm start                                      # Build the client and start PortOS
+npm run pm2:status                             # View status
+npm run pm2:logs -- portos-server --lines 100    # View server logs
+npm run pm2:restart                            # Restart the PortOS ecosystem
+npm run pm2:stop                               # Stop the PortOS ecosystem
+npm run pm2:save                               # Save the process list for startup
 ```
 
 ## Configuration

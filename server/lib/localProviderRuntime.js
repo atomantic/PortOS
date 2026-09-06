@@ -76,8 +76,7 @@ export function localBackendForProvider(provider) {
  * `defaultBaseUrl` is read from `opencodeConfig.js`'s provider table rather than
  * re-typed: that table is what a spawned OpenCode actually talks to when the
  * provider stores no config of its own, so a second copy here would eventually
- * probe a port nothing is on and call a working setup broken. LM Studio has no
- * row there (nothing spawns OpenCode against it), so it carries its own.
+ * probe a port nothing is on and call a working setup broken.
  *
  * `manageUrl` is the client route that installs/starts it — the Models → LLMs
  * page owns every one of these flows, so an unmet requirement links there
@@ -131,10 +130,18 @@ export const LOCAL_RUNTIMES = Object.freeze({
     id: 'lmstudio',
     label: 'LM Studio',
     command: 'lms',
-    defaultBaseUrl: 'http://localhost:1234/v1',
+    defaultBaseUrl: opencodeLocalBaseUrl('lmstudio'),
     manageUrl: '/models/llms',
     docsUrl: 'https://lmstudio.ai/download',
     modelsHint: 'Download a model in LM Studio and start its local server.',
+    // No pre-spawn context preparation, unlike Ollama's
+    // `ensureOllamaAgentContext`: LM Studio fixes a model's context length when
+    // the instance is LOADED, and the only lever PortOS holds is
+    // `lmStudioManager.loadModelWithArgs`, which UNLOADS whatever the user has
+    // resident and cold-loads the weights again. Paying that on every agent
+    // spawn — and evicting a model the operator loaded in the app — is worse
+    // than honouring the window they chose, so an `lmstudioBacked` provider's
+    // `numCtx` is set where the model is loaded, not here.
   }),
   vllm: Object.freeze({
     id: 'vllm',

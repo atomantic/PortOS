@@ -16,6 +16,7 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import BrailleSpinner from '../../BrailleSpinner';
 import useHoverTooltip from '../../../hooks/useHoverTooltip';
 import useFirstTouchHint from '../../../hooks/useFirstTouchHint';
+import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric } from '../../../utils/formatters';
 
 const EDGE_COLORS = {
@@ -241,9 +242,7 @@ export default function BrainGraph() {
   const [typeFilters, setTypeFilters] = useState(() =>
     Object.fromEntries(BRAIN_TYPES.map(t => [t, true]))
   );
-  const [reducedMotion, setReducedMotion] = useState(() =>
-    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-  );
+  const reducedMotion = usePrefersReducedMotion();
   const motionSettings = graphMotionSettings(reducedMotion);
 
   const graphRef = useRef(null);
@@ -253,15 +252,6 @@ export default function BrainGraph() {
   // True while the in-flight gesture came from a finger, so the mesh raycast
   // and onPointerMissed can stand down for the threshold pick below.
   const touchGestureRef = useRef(false);
-
-  useEffect(() => {
-    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)');
-    if (!media) return undefined;
-    const updatePreference = () => setReducedMotion(media.matches);
-    updatePreference();
-    media.addEventListener?.('change', updatePreference);
-    return () => media.removeEventListener?.('change', updatePreference);
-  }, []);
 
   const focusId = currentFocusId(focusTrail);
 
