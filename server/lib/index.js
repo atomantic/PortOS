@@ -412,6 +412,7 @@ export * from './providerGateways.js';
 export * from './providerHarnesses.js';
 export * from './providerConnections.js';
 export * from './providerGraphPreview.js';
+export * from './providerGraphRecords.js';
 export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
 export * from './postAdaptive.js';

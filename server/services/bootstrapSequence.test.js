@@ -464,6 +464,7 @@ describe('runDatabasePhase', () => {
       gate: step('gate', () => Promise.resolve(gateResult)),
       migrate: step('migrate', () => Promise.resolve()),
       warmStores: step('warmStores', () => Promise.resolve()),
+      reconcileProviderGraph: step('reconcileProviderGraph', () => Promise.resolve()),
       reconcileStackerNews: step('reconcileStackerNews', () => Promise.resolve())
     };
   };
@@ -471,7 +472,7 @@ describe('runDatabasePhase', () => {
   it('gates, migrates, warms, then arms the opt-in schedulers', async () => {
     const recorder = createRecorder();
     await runDatabasePhase(buildDeps(recorder));
-    expect(recorder.calls).toEqual(['gate', 'migrate', 'warmStores', 'reconcileStackerNews']);
+    expect(recorder.calls).toEqual(['gate', 'migrate', 'warmStores', 'reconcileProviderGraph', 'reconcileStackerNews']);
   });
 
   it('passes the gate result (dbReady + ensureSchema) straight to the migrations', async () => {

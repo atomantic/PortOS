@@ -459,7 +459,14 @@ export function createProviderService(config = {}) {
     // that storm to a single read without making config edits feel stale
     // (provider config changes are human-paced; saveProviders refreshes
     // the cache inline so a write is reflected immediately).
-    providersCacheTtlMs = 1000
+    providersCacheTtlMs = 1000,
+    // Host persistence hook, called after every SUCCESSFUL providers.json write
+    // with the data that landed. Injected rather than imported because this
+    // directory stays self-contained (see AGENTS.md): PortOS uses it to keep
+    // its machine-local provider connection graph (#6367) reconciled with a
+    // file any old client, migration or downgraded release may also write.
+    // Unset standalone, so the toolkit behaves exactly as before.
+    onProvidersSaved = null
   } = config;
 
   const PROVIDERS_PATH = join(dataDir, providersFile);
@@ -582,6 +589,19 @@ export function createProviderService(config = {}) {
     return providersLoadInFlight;
   }
 
+  // The write already landed and the cache already reflects it, so a host
+  // hook must never be able to turn a successful save into a failed one — and
+  // callers include schedulers and boot warmups with no Express `next(err)` to
+  // bubble to. Log and continue (AGENTS.md's stated try/catch exception).
+  async function notifyProvidersSaved(data) {
+    if (typeof onProvidersSaved !== 'function') return;
+    try {
+      await onProvidersSaved(data);
+    } catch (err) {
+      console.error(`❌ providers save hook failed: ${err.message}`);
+    }
+  }
+
   async function saveProviders(data) {
     // Drop the cache BEFORE the write: mutators read → mutate the cached
     // object in place → save, so the warm cache already holds the unsaved
@@ -592,6 +612,7 @@ export function createProviderService(config = {}) {
     invalidateProvidersCache();
     await atomicWrite(PROVIDERS_PATH, data);
     refreshProvidersCache(data);
+    await notifyProvidersSaved(data);
   }
 
   return {
@@ -745,6 +766,29 @@ export function createProviderService(config = {}) {
       }
       await saveProviders(data);
       return provider;
+    },
+
+    /**
+     * Apply partial updates to SEVERAL providers in ONE providers.json write.
+     *
+     * Unlike {@link updateProvider} this performs no sibling fan-out: the
+     * caller names every route it means to change, which is the contract a
+     * projection needs — materializing a shared connection's values must touch
+     * exactly the routes bound to it and no conventional neighbour.
+     *
+     * @param {Record<string, object>} patches - provider id → partial update
+     * @returns {Promise<string[]>} the ids that existed and were updated
+     */
+    async applyProviderPatches(patches) {
+      const data = await loadProviders();
+      const applied = [];
+      for (const [id, updates] of Object.entries(patches || {})) {
+        if (!data.providers[id]) continue;
+        data.providers[id] = { ...data.providers[id], ...updates, id };
+        applied.push(id);
+      }
+      if (applied.length > 0) await saveProviders(data);
+      return applied;
     },
 
     async deleteProvider(id) {

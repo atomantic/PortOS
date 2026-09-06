@@ -16,4 +16,9 @@ export const MIGRATION_OWNED_PATHS = new Set([
   // Migration 339 lifts the durable CoS config out of data/cos/state.json.
   // Absent, `loadConfig()` in server/services/cosState.js returns DEFAULT_CONFIG.
   'cos/config.json',
+  // Migration 358 parks an untouched pre-graph copy of the install's own
+  // data/providers.json before the provider connection graph (#6367) can write
+  // to it. Derived from the user's records; a shipped seed would masquerade as
+  // their pre-graph configuration and destroy the recovery path.
+  'private/providers.pre-graph.json',
 ]);

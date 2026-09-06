@@ -1,5 +1,12 @@
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/providerGraphPreview.js';
+import {
+  getManagementGraph,
+  linkBinding,
+  previewBindingLink,
+  removeConnection,
+  unlinkBinding,
+} from '../services/providerGraph.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
@@ -14,6 +21,8 @@ import {
   codexLoginStartSchema,
   providerVisionTestSchema,
   providerVisionSuiteSchema,
+  providerBindingLinkSchema,
+  providerBindingUnlinkSchema,
 } from '../lib/validation.js';
 import {
   getProviderRuntimeStatus,
@@ -288,6 +297,52 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.get('/management/preview', asyncHandler(async (_req, res) => {
     const data = await providerService.getAllProviders();
     res.set('Cache-Control', 'no-store').json(toManagementPreviewDto(buildProviderGraphPreview(data)));
+  }));
+
+  /**
+   * The DURABLE provider connection graph (#6367) — the same shape as the
+   * preview above, but read from ai_connections / ai_harness_bindings /
+   * ai_route_bindings rather than derived on every request.
+   *
+   * Sanitized identically: credential PRESENCE only, no projection snapshots,
+   * no raw provider records. An install whose database is unavailable gets an
+   * explicit 503 `PROVIDER_GRAPH_UNAVAILABLE` rather than a silent empty graph,
+   * so a client can fall back to the flat list on a known answer instead of
+   * guessing from a failed request.
+   */
+  router.get('/management', asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await getManagementGraph());
+  }));
+
+  /**
+   * What linking this binding into another connection WOULD change: which
+   * executable route ids move, how the two backends differ, and which variant
+   * key the binding would occupy. Read-only — POST because the body carries the
+   * revisions being reviewed, not because anything is written.
+   */
+  router.post('/bindings/:id/link/preview', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingLinkSchema, req.body ?? {});
+    res.json(await previewBindingLink({ bindingId: req.params.id, ...input }));
+  }));
+
+  // Apply a reviewed link. Every named revision is re-checked inside the graph
+  // transaction; a stale one is a 409 that requires a fresh preview.
+  router.post('/bindings/:id/link', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingLinkSchema, req.body ?? {});
+    res.json(await linkBinding({ bindingId: req.params.id, ...input }));
+  }));
+
+  // Give this binding its own copy of the connection it shares. Route ids,
+  // activeProvider, task pins and fallback references are all retained.
+  router.post('/bindings/:id/unlink', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingUnlinkSchema, req.body ?? {});
+    res.json(await unlinkBinding({ bindingId: req.params.id, ...input }));
+  }));
+
+  // Remove a connection no binding uses. Refused with a 409 while one still
+  // does — the graph never silently orphans a binding to tidy a row away.
+  router.delete('/connections/:id', asyncHandler(async (req, res) => {
+    res.json(await removeConnection(req.params.id));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
