@@ -268,6 +268,7 @@ export * from './persistentMind.js';
 export * from './persistentMindCapabilities.js';
 export * from './persistentMindTrajectory.js';
 export * from './persistentMindProfile.js';
+export * from './persistentMindMemory.js';
 export * from './persistentMindPrompt.js';
 export * from './persistentMindPublic.js';
 export * from './persistentMindThinkingPresets.js';

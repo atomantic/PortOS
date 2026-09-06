@@ -41,14 +41,15 @@ describe('PersistentMindVisibilityPanel', () => {
     expect(screen.getByText('Example release improvement')).toBeInTheDocument();
   });
 
-  it('turns a blocked snapshot into direct repair and permission actions', () => {
+  it('distinguishes diagnostics from delegation and explains repairs', () => {
     renderPanel(blockedVisibility());
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Delegated work is blocked');
-    expect(screen.getByRole('link', { name: /manage permissions/i })).toHaveAttribute('href', '/cos/tools');
+    expect(screen.getByRole('alert')).toHaveTextContent('This does not block all delegated work');
+    expect(screen.getByRole('link', { name: /manage permissions/i })).toHaveAttribute('href', '/cos/mind?panel=tools');
     expect(screen.getByRole('link', { name: /managed apps/i })).toHaveAttribute('href', '/apps');
     expect(screen.getByRole('link', { name: /manage reviewers/i })).toHaveAttribute('href', '/models/code-reviewers');
-    expect(screen.getByRole('link', { name: /open app settings/i })).toHaveAttribute('href', '/apps/example-app/overview?edit=1&appTab=general');
+    expect(screen.queryByRole('link', { name: /open app settings/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Restart PortOS after changing its runtime/)).toBeInTheDocument();
   });
 
   it('links submodule blockers to the affected app instead of hiding the cause', () => {

@@ -73,7 +73,7 @@ beforeEach(() => {
   mock.runPrompt.mockResolvedValue({ text: JSON.stringify({
     thinkingSummary: 'I connected the new request to the durable fact.',
     message: 'Here is the answer.',
-    memoryCandidates: [{ content: 'Remember this.', type: 'fact', category: 'other', tags: [] }],
+    memoryCandidates: [{ content: 'Remember this.', type: 'fact', category: 'other', tags: [], protection: 'important' }],
     selfWake: null,
   }) });
 });
@@ -113,7 +113,7 @@ describe('persistent mind adapter', () => {
       'mind.thought', 'mind.reply', 'mind.memory.created',
     ]);
     expect(mock.createPersistentMindMemoryFromCandidate).toHaveBeenCalledWith({
-      content: 'Remember this.', type: 'fact', category: 'other', tags: [], summary: '',
+      content: 'Remember this.', type: 'fact', category: 'other', tags: [], summary: '', protection: 'important',
       candidateId: 'turn-1:0', turnId: 'turn-1',
     });
     expect(mock.runPrompt.mock.calls[0][0].prompt).toContain('Task access: ON');
@@ -151,6 +151,44 @@ describe('persistent mind adapter', () => {
     expect(mock.runPrompt.mock.calls[1][0].prompt).toContain('Completed tool results');
     expect(recordCapabilityEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'request' }));
     expect(recordCapabilityEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'result' }));
+  });
+
+  it('saves protected candidates before cleanup and bounds deduplicated memories across rounds', async () => {
+    const candidates = Array.from({ length: 5 }, (_, index) => ({ content: `Lasting fact ${index}`, protection: 'core-identity' }));
+    mock.runPrompt
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        memoryCandidates: candidates,
+        toolCalls: [{ name: 'mind.cleanup', arguments: { scopes: ['history'] } }],
+      }) })
+      .mockResolvedValueOnce({ text: JSON.stringify({
+        message: 'Finished cleanup.', memoryCandidates: [candidates[0], { content: 'An extra fact' }],
+      }) });
+    mock.executeToolCall.mockImplementationOnce(async () => {
+      expect(mock.createPersistentMindMemoryFromCandidate).toHaveBeenCalledTimes(5);
+      return { state: 'completed', result: { ok: true } };
+    });
+    const result = await createPersistentMindTurnAdapter().run({
+      turnId: 'turn-protected-cleanup', wake: { kind: 'message', message: { id: 'message-cleanup', text: 'Remember and clean up.' } },
+      ...profile, context: { text: '# Context' },
+    });
+    expect(mock.createPersistentMindMemoryFromCandidate).toHaveBeenCalledTimes(5);
+    expect(mock.createPersistentMindMemoryFromCandidate.mock.calls.map(([candidate]) => candidate.candidateId))
+      .toEqual(Array.from({ length: 5 }, (_, index) => `turn-protected-cleanup:${index}`));
+    expect(result.events.filter((event) => event.kind === 'mind.memory.created')).toHaveLength(5);
+    expect(result.events.find((event) => event.kind === 'mind.reply').data.displayText).toContain('additional memories were not saved');
+  });
+
+  it('refuses cleanup when its preceding memory save fails', async () => {
+    mock.createPersistentMindMemoryFromCandidate.mockRejectedValueOnce(new Error('Storage unavailable'));
+    mock.runPrompt.mockResolvedValueOnce({ text: JSON.stringify({
+      memoryCandidates: [{ content: 'My lasting identity', protection: 'core-identity' }],
+      toolCalls: [{ name: 'mind_cleanup', arguments: { scopes: ['history'] } }],
+    }) });
+    await expect(createPersistentMindTurnAdapter().run({
+      turnId: 'turn-failed-save', wake: { kind: 'self', reason: 'Maintain memories' },
+      ...profile, context: { text: '# Context' },
+    })).rejects.toThrow('cleanup was not run');
+    expect(mock.executeToolCall).not.toHaveBeenCalled();
   });
 
   it('never executes a new tool request from the final provider round', async () => {

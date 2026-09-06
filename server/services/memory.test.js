@@ -1594,6 +1594,18 @@ describe('memory service', () => {
   // ===========================================================================
 
   describe('applyDecay', () => {
+    it('preserves protected records during background decay and expiration', async () => {
+      const record = { id: 'protected', status: 'active', importance: 0.1, tags: ['mind:core-identity'], createdAt: '2000-01-01T00:00:00.000Z', expiresAt: '2001-01-01T00:00:00.000Z' };
+      readJSONFile.mockImplementation((path, fallback) => {
+        if (path.includes('index.json')) return Promise.resolve({ memories: [record], count: 1 });
+        if (path.includes('memory.json')) return Promise.resolve(record);
+        return Promise.resolve(fallback);
+      });
+      expect(await applyDecay()).toEqual({ updated: 0 });
+      expect(await clearExpired()).toEqual({ cleared: 0 });
+      expect(atomicWrite).not.toHaveBeenCalled();
+    });
+
     it('should apply decay to old memories', async () => {
       const oldDate = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString(); // 100 days ago
       const mockIndex = {

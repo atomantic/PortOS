@@ -368,6 +368,15 @@ describe('persistent mind routes', () => {
     expect((await put('/mind/memories/memory-1', {})).status).toBe(400);
   });
 
+  it('validates protection on memory create and edit without changing legacy defaults', async () => {
+    expect((await post('/mind/memories', { content: 'An enduring identity.', protection: 'core-identity' })).status).toBe(201);
+    expect(mocks.createPersistentMindMemory).toHaveBeenLastCalledWith(expect.objectContaining({ protection: 'core-identity' }));
+    expect((await put('/mind/memories/memory-1', { protection: 'important' })).status).toBe(200);
+    expect(mocks.updatePersistentMindMemory).toHaveBeenLastCalledWith('memory-1', { protection: 'important' });
+    expect((await put('/mind/memories/memory-1', { protection: 'standard' })).status).toBe(200);
+    expect((await put('/mind/memories/memory-1', { protection: 'invalid' })).status).toBe(400);
+  });
+
   it('returns not found when an edited memory is not owned by this mind', async () => {
     mocks.updatePersistentMindMemory.mockResolvedValue(null);
     expect((await put('/mind/memories/foreign', { content: 'No access' })).status).toBe(404);

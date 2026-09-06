@@ -127,13 +127,15 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
   Object.freeze({
     id: 'mind.cleanup',
     capability: 'manageMind',
-    name: 'Clean up mindspace',
-    description: 'Archive mind-owned memories, clear conversation history, or rebuild the derived context cache.',
+    name: 'Maintain mindspace',
+    description: 'Protect important memories, archive unprotected mind-owned memories, clear conversation history, or rebuild derived context.',
     kind: 'typed-action',
     defaultEnabled: false,
     guardrails: [
       'Only Persistent Mind-owned machine-local state is in scope',
-      'Memory cleanup archives records instead of hard-deleting them',
+      'Core identity and important memories survive manual and self-triggered cleanup',
+      'The mind can add memory protection but only the user can remove it',
+      'Memory cleanup archives unprotected records instead of hard-deleting them',
       'History cleanup preserves the turn requesting it and resets derived rollups',
       'Every cleanup leaves a bounded maintenance record in the new trajectory',
     ],

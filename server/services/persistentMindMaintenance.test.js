@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   appendMindEvent: vi.fn(async (event) => ({ appended: true, event })),
   clearHistory: vi.fn(async () => ({ cleared: 12, preserved: 3 })),
-  archiveMemories: vi.fn(async () => ({ archived: 4 })),
+  archiveMemories: vi.fn(async () => ({ archived: 4, preserved: 2 })),
   clearRollups: vi.fn(async () => ({ cleared: 2 })),
   resetRuntime: vi.fn(async () => ({ status: 'thinking' })),
 }));
@@ -54,6 +54,7 @@ describe('persistent mind maintenance', () => {
     expect(result).toMatchObject({
       success: true,
       memoriesArchived: 4,
+      memoriesPreserved: 2,
       historyEventsCleared: 12,
       historyEventsPreserved: 3,
       rollupsCleared: 2,
