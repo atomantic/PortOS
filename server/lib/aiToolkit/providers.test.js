@@ -32,7 +32,7 @@ describe('Provider Service', () => {
     expect((await providerService.getProviderById('example')).enabled).toBe(true);
     expect((await providerService.getActiveProvider()).id).toBe('example-tui');
     await providerService.updateProvider('example-tui', { enabled: false, models: ['c'], args: ['--interactive'], defaultModel: 'c' });
-    expect(await providerService.getProviderById('example')).toMatchObject({ enabled: false, models: ['c'], args: ['--print'], defaultModel: 'a' });
+    expect(await providerService.getProviderById('example')).toMatchObject({ enabled: false, models: ['c'], args: ['--print'], defaultModel: 'c' });
     expect(await providerService.getProviderById('remote')).toMatchObject({ enabled: false, models: ['remote'] });
     const catalog = vi.spyOn(providerService, 'fetchProviderModelCatalog').mockResolvedValue({ models: ['fresh'], contextWindows: { fresh: 8192 } });
     await providerService.refreshProviderModelsBatch(['example-tui']);

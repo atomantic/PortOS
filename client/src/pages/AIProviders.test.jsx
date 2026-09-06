@@ -144,6 +144,19 @@ describe('AIProviders page load error handling', () => {
     await waitFor(() => expect(api.setActiveProvider).toHaveBeenLastCalledWith('example'));
   });
 
+  it('gates each unified Codex default on that mode’s own transport consent', async () => {
+    const executionModes = [{ id: 'codex', type: 'cli' }, { id: 'codex-tui', type: 'tui' }];
+    api.getCodexAccount.mockResolvedValue({ readiness: { status: 'ready' } });
+    api.getCodexModels.mockResolvedValue({ models: null });
+    api.getProviders.mockResolvedValue({ activeProvider: null, providers: [
+      { id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', enabled: true, textTransportEnabled: true, executionModes },
+      { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', enabled: true, textTransportEnabled: false, executionModes },
+    ] });
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Set CLI default' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Set TUI default' })).toBeDisabled();
+  });
+
   it('offers an install button on the card of a provider whose CLI is missing', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{ id: 'opencode-ollama', name: 'OpenCode Ollama', type: 'cli', command: 'opencode', args: ['run'], enabled: true }],

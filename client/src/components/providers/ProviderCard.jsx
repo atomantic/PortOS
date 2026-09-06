@@ -311,7 +311,7 @@ export default function ProviderCard({
               {provider.enabled && (
                 <button
                   onClick={() => onSetActive(mode.id)}
-                  disabled={mode.id === activeProviderId || !subscriptionReady}
+                  disabled={mode.id === activeProviderId || (isCodexSubscriptionProvider(mode) && (!subscriptionAccountReady || mode.textTransportEnabled !== true))}
                   className="px-3 py-1.5 text-sm bg-port-accent/20 text-port-accent rounded disabled:opacity-50"
                 >
                   {mode.id === activeProviderId ? `${mode.type.toUpperCase()} default` : `Set ${mode.type.toUpperCase()} default`}
@@ -345,7 +345,10 @@ export default function ProviderCard({
           <div className="text-xs text-gray-400 space-y-1">
             <p>CLI and TUI share enablement and the model catalog. Edit a mode to configure its arguments and model defaults.</p>
             {modes.filter(mode => mode.id !== provider.id && statuses[mode.id]?.available === false).map(mode => (
-              <p key={mode.id} className="text-port-warning">{mode.type.toUpperCase()} benched: {statuses[mode.id].message || statuses[mode.id].reason}</p>
+              <p key={mode.id} className="text-port-warning">
+                {mode.type.toUpperCase()} benched: {statuses[mode.id].message || statuses[mode.id].reason}{' '}
+                <button onClick={() => onRecover(mode.id)} className="underline">Retry {mode.type.toUpperCase()}</button>
+              </p>
             ))}
           </div>
         )}

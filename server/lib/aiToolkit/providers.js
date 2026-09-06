@@ -740,7 +740,7 @@ export function createProviderService(config = {}) {
       const group = providerModeGroups(Object.values(data.providers)).find(modes => modes.some(mode => mode.id === id));
       data.providers[id] = provider;
       for (const sibling of group || []) {
-        if (sibling.id !== id) Object.assign(sibling, sharedModeUpdates(updates));
+        if (sibling.id !== id) Object.assign(sibling, sharedModeUpdates(updates, sibling));
       }
       await saveProviders(data);
       return provider;

@@ -19,9 +19,16 @@ export function providerModeGroups(providers) {
   return [...groups, ...providers.filter(provider => !paired.has(provider.id)).map(provider => [provider])];
 }
 
-export function sharedModeUpdates(updates) {
+export function sharedModeUpdates(updates, sibling) {
   // Arguments, timeouts, routing consent and model pins remain mode-specific.
-  return Object.fromEntries(['enabled', 'models', 'modelContextWindows'].filter(key => Object.hasOwn(updates, key)).map(key => [key, updates[key]]));
+  const shared = Object.fromEntries(['enabled', 'models', 'modelContextWindows'].filter(key => Object.hasOwn(updates, key)).map(key => [key, updates[key]]));
+  // A caller deliberately repicking a default with a new catalog (the editor
+  // or harness discovery) must repair a removed sibling default too. Ordinary
+  // catalog probes omit defaultModel and retain their existing pin semantics.
+  if (Array.isArray(updates.models) && Object.hasOwn(updates, 'defaultModel') && sibling?.defaultModel && !updates.models.includes(sibling.defaultModel)) {
+    shared.defaultModel = updates.models[0] ?? null;
+  }
+  return shared;
 }
 
 export function unifyProviderModes(data) {
