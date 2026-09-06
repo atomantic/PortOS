@@ -144,10 +144,13 @@ const unavailable = (code, reason) => ({ code, reason });
  *     invoke (shell jobs, system-managed-only actions); absent reads as true.
  *   custom:  { [jobId]: { enabled, eligible, appId } }
  *
- * An EMPTY catalog resolves nothing: with no `builtin`/`custom` map supplied the
+ * An EMPTY catalog answers only the questions that need one. Existence, enabled
+ * state and eligibility all go unjudged — with no `builtin`/`custom` map the
  * step keeps whatever the normalizer already decided rather than being declared
- * dangling, so a caller that has not loaded the catalog yet cannot mass-orphan a
- * user's plan.
+ * dangling, so a caller reading the plan before the schedule store is up cannot
+ * mass-orphan a user's plan. Target SCOPE is the exception, and deliberately so:
+ * it is a property of the reference itself, decidable from the payload alone, so
+ * it is judged either way.
  */
 export function resolveQuotaBurnStepAvailability(step, catalog = {}) {
   // A legacy step's verdict is decided by the payload itself, not by the
@@ -166,9 +169,10 @@ export function resolveQuotaBurnStepAvailability(step, catalog = {}) {
     return null;
   }
 
-  // Scope is checked BEFORE the catalog lookup so a hand-edited config that
-  // dropped a required app reports the missing app rather than a confusing
-  // "unknown task" — the type is fine, the target is not.
+  // Scope runs BEFORE the catalog lookup so a hand-edited config that dropped a
+  // required app reports the missing app rather than a confusing "unknown task"
+  // — the type is fine, the target is not — and so it still reports at all when
+  // the caller has no catalog to hand.
   if (requiresManagedAppTarget(ref.taskType) && !ref.appId) {
     return unavailable(QUOTA_BURN_UNAVAILABLE.MISSING_APP, `scheduled task "${ref.taskType}" must name a managed app`);
   }

@@ -60,11 +60,16 @@ describe('resolveQuotaBurnStepAvailability', () => {
     expect(code({ kind: 'custom', jobId: 'job-2' })).toBe(QUOTA_BURN_UNAVAILABLE.DISABLED);
   });
 
-  it('resolves nothing when the catalog has not been loaded', () => {
+  it('withholds every catalog-dependent verdict when the catalog is missing', () => {
     // A caller reading the plan before the schedule store is up must not
     // declare every step dangling and wipe the page's plan.
     expect(resolveQuotaBurnStepAvailability(step(builtin('ux')), {})).toBeNull();
     expect(resolveQuotaBurnStepAvailability(step({ kind: 'custom', jobId: 'job-1' }), {})).toBeNull();
+    // Scope is the exception: it is a property of the reference itself, so a
+    // hand-edited step that dropped its required app is broken with or without
+    // a catalog and still says so.
+    expect(resolveQuotaBurnStepAvailability(step(builtin('pr-reviewer')), {})?.code)
+      .toBe(QUOTA_BURN_UNAVAILABLE.MISSING_APP);
   });
 
   it('leaves an un-migrated legacy step on its migration reason', () => {
