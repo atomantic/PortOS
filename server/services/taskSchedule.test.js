@@ -2303,7 +2303,9 @@ describe('taskSchedule', () => {
         // `fs` is doubled for this suite, so read through the real one.
         const { readFileSync } = await vi.importActual('node:fs')
         const src = readFileSync(new URL('./taskSchedule.js', import.meta.url), 'utf8')
-        expect(src).toMatch(/if \(origin !== ON_DEMAND_ORIGINS\.REFILL && !invocation\.userInvokable\)/)
+        // The rung itself lives in `evaluateOnDemandEligibility`; what this file
+        // still owns is which origins are exempt, so that is what is pinned.
+        expect(src).toMatch(/eligible: origin === ON_DEMAND_ORIGINS\.REFILL \|\| getTaskTypeInvocation\(taskType\)\.userInvokable !== false/)
         // Probe: the previous, narrower gate must be gone, or the assertion above
         // could pass on a file that still only checks USER somewhere else.
         expect(src).not.toMatch(/origin === ON_DEMAND_ORIGINS\.USER && !invocation\.userInvokable/)

@@ -152,10 +152,14 @@ beforeEach(() => {
 });
 
 describe('getQuotaBurnTaskCatalog', () => {
-  it('reports a feature-gated task as unavailable while its feature is off', async () => {
-    expect((await getQuotaBurnTaskCatalog()).builtin['jira-sprint-manager'].enabled).toBe(true);
+  it('carries the instance-feature verdict beside the user switch, not folded into it', async () => {
+    // Two switches, two fields: the shared ladder needs them apart to say WHICH
+    // one is off, and a task whose feature is disabled is still `enabled: true`.
+    expect((await getQuotaBurnTaskCatalog()).builtin['jira-sprint-manager'])
+      .toMatchObject({ enabled: true, featureEnabled: true, feature: 'jira' });
     state.features.jira = false;
-    expect((await getQuotaBurnTaskCatalog()).builtin['jira-sprint-manager'].enabled).toBe(false);
+    expect((await getQuotaBurnTaskCatalog()).builtin['jira-sprint-manager'])
+      .toMatchObject({ enabled: true, featureEnabled: false });
   });
 
   it('lists only the apps that have a built-in type switched on', async () => {
@@ -215,31 +219,34 @@ describe('refusal paths', () => {
     dispatchedNothing();
   });
 
-  it('refuses a task whose instance feature is off', async () => {
+  // The instance-feature gate is its OWN rung now rather than being folded into
+  // `enabled`: telling a user to re-enable a task whose toggle is already on
+  // sends them to the wrong switch, so the ladder names the feature instead.
+  it('refuses a task whose instance feature is off, naming the feature', async () => {
     state.features.jira = false;
     const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'jira-sprint-manager' } });
     expect(result.dispatched).toBe(false);
-    expect(result.reason).toContain('is disabled');
+    expect(result.reason).toContain("requires the 'jira' feature");
     dispatchedNothing();
   });
 
   it('refuses a built-in reference this install does not ship', async () => {
     const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'not-a-task' } });
-    expect(result.reason).toContain('is not available on this install');
+    expect(result.reason).toContain("Unknown task type 'not-a-task'");
     dispatchedNothing();
   });
 
   it('refuses a managed-app type with no app named, and an install-wide type with one', async () => {
     expect((await refuse({ taskRef: { kind: 'builtin', taskType: 'pr-reviewer' } })).reason)
-      .toContain('must name a managed app');
+      .toContain('requires a managed app target');
     expect((await refuse({ taskRef: { kind: 'builtin', taskType: 'model-comparison-refresh', appId: 'app-1' } })).reason)
-      .toContain('runs install-wide');
+      .toContain('requires an install-wide target');
     dispatchedNothing();
   });
 
   it('refuses an app the type is not configured for', async () => {
     const result = await refuse({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-9' } });
-    expect(result.reason).toContain('not configured for app "app-9"');
+    expect(result.reason).toContain("is not enabled for app 'app-9'");
     dispatchedNothing();
   });
 
