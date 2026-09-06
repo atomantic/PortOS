@@ -113,6 +113,12 @@ describe('buildPromptFromMediaPrompt', () => {
     expect(prompt).toContain('5 frames');
     expect(prompt).toContain('chronological');
   });
+
+  it('states the video prompt cap only when the caller has one', () => {
+    const capped = buildPromptFromMediaPrompt({ targets: ['video'], mediaKind: 'video', frameCount: 5, maxVideoPromptLength: 800 });
+    expect(capped).toContain('AT MOST 800 characters');
+    expect(buildPromptFromMediaPrompt({ targets: ['video'], mediaKind: 'video', frameCount: 5 })).not.toContain('AT MOST');
+  });
 });
 
 describe('parsePromptFromMediaJson', () => {
@@ -161,6 +167,36 @@ describe('promptFromMedia', () => {
     expect(result.videoPrompt).toContain('dollies');
     expect(result.mediaKind).toBe('image');
     expect(result.providerId).toBe('openai');
+  });
+
+  // reactor.inc rejects an over-length prompt outright, so a vivid analysis of
+  // a clip is unrenderable, not merely long, once it passes the cap.
+  it('clamps a video prompt that overshoots the caller cap and reports the trim', async () => {
+    providers.getProviderById.mockResolvedValue(API_PROVIDER);
+    promptRunner.runPromptThroughProvider.mockResolvedValue({
+      text: JSON.stringify({
+        imagePrompt: 'a painted wizard in moonlight',
+        videoPrompt: `${'The camera dollies through the rain-slick alley. '.repeat(30)}End beat.`,
+        rationale: 'Moonlit.',
+      }),
+      model: 'gpt-4o',
+      provider: API_PROVIDER,
+    });
+
+    const result = await promptFromMedia({
+      sourceKind: 'image',
+      filename: 'still.png',
+      targets: ['image', 'video'],
+      providerId: 'openai',
+      model: 'gpt-4o',
+      maxVideoPromptLength: 800,
+    });
+
+    expect(result.videoPrompt.length).toBeLessThanOrEqual(800);
+    expect(result.videoPromptTruncated).toBe(true);
+    // The cap is the VIDEO backend's; the image prompt is untouched by it.
+    expect(result.imagePrompt).toBe('a painted wizard in moonlight');
+    expect(promptRunner.runPromptThroughProvider.mock.calls[0][0].prompt).toContain('AT MOST 800 characters');
   });
 
   it('samples gallery-video frames and uses the CLI vision path for Codex', async () => {

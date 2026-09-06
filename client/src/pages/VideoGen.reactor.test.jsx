@@ -80,6 +80,23 @@ describe('VideoGen reactor.inc lane', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Add to queue/ })).toBeEnabled());
   });
 
+  // Enhancing to exactly 800 characters still gets rejected once the style
+  // preset is prepended, so the enhancer's budget is the cap MINUS that prefix.
+  it('hands the AI enhancer a prompt budget net of the style prefix', async () => {
+    await renderVideoGenPage();
+    expect((await screen.findByTestId('prompt-enhancer')).dataset.maxPromptLength).toBe('');
+
+    await selectReactor();
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'a fox watches the rain' } });
+    await waitFor(() => expect(screen.getByTestId('prompt-enhancer').dataset.maxPromptLength)
+      .toBe(String(REACTOR_MAX_PROMPT_LENGTH)));
+
+    // 'inky linework. ' — 15 characters of prefix the user never typed.
+    fireEvent.click(screen.getByRole('button', { name: 'Use universe style' }));
+    await waitFor(() => expect(screen.getByTestId('prompt-enhancer').dataset.maxPromptLength)
+      .toBe(String(REACTOR_MAX_PROMPT_LENGTH - 15)));
+  });
+
   // fast-h3's enqueue command has no negative-prompt field, so the box only
   // ever collected text nothing would submit.
   it('drops the negative prompt the backend has no field for', async () => {

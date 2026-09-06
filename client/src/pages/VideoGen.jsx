@@ -1013,6 +1013,19 @@ export default function VideoGen() {
   );
   const promptOverLimit = isReactor && submittedPromptLength > REACTOR_MAX_PROMPT_LENGTH;
 
+  // Budget the AI enhancer writes inside. It's the backend cap MINUS the style
+  // preset / universe prefix, because that prefix is part of what PortOS
+  // submits — enhancing to exactly 800 characters would still be rejected once
+  // the preset is prepended. `undefined` for a backend with no cap (and for the
+  // degenerate case where the prefix alone already fills the allowance, which
+  // the counter above is already flagging).
+  const enhancePromptBudget = useMemo(() => {
+    if (!isReactor) return undefined;
+    const overhead = submittedPromptLength - prompt.length;
+    const budget = REACTOR_MAX_PROMPT_LENGTH - Math.max(0, overhead);
+    return budget > 0 ? budget : undefined;
+  }, [isReactor, submittedPromptLength, prompt]);
+
   // Only grok folds a negative prompt into its request (as an "Avoid:" line);
   // fal's queue body and reactor's enqueue command have no such field, and a
   // CFG-distilled local model ignores one. Hide the box rather than showing a
@@ -1381,6 +1394,7 @@ export default function VideoGen() {
             negativePrompt={negativePromptSupported ? negativePrompt : ''}
             setNegativePrompt={negativePromptSupported ? setNegativePrompt : undefined}
             renderConfig={{ stylePreset: stylePreset?.id, mode, model: modelId }}
+            maxPromptLength={enhancePromptBudget}
           />
 
           {mode === 'fflf' && keyframesSupported && (
@@ -1871,6 +1885,7 @@ export default function VideoGen() {
             applyKind="video"
             setPrompt={setPrompt}
             setNegativePrompt={negativePromptSupported ? setNegativePrompt : undefined}
+            maxVideoPromptLength={enhancePromptBudget}
             alwaysOpen
           />
         </div>

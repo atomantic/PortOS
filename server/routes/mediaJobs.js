@@ -53,6 +53,13 @@ const refinePromptSchema = z.object({
     const v = (s ?? '').trim();
     return v.length > 0 ? v : undefined;
   }),
+  // Hard character cap the SELECTED render backend enforces on the prompt it
+  // receives — reactor.inc's fast-h3 rejects a prompt over 800 characters
+  // outright instead of truncating it, so an enhancement that ignores the cap
+  // produces a prompt that cannot be rendered. The caller sends the budget
+  // (cap minus whatever a style preset prefixes), the refiner instructs the
+  // model with it and clamps the answer. Omitted when the backend has no cap.
+  maxPromptLength: z.number().int().positive().max(8000).optional(),
   renderConfig: z.record(z.any())
     .refine((obj) => {
       // JSON.stringify throws on BigInt / circular refs. z.record(z.any())
@@ -89,6 +96,11 @@ const promptFromMediaSchema = z.object({
     const v = (s ?? '').trim();
     return v.length > 0 ? v : undefined;
   }),
+  // Same cap as `refinePromptSchema.maxPromptLength`, but scoped to the VIDEO
+  // prompt: the caller sends it when the video backend it is composing for
+  // rejects an over-length prompt (reactor.inc fast-h3). The image prompt has
+  // no equivalent cap on any current backend.
+  maxVideoPromptLength: z.number().int().positive().max(8000).optional(),
 }).superRefine((data, ctx) => {
   // A gallery video resolves by history id (the gallery flow) OR by on-disk
   // filename (a mood-board video item's `video:<filename>` ref — #4188).

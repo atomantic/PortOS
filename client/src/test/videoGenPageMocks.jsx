@@ -236,8 +236,16 @@ vi.mock('../components/ui/Toast', () => ({
 // The prompt helpers stay observable rather than blanked: whether they remain
 // usable while a render is already in flight is itself one of the assertions.
 vi.mock('../components/media/PromptEnhancer', () => ({
-  default: ({ disabled }) => (
-    <div data-testid="prompt-enhancer" data-disabled={disabled ? '1' : '0'}>Enhance with AI</div>
+  default: ({ disabled, maxPromptLength }) => (
+    <div
+      data-testid="prompt-enhancer"
+      data-disabled={disabled ? '1' : '0'}
+      // The backend's prompt cap, net of the style prefix — the enhancer has to
+      // write inside it or the render is rejected for a prompt the user never typed.
+      data-max-prompt-length={maxPromptLength ?? ''}
+    >
+      Enhance with AI
+    </div>
   ),
 }));
 vi.mock('../components/media/PromptFromMedia', () => ({

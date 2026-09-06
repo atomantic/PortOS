@@ -1,5 +1,6 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
+import { clampToCharLimit } from '../lib/textUtils.js';
 import { resolveEffectiveModel, runPromptThroughProvider } from './promptRunner.js';
 import { getProviderById } from './providers.js';
 
@@ -62,8 +63,16 @@ function extractRefinementJson(raw) {
   throw new Error(`Invalid JSON in AI response${lastErr ? `: ${lastErr.message}` : ''}`);
 }
 
-export function buildMediaPromptRefinePrompt({ kind, prompt, negativePrompt, feedback, renderConfig = {} }) {
+export function buildMediaPromptRefinePrompt({ kind, prompt, negativePrompt, feedback, renderConfig = {}, maxPromptLength }) {
   const kindLabel = kind === 'video' ? 'video' : 'image';
+  // Some render backends cap the prompt and REJECT anything longer instead of
+  // truncating it (reactor.inc fast-h3: 800 characters), so an unbounded
+  // "make it more vivid" enhancement reliably produces a prompt that cannot
+  // be rendered. Give the model the budget it has to write inside;
+  // `clampToCharLimit` below is the backstop for when it overshoots anyway.
+  const lengthRule = Number.isFinite(maxPromptLength) && maxPromptLength > 0
+    ? `\n\nHARD LENGTH LIMIT: the "prompt" field must be AT MOST ${maxPromptLength} characters long (characters, not words) — the renderer REJECTS a longer prompt outright rather than trimming it, so an over-length answer is unusable. Budget the space: keep the highest-value concrete visual detail, drop filler and redundant quality boosters, and stop before the limit rather than writing a longer prompt you expect to be cut. This limit applies to the "prompt" field only.`
+    : '';
   if (!feedback || !feedback.trim()) {
     return `You are a senior prompt engineer for generative ${kindLabel} renders.
 
@@ -83,7 +92,7 @@ Rules:
 - Enhance visual descriptions (lighting, camera angle, atmosphere, textures, details, mood).
 - Do not introduce unrelated characters, brands, or conflicting subjects unless requested.
 - Keep useful existing style constraints.
-- The "prompt" field must NEVER equal the schema placeholder text — it must be the actual enhanced prompt.
+- The "prompt" field must NEVER equal the schema placeholder text — it must be the actual enhanced prompt.${lengthRule}
 
 ORIGINAL POSITIVE PROMPT:
 ${prompt || '(empty)'}
@@ -115,7 +124,7 @@ Rules:
 - Keep useful existing style constraints unless the user explicitly rejects them.
 - Move things the user dislikes into the negative prompt when that improves control.
 - If the user asks for a different style, make the positive prompt clearly say what to move toward and the negative prompt clearly say what to avoid.
-- The "prompt" field must NEVER equal the schema placeholder text — it must be the actual rewritten render prompt.
+- The "prompt" field must NEVER equal the schema placeholder text — it must be the actual rewritten render prompt.${lengthRule}
 
 ORIGINAL POSITIVE PROMPT:
 ${prompt || '(empty)'}
@@ -160,6 +169,7 @@ export async function refineMediaPrompt({
   model,
   effort,
   renderConfig = {},
+  maxPromptLength,
 }) {
   // Let real failures (providers.json unreadable, toolkit not initialized)
   // bubble through the centralized error handler as 5xx. getProviderById
@@ -192,6 +202,7 @@ export async function refineMediaPrompt({
     negativePrompt: trimString(negativePrompt),
     feedback: trimString(feedback, 3000),
     renderConfig,
+    maxPromptLength,
   });
 
   const { text, runId } = await runRefinePrompt(provider, selectedModel, llmPrompt, effort);
@@ -217,12 +228,23 @@ export async function refineMediaPrompt({
     throw new ServerError('LLM returned an empty prompt', { status: 502, code: 'PROMPT_REFINE_EMPTY_PROMPT' });
   }
 
+  // The model is TOLD the cap (see `lengthRule`), but a model that overshoots
+  // by a few characters would hand the user a prompt the renderer rejects
+  // outright — reactor.inc's fast-h3 refuses an over-length prompt rather than
+  // trimming it. Report the clamp rather than swallowing it, so a shortened
+  // prompt doesn't read as the model losing detail on its own.
+  const { text: boundedPrompt, truncated } = clampToCharLimit(refinedPrompt, maxPromptLength);
+  if (truncated) {
+    console.warn(`✂️ media-prompt-refine [${provider.id}/${selectedModel || 'default'}] trimmed enhanced prompt ${refinedPrompt.length}→${boundedPrompt.length} chars (limit ${maxPromptLength})`);
+  }
+
   return {
-    prompt: refinedPrompt,
+    prompt: boundedPrompt,
     negativePrompt: trimString(parsed.negativePrompt),
     rationale: trimString(parsed.rationale, MAX_REASON_LEN),
     changes: cleanChanges(parsed.changes),
     providerId: provider.id,
     model: selectedModel,
+    truncated,
   };
 }
