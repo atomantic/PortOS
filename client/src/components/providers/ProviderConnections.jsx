@@ -40,6 +40,14 @@ import {
  * shareable, bookmarkable and reachable from ⌘K and voice.
  */
 
+/** How each catalog state reads at a glance — the four are deliberately distinct. */
+const CATALOG_TONE_CLASS = {
+  error: 'text-port-error',
+  ok: 'text-port-success',
+  warn: 'text-port-warning',
+  muted: 'text-port-muted',
+};
+
 /** A transports map edited as flat text, back to the wire shape. */
 const transportsFromDraft = (draft) => Object.fromEntries(
   Object.entries(draft)
@@ -188,6 +196,14 @@ export default function ProviderConnections({
   }, [selected, run]);
 
   const saveBindingModels = useCallback(async (binding, selectedModels) => {
+    // `[]` on the wire means "offer the whole shared catalog", so clearing the
+    // last checkbox would silently re-select everything — the opposite of the
+    // click. Refuse it and say why; removing a harness is a route action, not a
+    // model menu one.
+    if (selectedModels.length === 0) {
+      toast.error('Keep at least one model — an empty selection means the whole shared catalog.');
+      return;
+    }
     const saved = await run('Saving the model selection', () => api.updateProviderBinding(
       binding.id,
       { expectedRevision: binding.revision, selectedModels },
@@ -305,7 +321,7 @@ export default function ProviderConnections({
                         {group.connection.hasCredentials ? ' · key set' : ''}
                       </span>
                     </span>
-                    <span className={`shrink-0 text-xs ${summary.tone === 'error' ? 'text-port-error' : summary.tone === 'ok' ? 'text-port-success' : 'text-port-muted'}`}>
+                    <span className={`shrink-0 text-xs ${CATALOG_TONE_CLASS[summary.tone]}`}>
                       {summary.text}
                     </span>
                   </button>

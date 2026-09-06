@@ -443,6 +443,11 @@ export function sanitizeCatalogError(error, credentials = {}) {
  * empty list — a real answer from a backend whose last model was deleted, not
  * the same state as "never asked".
  *
+ * A PARTIAL result — some harnesses on the backend answered, others did not —
+ * is `known` (the models it lists really were observed) that KEEPS the error,
+ * because reporting it as clean would hide a harness that cannot reach the
+ * backend behind the models of one that can.
+ *
  * @param {{state:string, models:string[]}} current - the stored catalog
  * @param {{refreshed: boolean, models?: string[], error?: string|null}} outcome
  * @returns {{state:'unknown'|'known'|'failed', models:string[], error:string|null}}
@@ -452,5 +457,5 @@ export function nextConnectionCatalog(current, outcome) {
   if (!outcome?.refreshed) {
     return { state: 'failed', models, error: outcome?.error ?? 'The model refresh failed' };
   }
-  return { state: 'known', models: [...new Set(outcome.models || [])], error: null };
+  return { state: 'known', models: [...new Set(outcome.models || [])], error: outcome.error ?? null };
 }

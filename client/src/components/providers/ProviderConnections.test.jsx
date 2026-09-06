@@ -210,3 +210,17 @@ describe('backend connection management', () => {
     expect(screen.queryByText(/does not expose connection management/)).not.toBeInTheDocument();
   });
 });
+
+describe('the empty-selection inversion', () => {
+  it('refuses to clear the last model, because `[]` means the whole catalog', async () => {
+    renderPanel();
+
+    // `example-model` is the only CATALOG entry currently selected (the other
+    // selection, `retired-model`, is stale and not offered), so unchecking it
+    // would send `[]` — read by every consumer as "offer everything".
+    fireEvent.click(await screen.findByLabelText('example-model'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('at least one model')));
+    expect(api.updateProviderBinding).not.toHaveBeenCalled();
+  });
+});

@@ -432,6 +432,11 @@ function connectionFanout(graph, connectionId) {
  *
  * A stale `expectedRevision` is a 409, not a last-writer merge: the human was
  * editing values they had read, and a moved row means they were not.
+ *
+ * `transports` replaces the map WHOLESALE rather than merging into it, so
+ * dropping a protocol is expressible. That is why the editor renders one field
+ * per declared transport and sends them all back: a client that sends a partial
+ * map is asking to remove the rest.
  */
 export function updateConnectionSettings({ connectionId, expectedRevision, label, transports, credentials }) {
   return serialize(async () => {
@@ -479,17 +484,13 @@ export function updateBindingSettings({ bindingId, expectedRevision, label, sele
     if (binding.revision !== expectedRevision) throw stale('The binding');
     requireSettledRoutes(graph.routes.filter((route) => route.bindingId === binding.id));
 
-    const revision = await saveBindingSettings({
+    const next = {
       id: binding.id,
       label: label ?? binding.label,
       selectedModels: selectedModels ?? binding.selectedModels,
-    });
-    return {
-      bindingId: binding.id,
-      revision,
-      label: label ?? binding.label,
-      selectedModels: selectedModels ?? binding.selectedModels,
     };
+    const revision = await saveBindingSettings(next);
+    return { bindingId: binding.id, revision, label: next.label, selectedModels: next.selectedModels };
   });
 }
 
@@ -535,9 +536,13 @@ export function refreshConnectionCatalog(connectionId) {
       models.push(...Object.keys(modelMap));
     }
 
-    const catalog = nextConnectionCatalog(connection.catalog, refreshed
-      ? { refreshed: true, models }
-      : { refreshed: false, error: sanitizeCatalogError(failures[0]?.error, connection.credentials) });
+    // A failure is reported whether or not another group succeeded: a partial
+    // answer is still a harness that cannot reach this backend.
+    const error = failures.length > 0
+      ? sanitizeCatalogError(failures[0].error, connection.credentials)
+      : null;
+    const catalog = nextConnectionCatalog(connection.catalog,
+      refreshed ? { refreshed: true, models, error } : { refreshed: false, error });
     await saveConnectionSettings({ ...connection, catalog });
 
     console.log(`🔗 Refreshed connection ${connection.id} catalog: ${catalog.state}, `

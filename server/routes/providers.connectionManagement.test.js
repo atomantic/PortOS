@@ -427,3 +427,20 @@ describe('the management graph a browser actually receives', () => {
     expect(res.body.routes[0]).not.toHaveProperty('pending');
   });
 });
+
+describe('a partially reachable backend', () => {
+  it('reports the models it did observe AND the harness that could not reach it', async () => {
+    providerService.refreshProviderModelsBatch.mockResolvedValue([
+      { ids: ['claude-ollama', 'claude-ollama-tui'], leadId: 'claude-ollama', status: 'updated' },
+      { ids: ['codex-ollama'], leadId: 'codex-ollama', status: 'failed', error: new Error('404 from the /v1 port') },
+    ]);
+
+    const res = await request(app()).post(`/api/providers/connections/${CONNECTION}/refresh-models`);
+
+    // `known`, because the listed models really were observed…
+    expect(res.body.catalog.state).toBe('known');
+    // …but the failure is not swallowed by the group that worked.
+    expect(res.body.catalog.error).toContain('/v1 port');
+    expect(res.body.failedGroups).toBe(1);
+  });
+});
