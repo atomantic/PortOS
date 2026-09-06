@@ -376,11 +376,14 @@ async function queuedOnDemandReason(queued, taskType, appId) {
 
 /**
  * Invoke one burn step. Returns the registry's dispatch shape —
- * `{ dispatched, summary?, reason?, detail? }` — so the runner's accounting,
- * run log and skip reporting read identically whichever reference shape ran.
+ * `{ dispatched, summary?, reason?, detail?, awaiting? }` — so the runner's
+ * accounting, run log and skip reporting read identically whichever reference
+ * shape ran.
  *
  * A decline is reported, never thrown: work that failed to start must not
- * charge the window's cap.
+ * charge the window's cap. `awaiting` says the opposite thing about a dispatch
+ * that DID go out: the work is not accepted yet, so the runner reserves the
+ * step's place instead of charging it (see `quotaBurnAcceptance.js`).
  *
  * The master Improve switch is refused HERE, in the shared resolution, for all
  * three lanes: the catalog carries the switch, so the page reports it on the
@@ -460,6 +463,13 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
   console.log(`🔥 Quota-burn requested scheduled task ${resolved.ref.taskType} for ${family.id} (${request.id})`);
   return {
     dispatched: true,
+    // The ONLY lane whose acceptance is asynchronous: the request is recorded
+    // now and an on-demand engine generates the task later — or refuses it. The
+    // runner reserves against this instead of charging, and settles the charge
+    // when the request is joined to the task it produced
+    // (`quotaBurnAcceptance.js`). The two synchronous lanes below return no
+    // `awaiting`, because their work is accepted the moment they return.
+    awaiting: { requestId: request.id },
     summary: `Requested "${resolved.ref.taskType}"${resolved.ref.appId ? ` for ${resolved.ref.appId}` : ''}`,
     detail: {
       requestId: request.id,

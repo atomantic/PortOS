@@ -385,6 +385,14 @@ describe('built-in agent task invocation', () => {
     const result = await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
     expect(result).toEqual({ dispatched: false, reason: state.triggerResult.error });
   });
+
+  // #6379. This is the ONLY lane whose acceptance is asynchronous — an engine
+  // may still refuse the request — so it has to say so, or the runner charges
+  // the window for work that never starts.
+  it('names the request it is awaiting, so the runner reserves instead of charging', async () => {
+    const result = await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
+    expect(result.awaiting).toEqual({ requestId: 'demand-1' });
+  });
 });
 
 describe('custom app job invocation', () => {
@@ -409,6 +417,10 @@ describe('custom app job invocation', () => {
       quotaBurnStepId: 'step-1',
       quotaBurnLimitingResetAt: candidate.limitingResetAt,
     });
+    // Accepted on return — the task is queued right here — so there is nothing
+    // for the runner to wait on and it charges the window directly (#6379).
+    expect(result.awaiting).toBeUndefined();
+    expect(result.detail.taskId).toBe('sys-1');
   });
 
   it('does NOT inherit the manual endpoint\'s approval bypass, force-spawn or revive', async () => {

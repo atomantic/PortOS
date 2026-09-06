@@ -23,8 +23,19 @@ Every `checkIntervalMinutes` (default 30, bounded 5–720) the runner:
    plan that reports pending work** — at most one dispatch per cycle. The step
    is dispatched through the referenced task's own invocation path, so the run
    is indistinguishable from the same task started by hand.
-5. Charges the window in `data/cos/quota-burn-dispatches.json` and appends the
-   outcome (including skips, with reasons) to `data/cos/quota-burn-runs.json`.
+5. Accounts for it **when the work is accepted, not when it is asked for**, and
+   appends the outcome (including skips, with reasons) to
+   `data/cos/quota-burn-runs.json`. The two synchronous lanes — a programmatic
+   handler, which runs inline, and a custom app job, which `addTask` queues in
+   the same call — are accepted on return and charge
+   `data/cos/quota-burn-dispatches.json` immediately. A built-in task goes out as
+   an on-demand REQUEST an engine may still refuse, so it takes a reservation in
+   `data/cos/quota-burn-pending.json` instead: the reservation counts against
+   `maxDispatchesPerWindow` and blocks a second burn of the same step, and the
+   next cycle joins the request to the task it produced (by the
+   `quotaBurnRequestId` stamped on that task) to charge it exactly once — or
+   releases it uncharged if nothing was generated. See "Charging exactly once"
+   below.
 
 Everything fails closed: an unknown reset time, an unsupported provider, a
 quota-read error, a card that declares itself unburnable (`burnable: false`, e.g.
@@ -423,6 +434,63 @@ Every numeric bound (windows, reserve, caps, field lengths) lives in
 (which clamps an older on-disk plan) and by the Zod schemas (which reject a bad
 request), so raising a cap in one place cannot 400 a plan the other would accept.
 
+## Charging exactly once
+
+A burn's accounting hangs off **acceptance**, never off "we asked". The
+distinction only exists because one of the three invocation lanes is
+asynchronous:
+
+| Lane | Accepted when | Accounting |
+| --- | --- | --- |
+| Programmatic handler | it returns — PortOS did the work inline | charged immediately |
+| Custom app job | `addTask` returns a persisted, non-duplicate task | charged immediately |
+| Built-in scheduled task | an on-demand engine generates the task, later | **reserved**, then settled |
+
+A built-in step goes out as an on-demand request. One of the two engines
+(`cos.js#spawnDequeuePriority0OnDemand`, `cosTaskGenerator.js#spawnPriority0OnDemand`)
+drains it on a later cycle and may refuse it outright — improvement switched off,
+the task type disabled since queuing, a managed app that has gone away, a
+generator that produced nothing, an identical twin already queued. Charging at
+the request would spend the window (and retire a `runOnce` step) for work that
+never started: the same undercount #3179 fixed one hop further down.
+
+So the runner takes a **reservation** in `data/cos/quota-burn-pending.json`
+instead, keyed `<familyId>::<stepId>`, carrying the terms the dispatch was made
+under (which window to charge, whether it charges at all, whether the step is
+`runOnce`) and the request id. While it is held:
+
+- it counts against `maxDispatchesPerWindow` exactly as a charge would, so the
+  cap is honest for the whole in-flight window and the page's `N/M used` does not
+  under-report;
+- the step is skipped by any later cycle, so a duplicate scheduled or burn
+  invocation cannot queue the same work twice.
+
+Every cycle then settles what the last one asked for (`quotaBurnAcceptance.js`),
+before deciding what to ask for next. A reservation whose request is still on the
+schedule is left alone. One whose request has drained is **joined to the task the
+engine produced**, by the `quotaBurnRequestId` that request stamped onto it
+(`lib/quotaBurnOrigin.js`):
+
+- **a task exists** → charge the window once, mark a `runOnce` step spent, patch
+  the run-log row in place with the accepted task id, release the reservation;
+- **no task exists** → release the reservation, charge nothing, and say so on the
+  run-log row.
+
+Because the join runs off persisted state — the reservation, the request and the
+task are all on disk — a restart mid-flight reaches the same verdict a reconcile
+a second later would have. The charge is claimed on the reservation *before* the
+ledger write it authorizes, so a process killed between the two cannot charge
+twice on the next pass. And an ordinary clock-driven run of the very same
+scheduled task changes nothing here: it carries no burn provenance, so no
+reservation ever names it, and neither the cap nor the step's one-shot state
+moves.
+
+Reads fail closed. An unreadable reservation file skips the cycle (reading it as
+"nothing pending" would re-queue a step already in flight and re-open its cap
+slot), and an unreadable schedule or task queue defers every reservation rather
+than calling a running burn refused. The status page reads reservations but never
+settles one — a probe read performs no ledger write.
+
 ## Manual runs
 
 - **Evaluate now** runs a full cycle immediately, ignoring the master switch but
@@ -442,7 +510,7 @@ request), so raising a cap in one place cannot 400 a plan the other would accept
 
 ## Storage
 
-Six files under `data/cos/`, all machine-local and intentionally **not federated**: the plan (`quota-burn.json` — ordered steps, each a scheduled-task reference plus its overrides; the referenced tasks themselves live in `data/cos/task-schedule.json` and the app job store, and a burn never writes to either), the per-window dispatch ledger (`quota-burn-dispatches.json`), the run log (`quota-burn-runs.json`), the in-flight set (`quota-burn-inflight.json` — entries a job enqueued whose renders have not landed yet, so the next cycle does not re-queue them; 6-hour TTL), the denial ledger (`quota-burn-denials.json` — per-family blocks from an observed provider refusal, cleared by the next successful burn or a 5-hour TTL), and the `run once` completion ledger (`quota-burn-completions.json` — which one-shot steps have had their dispatch, cleared by Re-arm). They are not federated: quota belongs to a
+Seven files under `data/cos/`, all machine-local and intentionally **not federated**: the plan (`quota-burn.json` — ordered steps, each a scheduled-task reference plus its overrides; the referenced tasks themselves live in `data/cos/task-schedule.json` and the app job store, and a burn never writes to either), the per-window dispatch ledger (`quota-burn-dispatches.json`), the run log (`quota-burn-runs.json`), the in-flight set (`quota-burn-inflight.json` — entries a job enqueued whose renders have not landed yet, so the next cycle does not re-queue them; 6-hour TTL), the denial ledger (`quota-burn-denials.json` — per-family blocks from an observed provider refusal, cleared by the next successful burn or a 5-hour TTL), the `run once` completion ledger (`quota-burn-completions.json` — which one-shot steps have had their dispatch, cleared by Re-arm), and the pending-acceptance reservations (`quota-burn-pending.json` — `<familyId>::<stepId>` → the request a burn is waiting on, released when it is accepted or refused; 6-hour TTL). None of them ships a `data.reference/` seed, because an absent file already means "nothing recorded". They are not federated: quota belongs to a
 particular machine and provider account, and the "which managed app" targets
 differ per machine.
 
@@ -481,7 +549,8 @@ inference.
 | `server/lib/universeBibleCompleteness.js` | What "described" means per kind + depth — the field vocabulary the describe task scans with |
 | `server/lib/quotaWindows.js` | Classifies a window by period — target (broadest) vs limiting (narrowest) |
 | `server/services/quotaBurnInvoke.js` | The shared invocation path: builds the task catalog, resolves a step, layers its overrides, enforces the schedule's own gates, and dispatches |
-| `server/services/quotaBurnStore.js` | `data/cos/quota-burn.json` + the run log |
+| `server/services/quotaBurnAcceptance.js` | Reservations for an asynchronous acceptance, and the settlement that charges each accepted burn exactly once |
+| `server/services/quotaBurnStore.js` | `data/cos/quota-burn.json`, the run log, and the pending-acceptance reservations |
 | `server/services/quotaBurn.js` | `evaluateFamily` — the one gate ladder both selection and the page's skip reasons read — plus the dispatch ledger |
 | `server/services/quotaBurnCompletions.js` | The `run once` completion ledger and its re-arm |
 | `server/services/quotaBurnDenials.js` | The observed-refusal ledger and its `agent:completed` subscriber |
