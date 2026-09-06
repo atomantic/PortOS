@@ -219,7 +219,11 @@ export default function FleetProviderSetup({ peers = [], providers = [], onClose
     setError('');
     if (!name.trim()) return setError('Provider name is required.');
     if (!URL.canParse(endpoint)) return setError('Enter a full HTTP endpoint for the GPU host.');
-    if (!selfHost && (isLocalEndpoint(endpoint) || !isPrivateNetworkEndpoint(endpoint))) {
+    // Self-host mode prefills the loopback address on purpose (it's this same
+    // machine) — but if the user then edits that field to something else, the
+    // normal "must be a private/remote endpoint" rule still applies rather
+    // than skipping validation for whatever they typed.
+    if (!(selfHost && isLocalEndpoint(endpoint)) && (isLocalEndpoint(endpoint) || !isPrivateNetworkEndpoint(endpoint))) {
       return setError('Use a private LAN, MagicDNS, or Tailscale endpoint on another machine.');
     }
     if (!apiKey.trim()) return setError('The networked vLLM runtime must have an API key.');

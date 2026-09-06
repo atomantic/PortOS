@@ -95,7 +95,11 @@ describe('dedicated model host setup', () => {
  it('does not prompt for this machine when it already has a matching provider', async () => {
   api.getFleetLlmHost.mockResolvedValue({ ...state, serving: true });
   api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
-  const providers = [{ id: 'self-p1', endpoint: state.endpoint }];
+  // Self-host providers are wired to the loopback queue address (both the
+  // auto-created Direct API one and the `?selfHost=1` OpenCode one) — never
+  // to `state.endpoint`, which is the tailnet address published for OTHER
+  // machines to connect to.
+  const providers = [{ id: 'self-p1', endpoint: 'http://127.0.0.1:18022/v1' }];
   render(<MemoryRouter><FleetHostSetup compact providers={providers} /></MemoryRouter>);
   expect(await screen.findByText('Recommended model host setup')).toBeInTheDocument();
   expect(screen.queryByText(/serving its own model host/)).not.toBeInTheDocument();

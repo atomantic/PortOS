@@ -141,6 +141,29 @@ describe('FleetProviderSetup', () => {
     expect(screen.getByPlaceholderText('Enter host API key').value).toBe('self-host-key-1234567890123456');
   });
 
+  it('still validates the endpoint in self-host mode if the user edits it away from loopback', async () => {
+    api.getFleetLlmHost.mockResolvedValue({ hasApiKey: true, model: 'qwen3.8-27b' });
+    api.revealFleetLlmHostKey.mockResolvedValue({ apiKey: 'self-host-key-1234567890123456' });
+    const onCreate = vi.fn();
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&selfHost=1']}>
+        <FleetProviderSetup onClose={() => {}} onCreate={onCreate} />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('GPU host endpoint').value).toBe('http://127.0.0.1:18022/v1');
+    });
+    // The self-host bypass exists only for the prefilled loopback value — an
+    // edited-away public endpoint must still fail the private-network check.
+    fireEvent.change(screen.getByLabelText('GPU host endpoint'), { target: { value: 'http://example.com:18022/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create fleet provider' }));
+
+    expect(await screen.findByText(/private LAN, MagicDNS, or Tailscale endpoint/)).toBeInTheDocument();
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
   it('surfaces an error in self-host mode when the host has not been set up yet', async () => {
     api.getFleetLlmHost.mockResolvedValue({ hasApiKey: false });
 

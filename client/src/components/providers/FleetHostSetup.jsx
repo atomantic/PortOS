@@ -7,6 +7,15 @@ import { copyToClipboard } from '../../lib/clipboard';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import RuntimeInstallModal from '../install/RuntimeInstallModal';
 import Banner from '../ui/Banner';
+import { PORTS } from '../../lib/ports.js';
+
+// A self-host provider (the auto-created Direct API one from `configure()` in
+// server/services/fleetLlmHost.js, and the OpenCode one from `?selfHost=1`)
+// is always wired to the loopback queue address, never `status.endpoint` (the
+// tailnet-facing address published for OTHER machines to connect to) — dedupe
+// against the address these providers actually use, or the "add a provider"
+// nudge below never clears even after the provider exists.
+const SELF_HOST_ENDPOINT = `http://127.0.0.1:${PORTS.FLEET_LLM}/v1`;
 
 export default function FleetHostSetup({ compact = false, providers = [], onConfigured }) {
   const [status, setStatus] = useState(null);
@@ -39,10 +48,10 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
   // peer-discovery cards above only ever surface OTHER instances, so a host
   // machine that wants to also run OpenCode TUI against its own queue had no
   // discoverable path to it. Reuse the same dedupe the peer cards use, keyed
-  // on this machine's own tailnet endpoint.
+  // on the loopback address self-host providers are actually wired to.
   const selfNeedsProvider = useMemo(
-    () => compact && Boolean(status?.endpoint) && Boolean(status?.serving || status?.enabled)
-      && !isFleetHostConfigured({ endpoint: status.endpoint }, providers),
+    () => compact && Boolean(status?.serving || status?.enabled)
+      && !isFleetHostConfigured({ endpoint: SELF_HOST_ENDPOINT }, providers),
     [compact, status, providers],
   );
 
