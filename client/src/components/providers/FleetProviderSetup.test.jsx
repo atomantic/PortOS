@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import FleetProviderSetup from './FleetProviderSetup';
 
@@ -12,6 +12,7 @@ vi.mock('../../services/apiProviders', () => api);
 
 const existingProviders = [
   { id: 'opencode-1', name: 'My OpenCode', type: 'tui', command: 'opencode', envVars: { OTHER_VAR: '1' }, models: ['old-model'] },
+  { id: 'claude-tui-1', name: 'My Claude Code', type: 'tui', command: 'claude' },
 ];
 
 const peers = [
@@ -183,5 +184,36 @@ describe('FleetProviderSetup', () => {
       );
     });
     expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not offer a non-OpenCode TUI provider as a repoint target', async () => {
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&peerId=peer-1']}>
+        <FleetProviderSetup peers={peers} providers={existingProviders} onClose={() => {}} onCreate={vi.fn()} onUpdate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    const providerSelect = await screen.findByLabelText('Provider');
+    // buildFleetProvider always overwrites command/args/envVars with the
+    // OpenCode wiring — repointing a Claude Code TUI provider here would
+    // silently convert it into an OpenCode one out from under the user.
+    expect(within(providerSelect).queryByText(/My Claude Code/)).not.toBeInTheDocument();
+    expect(within(providerSelect).getByText(/My OpenCode/)).toBeInTheDocument();
+  });
+
+  it('resets name/model/harness back to defaults when switching from a selected target back to "create a new provider"', async () => {
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&peerId=peer-1']}>
+        <FleetProviderSetup peers={peers} providers={existingProviders} onClose={() => {}} onCreate={vi.fn()} onUpdate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    const providerSelect = await screen.findByLabelText('Provider');
+    fireEvent.change(providerSelect, { target: { value: 'opencode-1' } });
+    expect(screen.getByDisplayValue('My OpenCode')).toBeInTheDocument();
+
+    fireEvent.change(providerSelect, { target: { value: '' } });
+    expect(screen.getByDisplayValue('Fleet GPU · OpenCode TUI')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('qwen3.8-27b')).toBeInTheDocument();
   });
 });

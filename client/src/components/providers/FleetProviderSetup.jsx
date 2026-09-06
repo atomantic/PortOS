@@ -6,7 +6,7 @@ import FleetHostSetup from './FleetHostSetup';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
-import { isApiProvider, isLocalEndpoint, isPrivateNetworkEndpoint, isTuiProvider, mergeProviderUpdate } from '../../utils/providers';
+import { commandBasename, isApiProvider, isLocalEndpoint, isPrivateNetworkEndpoint, isTuiProvider, mergeProviderUpdate } from '../../utils/providers';
 import { getFleetLlmHost, revealFleetLlmHostKey, revealFleetPeerHostKey } from '../../services/apiProviders';
 import { PORTS } from '../../lib/ports.js';
 
@@ -109,8 +109,15 @@ export default function FleetProviderSetup({ peers = [], providers = [], onClose
   // Repoint targets: providers a fleet endpoint can plausibly replace — an
   // existing OpenCode TUI or Direct API provider. Without this, the only way
   // to point an already-created provider at a fleet host was delete-and-recreate.
+  // A TUI provider must already be OpenCode (or have no command set yet) —
+  // `buildFleetProvider` always overwrites `command`/`args`/`envVars` with the
+  // OpenCode wiring, so repointing a Claude/Codex/Grok TUI provider here would
+  // silently convert it into an OpenCode one out from under the user.
   const repointCandidates = useMemo(
-    () => providers.filter((provider) => isTuiProvider(provider) || isApiProvider(provider)),
+    () => providers.filter((provider) => (
+      isApiProvider(provider)
+      || (isTuiProvider(provider) && (!provider.command || commandBasename(provider.command) === 'opencode'))
+    )),
     [providers],
   );
   const repointTarget = useMemo(
@@ -193,7 +200,15 @@ export default function FleetProviderSetup({ peers = [], providers = [], onClose
   const selectTarget = (id) => {
     setTargetProviderId(id);
     const target = providers.find((provider) => provider.id === id);
-    if (!target) return;
+    if (!target) {
+      // Back to "create a new provider" — undo whatever a previously
+      // selected target's type/name/model left behind, or the form keeps
+      // showing that provider's values with no visible reason why.
+      setHarness('tui');
+      setName('Fleet GPU · OpenCode TUI');
+      setModel(DEFAULT_MODEL);
+      return;
+    }
     setHarness(isTuiProvider(target) ? 'tui' : 'api');
     setName(target.name || name);
     if (target.defaultModel) setModel(target.defaultModel);
