@@ -23,11 +23,34 @@ No `tailcat serve all`, no exit-node mode, and no Tailscale daemon are used.
 
 1. Open **Instances → Add Peer → Tailcat address**.
 2. Paste the peer's `tc…` address (received out of band).
-3. PortOS ensures `tailcat` is installed (PATH, else `go install
-   github.com/tailscale/tailcat/cmd/tailcat@latest`), starts the forward, and
-   calls the normal peer registration against `127.0.0.1:<localPort>`.
-   Select **Remote PortOS uses HTTPS** if the remote install has enabled TLS.
+3. PortOS ensures `tailcat` is installed, starts the forward, and calls the
+   normal peer registration against `127.0.0.1:<localPort>`. Select **Remote
+   PortOS uses HTTPS** if the remote install has enabled TLS.
 4. Classic **Host / port** add remains unchanged (still rejects loopback).
+
+### How `tailcat` gets installed
+
+`ensureTailcatInstalled` first looks for a runnable binary — PATH, then
+`$GOBIN`/`$GOPATH/bin`, then the Homebrew prefix, since a long-running server
+does not necessarily have a package manager's bin directory on its inherited
+PATH. When none is found it runs the package managers the operator already has,
+in order, and stops at the first that produces a working binary:
+
+| Order | Command | Available when |
+| --- | --- | --- |
+| 1 | `brew install tailcat` (with `HOMEBREW_NO_AUTO_UPDATE=1`) | `brew` on PATH |
+| 2 | `go install github.com/tailscale/tailcat/cmd/tailcat@latest` | `go` on PATH |
+
+Homebrew is tried first for two reasons. **Tailcat publishes release binaries
+for Linux and Windows only**, so on macOS `brew` is the only prebuilt route and
+the releases page is a dead end. And `go install` needs to reach the Go module
+proxy through Go's own dialer, which a local network filter can break in a way
+that surfaces only as `dial tcp …:443: connect: bad file descriptor` — Homebrew
+downloads over plain HTTPS and is unaffected.
+
+If every strategy fails, the error names each command and the first line of what
+it said, followed by platform-appropriate manual guidance (`brew install
+tailcat` on macOS, the releases page elsewhere).
 
 HTTP is the default; HTTPS runs through the same loopback tunnel. Remote
 announcements cannot replace the managed local host or forwarding port.
@@ -57,9 +80,9 @@ operator a tailcat address so the home install can federate in.
 
 ```bash
 # Install tailcat (pick one)
-go install github.com/tailscale/tailcat/cmd/tailcat@latest
-# or: brew install tailcat
-# or: download a release from https://github.com/tailscale/tailcat/releases
+brew install tailcat
+# or: go install github.com/tailscale/tailcat/cmd/tailcat@latest
+# or (Linux/Windows only): a release from https://github.com/tailscale/tailcat/releases
 
 # PortOS already listening on :5555 in the sandbox, then:
 tailcat serve --key=new 5555
