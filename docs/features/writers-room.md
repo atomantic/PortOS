@@ -87,8 +87,11 @@ The mapping model is a **relational read-model derived on request** rather than 
 - Prose segments come from the active draft's `segmentIndex`.
 - Script scenes come from the latest `script` analysis, whose scenes carry `sourceSegmentIds` back-references.
 - Media comes from the analysis snapshot's scene-image map.
+- Cast integrity comes from the per-work character bible, measured by the shared `server/lib/characterIntegrity.js` contract (#6415) and joined to the scenes that stage each character.
 
 Selecting prose highlights the mapped script and media; media cards show provenance (source segments, prompt, model, render job). Staleness falls out of the pinned analysis `sourceContentHash` — when the draft's hash differs, the UI shows stale badges and requires a deliberate re-run. Media attached to scenes that no longer exist after re-extraction is surfaced explicitly as orphaned rather than silently dropped.
+
+The **Cast pane** is where the cold read of the draft meets author knowledge, and the two are deliberately kept apart. Findings are the deterministic, zero-provider completeness pass over the AUTHORED bible — a character the prose stages vividly still reports every unauthored framework field, because an interior that lives only in the author's head is the defect. What the script extraction saw is reported beside it as `staged` (never as a repair): an authored character no scene stages is a fact rather than a flag, and a name the extraction found with no bible entry is listed under `staging.unmatchedNames` rather than becoming a finding the report has no record to attach. Depth rulings come from the same contract, so a declared minor role or flat arc is held to the conscious pursuit only. No model reads this cast here (`semanticReviewedCount` is 0 and `passed` is false by construction) — the semantic review and selective augmentation live in the Universe Bible's Cast Integrity panel.
 
 ## Federation
 

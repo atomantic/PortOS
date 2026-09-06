@@ -37,6 +37,7 @@ import {
   REVIEW_STATUS_META,
   castIntegrityPassed,
   findingIsRepairable,
+  humanizeIntegrityField,
   incompleteCoverage,
 } from '../../lib/characterIntegrity';
 
@@ -55,12 +56,6 @@ const Badge = ({ tone, children, title }) => (
     {children}
   </span>
 );
-
-/** `psychology.drives.status.fear` → `Psychology › drives › status › fear`. */
-const humanizeField = (field) => field
-  .split('.')
-  .map((part) => part.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim())
-  .join(' › ');
 
 export default function CastIntegrityPanel({ open, universeId, onClose, onUniverseChange }) {
   const mountedRef = useMounted();
@@ -290,7 +285,7 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
                               id={checkboxId}
                               checked={selected.has(f.id)}
                               onChange={() => toggleFinding(f.id)}
-                              aria-label={`Select ${humanizeField(f.field)} on ${f.characterName || f.characterId} for augmentation`}
+                              aria-label={`Select ${humanizeIntegrityField(f.field)} on ${f.characterName || f.characterId} for augmentation`}
                               className="mt-0.5 accent-port-accent"
                             />
                           ) : <span className="w-3" aria-hidden="true" />}
@@ -298,7 +293,7 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
                             <label htmlFor={meta.repairable ? checkboxId : undefined} className="flex flex-wrap items-center gap-1.5">
                               <span className="text-gray-200">{f.characterName || f.characterId}</span>
                               <span className="text-gray-500">·</span>
-                              <span className="text-gray-400 font-mono text-[11px]">{humanizeField(f.field)}</span>
+                              <span className="text-gray-400 font-mono text-[11px]">{humanizeIntegrityField(f.field)}</span>
                               <Badge tone={meta.tone} title={meta.hint}>{meta.label || f.kind}</Badge>
                               {f.dimension ? <Badge tone="slate">{DIMENSION_LABELS[f.dimension] || f.dimension}</Badge> : null}
                             </label>
@@ -353,7 +348,7 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
                             })}
                             className="accent-port-accent"
                           />
-                          <span className="font-mono text-[11px]">{humanizeField(p.field)}</span>
+                          <span className="font-mono text-[11px]">{humanizeIntegrityField(p.field)}</span>
                         </label>
                         <div className="grid gap-2 sm:grid-cols-2">
                           <p className="text-[11px] text-gray-500 border border-port-border rounded p-2 whitespace-pre-wrap">
