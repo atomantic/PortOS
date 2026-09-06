@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  renderCanonForPrompt,
   renderEntitiesSummary,
   renderCharacterNarrativeContext,
   renderStoryCanonDigest,
@@ -7,6 +8,7 @@ import {
   CHARACTER_NARRATIVE_FIELD_MAX,
   ENTITIES_SUMMARY_MAX_PER_KIND,
   ENTITIES_SUMMARY_DESCRIPTOR_MAX,
+  CONCEALMENT_SAFE_CANON_FIELDS,
 } from './universePromptRenderers.js';
 
 describe('renderEntitiesSummary', () => {
@@ -240,8 +242,110 @@ describe('renderStoryCanonDigest (#6416)', () => {
     expect(digest).toContain('not shown — prompt budget reached');
   });
 
+it('drives both blocks from one gate, and lets a read-only author surface opt out (#6426)', () => {
+    const masked = universe({
+      characters: [{
+        id: 'char-masked', name: 'Example Auditor', role: 'antagonist', spoiler: true,
+        surfaceDescriptor: 'a clerk with a ledger',
+        background: 'LEAK-background signed off on the collapse',
+        personality: 'LEAK-personality outwardly meek',
+        lie: 'LEAK-lie the ledger is the only honest thing left',
+      }],
+    });
+
+    // Generation-facing default: the descriptive block no longer contradicts
+    // the psychology block by publishing the same character's concealed history.
+    const gated = renderStoryCanonDigest(masked);
+    expect(gated).toContain('a clerk with a ledger — (reveal-gated');
+    expect(gated).toContain('Example Auditor: (reveal-gated');
+    expect(gated).not.toMatch(/LEAK-/);
+
+    // Author-side review opts out and gets the whole bible from both blocks.
+    const open = renderStoryCanonDigest(masked, { respectRevealGates: false });
+    expect(open).toContain('LEAK-background signed off on the collapse');
+    expect(open).toContain('lie=LEAK-lie the ledger is the only honest thing left');
+  });
+
   it('returns empty for a missing universe', () => {
     expect(renderStoryCanonDigest(null)).toBe('');
     expect(renderStoryCanonDigest('nope')).toBe('');
+  });
+});
+
+describe('the single reveal gate on the descriptive canon block (#6426)', () => {
+  // Obviously-fake placeholder canon. Every concealable field carries a
+  // distinct `LEAK-` sentinel so a failure names the field that escaped.
+  const gatedCharacter = (over = {}) => ({
+    id: 'char-masked',
+    name: 'Example Auditor',
+    role: 'antagonist',
+    spoiler: true,
+    surfaceDescriptor: 'a clerk with a ledger',
+    physicalDescription: 'LEAK-physicalDescription',
+    personality: 'LEAK-personality',
+    background: 'LEAK-background',
+    tags: ['LEAK-tags'],
+    ...over,
+  });
+  const world = (over = {}) => ({ characters: [gatedCharacter(over)], places: [], objects: [] });
+
+  it('masks the concealed descriptive fields and keeps identity plus the authored surface stand-in', () => {
+    const out = renderCanonForPrompt(world(), { respectRevealGates: true });
+    expect(out).toContain('- Example Auditor [antagonist]: a clerk with a ledger — (reveal-gated');
+    expect(out).not.toMatch(/LEAK-/);
+  });
+
+  it('names a gated entry that has no surface stand-in rather than dropping it from the roster', () => {
+    const out = renderCanonForPrompt(world({ surfaceDescriptor: '' }), { respectRevealGates: true });
+    expect(out).toContain('- Example Auditor [antagonist]: (reveal-gated');
+    expect(out).not.toMatch(/LEAK-/);
+  });
+
+  it('treats an unresolved revealIssue like a hard spoiler flag, and leaves an ungated character whole', () => {
+    const byIssue = renderCanonForPrompt(world({ spoiler: false, revealIssue: 4 }), { respectRevealGates: true });
+    expect(byIssue).toContain('(reveal-gated');
+    expect(byIssue).not.toMatch(/LEAK-/);
+
+    const ungated = renderCanonForPrompt(world({ spoiler: false }), { respectRevealGates: true });
+    expect(ungated).toContain('LEAK-background');
+  });
+
+  it('stays off by default so author-side planning still reasons over the whole bible', () => {
+    expect(renderCanonForPrompt(world())).toContain('LEAK-background');
+  });
+
+  it('gates places and objects through the same projection', () => {
+    const out = renderCanonForPrompt({
+      characters: [],
+      places: [{
+        name: 'Example Bunker', slugline: 'INT. BUNKER', spoiler: true,
+        description: 'LEAK-place-description', recurringDetails: 'LEAK-place-recurring',
+      }],
+      objects: [{
+        name: 'Example Ledger', revealIssue: 9,
+        description: 'LEAK-object-description', significance: 'LEAK-object-significance',
+      }],
+    }, { respectRevealGates: true });
+    expect(out).toContain('- Example Bunker: (reveal-gated');
+    expect(out).toContain('- Example Ledger: (reveal-gated');
+    expect(out).not.toMatch(/LEAK-/);
+  });
+
+  it('renders a gated entry from the allowlist alone, so a field added later cannot bypass the gate', () => {
+    // The regression this uniquely catches: someone adds a descriptive field to
+    // a canon record (or to formatCharacter) and never revisits the gate. The
+    // gate is an allowlist PROJECTION, so an unknown key is withheld with no
+    // edit here; a per-field subtraction would let each of these through.
+    const loaded = {
+      ...gatedCharacter(),
+      description: '', confession: '', secretName: '', theoryOfControl: '', ghost: '',
+    };
+    for (const key of Object.keys(loaded)) {
+      if (!CONCEALMENT_SAFE_CANON_FIELDS.includes(key) && typeof loaded[key] === 'string') {
+        loaded[key] = `LEAK-${key}`;
+      }
+    }
+    const out = renderCanonForPrompt({ characters: [loaded], places: [], objects: [] }, { respectRevealGates: true });
+    expect(out).not.toMatch(/LEAK-/);
   });
 });

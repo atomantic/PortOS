@@ -740,6 +740,25 @@ describe('editorial canon dependencies carry authored psychology (#6416)', () =>
     expect(canonDigest).toContain('do not treat this cast list as complete');
   });
 
+it('still shows the editorial reviewer a reveal-gated character in full (#6426)', async () => {
+    // The generation stages now mask a spoiler character's concealed history in
+    // BOTH canon blocks. The editorial pass must not inherit that: its
+    // continuity checks exist to catch a premature reveal, and a reviewer handed
+    // the masked view cannot tell concealed history from history that was never
+    // written.
+    const { canonDigest } = await load(authoredUniverse({
+      characters: [{
+        id: 'character-masked', name: 'The Auditor', role: 'antagonist', spoiler: true,
+        surfaceDescriptor: 'a clerk with a ledger',
+        background: 'Signed off on the collapse.',
+        lie: 'The ledger is the only honest thing left.',
+      }],
+    }));
+    expect(canonDigest).toContain('background: Signed off on the collapse.');
+    expect(canonDigest).toContain('lie=The ledger is the only honest thing left.');
+    expect(canonDigest).not.toContain('reveal-gated');
+  });
+
   it('invalidates an in-flight editorial result when a belief is edited mid-run', async () => {
     const before = await load(authoredUniverse());
     const edited = authoredUniverse();

@@ -145,6 +145,11 @@ const playRouting = (loom, perCall) => resolveLlmRoutePin(loom.playSettings, per
  *
  * Reader-facing paths do NOT call this: `playTurn` never renders canon, and the
  * cold-opening first-time-viewer review passes its own withheld placeholder.
+ *
+ * The composer's reveal gate is left ON (its default): a character carrying a
+ * `spoiler` flag or an unresolved `revealIssue` reaches these generation stages
+ * as name + role + the authored surface stand-in, with the concealed
+ * `background`/`personality` and the psychology block both withheld (#6426).
  */
 export async function buildCanonDigest(loom) {
   if (!loom.universeId) return '';
