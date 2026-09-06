@@ -201,6 +201,15 @@ export const TRACKER_FILING_PRESETS = {
   // as opposed to `reference-watch`'s recurring commit-diff review of a repo
   // configured on the app. Same clean-room contract: propose reimplementation in
   // the app's OWN code, never copy upstream source.
+  'youtube-analysis': {
+    slugPrefix: 'youtube-analysis-',
+    label: 'youtube-analysis',
+    issueLabel: 'youtube-analysis',
+    labelDescription: 'Proposed from analysis of a captured YouTube transcript',
+    planItemBody: 'From <video URL> (<today’s date>). <Rationale for {appName}.> Fix: <files and functions>. <Scope and validation.>',
+    bodyRequirements: 'the source video URL, rationale for {appName}, inspected files/functions to change, estimated scope, and validation plan',
+    planCommitMessage: 'docs: propose improvements from transcript analysis',
+  },
   'repo-study': {
     slugPrefix: 'repo-study-',
     label: 'repo-study',

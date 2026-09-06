@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
+vi.mock('../services/apiLocalLlm', () => ({ getToolUseModels: vi.fn(async () => ({ models: [] })) }));
 vi.mock('../services/api', () => ({
   captureBrainThought: vi.fn(),
   getYoutubeIngestSettings: vi.fn(),
@@ -63,7 +64,7 @@ const submit = (text) => {
 // Open the advanced panel and wait for the settings-seeded checkbox state.
 const openAdvanced = async () => {
   await waitFor(() => expect(getYoutubeIngestSettings).toHaveBeenCalled());
-  fireEvent.click(screen.getByLabelText('Toggle ingest options'));
+  await act(async () => { fireEvent.click(screen.getByLabelText('Toggle ingest options')); });
 };
 
 describe('QuickBrainCapture', () => {
@@ -364,8 +365,29 @@ describe('QuickBrainCapture', () => {
         ingestAudio: false,
         note: 'Keep this for the next research session.',
         agentPrompt: 'Review for writing-tool improvements.',
+        targetAppId: 'portos-default',
+        workMode: 'issues',
         // Blank entries dropped, surrounding whitespace trimmed.
         tags: ['writing-tools', 'research'],
+      });
+    });
+
+    it('routes transcript work to the selected app and implementation mode', async () => {
+      renderWidget();
+      type(YT);
+      await openAdvanced();
+      await screen.findByRole('option', { name: 'Example App' });
+      fireEvent.change(screen.getByLabelText('Analyze for app'), { target: { value: 'app-example' } });
+      fireEvent.change(screen.getByLabelText(/what should an agent do/i), { target: { value: 'Improve search.' } });
+      fireEvent.click(screen.getByLabelText('Do the work immediately'));
+      fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'claude-code' } });
+      fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-sonnet' } });
+      fireEvent.change(screen.getByLabelText('Thinking effort'), { target: { value: 'high' } });
+      fireEvent.click(screen.getByLabelText('Capture'));
+      await waitFor(() => expect(startYoutubeIngest).toHaveBeenCalled());
+      expect(startYoutubeIngest.mock.calls[0][0]).toMatchObject({
+        targetAppId: 'app-example', workMode: 'implement', agentPrompt: 'Improve search.',
+        providerId: 'claude-code', model: 'claude-sonnet', effort: 'high',
       });
     });
 

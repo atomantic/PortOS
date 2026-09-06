@@ -161,14 +161,26 @@ describe('buildAgentTaskContext', () => {
       notePath: 'Consumed/YouTube/note.md',
       tags: ['writing-tools'],
       hasTranscript: true,
+      trackerInstructions: 'File in Example project tracker.',
     });
+    expect(context).toContain('File in Example project tracker.');
     expect(context).toContain('Review for writing-tool improvements.');
     expect(context).toContain('/data/brain/youtube/oCnxnaVg0bY.md');
     expect(context).toContain('Consumed/YouTube/note.md');
-    expect(context).toContain('portos-file-issue');
-    expect(context).toContain('model:light|medium|heavy');
-    expect(context).toContain('good first issue');
+    expect(context).toContain('File actionable findings as issues');
+    expect(context).toContain('do not implement code changes');
     expect(context).toContain('**Duration:** 1:02:03');
+  });
+
+  it('scopes implementation to the selected app without issue-filing instructions', () => {
+    const context = buildAgentTaskContext({
+      meta: META, url: 'https://youtu.be/oCnxnaVg0bY', agentPrompt: 'Improve search.',
+      tags: [], hasTranscript: true, transcriptPath: '/example/transcript.md',
+      appName: 'Example App', workMode: 'implement', trackerInstructions: 'File on Example tracker',
+    });
+    expect(context).toContain('Analyze applicability to Example App');
+    expect(context).toContain('Implement applicable changes now');
+    expect(context).not.toContain('File on Example tracker');
   });
 
   it('names the untrusted-transcript boundary so a prompt-injecting speaker is data, not direction', () => {

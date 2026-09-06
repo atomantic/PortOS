@@ -393,6 +393,7 @@ export async function startYoutubeIngest({
   ingestAudio = false,
   note = '',
   agentPrompt = '',
+  targetAppId, providerId, model, effort, workMode = 'issues',
   tags = [],
   priority,
 } = {}) {
@@ -402,6 +403,22 @@ export async function startYoutubeIngest({
       status: 400,
       code: 'NOTHING_TO_INGEST',
     });
+  }
+
+  // Resolve explicit agent routing before starting downloads, so stale app
+  // selections fail visibly and never silently dispatch into PortOS.
+  let analysisApp = null;
+  let filing = null;
+  if (String(agentPrompt || '').trim()) {
+    const { getAppById, PORTOS_APP_ID } = await import('./apps.js');
+    analysisApp = await getAppById(targetAppId || PORTOS_APP_ID);
+    if (!analysisApp?.repoPath || analysisApp.archived) {
+      throw new ServerError('Selected analysis app is unavailable', { status: 400, code: 'APP_NOT_FOUND' });
+    }
+    if (workMode === 'issues') {
+      const { resolveTrackerFilingBlock } = await import('../lib/workTracker.js');
+      filing = await resolveTrackerFilingBlock(analysisApp, 'youtube-analysis');
+    }
   }
 
   const ytDlp = await findYtDlp();
@@ -623,14 +640,22 @@ export async function startYoutubeIngest({
         stage('queueing');
         const task = await addTask({
           description: `Review ingested YouTube content: ${meta.title} [${meta.videoId}]`,
+          app: analysisApp.id,
+          ...(providerId ? { provider: providerId } : {}),
+          ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          ...(filing ? { workTracker: filing.workTracker, worktreeChangesExpected: filing.worktreeChangesExpected } : {}),
           context: buildAgentTaskContext({
             meta, url, agentPrompt: prompt, transcriptPath, notePath: landed.obsidian?.path, tags: cleanTags,
             hasTranscript: !!transcriptPath,
+            appName: analysisApp.name, workMode,
+            trackerInstructions: filing?.trackerInstructions
+              .replace(/\{appName\}/g, () => analysisApp.name)
+              .replace(/\{repoPath\}/g, () => analysisApp.repoPath),
           }),
           priority: priority || settings.taskPriority,
-          // Analysis + issue-filing, not a code change: no worktree, no PR.
-          useWorktree: false,
-          openPR: false,
+          useWorktree: workMode === 'implement',
+          openPR: workMode === 'implement',
           simplify: false,
           reviewLoop: false,
         }, 'user').catch((err) => {

@@ -8,6 +8,8 @@ import { parseBareUrl } from '../lib/bareUrl';
 import { readClipboard } from '../lib/clipboard';
 import { INGEST_OPTIONS, defaultIngestOptions, ingestOptionsFromSettings, isYoutubeVideoUrl } from '../lib/youtubeUrl';
 import RepoIntakeOptions from './brain/RepoIntakeOptions';
+import RepoStudyFields from './brain/RepoStudyFields';
+import useRepoStudyConfig from '../hooks/useRepoStudyConfig';
 import ProgressBar from './ui/ProgressBar';
 import ToggleChip from './ui/ToggleChip';
 
@@ -30,7 +32,9 @@ export default function QuickBrainCapture() {
   // agent opt-ins (malware scan / repo study).
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [ingestOpts, setIngestOpts] = useState(defaultIngestOptions);
-  const [agentPrompt, setAgentPrompt] = useState('');
+  const analysis = useRepoStudyConfig({ enabled: isYoutube && showAdvanced });
+  const { studyContext: agentPrompt, setStudyContext: setAgentPrompt } = analysis;
+  const [workMode, setWorkMode] = useState('issues');
   const [tagsInput, setTagsInput] = useState('');
   const [linkNote, setLinkNote] = useState('');
   const repoIntake = useRepoIntake(input, linkNote);
@@ -77,11 +81,13 @@ export default function QuickBrainCapture() {
       // the input clears immediately and the widget stays usable.
       setInput('');
       setLinkNote('');
+      const { studyContext: _context, ...agentOptions } = analysis.studyPayload();
       ingest.start({
         url: text,
         ...ingestOpts,
         ...(note ? { note } : {}),
         agentPrompt: agentPrompt.trim(),
+        ...(agentPrompt.trim() ? { ...agentOptions, workMode } : {}),
         tags: tagsInput.split(',').map((t) => t.trim()).filter(Boolean),
       });
       return;
@@ -246,19 +252,23 @@ export default function QuickBrainCapture() {
             ))}
           </div>
 
-          <div>
-            <label htmlFor="quick-brain-prompt" className="block text-xs text-gray-400 mb-1">
-              What should an agent do with this? <span className="text-gray-600">(optional — queues a CoS task)</span>
-            </label>
-            <textarea
-              id="quick-brain-prompt"
-              rows={3}
-              value={agentPrompt}
-              onChange={e => setAgentPrompt(e.target.value)}
-              placeholder="e.g. Review for features and improvements to our writing tools; file issues for anything actionable."
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-            />
-          </div>
+          <RepoStudyFields
+            idPrefix="quick-brain-youtube"
+            {...analysis}
+            targetAppLabel="Analyze for app"
+            contextLabel="What should an agent do with this?"
+            contextPlaceholder="Describe what to learn or improve. A non-empty request queues a CoS agent."
+          />
+          <ToggleChip
+            id="quick-brain-youtube-implement"
+            label="Do the work immediately"
+            hint="On: implement applicable changes in the selected app. Off: file actionable issues in its configured project tracker. A request above is required to start an agent."
+            checked={workMode === 'implement'}
+            onToggle={() => setWorkMode(mode => mode === 'issues' ? 'implement' : 'issues')}
+          />
+          <p className="text-xs text-gray-500">
+            {workMode === 'implement' ? 'Agent will implement changes using an isolated worktree and PR.' : 'Agent will file issues in the selected app’s project tracker.'}
+          </p>
 
           <div>
             <label htmlFor="quick-brain-tags" className="block text-xs text-gray-400 mb-1">
