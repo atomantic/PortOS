@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   getSampleProviders: vi.fn(),
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
+  setActiveProvider: vi.fn().mockResolvedValue({}),
   getOrchestrationProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createRun: vi.fn().mockResolvedValue({ runId: 'run-1' }),
   stopRun: vi.fn().mockResolvedValue({}),
@@ -120,6 +121,40 @@ describe('AIProviders page load error handling', () => {
     api.getProviderReadiness.mockResolvedValue({ readiness: {} });
     api.getCodexAccount.mockImplementation(() => new Promise(() => {}));
     localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: null } };
+  });
+
+  it('renders one CLI/TUI card with one install check, explicit default modes and a TUI shell link', async () => {
+    const executionModes = [{ id: 'example', type: 'cli' }, { id: 'example-tui', type: 'tui' }];
+    api.getProviders.mockResolvedValue({ activeProvider: 'example', providers: [
+      { id: 'example', name: 'Example CLI', type: 'cli', command: 'opencode', enabled: true, models: ['model-a'], executionModes },
+      { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'opencode', enabled: true, models: ['model-a'], tuiCommandLine: 'opencode', executionModes },
+      { id: 'example-api', name: 'Example API', type: 'api', endpoint: 'http://192.0.2.10:11434', enabled: true, models: ['remote-model'] },
+    ] });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: { opencode: missingRuntime } });
+    renderPage();
+    expect(await screen.findByRole('heading', { name: 'Example', exact: true })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Example API' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Install OpenCode CLI/ })).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Launch in Shell' })).toHaveAttribute('href', '/shell?provider=example-tui');
+    expect(screen.getByRole('button', { name: 'CLI default' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Set TUI default' }));
+    await waitFor(() => expect(api.setActiveProvider).toHaveBeenCalledWith('example-tui'));
+    expect(await screen.findByRole('button', { name: 'TUI default' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Set CLI default' }));
+    await waitFor(() => expect(api.setActiveProvider).toHaveBeenLastCalledWith('example'));
+  });
+
+  it('gates each unified Codex default on that mode’s own transport consent', async () => {
+    const executionModes = [{ id: 'codex', type: 'cli' }, { id: 'codex-tui', type: 'tui' }];
+    api.getCodexAccount.mockResolvedValue({ readiness: { status: 'ready' } });
+    api.getCodexModels.mockResolvedValue({ models: null });
+    api.getProviders.mockResolvedValue({ activeProvider: null, providers: [
+      { id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', enabled: true, textTransportEnabled: true, executionModes },
+      { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', enabled: true, textTransportEnabled: false, executionModes },
+    ] });
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Set CLI default' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Set TUI default' })).toBeDisabled();
   });
 
   it('offers an install button on the card of a provider whose CLI is missing', async () => {

@@ -1,3 +1,4 @@
+import { providerModeGroups, sharedModeUpdates, unifyProviderModes } from './internal/providerModes.js';
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, delimiter, isAbsolute } from 'path';
@@ -533,7 +534,8 @@ export function createProviderService(config = {}) {
           console.error(`❌ sample providers file ${sampleFile} parse failed (${err.message}); starting from empty`);
           return { activeProvider: null, providers: {} };
         }
-        await atomicWrite(PROVIDERS_PATH, sample);
+        unifyProviderModes(parsed);
+        await atomicWrite(PROVIDERS_PATH, parsed);
         return parsed;
       }
       return { activeProvider: null, providers: {} };
@@ -546,7 +548,8 @@ export function createProviderService(config = {}) {
     const migratedAntigravity = migrateAntigravityProviders(data);
     const migratedAntigravityModels = migrateAntigravityModelCatalog(data);
     const migratedContextWindows = migrateProviderContextWindows(data);
-    if (migratedCodex || migratedAntigravity || migratedAntigravityModels || migratedContextWindows) {
+    const migratedModes = unifyProviderModes(data);
+    if (migratedModes || migratedCodex || migratedAntigravity || migratedAntigravityModels || migratedContextWindows) {
       await atomicWrite(PROVIDERS_PATH, data);
       if (migratedCodex) console.log('🔧 Migrated Codex providers to the selectable model catalog');
       if (migratedAntigravity) console.log('🔧 Migrated Gemini provider config to Antigravity CLI (agy)');
@@ -711,6 +714,7 @@ export function createProviderService(config = {}) {
       };
 
       data.providers[id] = provider;
+      unifyProviderModes(data);
 
       if (!data.activeProvider) {
         data.activeProvider = id;
@@ -733,7 +737,11 @@ export function createProviderService(config = {}) {
         id
       };
 
+      const group = providerModeGroups(Object.values(data.providers)).find(modes => modes.some(mode => mode.id === id));
       data.providers[id] = provider;
+      for (const sibling of group || []) {
+        if (sibling.id !== id) Object.assign(sibling, sharedModeUpdates(updates, sibling));
+      }
       await saveProviders(data);
       return provider;
     },
@@ -745,9 +753,11 @@ export function createProviderService(config = {}) {
         return false;
       }
 
-      delete data.providers[id];
+      const group = providerModeGroups(Object.values(data.providers)).find(modes => modes.some(mode => mode.id === id));
+      const removed = (group || []).map(mode => mode.id);
+      for (const modeId of removed) delete data.providers[modeId];
 
-      if (data.activeProvider === id) {
+      if (removed.includes(data.activeProvider)) {
         const remaining = Object.keys(data.providers);
         data.activeProvider = remaining.length > 0 ? remaining[0] : null;
       }
@@ -1119,11 +1129,13 @@ export function createProviderService(config = {}) {
           // Built per member rather than once per group: `modelCatalogUpdate`
           // merges against THAT provider's previously-learned windows, and it
           // copies the list, so members never share a mutable instance.
-          fresh.providers[id] = {
-            ...provider,
-            ...modelCatalogUpdate(group.catalog, provider.modelContextWindows),
-            id,
-          };
+          const modes = providerModeGroups(Object.values(fresh.providers)).find(entries => entries.some(entry => entry.id === id));
+          for (const mode of modes || [provider]) {
+            fresh.providers[mode.id] = {
+              ...mode,
+              ...modelCatalogUpdate(group.catalog, mode.modelContextWindows),
+            };
+          }
           changed = true;
         }
       }

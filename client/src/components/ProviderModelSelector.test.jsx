@@ -36,6 +36,21 @@ describe('ProviderModelSelector', () => {
     expect(options).toEqual(['Provider One', 'Provider Two', 'm1', 'm2']);
   });
 
+  it('keeps both execution modes independently selectable when the settings page groups their card', () => {
+    const onProviderChange = vi.fn();
+    const executionModes = [{ id: 'example-cli', type: 'cli' }, { id: 'example-tui', type: 'tui' }];
+    renderSelector({ providers: [
+      { id: 'example-cli', name: 'Example CLI', type: 'cli', enabled: true, executionModes },
+      { id: 'example-tui', name: 'Example TUI', type: 'tui', enabled: true, executionModes },
+    ], selectedProviderId: 'example-cli', onProviderChange });
+    const select = screen.getByRole('combobox', { name: 'Provider' });
+    expect([...select.options].map(option => [option.value, option.textContent])).toEqual([
+      ['example-cli', 'Example CLI'], ['example-tui', 'Example TUI'],
+    ]);
+    fireEvent.change(select, { target: { value: 'example-tui' } });
+    expect(onProviderChange).toHaveBeenCalledWith('example-tui');
+  });
+
   it('renders every current Codex fallback choice, including Codex Spark', () => {
     const codexModels = SHIPPED_PROVIDERS.providers.codex.models;
     expect(codexModels).toContain('gpt-5.3-codex-spark');

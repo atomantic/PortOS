@@ -1,3 +1,4 @@
+import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
@@ -219,6 +220,8 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.get('/', asyncHandler(async (req, res) => {
     const data = await providerService.getAllProviders();
     const prerequisites = getProviderPrerequisiteMap(data.providers);
+    const modeGroups = new Map(providerModeGroups(data.providers).flatMap(group =>
+      group.map(provider => [provider.id, group.map(({ id, type }) => ({ id, type }))])));
     const capabilities = await detectSystemCapabilities();
     // Cache-only: this list must stay a synchronous read that spawns nothing.
     // `null` here means NOT PROBED, and the dedicated `/codex/account` fetch is
@@ -233,6 +236,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
       activeProvider: data.activeProvider,
       providers: data.providers.map((provider) => ({
         ...presentProvider(provider, capabilities),
+        executionModes: modeGroups.get(provider.id),
         prerequisitesMet: prerequisites[provider.id]?.met ?? true,
         missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
         // NON-blocking notices — today only 'this install's own ~/.codex/config.toml

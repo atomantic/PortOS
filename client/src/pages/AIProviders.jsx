@@ -631,8 +631,13 @@ export default function AIProviders() {
     };
     // The hardware veto is decided first: what this machine cannot run never
     // reaches the readiness buckets, so a card lands in exactly one section.
-    const runnable = providers.filter(isProviderHardwareCompatible);
-    const unrunnable = providers.filter(p => !isProviderHardwareCompatible(p));
+    const cards = providers.filter(provider => {
+      const modes = provider.executionModes || [{ id: provider.id }];
+      const representative = modes.find(mode => mode.id === activeProviderId) || modes[0];
+      return provider.id === representative.id;
+    });
+    const runnable = cards.filter(isProviderHardwareCompatible);
+    const unrunnable = cards.filter(p => !isProviderHardwareCompatible(p));
     return {
       providersById: byId,
       runtimeByProviderId: runtimeById,
@@ -994,6 +999,8 @@ export default function AIProviders() {
                       status={statuses[provider.id]}
                       isDefault={provider.id === activeProviderId}
                       providersById={providersById}
+                      activeProviderId={activeProviderId}
+                      statuses={statuses}
                       runnerAllowedCommands={runnerAllowedCommands}
                       testResult={testResults[provider.id]}
                       refreshing={Boolean(refreshing[provider.id])}
