@@ -12,7 +12,7 @@ import { hashPromptBody, buildPromptIntegritySnapshot } from './taskPromptDefaul
 import { EPIC_DECOMPOSED_LABEL } from './perpetualWork.js';
 // The claim prompts build their contributor-label release from this helper, so the
 // test asserts against the same source rather than re-typing the command text.
-import { formatContributorLabelReleaseCommands, formatVolunteerClaimCommands } from '../lib/dispatchLabels.js';
+import { DISPATCH_HINT_FANOUT_GUIDANCE, formatContributorLabelReleaseCommands, formatVolunteerClaimCommands } from '../lib/dispatchLabels.js';
 
 // Hash snapshot of every exported prompt body and version. This pins the
 // cross-install prompt-upgrade contract (see AGENTS.md "Distribution model"):
@@ -703,18 +703,38 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // regression. The tell is the conflict itself, which is why the prompt has to
   // say outright that a resolvable conflict proves nothing.
   it('branch-reconcile v3 makes SUPERSEDED an outcome and denies conflicts as evidence, preserving the v2 default', () => {
-    const current = DEFAULT_TASK_PROMPTS['branch-reconcile'];
-    expect(current).toContain('SUPERSEDED');
-    expect(current).toContain('not evidence the work is still needed');
-    expect(current).toContain('Nothing reaches a PR unverified');
-    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(3);
-
     const previous = PREVIOUS_DEFAULT_PROMPTS['branch-reconcile'];
-    const v2 = previous[previous.length - 1];
+    const v3 = previous[previous.length - 1];
+    const v2 = previous[previous.length - 2];
+    expect(v3).toContain('SUPERSEDED');
+    expect(v3).toContain('not evidence the work is still needed');
+    expect(v3).toContain('Nothing reaches a PR unverified');
+
     // v2 already drove branches to merged, but had no supersession concept.
     expect(v2).toContain('not finished until it IS merged');
     expect(v2).not.toContain('SUPERSEDED');
-    expect(v2).not.toBe(current);
+    expect(v2).not.toBe(v3);
+  });
+
+  // branch-reconcile v4 (#6373): the coordinator fans out one sub-agent per
+  // branch just like v3 did, but now routes each sub-agent by ITS OWN branch's
+  // issue labels — the same per-issue routing DISPATCH_HINT_FANOUT_GUIDANCE
+  // already gives the claim swarm's Phase B, imported verbatim rather than
+  // retyped so the two consumers can't drift on vocabulary.
+  it('branch-reconcile v4 routes each fan-out sub-agent by its own branch\'s dispatch labels', () => {
+    const current = DEFAULT_TASK_PROMPTS['branch-reconcile'];
+    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(4);
+    expect(current).toContain(DISPATCH_HINT_FANOUT_GUIDANCE);
+    expect(current).toContain('Dispatch each sub-agent at ITS OWN branch\'s recommended model and effort');
+    // Still carries every v3 behavior — v4 only adds the routing guidance.
+    expect(current).toContain('SUPERSEDED');
+    expect(current).toContain('not evidence the work is still needed');
+    expect(current).toContain('Nothing reaches a PR unverified');
+
+    const previous = PREVIOUS_DEFAULT_PROMPTS['branch-reconcile'];
+    const v3 = previous[previous.length - 1];
+    expect(v3).not.toContain(DISPATCH_HINT_FANOUT_GUIDANCE);
+    expect(v3).not.toBe(current);
   });
 
   // Phase 1's candidate fetch must match perpetualWork.js's detector — both

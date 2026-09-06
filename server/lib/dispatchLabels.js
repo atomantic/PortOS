@@ -286,6 +286,28 @@ export function normalizeDispatchEffort(value) {
 }
 
 /**
+ * Recover `{ model, effort }` from a raw forge label-name list — the read side
+ * of `forgeDispatchLabels`. Used by any consumer (branch-reconcile's per-branch
+ * routing hint, a future one) that reads an issue's labels back OFF the forge
+ * rather than writing them. Each `model:<tier>` / `effort:<level>` label is
+ * validated through the same `normalizeDispatchModel` / `normalizeDispatchEffort`
+ * the write side uses, so a foreign or stale label (`model:huge`) reads as
+ * absent rather than being misreported. Non-dispatch labels are ignored.
+ * @param {string[]} labels - plain label names (e.g. from `gh issue view --json labels`, mapped to `.name`)
+ * @returns {{ model: string|null, effort: string|null }}
+ */
+export function dispatchHintFromLabels(labels) {
+  let model = null;
+  let effort = null;
+  for (const label of Array.isArray(labels) ? labels : []) {
+    if (typeof label !== 'string') continue;
+    if (label.startsWith('model:')) model = normalizeDispatchModel(label.slice('model:'.length)) || model;
+    else if (label.startsWith('effort:')) effort = normalizeDispatchEffort(label.slice('effort:'.length)) || effort;
+  }
+  return { model, effort };
+}
+
+/**
  * Forge (GitHub/GitLab) label name for one axis, or null when the value is
  * unrecognized. `axis` is `'model'` or `'effort'`.
  */

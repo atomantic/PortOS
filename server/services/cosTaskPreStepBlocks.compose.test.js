@@ -77,6 +77,15 @@ vi.mock('./branchReconcile.js', async (importActual) => ({
   reconcile: vi.fn((...args) => reconcileMock(...args)),
 }));
 
+// formatInFlightForPrompt (real, via importActual above) fetches a dispatch
+// hint per issue-derived branch — mock just that one gh call so this suite
+// never shells out to a real `gh`. `getIssueDispatchHint` already collapses
+// every failure mode to `unavailable`, so this mirrors "no forge reachable".
+vi.mock('./github.js', async (importActual) => ({
+  ...(await importActual()),
+  getIssueDispatchHint: vi.fn(async () => ({ status: 'unavailable', model: null, effort: null })),
+}));
+
 vi.mock('./agentState.js', async (importActual) => ({
   ...(await importActual()),
   getActiveAgentIds: vi.fn(() => []),

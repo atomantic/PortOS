@@ -439,10 +439,11 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   metadata.perpetual = true;
   const supersededBlock = formatSupersededForPrompt(result.superseded || []);
   const block = [
-    formatInFlightForPrompt(actionable, {
+    await formatInFlightForPrompt(actionable, {
       defaultBranch: result.defaultBranch,
       actions,
-      branchesPerAgent: metadata.branchesPerAgent
+      branchesPerAgent: metadata.branchesPerAgent,
+      repoPath: app.repoPath
     }),
     supersededBlock
   ].filter(Boolean).join('\n');

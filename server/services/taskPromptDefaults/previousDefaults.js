@@ -10979,6 +10979,33 @@ Spawn ONE sub-agent per branch (they are independent — run them in parallel) t
 - Merging is gated by the "Do:" line itself — required CI green, MERGEABLE, and the review that branch's flow ran (\`/do:pr\`'s reviewer loop for a PR this task opens; the named review for one already in review). That gate, not a blanket ban, is what keeps unreviewed work out of the default branch. Merge only via \`gh pr merge\`, never a local \`git merge\` into the default branch.
 - If a sub-agent reports a branch is incomplete or blocked, leave it as-is and note it in your summary.
 - Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / left incomplete). When a PR is left open, name the check or review that blocked it.`,
+    // v3 default — superseded by v4, which interpolates DISPATCH_HINT_FANOUT_GUIDANCE
+    // next to the fan-out instruction and tells the coordinator to route each
+    // sub-agent by its own branch's issue model:/effort: labels (#6373). v3 added
+    // SUPERSEDED as a first-class outcome and the rebase+test-verify gate before a
+    // branch reaches a PR.
+    `[Improvement: {appName}] Branch & PR Reconciliation
+
+You are the coordinator for finishing {appName}'s unfinished local git work. The scheduler has already run the deterministic pass (removed fully-merged, orphaned local branches + their worktrees) and handed you ONLY the branches that need judgment.
+
+Repository: {repoPath}
+
+Each branch listed below is a LOCAL branch in THIS clone of {appName}. On a machine that is a federated sync peer, branches created on OTHER machines exist here only as remote-tracking refs (\`origin/*\`) and are deliberately NOT listed — never open, rebase, or merge anything that is not in the list below.
+
+{inFlightBranches}
+
+Spawn ONE sub-agent per branch (they are independent — run them in parallel) to carry out that branch's "Do:" instruction, each working in the branch's existing worktree when it has one.
+
+## Rules
+- Work ONLY on the branches listed above. Never touch a branch that is not listed.
+- Never force-push the default branch.
+- **A branch can be finished, correct, and still not wanted.** Work that sat while the default branch moved may have been solved there a different way in the meantime; merging it then UNDOES what already shipped. Each branch's "Do:" line opens with the files the default branch has also changed since that branch diverged — the sub-agent reads those first and reports **SUPERSEDED** if the default branch already solves that branch's problem, by any means (a differently-named function, a policy object where the branch has a boolean, a scheduled tick where the branch has a watcher). A SUPERSEDED branch is left completely untouched: no commit, no rebase, no conflict resolution, no merge.
+- **A conflict you can resolve is not evidence the work is still needed.** It is the most common way a superseded branch gets merged looking deliberate — the resolution is mechanically sound and semantically a regression. Treat every conflict as a question about supersession first and a merge chore second.
+- **Nothing reaches a PR unverified.** Each sub-agent rebases onto the default branch before opening or updating a PR (so the PR is conflict-free by construction), then runs the touched workspaces' test suites and lint and reads the result — a rebase can break code that passed on the old base. A branch whose tests the sub-agent has not seen pass is never pushed.
+- **A branch whose "Do:" line ends in a merge is not finished until it IS merged.** Its sub-agent stays alive through CI — waiting out the check run, fixing what goes red, then merging — and reports back only when the PR is merged or a specific check/review is blocking it. "PR opened, left open for review" is a completed STEP, not a completed branch: the PR just sits green until the next run re-drives it. Do not end your own run while a sub-agent is still waiting on CI.
+- Merging is gated by the "Do:" line itself — required CI green, MERGEABLE, and the review that branch's flow ran (\`/do:pr\`'s reviewer loop for a PR this task opens; the named review for one already in review). That gate, not a blanket ban, is what keeps unreviewed work out of the default branch. Merge only via \`gh pr merge\`, never a local \`git merge\` into the default branch.
+- If a sub-agent reports a branch is incomplete, superseded, or blocked, leave it as-is and note it in your summary.
+- Summarize what each branch ended up doing (merged / PR opened but blocked on <what> / conflicts resolved / superseded / left incomplete). For a SUPERSEDED branch, name the file(s) and what on the default branch replaced it, so the user can delete the branch with confidence. When a PR is left open, name the check or review that blocked it.`,
   ],
 
   'issue-reconcile': [

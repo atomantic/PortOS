@@ -6,6 +6,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { getSettings, updateSettings } from './settings.js';
+import { dispatchHintFromLabels } from '../lib/dispatchLabels.js';
 
 const DATA_DIR = PATHS.data;
 const REPOS_FILE = join(DATA_DIR, 'github-repos.json');
@@ -871,4 +872,36 @@ export async function getPullRequestState(prRef, { cwd = null, env = null } = {}
   // A zero-exit gh that emitted nothing parseable told us nothing.
   if (!state) return { status: 'unavailable', state: null, detail: 'gh returned unparseable output' };
   return { status: 'known', state, detail: null };
+}
+
+/**
+ * Read one issue's `model:`/`effort:` dispatch-hint labels, for a caller (e.g.
+ * branch-reconcile's per-branch prompt line) that wants to route an
+ * issue-derived branch by the same labels a planner already chose. GitHub only
+ * — same scope as `findPullRequestForBranch` / `getPullRequestState`.
+ *
+ * Same two-not-three-answers discipline as those two: `unavailable` means we
+ * could not ask (gh firewalled, issue deleted, unparseable output) and a
+ * caller must never read it as "no labels" — the whole point is to let a
+ * failed read be silently omitted rather than misreported as an actual
+ * absence of dispatch hints.
+ *
+ * @param {number|string} issueNumber
+ * @param {{ cwd?: string, env?: object|null }} [opts] - repo dir gh resolves the remote from, and the env overlay to run under
+ * @returns {Promise<{ status: 'known'|'unavailable', model: string|null, effort: string|null }>}
+ */
+export async function getIssueDispatchHint(issueNumber, { cwd = null, env = null } = {}) {
+  if (!issueNumber) return { status: 'unavailable', model: null, effort: null };
+  const raw = await execGh(
+    ['issue', 'view', String(issueNumber), '--json', 'labels'],
+    DEFAULT_EXEC_GH_TIMEOUT_MS,
+    { cwd, env }
+  ).catch(err => err);
+  if (raw instanceof Error) return { status: 'unavailable', model: null, effort: null };
+  const parsed = safeJSONParse(raw, null);
+  const labels = Array.isArray(parsed?.labels) ? parsed.labels : null;
+  // A zero-exit gh that emitted nothing parseable told us nothing.
+  if (!labels) return { status: 'unavailable', model: null, effort: null };
+  const names = labels.map((l) => (typeof l?.name === 'string' ? l.name : '')).filter(Boolean);
+  return { status: 'known', ...dispatchHintFromLabels(names) };
 }
