@@ -183,3 +183,37 @@ export const filterHardwareCompatibleProviderModels = (models, provider) =>
     const modelId = typeof model === 'string' ? model : model?.id;
     return isProviderModelHardwareCompatible(provider, modelId);
   });
+
+/**
+ * Caller EXECUTION-MODE policies, mirrored from
+ * `server/lib/callerModePolicy.js#CALLER_MODE_POLICIES`.
+ *
+ * The server is the authority — it enforces the same policy on the explicit
+ * pin, on `activeProvider` inheritance and on every fallback candidate. This
+ * mirror exists only so a picker can SHOW the rule rather than let a user save
+ * a route the server will refuse at run time. `providerModeSelectionPolicy`
+ * feeds `ProviderModelSelector`'s `selectionPolicy`, which keeps an ineligible
+ * saved value visible-but-disabled with a reason instead of hiding or silently
+ * replacing it. Pinned by `providerModePolicy.parity.test.js`.
+ */
+export const CALLER_MODE_POLICY_MODES = Object.freeze({
+  'agent-harness': Object.freeze(['cli', 'tui']),
+  'cli-harness': Object.freeze(['cli']),
+  'direct-api': Object.freeze(['api']),
+  'any-text': Object.freeze(['cli', 'tui', 'api']),
+});
+
+/** The allowed-mode list for a policy name, or the array itself when given one. */
+export const callerModeList = (policy) =>
+  (Array.isArray(policy) ? policy : CALLER_MODE_POLICY_MODES[policy]) || [];
+
+/**
+ * A `selectionPolicy` restricting the provider select to one caller's allowed
+ * execution modes. An unknown policy name yields an empty allowed list, which
+ * permits nothing — the same fail-closed direction the server takes, so a typo
+ * surfaces as a visibly blocked picker rather than a silently permissive one.
+ */
+export const providerModeSelectionPolicy = (policy) => {
+  const allowed = callerModeList(policy);
+  return { provider: (provider) => allowed.includes(provider?.type) };
+};

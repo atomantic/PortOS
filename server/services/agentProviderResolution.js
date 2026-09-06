@@ -19,6 +19,7 @@ import { getActiveProvider, getAllProviders, getProviderById } from './providers
 import { isProviderAvailable, getFallbackProvider, getProviderStatus } from './providerStatus.js';
 import { selectModelForRole, selectModelForTask } from './agentModelSelection.js';
 import { modelPinIsOffered } from '../lib/localProviderRuntime.js';
+import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
 import { PRIMARY_ORCHESTRATION_ROLE, roleAssignment } from '../lib/orchestrationProfile.js';
 import { publicReviewPostureForTask, resolvePublicReviewProvider } from './publicReviewProviderSelection.js';
 
@@ -128,6 +129,14 @@ async function resolvePublicReviewAgentProvider(task, posture) {
   return { ok: true, provider, selectedModel, modelSelection };
 }
 
+/**
+ * A CoS agent task needs a harness that can read/write files and run commands,
+ * so `api` records are ineligible however they are reached — by a task pin, by
+ * `activeProvider` inheritance, or by the fallback chain. Naming the policy once
+ * is what keeps the pin gate and the fallback gate from drifting apart.
+ */
+const AGENT_CALLER_POLICY = 'agent-harness';
+
 async function resolveOrdinaryProviderAndModel(task) {
   // A task can pin a specific provider via metadata.provider (e.g. a CoS job's
   // per-job AI override). Resolve it BEFORE the active-provider availability
@@ -195,7 +204,12 @@ async function resolveOrdinaryProviderAndModel(task) {
     const providersMap = Object.fromEntries(providerList.map((p) => [p.id, p]));
     const taskFallbackId = task.metadata?.fallbackProvider;
     const taskFallbackModel = task.metadata?.fallbackModel;
-    const fallbackResult = await getFallbackProvider(provider.id, providersMap, taskFallbackId, taskFallbackModel);
+    // The caller's mode policy travels WITH the fallback request, so an
+    // ineligible candidate is skipped during selection rather than picked and
+    // then rejected below — which used to burn the one retry the cascade had.
+    const fallbackResult = await getFallbackProvider(provider.id, providersMap, taskFallbackId, taskFallbackModel, {
+      allowedModes: allowedModesFor(AGENT_CALLER_POLICY),
+    });
 
     if (fallbackResult) {
       emitLog('info', `Using fallback provider: ${fallbackResult.provider.id} (source: ${fallbackResult.source})`, {
@@ -221,25 +235,27 @@ async function resolveOrdinaryProviderAndModel(task) {
     }
   }
 
-  // Harness boundary guard. `api`-type providers (Ollama / LM Studio / kimi over
-  // HTTP) return plain text with NO filesystem tool harness — they can't
-  // Read/Write/Edit/Bash, so a CoS agent task resolved onto one would spawn a
-  // child process that writes nothing to disk. Fail clearly instead. This catches
-  // an api provider arriving via a task pin OR via the fallback chain (the default
-  // fallback priority includes lmstudio/ollama). The fix for users: add a CLI
-  // coding provider — e.g. Claude Ollama, or OpenCode MTPLX when a separate
-  // MTPLX runtime is already running locally.
-  if (provider.type === 'api') {
+  // Harness boundary guard — the LAST line of the same policy the fallback
+  // request above carries, so it still fires for a provider that never went
+  // through fallback selection: a task pin or the inherited active provider.
+  // `api`-type providers (Ollama / LM Studio / kimi over HTTP) return plain text
+  // with NO filesystem tool harness — they can't Read/Write/Edit/Bash, so a CoS
+  // agent task resolved onto one would spawn a child process that writes nothing
+  // to disk. A record with no recognizable mode at all is refused here too. The
+  // fix for users: add a CLI coding provider — e.g. Claude Ollama, or OpenCode
+  // MTPLX when a separate MTPLX runtime is already running locally.
+  const harnessRejection = callerModeRejection(provider, AGENT_CALLER_POLICY);
+  if (harnessRejection) {
     return {
       ok: false,
       // PERMANENT config error when the DIRECTLY-resolved (pinned/active) provider
-      // was itself api — no CLI/TUI harness is reachable for this task no matter
-      // how many times it re-dispatches, so the caller must retire it rather than
-      // leave it silently re-failing forever. An api provider reached by falling
-      // back from a CLI primary (directProviderType 'cli') is instead TRANSIENT:
-      // the primary may recover, so the task stays retryable.
-      permanent: directProviderType === 'api',
-      error: `Provider "${provider.id}" is an HTTP API provider with no file-writing harness — CoS agent tasks need a CLI/TUI coding provider (claude, codex, "Claude Ollama", or "OpenCode MTPLX").`,
+      // was itself ineligible — no CLI/TUI harness is reachable for this task no
+      // matter how many times it re-dispatches, so the caller must retire it
+      // rather than leave it silently re-failing forever. An ineligible provider
+      // reached by falling back from a CLI primary (directProviderType 'cli') is
+      // instead TRANSIENT: the primary may recover, so the task stays retryable.
+      permanent: Boolean(callerModeRejection({ type: directProviderType }, AGENT_CALLER_POLICY)),
+      error: `Provider "${provider.id}" ${harnessRejection.reason} — it has no file-writing harness, and CoS agent tasks need a CLI/TUI coding provider (claude, codex, "Claude Ollama", or "OpenCode MTPLX").`,
       providerId: provider.id
     };
   }

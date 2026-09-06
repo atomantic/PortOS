@@ -7,6 +7,7 @@ import { isCronExpression, describeCron } from '../../../../utils/cronHelpers';
 import ToggleSwitch from '../../../ToggleSwitch';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { INTERVAL_LABELS, setMetadataOverride } from './scheduleConstants';
+import { providerModeSelectionPolicy } from '../../../../utils/providers.js';
 
 const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, managedAgentOptions, fileIssuesCapable, defaultFileIssues, doWorkRequiresWorktree, inheritedProviderText, providers, providersLoaded = true, override, onUpdate }) {
   const [updating, setUpdating] = useState(false);
@@ -215,7 +216,7 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
         <div className="w-full sm:w-auto sm:min-w-[240px] sm:max-w-[360px] sm:flex-1">
           <AppProviderPin
             providers={providers}
-            selectionPolicy={taskType === 'issue-watcher' ? { provider: (provider) => provider.type === 'api' } : undefined}
+            selectionPolicy={taskType === 'issue-watcher' ? providerModeSelectionPolicy('direct-api') : undefined}
             loading={!providersLoaded}
             providerId={override?.providerId}
             model={override?.model}
