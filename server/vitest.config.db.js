@@ -29,6 +29,7 @@ export const DB_TEST_INCLUDE = [
   'services/privacyChanges.db.test.js',
   'services/privacyBrokers.db.test.js',
   'services/privacyOptOut.db.test.js',
+  'services/providerGraphStore.db.test.js',
   'services/catalogCanonProjection.test.js',
   'services/catalogRefResolver.test.js',
   'services/creativeDirector/projectsDB.test.js',

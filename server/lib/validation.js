@@ -556,6 +556,31 @@ export const codexLoginStartSchema = z.object({
   deviceCode: z.boolean().optional().default(false),
 });
 
+// POST /api/providers/bindings/:id/link  (and /link/preview).
+//
+// Every revision the caller reviewed is named explicitly. Omitting one is
+// allowed for a PREVIEW (there is nothing to be stale against yet), but the
+// service refuses to APPLY a link whose named revisions have moved -- a link is
+// a decision about a specific difference, so a changed row invalidates it.
+export const providerBindingLinkSchema = z.object({
+  targetConnectionId: z.string().uuid(),
+  expectedRevisions: z.object({
+    binding: z.number().int().positive().optional(),
+    sourceConnection: z.number().int().positive().optional(),
+    targetConnection: z.number().int().positive().optional(),
+  }).strict().optional().default({}),
+}).strict();
+
+// POST /api/providers/bindings/:id/unlink. No target: unlink clones the
+// connection this binding already uses, so only the binding and its source
+// participate.
+export const providerBindingUnlinkSchema = z.object({
+  expectedRevisions: z.object({
+    binding: z.number().int().positive().optional(),
+    sourceConnection: z.number().int().positive().optional(),
+  }).strict().optional().default({}),
+}).strict();
+
 // POST /api/providers/:id/vision-suite.
 export const providerVisionSuiteSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(256).optional()),

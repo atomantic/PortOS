@@ -90,6 +90,7 @@ import { startSignalScheduler } from './signalScheduler.js';
 import { startSpotifyScheduler } from './spotifyScheduler.js';
 import { startYoutubeScheduler } from './youtubeScheduler.js';
 import { reconcileStackerNewsSchedulers } from './stackerNewsScheduler.js';
+import { onProvidersSaved as onProvidersSavedForGraph } from './providerGraph.js';
 import { startBrainScheduler } from './brainScheduler.js';
 import { startActivityDigestScheduler } from './activityDigestScheduler.js';
 import { startTwinEnrichmentScheduler } from './twinEnrichmentScheduler.js';
@@ -253,6 +254,11 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // canonical `{ error, code, timestamp, context? }` envelope (issue #1084).
       ServerError,
       hooks: aiToolkitHooks,
+      // Keep the provider connection graph reconciled with any write to
+      // providers.json — an old client's PATCH, a model refresh, a delete.
+      // Injected rather than imported by the toolkit, which stays
+      // self-contained. A no-op until the database phase enables the graph.
+      onProvidersSaved: () => onProvidersSavedForGraph(),
       // Keep the fallback chain off providers whose CLI is not installed on
       // this host (#4611), so a run falls through to the next candidate instead
       // of dying at spawn time. Sync by contract: it reads the runtime probe's
@@ -679,6 +685,11 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     // recovery files). Marker-gated in data/legacy-prune.applied.json.
     pruneLegacyFiles: async () => (await import('../scripts/pruneImportedLegacyFiles.js')).pruneImportedLegacyFiles()
   }),
+
+  // Provider connection graph (#6367): first run imports every provider record
+  // into ai_connections / ai_harness_bindings / ai_route_bindings; later runs
+  // reconcile against providers.json. Reads and writes local state only.
+  reconcileProviderGraph: async () => (await import('./providerGraph.js')).initProviderGraph(),
 
   reconcileStackerNews: reconcileStackerNewsSchedulers
 });

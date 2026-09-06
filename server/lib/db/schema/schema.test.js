@@ -25,7 +25,7 @@ import {
 } from './index.js';
 
 const DOMAIN_ARRAYS = [
-  'coreDdl', 'tribeDdl', 'humanActivityDdl', 'postDdl', 'commissionsDdl', 'userActionsDdl',
+  'coreDdl', 'tribeDdl', 'humanActivityDdl', 'postDdl', 'commissionsDdl', 'userActionsDdl', 'aiGraphDdl',
   'catalogDdl', 'catalogUserTypesDdl', 'mediaDdl', 'universesDdl',
   'libraryDdl', 'pipelineDdl', 'writersRoomDdl', 'loraDdl', 'privacyDdl', 'stackerNewsDdl', 'xDdl',
   'auditDdl',
@@ -47,6 +47,7 @@ describe('db/schema barrel + composer (#2832)', () => {
       ...schema.postDdl,
       ...schema.commissionsDdl,
       ...schema.userActionsDdl,
+      ...schema.aiGraphDdl,
     ];
     expect(buildUpgradeDdl()).toEqual(expected);
   });

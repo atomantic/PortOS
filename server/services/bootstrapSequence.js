@@ -254,17 +254,24 @@ export const warmMandatoryStores = async ({
 };
 
 /**
- * Database phase: gate, then migrate, then (only on a real DB) warm the stores
- * and arm the Stacker News schedulers. The warm/arm pair is skipped on the
+ * Database phase: gate, then migrate, then (only on a real DB) warm the stores,
+ * reconcile the provider connection graph, and arm the Stacker News schedulers. The warm/arm pair is skipped on the
  * escape hatch for the same reason the migrations are — there is no DB to read.
  *
  * Returns the gate result so a caller can branch on `dbReady`.
  */
-export const runDatabasePhase = async ({ gate, migrate, warmStores, reconcileStackerNews }) => {
+export const runDatabasePhase = async ({ gate, migrate, warmStores, reconcileProviderGraph, reconcileStackerNews }) => {
   const gateResult = await gate();
   await migrate(gateResult);
   if (gateResult.dbReady) {
     await warmStores();
+    // Provider connection graph (#6367): import on first run, then reconcile
+    // the DB graph against providers.json — recovering an interrupted
+    // projection and absorbing edits a downgraded release or an old client made
+    // to the file. AFTER the schema migrations (its tables must exist) and
+    // BEFORE listen(), so no request can read a half-reconciled graph. Local
+    // I/O only: it reads two stores and writes rows, never a provider.
+    await reconcileProviderGraph();
     // OFF by default — arms timers for opted-in accounts only, after their
     // tables exist. No initial sync, no local-LLM call.
     await reconcileStackerNews();

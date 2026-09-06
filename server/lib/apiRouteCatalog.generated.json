@@ -13881,6 +13881,30 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/providers/bindings/:id/link",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/bindings/:id/link/preview",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/bindings/:id/unlink",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/providers/codex/account",
       "mountPath": "/api/providers",
@@ -13953,6 +13977,14 @@
       ]
     },
     {
+      "method": "DELETE",
+      "path": "/api/providers/connections/:id",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/providers/fleet-host",
       "mountPath": "/api/providers",
@@ -13987,6 +14019,14 @@
     {
       "method": "POST",
       "path": "/api/providers/fleet-peer-hosts/:peerId/key",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/providers/management",
       "mountPath": "/api/providers",
       "sources": [
         "server/routes/providers.js"
@@ -17828,8 +17868,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2208,
-    "declarations": 2216,
+    "operations": 2213,
+    "declarations": 2221,
     "sourceFiles": 233
   }
 }
