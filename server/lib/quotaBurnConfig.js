@@ -22,7 +22,13 @@
  * the wrong burn job spends real quota on work nobody asked for).
  */
 
-import { isPlainObject, POLLUTING_KEYS } from './objects.js';
+import { isPlainObject } from './objects.js';
+import {
+  QUOTA_BURN_UNAVAILABLE,
+  normalizeQuotaBurnOverrides,
+  normalizeQuotaBurnParams,
+  normalizeQuotaBurnTaskRef,
+} from './quotaBurnTaskRef.js';
 import { BIBLE_DESCRIBE_DEPTHS, BIBLE_DESCRIBE_SCOPES } from './universeBibleCompleteness.js';
 
 /** Provider quota families a burn plan may target. Mirrors `providerUsage.js`'s card ids. */
@@ -111,9 +117,18 @@ const BOUNDS = QUOTA_BURN_BOUNDS;
 export const isUnlimitedDispatchCap = (cap) => Number(cap) < 0;
 
 /**
- * Burn job types. `agent-prompt` is the original behavior (spawn a CoS agent in
- * a managed app with a custom prompt); everything else is a PROGRAMMATIC job
- * that PortOS performs itself with no agent in the loop.
+ * LEGACY burn job types — a COMPATIBILITY INPUT, frozen.
+ *
+ * A step's work is now named by a scheduled-task reference
+ * (`quotaBurnTaskRef.js`), not by a quota-only job type. This enum, the catalog
+ * below, and `quotaBurnPresets.js` stay readable so a plan written before the
+ * reference model still loads and migration (#6381) can convert it — they are no
+ * longer the canonical definition of new work, and nothing new belongs in them.
+ * A new burn action ships as an on-demand SCHEDULED task and is referenced.
+ *
+ * `agent-prompt` was the original behavior (spawn a CoS agent in a managed app
+ * with a copied prompt); the other two are PROGRAMMATIC jobs PortOS performs
+ * itself with no agent in the loop.
  */
 export const QUOTA_BURN_JOB_TYPE = Object.freeze({
   AGENT_PROMPT: 'agent-prompt',
@@ -123,7 +138,9 @@ export const QUOTA_BURN_JOB_TYPE = Object.freeze({
 export const QUOTA_BURN_JOB_TYPES = Object.freeze(Object.values(QUOTA_BURN_JOB_TYPE));
 
 /**
- * Catalog rendered by the config page so the job picker can describe each type
+ * LEGACY catalog, frozen alongside `QUOTA_BURN_JOB_TYPE` above.
+ *
+ * Rendered by the config page so the job picker can describe each type
  * without the client re-encoding what a job does. `params` names the per-job
  * fields the runner reads — the client builds its form from this list, so a new
  * job type needs no client change beyond a field renderer for a novel kind.
@@ -224,49 +241,97 @@ const nullableString = (value, max) => {
 };
 
 /**
- * A job's `params` bag stays free-form on purpose — each job type owns its own
- * contract, and the runner's registry validates the keys it actually reads.
- * What is enforced here is that it's a plain object of JSON-ish scalars, so a
- * hand-edited config file can't smuggle a prototype or a nested blob into it.
+ * A step's run `params` stay free-form on purpose — each task type owns its own
+ * contract, and the handler validates the keys it actually reads. What is
+ * enforced is that it's a plain object of JSON-ish scalars, so a hand-edited
+ * config file can't smuggle a prototype or a nested blob into it. The rule
+ * itself lives in `quotaBurnTaskRef.js` so the overrides bag applies the same
+ * one; the BOUND stays here, with every other bound.
  */
-function normalizeParams(raw) {
-  if (!isPlainObject(raw)) return {};
-  const clean = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (POLLUTING_KEYS.has(key)) continue;
-    if (typeof value === 'string') clean[key] = value.slice(0, BOUNDS.paramLength.max);
-    else if (typeof value === 'number' && Number.isFinite(value)) clean[key] = value;
-    else if (typeof value === 'boolean' || value === null) clean[key] = value;
-  }
-  return clean;
-}
+const normalizeParams = (raw) => normalizeQuotaBurnParams(raw, BOUNDS.paramLength.max);
 
 /**
- * Normalize one burn job. Returns `null` for a job whose type is unknown — the
- * caller DROPS it rather than substituting a default type: a job that runs the
- * wrong work spends real subscription quota on something the user never asked
- * for, which is strictly worse than the job disappearing from the list.
+ * Normalize one burn STEP.
  *
- * `index` seeds a stable id for a job written before ids existed (or by a
+ * A step names its work in one of two ways, and normalization keeps them
+ * strictly apart rather than translating between them:
+ *
+ *  - a `taskRef` — the current model: a reference to a scheduled task the user
+ *    already owns, plus per-invocation `overrides`;
+ *  - a legacy `jobType` — a copied prompt in a free-form params bag. It still
+ *    LOADS (an install upgrading across the reference model must not lose its
+ *    plan), but it normalizes to unavailable with a migration reason. It is
+ *    never rewritten into a reference here: guessing which scheduled task a
+ *    hand-edited prompt meant would either strand the user's edits or duplicate
+ *    an automation, so #6381's conversion service owns that, once.
+ *
+ * Returns `null` for a payload that names NEITHER — the caller drops it rather
+ * than substituting a default: a step that runs the wrong work spends real
+ * subscription quota on something the user never asked for, which is strictly
+ * worse than the step disappearing from the list.
+ *
+ * `index` seeds a stable id for a step written before ids existed (or by a
  * hand-edited file), so the client's list keys and the run ledger have
  * something to key on.
+ *
+ * **Overrides and their compat mirrors.** `overrides` is the canonical home for
+ * provider / model / effort / params, but the shipped editor still reads and
+ * writes them at the TOP level (it moves to `overrides` in #6382), so both are
+ * emitted and kept in lockstep here. The tie-break is presence, not truthiness:
+ * a payload that CARRIES a top-level key wins with it — including when the user
+ * just cleared it to `null` — and only a payload with no top-level key at all
+ * falls through to `overrides`. Reading truthiness instead would resurrect the
+ * stale override every time the editor cleared a pinned model.
  */
 export function normalizeQuotaBurnJob(raw, index = 0) {
   if (!isPlainObject(raw)) return null;
+  const taskRef = normalizeQuotaBurnTaskRef(raw.taskRef);
   const jobType = typeof raw.jobType === 'string' ? raw.jobType : '';
-  if (!QUOTA_BURN_JOB_TYPES.includes(jobType)) return null;
+  const legacyType = QUOTA_BURN_JOB_TYPES.includes(jobType) ? jobType : null;
+  if (!taskRef && !legacyType) return null;
+
+  const stored = normalizeQuotaBurnOverrides(raw.overrides, {
+    maxParamLength: BOUNDS.paramLength.max,
+    maxFieldLength: BOUNDS.labelLength.max,
+  });
+  const override = (key) => (Object.hasOwn(raw, key)
+    ? nullableString(raw[key], BOUNDS.labelLength.max)
+    : stored[key]);
+  const overrides = {
+    providerId: override('providerId'),
+    model: override('model'),
+    effort: override('effort'),
+    params: Object.hasOwn(raw, 'params') ? normalizeParams(raw.params) : stored.params,
+  };
+
   return {
     id: trimString(raw.id, BOUNDS.idLength.max) || `job-${index + 1}`,
     enabled: raw.enabled !== false,
     label: trimString(raw.label, BOUNDS.labelLength.max),
-    jobType,
-    model: nullableString(raw.model, BOUNDS.labelLength.max),
-    providerId: nullableString(raw.providerId, BOUNDS.labelLength.max),
-    effort: nullableString(raw.effort, BOUNDS.labelLength.max),
+    taskRef,
+    // Only a legacy step keeps a `jobType`; a reference step reports null so no
+    // reader can mistake a stale field for the step's identity.
+    jobType: taskRef ? null : legacyType,
+    overrides,
+    // Derived, never trusted from the payload: what the CATALOG says right now
+    // is stamped by `resolveQuotaBurnStepAvailability`, which normalization (a
+    // pure function with no store access) cannot ask. The one verdict decidable
+    // from the payload alone is the un-migrated legacy step.
+    unavailable: taskRef ? null : {
+      code: QUOTA_BURN_UNAVAILABLE.LEGACY_UNMIGRATED,
+      reason: `legacy "${legacyType}" step is waiting to be migrated to a scheduled task`,
+    },
     // Opt-IN, and absent reads as `false`, so every plan written before this
     // field existed keeps repeating exactly as it did. See `jobIsSpent`.
     runOnce: raw.runOnce === true,
-    params: normalizeParams(raw.params),
+    // Compat mirrors of `overrides` for the shipped editor and the legacy
+    // executor. Derived on every read (normalization is total), so they cannot
+    // drift from the canonical bag the way two independently-written fields
+    // would. Removed with the editor rewrite in #6382.
+    model: overrides.model,
+    providerId: overrides.providerId,
+    effort: overrides.effort,
+    params: overrides.params,
   };
 }
 

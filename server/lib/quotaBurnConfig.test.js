@@ -12,6 +12,7 @@ import {
   normalizeQuotaBurnJob,
   quotaBurnJobKey,
 } from './quotaBurnConfig.js';
+import { QUOTA_BURN_UNAVAILABLE, quotaBurnStepIsDispatchable } from './quotaBurnTaskRef.js';
 
 describe('normalizeQuotaBurnConfig', () => {
   it('materializes every family so absent is never confused with off', () => {
@@ -99,6 +100,80 @@ describe('normalizeQuotaBurnJob', () => {
       .toMatchObject({ model: 'claude-sonnet-4', effort: 'high' });
     expect(normalizeQuotaBurnJob({ jobType: 'agent-prompt', model: '', effort: '' }))
       .toMatchObject({ model: null, effort: null });
+  });
+});
+
+describe('normalizeQuotaBurnJob — scheduled-task references', () => {
+  const ref = { kind: 'builtin', taskType: 'ux', appId: 'app-1' };
+
+  it('round-trips a reference step through save and reload unchanged', () => {
+    // The whole point of the reference model: identity survives a reload, so a
+    // step stays the step the user configured — no prompt-text re-derivation.
+    const stored = {
+      enabled: true,
+      jobs: [{
+        id: 'step-1', enabled: false, label: 'Nightly UX sweep', runOnce: true,
+        taskRef: ref,
+        overrides: { providerId: 'claude-code-tui', model: 'opus', effort: 'high', params: { fileIssues: true, maxEntries: 3 } },
+      }],
+    };
+    const once = normalizeQuotaBurnConfig({ families: { claude: stored } }).families.claude;
+    const twice = normalizeQuotaBurnConfig({ families: { claude: once } }).families.claude;
+    expect(twice).toEqual(once);
+    expect(once.jobs[0]).toMatchObject({
+      id: 'step-1', enabled: false, label: 'Nightly UX sweep', runOnce: true, jobType: null, unavailable: null,
+      taskRef: ref,
+      overrides: { providerId: 'claude-code-tui', model: 'opus', effort: 'high', params: { fileIssues: true, maxEntries: 3 } },
+    });
+  });
+
+  it('drops a payload that names neither a reference nor a known legacy type', () => {
+    expect(normalizeQuotaBurnJob({ label: 'orphan' })).toBeNull();
+    expect(normalizeQuotaBurnJob({ taskRef: { kind: 'nonsense', taskType: 'ux' } })).toBeNull();
+  });
+
+  it('mirrors the overrides bag onto the fields the shipped editor still writes', () => {
+    const job = normalizeQuotaBurnJob({ taskRef: ref, overrides: { model: 'opus', effort: 'high', params: { a: 1 } } });
+    expect(job).toMatchObject({ model: 'opus', effort: 'high', params: { a: 1 } });
+  });
+
+  it('lets a top-level clear win over a stale override rather than resurrecting it', () => {
+    // The editor spreads the whole step and edits the top-level field, so a
+    // truthiness test would put the old pin back every time the user cleared it.
+    const job = normalizeQuotaBurnJob({
+      taskRef: ref, model: null, providerId: null, effort: null, params: {},
+      overrides: { model: 'opus', providerId: 'claude-code-tui', effort: 'high', params: { stale: true } },
+    });
+    expect(job.overrides).toEqual({ model: null, providerId: null, effort: null, params: {} });
+    expect(job.model).toBeNull();
+  });
+});
+
+describe('normalizeQuotaBurnJob — legacy compatibility', () => {
+  it('loads an un-migrated legacy step but marks it for migration', () => {
+    const job = normalizeQuotaBurnJob({
+      id: 'legacy-1', label: 'UX audit', runOnce: true, jobType: 'agent-prompt',
+      model: 'opus', providerId: 'claude-code-tui', effort: 'high',
+      params: { appId: 'app-1', prompt: 'audit the UX' },
+    });
+    // Every stored setting survives — a migration that loses the user's prompt
+    // or their one-shot state is worse than one that has not run yet.
+    expect(job).toMatchObject({
+      id: 'legacy-1', label: 'UX audit', runOnce: true, jobType: 'agent-prompt', taskRef: null,
+      overrides: { model: 'opus', providerId: 'claude-code-tui', effort: 'high', params: { appId: 'app-1', prompt: 'audit the UX' } },
+    });
+    expect(job.unavailable.code).toBe(QUOTA_BURN_UNAVAILABLE.LEGACY_UNMIGRATED);
+    expect(quotaBurnStepIsDispatchable(job)).toBe(false);
+  });
+
+  it('never rewrites a legacy step into a reference, and never duplicates it', () => {
+    const family = normalizeQuotaBurnConfig({
+      families: { grok: { jobs: [{ id: 'legacy-1', jobType: 'agent-prompt', params: { appId: 'app-1', prompt: 'x' } }] } },
+    }).families.grok;
+    expect(family.jobs).toHaveLength(1);
+    expect(family.jobs[0].taskRef).toBeNull();
+    // Re-normalizing is idempotent: a repeated load cannot mint a second step.
+    expect(normalizeQuotaBurnConfig({ families: { grok: family } }).families.grok).toEqual(family);
   });
 });
 

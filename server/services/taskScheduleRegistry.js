@@ -13,24 +13,16 @@ import {
 } from '../lib/agentExecutionProfiles.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
 
-/**
- * Task types PortOS executes ITSELF through a programmatic handler
- * (`services/scheduledHandlers/`) — no agent, no CoS task, no spawn slot.
- *
- * Written out rather than derived from `SCHEDULED_HANDLER_MODULES` on purpose:
- * this registry is reached by a large share of the server suite, so it must not
- * pay an import to learn two strings (server/AGENTS.md, "Import scoping").
- * `taskScheduleRegistry.programmatic.test.js` asserts this list matches the
- * handler registry exactly, so the two cannot drift.
- */
-export const PROGRAMMATIC_SCHEDULED_TASK_TYPES = Object.freeze([
-  'universe-bible-describe',
-  'universe-bible-images',
-]);
-const PROGRAMMATIC_SCHEDULED_TASK_TYPE_SET = new Set(PROGRAMMATIC_SCHEDULED_TASK_TYPES);
+// Programmatic handler types + target-scope vocabulary live in
+// `lib/taskTargetScope.js` (see that file for why); re-exported here because
+// the on-demand request gate, the global generator, and the schedule UI have
+// always read them off the registry.
+import {
+  isProgrammaticScheduledTaskType,
+  PROGRAMMATIC_SCHEDULED_TASK_TYPES,
+} from '../lib/taskTargetScope.js';
 
-export const isProgrammaticScheduledTaskType = (taskType) =>
-  PROGRAMMATIC_SCHEDULED_TASK_TYPE_SET.has(taskType);
+export { isProgrammaticScheduledTaskType, PROGRAMMATIC_SCHEDULED_TASK_TYPES };
 
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'model-comparison-refresh',
@@ -226,34 +218,20 @@ export const PERPETUAL_DRAIN_DISPATCH_CAP = 5;
 export const DEFAULT_BRANCHES_PER_AGENT = 3;
 
 /**
- * Task types whose "Run Now" with NO app is the REAL run — they sweep every
- * managed app in one dispatch rather than acting on one. Surfaced per task on
- * `getScheduleStatus()` so the schedule UI can offer an "All apps" entry
- * instead of forcing every run through the app picker (which would make the
- * install-wide lane unreachable on any install that has apps).
+ * Target scope for a task type — which app (if any) a run must name.
+ *
+ * The vocabulary itself lives in `lib/taskTargetScope.js` so the quota-burn
+ * reference schemas can reach it: `server/lib` may not import upward into
+ * `server/services` (`lib/layering.test.js`). Re-exported here because the
+ * on-demand request gate, the global generator, and the schedule UI have always
+ * read it off the registry, and splitting that import would gain nothing.
  */
-export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review', 'model-comparison-refresh']);
-
-// Task types that only make sense when pointed at a managed app. Keeping this
-// alongside the install-wide registry gives both the on-demand request gate
-// and the global generator one target-scope contract; neither has to infer
-// scope from a task name or from which generator happened to receive a call.
-export const MANAGED_APP_TARGET_TASK_TYPES = new Set(['pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile']);
-
-export function requiresManagedAppTarget(taskType) {
-  return MANAGED_APP_TARGET_TASK_TYPES.has(taskType);
-}
-
-// Task types that must NOT be pointed at a managed app. Unlike repo-sync, model
-// research has no meaningful per-app variant: its catalog and API live in the
-// PortOS install, never another app's checkout. The programmatic bible handlers
-// are the same shape for a different reason — a universe is PortOS's own record,
-// not any repo's — so an appId on their request is a caller bug, not a scope.
-const INSTALL_WIDE_ONLY_TASK_TYPES = new Set(['model-comparison-refresh', ...PROGRAMMATIC_SCHEDULED_TASK_TYPES]);
-
-export function requiresInstallWideTarget(taskType) {
-  return INSTALL_WIDE_ONLY_TASK_TYPES.has(taskType);
-}
+export {
+  INSTALL_WIDE_TASK_TYPES,
+  MANAGED_APP_TARGET_TASK_TYPES,
+  requiresInstallWideTarget,
+  requiresManagedAppTarget,
+} from '../lib/taskTargetScope.js';
 
 // The pr-reviewer pipeline is a trust boundary, not three interchangeable
 // prompt tabs. Keep the shipped role/profile pairing in one place so the

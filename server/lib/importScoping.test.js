@@ -179,7 +179,16 @@ describe('deferred imports stay deferred (#6156)', () => {
 // Deferring catalog/version parsers removes 296 instantiations (88,360 →
 // 88,064). Restore the documented ~1.5k allowance for ordinary leaf growth;
 // keep the negative runtime-installer guard above so eager parsing cannot return.
-const MAX_STATIC_INSTANTIATIONS = 89500;
+//
+// #6377 measures 89,889. Its share is ~389, and it is the tolerated shape, not
+// the one this budget exists to catch: two new LEAF vocabulary modules with no
+// subtree behind them — `lib/taskTargetScope.js` (four constants, zero imports)
+// and `lib/quotaBurnTaskRef.js` (pure shape + resolver, importing only
+// `objects.js`, which every reacher already had). They are reached by the ~200
+// suites that cross `lib/quotaBurnConfig.js`, so a leaf costs ~200 apiece with
+// nothing to defer. Restore the ~1.5k allowance again rather than inching the
+// number up by a few hundred per PR.
+const MAX_STATIC_INSTANTIATIONS = 91400;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {

@@ -57,6 +57,21 @@ describe('providerForFamily', () => {
     expect(providerForFamily(providers, { familyId: 'codex' })).toBeNull();
   });
 
+  // A burn step's provider pin is optional, and an unset one INHERITS. What it
+  // must never inherit is another family's subscription: the plan says "spend
+  // the codex window", so a codex step with no codex provider registered has to
+  // report nothing to burn rather than quietly draining the claude plan.
+  it('resolves an unpinned step inside its own family, never falling back to another', () => {
+    const providers = [
+      { id: 'claude-code-tui', type: 'tui', enabled: true, command: 'claude' },
+      { id: 'claude-code', type: 'cli', enabled: true, command: 'claude' },
+      { id: 'antigravity-tui', type: 'tui', enabled: true, command: 'agy' },
+    ];
+    expect(providerForFamily(providers, { familyId: 'claude' })?.id).toBe('claude-code-tui');
+    expect(providerForFamily(providers, { familyId: 'codex' })).toBeNull();
+    expect(providerForFamily(providers, { familyId: 'grok', prefer: 'cli' })).toBeNull();
+  });
+
   it('never selects an ollama-backed wrapper — a local model has no window to burn', () => {
     // `claude-ollama-tui` matches the `claude` family and IS a TUI, so the
     // preference above would reach for it. It runs a local model: nothing
