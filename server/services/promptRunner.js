@@ -1367,9 +1367,13 @@ async function executeProviderRunOnce({
         // the response file the model was directed to write, falling back
         // to cleanTuiResponse on the screen scrape). Trust `result.text`
         // — the accumulated `text` here is the raw chrome-laden stream.
+        // Codex CLI likewise supplies stdout as its authoritative final text;
+        // its diagnostic stream includes prompt examples that are not answers.
         const finalText = effectiveProvider.type === PROVIDER_TYPES.TUI
           ? (typeof result?.text === 'string' ? result.text : '')
-          : text;
+          : effectiveProvider.type === PROVIDER_TYPES.CLI && typeof result?.text === 'string'
+            ? result.text
+            : text;
         // Report the provider that ACTUALLY ran. `effectiveProvider` reflects
         // createRun's proactive swap (when the requested provider was already
         // benched) — distinct from the retry-fallback path, which the outer

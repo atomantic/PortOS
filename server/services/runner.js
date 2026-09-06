@@ -7,7 +7,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile, writeFileGuarded, PATHS } from '../lib/fileUtils.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
-import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
+import { hasModelFlag, extractBakedModel, isCodexProvider } from '../lib/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
@@ -328,6 +328,10 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
 
   const startTime = Date.now();
   let output = '';
+  // Codex writes its final answer to stdout; stderr is a diagnostic transcript
+  // containing the input prompt. Keep both in logs, but never parse stderr.
+  let assistantOutput = '';
+  const stdoutIsResponse = isCodexProvider(provider);
   let immediateFallbackAnalysis = null;
   let childProcess = null;
   // Set by the wall-clock timeout below so the close handler can classify the
@@ -470,6 +474,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
   childProcess.stdout?.on('data', (data) => {
     const text = data.toString();
     output += text;
+    if (stdoutIsResponse) assistantOutput += text;
     onData?.(text);
     abortForImmediateFallbackSignal(text);
   });
@@ -573,7 +578,7 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, sc
       } else if (!canceled) {
         safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
       }
-      safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+      safeSettle(() => onComplete?.(stdoutIsResponse && metadata.success ? { ...metadata, text: assistantOutput } : metadata), `Run ${runId} onComplete`);
       return metadata;
     } catch (err) {
       const handler = spawnError ? 'error' : 'close';
