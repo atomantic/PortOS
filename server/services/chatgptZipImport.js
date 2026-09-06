@@ -161,6 +161,11 @@ const streamAssetToFile = (entry, filePath, max) => new Promise((resolve, reject
   let done = false;
   const fail = (err) => { if (done) return; done = true; out?.destroy(); reject(err); };
   outPromise.then((stream) => {
+    // `sink` can already have failed (and destroyed `out`, which was still
+    // null at that point) before this resolves — the fd it just opened would
+    // otherwise never be closed. Destroy it immediately rather than wiring it
+    // into a promise that already settled.
+    if (done) { stream.destroy(); return; }
     out = stream;
     out.on('error', fail);
     out.on('finish', () => { if (done) return; done = true; resolve(sniffExtension(Buffer.concat(head))); });
