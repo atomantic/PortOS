@@ -34,6 +34,42 @@ describe('FleetProviderSetup', () => {
     expect(endpointInput.value).toBe('http://workstation.tailnet.ts.net:18022/v1');
   });
 
+  it('auto-fetches the API key as soon as a peer is selected from the URL, with no extra click', async () => {
+    api.revealFleetPeerHostKey.mockResolvedValue({ apiKey: 'auto-fetched-key-123456789012' });
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&peerId=peer-1']}>
+        <FleetProviderSetup peers={peers} onClose={() => {}} onCreate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(api.revealFleetPeerHostKey).toHaveBeenCalledWith('peer-1', { silent: true });
+    });
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Enter host API key').value).toBe('auto-fetched-key-123456789012');
+    });
+  });
+
+  it('auto-fetches the API key when a peer is chosen from the dropdown, not just from the URL', async () => {
+    api.revealFleetPeerHostKey.mockResolvedValue({ apiKey: 'dropdown-fetched-key-12345678' });
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client']}>
+        <FleetProviderSetup peers={peers} onClose={() => {}} onCreate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByLabelText('Known PortOS peer'), { target: { value: 'peer-2' } });
+
+    await waitFor(() => {
+      expect(api.revealFleetPeerHostKey).toHaveBeenCalledWith('peer-2', { silent: true });
+    });
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Enter host API key').value).toBe('dropdown-fetched-key-12345678');
+    });
+  });
+
   it('fetches API key from host when clicked', async () => {
     api.revealFleetPeerHostKey.mockResolvedValue({ apiKey: 'host-secret-key-123456789012' });
 

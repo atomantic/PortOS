@@ -101,10 +101,33 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
   );
   const endpoint = normalizeEndpoint(endpointInput);
 
+  const fetchKeyFor = async (peerId) => {
+    if (!peerId) return;
+    setFetchingKey(true);
+    setError('');
+    try {
+      const res = await revealFleetPeerHostKey(peerId, { silent: true });
+      if (res?.apiKey) {
+        setApiKey(res.apiKey);
+      } else {
+        setError('Host did not return an API key. Enter it manually.');
+      }
+    } catch (err) {
+      setError(err?.message || 'Could not retrieve API key from host. Enter it manually.');
+    } finally {
+      setFetchingKey(false);
+    }
+  };
+
+  // Selecting a known peer auto-fetches its key too — a user who only fills the
+  // pre-populated fields and clicks Create must not be stopped by a manual
+  // "Fetch API key" click they had no reason to expect: submit rejects a blank
+  // key, but nothing upstream of that prompts for it.
   const selectPeer = (peerId) => {
     setSelectedPeerId(peerId);
     const peer = availablePeers.find(({ id }) => id === peerId);
     setEndpointInput(peer ? endpointForPeer(peer) : '');
+    if (peerId) fetchKeyFor(peerId);
   };
 
   useEffect(() => {
@@ -113,23 +136,7 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
     }
   }, [initialPeerId, availablePeers]);
 
-  const handleFetchKey = async () => {
-    if (!selectedPeerId) return;
-    setFetchingKey(true);
-    setError('');
-    try {
-      const res = await revealFleetPeerHostKey(selectedPeerId, { silent: true });
-      if (res?.apiKey) {
-        setApiKey(res.apiKey);
-      } else {
-        setError('Host did not return an API key. Enter it manually.');
-      }
-    } catch (err) {
-      setError(err?.message || 'Could not retrieve API key from host.');
-    } finally {
-      setFetchingKey(false);
-    }
-  };
+  const handleFetchKey = () => fetchKeyFor(selectedPeerId);
 
   const selectHarness = (next) => {
     setHarness(next);
