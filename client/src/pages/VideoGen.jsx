@@ -228,6 +228,7 @@ export default function VideoGen() {
 
     speedProfileId, setSpeedProfileId,
     draftDecode, setDraftDecode,
+    batchSize, setBatchSize,
     seed, setSeed, handleRandomSeed, tiling, setTiling,
     textEncoderId, setTextEncoderId, textEncoderOptions,
     disableAudio, setDisableAudio, noMusic, setNoMusic,
@@ -1047,6 +1048,9 @@ export default function VideoGen() {
   // A federated render answers to the PEER’s readiness, not to this machine’s
   // runtime gates — none of the local probes below describe the hardware it
   // will actually run on.
+  const effectiveBatchSize = !isGrok && !isFal && !isReactor && !remoteTarget.isRemote
+    && currentModel?.supportsWarmBatch && !chainingActive ? batchSize : 1;
+
   const canEnqueue = prompt.trim() && !remixHandoffPending && !promptOverLimit && (remoteTarget.isRemote
     ? remoteBlocked === null
     : (isGrok || isFal || isReactor || (!notConnected && !extendModeBlocked
@@ -1747,6 +1751,7 @@ export default function VideoGen() {
               chunkPrompts={chunkPrompts} onChunkPromptChange={setChunkPromptAt} chainingActive={chainingActive}
               contextFrames={contextFrames} onContextFramesChange={setContextFrames}
               fps={fps} onFpsChange={setFps}
+              batchSize={batchSize} onBatchSizeChange={setBatchSize}
               seed={seed} onSeedChange={setSeed} onRandomSeed={handleRandomSeed}
               steps={steps} onStepsChange={setSteps}
               guidanceScale={guidanceScale} onGuidanceScaleChange={setGuidanceScale}
@@ -1795,7 +1800,7 @@ export default function VideoGen() {
                     : undefined
                 }
               >
-                <Sparkles className="w-4 h-4" /> Generate
+                <Sparkles className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Generate ${effectiveBatchSize} videos` : 'Generate'}
               </button>
             )}
             <button
@@ -1808,7 +1813,7 @@ export default function VideoGen() {
                   : weightsGateBlocked ? 'Finish required model downloads before queueing'
                     : 'Complete the required inputs before queueing'}
             >
-              <ListPlus className="w-4 h-4" /> Add to queue
+              <ListPlus className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Add ${effectiveBatchSize} videos to queue` : 'Add to queue'}
             </button>
             {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
             {(generating || error) && (

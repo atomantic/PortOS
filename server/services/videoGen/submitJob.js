@@ -54,6 +54,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
       ['IC-LoRA references', body.icReferenceVideoIds?.length || body.icReferenceImageFiles?.length],
       ['LoRA weights', body.loraFilenames?.length],
       ['chained chunks', body.chunks > 1],
+      ['warm render batches', body.batchSize > 1],
       ['the Grok backend', body.backend === 'grok'],
       ['a FableLoom scene tag', body.fableLoom],
       // Inspire is a per-runtime capability the caller cannot prove for a peer.
@@ -273,6 +274,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     steps: body.steps,
     guidanceScale: body.guidanceScale,
     seed: body.seed,
+    ...(body.batchSize > 1 ? { batchSize: body.batchSize } : {}),
     tiling: body.tiling || 'auto',
     // Default-valued delivery controls stay absent from persisted params so a
     // resumed form cannot restore a knob that never changed the render.

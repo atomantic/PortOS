@@ -21,13 +21,19 @@ export function useMediaCompletionRefresh({ onImageCompleted, onVideoCompleted, 
 
     const onImageDone = () => schedule('image', imageCallbackRef);
     const onVideoDone = () => schedule('video', videoCallbackRef);
+    // A batch can save usable videos before a later render fails or is canceled.
+    const onVideoFailed = (event) => {
+      if (Array.isArray(event?.results) && event.results.length > 0) onVideoDone();
+    };
 
     socket.on('image-gen:completed', onImageDone);
     socket.on('video-gen:completed', onVideoDone);
+    socket.on('video-gen:failed', onVideoFailed);
 
     return () => {
       socket.off('image-gen:completed', onImageDone);
       socket.off('video-gen:completed', onVideoDone);
+      socket.off('video-gen:failed', onVideoFailed);
       Object.values(timersRef.current).forEach((timer) => {
         if (timer) clearTimeout(timer);
       });

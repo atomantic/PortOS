@@ -99,6 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt-embedding-cache-dir",
                         help="directory holding reusable prompt embeddings, keyed by prompt text and "
                              "conditioning-image content (omit to recompute on every render)")
+    parser.add_argument("--batch-seeds", help="JSON array of per-render seeds; one resident pipeline")
     return parser.parse_args()
 
 
@@ -1020,8 +1021,79 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"--draft-decoder-id must be a bare directory-safe name; got {args.draft_decoder_id!r}.")
 
 
+def render_outputs(pipe, args, images, save_mp4, batch_seeds=None):
+    """Render one at a time, retaining weights and only this request's conditioning.
+
+    The pipeline already keeps its DiT, VAEs and modulation cache. Cache the
+    encoder's return in memory even when the optional disk cache is unavailable.
+    The closed-over prompt and images never change inside this workflow.
+    """
+    preview = _install_h3_stepwise_preview(pipe, args)
+    encode = pipe.text_encoder.encode
+    encoded = None
+
+    def encode_once(*values, **kwargs):
+        nonlocal encoded
+        if encoded is None:
+            encoded = encode(*values, **kwargs)
+        return encoded
+
+    if batch_seeds is not None:
+        pipe.text_encoder.encode = encode_once
+    try:
+        base_output = Path(args.output)
+        for index, seed in enumerate(batch_seeds or [args.seed]):
+            output = base_output if index == 0 else base_output.with_name(f"{base_output.stem}-{index + 1}{base_output.suffix}")
+            if batch_seeds is not None:
+                print(f"STATUS:Rendering video {index + 1}/{len(batch_seeds)} (seed {seed})", file=sys.stderr, flush=True)
+            print("STAGE:inference", file=sys.stderr, flush=True)
+            progress = ProgressWriter(preview)
+            with heartbeat("minimax-h3-inference"), redirect_stdout(progress):
+                result = pipe(
+                    args.prompt,
+                    duration_seconds=args.num_frames / FPS,
+                    num_inference_steps=args.steps,
+                    seed=seed,
+                    images=images or None,
+                    keyframe_anchors=tuple(args.anchor),
+                    height=args.height,
+                    width=args.width,
+                    drop_adaln=True,
+                )
+            progress.flush()
+
+            output.parent.mkdir(parents=True, exist_ok=True)
+            wav_path = output.with_suffix(".wav")
+            print("STAGE:mux", file=sys.stderr, flush=True)
+            try:
+                save_mp4(output, result.video, result.fps, result.audio, result.sample_rate)
+            finally:
+                wav_path.unlink(missing_ok=True)
+
+            if not output.is_file() or output.stat().st_size == 0:
+                raise RuntimeError(f"MiniMax H3 completed but did not write {output}.")
+            print(
+                f"STATUS:MiniMax H3 saved {output.name} ({result.video.shape[0]} frames with stereo audio)",
+                file=sys.stderr,
+                flush=True,
+            )
+            if batch_seeds is None:
+                emit_result(output)
+            else:
+                print(json.dumps({"video_path": str(output), "batch_index": index, "seed": seed}), flush=True)
+            del result
+    finally:
+        if batch_seeds is not None:
+            pipe.text_encoder.encode = encode
+
+
 def main() -> int:
     args = parse_args()
+    batch_seeds = json.loads(args.batch_seeds) if args.batch_seeds else None
+    if batch_seeds is not None and (not isinstance(batch_seeds, list)
+            or not 2 <= len(batch_seeds) <= 20
+            or any(type(seed) is not int or not 0 <= seed <= 2 ** 32 - 1 for seed in batch_seeds)):
+        raise ValueError("--batch-seeds requires 2 to 20 unsigned 32-bit integers")
     validate_args(args)
     # Read the keyframes first: everything below is a git probe, ~35 HF cache
     # lookups and an mlx/transformers import, so an unreadable conditioning
@@ -1178,40 +1250,7 @@ def main() -> int:
             [{"path": p, "scale": s} for p, s in zip(args.lora, args.lora_scale)],
         )
 
-    print("STAGE:inference", file=sys.stderr, flush=True)
-    preview = _install_h3_stepwise_preview(pipe, args)
-    progress = ProgressWriter(preview)
-    with heartbeat("minimax-h3-inference"), redirect_stdout(progress):
-        result = pipe(
-            args.prompt,
-            duration_seconds=args.num_frames / FPS,
-            num_inference_steps=args.steps,
-            seed=args.seed,
-            images=images or None,
-            keyframe_anchors=tuple(args.anchor),
-            height=args.height,
-            width=args.width,
-            drop_adaln=True,
-        )
-    progress.flush()
-
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    wav_path = output.with_suffix(".wav")
-    print("STAGE:mux", file=sys.stderr, flush=True)
-    try:
-        save_mp4(output, result.video, result.fps, result.audio, result.sample_rate)
-    finally:
-        wav_path.unlink(missing_ok=True)
-
-    if not output.is_file() or output.stat().st_size == 0:
-        raise RuntimeError(f"MiniMax H3 completed but did not write {output}.")
-    print(
-        f"STATUS:MiniMax H3 saved {output.name} ({result.video.shape[0]} frames with stereo audio)",
-        file=sys.stderr,
-        flush=True,
-    )
-    emit_result(output)
+    render_outputs(pipe, args, images, save_mp4, batch_seeds)
     return 0
 
 

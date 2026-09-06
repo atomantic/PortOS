@@ -8,7 +8,7 @@ import { mediaJobExecutionLane } from '../../lib/generationModes.js';
 const PARAM_ALLOWLIST = new Set([
   'prompt', 'negativePrompt', 'modelId', 'model', 'effort',
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidanceScale',
-  'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
+  'batchSize', 'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
   'i2vReferenceMode',
   // Sampler/decoder knobs the retry editor re-offers. 'draftDecode' (#5423) is
   // the preview-fidelity decode REQUEST the job was submitted with — projected

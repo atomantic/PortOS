@@ -1,3 +1,4 @@
+import { planVideoBatch, supportsWarmVideoBatch, validateVideoBatch } from './batch.js';
 import { normalizeVideoFailure } from '../../lib/videoFailure.js';
 /**
  * Video Gen — local render runner (mlx_video on macOS, diffusers on Windows).
@@ -124,6 +125,7 @@ export const VIDEO_MODELS = Object.fromEntries(getVideoModels().map((m) => [m.id
 // the client renders no picker instead of a one-entry select.
 const decorateVideoModel = (m) => (m ? {
   ...m,
+  supportsWarmBatch: supportsWarmVideoBatch(m),
   lastFrameAnchored: modelAnchorsLastFrame(m),
   runtimeLoraCapable: byovRuntimeLoraCapable(m.runtime),
   textEncoderOptions: publicVideoTextEncoderOptions(m),
@@ -150,7 +152,7 @@ export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
 export const defaultVideoModelId = (capabilities) => getDefaultVideoModelId(capabilities);
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, visualConditioning = null, hidden = false, displaySleep = null, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, visualConditioning = null, hidden = false, displaySleep = null, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
@@ -160,6 +162,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   const { modelId: selectedModelId, model } = await resolveVideoModelSelection(modelId, { resolveModel: resolveVideoModel });
   modelId = selectedModelId;
+  validateVideoBatch({ batchSize, seed }, model);
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
@@ -410,7 +413,8 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     : 64;
   const w = Math.floor(Number(width) / resolutionStep) * resolutionStep;
   const h = Math.floor(Number(height) / resolutionStep) * resolutionStep;
-  const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
+  const batch = batchSize > 1 ? planVideoBatch({ jobId, batchSize, seed }) : null;
+  const actualSeed = batch ? batch[0].seed : seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
   // User-facing speed profile (#4875). Resolved BEFORE the sampler so it can
   // drive steps/guidance/stage-2 together — a half-applied schedule would make
   // the profile's speed claim false. `null` whenever the request is
@@ -695,6 +699,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const createdAt = new Date().toISOString();
   const meta = {
     id: jobId,
+    ...(batch ? { batchId: jobId, batchSize, batchIndex: 0 } : {}),
     prompt,
     negativePrompt,
     modelId,
@@ -870,6 +875,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       ffmpegPath: ffmpeg,
       ffprobePath: ffprobe,
     }));
+    if (batch) args.push('--batch-seeds', JSON.stringify(batch.map((item) => item.seed)));
   } catch (err) {
     job.status = 'error';
     const reason = err.message || 'Failed to build video gen args';
@@ -884,6 +890,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
 
   await spawnAndWatchVideo({
     jobId,
+    batch,
     // Keeps this render's ETA samples in its own cost bucket — a speed profile
     // changes the slope, not just the step count.
     speedProfileId: speedProfile?.id ?? null,
