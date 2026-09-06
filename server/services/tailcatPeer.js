@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, posix, win32 } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
 import { commandExists } from '../lib/commandExists.js';
 import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
@@ -376,10 +376,13 @@ export function derpMapCachePath({
   home = homedir(),
   platform = process.platform,
 } = {}) {
-  const base = platform === 'darwin' ? join(home, 'Library', 'Caches')
-    : platform === 'win32' ? (env.LOCALAPPDATA || join(home, 'AppData', 'Local'))
-      : (env.XDG_CACHE_HOME || join(home, '.cache'));
-  return join(base, 'tailcat', `derpmap-${goQueryEscape(url)}.json`);
+  // Join for the REQUESTED platform, not the host: the caller names the platform,
+  // so a `darwin` path asked for from a Windows runner must still be POSIX.
+  const { join: joinFor } = platform === 'win32' ? win32 : posix;
+  const base = platform === 'darwin' ? joinFor(home, 'Library', 'Caches')
+    : platform === 'win32' ? (env.LOCALAPPDATA || joinFor(home, 'AppData', 'Local'))
+      : (env.XDG_CACHE_HOME || joinFor(home, '.cache'));
+  return joinFor(base, 'tailcat', `derpmap-${goQueryEscape(url)}.json`);
 }
 
 /**

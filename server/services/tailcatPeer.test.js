@@ -685,6 +685,10 @@ describe('tailcat startup diagnostics and DERP map priming', () => {
       url: 'https://example.com/derpmap.json', platform: 'linux', home: '/example/home',
       env: { XDG_CACHE_HOME: '/example/cache' },
     })).toBe('/example/cache/tailcat/derpmap-https%3A%2F%2Fexample.com%2Fderpmap.json.json');
+    expect(derpMapCachePath({
+      url: 'https://example.com/derpmap.json', platform: 'win32', home: 'C:\\example\\home',
+      env: { LOCALAPPDATA: 'C:\\example\\cache' },
+    })).toBe('C:\\example\\cache\\tailcat\\derpmap-https%3A%2F%2Fexample.com%2Fderpmap.json.json');
   });
 
   it('primes the DERP map with PortOS own fetch, but never caches a non-map body', async () => {
