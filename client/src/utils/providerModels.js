@@ -109,9 +109,24 @@ export const GROK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh
 
 const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra']);
 
-const codexEffortLevelsForModel = (model) => CODEX_ULTRA_MODELS.has(String(model || '').trim().toLowerCase())
-  ? CODEX_ULTRA_EFFORT_LEVELS
-  : CODEX_EFFORT_LEVELS;
+// MIRROR of `CODEX_NO_MINIMAL_MODEL_RE` in server/lib/providerModels.js. The
+// gpt-6 family dropped the `minimal` rung and answers HTTP 400
+// `unsupported_value` when it is sent, so the picker must not offer it. Matched
+// as a family prefix so a new gpt-6/7 model doesn't reintroduce the 400.
+const CODEX_NO_MINIMAL_MODEL_RE = /^gpt-[6-9]([.-]|$)/;
+
+const withoutMinimal = (levels) => Object.freeze(levels.filter((l) => l !== 'minimal'));
+const CODEX_EFFORT_LEVELS_NO_MINIMAL = withoutMinimal(CODEX_EFFORT_LEVELS);
+const CODEX_ULTRA_EFFORT_LEVELS_NO_MINIMAL = withoutMinimal(CODEX_ULTRA_EFFORT_LEVELS);
+
+const codexEffortLevelsForModel = (model) => {
+  const id = String(model || '').trim().toLowerCase();
+  const ultra = CODEX_ULTRA_MODELS.has(id);
+  if (CODEX_NO_MINIMAL_MODEL_RE.test(id)) {
+    return ultra ? CODEX_ULTRA_EFFORT_LEVELS_NO_MINIMAL : CODEX_EFFORT_LEVELS_NO_MINIMAL;
+  }
+  return ultra ? CODEX_ULTRA_EFFORT_LEVELS : CODEX_EFFORT_LEVELS;
+};
 
 /**
  * Antigravity base-model ↔ effort-suffix split — MIRROR of

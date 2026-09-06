@@ -42,6 +42,10 @@ const MIRRORED_NAMES = [
   // as load-bearing as the ladders themselves: a new Ultra model added
   // server-side only tops the client picker out at `max`.
   'CODEX_ULTRA_MODELS',
+  // The other model gate: which Codex models REJECT `minimal`. Divergence here
+  // is worse than a missing rung — a client that still offers `minimal` for a
+  // gpt-6 model lets the user pick a level whose run dies on an HTTP 400.
+  'CODEX_NO_MINIMAL_MODEL_RE',
   // The clamp order. Divergence here is silent — every value stays "known", it
   // just resolves to a different rung than the run will actually use.
   'EFFORT_RANK',
