@@ -682,7 +682,9 @@ async function startAndRegister({
   // Best-effort, and deliberately before the spawn: on a host whose filter
   // blocks Go's dialer this is the difference between a working tunnel and a
   // CLI that cannot resolve its own relay.
-  await primeDerpMap().catch(() => null);
+  // Promise.resolve().then defers the call so a synchronous throw is caught here
+  // too, the same guard ensureTailcatInstalled documents for its installers.
+  await Promise.resolve().then(primeDerpMap).catch(() => null);
   const remotePort = DEFAULT_TAILCAT_REMOTE_PORT;
   const localPort = await allocatePort({ preferred: entry.localPort || DEFAULT_TAILCAT_LOCAL_PORT });
 
@@ -702,8 +704,17 @@ async function startAndRegister({
     if (shuttingDown) throw new Error('PortOS is shutting down');
     if (peer) {
       // A reallocated port has to reach the peer record too, or every request
-      // would keep dialing the port the dead forward used to hold.
-      if (peer.port !== localPort) peer = await setPeerPortFn(peer.id, localPort) || peer;
+      // would keep dialing the port the dead forward used to hold. A null result
+      // means the record is gone or is no longer a tailcat peer — failing here is
+      // the point: falling back to the stale object would report success while the
+      // peer kept pointing at the dead port.
+      if (peer.port !== localPort) {
+        peer = await setPeerPortFn(peer.id, localPort);
+        if (!peer) throw new ServerError(
+          `Could not repoint peer ${existingPeer.id} at 127.0.0.1:${localPort}`,
+          { status: 409, code: 'TAILCAT_PEER_REPOINT_FAILED' }
+        );
+      }
     } else {
       peer = await addPeerFn({
         address: '127.0.0.1',
@@ -777,7 +788,11 @@ async function retryForward(id, {
   killLiveForward(entry.id);
 
   const peers = await getPeersFn();
-  const existingPeer = entry.peerId ? peers.find((p) => p.id === entry.peerId) || null : null;
+  // Match the transport too, exactly as the boot-time restore does: a stale entry
+  // whose peerId now names a classic peer must register a fresh one, never adopt it.
+  const existingPeer = entry.peerId
+    ? peers.find((p) => p.id === entry.peerId && p.transport === 'tailcat') || null
+    : null;
   const peer = await startAndRegister({
     entry, existingPeer, ensureInstalled, primeDerpMap, allocatePort, startForward,
     addPeerFn, patchForwardEntry, removePeerFn, setPeerPortFn,
@@ -811,7 +826,7 @@ async function restoreTailcatForwards({
     console.log(`⚠️ tailcat restore skipped — ${err.message}`);
     return { restored: 0, error: err.message };
   }
-  await primeDerpMap().catch(() => null);
+  await Promise.resolve().then(primeDerpMap).catch(() => null);
 
   const peers = await getPeersFn();
   let restored = 0;

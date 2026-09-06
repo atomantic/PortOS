@@ -563,6 +563,47 @@ describe('saved tailcat forwards', () => {
     expect(peer.port).toBe(15557);
   });
 
+  it('fails the retry rather than leaving a peer pointed at the dead port', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+    }] });
+    const child = fakeChild();
+    await expect(retryTailcatForward('fwd_1', {
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => ({ primed: false }),
+      allocatePort: async () => 15557,
+      startForward: async () => child,
+      addPeerFn: async () => { throw new Error('must not register a duplicate'); },
+      patchForwardEntry: async (id, patch) => ({ id, ...patch }),
+      getPeersFn: async () => [{ id: 'peer-1', transport: 'tailcat', address: '127.0.0.1', port: 15555 }],
+      // The record vanished (or stopped being a tailcat peer) mid-retry.
+      setPeerPortFn: async () => null,
+    })).rejects.toMatchObject({ code: 'TAILCAT_PEER_REPOINT_FAILED', status: 409 });
+    expect(child.killed).toBe(true);
+  });
+
+  it('registers a fresh peer when the saved peerId no longer names a tailcat peer', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+    }] });
+    const addPeerFn = vi.fn(async (data) => ({ id: 'peer-new', ...data }));
+    const setPeerPortFn = vi.fn();
+    const peer = await retryTailcatForward('fwd_1', {
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => ({ primed: false }),
+      allocatePort: async () => 15555,
+      startForward: async () => fakeChild(),
+      addPeerFn,
+      patchForwardEntry: async (id, patch) => ({ id, ...patch }),
+      // Same id, but a classic peer now — adopting it would repoint an unrelated route.
+      getPeersFn: async () => [{ id: 'peer-1', address: '192.0.2.10', port: 5555 }],
+      setPeerPortFn,
+    });
+    expect(setPeerPortFn).not.toHaveBeenCalled();
+    expect(addPeerFn).toHaveBeenCalledOnce();
+    expect(peer.id).toBe('peer-new');
+  });
+
   it('records a redacted reason when a retry fails again', async () => {
     readJSONFile.mockResolvedValue({ version: 1, forwards: [{
       id: 'fwd_1', peerId: null, tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
