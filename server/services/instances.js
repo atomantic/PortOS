@@ -122,11 +122,15 @@ function sameAuth(a, b) {
 // are local-only too, so peers cannot discover or influence our assignments.
 export function redactPeerForWire(peer) {
   if (!peer || typeof peer !== 'object') return peer;
-  if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaProviderStatus' in peer)) return peer;
+  if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaProviderStatus' in peer)
+    && !('tcAddress' in peer)) {
+    return peer;
+  }
   const {
     auth: _auth,
     mediaProvider: _mediaProvider,
     mediaProviderStatus: _mediaProviderStatus,
+    tcAddress: _tcAddress,
     ...rest
   } = peer;
   return rest;
@@ -468,7 +472,7 @@ const PER_RECORD_CATEGORY_KINDS = Object.freeze([
   ['creativeCommissions', 'creativeCommission'],
 ]);
 
-export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth }) {
+export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth, transport }) {
   const peer = await withData(async (data) => {
     const normalizedHost = validHost(host);
     const normalizedAuth = sanitizePeerAuth(auth);
@@ -487,6 +491,9 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       hostManual: !!normalizedHost,
       port,
       name: validName(name, normalizedHost || address),
+      // Optional transport marker (e.g. 'tailcat'). Never carries the tc address —
+      // that capability lives only in data/tailcat-forwards.json.
+      ...(transport === 'tailcat' ? { transport: 'tailcat' } : {}),
       instanceId: null,
       addedAt: new Date().toISOString(),
       lastSeen: null,
@@ -519,6 +526,11 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
 
 export async function removePeer(id) {
   disconnectFromPeer(id);
+  // Tear down a managed tailcat forward if this peer was added via tc address.
+  // Dynamic import avoids a static cycle with tailcatPeer → addPeer.
+  await import('./tailcatPeer.js')
+    .then(({ stopForwardForPeer }) => stopForwardForPeer(id))
+    .catch((err) => console.log(`⚠️ instances: stopping tailcat forward failed: ${err.message}`));
   const removed = await withData(async (data) => {
     const idx = data.peers.findIndex(p => p.id === id);
     if (idx === -1) return null;

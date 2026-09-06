@@ -31,6 +31,7 @@ export const PORTS = Object.freeze({
 
   VLLM_QWEN: 18020, // Loopback vLLM Qwen3.8-27B (DFlash 2) container — opt-in dedicated host setup
   SGLANG_QWEN: 18021, // Loopback SGLang Qwen3.8-27B container (Hopper/Blackwell) — operator-started, never by PortOS
+  TAILCAT_FORWARD: 15555, // Loopback forward for tailcat peers (maps to remote :5555)
   POSTGRES_NATIVE: 5432  // System PostgreSQL (PGMODE=native)
 });
 
@@ -42,3 +43,6 @@ export const resolvePostgresPort = (pgMode) =>
   (pgMode === 'native' ? PORTS.POSTGRES_NATIVE : PORTS.POSTGRES_DOCKER);
 
 export const DEFAULT_PEER_PORT = PORTS.API;
+// Preferred local bind for `tailcat forward <tc> LOCAL:5555` (remote PortOS API).
+export const DEFAULT_TAILCAT_LOCAL_PORT = PORTS.TAILCAT_FORWARD;
+export const DEFAULT_TAILCAT_REMOTE_PORT = PORTS.API;
