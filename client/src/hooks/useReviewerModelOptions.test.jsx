@@ -29,6 +29,7 @@ const providers = [
   // shown DEFAULT, since the reviewer is spawned non-interactively.
   { id: 'grok-tui', type: 'tui', command: 'grok', models: ['tui-only-id'] },
   { id: 'grok-cli', type: 'cli', command: 'grok', models: ['grok-configured-default', 'grok-code-fast-1'] },
+  { id: 'pi-cli', type: 'cli', command: 'pi', models: ['example/model-a'], defaultModel: 'example/model-a' },
   { id: 'cursor-cli', type: 'cli', command: 'cursor-agent', models: ['auto', 'gpt-5'] },
   { id: 'mtplx', type: 'api', models: ['mtplx-qwen38-27b-optimized-speed'], defaultModel: 'mtplx-qwen38-27b-optimized-speed' },
   // The seeded OpenCode Zen wrappers, whose namespaced ids the Harnesses page
@@ -51,6 +52,7 @@ describe('useReviewerModelOptions', () => {
   it('offers options for every model-selectable reviewer', async () => {
     const { result } = renderHook(() => useReviewerModelOptions());
     await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.optionsByReviewer.pi).toEqual(['example/model-a']);
     for (const reviewer of MODEL_SELECTABLE_REVIEWERS) {
       expect(Array.isArray(result.current.optionsByReviewer[reviewer])).toBe(true);
     }
