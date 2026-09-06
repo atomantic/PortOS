@@ -904,6 +904,7 @@ describe('videoGen routes', () => {
         'fps',
         'steps',
         'guidanceScale',
+        'batchSize',
         'seed',
         'imageStrength',
         // Not in the it.each table above: a non-default value is only legal on
@@ -2967,6 +2968,28 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/chained chunks/);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+  });
+
+
+  describe('warm video batch submission', () => {
+    it('queues one coerced batch with seed zero and rejects unsupported or overflowing requests', async () => {
+      const models = vi.mocked(videoGenService.listVideoModels);
+      models.mockReturnValue([
+        { id: 'example-h3', name: 'Example H3', runtime: 'minimax_h3', defaultFrames: 124, frameOptions: [124], fpsOptions: [24] },
+        { id: 'example-ltx', runtime: 'ltx2' },
+      ]);
+      const response = await request(app).post('/api/video-gen/').send({
+        prompt: 'Example shot', modelId: 'example-h3', batchSize: '3', seed: '0',
+      });
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.enqueueJob.mock.calls[0][0].params).toMatchObject({ batchSize: 3, seed: 0 });
+      for (const overrides of [{ batchSize: 1.5 }, { batchSize: 21 }, { seed: 2 ** 32 - 1 }, { modelId: 'example-ltx' }, { backend: 'fal' }, { chunks: 2 }, { mediaProviderPeerId: 'peer' }]) {
+        const rejected = await request(app).post('/api/video-gen/').send({ prompt: 'Example shot', modelId: 'example-h3', batchSize: 3, ...overrides });
+        expect(rejected.status).toBe(400);
+      }
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
     });
   });
 

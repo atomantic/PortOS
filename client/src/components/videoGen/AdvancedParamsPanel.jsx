@@ -34,6 +34,7 @@ export default function AdvancedParamsPanel({
   contextFrames, onContextFramesChange,
   fps, onFpsChange,
   seed, onSeedChange, onRandomSeed,
+  batchSize = 1, onBatchSizeChange,
   steps, onStepsChange,
   guidanceScale, onGuidanceScaleChange,
   speedProfileId = DEFAULT_SPEED_PROFILE_ID, onSpeedProfileChange,
@@ -254,6 +255,22 @@ export default function AdvancedParamsPanel({
             </select>
           </FormField>
 
+          {onBatchSizeChange && (
+            <div>
+              <label htmlFor={fieldId('video-batch-size')} className="block text-xs font-medium text-gray-400 mb-1">Renders in batch</label>
+              <select id={fieldId('video-batch-size')} className={inputCls}
+                value={currentModel?.supportsWarmBatch && !chainingActive ? batchSize : 1}
+                disabled={!currentModel?.supportsWarmBatch || chainingActive}
+                onChange={(event) => onBatchSizeChange(Number(event.target.value))}>
+                {Array.from({ length: 20 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1}</option>)}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                {!currentModel?.supportsWarmBatch ? 'Warm batching is available for local MiniMax H3 MLX models.'
+                  : chainingActive ? 'Use one chunk to batch separate videos.'
+                    : 'Sequential videos reuse the model and prompt. Blank seed: random each time. Number: increment per render.'}
+              </p>
+            </div>
+          )}
           <div>
             <label htmlFor={fieldId('video-seed')} className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
             <div className="flex items-center gap-1">
@@ -269,7 +286,7 @@ export default function AdvancedParamsPanel({
                 type="button"
                 onClick={onRandomSeed}
                 className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
-                title="Randomize seed" aria-label="Randomize seed"
+                title="Use a random seed for each render" aria-label="Randomize seed"
               >
                 <Dice5 className="w-4 h-4" />
               </button>

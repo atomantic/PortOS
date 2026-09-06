@@ -62,6 +62,9 @@ import { generateVideo, resolveVideoModel, defaultVideoModelId } from './generat
 // `prompt`. It is destructured out of `rest` on purpose so the per-chunk
 // generateVideo() calls below never receive the whole list.
 export async function generateChainedVideo({ chunks, chunkPrompts, contextFrames, jobId: outerJobId, ...rest }) {
+  if (Number(chunks) > 1 && Number(rest.batchSize) > 1) {
+    throw new ServerError('A render batch cannot be combined with chained clips.', { status: 400, code: 'VIDEO_BATCH_CONFLICT' });
+  }
   const totalChunks = Number(chunks) || 1;
   if (totalChunks === 1) {
     return generateVideo({ jobId: outerJobId, ...rest });

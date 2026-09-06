@@ -544,11 +544,12 @@ export function bufferChildExit(proc) {
  * @param {object} ctx.meta - the history-entry metadata built up-front
  * @param {number} ctx.actualSeed
  * @param {(mutator: (h: Array) => Array) => Promise<Array>} ctx.mutateHistory - serialized read-modify-write on the shared history file (mutateVideoHistory)
+ * @param {boolean} [ctx.terminal=true] - False persists a batch member without completing its queue job.
  * @param {number} [ctx.startedAtMs] - Date.now() captured just before the child
  *   spawned. Defaults to `job.renderStartedAtMs`, which generateVideo stamps.
  */
-export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory, startedAtMs = job?.renderStartedAtMs }) {
-  job.status = 'complete';
+export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory, startedAtMs = job?.renderStartedAtMs, terminal = true }) {
+  if (terminal) job.status = 'complete';
   await optimizeForStreaming(outputPath);
   const thumbnail = await generateThumbnail(outputPath, jobId);
   // Serialized append through the shared history tail so a concurrent write
@@ -592,7 +593,9 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
     return history;
   });
   console.log(`✅ Video generated [${jobId.slice(0, 8)}]: ${filename}`);
-  broadcastSse(job, { type: 'complete', result: { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` } });
-  videoGenEvents.emit('completed', { generationId: jobId, filename, path: `/data/videos/${filename}`, thumbnail });
+  if (terminal) {
+    broadcastSse(job, { type: 'complete', result: { filename, seed: actualSeed, thumbnail, path: `/data/videos/${filename}` } });
+    videoGenEvents.emit('completed', { generationId: jobId, filename, path: `/data/videos/${filename}`, thumbnail });
+  }
   return thumbnail;
 }

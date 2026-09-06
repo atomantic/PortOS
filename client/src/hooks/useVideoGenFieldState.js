@@ -50,6 +50,7 @@ export function useVideoGenFieldState({
   const [guidanceScale, setGuidanceScale] = useState('');
   const [imageStrength, setImageStrength] = useState('');
   const [i2vReferenceMode, setI2vReferenceMode] = useState(DEFAULT_I2V_REFERENCE_MODE);
+  const [batchSize, setBatchSize] = useState(1);
   const [seed, setSeed] = useState('');
   const [tiling, setTiling] = useState('auto');
   const [textEncoderId, setTextEncoderId] = useState(STOCK_TEXT_ENCODER_ID);
@@ -119,7 +120,7 @@ export function useVideoGenFieldState({
     prompt, setPrompt,
     remixModelFallback, setRemixModelFallback,
     remixSourceModel, setRemixSourceModel,
-    seed, setSeed,
+    seed, setSeed, batchSize, setBatchSize,
     selectedLoras, setSelectedLoras,
     selectedUniverse, setSelectedUniverse,
     sizeManuallySetRef,

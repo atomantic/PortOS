@@ -8,7 +8,6 @@ import {
   DEFAULT_I2V_REFERENCE_MODE, isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
   runtimeSupportsI2vReferenceMode, resolveI2vReferenceStrength,
 } from '../lib/videoReferenceModes';
-import { randomSeed } from '../lib/genUtils';
 import {
   resolutionOptionsForModel, defaultResolutionForModel, snapAspectToImage,
 } from '../lib/videoGenResolutions';
@@ -129,6 +128,7 @@ export function useVideoGenForm({
     prompt, setPrompt,
     remixModelFallback, setRemixModelFallback,
     remixSourceModel, setRemixSourceModel,
+    batchSize, setBatchSize,
     seed, setSeed,
     selectedLoras, setSelectedLoras,
     selectedUniverse, setSelectedUniverse,
@@ -683,7 +683,7 @@ export function useVideoGenForm({
   const handleResolutionChange = (w, h) => {
     setWidth(w); setHeight(h); sizeManuallySetRef.current = true;
   };
-  const handleRandomSeed = () => setSeed(randomSeed());
+  const handleRandomSeed = () => setSeed('');
   // Switching model drops the sampler overrides — steps/guidanceScale are
   // per-model defaults, and carrying one model's numbers onto another is
   // usually wrong.
@@ -1188,7 +1188,8 @@ export function useVideoGenForm({
     if (p.fps) setFps(p.fps);
     if (p.steps != null) setSteps(String(p.steps));
     if (p.guidanceScale != null) setGuidanceScale(String(p.guidanceScale));
-    if (p.seed != null) setSeed(String(p.seed));
+    setBatchSize(p.batchSize ?? 1);
+    setSeed(p.seed == null ? '' : String(p.seed));
     if (p.tiling) setTiling(p.tiling);
     // Conditioning promise + strength. Both are echoed only when they applied, so
     // absence means "the defaults" and must CLEAR whatever the form last held —
@@ -1298,7 +1299,7 @@ export function useVideoGenForm({
     displaySleepEnabled,
     prompt, negativePrompt, stylePreset, selectedUniverse,
     width, height, mode, sourceImageFile, sourceImageUpload,
-    numFrames, fps, steps, guidanceScale, seed,
+    numFrames, fps, steps, guidanceScale, seed, batchSize,
     currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
     disableAudio, noMusic, imageStrength, i2vReferenceMode,
     keyframesActive, keyframes, loraFamily, selectedLoras,
@@ -1346,6 +1347,7 @@ export function useVideoGenForm({
     imageStrength, setImageStrength,
     i2vReferenceMode, setI2vReferenceMode,
     referenceModeSupported, effectiveImageStrength,
+    batchSize, setBatchSize,
     seed, setSeed, handleRandomSeed,
     tiling, setTiling,
     textEncoderId, setTextEncoderId, textEncoderOptions,

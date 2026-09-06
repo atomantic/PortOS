@@ -7,6 +7,7 @@ export const VIDEO_GEN_LOCAL_ONLY_FIELDS = Object.freeze({
   STEPS: 'steps',
   GUIDANCE_SCALE: 'guidanceScale',
   SEED: 'seed',
+  BATCH_SIZE: 'batchSize',
   IMAGE_STRENGTH: 'imageStrength',
   I2V_REFERENCE_MODE: 'i2vReferenceMode',
   TILING: 'tiling',

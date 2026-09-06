@@ -49,7 +49,7 @@ export function buildVideoGenSubmission({
   displaySleepEnabled,
   prompt, negativePrompt, stylePreset, selectedUniverse,
   width, height, mode, sourceImageFile, sourceImageUpload,
-  numFrames, fps, steps, guidanceScale, seed,
+  numFrames, fps, steps, guidanceScale, seed, batchSize = 1,
   currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
   disableAudio, noMusic, imageStrength, i2vReferenceMode,
   keyframesActive, keyframes, loraFamily, selectedLoras,
@@ -141,7 +141,7 @@ export function buildVideoGenSubmission({
       fps,
       steps: steps || '',
       guidanceScale: guidanceScale || '',
-      seed: seed || '',
+      seed: seed ?? '',
       ...remoteSubmissionFields,
     };
   }
@@ -159,7 +159,8 @@ export function buildVideoGenSubmission({
     fps,
     steps: steps || '',
     guidanceScale: guidanceScale || '',
-    seed: seed || '',
+    seed: seed ?? '',
+    ...(currentModel?.supportsWarmBatch && !chainingActive && batchSize > 1 ? { batchSize } : {}),
     tiling: currentModel?.supportsTiling === false ? 'auto' : tiling,
     textEncoderId: normalizeTextEncoderForModel(textEncoderId, currentModel) === STOCK_TEXT_ENCODER_ID
       ? undefined

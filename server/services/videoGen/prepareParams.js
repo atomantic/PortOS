@@ -69,6 +69,7 @@ import {
 // module mock local.js wholesale, and a mocked rule table would assert nothing.
 import { videoModeContractError, videoChainUnsupportedError, videoReferenceModeError } from './modeContract.js';
 import { resolveByovRuntimeLoraCapable, videoLoraUnsupportedError } from './runtimes.js';
+import { validateVideoBatch } from './batch.js';
 import { audioDurationToFrames } from './audioDuration.js';
 
 // Retries reuse persisted worker parameters instead of passing through the
@@ -102,6 +103,7 @@ export async function validateVideoRetryParams(params = {}) {
     && !supportsVideoTextEncoder(model, params.textEncoderId)) {
     throw videoTextEncoderUnsupportedError(model, params.textEncoderId);
   }
+  validateVideoBatch(params, model);
   const mode = params.mode || (params.sourceImagePath ? 'image' : 'text');
   const modeError = videoModeContractError({
     model,
@@ -324,6 +326,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
   }
+  validateVideoBatch({ ...body, backend }, effectiveModel);
   if (effectiveModel && !isHardwareCompatible(effectiveModel.hardwareCompatibility)) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(

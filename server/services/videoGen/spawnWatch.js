@@ -50,6 +50,7 @@ const MUXING_DONE_RE = /\[Decoding video \+ audio \+ muxing\]\s+done in/i;
 
 export async function spawnAndWatchVideo({
   jobId,
+  batch = null,
   speedProfileId = null,
   cleanupTempFiles,
   stepwiseDir,
@@ -256,6 +257,40 @@ export async function spawnAndWatchVideo({
     // Returns true for a recognized progress/status/noise line (suppress raw
     // logging), false for an unhandled line worth raw-logging.
     const handleLine = makeVideoGenLineHandler({ job, jobId, pythonNoiseRe: PYTHON_NOISE_RE });
+    const batchResults = [];
+    let outputTail = Promise.resolve();
+    let batchError = null;
+    let receivedOutputs = 0;
+    const stopFailedBatch = (err) => {
+      batchError ||= err;
+      try { proc.kill('SIGTERM'); } catch (killError) {
+        console.error(`❌ Video batch could not stop [${jobId.slice(0, 8)}]: ${killError.message}`);
+      }
+    };
+    const acceptBatchOutput = (parsed) => {
+      const item = batch[receivedOutputs];
+      const itemFilename = item?.filename;
+      const itemPath = itemFilename && join(PATHS.videos, itemFilename);
+      if (!item || parsed.batch_index !== item.index || parsed.seed !== item.seed || parsed.video_path !== itemPath) {
+        stopFailedBatch(new Error('Video batch returned an unexpected output or seed.'));
+        return;
+      }
+      receivedOutputs += 1;
+      outputTail = outputTail.then(async () => {
+        const thumbnail = await finalizeGeneratedVideo({
+          job, jobId: item.id, outputPath: itemPath, filename: itemFilename,
+          meta: { ...meta, id: item.id, filename: itemFilename, seed: item.seed, batchIndex: item.index },
+          actualSeed: item.seed, mutateHistory: mutateVideoHistory,
+          // Batch timings include shared startup and cannot train single-render ETAs.
+          startedAtMs: null, terminal: false,
+        });
+        batchResults.push({ filename: itemFilename, seed: item.seed, thumbnail, path: `/data/videos/${itemFilename}` });
+        const message = `Saved ${batchResults.length}/${batch.length} videos`;
+        broadcastSse(job, { type: 'status', message });
+        videoGenEvents.emit('status', { generationId: jobId, message });
+      }).catch(stopFailedBatch);
+      if (receivedOutputs === batch.length) armCompletionWatchdog();
+    };
 
     // Per-stream line readers carry the partial trailing line across chunk
     // boundaries and decode through a StringDecoder, so a marker (or multibyte
@@ -268,6 +303,10 @@ export async function spawnAndWatchVideo({
       // for the result metadata; otherwise raw-log so we can debug failures.
       try {
         const parsed = JSON.parse(line);
+        if (parsed.video_path && batch) {
+          acceptBatchOutput(parsed);
+          return;
+        }
         if (parsed.video_path) {
           job.resultJson = parsed;
           // The result JSON is the strongest "work is done" signal — arm the
@@ -278,7 +317,7 @@ export async function spawnAndWatchVideo({
       } catch { /* not JSON */ }
       // Some runtimes don't print the result JSON but do log the final
       // decode+mux line right before they should exit — treat it the same way.
-      if (MUXING_DONE_RE.test(line)) armCompletionWatchdog();
+      if (!batch && MUXING_DONE_RE.test(line)) armCompletionWatchdog();
       console.log(`🐍-out [${jobId.slice(0, 8)}] ${line}`);
     });
     const stderrReader = createLineReader((raw) => {
@@ -348,7 +387,10 @@ export async function spawnAndWatchVideo({
         // output file is already on disk and non-empty: the render wrote its
         // result, but the child hung during teardown. A kill with no output on
         // disk still fails loudly below.
-        const watchdogSuccess = isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
+        await outputTail;
+        if (batchError) throw batchError;
+        const watchdogSuccess = (!batch || batchResults.length === batch.length)
+          && isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
 
         if (code !== 0 && !watchdogSuccess) {
           job.status = 'error';
@@ -377,14 +419,23 @@ export async function spawnAndWatchVideo({
             const diagnostic = failure?.summary || failure?.cause;
             reason = `Exit code ${code}${diagnostic ? `: ${diagnostic}` : ''}`;
           }
+          if (batch) reason += ` (${batchResults.length}/${batch.length} videos saved to history)`;
           console.log(`❌ Video generation failed [${jobId.slice(0, 8)}]: ${reason}`);
           broadcastSse(job, { type: 'error', error: `Generation failed: ${reason}` });
-          videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: missingPyModule ? normalizeVideoFailure(reason) : failure });
+          videoGenEvents.emit('failed', { generationId: jobId, error: reason, failure: missingPyModule ? normalizeVideoFailure(reason) : failure, ...(batch ? { results: batchResults } : {}) });
         } else {
           if (watchdogSuccess) {
             console.log(`⚠️ video child force-killed (completion teardown hang) — output is intact [${jobId.slice(0, 8)}]`);
           }
-          await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
+          if (batch) {
+            if (batchResults.length !== batch.length) throw new Error(`Video batch stopped after ${batchResults.length}/${batch.length} outputs.`);
+            job.status = 'complete';
+            const result = { ...batchResults[0], results: batchResults };
+            broadcastSse(job, { type: 'complete', result });
+            videoGenEvents.emit('completed', { generationId: jobId, ...result });
+          } else {
+            await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory: mutateVideoHistory });
+          }
         }
       } catch (err) {
         // Finalize/teardown threw — fail the job loudly instead of crashing the
@@ -393,7 +444,7 @@ export async function spawnAndWatchVideo({
         job.status = 'error';
         console.error(`❌ Video close handler failed [${jobId.slice(0, 8)}]: ${err.message}`);
         broadcastSse(job, { type: 'error', error: `Generation failed: ${err.message}` });
-        videoGenEvents.emit('failed', { generationId: jobId, error: err.message, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }) });
+        videoGenEvents.emit('failed', { generationId: jobId, error: err.message, failure: normalizeVideoFailure(err, { prompts: [meta?.prompt, meta?.negativePrompt] }), ...(batch ? { results: batchResults } : {}) });
       } finally {
         // A prompt-encode relaunch returns before this finalizer, deliberately
         // leaving the display asleep while its replacement owns the GPU.
@@ -592,7 +643,7 @@ export async function spawnAndWatchVideo({
     // has never measured a render on this model — an explicit "no estimate"
     // sentinel the UI must render as "unknown", never as 0 or a guess. Stamped
     // on the job so every progress frame can carry it alongside step progress.
-    const etaEstimate = estimateRenderMs({
+    const etaEstimate = batch ? null : estimateRenderMs({
       history: await loadHistory(),
       modelId,
       width: w,
