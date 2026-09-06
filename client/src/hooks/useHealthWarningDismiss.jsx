@@ -24,7 +24,9 @@ export function useHealthWarningDismiss(refetchFn) {
           <button
             type="button"
             onClick={() => {
-              undismissHealthWarning(warning.type, { silent: true }).then(() => refetchFn());
+              undismissHealthWarning(warning.type, { silent: true })
+                .then(() => refetchFn())
+                .catch((err) => toast.error(err?.message || 'Failed to undo dismissal'));
               toast.dismiss(t.id);
             }}
             className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 py-0.5 text-[11px] text-port-accent hover:border-port-accent/40 hover:text-white"

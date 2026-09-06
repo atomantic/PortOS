@@ -1305,7 +1305,7 @@ export const databaseExportSchema = z.object({
 });
 
 // System health dashboard warnings — see server/routes/systemHealth.js. The
-// `type` enum mirrors every `warnings.push({ type: ... })` call site there;
+// `type` enum mirrors every `rawWarnings.push({ type: ... })` call site there;
 // keep the two lists in sync.
 export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge'];
 export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
