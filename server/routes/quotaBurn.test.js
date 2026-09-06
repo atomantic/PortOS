@@ -114,6 +114,54 @@ describe('PUT /api/quota-burn', () => {
     expect((await request(app).put('/api/quota-burn').send({ checkIntervalMinutes: 1 })).status).toBe(400);
     expect(saveQuotaBurnConfig).not.toHaveBeenCalled();
   });
+
+  it('saves a scheduled-task reference step with per-invocation overrides', async () => {
+    saveQuotaBurnConfig.mockResolvedValue({ enabled: true });
+    const jobs = [{
+      id: 'step-1', label: 'Nightly UX sweep', runOnce: true,
+      taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' },
+      overrides: { providerId: 'claude-code-tui', model: 'opus', effort: 'high', params: { fileIssues: true } },
+    }];
+    const res = await request(buildApp()).put('/api/quota-burn').send({ families: { claude: { enabled: true, jobs } } });
+    expect(res.status).toBe(200);
+    expect(saveQuotaBurnConfig).toHaveBeenCalledWith({ families: { claude: { enabled: true, jobs } } });
+  });
+
+  it('names the offending field when a reference is malformed', async () => {
+    const app = buildApp();
+    const reject = async (families) => {
+      const res = await request(app).put('/api/quota-burn').send({ families });
+      expect(res.status).toBe(400);
+      return (res.body.context?.details || []).map((d) => d.path);
+    };
+    // A type that only makes sense against one managed app, with none named.
+    expect(await reject({ claude: { jobs: [{ taskRef: { kind: 'builtin', taskType: 'pr-reviewer' } }] } }))
+      .toContain('families.claude.jobs.0.taskRef.appId');
+    // A custom reference addressed by something that is not a job id.
+    expect(await reject({ claude: { jobs: [{ taskRef: { kind: 'custom', jobId: 7 } }] } }))
+      .toContain('families.claude.jobs.0.taskRef.jobId');
+    // A pin on another family's subscription — the runner would spend it.
+    expect(await reject({ claude: { jobs: [{ taskRef: { kind: 'custom', jobId: 'j1' }, overrides: { providerId: 'codex-tui' } }] } }))
+      .toContain('families.claude.jobs.0.overrides.providerId');
+    // A step that names no work at all, and one that names two kinds of it.
+    expect(await reject({ claude: { jobs: [{ label: 'orphan' }] } }))
+      .toContain('families.claude.jobs.0.taskRef');
+    expect(await reject({ claude: { jobs: [{ jobType: 'agent-prompt', taskRef: { kind: 'custom', jobId: 'j1' } }] } }))
+      .toContain('families.claude.jobs.0.jobType');
+    expect(saveQuotaBurnConfig).not.toHaveBeenCalled();
+  });
+
+  it('accepts an in-family pin, and one whose id names no family at all', async () => {
+    // Only an id that unambiguously names ANOTHER family is rejected: the binary
+    // decides the family, and a schema cannot read the provider list.
+    saveQuotaBurnConfig.mockResolvedValue({ enabled: true });
+    const app = buildApp();
+    for (const providerId of ['claude-code-tui', 'my-own-wrapper']) {
+      const res = await request(app).put('/api/quota-burn')
+        .send({ families: { claude: { jobs: [{ taskRef: { kind: 'custom', jobId: 'j1' }, overrides: { providerId } }] } } });
+      expect(res.status, providerId).toBe(200);
+    }
+  });
 });
 
 describe('POST /api/quota-burn/run', () => {
