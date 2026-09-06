@@ -13,6 +13,7 @@ import {
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
 import {
   FEDERATED_MEDIA_ASSET_MAX_COUNT,
@@ -641,6 +642,29 @@ export const providerRouteSettingsUpdateSchema = z.object({
   }).strict().refine((value) => Object.keys(value).length > 0, {
     message: 'Name at least one setting to change',
   }),
+}).strict();
+
+// PATCH /api/providers/routes/:providerId/model-aliases (#6369) — ONE route's
+// HAND-AUTHORED canonical→executable model aliases.
+//
+// Three-valued like the connection credentials above, and for the same reason:
+// a panel that read three aliases and changed one must be able to send one. An
+// absent key is preserved, a string sets, and `null` DELETES — the only way an
+// override is ever removed, because a refresh must never delete a correction.
+//
+// The keys are model names, so the record is not enumerable and each key is
+// length-checked. `expectedRevision` is a FINGERPRINT of the current override
+// map (`ai_route_bindings` has no revision column), and an empty patch is
+// refused rather than written: it would rewrite a row to say nothing.
+export const providerRouteModelAliasSchema = z.object({
+  expectedRevision: z.string().trim().min(1).max(64),
+  aliases: z.record(
+    z.string().trim().min(1).max(MODEL_ALIAS_LIMITS.maxLength),
+    z.string().trim().min(1).max(MODEL_ALIAS_LIMITS.maxLength).nullable(),
+  ).refine((value) => Object.keys(value).length > 0, { message: 'Name at least one alias to change' })
+    .refine((value) => Object.keys(value).length <= MODEL_ALIAS_LIMITS.maxEntries, {
+      message: `At most ${MODEL_ALIAS_LIMITS.maxEntries} aliases at a time`,
+    }),
 }).strict();
 
 // POST /api/providers/:id/vision-suite.

@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { Router } from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { modelAliasRevision } from '../lib/providerModelAliases.js';
 
 const store = {
   readGraph: vi.fn(),
@@ -32,6 +33,7 @@ const store = {
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
   saveBindingSettings: vi.fn().mockResolvedValue(2),
   saveRouteModelMap: vi.fn().mockResolvedValue(undefined),
+  saveRouteModelAliases: vi.fn().mockResolvedValue(undefined),
 };
 vi.mock('../services/providerGraphStore.js', () => store);
 
@@ -601,5 +603,173 @@ describe('what a route row can act on', () => {
     // Distinguishable from an empty ladder: `null` is "this harness has no
     // effort control", which the panel renders as a disabled select.
     expect(byId['codex-ollama'].effortLevels).toContain('minimal');
+  });
+});
+
+describe('PATCH /api/providers/routes/:providerId/model-aliases', () => {
+  /** The graph as a browser reads it, which is where the fingerprint comes from. */
+  const routeFromGraph = async (providerId) => {
+    const res = await request(app()).get('/api/providers/management');
+    return res.body.routes.find((route) => route.providerId === providerId);
+  };
+
+  it('makes an alias the harness adapter could not derive, and puts it in the shared catalog', async () => {
+    // OpenCode needs `<namespace>/<model>`, so a bare string on that route
+    // round-trips to nothing and reaches no catalog. This is the repair.
+    const before = await routeFromGraph('codex-ollama');
+    expect(before.modelMap).not.toHaveProperty('namespaced-model');
+
+    const res = await request(app())
+      .patch('/api/providers/routes/codex-ollama/model-aliases')
+      .send({
+        expectedRevision: before.modelAliasRevision,
+        aliases: { 'namespaced-model': 'example-model' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(store.saveRouteModelAliases).toHaveBeenCalledWith('codex-ollama',
+      { 'namespaced-model': 'example-model' });
+    // The effective map is the merge, so the observed alias is still there.
+    expect(res.body.modelMap).toEqual({
+      'example-model': 'example-model',
+      'namespaced-model': 'example-model',
+    });
+    // A correction no model menu offers has corrected nothing, so the shared
+    // catalog is re-derived from the stored maps — without probing anything.
+    const [{ catalog }] = store.saveConnectionSettings.mock.calls.at(-1);
+    expect(catalog.models).toContain('namespaced-model');
+    expect(providerService.refreshProviderModelsBatch).not.toHaveBeenCalled();
+    // Aliases are graph state: no executable record is rewritten by one.
+    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
+  });
+
+  it('wins over the alias a refresh observed for the same model', async () => {
+    const route = await routeFromGraph('claude-ollama');
+
+    const res = await request(app())
+      .patch('/api/providers/routes/claude-ollama/model-aliases')
+      .send({
+        expectedRevision: route.modelAliasRevision,
+        aliases: { 'example-model': 'example-model:8b' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.modelMap['example-model']).toBe('example-model:8b');
+  });
+
+  it('survives the next catalog refresh, which rewrites only what it observed', async () => {
+    const withOverride = graphFixture();
+    withOverride.routes[0].modelAliasOverrides = { 'hand-written': 'example-model' };
+    store.readGraph.mockResolvedValue(withOverride);
+    providerService.refreshProviderModelsBatch.mockResolvedValue([
+      { ids: ['claude-ollama', 'claude-ollama-tui', 'codex-ollama'], leadId: 'claude-ollama', status: 'updated' },
+    ]);
+
+    const res = await request(app()).post(`/api/providers/connections/${CONNECTION}/refresh-models`);
+
+    expect(res.status).toBe(200);
+    // The observed column is rewritten wholesale...
+    expect(store.saveRouteModelMap).toHaveBeenCalledWith('claude-ollama', { 'example-model': 'example-model' });
+    // ...the override column is not touched at all...
+    expect(store.saveRouteModelAliases).not.toHaveBeenCalled();
+    // ...and the hand-written alias is still in the refreshed shared catalog.
+    expect(res.body.catalog.models).toContain('hand-written');
+  });
+
+  it('removes an override only on an explicit null', async () => {
+    const withOverride = graphFixture();
+    withOverride.routes[0].modelAliasOverrides = { 'hand-written': 'example-model', kept: 'example-model' };
+    store.readGraph.mockResolvedValue(withOverride);
+    const route = await routeFromGraph('claude-ollama');
+
+    const res = await request(app())
+      .patch('/api/providers/routes/claude-ollama/model-aliases')
+      .send({ expectedRevision: route.modelAliasRevision, aliases: { 'hand-written': null } });
+
+    expect(res.status).toBe(200);
+    // The alias not named in the patch is preserved, not restated by the caller.
+    expect(res.body.modelAliasOverrides).toEqual({ kept: 'example-model' });
+  });
+
+  it('keeps an alias whose spelling the record no longer lists, and reports it stale', async () => {
+    const withOverride = graphFixture();
+    withOverride.routes[0].modelAliasOverrides = { 'hand-written': 'model-the-backend-dropped' };
+    store.readGraph.mockResolvedValue(withOverride);
+
+    const route = await routeFromGraph('claude-ollama');
+
+    expect(route.modelAliasOverrides).toEqual({ 'hand-written': 'model-the-backend-dropped' });
+    expect(route.staleModelAliases).toEqual(['hand-written']);
+    // Reported, never repaired: it is still in the effective map a run resolves
+    // through, exactly like a model pin outside the catalog.
+    expect(route.modelMap['hand-written']).toBe('model-the-backend-dropped');
+  });
+
+  it('makes no staleness claim about a route that lists no models at all', async () => {
+    const withOverride = graphFixture();
+    withOverride.routes[0].modelAliasOverrides = { 'hand-written': 'example-model' };
+    store.readGraph.mockResolvedValue(withOverride);
+    // `[]` on a record cannot tell "never fetched" from "fetched and empty", so
+    // calling every alias stale here would be a warning about nothing.
+    providerService.getAllProviders.mockResolvedValue({
+      activeProvider: 'claude-ollama',
+      providers: [{ ...structuredClone(CLAUDE_CLI), models: [] },
+        structuredClone(CLAUDE_TUI), structuredClone(CODEX_CLI)],
+    });
+
+    const route = await routeFromGraph('claude-ollama');
+
+    expect(route.staleModelAliases).toEqual([]);
+  });
+
+  it('refuses an edit made against aliases that have since moved', async () => {
+    const res = await request(app())
+      .patch('/api/providers/routes/claude-ollama/model-aliases')
+      .send({ expectedRevision: 'a-fingerprint-from-a-screen-that-moved-on', aliases: { a: 'b' } });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PROVIDER_GRAPH_STALE_REVISION');
+    expect(store.saveRouteModelAliases).not.toHaveBeenCalled();
+    expect(store.saveConnectionSettings).not.toHaveBeenCalled();
+  });
+
+  it('404s a provider id the graph does not route, and refuses an empty patch', async () => {
+    const route = await routeFromGraph('claude-ollama');
+
+    const missing = await request(app())
+      .patch('/api/providers/routes/not-a-route/model-aliases')
+      .send({ expectedRevision: route.modelAliasRevision, aliases: { a: 'b' } });
+    expect(missing.status).toBe(404);
+
+    const empty = await request(app())
+      .patch('/api/providers/routes/claude-ollama/model-aliases')
+      .send({ expectedRevision: route.modelAliasRevision, aliases: {} });
+    expect(empty.status).toBe(400);
+    expect(store.saveRouteModelAliases).not.toHaveBeenCalled();
+  });
+
+  it('refuses while the route is mid-projection', async () => {
+    const fixture = graphFixture();
+    fixture.routes[0].pending = ownedSnapshot();
+    store.readGraph.mockResolvedValue(fixture);
+
+    const res = await request(app())
+      .patch('/api/providers/routes/claude-ollama/model-aliases')
+      .send({ expectedRevision: modelAliasRevision({}), aliases: { a: 'b' } });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PROVIDER_GRAPH_BINDING_BLOCKED');
+    expect(store.saveRouteModelAliases).not.toHaveBeenCalled();
+  });
+
+  it('drops a hand-edited row entry that could not be published, rather than failing the graph', async () => {
+    const fixture = graphFixture();
+    // A column edited in psql, or restored from an older release's backup.
+    fixture.routes[0].modelAliasOverrides = { good: 'example-model', broken: null, '': 'x' };
+    store.readGraph.mockResolvedValue(fixture);
+
+    const route = await routeFromGraph('claude-ollama');
+
+    expect(route.modelAliasOverrides).toEqual({ good: 'example-model' });
   });
 });

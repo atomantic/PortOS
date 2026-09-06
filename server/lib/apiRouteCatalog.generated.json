@@ -14121,6 +14121,14 @@
       ]
     },
     {
+      "method": "PATCH",
+      "path": "/api/providers/routes/:providerId/model-aliases",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/providers/runtimes",
       "mountPath": "/api/providers",
@@ -17940,8 +17948,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2222,
-    "declarations": 2230,
+    "operations": 2223,
+    "declarations": 2231,
     "sourceFiles": 233
   }
 }

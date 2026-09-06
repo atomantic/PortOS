@@ -24,6 +24,7 @@ const api = vi.hoisted(() => ({
   unlinkProviderBinding: vi.fn(),
   deleteProviderConnection: vi.fn(),
   updateProviderRouteSettings: vi.fn(),
+  updateProviderRouteModelAliases: vi.fn(),
   setActiveProvider: vi.fn(),
   isManagementUnsupported: (error) => error?.status === 404 || error?.code === 'PROVIDER_GRAPH_UNAVAILABLE',
 }));
@@ -80,6 +81,9 @@ const graphFixture = () => ({
       },
       settingsRevision: 'cli-fingerprint',
       effortLevels: ['low', 'medium', 'high'],
+      modelAliasOverrides: {},
+      modelAliasRevision: 'cli-aliases',
+      staleModelAliases: [],
     },
     {
       providerId: 'claude-ollama-tui', bindingId: CLAUDE_BINDING, mode: 'tui', modelMap: {}, projectionPending: false,
@@ -89,6 +93,9 @@ const graphFixture = () => ({
       },
       settingsRevision: 'tui-fingerprint',
       effortLevels: ['low', 'medium', 'high'],
+      modelAliasOverrides: {},
+      modelAliasRevision: 'tui-aliases',
+      staleModelAliases: [],
       tuiCommandLine: 'claude --dangerously-skip-permissions',
     },
   ],
@@ -249,7 +256,7 @@ describe('the empty-selection inversion', () => {
 describe('a route row', () => {
   const openOverrides = async (name) => {
     renderPanel();
-    const rows = await screen.findAllByRole('button', { name: /Overrides/ });
+    const rows = await screen.findAllByRole('button', { name: /Overrides & aliases/ });
     fireEvent.click(rows[name === 'claude-ollama' ? 0 : 1]);
   };
 
@@ -326,10 +333,80 @@ describe('an override the harness no longer offers', () => {
     api.getProviderManagementGraph.mockResolvedValue(graph);
     renderPanel();
 
-    const rows = await screen.findAllByRole('button', { name: /Overrides/ });
+    const rows = await screen.findAllByRole('button', { name: /Overrides & aliases/ });
     fireEvent.click(rows[0]);
 
     expect(screen.getByLabelText('Reasoning effort')).toHaveValue('ultra');
     expect(screen.getByRole('button', { name: 'Save overrides' })).toBeDisabled();
+  });
+});
+
+describe('hand-authored model aliases', () => {
+  const openRoute = async (index = 0) => {
+    renderPanel();
+    const rows = await screen.findAllByRole('button', { name: /Overrides & aliases/ });
+    fireEvent.click(rows[index]);
+  };
+
+  it('sends the pair a human typed with the fingerprint the panel was showing', async () => {
+    api.updateProviderRouteModelAliases.mockResolvedValue({ providerId: 'claude-ollama' });
+    await openRoute();
+
+    fireEvent.change(screen.getByLabelText('Backend model name'), { target: { value: 'example-model' } });
+    fireEvent.change(screen.getByLabelText('What this harness is sent'),
+      { target: { value: 'namespace/example-model' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add alias' }));
+
+    await waitFor(() => expect(api.updateProviderRouteModelAliases).toHaveBeenCalled());
+    const [providerId, body] = api.updateProviderRouteModelAliases.mock.calls[0];
+    expect(providerId).toBe('claude-ollama');
+    expect(body.expectedRevision).toBe('cli-aliases');
+    expect(body.aliases).toEqual({ 'example-model': 'namespace/example-model' });
+  });
+
+  it('marks which aliases a human wrote, and offers to remove only those', async () => {
+    const graph = graphFixture();
+    graph.routes[0].modelMap = { 'example-model': 'example-model', 'hand-written': 'other-model' };
+    graph.routes[0].modelAliasOverrides = { 'hand-written': 'other-model' };
+    api.getProviderManagementGraph.mockResolvedValue(graph);
+    api.updateProviderRouteModelAliases.mockResolvedValue({ providerId: 'claude-ollama' });
+    await openRoute();
+
+    // The observed alias has no Remove button — nothing a refresh wrote is the
+    // human's to delete here.
+    expect(screen.getAllByRole('button', { name: /Remove the manual alias/ })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove the manual alias for hand-written' }));
+
+    await waitFor(() => expect(api.updateProviderRouteModelAliases).toHaveBeenCalled());
+    // `null` is the removal, and it names ONLY that key: the aliases the human
+    // did not touch are not restated and cannot be lost in the round trip.
+    expect(api.updateProviderRouteModelAliases.mock.calls[0][1].aliases).toEqual({ 'hand-written': null });
+  });
+
+  it('shows an alias the route no longer lists instead of dropping it', async () => {
+    const graph = graphFixture();
+    graph.routes[0].modelMap = { 'hand-written': 'model-the-backend-dropped' };
+    graph.routes[0].modelAliasOverrides = { 'hand-written': 'model-the-backend-dropped' };
+    graph.routes[0].staleModelAliases = ['hand-written'];
+    api.getProviderManagementGraph.mockResolvedValue(graph);
+    await openRoute();
+
+    expect(screen.getByText('model-the-backend-dropped')).toBeInTheDocument();
+    expect(screen.getByText(/no longer lists that spelling/)).toBeInTheDocument();
+  });
+
+  it('keeps the typed pair when the save is refused, so it can be re-submitted', async () => {
+    api.updateProviderRouteModelAliases.mockRejectedValue(
+      Object.assign(new Error('The aliases moved'), { status: 409 }),
+    );
+    await openRoute();
+
+    fireEvent.change(screen.getByLabelText('Backend model name'), { target: { value: 'example-model' } });
+    fireEvent.change(screen.getByLabelText('What this harness is sent'), { target: { value: 'ns/example-model' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add alias' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(screen.getByLabelText('Backend model name')).toHaveValue('example-model');
   });
 });

@@ -109,6 +109,21 @@ describe.skipIf(!runDb)('ai_* connection graph store', () => {
     expect(read.routes[0].projected).toEqual(route(bind.id, 'x').projected);
   });
 
+  it('keeps a hand-authored alias when an unrelated repair re-upserts the route', async () => {
+    const conn = connection();
+    const bind = binding(conn.id);
+    await store.writeGraph({ connections: [conn], bindings: [bind], routes: [route(bind.id, 'claude-ollama')] });
+    await store.saveRouteModelAliases('claude-ollama', { 'hand-written': 'example-model' });
+
+    // An import, a reconciliation re-import and a binding split all carry no
+    // overrides. If the conflict update took them from EXCLUDED, this would
+    // silently delete a correction the user typed (#6369).
+    await store.writeGraph({ connections: [], bindings: [], routes: [route(bind.id, 'claude-ollama')] });
+
+    const read = await store.readGraph();
+    expect(read.routes[0].modelAliasOverrides).toEqual({ 'hand-written': 'example-model' });
+  });
+
   it('refuses two routes on one binding in the same mode', async () => {
     const conn = connection();
     const bind = binding(conn.id);

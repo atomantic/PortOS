@@ -11,6 +11,12 @@ import {
   toManagementGraphDto,
 } from '../lib/providerGraphRecords.js';
 import { resolveRouteModels } from '../lib/providerGraphPreview.js';
+import {
+  applyModelAliasPatch,
+  connectionCatalogModels,
+  effectiveModelAliases,
+  modelAliasRevision,
+} from '../lib/providerModelAliases.js';
 import { effortLevelsForProvider } from '../lib/providerModels.js';
 import {
   routeSettingsFor,
@@ -29,6 +35,7 @@ import {
   relinkBinding,
   saveBindingSettings,
   saveConnectionSettings,
+  saveRouteModelAliases,
   saveRouteModelMap,
 } from './providerGraphStore.js';
 
@@ -186,6 +193,9 @@ function describeRoute(provider) {
     settings,
     effortLevels: effortLevelsForProvider(provider, settings.defaultModel ?? null),
     tuiCommandLine: buildTuiShellLaunch(provider)?.commandLine ?? null,
+    // The record's own model strings, so the DTO can say which hand-authored
+    // aliases name a spelling this route no longer carries (#6369).
+    storedModels: Array.isArray(provider?.models) ? provider.models : null,
   };
 }
 
@@ -574,14 +584,19 @@ export function refreshConnectionCatalog(connectionId) {
     // catalog and each route's alias map describe the same observation.
     const { providers } = await providerService().getAllProviders();
     const byId = new Map(providers.map((provider) => [provider.id, provider]));
-    const models = [];
+    const refreshedRoutes = [];
     for (const route of routes) {
       const provider = byId.get(route.providerId);
       if (!provider) continue;
       const { modelMap } = resolveRouteModels(provider);
+      // Only the OBSERVED half is written back. The user's overrides stay in
+      // their own column, which is what lets a hand-authored alias outlast this
+      // refresh — but they still count towards the shared catalog below,
+      // because a correction that no model menu offers has corrected nothing.
       await saveRouteModelMap(route.providerId, modelMap);
-      models.push(...Object.keys(modelMap));
+      refreshedRoutes.push({ ...route, modelMap });
     }
+    const models = connectionCatalogModels(refreshedRoutes);
 
     // A failure is reported whether or not another group succeeded: a partial
     // answer is still a harness that cannot reach this backend.
@@ -671,5 +686,72 @@ export function updateRouteSettings({ providerId, expectedRevision, settings }) 
     // is a documented no-op.
     console.log(`🔗 Updated route ${providerId} overrides: ${Object.keys(settings).join(', ')}`);
     return { providerId, settings: next, settingsRevision: routeSettingsRevision(next) };
+  });
+}
+
+/**
+ * Edit ONE route's hand-authored model aliases (#6369).
+ *
+ * The correction surface for `modelMap`. A refresh only ever records the
+ * aliases it could VERIFY — a stored model string round-trips through the
+ * harness's own adapter or it is reported unresolved rather than rewritten — so
+ * a bare `example-model` on an OpenCode route that needs its `<namespace>/`
+ * prefix resolves to nothing, reaches no catalog, and can be offered by no
+ * model menu. Naming the pair by hand is the repair.
+ *
+ * The merge rule, which is the whole design decision behind this endpoint:
+ *
+ *   - Observed aliases and user overrides live in SEPARATE columns. A refresh
+ *     rewrites the observed one wholesale and never touches the other, so an
+ *     override survives every refresh and is removed only by the person who
+ *     wrote it (`null` for its key).
+ *   - The effective map is `{ ...observed, ...overrides }` — an override wins.
+ *   - An override naming a spelling the record no longer lists is KEPT and
+ *     reported stale, the same way a model pin outside the catalog is.
+ *
+ * The connection's catalog is re-derived here from the maps already stored,
+ * because an alias that no model menu offers has fixed nothing. That is a pure
+ * recompute: no backend is probed, `state` and `error` are preserved, and a
+ * failed catalog keeps reading as failed.
+ *
+ * Stale-checked with a fingerprint of the overrides rather than a row revision,
+ * for the reason `routeSettingsRevision` documents: `ai_route_bindings` has no
+ * revision column, and a hash of the values catches every writer.
+ */
+export function updateRouteModelAliases({ providerId, expectedRevision, aliases }) {
+  return serialize(async () => {
+    requireGraph();
+    const graph = await readGraph();
+    const route = graph.routes.find((candidate) => candidate.providerId === providerId);
+    if (!route) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
+    requireSettledRoutes([route]);
+
+    if (modelAliasRevision(route.modelAliasOverrides) !== expectedRevision) {
+      throw stale("This route's model aliases");
+    }
+
+    const { aliases: overrides, removed } = applyModelAliasPatch(route.modelAliasOverrides, aliases);
+    await saveRouteModelAliases(providerId, overrides);
+
+    // Re-derive the shared catalog from every route on this backend, reading
+    // the row we just wrote rather than the stale one the graph read.
+    const bindingConnectionId = graph.bindings.find((binding) => binding.id === route.bindingId)?.connectionId;
+    const connection = graph.connections.find((candidate) => candidate.id === bindingConnectionId);
+    if (connection) {
+      const { routes } = connectionFanout(graph, connection.id);
+      const models = connectionCatalogModels(routes.map((entry) => (entry.providerId === providerId
+        ? { ...entry, modelAliasOverrides: overrides }
+        : entry)));
+      await saveConnectionSettings({ ...connection, catalog: { ...connection.catalog, models } });
+    }
+
+    console.log(`🔗 Updated route ${providerId} model aliases: `
+      + `${Object.keys(overrides).length} kept, ${removed.length} removed`);
+    return {
+      providerId,
+      modelMap: effectiveModelAliases(route.modelMap, overrides),
+      modelAliasOverrides: overrides,
+      modelAliasRevision: modelAliasRevision(overrides),
+    };
   });
 }

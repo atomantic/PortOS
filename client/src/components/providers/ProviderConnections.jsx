@@ -282,6 +282,24 @@ export default function ProviderConnections({
     if (saved) toast.success(`${route.providerId}: ${Object.keys(settings).length} setting(s) saved for this mode only.`);
   }, [run]);
 
+  // A hand-authored alias for what THIS harness must be sent for a backend
+  // model. Resolves to the saved row so the form can clear only on a save that
+  // landed, and `null` for a key is the removal — nothing else drops one.
+  const saveRouteAliases = useCallback(async (route, aliases) => {
+    const saved = await run('Saving the model alias', () => api.updateProviderRouteModelAliases(
+      route.providerId,
+      { expectedRevision: route.modelAliasRevision, aliases },
+      { silent: true },
+    ));
+    if (saved) {
+      const removed = Object.values(aliases).filter((value) => value === null).length;
+      toast.success(removed > 0
+        ? 'Alias removed. What the last refresh observed is unchanged.'
+        : 'Alias saved — it wins over what a refresh finds, and survives the next one.');
+    }
+    return saved;
+  }, [run]);
+
   return (
     <Drawer
       open={open}
@@ -434,6 +452,7 @@ export default function ProviderConnections({
                                   blocked={binding.blocked}
                                   onMakeDefault={makeDefault}
                                   onSaveSettings={saveRouteSettings}
+                                  onSaveAliases={saveRouteAliases}
                                 />
                               ))}
                             </ul>

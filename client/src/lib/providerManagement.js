@@ -179,3 +179,38 @@ export function routeOverridePatch(settings, draft) {
   }
   return patch;
 }
+
+// --- route model aliases (#6369) ---------------------------------------------
+//
+// A route's `modelMap` says what THIS harness has to be sent for a given
+// canonical backend model. A refresh can only record the aliases it verifies,
+// so a spelling the harness adapter cannot reproduce is missing from it — and
+// the shared catalog, and therefore every model menu. The panel lets a human
+// supply the pair, which the server stores apart from what it observed so the
+// correction outlives the next refresh.
+
+/**
+ * One row per alias the route resolves through, ready to render.
+ *
+ * Sorted by canonical name so the list does not reshuffle when an entry moves
+ * between observed and manual. `manual` is what the user wrote (and may remove);
+ * `stale` is a manual alias naming a spelling the route no longer lists — shown,
+ * never dropped, exactly like a model pin outside the catalog.
+ *
+ * @returns {{canonical:string, executable:string, manual:boolean, stale:boolean}[]}
+ */
+export function routeModelAliasRows(route) {
+  const effective = route?.modelMap && typeof route.modelMap === 'object' ? route.modelMap : {};
+  const overrides = route?.modelAliasOverrides && typeof route.modelAliasOverrides === 'object'
+    ? route.modelAliasOverrides
+    : {};
+  const stale = new Set(Array.isArray(route?.staleModelAliases) ? route.staleModelAliases : []);
+  return Object.entries(effective)
+    .map(([canonical, executable]) => ({
+      canonical,
+      executable,
+      manual: Object.hasOwn(overrides, canonical),
+      stale: stale.has(canonical),
+    }))
+    .sort((a, b) => a.canonical.localeCompare(b.canonical));
+}

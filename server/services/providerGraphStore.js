@@ -48,6 +48,7 @@ const routeRow = (row) => ({
   bindingId: row.binding_id,
   mode: row.mode,
   modelMap: row.model_map || {},
+  modelAliasOverrides: row.model_alias_overrides || {},
   projected: row.projected || {},
   pending: row.pending ?? null,
   pendingRevision: row.pending_revision ?? null,
@@ -94,15 +95,21 @@ const upsertBinding = (client, binding) => client.query(
     JSON.stringify(binding.selectedModels || [])],
 );
 
+// `model_alias_overrides` is set on INSERT and deliberately absent from the
+// conflict update: an import, a reconciliation re-import and a binding split
+// all carry no overrides, so updating the column from EXCLUDED would delete a
+// human's hand-authored aliases as a side effect of an unrelated repair. Only
+// `saveRouteModelAliases` writes it.
 const upsertRoute = (client, route) => client.query(
   `INSERT INTO ai_route_bindings
-     (provider_id, binding_id, mode, model_map, projected, pending, pending_revision, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+     (provider_id, binding_id, mode, model_map, model_alias_overrides, projected, pending, pending_revision, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
    ON CONFLICT (provider_id) DO UPDATE SET
      binding_id = EXCLUDED.binding_id, mode = EXCLUDED.mode, model_map = EXCLUDED.model_map,
      projected = EXCLUDED.projected, pending = EXCLUDED.pending,
      pending_revision = EXCLUDED.pending_revision, updated_at = NOW()`,
   [route.providerId, route.bindingId, route.mode, JSON.stringify(route.modelMap || {}),
+    JSON.stringify(route.modelAliasOverrides || {}),
     JSON.stringify(route.projected || {}),
     route.pending == null ? null : JSON.stringify(route.pending),
     route.pendingRevision ?? null],
@@ -299,4 +306,19 @@ export async function saveBindingSettings({ id, label, selectedModels }) {
 export async function saveRouteModelMap(providerId, modelMap) {
   await query('UPDATE ai_route_bindings SET model_map = $2, updated_at = NOW() WHERE provider_id = $1',
     [providerId, JSON.stringify(modelMap || {})]);
+}
+
+/**
+ * Write one route's hand-authored alias overrides. Revision-checked and
+ * serialized by the caller, like every other mutation in this block.
+ *
+ * Separate from {@link saveRouteModelMap} on purpose: that column records what
+ * a refresh OBSERVED and is rewritten by the next one, so keeping the two apart
+ * is what lets a correction survive a refresh (#6369).
+ */
+export async function saveRouteModelAliases(providerId, overrides) {
+  await query(
+    'UPDATE ai_route_bindings SET model_alias_overrides = $2, updated_at = NOW() WHERE provider_id = $1',
+    [providerId, JSON.stringify(overrides || {})],
+  );
 }

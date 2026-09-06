@@ -82,6 +82,11 @@ export const aiGraphDdl = [
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`,
+  // Hand-authored canonical→executable aliases, kept apart from `model_map`
+  // on purpose (#6369): a refresh rewrites what it OBSERVED, and merging the
+  // two into one column would make the next refresh silently delete the
+  // correction a human typed. Read as `{ ...model_map, ...overrides }`.
+  `ALTER TABLE ai_route_bindings ADD COLUMN IF NOT EXISTS model_alias_overrides JSONB NOT NULL DEFAULT '{}'::jsonb`,
   `CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_route_bindings_binding_mode
       ON ai_route_bindings (binding_id, mode)`,
   `CREATE INDEX IF NOT EXISTS idx_ai_route_bindings_binding
