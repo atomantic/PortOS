@@ -58,6 +58,7 @@ import {
   auditDoWorkRequiresWorktree,
   modeContractFor,
   applyAuditModeWrapper,
+  FILE_ISSUES_DELIVERY_SETTINGS,
 } from '../lib/auditCatalog.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -840,7 +841,16 @@ async function spawnPriority0OnDemand(ctx) {
           skipPreconditions: true,
           deferPerpetualDispatch: true,
           targetPullRequest: request.targetPullRequest ?? null,
-          providerOverride: request.providerOverride ?? null
+          providerOverride: request.providerOverride ?? null,
+          // A quota-burn step's per-invocation run parameters. They must reach
+          // the PROMPT, so unlike the provider/model/effort pins they cannot
+          // ride the post-generation `onDemandRequestMetadata` stamp below —
+          // the generator overlays them before it picks the mode banner.
+          // `normalizeQuotaBurnProvenance` (lib/quotaBurnOrigin.js) has to keep
+          // `overrides.params` for a step to reach this; it drops them today,
+          // so a burn currently runs the task's SAVED mode, which is correct
+          // for every step until the migration starts pinning one.
+          runOverrides: request.burn?.overrides?.params ?? null
         });
         if (task) {
           await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
@@ -2963,7 +2973,8 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   deferPerpetualDispatch = false,
   targetPullRequest = null,
   // Per-request provider/model/effort pin — see applyProviderModelPins.
-  providerOverride = null
+  providerOverride = null,
+  runOverrides = null
 } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
@@ -2996,6 +3007,24 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   ]);
   const appOverride = appOverrides[taskType] || null;
   const metadata = buildImprovementTaskMetadata(taskType, app, interval, taskSchedule, appOverride);
+
+  // Per-INVOCATION run parameters, layered on top of the schedule + per-app
+  // metadata the task saved. A quota-burn step is the caller that needs them: a
+  // step migrated from an issues-only burn preset pins `fileIssues: true`
+  // explicitly, so it keeps filing even against an audit type whose shipped
+  // scheduled default is `false` — migration must never silently turn an
+  // issues-only burn into code-writing work.
+  //
+  // It has to land HERE, before the mode decision and the prompt render below.
+  // The post-generation stamp both on-demand engines apply
+  // (`onDemandRequestMetadata`) is far too late: by then the banner is chosen
+  // and the description is built, so a `fileIssues` arriving there would flip
+  // the flag while the agent still read a "fix and commit" prompt.
+  //
+  // Sanitized through the SAME allowlist the schedule and per-app overrides
+  // pass, so an invocation can carry nothing a stored override could not.
+  const sanitizedRunMeta = sanitizeTaskMetadata(runOverrides);
+  if (sanitizedRunMeta) Object.assign(metadata, sanitizedRunMeta);
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);
@@ -3149,11 +3178,10 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // File-issues posture wins over app worktree/PR defaults — the deliverable
   // is tracker items, so a managed worktree or an implied PR is the wrong shape.
   if (fileIssues) {
-    metadata.fileIssues = true;
-    metadata.noCodeOutput = true;
-    metadata.useWorktree = false;
-    metadata.openPR = false;
-    metadata.simplify = false;
+    // The catalog's one delivery posture, stamped rather than restated — the
+    // custom-job lane (autonomousJobs/skillTemplates.js) applies this same
+    // object, so the two cannot drift into different definitions of the mode.
+    Object.assign(metadata, FILE_ISSUES_DELIVERY_SETTINGS);
   } else if (auditDoWorkRequiresWorktree(taskType)) {
     // Some structural audits are safe to remediate only in isolation. Enforce
     // this after schedule/app defaults so a stale file-issues toggle transition

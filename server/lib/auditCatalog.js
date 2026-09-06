@@ -355,10 +355,27 @@ export function auditDoWorkRequiresWorktree(taskType) {
 }
 
 /**
+ * The dispatch's own `fileIssues` answer, or `null` when it did not give one.
+ *
+ * Three-valued on purpose: absent is NOT "off". The catalog default only
+ * applies to the absent case, and an explicit `false` on a type that defaults
+ * to filing has to survive as a real "implement" choice. Accepts the
+ * `'true'`/`'false'` string forms for parity with other metadata gates that
+ * round-trip through TASKS.md as text.
+ *
+ * @param {Record<string, unknown>} [metadata] - Task metadata object
+ * @returns {boolean|null} The explicit choice, or null when the key is absent
+ */
+function explicitFileIssues(metadata) {
+  const raw = metadata?.fileIssues;
+  if (raw === true || raw === 'true') return true;
+  if (raw === false || raw === 'false') return false;
+  return null;
+}
+
+/**
  * Effective file-issues mode for a dispatch. An explicit `fileIssues` boolean
  * on the merged task metadata wins; otherwise the catalog default applies.
- * Accepts the `'true'`/`'false'` string forms for parity with other metadata
- * gates that round-trip through TASKS.md as text.
  *
  * @param {string} taskType - Task type identifier
  * @param {Record<string, unknown>} [metadata] - Task metadata object
@@ -366,11 +383,57 @@ export function auditDoWorkRequiresWorktree(taskType) {
  */
 export function isFileIssuesMode(taskType, metadata) {
   if (!isAuditTaskType(taskType)) return false;
-  const raw = metadata?.fileIssues;
-  if (raw === true || raw === 'true') return true;
-  if (raw === false || raw === 'false') return false;
-  return defaultFileIssuesFor(taskType);
+  return explicitFileIssues(metadata) ?? defaultFileIssuesFor(taskType);
 }
+
+/**
+ * Whether a dispatch EXPLICITLY asked for file-issues delivery — the lane for
+ * work that has no catalog default to fall back on.
+ *
+ * A custom app job is user-authored: nothing in this catalog knows what it
+ * audits, so there is no default to consult and opting in is the only way a
+ * custom agent task can carry the posture. Deliberately separate from
+ * `isFileIssuesMode`, which stays gated on the catalog so a non-audit built-in
+ * (`claim-issue`, `user-action-review`) cannot acquire the audit posture from a
+ * `fileIssues` key it uses to mean something else.
+ *
+ * @param {Record<string, unknown>} [metadata] - Task metadata object
+ * @returns {boolean} True only when the dispatch itself asked to file issues
+ */
+export function isExplicitFileIssuesRequest(metadata) {
+  return explicitFileIssues(metadata) === true;
+}
+
+/**
+ * The task-metadata posture a file-issues dispatch runs with, in ONE place.
+ *
+ * These flags are what actually enforce the mode: the banner is text a
+ * model may argue with, but `noCodeOutput` is what routes the prompt through
+ * `buildActionOutputCompletionSection` — stripping every commit/push/PR/
+ * auto-merge instruction — and what makes `declaresNoCommitCriterion` stop
+ * scoring a diff-free run as a failure (`services/taskTypeHooks.js`), so an
+ * issues-only run can neither be told to ship code nor be failed and retried
+ * for not shipping any. `useWorktree: false` keeps `openPR: false` from
+ * meaning the AUTO-MERGE posture, and `simplify: false` drops a step that
+ * presupposes a diff.
+ *
+ * `fileIssues` rides along so the persisted task states the mode it ran in
+ * rather than leaving readers to re-derive it from a catalog default that may
+ * have changed since.
+ *
+ * Every lane stamps THIS object — the scheduled audit generator and the custom
+ * agent job generator — so the two cannot drift into separate postures.
+ * `worktreeChangesExpected` is deliberately NOT here: the PLAN.md tracker files
+ * by committing checklist items, so its file-issues run legitimately leaves a
+ * dirty tree, and that flag is derived per dispatch from the resolved tracker.
+ */
+export const FILE_ISSUES_DELIVERY_SETTINGS = Object.freeze({
+  fileIssues: true,
+  noCodeOutput: true,
+  useWorktree: false,
+  openPR: false,
+  simplify: false,
+});
 
 /**
  * Retrieve filing preset configuration for an audit task type.

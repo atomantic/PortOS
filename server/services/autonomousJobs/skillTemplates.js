@@ -11,6 +11,7 @@ import { ensureDir, PATHS, tryReadFile, writeFileGuarded } from '../../lib/fileU
 import { JOBS_SKILLS_DIR, JOB_SKILL_MAP } from './constants.js'
 import { getAppById } from '../apps.js'
 import { appendTaskDataInputs, resolveTaskDataInputs } from '../taskDataInputs.js'
+import { FILE_ISSUES_DELIVERY_SETTINGS, isExplicitFileIssuesRequest } from '../../lib/auditCatalog.js'
 
 /**
  * Load a job skill template from disk
@@ -186,7 +187,15 @@ async function generateTaskFromJob(job) {
       // Reasoning-effort override — agentLifecycle reads metadata.effort and the
       // spawn builders emit `--effort`/`-c model_reasoning_effort=` (no-op for
       // non-effort providers). Absent = provider default.
-      ...(job.effort ? { effort: job.effort } : {})
+      ...(job.effort ? { effort: job.effort } : {}),
+      // File-issues delivery, from the SAME catalog object a scheduled audit
+      // stamps (`lib/auditCatalog.js`) rather than a second definition of the
+      // mode. A custom job is user-authored, so there is no catalog default to
+      // consult — it is opt-in, and the opt-in is the explicit `fileIssues`
+      // flag on the job's own taskMetadata. Stamped LAST so it wins over the
+      // useWorktree/openPR/simplify forwards above: those describe a
+      // code-shipping run, which is exactly what this mode is not.
+      ...(isExplicitFileIssuesRequest(meta) ? FILE_ISSUES_DELIVERY_SETTINGS : {})
     },
     taskType: 'internal',
     autoApprove: job.autonomyLevel === 'yolo'

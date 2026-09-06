@@ -205,7 +205,18 @@ describe('deferred imports stay deferred (#6156)', () => {
 // `avatarStyles.js` in from the client tree). Each is one extra NODE on a path
 // that already existed — a flatter graph, not a new eager edge into a heavy
 // subtree. Fits inside the allowance above.
-const MAX_STATIC_INSTANTIATIONS = 91400;
+//
+// #6380 measures 91,710 — the ~1.5k allowance restored at #6377 is spent, so
+// re-measure and restore it rather than inching. The +371 is ONE new suite,
+// `services/cosTaskGenerator.auditMode.test.js`, and its cost IS its point: it
+// generates a real audit task through `cosTaskGenerator.js` (274) and renders
+// the final agent prompt from it through `agentPromptBuilder.js` (+94
+// marginal), because the file-issues mode is enforced across exactly that seam
+// and neither half alone can prove an issues-only run cannot acquire
+// commit/push/PR instructions. No new eager edge into a heavy subtree: the
+// production change adds only `lib/auditCatalog.js` (a zero-import leaf) to
+// `autonomousJobs/skillTemplates.js`, worth 2.
+const MAX_STATIC_INSTANTIATIONS = 93200;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {
