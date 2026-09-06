@@ -1063,7 +1063,13 @@ async function spawnDequeuePriority0OnDemand(ctx) {
         skipPreconditions: true,
         deferPerpetualDispatch: true,
         targetPullRequest: request.targetPullRequest ?? null,
-        providerOverride: request.providerOverride ?? null
+        providerOverride: request.providerOverride ?? null,
+        // Mirrors the sibling engine in cosTaskGenerator.js#spawnPriority0OnDemand
+        // — either may drain any given request, so a quota-burn step's run
+        // parameters have to reach the generator from both or the mode a
+        // migrated issues-only step pinned depends on which engine got there
+        // first.
+        runOverrides: request.burn?.overrides?.params ?? null
       });
       if (task) {
         await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);

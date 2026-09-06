@@ -322,7 +322,12 @@ describe('isConfiguredApprovalRequired', () => {
     const selfStart = GEN_SRC.indexOf('export async function generateSelfImprovementTaskForType');
     const appStart = GEN_SRC.indexOf('export async function generateManagedAppImprovementTaskForType');
     expect(GEN_SRC.slice(selfStart, appStart)).toContain('stampApprovalReason(metadata, approval)');
-    expect(GEN_SRC.slice(appStart, appStart + 12000)).toContain('stampApprovalReason(metadata, approval)');
+    // Bounded by the function's own `return task;` rather than a character
+    // count: a magic window makes this guard fire on any commit that adds a
+    // comment above the stamp, which says nothing about whether the stamp is
+    // still there.
+    const appBody = GEN_SRC.slice(appStart, GEN_SRC.indexOf('\n  return task;', appStart));
+    expect(appBody).toContain('stampApprovalReason(metadata, approval)');
   });
 
   it('the PortOS self-improvement lane resolves and appends configured data inputs', () => {

@@ -9,6 +9,8 @@ import {
   defaultFileIssuesFor,
   auditDoWorkRequiresWorktree,
   isFileIssuesMode,
+  isExplicitFileIssuesRequest,
+  FILE_ISSUES_DELIVERY_SETTINGS,
   getAuditFilingPreset,
   modeContractFor,
   applyAuditModeWrapper,
@@ -31,6 +33,28 @@ describe('AUDIT_DEFINITIONS', () => {
     for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
       expect(mapped.has(preset.id), `missing scheduled counterpart for ${preset.id}`).toBe(true);
     }
+  });
+
+  // The REVERSE of the mapping above. The forward direction stops a new burn
+  // preset landing without a scheduled counterpart; this one stops a `quotaBurnId`
+  // that names a preset which was renamed or deleted. Once the presets are
+  // compatibility-only inputs to the migration, a dangling id here is invisible
+  // — nothing dereferences it at runtime — so only a test can catch it.
+  it('every non-null quotaBurnId names a preset that exists', () => {
+    const presetIds = new Set(QUOTA_BURN_PROMPT_PRESETS.map((preset) => preset.id));
+    const referenced = Object.entries(AUDIT_DEFINITIONS)
+      .filter(([, def]) => def.quotaBurnId != null);
+    // Guards the guard: an accidental `quotaBurnId: null` sweep would make the
+    // loop below vacuous while still passing.
+    expect(referenced.length).toBeGreaterThan(0);
+    for (const [taskType, def] of referenced) {
+      expect(presetIds.has(def.quotaBurnId), `${taskType} → unknown preset "${def.quotaBurnId}"`).toBe(true);
+    }
+  });
+
+  it('never points two audit types at the same burn preset', () => {
+    const ids = Object.values(AUDIT_DEFINITIONS).map((def) => def.quotaBurnId).filter(Boolean);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('defaults new audit types to file-issues and existing do-work types to implement', () => {
@@ -67,6 +91,66 @@ describe('isFileIssuesMode', () => {
     expect(isFileIssuesMode('ux', {})).toBe(true);
     expect(isFileIssuesMode('security', {})).toBe(false);
     expect(isFileIssuesMode('data-safety', null)).toBe(true);
+  });
+
+  // The override a migrated issues-only burn step writes: an explicit `true`
+  // has to beat a shipped scheduled default of `false`, or migrating an
+  // issues-only burn preset onto `security` would silently convert it into
+  // code-writing work.
+  it('an explicit true beats a shipped false default', () => {
+    expect(defaultFileIssuesFor('security')).toBe(false);
+    expect(isFileIssuesMode('security', { fileIssues: true })).toBe(true);
+    expect(isFileIssuesMode('performance', { fileIssues: 'true' })).toBe(true);
+  });
+});
+
+describe('isExplicitFileIssuesRequest', () => {
+  it('is true only when the dispatch itself asked — absent is not off, and not on', () => {
+    expect(isExplicitFileIssuesRequest({ fileIssues: true })).toBe(true);
+    expect(isExplicitFileIssuesRequest({ fileIssues: 'true' })).toBe(true);
+    expect(isExplicitFileIssuesRequest({ fileIssues: false })).toBe(false);
+    expect(isExplicitFileIssuesRequest({})).toBe(false);
+    expect(isExplicitFileIssuesRequest(null)).toBe(false);
+  });
+
+  // The custom-agent-job lane reads it without a task type, so it must not be
+  // gated on the catalog the way isFileIssuesMode is.
+  it('is type-agnostic — a custom job has no catalog entry to default from', () => {
+    expect(isAuditTaskType('my-custom-job')).toBe(false);
+    expect(isFileIssuesMode('my-custom-job', { fileIssues: true })).toBe(false);
+    expect(isExplicitFileIssuesRequest({ fileIssues: true })).toBe(true);
+  });
+});
+
+describe('FILE_ISSUES_DELIVERY_SETTINGS', () => {
+  it('is the whole posture, frozen — every flag that could ship code is off', () => {
+    expect(FILE_ISSUES_DELIVERY_SETTINGS).toEqual({
+      fileIssues: true,
+      noCodeOutput: true,
+      useWorktree: false,
+      openPR: false,
+      simplify: false,
+    });
+    expect(Object.isFrozen(FILE_ISSUES_DELIVERY_SETTINGS)).toBe(true);
+  });
+
+  // `worktreeChangesExpected` is derived per dispatch from the RESOLVED tracker:
+  // a PLAN.md tracker files by committing checklist items, so its file-issues
+  // run legitimately leaves a dirty tree. Baking `false` in here would score
+  // every one of those successful runs as a missed deliverable (#3102).
+  it('does not pin worktreeChangesExpected — the resolved tracker owns it', () => {
+    expect(FILE_ISSUES_DELIVERY_SETTINGS).not.toHaveProperty('worktreeChangesExpected');
+  });
+
+  // The legacy burn presets are the OTHER definition of this posture (their
+  // `AUDIT_PARAMS`, copied into a job at pick time). They stay compatibility-only
+  // inputs to the migration, so they are not deduped into this constant — but
+  // they must not disagree with it while both exist.
+  it('agrees with the legacy quota-burn audit presets', () => {
+    const { fileIssues: _fileIssues, ...runShape } = FILE_ISSUES_DELIVERY_SETTINGS;
+    for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
+      expect(preset.params, preset.id).toMatchObject(runShape);
+    }
   });
 });
 

@@ -466,6 +466,14 @@ export const createCosJobSchema = z.object({
     // PortOS-owned audits may succeed after proving the branch is empty; the
     // finalizer still requires the forge/no-commit proof before honoring this.
     noChangeSuccess: z.boolean().optional(),
+    // Opt a custom AGENT job into file-issues delivery. A custom job is
+    // user-authored, so unlike a built-in audit type it has no catalog default
+    // — the explicit flag IS the opt-in, and `generateTaskFromJob` turns it
+    // into the shared posture from lib/auditCatalog.js
+    // (`FILE_ISSUES_DELIVERY_SETTINGS`), overriding the code-shipping
+    // useWorktree/openPR/simplify keys above. Zod strips unknown keys, so
+    // without this row the flag never survives a job create/update.
+    fileIssues: z.boolean().optional(),
   }).optional(),
 });
 
