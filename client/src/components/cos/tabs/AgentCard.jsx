@@ -521,7 +521,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             )}
             {agent.metadata?.model && (
               <span className={`px-2 py-0.5 text-xs rounded shrink-0 ${
-                agent.metadata.modelTier === 'heavy' ? 'bg-purple-500/20 text-purple-400' :
+                ['heavy', 'ultra'].includes(agent.metadata.modelTier) ? 'bg-purple-500/20 text-purple-400' :
                 agent.metadata.modelTier === 'light' ? 'bg-green-500/20 text-green-400' :
                 'bg-blue-500/20 text-blue-400'
               }`} title={agent.metadata.modelReason}>

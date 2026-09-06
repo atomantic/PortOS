@@ -13,6 +13,7 @@
  * widened try/catch the same way the inline code did.
  */
 
+import { MODEL_TIERS } from '../lib/aiToolkit/constants.js';
 import { emitLog } from './cosEvents.js';
 import { isPublicReviewNoToolProfile } from '../lib/agentExecutionProfiles.js';
 import { getActiveProvider, getAllProviders, getProviderById } from './providers.js';
@@ -91,7 +92,8 @@ async function resolvePublicReviewAgentProvider(task, posture) {
   // at its list check, by a different rule (it exempts any user pin outright).
   // Three other sites still hand-roll a raw `models.includes` — see #6151.
   const pinnedModel = task.metadata?.model;
-  const pinnedForThisProvider = Boolean(pinnedModel) && task.metadata?.provider === provider.id;
+  const isTierRequest = Object.values(MODEL_TIERS).includes(pinnedModel);
+  const pinnedForThisProvider = !isTierRequest && Boolean(pinnedModel) && task.metadata?.provider === provider.id;
   // `modelPinIsOffered` owns which provider records may invalidate a pin at all
   // — an empty catalog and a local daemon's cached snapshot are both
   // pass-throughs (see its doc comment).
@@ -107,7 +109,7 @@ async function resolvePublicReviewAgentProvider(task, posture) {
   // function's header says it prevents. Both are the same "will not be honored"
   // case, so both strip here.
   const modelSelection = await selectModelForTask(
-    pinnedModel && !honorPin ? { ...task, metadata: { ...task.metadata, model: null } } : task,
+    pinnedModel && !isTierRequest && !honorPin ? { ...task, metadata: { ...task.metadata, model: null } } : task,
     provider,
   );
   if (pinRejected) {
@@ -331,7 +333,8 @@ async function resolveOrdinaryProviderAndModel(task) {
         providerId: provider.id,
         validModels: provider.models
       });
-      selectedModel = modelSelection.tier === 'heavy' ? provider.heavyModel :
+      selectedModel = modelSelection.tier === 'ultra' ? (provider.ultraModel || provider.heavyModel || provider.defaultModel) :
+                      modelSelection.tier === 'heavy' ? provider.heavyModel :
                       modelSelection.tier === 'light' ? provider.lightModel :
                       modelSelection.tier === 'medium' ? provider.mediumModel :
                       provider.defaultModel;

@@ -951,3 +951,9 @@ describe('stageRunner — withStagePinsIgnored', () => {
     expect(outsideSaw).toBe(false);
   });
 });
+
+it('resolves an Ultra stage without passing a tier name to the provider', () => {
+  expect(resolveModel({ ultraModel: 'frontier', heavyModel: 'strong' }, 'ultra')).toBe('frontier');
+  expect(resolveModel({ heavyModel: 'strong' }, 'ultra')).toBe('strong');
+  expect(resolveModel({ defaultModel: 'default' }, 'ultra')).toBe('default');
+});

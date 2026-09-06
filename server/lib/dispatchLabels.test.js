@@ -53,7 +53,7 @@ import {
 
 describe('dispatch label vocabulary', () => {
   it('is the exact slashdo model/effort set', () => {
-    expect(DISPATCH_MODEL_TIERS).toEqual(['light', 'medium', 'heavy']);
+    expect(DISPATCH_MODEL_TIERS).toEqual(['light', 'medium', 'heavy', 'ultra']);
     expect(DISPATCH_EFFORT_LEVELS).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
   });
 
@@ -62,6 +62,7 @@ describe('dispatch label vocabulary', () => {
       'model:light': 'D4C5F9',
       'model:medium': 'A371F7',
       'model:heavy': '6F42C1',
+      'model:ultra': 'C2185B',
       'effort:low': 'BFE5E5',
       'effort:medium': '76C7C7',
       'effort:high': '1D7874',
@@ -156,9 +157,9 @@ describe('label specs and CLI formatting', () => {
     expect(formatLabelCreateCommand(IN_PROGRESS_LABEL)).toContain('gh label create in-progress');
   });
 
-  it('lists all eight specs without dropping an axis', () => {
+  it('lists all nine specs without dropping an axis', () => {
     const specs = allDispatchLabelSpecs();
-    expect(specs).toHaveLength(8);
+    expect(specs).toHaveLength(9);
     expect(specs.map((s) => s.name)).toEqual(Object.keys(DISPATCH_LABEL_COLORS));
     expect(specs.every((s) => /^[0-9A-F]{6}$/.test(s.color))).toBe(true);
   });

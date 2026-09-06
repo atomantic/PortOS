@@ -402,6 +402,7 @@ export function withProviderHardwareCompatibility(provider, capabilities) {
     provider?.lightModel,
     provider?.mediumModel,
     provider?.heavyModel,
+    provider?.ultraModel,
     provider?.fallbackModel,
   ].filter((model) => typeof model === 'string' && model))];
   const modelHardwareCompatibility = Object.fromEntries(modelIds.map((model) => {
