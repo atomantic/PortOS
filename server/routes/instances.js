@@ -12,6 +12,7 @@ import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
+import * as tailcatPeer from '../services/tailcatPeer.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { federatedMediaPeerSettingsSchema, validateRequest } from '../lib/validation.js';
 
@@ -245,6 +246,24 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
     // reaching them, not theirs to receive.
     peer: instances.redactPeerForWire(result.peer)
   });
+}));
+
+const addTailcatPeerSchema = z.object({
+  tcAddress: z.string().min(24).max(2048),
+  name: z.string().optional(),
+  auth: peerAuthSchema
+});
+
+// POST /api/instances/peers/tailcat — add a peer via tailcat forward (no Tailscale account).
+// Starts `tailcat forward <tc> LOCAL:5555` (LOCAL defaults to 15555) and registers
+// a loopback peer. The classic POST /peers path still rejects 127/8.
+router.post('/peers/tailcat', asyncHandler(async (req, res) => {
+  const data = addTailcatPeerSchema.parse(req.body);
+  if (!tailcatPeer.isValidTcAddress(data.tcAddress)) {
+    throw new ServerError('Invalid tailcat address — paste a tc… address from the peer', { status: 400 });
+  }
+  const peer = await tailcatPeer.addPeerViaTailcat(data);
+  res.status(201).json(instances.sanitizePeerForClient(peer));
 }));
 
 // POST /api/instances/peers — add a peer

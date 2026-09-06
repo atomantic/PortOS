@@ -14,7 +14,7 @@ import Pill from '../components/ui/Pill';
 import EmptyState from '../components/EmptyState';
 import socket from '../services/socket';
 import {
-  getInstances, updateSelfInstance, addPeer, updatePeer,
+  getInstances, updateSelfInstance, addPeer, addTailcatPeer, updatePeer,
   removePeer, connectPeer, reciprocatePeer, probePeer, syncPeer, getTailnetInfo,
   getNetworkExposure,
   listPeerSubscriptions,
@@ -24,7 +24,7 @@ import {
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
-import { DEFAULT_PEER_PORT } from '../lib/ports.js';
+import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT } from '../lib/ports.js';
 import PeerMediaProviderPanel from '../components/instances/PeerMediaProviderPanel';
 import UnattendedRenderRouting from '../components/instances/UnattendedRenderRouting';
 import BrainParityPanel from '../components/instances/BrainParityPanel';
@@ -207,7 +207,9 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
 // Exported for focused tests (the port input's placeholder must advertise the
 // same default the form actually submits — see Instances.test.jsx).
 export function AddPeerForm({ onAdd, addressRef }) {
+  const [mode, setMode] = useState('classic'); // 'classic' | 'tailcat'
   const [address, setAddress] = useState('');
+  const [tcAddress, setTcAddress] = useState('');
   const [port, setPort] = useState(String(DEFAULT_PEER_PORT));
   const [name, setName] = useState('');
   const [showAuth, setShowAuth] = useState(false);
@@ -217,6 +219,24 @@ export function AddPeerForm({ onAdd, addressRef }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (mode === 'tailcat') {
+      if (!tcAddress.trim()) return;
+      setAdding(true);
+      const data = { tcAddress: tcAddress.trim() };
+      if (name.trim()) data.name = name.trim();
+      if (password) data.auth = { username: username.trim(), password };
+      const result = await addTailcatPeer(data).catch(() => null);
+      setAdding(false);
+      if (!result) return;
+      setTcAddress('');
+      setName('');
+      setUsername('');
+      setPassword('');
+      setShowAuth(false);
+      onAdd();
+      toast.success(`Peer added via tailcat (local :${result.port || DEFAULT_TAILCAT_LOCAL_PORT})`);
+      return;
+    }
     if (!address.trim()) return;
     setAdding(true);
     const data = { address: address.trim(), port: parseInt(port, 10) || DEFAULT_PEER_PORT };
@@ -237,11 +257,58 @@ export function AddPeerForm({ onAdd, addressRef }) {
     toast.success('Peer added');
   };
 
+  const canSubmit = mode === 'tailcat' ? !!tcAddress.trim() : !!address.trim();
+
   return (
     <form onSubmit={handleSubmit} className="bg-port-card border border-port-border rounded-xl p-5">
       <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3 flex items-center gap-2">
         <Plus size={14} /> Add Peer
       </h3>
+      <div className="flex flex-wrap gap-2 mb-3">
+        <button
+          type="button"
+          aria-pressed={mode === 'classic'}
+          onClick={() => setMode('classic')}
+          className={`text-xs px-2.5 py-1 rounded border transition-colors ${mode === 'classic' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
+        >
+          Host / port
+        </button>
+        <button
+          type="button"
+          aria-pressed={mode === 'tailcat'}
+          onClick={() => setMode('tailcat')}
+          className={`text-xs px-2.5 py-1 rounded border transition-colors ${mode === 'tailcat' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
+        >
+          Tailcat address
+        </button>
+      </div>
+      {mode === 'tailcat' ? (
+        <div className="flex flex-wrap gap-2">
+          <input
+            ref={addressRef}
+            aria-label="Tailcat address"
+            value={tcAddress}
+            onChange={e => setTcAddress(e.target.value)}
+            placeholder="tcEXAMPLE…"
+            required
+            className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[200px] font-mono"
+          />
+          <input
+            aria-label="Peer name"
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder="Name (optional)"
+            className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[120px]"
+          />
+          <button
+            type="submit"
+            disabled={adding || !canSubmit}
+            className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium transition-colors"
+          >
+            {adding ? 'Connecting...' : 'Add via tailcat'}
+          </button>
+        </div>
+      ) : (
       <div className="flex flex-wrap gap-2">
         <input
           ref={addressRef}
@@ -272,12 +339,20 @@ export function AddPeerForm({ onAdd, addressRef }) {
         />
         <button
           type="submit"
-          disabled={adding || !address.trim()}
+          disabled={adding || !canSubmit}
           className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium transition-colors"
         >
           {adding ? 'Adding...' : 'Add'}
         </button>
       </div>
+      )}
+      {mode === 'tailcat' && (
+        <p className="text-[11px] text-gray-500 mt-2 leading-snug">
+          Forwards <span className="font-mono text-gray-400">127.0.0.1:{DEFAULT_TAILCAT_LOCAL_PORT}</span>
+          {' '}→ remote <span className="font-mono text-gray-400">:5555</span> via tailcat
+          (next free port if {DEFAULT_TAILCAT_LOCAL_PORT} is busy). No Tailscale account required.
+        </p>
+      )}
       <div className="mt-2">
         <button
           type="button"
@@ -1195,6 +1270,11 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
       <div className="mb-3">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-xs text-gray-500 font-mono">{peer.address}:{peer.port}</p>
+          {peer.transport === 'tailcat' && (
+            <Pill tone="accent" size="xs" bordered={false} title="Reachable via local tailcat forward (no Tailscale account)">
+              tailcat
+            </Pill>
+          )}
           <DirectionBadge directions={peer.directions} />
           {isInboundOnly && (
             <button

@@ -8507,6 +8507,14 @@
     },
     {
       "method": "POST",
+      "path": "/api/instances/peers/tailcat",
+      "mountPath": "/api/instances",
+      "sources": [
+        "server/routes/instances.js"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/instances/provision-cert",
       "mountPath": "/api/instances",
       "sources": [
@@ -17820,8 +17828,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2207,
-    "declarations": 2215,
+    "operations": 2208,
+    "declarations": 2216,
     "sourceFiles": 233
   }
 }

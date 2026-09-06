@@ -8,4 +8,9 @@
  * top of that. Use these instead of re-hardcoding a port literal in a form
  * default, a copy-paste help string, or a cross-machine URL.
  */
-export { PORTS, DEFAULT_PEER_PORT } from '../../../server/lib/ports.js';
+export {
+  PORTS,
+  DEFAULT_PEER_PORT,
+  DEFAULT_TAILCAT_LOCAL_PORT,
+  DEFAULT_TAILCAT_REMOTE_PORT,
+} from '../../../server/lib/ports.js';

@@ -817,7 +817,13 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       // failures also surface in the UI.
       setupProcessErrorHandlers: () => setupProcessErrorHandlers(io),
       backfillOriginInstanceId,
-      startPolling,
+      startPolling: () => {
+        startPolling();
+        // Best-effort: re-attach tailcat forwards persisted across restarts.
+        void import('./tailcatPeer.js')
+          .then(({ restoreForwards }) => restoreForwards())
+          .catch((err) => console.log(`⚠️ tailcat forward restore failed: ${err.message}`));
+      },
       initSyncOrchestrator
     }))
   });
