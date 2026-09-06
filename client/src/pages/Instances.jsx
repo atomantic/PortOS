@@ -210,6 +210,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
   const [mode, setMode] = useState('classic'); // 'classic' | 'tailcat'
   const [address, setAddress] = useState('');
   const [tcAddress, setTcAddress] = useState('');
+  const [tailcatHttps, setTailcatHttps] = useState(false);
   const [port, setPort] = useState(String(DEFAULT_PEER_PORT));
   const [name, setName] = useState('');
   const [showAuth, setShowAuth] = useState(false);
@@ -223,6 +224,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
       if (!tcAddress.trim()) return;
       setAdding(true);
       const data = { tcAddress: tcAddress.trim() };
+      if (tailcatHttps) data.protocol = 'https';
       if (name.trim()) data.name = name.trim();
       if (password) data.auth = { username: username.trim(), password };
       const result = await addTailcatPeer(data).catch(() => null);
@@ -268,6 +270,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
         <button
           type="button"
           aria-pressed={mode === 'classic'}
+          disabled={adding}
           onClick={() => setMode('classic')}
           className={`text-xs px-2.5 py-1 rounded border transition-colors ${mode === 'classic' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
         >
@@ -276,6 +279,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
         <button
           type="button"
           aria-pressed={mode === 'tailcat'}
+          disabled={adding}
           onClick={() => setMode('tailcat')}
           className={`text-xs px-2.5 py-1 rounded border transition-colors ${mode === 'tailcat' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
         >
@@ -347,11 +351,19 @@ export function AddPeerForm({ onAdd, addressRef }) {
       </div>
       )}
       {mode === 'tailcat' && (
-        <p className="text-[11px] text-gray-500 mt-2 leading-snug">
-          Forwards <span className="font-mono text-gray-400">127.0.0.1:{DEFAULT_TAILCAT_LOCAL_PORT}</span>
-          {' '}→ remote <span className="font-mono text-gray-400">:5555</span> via tailcat
-          (next free port if {DEFAULT_TAILCAT_LOCAL_PORT} is busy). No Tailscale account required.
-        </p>
+        <>
+          <label htmlFor="tailcat-https" className="flex items-center gap-2 text-sm text-gray-400 mt-3">
+            <input id="tailcat-https" type="checkbox" checked={tailcatHttps}
+              onChange={e => setTailcatHttps(e.target.checked)} disabled={adding} />
+            Remote PortOS uses HTTPS
+          </label>
+          <p className="text-[11px] text-gray-500 mt-2 leading-snug">
+            Forwards <span className="font-mono text-gray-400">127.0.0.1:{DEFAULT_TAILCAT_LOCAL_PORT}</span>
+            {' '}→ remote <span className="font-mono text-gray-400">:5555</span> via tailcat
+            (next free port if {DEFAULT_TAILCAT_LOCAL_PORT} is busy). No Tailscale account required.
+            Tailcat is installed with Go if needed.
+          </p>
+        </>
       )}
       <div className="mt-2">
         <button

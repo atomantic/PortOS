@@ -25,11 +25,18 @@ No `tailcat serve all`, no exit-node mode, and no Tailscale daemon are used.
 2. Paste the peer's `tc…` address (received out of band).
 3. PortOS ensures `tailcat` is installed (PATH, else `go install
    github.com/tailscale/tailcat/cmd/tailcat@latest`), starts the forward, and
-   calls the normal peer registration against `127.0.0.1:<localPort>` over HTTP.
+   calls the normal peer registration against `127.0.0.1:<localPort>`.
+   Select **Remote PortOS uses HTTPS** if the remote install has enabled TLS.
 4. Classic **Host / port** add remains unchanged (still rejects loopback).
 
+HTTP is the default; HTTPS runs through the same loopback tunnel. Remote
+announcements cannot replace the managed local host or forwarding port.
+
 Forwards are persisted in machine-local `data/tailcat-forwards.json` so PortOS
-can restart them on boot. The full `tc…` string is a bearer capability — it is
+can restart them on boot. Startup waits for the CLI to confirm its local listener;
+this confirms the tunnel listener, not the remote PortOS health. A failed metadata
+write rolls back the new peer. Graceful shutdown stops forwards while retaining
+their restart metadata. The full `tc…` string is a bearer capability — it is
 **never** logged in full, never placed on the peer record returned to the UI or
 to other peers, and must never appear in commits, PR bodies, docs, or tests.
 Use placeholders such as `<tcADDR>` or `tcEXAMPLE…` only.

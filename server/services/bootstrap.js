@@ -882,6 +882,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // microseconds from now — and its exit handler must already know the PTY
     // died because PortOS is going down, not because the agent finished (#3202).
     markHostShuttingDown();
+    await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
+      .catch(() => console.error('❌ Tailcat forward shutdown failed'));
     // Disarm the idle reaper before anything awaits: a sweep that fires mid
     // -shutdown would `pm2 stop` a model server the user never asked to lose,
     // and PortOS is about to stop being the thing that could restart it.

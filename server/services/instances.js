@@ -157,7 +157,8 @@ export function sanitizePeerForClient(peer) {
   // separately, so masking here would hide the stored selection: every box on a
   // `syncEnabled: false` peer would read unchecked, and ticking one would
   // silently reactivate every other category still true underneath it.
-  return { ...peer, auth, syncCategories: resolveEffectiveCategories(peer, { masterSwitch: false }) };
+  const { tcAddress: _tcAddress, ...safePeer } = peer;
+  return { ...safePeer, auth, syncCategories: resolveEffectiveCategories(peer, { masterSwitch: false }) };
 }
 
 // Default data shape
@@ -472,7 +473,7 @@ const PER_RECORD_CATEGORY_KINDS = Object.freeze([
   ['creativeCommissions', 'creativeCommission'],
 ]);
 
-export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth, transport }) {
+export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth, transport, protocol = 'http' }) {
   const peer = await withData(async (data) => {
     const normalizedHost = validHost(host);
     const normalizedAuth = sanitizePeerAuth(auth);
@@ -493,7 +494,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       name: validName(name, normalizedHost || address),
       // Optional transport marker (e.g. 'tailcat'). Never carries the tc address —
       // that capability lives only in data/tailcat-forwards.json.
-      ...(transport === 'tailcat' ? { transport: 'tailcat' } : {}),
+      ...(transport === 'tailcat' ? { transport: 'tailcat', protocol: protocol === 'https' ? 'https' : 'http' } : {}),
       instanceId: null,
       addedAt: new Date().toISOString(),
       lastSeen: null,
@@ -524,14 +525,13 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
   return peer;
 }
 
-export async function removePeer(id, { cleanupForward = true } = {}) {
+export async function removePeer(id, { stopTransport = true } = {}) {
   disconnectFromPeer(id);
-  // Tear down a managed tailcat forward if this peer was added via tc address.
-  // Dynamic import avoids a static cycle with tailcatPeer → addPeer.
-  const data = await loadData();
-  if (cleanupForward && data.peers.some(peer => peer.id === id && peer.transport === 'tailcat')) {
-    await import('./tailcatPeer.js')
-      .then(({ stopForwardForPeer }) => stopForwardForPeer(id));
+  // Retire the transport outside the data lock: its lifecycle may itself need
+  // that lock when rolling back a failed add. Keep the peer on retirement errors.
+  if (stopTransport && (await getPeers()).some(peer => peer.id === id && peer.transport === 'tailcat')) {
+    const { stopForwardForPeer } = await import('./tailcatPeer.js');
+    await stopForwardForPeer(id);
   }
   const removed = await withData(async (data) => {
     const idx = data.peers.findIndex(p => p.id === id);
@@ -654,7 +654,7 @@ export async function updatePeer(id, updates) {
         console.log(`🌐 Remote media provider ${next.enabled ? 'enabled' : 'disabled'}: ${peer.name}`);
       }
     }
-    if (updates.host !== undefined) {
+    if (peer.transport !== 'tailcat' && updates.host !== undefined) {
       const normalized = validHost(updates.host);
       if (normalized !== undefined && normalized !== peer.host) {
         peer.host = normalized; // null clears, string sets
@@ -946,6 +946,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       existing.lastSeen = new Date().toISOString();
       existing.status = 'online';
       existing.instanceId = instanceId;
+      // A managed forward uses local coordinates, not the remote listen port.
       if (existing.transport !== 'tailcat') existing.port = port;
       // Only auto-update name if still an IP address (preserve user-set names)
       const sanitized = validName(name, null);
@@ -956,7 +957,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       // AND the user hasn't manually intervened. The hostManual flag covers
       // the "user explicitly cleared this — stay on IP" case that the
       // existing.host check alone can't distinguish from "never set".
-      if (normalizedHost && !existing.host && !existing.hostManual) {
+      if (existing.transport !== 'tailcat' && normalizedHost && !existing.host && !existing.hostManual) {
         existing.host = normalizedHost;
         console.log(`🌐 Peer host learned via announce: ${existing.name} → ${normalizedHost}`);
       }

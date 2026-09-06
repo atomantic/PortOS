@@ -4,7 +4,7 @@
  *
  * Flow: ensure the `tailcat` CLI is installed → start
  * `tailcat forward <tcADDR> LOCAL:5555` (preferred LOCAL=15555) → register a
- * normal peer at `127.0.0.1:LOCAL` over HTTP.
+ * normal peer at `127.0.0.1:LOCAL` over HTTP or explicitly selected HTTPS.
  *
  * The tc address is a bearer capability. Persist it only in the machine-local
  * forwards file for restart; never log the full value, never put it on the peer
@@ -15,6 +15,7 @@ import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
+import { createLineReader } from '../lib/streamLines.js';
 import { commandExists } from '../lib/commandExists.js';
 import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
@@ -24,7 +25,7 @@ import {
   DEFAULT_TAILCAT_REMOTE_PORT,
 } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { addPeer, removePeer as removeInstancePeer } from './instances.js';
+import { addPeer, getPeers, removePeer as removeInstancePeer } from './instances.js';
 
 const FORWARDS_FILE = dataPath('tailcat-forwards.json');
 const GO_INSTALL_PKG = 'github.com/tailscale/tailcat/cmd/tailcat@latest';
@@ -34,6 +35,9 @@ const PORT_SCAN_LIMIT = 32;
 const DEFAULT_DATA = { version: 1, forwards: [] };
 
 const withLock = createMutex();
+const withLifecycle = createMutex();
+const ownedChildren = new Set();
+let shuttingDown = false;
 
 /** @type {Map<string, { child: import('node:child_process').ChildProcess, localPort: number, remotePort: number }>} */
 const liveForwards = new Map();
@@ -60,7 +64,12 @@ export function isValidTcAddress(tc) {
 }
 
 async function loadForwards() {
-  return await readJSONFile(FORWARDS_FILE, DEFAULT_DATA, { strict: false });
+  const data = await readJSONFile(FORWARDS_FILE, DEFAULT_DATA, { strict: true, logError: false })
+    .catch(() => { throw new ServerError('Could not read tailcat forward storage', { status: 503 }); });
+  if (data?.version !== 1 || !Array.isArray(data.forwards)) {
+    throw new ServerError('Invalid tailcat forward storage', { status: 503 });
+  }
+  return data;
 }
 
 async function saveForwards(data) {
@@ -122,7 +131,7 @@ export async function ensureTailcatInstalled({
     await runGoInstall(goBin);
   } catch (err) {
     throw new ServerError(
-      `Failed to install tailcat via go install: ${err.message}. `
+      'Failed to install tailcat via go install. '
       + 'Install a release binary from https://github.com/tailscale/tailcat/releases and retry.',
       { status: 503, code: 'TAILCAT_INSTALL_FAILED' }
     );
@@ -220,56 +229,45 @@ export async function startForwardProcess({
 } = {}) {
   if (!isValidTcAddress(tcAddress)) {
     throw new ServerError('Invalid tailcat address — paste a tc… address from the peer', {
-      status: 400,
-      code: 'TAILCAT_BAD_ADDRESS',
+      status: 400, code: 'TAILCAT_BAD_ADDRESS',
     });
   }
-  const mapping = `${localPort}:${remotePort}`;
-  const args = ['forward', tcAddress.trim(), mapping];
-  const child = spawnFn(
-    bin,
-    args,
-    safeChildProcessOptions({
-      env: safeChildProcessEnv(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-  );
-
-  // Diagnostics can split or repeat bearer capabilities across chunks. Never
-  // propagate them; recognize only the CLI's listener-ready line.
+  if (shuttingDown) throw new Error('PortOS is shutting down');
+  const child = spawnFn(bin, ['forward', '--bind=127.0.0.1', tcAddress.trim(), `${localPort}:${remotePort}`],
+    safeChildProcessOptions({ env: safeChildProcessEnv(), stdio: ['ignore', 'pipe', 'pipe'] }));
+  ownedChildren.add(child);
   child.stdout?.on('data', () => {});
   await new Promise((resolve, reject) => {
     let settled = false;
-    let pending = '';
+    let reader;
     const finish = (error) => {
       if (settled) return;
       settled = true;
-      pending = '';
       clearTimeout(timer);
-      child.stderr?.removeListener('data', onData);
-      child.stderr?.on('data', () => {});
+      reader = null;
+      // Diagnostics can contain the bearer capability, including across chunks.
+      // Drain them, but never expose them in errors or retain them after startup.
       if (error) {
-        try { child.kill('SIGTERM'); } catch { /* process already gone */ }
+        try { child.kill('SIGTERM'); } catch { /* process event boundary */ }
         reject(error);
       } else resolve();
     };
-    const onData = (chunk) => {
-      pending = (pending + String(chunk)).slice(-4096);
-      if (pending.includes(`forwarding 127.0.0.1:${localPort} -> remote localhost:${remotePort}`)) {
-        finish();
-      }
-    };
     const timer = setTimeout(() => finish(new Error('tailcat listener startup timed out')), readyMs);
-    child.stderr?.on('data', onData);
+    reader = createLineReader((line) => {
+      if (line.endsWith(`forwarding 127.0.0.1:${localPort} -> remote localhost:${remotePort}`)) finish();
+    }, { maxCarry: 4096 });
+    child.stderr?.on('data', (chunk) => reader?.push(chunk));
     child.on('error', () => finish(new Error('tailcat forward process failed')));
-    child.once('exit', (code, signal) => finish(new Error(
-      `tailcat forward exited early (code=${code}, signal=${signal})`
-    )));
+    child.once('exit', (code, signal) => {
+      ownedChildren.delete(child);
+      finish(new Error(`tailcat forward exited early (code=${code}, signal=${signal})`));
+    });
+  }).catch((error) => {
+    ownedChildren.delete(child);
+    throw error;
   });
 
-  console.log(
-    `🐈 tailcat forward started ${redactTcAddress(tcAddress)} → 127.0.0.1:${localPort} (remote :${remotePort})`
-  );
+  console.log(`🐈 tailcat forward listening on 127.0.0.1:${localPort} (remote :${remotePort})`);
   return child;
 }
 
@@ -290,7 +288,11 @@ async function forgetForward(peerId) {
   });
 }
 
-export async function stopForwardForPeer(peerId) {
+export function stopForwardForPeer(peerId) {
+  return withLifecycle(() => stopForward(peerId));
+}
+
+async function stopForward(peerId) {
   const live = liveForwards.get(peerId);
   if (live?.child && !live.child.killed) {
     try {
@@ -299,8 +301,8 @@ export async function stopForwardForPeer(peerId) {
       // best-effort
     }
   }
-  liveForwards.delete(peerId);
   await forgetForward(peerId);
+  liveForwards.delete(peerId);
 }
 
 /**
@@ -308,10 +310,15 @@ export async function stopForwardForPeer(peerId) {
  * forward, then register a classic loopback peer. Loopback is intentional here
  * — the public POST /peers schema still rejects 127/8 for classic adds.
  */
-export async function addPeerViaTailcat({
+export function addPeerViaTailcat(options = {}) {
+  return withLifecycle(() => addTailcatPeer(options));
+}
+
+async function addTailcatPeer({
   tcAddress,
   name,
   auth,
+  protocol = 'http',
   ensureInstalled = ensureTailcatInstalled,
   allocatePort = allocateLocalPort,
   startForward = startForwardProcess,
@@ -327,6 +334,7 @@ export async function addPeerViaTailcat({
     });
   }
 
+  if (shuttingDown) throw new Error('PortOS is shutting down');
   const { bin } = await ensureInstalled();
   const localPort = await allocatePort();
   const remotePort = DEFAULT_TAILCAT_REMOTE_PORT;
@@ -341,25 +349,23 @@ export async function addPeerViaTailcat({
     );
   }
 
+  ownedChildren.add(child);
+  child.once('exit', () => ownedChildren.delete(child));
   let peer;
   try {
+    if (shuttingDown) throw new Error('PortOS is shutting down');
     peer = await addPeerFn({
       address: '127.0.0.1',
       port: localPort,
       name: name || `tailcat:${redactTcAddress(trimmed)}`,
       auth,
       transport: 'tailcat',
+      protocol,
     });
   } catch (err) {
     try { child.kill('SIGTERM'); } catch { /* ignore */ }
     throw err;
   }
-
-  liveForwards.set(peer.id, { child, localPort, remotePort });
-  child.on('exit', () => {
-    if (liveForwards.get(peer.id)?.child === child) liveForwards.delete(peer.id);
-    console.log(`🐈 tailcat forward stopped for peer ${peer.id} (${redactTcAddress(trimmed)})`);
-  });
 
   await persistForwardEntry({
     peerId: peer.id,
@@ -367,22 +373,38 @@ export async function addPeerViaTailcat({
     localPort,
     remotePort,
     createdAt: new Date().toISOString(),
-  }).catch(async (error) => {
+  }).then(() => {
+    if (shuttingDown) throw new Error('PortOS is shutting down');
+  }).catch(async () => {
     child.kill('SIGTERM');
-    liveForwards.delete(peer.id);
-    // The failed mapping write must not be retried before removing the peer.
-    await removePeerFn(peer.id, { cleanupForward: false });
-    throw error;
+    // removePeer skips transport cleanup here: this lifecycle operation already
+    // owns the child and the queue, so re-entering it would deadlock.
+    await removePeerFn(peer.id, { stopTransport: false });
+    throw new ServerError('Could not save tailcat forward; peer creation rolled back', {
+      status: 503, code: 'TAILCAT_PERSIST_FAILED',
+    });
+  });
+
+  liveForwards.set(peer.id, { child, localPort, remotePort });
+  child.on('exit', () => {
+    if (liveForwards.get(peer.id)?.child === child) liveForwards.delete(peer.id);
+    console.log(`🐈 tailcat forward stopped for peer ${peer.id} (${redactTcAddress(trimmed)})`);
   });
 
   return peer;
 }
 
 /** Restart persisted forwards after PortOS boot (best-effort). */
-export async function restoreForwards({
+export function restoreForwards(options = {}) {
+  return withLifecycle(() => restoreTailcatForwards(options));
+}
+
+async function restoreTailcatForwards({
   ensureInstalled = ensureTailcatInstalled,
   startForward = startForwardProcess,
+  getPeersFn = getPeers,
 } = {}) {
+  if (shuttingDown) return { restored: 0 };
   const data = await loadForwards();
   const forwards = Array.isArray(data.forwards) ? data.forwards : [];
   if (forwards.length === 0) return { restored: 0 };
@@ -395,9 +417,16 @@ export async function restoreForwards({
     return { restored: 0, error: err.message };
   }
 
+  const peers = await getPeersFn();
   let restored = 0;
   for (const entry of forwards) {
+    if (shuttingDown) break;
     if (!entry?.peerId || !isValidTcAddress(entry.tcAddress)) continue;
+    // A stale entry must never resurrect a removed peer or reuse another route.
+    if (!peers.some((peer) => peer.id === entry.peerId && peer.transport === 'tailcat'
+      && peer.address === '127.0.0.1' && peer.port === entry.localPort)) continue;
+    if (!Number.isInteger(entry.localPort) || entry.localPort < 1024 || entry.localPort > 65535
+      || entry.remotePort !== DEFAULT_TAILCAT_REMOTE_PORT) continue;
     if (liveForwards.has(entry.peerId)) continue;
     try {
       const child = await startForward({
@@ -416,24 +445,27 @@ export async function restoreForwards({
       });
       restored += 1;
     } catch (err) {
-      console.log(`⚠️ tailcat restore failed for peer ${entry.peerId}: ${err.message}`);
+      console.log(`⚠️ tailcat restore failed for peer ${entry.peerId}`);
     }
   }
   if (restored > 0) console.log(`🐈 Restored ${restored} tailcat forward(s)`);
   return { restored };
 }
 
-/**
- * Remove a peer and tear down its forward when present. Prefer this over a
- * bare removePeer for any peer that may have been added via tailcat.
- */
-export async function removePeerAndForward(peerId, { removePeerFn = removeInstancePeer } = {}) {
-  await stopForwardForPeer(peerId);
-  return removePeerFn(peerId);
+/** Stop server-owned children on shutdown; keep mappings for the next boot. */
+export function stopAllForwards() {
+  shuttingDown = true;
+  for (const child of new Set([...ownedChildren, ...[...liveForwards.values()].map((live) => live.child)])) {
+    child.kill('SIGTERM');
+  }
+  ownedChildren.clear();
+  liveForwards.clear();
 }
 
 // Test-only helpers
 export function _resetLiveForwardsForTests() {
+  stopAllForwards();
+  shuttingDown = false;
   liveForwards.clear();
 }
 

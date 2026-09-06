@@ -69,7 +69,17 @@ describe('AddPeerForm tailcat path', () => {
     expect(addPeer).not.toHaveBeenCalled();
   });
 
-  it('keeps classic host/port add working', async () => {
+  it('sends HTTPS selection for a remote TLS install', async () => {
+    render(<AddPeerForm onAdd={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Tailcat address' }));
+    const tc = 'tcEXAMPLE' + 'B'.repeat(40);
+    fireEvent.change(screen.getByLabelText('Tailcat address'), { target: { value: tc } });
+    fireEvent.click(screen.getByLabelText('Remote PortOS uses HTTPS'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add via tailcat' }));
+    await waitFor(() => expect(addTailcatPeer).toHaveBeenCalledWith({ tcAddress: tc, protocol: 'https' }));
+  });
+
+  it('keeps classic host/port add working' , async () => {
     render(<AddPeerForm onAdd={() => {}} />);
     fireEvent.change(screen.getByLabelText('Peer address'), { target: { value: '192.0.2.10' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));

@@ -11,6 +11,7 @@ vi.mock('../services/syncOrchestrator.js', () => ({
 }));
 vi.mock('../services/instances.js', () => ({
   updatePeer: vi.fn(),
+  addPeer: vi.fn(),
   sanitizePeerForClient: vi.fn((peer) => peer),
   getAssignableInstances: vi.fn(),
 }));
@@ -27,6 +28,11 @@ vi.mock('../lib/tailscale.js', () => ({
 import { getSyncStatus } from '../services/syncOrchestrator.js';
 import * as instances from '../services/instances.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
+vi.mock('../services/tailcatPeer.js', async (original) => ({
+  ...(await original()),
+  addPeerViaTailcat: vi.fn(),
+}));
+import { addPeerViaTailcat } from '../services/tailcatPeer.js';
 import instancesRoutes from './instances.js';
 
 const buildApp = () => {
@@ -190,5 +196,38 @@ describe('PUT /api/instances/peers/:id — media provider selection', () => {
 
     expect(res.status).toBe(400);
     expect(instances.updatePeer).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/instances/peers/tailcat', () => {
+  const tcAddress = 'tcEXAMPLE' + 'A'.repeat(40);
+  beforeEach(() => vi.clearAllMocks());
+
+  it('passes the selected HTTPS protocol and credentials through the managed transport', async () => {
+    const peer = { id: 'peer-example', transport: 'tailcat', address: '127.0.0.1', port: 15555, protocol: 'https' };
+    addPeerViaTailcat.mockResolvedValue(peer);
+    const auth = { password: 'example-password' };
+    const res = await request(buildApp()).post('/api/instances/peers/tailcat')
+      .send({ tcAddress: ` ${tcAddress} `, protocol: 'https', auth });
+    expect(res.status).toBe(201);
+    expect(addPeerViaTailcat).toHaveBeenCalledWith({ tcAddress, protocol: 'https', auth });
+    expect(instances.sanitizePeerForClient).toHaveBeenCalledWith(peer);
+    expect(res.body).toEqual(peer);
+  });
+
+  it('rejects invalid addresses and protocols without starting a transport', async () => {
+    for (const body of [{ tcAddress: 'invalid' }, { tcAddress, protocol: 'file' }]) {
+      const res = await request(buildApp()).post('/api/instances/peers/tailcat').send(body);
+      expect(res.status).toBe(400);
+    }
+    expect(addPeerViaTailcat).not.toHaveBeenCalled();
+  });
+
+  it('keeps the classic loopback guard in force', async () => {
+    const res = await request(buildApp()).post('/api/instances/peers')
+      .send({ address: '127.0.0.1', port: 15555, transport: 'tailcat' });
+    expect(res.status).toBe(400);
+    expect(instances.addPeer).not.toHaveBeenCalled();
+    expect(addPeerViaTailcat).not.toHaveBeenCalled();
   });
 });

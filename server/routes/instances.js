@@ -249,7 +249,8 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
 }));
 
 const addTailcatPeerSchema = z.object({
-  tcAddress: z.string().min(24).max(2048),
+  tcAddress: z.string().trim().min(24).max(2048),
+  protocol: z.enum(['http', 'https']).default('http'),
   name: z.string().optional(),
   auth: peerAuthSchema
 });
@@ -258,7 +259,7 @@ const addTailcatPeerSchema = z.object({
 // Starts `tailcat forward <tc> LOCAL:5555` (LOCAL defaults to 15555) and registers
 // a loopback peer. The classic POST /peers path still rejects 127/8.
 router.post('/peers/tailcat', asyncHandler(async (req, res) => {
-  const data = addTailcatPeerSchema.parse(req.body);
+  const data = validateRequest(addTailcatPeerSchema, req.body);
   if (!tailcatPeer.isValidTcAddress(data.tcAddress)) {
     throw new ServerError('Invalid tailcat address — paste a tc… address from the peer', { status: 400 });
   }
@@ -268,7 +269,7 @@ router.post('/peers/tailcat', asyncHandler(async (req, res) => {
 
 // POST /api/instances/peers — add a peer
 router.post('/peers', asyncHandler(async (req, res) => {
-  const data = addPeerSchema.parse(req.body);
+  const data = validateRequest(addPeerSchema, req.body);
   // Reject invalid DNS names up front so the UI gets a clear error instead of
   // addPeer() silently dropping the field (validHost returns undefined for invalid input).
   if (data.host !== undefined && data.host !== null && data.host !== '') {

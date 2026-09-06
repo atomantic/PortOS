@@ -2,6 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { peerBaseUrl } from './peerUrl.js';
 
 describe('peerBaseUrl', () => {
+  it('keeps tailcat HTTPS on the managed local endpoint even when a host is present', () => {
+    expect(peerBaseUrl({ transport: 'tailcat', protocol: 'https', address: '127.0.0.1', port: 15555, host: 'peer.example.com' }))
+      .toBe('https://127.0.0.1:15555');
+  });
+
+  it('preserves HTTP for legacy tailcat peers without a protocol', () => {
+    expect(peerBaseUrl({ transport: 'tailcat', address: '127.0.0.1', port: 15556 }))
+      .toBe('http://127.0.0.1:15556');
+  });
+
   it('builds an https URL when peer.host is present', () => {
     expect(peerBaseUrl({ host: 'box.tail-net.ts.net', port: 5555 }))
       .toBe('https://box.tail-net.ts.net:5555');

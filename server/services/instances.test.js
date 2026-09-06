@@ -45,6 +45,10 @@ vi.mock('./peerSocketRelay.js', () => ({
   disconnectFromPeer: vi.fn()
 }));
 
+vi.mock('./tailcatPeer.js', () => ({
+  stopForwardForPeer: vi.fn().mockResolvedValue(undefined)
+}));
+
 vi.mock('../lib/ports.js', () => ({
   DEFAULT_PEER_PORT: 5555
 }));
@@ -55,6 +59,7 @@ vi.mock('../lib/tailscale.js', () => ({
 
 // fetch is stubbed per-test in beforeEach and restored in afterEach
 
+import { stopForwardForPeer } from './tailcatPeer.js';
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { instanceEvents } from './instanceEvents.js';
@@ -283,6 +288,18 @@ describe('instances.js', () => {
   });
 
   describe('addPeer', () => {
+    it('persists the tailcat protocol without changing classic peer records', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [] });
+      const secure = await addPeer({ address: '127.0.0.1', port: 15555, transport: 'tailcat', protocol: 'https' });
+      const plain = await addPeer({ address: '127.0.0.1', port: 15556, transport: 'tailcat' });
+      const classic = await addPeer({ address: '192.0.2.10', protocol: 'https' });
+
+      expect(secure).toMatchObject({ transport: 'tailcat', protocol: 'https' });
+      expect(plain).toMatchObject({ transport: 'tailcat', protocol: 'http' });
+      expect(classic).not.toHaveProperty('protocol');
+      expect(atomicWrite).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ peers: [secure, plain, classic] }));
+    });
+
     it('should add a peer with correct defaults', async () => {
       readJSONFile.mockResolvedValue({ self: null, peers: [] });
       fetch.mockRejectedValue(new Error('not reachable'));
@@ -411,8 +428,32 @@ describe('instances.js', () => {
       const removed = await removePeer('peer-1');
 
       expect(removed).toMatchObject({ id: 'peer-1', name: 'host1' });
+      expect(stopForwardForPeer).not.toHaveBeenCalled();
       expect(disconnectFromPeer).toHaveBeenCalledWith('peer-1');
       expect(instanceEvents.emit).toHaveBeenCalledWith('peers:updated', expect.any(Array));
+    });
+
+    it('keeps a tailcat peer recoverable when forward retirement fails, then removes it on retry', async () => {
+      const peer = { id: 'tailcat-peer', transport: 'tailcat', address: '127.0.0.1', port: 15555 };
+      const peers = [peer];
+      readJSONFile.mockResolvedValue({ self: null, peers });
+      stopForwardForPeer.mockRejectedValueOnce(new Error('forward metadata write failed'));
+
+      await expect(removePeer(peer.id)).rejects.toThrow('forward metadata write failed');
+      expect(peers).toEqual([peer]);
+      expect(atomicWrite).not.toHaveBeenCalled();
+
+      await expect(removePeer(peer.id)).resolves.toEqual(peer);
+      expect(stopForwardForPeer).toHaveBeenCalledWith(peer.id);
+      expect(peers).toEqual([]);
+    });
+
+    it('allows transport-owned rollback without re-entering transport cleanup', async () => {
+      const peer = { id: 'tailcat-peer', transport: 'tailcat' };
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+
+      await expect(removePeer(peer.id, { stopTransport: false })).resolves.toEqual(peer);
+      expect(stopForwardForPeer).not.toHaveBeenCalled();
     });
 
     it('should return null for non-existent peer', async () => {
@@ -474,6 +515,12 @@ describe('instances.js', () => {
   });
 
   describe('sanitizePeerForClient', () => {
+    it('never exposes a legacy tailcat capability on either wire surface', () => {
+      const peer = { id: 'peer-example', tcAddress: 'tcEXAMPLE' + 'A'.repeat(40) };
+      expect(sanitizePeerForClient(peer)).not.toHaveProperty('tcAddress');
+      expect(redactPeerForWire(peer)).not.toHaveProperty('tcAddress');
+    });
+
     // The sync path layers DEFAULT_SYNC_CATEGORIES *under* the stored map so a
     // peer record written before a category existed picks up its shipped default
     // with no migration. Shipping the RAW map to the client would render a
@@ -538,6 +585,29 @@ describe('instances.js', () => {
 
       expect(result.enabled).toBe(false);
       expect(disconnectFromPeer).toHaveBeenCalledWith('peer-1');
+    });
+
+    it('keeps a tailcat peer recoverable when forward retirement fails, then removes it on retry', async () => {
+      const peer = { id: 'tailcat-peer', transport: 'tailcat', address: '127.0.0.1', port: 15555 };
+      const peers = [peer];
+      readJSONFile.mockResolvedValue({ self: null, peers });
+      stopForwardForPeer.mockRejectedValueOnce(new Error('forward metadata write failed'));
+
+      await expect(removePeer(peer.id)).rejects.toThrow('forward metadata write failed');
+      expect(peers).toEqual([peer]);
+      expect(atomicWrite).not.toHaveBeenCalled();
+
+      await expect(removePeer(peer.id)).resolves.toEqual(peer);
+      expect(stopForwardForPeer).toHaveBeenCalledWith(peer.id);
+      expect(peers).toEqual([]);
+    });
+
+    it('allows transport-owned rollback without re-entering transport cleanup', async () => {
+      const peer = { id: 'tailcat-peer', transport: 'tailcat' };
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+
+      await expect(removePeer(peer.id, { stopTransport: false })).resolves.toEqual(peer);
+      expect(stopForwardForPeer).not.toHaveBeenCalled();
     });
 
     it('should return null for non-existent peer', async () => {
@@ -1461,7 +1531,42 @@ describe('instances.js', () => {
 
   // --- Announce (Bidirectional Registration) ---
 
+  it('keeps tailcat routing managed while applying ordinary peer settings', async () => {
+    const peer = {
+      id: 'tailcat-peer', transport: 'tailcat', address: '127.0.0.1', port: 15555, host: null, protocol: 'https'
+    };
+    readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+
+    const updated = await updatePeer(peer.id, {
+      address: '192.0.2.10', port: 5555, host: 'peer.example.com', protocol: 'http', name: 'Example peer', enabled: false
+    });
+
+    expect(updated).toMatchObject({
+      address: '127.0.0.1', port: 15555, host: null, protocol: 'https', name: 'Example peer', enabled: false
+    });
+  });
+
   describe('handleAnnounce', () => {
+    it('preserves the managed tailcat endpoint when the remote announces its own host and port', async () => {
+      const existing = {
+        id: 'tailcat-peer', address: '127.0.0.1', port: 15555, host: null,
+        transport: 'tailcat', instanceId: 'remote-instance', directions: ['outbound']
+      };
+      readJSONFile.mockResolvedValue({ self: null, peers: [existing] });
+
+      const result = await handleAnnounce({
+        address: '192.0.2.10', port: 5555, host: 'peer.example.com',
+        instanceId: 'remote-instance', name: 'Example peer'
+      });
+
+      expect(result.created).toBe(false);
+      expect(result.peer).toMatchObject({
+        address: '127.0.0.1', port: 15555, host: null, transport: 'tailcat', status: 'online'
+      });
+      expect(result.peer.directions).toEqual(['outbound', 'inbound']);
+      expect(atomicWrite).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ peers: [result.peer] }));
+    });
+
     it('should create a new peer from announcement', async () => {
       readJSONFile.mockResolvedValue({ self: null, peers: [] });
       // probePeer will call fetch
