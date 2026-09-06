@@ -42,7 +42,9 @@ import { getQuotaBurnCompletions, recordQuotaBurnJobCompletion } from './quotaBu
 import { getActiveQuotaBurnBlocks, recordBurnAgentCompletion } from './quotaBurnDenials.js';
 import { getQuotaBurnConfig, getQuotaBurnRuns, recordQuotaBurnRun } from './quotaBurnStore.js';
 import { countJobPending, runBurnJob } from './quotaBurnJobs/index.js';
+import { countQuotaBurnStepPending, getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
 import { familyHasRunnableJobs, familyIsConfigured, jobIsSpent, quotaBurnJobKey } from '../lib/quotaBurnConfig.js';
+import { applyQuotaBurnAvailability } from '../lib/quotaBurnTaskRef.js';
 import { windowLabelOf } from '../lib/quotaWindows.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
 import { cosEvents } from './cosEvents.js';
@@ -79,6 +81,50 @@ const selectJobs = (family, { jobId = null, force = false, completions = {} } = 
  * opt into the wire deliberately.
  */
 const wireShape = (pending) => ({ count: pending?.count ?? 0, detail: pending?.detail ?? '' });
+
+/**
+ * The two invocation lanes, chosen by what the step actually names.
+ *
+ * A step carrying a `taskRef` runs through the shared reference path
+ * (`quotaBurnInvoke.js`) — canonical task generation, all its gates. A step
+ * still carrying a legacy `jobType` has no reference to run yet, so it keeps
+ * going through the frozen `JOB_MODULES` registry until #6381's migration
+ * converts it. Never both, and never a guess: `normalizeQuotaBurnJob` already
+ * makes the two mutually exclusive.
+ */
+/**
+ * What a step names, for the run log and the skip report: the scheduled task it
+ * references, or the legacy job type. `jobType` is null on a reference step, so
+ * recording it unconditionally wrote `jobType: undefined` on every one of them.
+ */
+const stepIdentity = (job) => (job?.taskRef
+  ? { taskRef: job.taskRef }
+  : { jobType: job?.jobType ?? null });
+
+const probeStep = ({ job, family, catalog }) => (job?.taskRef
+  ? countQuotaBurnStepPending({ step: job, family, catalog })
+  : countJobPending({ job, family }));
+
+const runStep = ({ job, family, candidate, context, force, catalog }) => (job?.taskRef
+  ? invokeQuotaBurnStep({ step: job, family, candidate, context, force, catalog })
+  : runBurnJob({ job, family, candidate, context, force }));
+
+/**
+ * The live task catalog, read at most once per cycle/status pass and only when a
+ * reference step is actually present — it reads the schedule, the app registry
+ * and the custom-job store, and a plan made entirely of legacy steps needs none
+ * of them, and neither does an unreadable one. Both come back EMPTY rather than
+ * as a third state: `resolveQuotaBurnStepAvailability` reads `{}` as "ask no
+ * catalog questions", so target scope is still judged (it is decidable from the
+ * reference alone), no step is mass-orphaned by a transient read failure, and a
+ * legacy-only plan resolves to exactly the verdict it already had.
+ */
+const catalogFor = async (jobs) => ((jobs || []).some((job) => job?.taskRef)
+  ? await getQuotaBurnTaskCatalog().catch((err) => {
+    console.error(`❌ Quota-burn could not read the scheduled-task catalog: ${err.message}`);
+    return {};
+  })
+  : {});
 
 /**
  * The plan, re-anchored to start just AFTER the job this family last dispatched.
@@ -126,7 +172,7 @@ async function lastDispatchedJobByFamily() {
  * and `run` needs the very same scan to know what to render. Without the
  * passthrough that multi-megabyte read happened twice per dispatch.
  */
-async function dispatchFromCandidate(candidate, { jobId = null, force = false, afterJobId = null, completions = {} } = {}) {
+async function dispatchFromCandidate(candidate, { jobId = null, force = false, afterJobId = null, completions = {}, catalog = {} } = {}) {
   const attempts = [];
   // A forced run of a NAMED job skips the pending probe entirely and calls the
   // job directly. The probe exists to pick which job in the plan to run; when
@@ -138,14 +184,14 @@ async function dispatchFromCandidate(candidate, { jobId = null, force = false, a
   // its own cooldown too.
   const targeted = force && jobId;
   for (const job of rotatePlanAfter(selectJobs(candidate.family, { jobId, force, completions }), afterJobId)) {
-    const pending = targeted ? null : await countJobPending({ job, family: candidate.family });
+    const pending = targeted ? null : await probeStep({ job, family: candidate.family, catalog });
     if (pending && !(pending.count > 0)) {
-      attempts.push({ jobId: job.id, jobType: job.jobType, skipped: pending.detail || 'no pending work' });
+      attempts.push({ jobId: job.id, ...stepIdentity(job), skipped: pending.detail || 'no pending work' });
       continue;
     }
-    const result = await runBurnJob({ job, family: candidate.family, candidate, context: pending?.context, force });
+    const result = await runStep({ job, family: candidate.family, candidate, context: pending?.context, force, catalog });
     if (!result.dispatched) {
-      attempts.push({ jobId: job.id, jobType: job.jobType, skipped: result.reason || 'declined' });
+      attempts.push({ jobId: job.id, ...stepIdentity(job), skipped: result.reason || 'declined' });
       continue;
     }
     return { dispatched: true, job, result, attempts };
@@ -322,13 +368,17 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   // cycle, before any dispatch, so two families in the same cycle can't see each
   // other's fresh run-log entries.
   const cursors = await lastDispatchedJobByFamily();
+  // ONE catalog for the whole cycle. It reads the schedule, the app registry and
+  // the custom-job store, none of which vary per family — building it inside the
+  // loop paid all three once per enabled family, every tick.
+  const catalog = await catalogFor(candidates.flatMap((entry) => entry.family.jobs || []));
   // Every eligible family gets its own dispatch — see the module header. The
   // loop does NOT break on the first success: `candidates` is already the set
   // that passed the full gate ladder, and each entry spends a different
   // provider's window.
   for (const candidate of candidates) {
     const outcome = await dispatchFromCandidate(candidate, {
-      jobId, force, completions, afterJobId: cursors.get(candidate.family.id) || null,
+      jobId, force, completions, catalog, afterJobId: cursors.get(candidate.family.id) || null,
     });
     attempts.push(...outcome.attempts.map((entry) => ({ familyId: candidate.family.id, ...entry })));
     if (!outcome.dispatched) continue;
@@ -357,7 +407,7 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
       dispatched: true,
       familyId: candidate.family.id,
       jobId: outcome.job.id,
-      jobType: outcome.job.jobType,
+      ...stepIdentity(outcome.job),
       dispatchKey: candidate.dispatchKey,
       charged: candidate.charge,
       hoursUntilReset: Math.round(candidate.hoursUntilReset * 10) / 10,
@@ -416,8 +466,9 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
 export async function getQuotaBurnStatus({ refresh = false } = {}) {
   // Independent reads: only `quotas` is slow (a PTY scrape on the Refresh path),
   // and nothing else waits on it.
-  const [config, quotas, dispatches, blocks, completions, runs] = await Promise.all([
-    getQuotaBurnConfig(),
+  const configPromise = getQuotaBurnConfig();
+  const [config, quotas, dispatches, blocks, completions, runs, catalog] = await Promise.all([
+    configPromise,
     getProviderQuotas({ wait: refresh ? WAIT.FRESH : WAIT.NEVER }).catch((err) => {
       console.error(`❌ Quota-burn status could not read provider quota: ${err.message}`);
       return [];
@@ -434,6 +485,9 @@ export async function getQuotaBurnStatus({ refresh = false } = {}) {
     // while on the cycle's path it is re-spending quota on finished work.
     getQuotaBurnCompletions().then((ledger) => ledger || {}),
     getQuotaBurnRuns(),
+    // Depends only on the config, never on `quotas` — so it overlaps the PTY
+    // scrape the Refresh path waits on instead of queueing behind it.
+    configPromise.then((cfg) => catalogFor(Object.values(cfg.families).flatMap((family) => family.jobs || []))),
   ]);
 
   const cards = new Map(quotas.map((card) => [card.family, card]));
@@ -485,13 +539,16 @@ export async function getQuotaBurnStatus({ refresh = false } = {}) {
             // for the universe jobs a picked-universe payload. The page renders
             // `count` and `detail` only, so shipping the rest would put probe
             // internals on the wire and grow with every job type.
-            pending: family.enabled && !spent ? wireShape(await countJobPending({ job, family })) : null,
+            pending: family.enabled && !spent ? wireShape(await probeStep({ job, family, catalog })) : null,
           };
         })),
       };
     }));
 
-  return { config, status: { running, families, runs } };
+  // Availability is a fact about the catalog RIGHT NOW — a reference whose task
+  // was disabled or deleted has to render its reason and lose its Run affordance
+  // — so it is stamped onto the config the page receives and never onto disk.
+  return { config: applyQuotaBurnAvailability(config, catalog), status: { running, families, runs } };
 }
 
 /**

@@ -30,6 +30,8 @@ import { schedule as scheduleEvent, cancel as cancelEvent } from './eventSchedul
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { recordJobExecution } from './autonomousJobs.js';
 import { safeJSONParse, sleep, isTopLevelEntryName } from '../lib/fileUtils.js';
+import { onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
+import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { todayInTimezone } from '../lib/timezone.js';
@@ -1086,7 +1088,10 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       // continues in the same user-initiated lane instead of the auto-run-gated
       // queue path (see perpetualRefillPlan). Stamped before addTask so the
       // blocked-revive branch below inherits it via `task.metadata` too.
-      task.metadata = { ...(task.metadata || {}), onDemand: true };
+      // `onDemandRequestMetadata` also carries the request's ORIGIN, which
+      // `perpetualRefillPlan` reads to decide whether the completed run may
+      // continue its drain — and a quota burn's provenance when it is one.
+      task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(request) };
       // Forward `ignoreTaskId` so a completion-triggered re-issue is dedup-safe:
       // the perpetual drain regenerates an identical first-line for the same app,
       // and `agent:completed` fires before the completing task's updateTask
@@ -1506,6 +1511,13 @@ function agentScheduledType(agent) {
     || null;
 }
 
+/**
+ * The on-demand origins whose completed perpetual run may re-issue itself: a
+ * human Run, and the drain re-issuing itself through the same lane. Everything
+ * else — a quota burn today, whatever is added tomorrow — stops after one unit.
+ */
+const DRAINABLE_ON_DEMAND_ORIGINS = new Set([ON_DEMAND_ORIGINS.USER, ON_DEMAND_ORIGINS.REFILL]);
+
 export function isPerpetualRefillCandidate(agent, schedule) {
   const analysisType = agentScheduledType(agent);
   if (!analysisType) return false;
@@ -1550,6 +1562,16 @@ export function perpetualRefillPlan(agent, schedule) {
   // silently promote that click into a sweep of every open contributor PR.
   if (agent?.metadata?.taskTargetPullRequest) return { lane: 'skip' };
   if (agent?.metadata?.taskOnDemand) {
+    // Which ORIGINS may keep draining in this lane, as an allowlist rather than
+    // a growing list of exclusions — so an automated origin added later fails
+    // CLOSED. A QUOTA BURN invokes exactly ONE unit of its referenced task: the
+    // burn has its own continuation (quotaBurnRunner#onBurnAgentCompleted) behind
+    // the window/reserve/cap ladder, and refilling here as well would walk the
+    // whole backlog outside every one of those gates, on the very subscription
+    // the plan was rationing. An unrecorded origin is a human Run — that is what
+    // a task queued before the field existed is.
+    const origin = agent?.metadata?.taskOnDemandOrigin || ON_DEMAND_ORIGINS.USER;
+    if (!DRAINABLE_ON_DEMAND_ORIGINS.has(origin)) return { lane: 'skip' };
     return { lane: 'onDemand', taskType: agentScheduledType(agent), appId: agent?.metadata?.taskApp || null };
   }
   return { lane: 'queue' };

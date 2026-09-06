@@ -34,7 +34,7 @@ import {
   ON_DEMAND_ORIGINS,
   decodeIntervalType,
   isCronExpression,
-  isRefillRequest
+  isUserOriginRequest
 } from './taskScheduleConstants.js';
 import {
   DEFAULT_TASK_INTERVALS,
@@ -54,6 +54,7 @@ import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { recordUserAction } from './userActions.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
+import { normalizeQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import {
   clearFailureLedgerFields,
   clearTaskTypeFailurePark,
@@ -63,7 +64,7 @@ import {
 
 export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION } from './taskPromptDefaults.js';
 export {
-  INTERVAL_TYPES, ON_DEMAND_ORIGINS, isRefillRequest
+  INTERVAL_TYPES, ON_DEMAND_ORIGINS, isRefillRequest, isUserOriginRequest
 } from './taskScheduleConstants.js';
 export {
   DEFAULT_BRANCHES_PER_AGENT, DEFAULT_TASK_INTERVALS, INSTALL_WIDE_TASK_TYPES,
@@ -82,7 +83,7 @@ export {
 } from './taskScheduleBackoff.js';
 export { addTemplateTask, deleteTemplateTask, getTemplateTasks } from './taskScheduleTemplates.js';
 
-const createFeatureGate = () => {
+export const createFeatureGate = () => {
   const enabledByFeature = new Map();
   return async (interval) => {
     const featureId = interval?.feature;
@@ -739,7 +740,12 @@ export async function resetPerpetualForManualRun(taskType, appId = null) {
  *   applied) — callers use it to decide whether user-facing feedback is warranted
  */
 export async function applyOnDemandRunResets(request, appId = null) {
-  if (isRefillRequest(request)) return false;
+  // Every AUTOMATED origin inherits the brakes — the drain's own refill and a
+  // quota burn alike. Written as "is this a human?" rather than "is this a
+  // refill?" so an origin added later fails CLOSED instead of silently
+  // acquiring a human's park/convergence resets (a burn that cleared them would
+  // re-run a converged drain every time its window opened).
+  if (!isUserOriginRequest(request)) return false;
   // A user-initiated "Run" must re-check live state, never honor a stale park or
   // convergence verdict.
   await resetPerpetualForManualRun(request.taskType, appId);
@@ -1091,12 +1097,21 @@ export async function getNextTaskType(appId = null, { perpetualOnly = false, con
  * perpetual drain re-issued ITSELF through the same lane after a completed run —
  * automated, and therefore NOT allowed to clear its own brakes.
  */
-export async function triggerOnDemandTask(taskType, appId = null, { emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null } = {}) {
+export async function triggerOnDemandTask(taskType, appId = null, { emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null, burn = null } = {}) {
   // A targeted run names ONE open PR/MR instead of letting the task pick from
   // the app's whole open set (the PR/MR row's "Review this PR" button). Coerced
   // and validated here so a bad value can't reach the generator's forge filter.
   const requested = Number(targetPullRequest);
   const scopedPullRequest = Number.isInteger(requested) && requested > 0 ? requested : null;
+  // Burn provenance rides ON the request because acceptance is asynchronous —
+  // an on-demand engine generates the task minutes later and stamps these keys
+  // onto it (lib/quotaBurnOrigin.js). Refused BEFORE the schedule write rather
+  // than dropped: an unattributable burn would leave a task that reads as
+  // cooldown-exempt with no family to credit its refusal to.
+  const burnProvenance = origin === ON_DEMAND_ORIGINS.QUOTA_BURN ? normalizeQuotaBurnProvenance(burn) : null;
+  if (origin === ON_DEMAND_ORIGINS.QUOTA_BURN && !burnProvenance) {
+    return { error: 'A quota-burn request must name the burning family and its burn step' };
+  }
   const request = await updateSchedule(async (schedule) => {
     // Cheap per-task-type check first; the master-flag check pays a state.json read.
     const tasks = schedule.tasks || {};
@@ -1110,8 +1125,12 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
       return { result: { error: `Task type '${taskType}' requires the '${tasks[taskType].feature}' feature` }, changed: false };
     }
     const invocation = getTaskTypeInvocation(taskType);
-    if (origin === ON_DEMAND_ORIGINS.USER && !invocation.userInvokable) {
-      return { result: { error: `Task type '${taskType}' is managed by another automation and cannot be run manually` }, changed: false };
+    // A quota burn faces this gate alongside a human Run: a type owned by
+    // another automation is not something an unattended burn may commandeer
+    // either. Only the drain's own REFILL is exempt — it is that automation
+    // re-issuing itself.
+    if (origin !== ON_DEMAND_ORIGINS.REFILL && !invocation.userInvokable) {
+      return { result: { error: `Task type '${taskType}' is managed by another automation and cannot be invoked on demand` }, changed: false };
     }
     if (requiresManagedAppTarget(taskType) && !appId) {
       return { result: { error: `Task type '${taskType}' requires a managed app target` }, changed: false };
@@ -1136,7 +1155,8 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
       appId,
       origin,
       requestedAt: new Date().toISOString(),
-      ...(scopedPullRequest ? { targetPullRequest: scopedPullRequest } : {})
+      ...(scopedPullRequest ? { targetPullRequest: scopedPullRequest } : {}),
+      ...(burnProvenance ? { burn: burnProvenance } : {})
     };
 
     schedule.onDemandRequests.push(request);
@@ -1149,7 +1169,7 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
   // drain re-issues itself through this same lane with `origin: REFILL` — logging
   // that would fill the ledger with events the user never performed and make
   // "what did I trigger?" unanswerable.
-  if (origin === ON_DEMAND_ORIGINS.USER) {
+  if (isUserOriginRequest(request)) {
     await recordUserAction({
       type: 'cos.schedule.trigger',
       target: taskType,

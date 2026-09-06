@@ -244,13 +244,19 @@ describe('dry-run hook wiring matches each engine execute path', () => {
   });
 });
 
-// Both on-demand spawn engines must stamp `metadata.onDemand` on the generated
-// task, or a MANUAL "Run Now" perpetual drain processed by whichever engine
-// forgot would refill through the auto-run-gated queue lane and stall after one
-// item (see perpetualRefillPlan in cos.js). The cos.js engine's stamp +
-// ignoreTaskId forwarding is pinned in cos.test.js; this pins the sibling
-// evaluateTasks engine here so the two-engine mirror can't drift by a comment.
-describe('both on-demand engines stamp metadata.onDemand', () => {
+// Both on-demand spawn engines must merge the request's own metadata onto the
+// generated task through `onDemandRequestMetadata`, or a MANUAL "Run Now"
+// perpetual drain processed by whichever engine forgot would refill through the
+// auto-run-gated queue lane and stall after one item (see perpetualRefillPlan in
+// cos.js) — and a QUOTA BURN would arrive with no provenance, reading as an
+// ordinary manual run that then drains its whole backlog outside the burn gates.
+// The cos.js engine's stamp + ignoreTaskId forwarding is pinned in cos.test.js;
+// this pins the sibling evaluateTasks engine here so the mirror can't drift.
+//
+// It greps for the shared CALL rather than the fork itself: the fork lives in
+// one place now (lib/quotaBurnOrigin.js, unit-tested directly), and the only
+// thing an engine can still get wrong is failing to consult it.
+describe('both on-demand engines merge onDemandRequestMetadata', () => {
   const onDemandStamp = (src, engineFn) => {
     const start = src.indexOf(engineFn);
     expect(start, `${engineFn} must exist`).toBeGreaterThan(-1);
@@ -258,15 +264,14 @@ describe('both on-demand engines stamp metadata.onDemand', () => {
     const next = src.indexOf('\nasync function ', start + 1);
     return src.slice(start, next === -1 ? src.length : next);
   };
+  const MERGE = /task\.metadata = \{ \.\.\.\(task\.metadata \|\| \{\}\), \.\.\.onDemandRequestMetadata\(request\) \}/;
 
-  it('evaluateTasks engine (spawnPriority0OnDemand) stamps onDemand before addTask', () => {
-    const engine = onDemandStamp(GEN_SRC, 'async function spawnPriority0OnDemand');
-    expect(/task\.metadata = \{ \.\.\.\(task\.metadata \|\| \{\}\), onDemand: true \}/.test(engine)).toBe(true);
+  it('evaluateTasks engine (spawnPriority0OnDemand) merges the request metadata before addTask', () => {
+    expect(MERGE.test(onDemandStamp(GEN_SRC, 'async function spawnPriority0OnDemand'))).toBe(true);
   });
 
-  it('dequeueNextTask engine (spawnDequeuePriority0OnDemand) stamps onDemand before addTask', () => {
-    const engine = onDemandStamp(COS_SRC, 'async function spawnDequeuePriority0OnDemand');
-    expect(/task\.metadata = \{ \.\.\.\(task\.metadata \|\| \{\}\), onDemand: true \}/.test(engine)).toBe(true);
+  it('dequeueNextTask engine (spawnDequeuePriority0OnDemand) merges the request metadata before addTask', () => {
+    expect(MERGE.test(onDemandStamp(COS_SRC, 'async function spawnDequeuePriority0OnDemand'))).toBe(true);
   });
 });
 

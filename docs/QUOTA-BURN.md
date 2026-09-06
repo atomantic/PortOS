@@ -377,12 +377,15 @@ folds those overrides into the single plan (each app's family prompt becomes an
 | `server/lib/quotaBurnConfig.js` | Plan shape, job-type catalog, total normalization |
 | `server/lib/universeBibleCompleteness.js` | What "described" means per kind + depth — the field vocabulary the describe job scans with |
 | `server/lib/quotaBurnPresets.js` | Ready-made single-focus audit prompts for `agent-prompt` jobs |
+| `server/lib/quotaBurnTaskRef.js` | The step→scheduled-task reference model, its overrides bag, and the availability resolver |
+| `server/lib/quotaBurnOrigin.js` | Burn provenance on an on-demand request, and the metadata both on-demand engines stamp from it |
 | `server/lib/quotaWindows.js` | Classifies a window by period — target (broadest) vs limiting (narrowest) |
 | `server/services/quotaBurnStore.js` | `data/cos/quota-burn.json` + the run log |
 | `server/services/quotaBurn.js` | `evaluateFamily` — the one gate ladder both selection and the page's skip reasons read — plus the dispatch ledger |
 | `server/services/quotaBurnCompletions.js` | The `run once` completion ledger and its re-arm |
 | `server/services/quotaBurnDenials.js` | The observed-refusal ledger and its `agent:completed` subscriber |
-| `server/services/quotaBurnJobs/` | The burn job registry and the `agent-prompt` executor |
+| `server/services/quotaBurnInvoke.js` | The shared invocation path: resolves a step's reference, enforces the schedule's own gates, and dispatches through canonical task generation |
+| `server/services/quotaBurnJobs/` | The frozen legacy job registry and the `agent-prompt` executor, kept until un-migrated plans are converted |
 | `server/services/scheduledHandlers/` | The programmatic handlers (universe bible descriptions/images) — shared by Scheduled Tasks and Quota Burn |
 | `server/services/quotaBurnRunner.js` | The loop, the cycle, and the status feed |
 | `server/routes/quotaBurn.js` | `/api/quota-burn` |
