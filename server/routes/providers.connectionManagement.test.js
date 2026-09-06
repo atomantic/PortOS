@@ -444,3 +444,162 @@ describe('a partially reachable backend', () => {
     expect(res.body.failedGroups).toBe(1);
   });
 });
+
+describe('PATCH /api/providers/routes/:providerId', () => {
+  /** The fingerprint the panel would have been holding. Read the way a browser reads it. */
+  const routeFromGraph = async (providerId) => {
+    const res = await request(app()).get('/api/providers/management');
+    return res.body.routes.find((route) => route.providerId === providerId);
+  };
+
+  it('changes ONE mode and leaves its sibling mode alone', async () => {
+    const cli = await routeFromGraph('claude-ollama');
+    providerService.applyProviderPatches.mockClear();
+
+    const res = await request(app())
+      .patch('/api/providers/routes/claude-ollama')
+      .send({
+        expectedRevision: cli.settingsRevision,
+        settings: { args: ['--verbose'], effort: 'high', heavyModel: 'example-model' },
+      });
+
+    expect(res.status).toBe(200);
+    const [patches] = providerService.applyProviderPatches.mock.calls.at(-1);
+    // The TUI route on the same harness shares this backend but NOT this
+    // mode's arguments — the whole reason the write skips `updateProvider`.
+    expect(Object.keys(patches)).toEqual(['claude-ollama']);
+    expect(patches['claude-ollama']).toEqual({ args: ['--verbose'], effort: 'high', heavyModel: 'example-model' });
+    // Route-owned, so no connection value moved and nothing was projected:
+    // the binding must not be detached by an override edit.
+    expect(store.saveConnectionSettings).not.toHaveBeenCalled();
+    expect(store.commitPendingProjection).not.toHaveBeenCalled();
+  });
+
+  it('refuses an edit made against settings that have since moved', async () => {
+    const res = await request(app())
+      .patch('/api/providers/routes/claude-ollama')
+      .send({ expectedRevision: 'from-a-panel-that-had-moved-on', settings: { effort: 'high' } });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PROVIDER_GRAPH_STALE_REVISION');
+    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
+  });
+
+  it('rejects a connection-owned field and an execution-consent field', async () => {
+    const cli = await routeFromGraph('claude-ollama');
+    providerService.applyProviderPatches.mockClear();
+
+    for (const settings of [{ endpoint: 'http://127.0.0.1:22222' }, { enabled: true }, { envVars: {} }]) {
+      const res = await request(app())
+        .patch('/api/providers/routes/claude-ollama')
+        .send({ expectedRevision: cli.settingsRevision, settings });
+      expect(res.status).toBe(400);
+    }
+    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
+  });
+
+  it('refuses an effort level this harness does not accept', async () => {
+    const cli = await routeFromGraph('claude-ollama');
+    providerService.applyProviderPatches.mockClear();
+
+    // `minimal` is a real effort level — for Codex. Claude's ladder starts at
+    // `low`, so storing it would be a value the spawn silently drops.
+    const res = await request(app())
+      .patch('/api/providers/routes/claude-ollama')
+      .send({ expectedRevision: cli.settingsRevision, settings: { effort: 'minimal' } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROVIDER_ROUTE_EFFORT_UNSUPPORTED');
+    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
+  });
+
+  it('refuses launch arguments on a direct API route, which spawns nothing', async () => {
+    const API_BINDING = '66666666-6666-4666-8666-666666666666';
+    const API_PROVIDER = {
+      id: 'example-api',
+      name: 'Example API',
+      type: 'api',
+      endpoint: 'https://api.example.com/v1',
+      apiKey: 'example-api-key',
+      models: ['example-model'],
+      enabled: true,
+    };
+    const fixture = graphFixture();
+    fixture.bindings.push({
+      id: API_BINDING, revision: 1, connectionId: OTHER_CONNECTION, harnessId: null,
+      variantKey: 'default', label: 'Direct API', enabled: true, selectedModels: [],
+    });
+    fixture.routes.push({
+      providerId: 'example-api', bindingId: API_BINDING, mode: 'api',
+      modelMap: {}, projected: {}, pending: null, pendingRevision: null,
+    });
+    store.readGraph.mockResolvedValue(fixture);
+    providerService.getAllProviders.mockResolvedValue({
+      activeProvider: 'claude-ollama',
+      providers: [structuredClone(CLAUDE_CLI), structuredClone(CLAUDE_TUI), structuredClone(CODEX_CLI),
+        structuredClone(API_PROVIDER)],
+    });
+
+    const apiRoute = await routeFromGraph('example-api');
+    // An API route has no spawn, so it never offers the field in the first place.
+    expect(apiRoute.settings).not.toHaveProperty('args');
+    expect(apiRoute.settings).toHaveProperty('defaultModel');
+    providerService.applyProviderPatches.mockClear();
+
+    const res = await request(app())
+      .patch('/api/providers/routes/example-api')
+      .send({ expectedRevision: apiRoute.settingsRevision, settings: { args: ['--yolo'] } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROVIDER_ROUTE_SETTING_UNSUPPORTED');
+    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
+  });
+
+  it('404s a provider id the graph does not route', async () => {
+    const res = await request(app())
+      .patch('/api/providers/routes/not-a-route')
+      .send({ expectedRevision: 'anything', settings: { effort: 'high' } });
+
+    expect(res.status).toBe(404);
+    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
+  });
+
+  it('refuses while the route is mid-projection', async () => {
+    const cli = await routeFromGraph('claude-ollama');
+    const fixture = graphFixture();
+    fixture.routes[0].pending = ownedSnapshot();
+    store.readGraph.mockResolvedValue(fixture);
+    providerService.applyProviderPatches.mockClear();
+
+    const res = await request(app())
+      .patch('/api/providers/routes/claude-ollama')
+      .send({ expectedRevision: cli.settingsRevision, settings: { effort: 'high' } });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PROVIDER_GRAPH_BINDING_BLOCKED');
+    expect(providerService.applyProviderPatches).not.toHaveBeenCalled();
+  });
+});
+
+describe('what a route row can act on', () => {
+  it('offers the Shell hand-off on the TUI route only, and never its env', async () => {
+    const res = await request(app()).get('/api/providers/management');
+    const byId = Object.fromEntries(res.body.routes.map((route) => [route.providerId, route]));
+
+    expect(byId['claude-ollama-tui'].tuiCommandLine).toContain('claude');
+    // A CLI route is not launchable by hand, so it carries no command at all —
+    // absent rather than empty, so the button cannot render on a blank string.
+    expect(byId['claude-ollama']).not.toHaveProperty('tuiCommandLine');
+    expect(JSON.stringify(res.body)).not.toContain(TOKEN);
+  });
+
+  it('publishes the effort ladder the harness really accepts', async () => {
+    const res = await request(app()).get('/api/providers/management');
+    const byId = Object.fromEntries(res.body.routes.map((route) => [route.providerId, route]));
+
+    expect(byId['claude-ollama'].effortLevels).toContain('high');
+    // Distinguishable from an empty ladder: `null` is "this harness has no
+    // effort control", which the panel renders as a disabled select.
+    expect(byId['codex-ollama'].effortLevels).toContain('minimal');
+  });
+});

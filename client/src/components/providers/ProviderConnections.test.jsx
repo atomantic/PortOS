@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   linkProviderBinding: vi.fn(),
   unlinkProviderBinding: vi.fn(),
   deleteProviderConnection: vi.fn(),
+  updateProviderRouteSettings: vi.fn(),
   setActiveProvider: vi.fn(),
   isManagementUnsupported: (error) => error?.status === 404 || error?.code === 'PROVIDER_GRAPH_UNAVAILABLE',
 }));
@@ -68,8 +69,28 @@ const graphFixture = () => ({
     blocked: false,
   }],
   routes: [
-    { providerId: 'claude-ollama', bindingId: CLAUDE_BINDING, mode: 'cli', modelMap: {}, projectionPending: false },
-    { providerId: 'claude-ollama-tui', bindingId: CLAUDE_BINDING, mode: 'tui', modelMap: {}, projectionPending: false },
+    // `settings` is what the server published as route-owned for this MODE, and
+    // `settingsRevision` the fingerprint a save must echo. The TUI route also
+    // carries the server-resolved command line that enables the Shell hand-off.
+    {
+      providerId: 'claude-ollama', bindingId: CLAUDE_BINDING, mode: 'cli', modelMap: {}, projectionPending: false,
+      settings: {
+        args: ['--verbose'], timeout: 60000, effort: 'high', defaultModel: 'example-model',
+        lightModel: null, mediumModel: null, heavyModel: null, ultraModel: null,
+      },
+      settingsRevision: 'cli-fingerprint',
+      effortLevels: ['low', 'medium', 'high'],
+    },
+    {
+      providerId: 'claude-ollama-tui', bindingId: CLAUDE_BINDING, mode: 'tui', modelMap: {}, projectionPending: false,
+      settings: {
+        args: [], timeout: 60000, effort: null, defaultModel: 'example-model',
+        lightModel: null, mediumModel: null, heavyModel: null, ultraModel: null,
+      },
+      settingsRevision: 'tui-fingerprint',
+      effortLevels: ['low', 'medium', 'high'],
+      tuiCommandLine: 'claude --dangerously-skip-permissions',
+    },
   ],
 });
 
@@ -222,5 +243,93 @@ describe('the empty-selection inversion', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('at least one model')));
     expect(api.updateProviderBinding).not.toHaveBeenCalled();
+  });
+});
+
+describe('a route row', () => {
+  const openOverrides = async (name) => {
+    renderPanel();
+    const rows = await screen.findAllByRole('button', { name: /Overrides/ });
+    fireEvent.click(rows[name === 'claude-ollama' ? 0 : 1]);
+  };
+
+  it('hands a TUI route to the Shell page and shows what it will run', async () => {
+    renderPanel();
+
+    const launch = await screen.findByRole('link', { name: /Launch in Shell/ });
+    // The provider id alone: the env the launch needs is secret and is
+    // re-resolved server-side when the PTY spawns.
+    expect(launch).toHaveAttribute('href', '/shell?provider=claude-ollama-tui');
+    expect(launch).toHaveAttribute('title', expect.stringContaining('claude --dangerously-skip-permissions'));
+    // Exactly one — the CLI route on the same harness is not launchable by hand.
+    expect(screen.getAllByRole('link', { name: /Launch in Shell/ })).toHaveLength(1);
+  });
+
+  it('sends only the fields that changed, with the fingerprint it was showing', async () => {
+    api.updateProviderRouteSettings.mockResolvedValue({ providerId: 'claude-ollama' });
+    await openOverrides('claude-ollama');
+
+    fireEvent.change(screen.getByLabelText(/Launch arguments/), { target: { value: '--verbose\n--debug' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save overrides' }));
+
+    await waitFor(() => expect(api.updateProviderRouteSettings).toHaveBeenCalled());
+    const [providerId, body] = api.updateProviderRouteSettings.mock.calls[0];
+    expect(providerId).toBe('claude-ollama');
+    expect(body.expectedRevision).toBe('cli-fingerprint');
+    // The timeout, effort and pins the human never touched are absent, so a
+    // save cannot rewrite a value the route editor changed a moment ago.
+    expect(body.settings).toEqual({ args: ['--verbose', '--debug'] });
+  });
+
+  it('reads a cleared pin as unset rather than as an empty string', async () => {
+    api.updateProviderRouteSettings.mockResolvedValue({ providerId: 'claude-ollama' });
+    await openOverrides('claude-ollama');
+
+    fireEvent.change(screen.getByLabelText('Default model'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save overrides' }));
+
+    await waitFor(() => expect(api.updateProviderRouteSettings).toHaveBeenCalled());
+    expect(api.updateProviderRouteSettings.mock.calls[0][1].settings).toEqual({ defaultModel: null });
+  });
+
+  it('cannot save until something differs, and reverts back to the saved values', async () => {
+    await openOverrides('claude-ollama');
+
+    const save = screen.getByRole('button', { name: 'Save overrides' });
+    expect(save).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Heavy tier model'), { target: { value: 'other-model' } });
+    expect(save).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Revert' }));
+    expect(screen.getByLabelText('Heavy tier model')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Save overrides' })).toBeDisabled();
+    expect(api.updateProviderRouteSettings).not.toHaveBeenCalled();
+  });
+
+  it('offers only the effort levels this harness accepts', async () => {
+    await openOverrides('claude-ollama');
+
+    const options = [...screen.getByLabelText('Reasoning effort').options].map((option) => option.value);
+    // The blank first option is "harness default", not a level.
+    expect(options).toEqual(['', 'low', 'medium', 'high']);
+  });
+});
+
+describe('an override the harness no longer offers', () => {
+  it('stays selected instead of reading as a clear the moment the panel opens', async () => {
+    const graph = graphFixture();
+    // The stored level is real and saved; this build's ladder for the harness
+    // simply no longer lists it — the same shape as a model pin outside the
+    // catalog, and it must not be silently offered up for deletion.
+    graph.routes[0].settings.effort = 'ultra';
+    api.getProviderManagementGraph.mockResolvedValue(graph);
+    renderPanel();
+
+    const rows = await screen.findAllByRole('button', { name: /Overrides/ });
+    fireEvent.click(rows[0]);
+
+    expect(screen.getByLabelText('Reasoning effort')).toHaveValue('ultra');
+    expect(screen.getByRole('button', { name: 'Save overrides' })).toBeDisabled();
   });
 });

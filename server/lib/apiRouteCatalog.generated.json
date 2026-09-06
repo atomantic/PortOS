@@ -14113,6 +14113,14 @@
       ]
     },
     {
+      "method": "PATCH",
+      "path": "/api/providers/routes/:providerId",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/providers/runtimes",
       "mountPath": "/api/providers",
@@ -17932,8 +17940,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2221,
-    "declarations": 2229,
+    "operations": 2222,
+    "declarations": 2230,
     "sourceFiles": 233
   }
 }

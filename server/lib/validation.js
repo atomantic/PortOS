@@ -610,6 +610,39 @@ export const providerBindingUpdateSchema = z.object({
   selectedModels: z.array(z.string().trim().min(1).max(512)).max(1000).optional(),
 }).strict();
 
+// PATCH /api/providers/routes/:providerId (#6369) — ONE route's mode overrides.
+//
+// Deliberately not `providerSchema.partial()`: that would reopen the whole
+// executable record, including the connection-owned endpoint/key the graph
+// projects and the `enabled` flag that grants execution consent. The accepted
+// keys are exactly the route-owned table in `providerRouteSettings.js`;
+// `providerRouteSettings.test.js` fails if the two ever drift.
+//
+// `expectedRevision` is a FINGERPRINT of the values on disk, not a row counter
+// — these fields live in providers.json, which the route editor and a model
+// refresh also write. An empty patch is refused rather than written: it would
+// rewrite the provider file to say nothing.
+//
+// `timeout` takes no `null`. The executable record's own schema has no null
+// timeout, so storing one here would 400 the next save from the route editor;
+// clearing a custom timeout stays that editor's job.
+const nullableModelPin = z.preprocess(emptyToNull, z.string().trim().max(512).nullable());
+export const providerRouteSettingsUpdateSchema = z.object({
+  expectedRevision: z.string().trim().min(1).max(64),
+  settings: z.object({
+    args: z.array(z.string().trim().min(1).max(2048)).max(200).optional(),
+    timeout: z.number().int().min(AI_RUN_TIMEOUT_MIN_MS).max(AI_RUN_TIMEOUT_MAX_MS).optional(),
+    effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable()).optional(),
+    defaultModel: nullableModelPin.optional(),
+    lightModel: nullableModelPin.optional(),
+    mediumModel: nullableModelPin.optional(),
+    heavyModel: nullableModelPin.optional(),
+    ultraModel: nullableModelPin.optional(),
+  }).strict().refine((value) => Object.keys(value).length > 0, {
+    message: 'Name at least one setting to change',
+  }),
+}).strict();
+
 // POST /api/providers/:id/vision-suite.
 export const providerVisionSuiteSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(256).optional()),
