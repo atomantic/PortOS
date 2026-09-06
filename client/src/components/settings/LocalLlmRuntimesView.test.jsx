@@ -47,6 +47,7 @@ vi.mock('../../services/api', () => ({
     verdict: 'ok',
   })),
   cancelSpecDecodeModelDownload: vi.fn(),
+  removeSpecDecodeModel: vi.fn(),
 }));
 vi.mock('../../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn() },
@@ -677,6 +678,39 @@ describe('LocalLlmRuntimesView llama-server management', () => {
     await waitFor(() => {
       expect(cancelSpecDecodeModelDownload).toHaveBeenCalledWith('qwen3.8-27b-dspark', 'model', { silent: true });
     });
+  });
+
+  // The "unload this method" cleanup path: a downloaded weight offers Delete,
+  // gated behind an inline confirm rather than firing on the first click.
+  it('deletes a downloaded preset GGUF after an inline confirm', async () => {
+    const { getLlamaServerStatus, removeSpecDecodeModel } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValue(llamaReady());
+    removeSpecDecodeModel.mockResolvedValue({ success: true, deleted: true, path: 'models/Qwen3.8-27B-Instruct-Q4_K_M.gguf' });
+
+    await renderRuntimes();
+
+    expect(await screen.findByText(/Downloaded \(1\.1 GB\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: /^Delete$/ })[0]);
+    expect(removeSpecDecodeModel).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Yes, delete/ }));
+
+    await waitFor(() => {
+      expect(removeSpecDecodeModel).toHaveBeenCalledWith('qwen3.8-27b-dspark', 'model', { silent: true });
+    });
+  });
+
+  it('backs out of the delete confirm without calling the delete endpoint', async () => {
+    const { getLlamaServerStatus, removeSpecDecodeModel } = await import('../../services/api');
+    getLlamaServerStatus.mockResolvedValue(llamaReady());
+
+    await renderRuntimes();
+
+    fireEvent.click((await screen.findAllByRole('button', { name: /^Delete$/ }))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: /^Cancel$/ }));
+
+    expect(screen.queryByRole('button', { name: /Yes, delete/ })).not.toBeInTheDocument();
+    expect(removeSpecDecodeModel).not.toHaveBeenCalled();
   });
 
   it('blocks Start while a preset GGUF is missing and names the fix', async () => {

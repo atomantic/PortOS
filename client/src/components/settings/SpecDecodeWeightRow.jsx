@@ -1,5 +1,7 @@
-import { Check, Download, ExternalLink, X } from 'lucide-react';
+import { Check, Download, ExternalLink, Trash2, X } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
+import useConfirmDelete from '../../hooks/useConfirmDelete.js';
 import { formatBytes } from '../../utils/formatters';
 
 const ROLE_LABELS = { model: 'Target base model', draftModel: 'Drafter' };
@@ -13,7 +15,8 @@ const ROLE_LABELS = { model: 'Target base model', draftModel: 'Drafter' };
  * this row is what turns "The base model was not found at `models/…`" into a
  * thing the user can act on without leaving the page.
  */
-export default function SpecDecodeWeightRow({ entry, progress, onDownload, onCancel, disabled }) {
+export default function SpecDecodeWeightRow({ entry, progress, onDownload, onCancel, onDelete, disabled }) {
+  const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   if (!entry?.path) return null;
   const label = ROLE_LABELS[entry.role] || entry.role;
   const downloading = Boolean(progress) || entry.downloading;
@@ -32,10 +35,35 @@ export default function SpecDecodeWeightRow({ entry, progress, onDownload, onCan
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {entry.exists ? (
-            <span className="flex items-center gap-1 text-[11px] text-port-success">
-              <Check size={12} />
-              Downloaded{entry.sizeBytes ? ` (${formatBytes(entry.sizeBytes)})` : ''}
-            </span>
+            isConfirming(entry.role) ? (
+              <ConfirmButtonPair
+                prompt="Delete this file?"
+                confirmIcon={Trash2}
+                confirmText="Yes, delete"
+                busy={disabled}
+                onConfirm={() => confirmDelete(() => onDelete(entry.role))}
+                onCancel={cancelDelete}
+              />
+            ) : (
+              <>
+                <span className="flex items-center gap-1 text-[11px] text-port-success">
+                  <Check size={12} />
+                  Downloaded{entry.sizeBytes ? ` (${formatBytes(entry.sizeBytes)})` : ''}
+                </span>
+                {onDelete && (
+                  <button
+                    type="button"
+                    onClick={() => requestDelete(entry.role)}
+                    disabled={disabled}
+                    className="flex items-center gap-1 px-2 py-1 text-[11px] text-gray-500 hover:text-port-error hover:bg-port-error/10 rounded transition-colors disabled:opacity-50"
+                    title={`Delete ${label.toLowerCase()} from disk to free up space`}
+                  >
+                    <Trash2 size={11} />
+                    Delete
+                  </button>
+                )}
+              </>
+            )
           ) : downloading ? (
             <>
               <span className="flex items-center gap-1.5 text-[11px] text-gray-400">

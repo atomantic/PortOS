@@ -12,7 +12,7 @@
  * about which file a relative or `~`-prefixed path means.
  */
 
-import { stat } from 'fs/promises';
+import { stat, unlink } from 'fs/promises';
 import { resolve } from 'path';
 import { expandHome } from '../lib/fileUtils.js';
 import { isProjectorName, isShardedGguf } from '../lib/localLlmDisk.js';
@@ -335,6 +335,51 @@ export function cancelSpecDecodeModelDownload({ presetId, role }) {
   return downloadSlot.cancel(resolveSpecModelPath(source.path));
 }
 
+
+/**
+ * Delete one preset role's on-disk GGUF — the "unload this method" cleanup
+ * counterpart to `downloadSpecDecodeModel`. Refuses while that same file is
+ * mid-download (cancel it first) or while llama-server is running it (stop it
+ * first) — both guards belong here rather than at the route, so any other
+ * caller of this function inherits them too.
+ *
+ * `llamaServerManager.js` imports `resolveSpecModelPath` from this module at
+ * the top level, so a static import back would be circular; importing it
+ * lazily inside the function reaches the same module once both are loaded
+ * without introducing that cycle (server/AGENTS.md "Import scoping").
+ */
+export async function removeSpecDecodeModel({ presetId, role }) {
+  if (!SPEC_MODEL_ROLES.includes(role)) {
+    throw new ServerError(`Unknown model role "${role}"`, { status: 400 });
+  }
+  const entry = findSpecDecodePreset(presetId)?.[role];
+  if (!entry?.path) {
+    throw new ServerError('No weight is configured for that preset role', { status: 400 });
+  }
+  const destPath = resolveSpecModelPath(entry.path);
+  if (downloadSlot.get(destPath)) {
+    throw new ServerError(
+      `${entry.path} is still downloading — cancel the download before deleting it`,
+      { status: 409, code: 'SPEC_DOWNLOAD_ACTIVE' },
+    );
+  }
+  const { getLlamaServerStatus } = await import('./llamaServerManager.js');
+  const status = await getLlamaServerStatus();
+  const runningPath = status?.config?.[role];
+  if (status?.running && runningPath && resolveSpecModelPath(runningPath) === destPath) {
+    throw new ServerError(
+      'Stop llama-server before deleting the weights it is currently running',
+      { status: 409, code: 'SPEC_MODEL_IN_USE' },
+    );
+  }
+  const stats = await stat(destPath).catch(() => null);
+  if (!stats?.isFile()) {
+    return { success: true, deleted: false, path: entry.path };
+  }
+  await unlink(destPath);
+  console.log(`🗑️  Deleted speculative-decoding weights: ${entry.path}`);
+  return { success: true, deleted: true, path: entry.path };
+}
 
 /** Clears in-flight download bookkeeping (used by test suites). */
 export const _resetSpecDecodeDownloadsForTests = () => downloadSlot.reset();

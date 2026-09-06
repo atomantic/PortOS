@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { homedir, tmpdir } from 'os';
-import { isAbsolute, join } from 'path';
+import { isAbsolute, join, relative } from 'path';
 import { Readable } from 'stream';
 import {
   downloadSpecDecodeModel,
   cancelSpecDecodeModelDownload,
+  removeSpecDecodeModel,
   getSpecDecodePresetStatus,
   pickGgufSibling,
   resolveSpecModelPath,
@@ -14,6 +15,14 @@ import {
 import * as specDecodePresets from '../lib/specDecodePresets.js';
 import * as hfToken from './hfToken.js';
 import * as huggingfaceLora from '../lib/huggingfaceLora.js';
+
+// removeSpecDecodeModel reaches this lazily (a static import would cycle back
+// here — llamaServerManager.js imports resolveSpecModelPath from this module)
+// to refuse deleting a weight llama-server is actively running.
+vi.mock('./llamaServerManager.js', () => ({
+  getLlamaServerStatus: vi.fn(async () => ({ running: false, config: null })),
+}));
+import { getLlamaServerStatus } from './llamaServerManager.js';
 
 const siblings = (...names) => ({ siblings: names.map((rfilename) => ({ rfilename, size: 6 })) });
 
@@ -318,6 +327,121 @@ describe('downloadSpecDecodeModel', () => {
 
   it('rejects an unknown role outright', async () => {
     await expect(downloadSpecDecodeModel({ presetId: 'test-preset', role: 'sneaky' }))
+      .rejects.toThrow(/Unknown model role/);
+  });
+});
+
+describe('removeSpecDecodeModel', () => {
+  let dir;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'portos-spec-decode-remove-'));
+    _resetSpecDecodeDownloadsForTests();
+  });
+
+  afterEach(async () => {
+    _resetSpecDecodeDownloadsForTests();
+    vi.restoreAllMocks();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const stubEntry = (path) => {
+    vi.spyOn(specDecodePresets, 'findSpecDecodePreset').mockImplementation((id) => (
+      id === 'test-preset' ? { model: { path }, draftModel: { path } } : null
+    ));
+  };
+
+  it('deletes an on-disk weight file', async () => {
+    const path = join(dir, 'base.gguf');
+    await writeFile(path, 'weights');
+    stubEntry(path);
+
+    const result = await removeSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+
+    expect(result).toMatchObject({ success: true, deleted: true, path });
+    await expect(readFile(path)).rejects.toThrow();
+  });
+
+  it('is a no-op when nothing is on disk to delete', async () => {
+    const path = join(dir, 'missing.gguf');
+    stubEntry(path);
+
+    const result = await removeSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+
+    expect(result).toMatchObject({ success: true, deleted: false, path });
+  });
+
+  // Deleting the partial mid-transfer would pull the file out from under the
+  // stream write it's racing; Cancel is the correct action for that, not Delete.
+  it('refuses to delete a file that is still downloading', async () => {
+    stubEntry(join(dir, 'base.gguf'));
+    vi.spyOn(specDecodePresets, 'specDecodeSource').mockImplementation((id, role) => (
+      id === 'test-preset' && role === 'model'
+        ? { path: join(dir, 'base.gguf'), repo: 'acme/Example-GGUF', quant: 'Q4_K_M' }
+        : null
+    ));
+    vi.spyOn(hfToken, 'getHfToken').mockResolvedValue(null);
+    let releaseMetadata;
+    vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockImplementation(
+      () => new Promise((resolve) => { releaseMetadata = () => resolve(siblings('Example-Q4_K_M.gguf')); }),
+    );
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => '2' },
+      body: Readable.toWeb(Readable.from([Buffer.from('gg')])),
+    });
+
+    const download = downloadSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+    await vi.waitFor(() => expect(releaseMetadata).toBeTypeOf('function'));
+
+    await expect(removeSpecDecodeModel({ presetId: 'test-preset', role: 'model' }))
+      .rejects.toThrow(/still downloading/);
+
+    releaseMetadata();
+    await download;
+  });
+
+  // Deleting the weight out from under a running launch would leave
+  // llama-server serving a now-deleted (POSIX) or unwritable (Windows) file.
+  it('refuses to delete a weight llama-server is currently running', async () => {
+    const path = join(dir, 'base.gguf');
+    await writeFile(path, 'weights');
+    stubEntry(path);
+    getLlamaServerStatus.mockResolvedValueOnce({ running: true, config: { model: path } });
+
+    await expect(removeSpecDecodeModel({ presetId: 'test-preset', role: 'model' }))
+      .rejects.toThrow(/Stop llama-server/);
+    await expect(readFile(path, 'utf8')).resolves.toBe('weights');
+  });
+
+  // The comparison resolves both sides — the running config can carry a
+  // relative launch-line path while the preset's own path is absolute (or
+  // vice versa) and the two must still be recognized as the same file.
+  it('matches the running config against the resolved path, not the raw string', async () => {
+    const path = join(dir, 'base.gguf');
+    await writeFile(path, 'weights');
+    stubEntry(path);
+    getLlamaServerStatus.mockResolvedValueOnce({ running: true, config: { model: relative(process.cwd(), path) } });
+
+    await expect(removeSpecDecodeModel({ presetId: 'test-preset', role: 'model' }))
+      .rejects.toThrow(/Stop llama-server/);
+  });
+
+  it('allows deletion once llama-server is running a different weight', async () => {
+    const path = join(dir, 'base.gguf');
+    await writeFile(path, 'weights');
+    stubEntry(path);
+    getLlamaServerStatus.mockResolvedValueOnce({ running: true, config: { model: join(dir, 'other.gguf') } });
+
+    const result = await removeSpecDecodeModel({ presetId: 'test-preset', role: 'model' });
+
+    expect(result).toMatchObject({ success: true, deleted: true, path });
+  });
+
+  it('rejects an unknown role outright', async () => {
+    stubEntry(join(dir, 'base.gguf'));
+    await expect(removeSpecDecodeModel({ presetId: 'test-preset', role: 'sneaky' }))
       .rejects.toThrow(/Unknown model role/);
   });
 });
