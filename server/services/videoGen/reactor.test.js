@@ -5,8 +5,9 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 const root = join(tmpdir(), `reactor-test-${process.pid}`);
-const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: vi.fn(), samples: vi.fn() }));
+const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: vi.fn(), samples: vi.fn(), runtime: vi.fn() }));
 vi.mock('../../lib/childProcess.js', async (importOriginal) => ({ ...await importOriginal(), spawn: mocks.spawn }));
+vi.mock('./reactorRuntime.js', () => ({ ensureReactorRuntime: mocks.runtime }));
 vi.mock('../../lib/ffmpeg.js', () => ({ extractEvaluationFrames: mocks.samples }));
 vi.mock('./generateVideoHelpers.js', () => ({ finalizeGeneratedVideo: mocks.finalize }));
 vi.mock('../settings.js', () => ({ getSettings: mocks.settings }));
@@ -25,6 +26,7 @@ beforeEach(async () => {
   await writeFile(join(root, 'python'), 'placeholder');
   vi.stubEnv('REACTOR_PYTHON_PATH', join(root, 'python'));
   vi.stubEnv('REACTOR_API_KEY', '');
+  mocks.runtime.mockResolvedValue(join(root, 'python'));
   mocks.settings.mockResolvedValue(settings);
   mocks.samples.mockResolvedValue([]);
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ jwt: 'example-jwt' }) })));
@@ -170,18 +172,46 @@ describe('Reactor SDK adapter', () => {
     expect(mocks.finalize).not.toHaveBeenCalled();
   });
 
-  it('fails missing runtime before minting a token', async () => {
-    vi.stubEnv('REACTOR_PYTHON_PATH', join(root, 'missing-python'));
-    await expect(reactor.generateVideo({ prompt: 'A gate' })).rejects.toMatchObject({ code: 'REACTOR_RUNTIME_MISSING' });
+  it('reports automatic setup failure without minting a token', async () => {
+    mocks.runtime.mockRejectedValue(new Error('Automatic Reactor runtime preparation failed'));
+    const failed = once(videoGenEvents, 'failed');
+    await reactor.generateVideo({ prompt: 'A gate' });
+    const [event] = await failed;
+    expect(event.error).toContain('Automatic Reactor runtime preparation failed');
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('cancels during setup immediately and never opens a session after setup finishes', async () => {
+    let finish;
+    mocks.runtime.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const job = await reactor.generateVideo({ prompt: 'A gate' });
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    const failed = once(videoGenEvents, 'failed');
+    expect(reactor.cancel(job.jobId)).toBe(true);
+    await failed;
+    finish(join(root, 'python'));
+    await new Promise(setImmediate);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(reactor.getActiveJob()).toBeNull();
+  });
+
+  it('does not prepare a runtime without a configured key', async () => {
+    mocks.settings.mockResolvedValue({});
+    await expect(reactor.generateVideo({ prompt: 'A gate' })).rejects.toMatchObject({ code: 'REACTOR_NOT_CONFIGURED' });
+    expect(mocks.runtime).not.toHaveBeenCalled();
   });
 
   it('does not finalize a completion marker without its output file', async () => {
     await started();
+    const scratch = `${input.outputPath}.capture`;
+    await mkdir(scratch);
+    await writeFile(join(scratch, 'video.bgra'), 'partial capture');
     const failed = once(videoGenEvents, 'failed');
     child.stdout.emit('data', Buffer.from('{"type":"complete","clipId":"clip-example","seconds":6}\n'));
     child.emit('close', 0);
     await failed;
+    await vi.waitFor(async () => { await expect(stat(scratch)).rejects.toBeTruthy(); });
     expect(mocks.finalize).not.toHaveBeenCalled();
   });
 

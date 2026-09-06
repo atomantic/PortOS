@@ -366,10 +366,26 @@ Draft visual bindings can select a character image from the gallery. This fixed 
 ### Reactor video previews
 
 Reactor FastH3 uses a live SDK session: upload the storyboard image, enqueue one
-shot, play it once, capture its video and native audio, then disconnect. Install
-the pinned SDK with `npm run setup:reactor` (Python 3.11+ and ffmpeg required).
-`REACTOR_PYTHON_PATH` can select an existing SDK environment. Installation is
-explicit; starting PortOS never installs or opens a Reactor session.
+shot, play it once, capture its video and native audio, then disconnect. Configure
+an API key in Settings > Video Gen and render. On the first authorized render,
+PortOS automatically downloads a checksum-verified runtime manager, private
+Python 3.12, and the pinned Reactor SDK. Preparation appears in job status and
+finishes before a paid session opens. Failed or incomplete installations are
+retried on the next render. ffmpeg remains a standard PortOS prerequisite.
+Starting PortOS never installs this runtime or opens a Reactor session.
+
+The Python SDK supplies the native WebRTC receiver needed by background render
+jobs. Reactor's JavaScript SDK uses browser WebRTC APIs; it is not a Node HTTP
+render-to-MP4 client. Moving to it would require a managed browser or a new native
+WebRTC layer. Reactor's recording API also requires a live session and model
+recording support, so it is not a drop-in replacement for FastH3 capture. See
+[SDK connection](https://docs.reactor.inc/sdk-reference/reactor-class) and
+[recordings](https://docs.reactor.inc/concepts/recordings).
+
+Existing `REACTOR_PYTHON_PATH` overrides remain supported and are verified without
+modifying that environment. Remove an incompatible override to use automatic
+setup. `npm run setup:reactor` remains an optional preinstallation command;
+neither it nor an environment variable is required for normal renders.
 
 The outline and shot editor show incoming reference images beside the current
 shot, including every incoming branch at a convergence. Review room geometry,

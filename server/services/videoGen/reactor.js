@@ -18,6 +18,7 @@ import {
 } from '../../lib/reactorVideoClip.js';
 import { extractEvaluationFrames } from '../../lib/ffmpeg.js';
 import { describeFrameStats, isDegenerateFrame } from '../../lib/imageFrameStats.js';
+import { ensureReactorRuntime } from './reactorRuntime.js';
 import { prepareReactorStartingFrame } from '../../lib/reactorStartingFrame.js';
 
 export const REACTOR_API_BASE = 'https://api.reactor.inc';
@@ -186,7 +187,7 @@ function captureClip(entry, input, pythonPath, job, jobId) {
     child.stderr.on('data', countOutput);
     child.stdin.on('error', () => stop('Could not send request to Reactor renderer'));
     child.on('error', () => {
-      failure ||= new Error('Could not start Reactor renderer; run the Reactor runtime setup');
+      failure ||= new Error('Could not start Reactor renderer; retry the render to verify its runtime');
     });
     child.on('close', (code) => {
       clearTimeout(timeout);
@@ -206,9 +207,6 @@ export async function generateVideo({
   sourceImagePath = null, jobId: providedJobId = null,
 }) {
   const request = validateReactorRequest({ prompt, continueFromClipId, sourceImagePath, seconds, seed, aspect });
-  const pythonPath = process.env.REACTOR_PYTHON_PATH || join(PATHS.data, 'venvs', 'reactor', ...(process.platform === 'win32' ? ['Scripts', 'python.exe'] : ['bin', 'python']));
-  const runtime = await stat(pythonPath).catch(() => null);
-  if (!runtime?.isFile()) { throw new ServerError('Reactor runtime is missing. Run npm run setup:reactor, or set REACTOR_PYTHON_PATH', { status: 400, code: 'REACTOR_RUNTIME_MISSING' }); }
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
 
@@ -245,10 +243,10 @@ export async function generateVideo({
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}] reactor (${REACTOR_MODEL_ID}): ${prompt.slice(0, 60)}…`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
-  broadcastSse(job, { type: 'status', message: 'Minting reactor.inc session…' });
+  broadcastSse(job, { type: 'status', message: 'Preparing Reactor runtime…' });
 
   runReactorVideo(job, jobId, {
-    apiKey, ...request, pythonPath, sourceImagePath, outputPath, filename, meta,
+    apiKey, ...request, sourceImagePath, outputPath, filename, meta,
   }).catch((err) => {
     console.log(`❌ reactor video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
@@ -261,7 +259,7 @@ export async function generateVideo({
 }
 
 async function runReactorVideo(job, jobId, {
-  apiKey, prompt, seconds, seed, aspect, continueFromClipId, pythonPath, sourceImagePath, outputPath, filename, meta,
+  apiKey, prompt, seconds, seed, aspect, continueFromClipId, sourceImagePath, outputPath, filename, meta,
 }) {
   const entry = { aborted: false, stop: null };
   activeRequests.set(jobId, entry);
@@ -272,6 +270,18 @@ async function runReactorVideo(job, jobId, {
     // Resolved before the token is minted, so a starting frame PortOS could not
     // fit costs nothing on the reactor side.
     frame = await prepareReactorStartingFrame(sourceImagePath, aspect, outputPath);
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+    // The shared install may finish for another job after this one is canceled.
+    // Cancellation stops this job immediately, without opening a paid session.
+    const pythonPath = await new Promise((resolve, reject) => {
+      entry.stop = () => reject(new Error('Canceled'));
+      ensureReactorRuntime().then(resolve, reject);
+      if (entry.aborted) entry.stop();
+    });
+    entry.stop = null;
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+    videoGenEvents.emit('activity', { generationId: jobId });
+    broadcastSse(job, { type: 'status', message: 'Minting reactor.inc session…' });
     const { jwt } = await mintReactorToken(apiKey);
     if (entry.aborted) return finalizeCanceled(job, jobId);
     const result = await captureClip(entry, {
@@ -302,6 +312,7 @@ async function runReactorVideo(job, jobId, {
       : '';
     finalizeError(job, jobId, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}${continuationHint}`, { force: true });
   } finally {
+    await rm(`${outputPath}.capture`, { recursive: true, force: true }).catch(() => {});
     if (frame.fittedPath) await rm(frame.fittedPath, { force: true }).catch(() => {});
     if (entry.aborted) await rm(outputPath, { force: true }).catch(() => {});
     activeRequests.delete(jobId);
