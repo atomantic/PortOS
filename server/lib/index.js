@@ -364,6 +364,7 @@ export * from './songCraftRef.js';
 // === Domain utilities ===
 export * from './appIdentity.js';
 export * from './appResolver.js';
+export * from './autonomousJobIntervals.js';
 export * from './capabilityMap.js';
 export * from './chiptuneRender.js';
 export * from './chiptuneScore.js';

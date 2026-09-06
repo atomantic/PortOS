@@ -19,6 +19,7 @@ import { PUBLIC_REVIEW_EXECUTION_PROFILES } from './agentExecutionProfiles.js';
 import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
+import { JOB_INTERVAL_VALUES } from './autonomousJobIntervals.js';
 import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
 import {
   EFFORT_SELECTABLE_REVIEWERS,
@@ -409,7 +410,13 @@ export const createCosJobSchema = z.object({
   description: z.string().optional(),
   category: z.string().optional(),
   type: z.enum(['agent', 'shell', 'script']).optional(),
-  interval: z.string().optional(),
+  // The autonomous-job cadence vocabulary. Previously a bare z.string(), so a
+  // typo'd cadence reached disk and silently rescheduled the job daily via
+  // resolveIntervalMs's old `default: DAY` fall-through. Note this is NOT the
+  // scheduled-CoS-task INTERVAL_TYPES vocabulary — nothing converts between them.
+  interval: z.enum(JOB_INTERVAL_VALUES).optional(),
+  // Only meaningful for the `custom` cadence; never required or back-filled for
+  // the on-demand one, which resolves to a null intervalMs by design.
   intervalMs: z.number().positive().int().optional(),
   // Null actively clears a pinned time/cron mode on update. The jobs UI has
   // always emitted null for the inactive mode; accepting it here lets updateJob

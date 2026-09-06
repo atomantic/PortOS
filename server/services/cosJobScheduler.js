@@ -27,6 +27,7 @@ import { getUserTimezone } from './userTimezone.js';
 import { formatDuration } from '../lib/fileUtils.js';
 import { loadState, isDaemonRunning, canQueueImprovementTasks } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
+import { isOnDemandJob } from '../lib/autonomousJobIntervals.js';
 import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -45,9 +46,11 @@ import {
  * 1. Cron mode: job.cronExpression defines the full schedule
  * 2. Interval mode: job.intervalMs + optional job.scheduledTime (HH:MM in user timezone)
  *
+ * 3. On-demand: no cadence at all — returns null so no timer is armed.
+ *
  * @param {Object} job - The job object
  * @param {string} timezone - IANA timezone string for interpreting scheduledTime/cron
- * @returns {number} Timestamp (ms) of next fire time
+ * @returns {number|null} Timestamp (ms) of next fire time, or null when the job never fires on a clock
  */
 function computeNextJobFireTime(job, timezone) {
   // Convert scheduledTime (HH:MM) + interval to a cron expression so parseCronToNextRun
@@ -65,6 +68,12 @@ function computeNextJobFireTime(job, timezone) {
     }
     return next.getTime();
   }
+  // On-demand jobs never fire on a clock. Checked after the explicit cron
+  // fields (a job switched to cron mode keeps whatever cadence it last had) but
+  // before the synthesized daily/weekday cron below, which a weekdaysOnly
+  // on-demand job would otherwise fall into.
+  if (!cronExpr && isOnDemandJob(job)) return null;
+
   const isDailyCronCandidate = job.interval === 'daily' || job.weekdaysOnly;
   if (!cronExpr && job.scheduledTime && isDailyCronCandidate) {
     const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
@@ -125,6 +134,12 @@ export async function registerSingleJobSchedule(jobId) {
 
   const timezone = await getUserTimezone();
   const nextFire = computeNextJobFireTime(job, timezone);
+  // An on-demand job stays enabled (so POST /jobs/:id/trigger still runs it)
+  // but arms no timer. Cancel any timer left over from a previous cadence.
+  if (nextFire == null) {
+    cancelEvent(`job:${jobId}`);
+    return;
+  }
   const delayMs = Math.max(nextFire - Date.now(), 1000);
 
   scheduleEvent({

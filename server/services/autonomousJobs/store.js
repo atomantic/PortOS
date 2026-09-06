@@ -13,7 +13,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { ensureDir, PATHS, readJSONFile, atomicWrite, tryReadFile } from '../../lib/fileUtils.js'
 import { validateCommand } from '../../lib/commandSecurity.js'
-import { DATA_DIR, JOBS_FILE, JOBS_SKILLS_DIR, resolveIntervalMs } from './constants.js'
+import { DATA_DIR, JOBS_FILE, JOBS_SKILLS_DIR, JOB_INTERVAL_VALUES, resolveIntervalMs } from './constants.js'
 import { createDefaultJobsData, mergeWithDefaults } from './defaults.js'
 
 let initPromise = null
@@ -133,7 +133,7 @@ async function migrateScriptsState(jobsData) {
   const existingIds = new Set(jobsData.jobs.map(j => j.id))
 
   // Map legacy schedule values to valid interval values
-  const VALID_INTERVALS = new Set(['hourly', 'every-2-hours', 'every-4-hours', 'every-8-hours', 'daily', 'weekly', 'biweekly', 'monthly', 'custom'])
+  const VALID_INTERVALS = new Set(JOB_INTERVAL_VALUES)
   const LEGACY_SCHEDULE_MAP = {
     'every-5-min': 'hourly',
     'every-10-min': 'hourly',
@@ -146,7 +146,9 @@ async function migrateScriptsState(jobsData) {
     'twice-daily': 'daily'
   }
   const mapLegacySchedule = (schedule, scriptName) => {
-    if (!schedule || schedule === 'on-demand' || schedule === 'startup') return 'daily'
+    // 'startup' has no cadence equivalent; 'on-demand' now maps to the real
+    // on-demand cadence via VALID_INTERVALS below instead of a disabled daily job.
+    if (!schedule || schedule === 'startup') return 'daily'
     if (VALID_INTERVALS.has(schedule)) return schedule
     if (LEGACY_SCHEDULE_MAP[schedule]) {
       console.log(`📦 Mapped legacy schedule '${schedule}' for '${scriptName}' to '${LEGACY_SCHEDULE_MAP[schedule]}'`)
@@ -167,7 +169,10 @@ async function migrateScriptsState(jobsData) {
     if (script.cronExpression) {
       console.warn(`⚠️ Legacy cron expression '${script.cronExpression}' for script '${script.name}' not supported by job scheduler, using interval '${mappedInterval}' instead`)
     }
-    const isOnDemandOrStartup = script.schedule === 'on-demand' || script.schedule === 'startup'
+    // A startup script has no cadence to carry over, so it lands disabled. An
+    // on-demand one keeps its own enabled flag — the on-demand cadence already
+    // guarantees no timer, and staying enabled keeps it manually runnable.
+    const isStartupScript = script.schedule === 'startup'
 
     // Validate command against allowlist — disable jobs with invalid commands
     let commandValid = true
@@ -188,7 +193,7 @@ async function migrateScriptsState(jobsData) {
       command: commandValid ? script.command : null,
       interval: mappedInterval,
       intervalMs: resolveIntervalMs(mappedInterval),
-      enabled: commandValid ? (isOnDemandOrStartup ? false : (script.enabled || false)) : false,
+      enabled: commandValid ? (isStartupScript ? false : (script.enabled || false)) : false,
       priority: script.triggerPriority || 'MEDIUM',
       triggerAction: 'log-only',
       lastRun: script.lastRun || null,
