@@ -15618,6 +15618,22 @@
       ]
     },
     {
+      "method": "DELETE",
+      "path": "/api/system/health/warnings/:type/dismiss",
+      "mountPath": "/api/system",
+      "sources": [
+        "server/routes/systemHealth.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/system/health/warnings/:type/dismiss",
+      "mountPath": "/api/system",
+      "sources": [
+        "server/routes/systemHealth.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/system/processing",
       "mountPath": "/api/system",
@@ -17796,8 +17812,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2204,
-    "declarations": 2212,
+    "operations": 2206,
+    "declarations": 2214,
     "sourceFiles": 233
   }
 }

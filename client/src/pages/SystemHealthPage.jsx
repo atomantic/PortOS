@@ -1,11 +1,12 @@
 import { useEffect, useState, useRef } from 'react';
 import { Link, Navigate, NavLink, useParams } from 'react-router';
-import { Activity, AlertTriangle, CheckCircle, XCircle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle, XCircle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useHealthWarningDismiss } from '../hooks/useHealthWarningDismiss.jsx';
 import { useSystemResourceReport } from '../hooks/useSystemResourceReport.js';
 import StoragePanel from '../components/system-resources/StoragePanel.jsx';
 import QueuesPanel from '../components/system-resources/QueuesPanel.jsx';
@@ -132,6 +133,7 @@ function SystemHealthOverview() {
     () => api.getSystemHealth({ silent: true }),
     15_000,
   );
+  const { dismissingType, handleDismissWarning } = useHealthWarningDismiss(refetch);
 
   const handleRefresh = async () => {
     if (refreshing) return;
@@ -233,7 +235,25 @@ function SystemHealthOverview() {
             {health.warnings.map((w, i) => {
               const remedy = REMEDIATION[w.type];
               return (
-                <Banner key={`${w.type || 'warning'}-${i}`} tone="warning" size="md" icon={AlertTriangle} align="start">
+                <Banner
+                  key={`${w.type || 'warning'}-${i}`}
+                  tone="warning"
+                  size="md"
+                  icon={AlertTriangle}
+                  align="start"
+                  actions={(
+                    <button
+                      type="button"
+                      onClick={() => handleDismissWarning(w)}
+                      disabled={dismissingType === w.type}
+                      className="inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded text-port-warning/70 transition-colors hover:bg-port-warning/20 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-50"
+                      title="Dismiss as resolved"
+                      aria-label={`Dismiss warning: ${w.message}`}
+                    >
+                      <X size={14} aria-hidden="true" />
+                    </button>
+                  )}
+                >
                   <div>{w.message}</div>
                   {remedy && (
                     <Link to={remedy.to} className="inline-block mt-1 font-medium underline underline-offset-2 hover:no-underline">

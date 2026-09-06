@@ -196,6 +196,7 @@ export * from './useCanonPatch.js';
 export * from './useDeathClock.js';
 export * from './useFederatedMediaTarget.js';
 export * from './useGoalDetail.js';
+export * from './useHealthWarningDismiss.jsx';
 export * from './usePostSession.js';
 export * from './useRecordMerge.js';
 export * from './useRenderJobQueue.js';

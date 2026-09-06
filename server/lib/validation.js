@@ -1304,6 +1304,13 @@ export const databaseExportSchema = z.object({
   backend: z.enum(DB_BACKENDS).optional()
 });
 
+// System health dashboard warnings — see server/routes/systemHealth.js. The
+// `type` enum mirrors every `warnings.push({ type: ... })` call site there;
+// keep the two lists in sync.
+export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge'];
+export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
+export const systemHealthWarningDismissSchema = z.object({ message: z.string().trim().min(1).max(500) });
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.

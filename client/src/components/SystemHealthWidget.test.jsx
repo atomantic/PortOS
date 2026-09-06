@@ -3,10 +3,21 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import SystemHealthWidget from './SystemHealthWidget.jsx';
+import { dismissHealthWarning } from '../services/apiSystem.js';
+import toast from './ui/Toast';
+
+vi.mock('../services/apiSystem.js', () => ({
+  dismissHealthWarning: vi.fn().mockResolvedValue({ message: 'x', dismissedAt: '2026-01-01T00:00:00.000Z' }),
+  undismissHealthWarning: vi.fn().mockResolvedValue({ success: true }),
+}));
+vi.mock('./ui/Toast', () => {
+  const toast = Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn(), dismiss: vi.fn() });
+  return { default: toast };
+});
 
 const HEALTH = {
-  overallHealth: 'healthy',
-  warnings: [],
+  overallHealth: 'warning',
+  warnings: [{ type: 'disk', severity: 'warning', message: 'Disk usage at or above 90%' }],
   system: {
     uptimeFormatted: '3h 12m',
     memory: { usagePercent: 40, usedFormatted: '12 GB', totalFormatted: '32 GB' },
@@ -59,5 +70,28 @@ describe('SystemHealthWidget', () => {
     renderWidget({ health: HEALTH, refetchHealth: vi.fn() });
     expect(screen.getByRole('link', { name: 'Open disk usage report' })).toHaveAttribute('href', '/system-resources/storage');
     expect(screen.getByRole('link', { name: /Details/ })).toHaveAttribute('href', '/system-resources/overview');
+  });
+
+  it('dismisses a warning as resolved and refetches health', async () => {
+    const user = userEvent.setup();
+    const refetchHealth = vi.fn().mockResolvedValue(undefined);
+    renderWidget({ health: HEALTH, refetchHealth });
+
+    await user.click(screen.getByRole('button', { name: /Dismiss warning: Disk usage at or above 90%/ }));
+
+    expect(dismissHealthWarning).toHaveBeenCalledWith('disk', 'Disk usage at or above 90%', { silent: true });
+    expect(refetchHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('toasts an error and does not refetch when dismissing fails', async () => {
+    const user = userEvent.setup();
+    dismissHealthWarning.mockRejectedValueOnce(new Error('offline'));
+    const refetchHealth = vi.fn();
+    renderWidget({ health: HEALTH, refetchHealth });
+
+    await user.click(screen.getByRole('button', { name: /Dismiss warning: Disk usage at or above 90%/ }));
+
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('offline'));
+    expect(refetchHealth).not.toHaveBeenCalled();
   });
 });
