@@ -780,7 +780,10 @@ export function formatZombiesForPrompt(zombies, { fullName, forge = 'github', au
     const pr = z.mergedPr
       ? `merged ${change} #${z.mergedPr.number}${z.mergedPr.url ? ` (${z.mergedPr.url})` : ''}`
       : `a merged ${change}`;
-    lines.push(isGitlab ? `### #${z.number} — ${z.title}` : `### #${z.number}`);
+    // The title is untrusted, attacker-controlled text on both forges — GitLab
+    // has no actor-trust screening equivalent to forgeActorTrust.js, so it gets
+    // the same hardening GitHub's title already dropped for.
+    lines.push(`### #${z.number}`);
     if (z.url) lines.push(`- Issue: ${z.url}`);
     lines.push(`- Shipped by: ${pr}`);
     if (!isGitlab && z.maintenanceEvidence) {
