@@ -65,7 +65,7 @@ export const WIDGETS = [
   { id: 'system-health',     label: 'System Health',         Component: SystemHealthWidget,     width: 'quarter', defaultH: 8 },
   { id: 'network-exposure',  label: 'Network Exposure',      Component: NetworkExposureWidget,  width: 'quarter', defaultH: 5 },
   { id: 'backup',            label: 'Backup',                Component: BackupWidget,           width: 'quarter', defaultH: 5 },
-  { id: 'death-clock',       label: 'Death Clock',           Component: DeathClockWidget,       width: 'quarter', defaultH: 4 },
+  { id: 'death-clock',       label: 'Meatspace Time Remaining', Component: DeathClockWidget,    width: 'quarter', defaultH: 4 },
   { id: 'daily-post',        label: 'Daily POST',            Component: DailyPostWidget,        width: 'quarter', defaultH: 3, gate: postFeatureEnabled },
   { id: 'tribe-care',        label: 'Tribe Care',            Component: TribeCareWidget,        width: 'quarter', defaultH: 4, gate: (s) => !!s.tribeCare?.hasPeople },
   { id: 'quick-stats',       label: 'Quick Stats',           Component: QuickStatsWidget,       width: 'quarter', defaultH: 3, gate: (s) => s.apps.length > 0 },
