@@ -27,6 +27,13 @@ vi.mock('../lib/fileUtils.js', async (original) => ({
 }));
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 
+// Only the install path spawns through this; forwards use spawn() directly.
+vi.mock('../lib/bufferedSpawn.js', async (original) => ({
+  ...(await original()),
+  bufferedSpawn: vi.fn(),
+}));
+import { bufferedSpawn } from '../lib/bufferedSpawn.js';
+
 const EXAMPLE_TC = 'tcEXAMPLE' + 'A'.repeat(40);
 
 function fakeChild() {
@@ -110,18 +117,36 @@ describe('tailcatPeer helpers', () => {
   });
 
   it('reports what every installer said when they all fail', async () => {
-    await expect(ensureTailcatInstalled({
+    const error = await ensureTailcatInstalled({
       detect: async () => null,
       platform: 'linux',
       installers: [
         { label: 'brew install tailcat', run: async () => { throw new Error('brew boom'); } },
         { label: 'go install', run: async () => { throw new Error('dial tcp: connect: bad file descriptor\nignored'); } },
       ],
-    })).rejects.toMatchObject({
-      code: 'TAILCAT_INSTALL_FAILED',
-      status: 503,
-      message: expect.stringContaining('brew install tailcat failed: brew boom'),
+    }).catch((err) => err);
+    expect(error).toMatchObject({ code: 'TAILCAT_INSTALL_FAILED', status: 503 });
+    // Every strategy is named, not just the first one that failed.
+    expect(error.message).toContain('brew install tailcat failed: brew boom');
+    expect(error.message).toContain('go install failed: dial tcp: connect: bad file descriptor');
+    // Only the first line of a multi-line diagnostic reaches the toast.
+    expect(error.message).not.toContain('ignored');
+    expect(error.message).toContain('https://github.com/tailscale/tailcat/releases');
+  });
+
+  it('falls through to the next installer even when one throws synchronously', async () => {
+    let calls = 0;
+    const result = await ensureTailcatInstalled({
+      detect: async () => {
+        calls += 1;
+        return calls <= 1 ? null : '/example/go/bin/tailcat';
+      },
+      installers: [
+        { label: 'brew install tailcat', run: () => { throw new Error('sync boom'); } },
+        { label: 'go install', run: async () => {} },
+      ],
     });
+    expect(result).toEqual({ bin: '/example/go/bin/tailcat', installed: true });
   });
 
   it('treats an installer that leaves no binary as a failure, not a success', async () => {
@@ -164,9 +189,27 @@ describe('tailcatPeer helpers', () => {
       expect.objectContaining({ HOMEBREW_NO_AUTO_UPDATE: '1' }));
   });
 
-  it('surfaces a real install command failure as a readable error', async () => {
-    const [installer] = listTailcatInstallers({ brewBin: null, goBin: '/example/missing/go' });
-    await expect(installer.run()).rejects.toThrow(/ENOENT|spawn/);
+  // The default runner maps a bufferedSpawn result onto the message the operator
+  // reads in the toast; each terminal condition has to say something different.
+  it.each([
+    ['a non-zero exit', { success: false, code: 1, stdout: '', stderr: 'Warning: tap not trusted\nError: No available formula\n', timedOut: false },
+      'Error: No available formula'],
+    ['a spawn failure', { success: false, code: -1, stdout: '', stderr: '', timedOut: false, error: new Error('spawn /example/missing/go ENOENT') },
+      'spawn /example/missing/go ENOENT'],
+    ['a silent non-zero exit', { success: false, code: 7, stdout: '', stderr: '', timedOut: false }, 'exit 7'],
+    ['a timeout', { success: false, code: -1, stdout: '', stderr: '', timedOut: true }, 'timed out after 180s'],
+  ])('surfaces %s as a readable install error', async (_label, result, expected) => {
+    bufferedSpawn.mockResolvedValueOnce(result);
+    const [installer] = listTailcatInstallers({ brewBin: null, goBin: '/example/go' });
+    await expect(installer.run()).rejects.toThrow(expected);
+  });
+
+  it('treats a clean install-command exit as success', async () => {
+    bufferedSpawn.mockResolvedValueOnce({ success: true, code: 0, stdout: '', stderr: '', timedOut: false });
+    const [installer] = listTailcatInstallers({ brewBin: '/example/brew', goBin: null });
+    await expect(installer.run()).resolves.toBeUndefined();
+    expect(bufferedSpawn).toHaveBeenCalledWith('/example/brew', ['install', 'tailcat'],
+      expect.objectContaining({ env: expect.objectContaining({ HOMEBREW_NO_AUTO_UPDATE: '1' }) }));
   });
 
   it('looks for tailcat in the GOBIN and Homebrew prefixes a server may not have on PATH', () => {

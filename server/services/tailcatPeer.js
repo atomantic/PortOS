@@ -184,7 +184,10 @@ export async function ensureTailcatInstalled({
 
   const failures = [];
   for (const installer of installers) {
-    const error = await installer.run().then(() => null, (err) => err);
+    // Promise.resolve().then defers the call, so an installer that throws
+    // SYNCHRONOUSLY still falls through to the next one instead of escaping
+    // past the ServerError wrapper as an unhandled 500.
+    const error = await Promise.resolve().then(() => installer.run()).then(() => null, (err) => err);
     if (error) {
       failures.push(`${installer.label} failed: ${summarizeInstallError(error)}`);
       continue;
