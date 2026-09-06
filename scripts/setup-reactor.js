@@ -2,7 +2,7 @@
 // Invoked automatically on the first authorized render, never at server boot.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
@@ -21,8 +21,8 @@ const targets = {
   'win32-x64': ['x86_64-pc-windows-msvc', 'f65744f94072152b1f86ba2aace4d01f1124d9a8ecb235805039e3718c36cac2'],
 };
 const env = { ...process.env, UV_PYTHON_INSTALL_DIR: join(data, 'venvs', 'reactor-python'), UV_NO_PROGRESS: '1' };
-function run(executable, args) {
-  const result = spawnSync(executable, args, { env, stdio: 'ignore', shell: false, windowsHide: true, timeout: 240_000, killSignal: 'SIGKILL' });
+function run(executable, args, timeout = 450_000) {
+  const result = spawnSync(executable, args, { env, stdio: 'ignore', shell: false, windowsHide: true, timeout, killSignal: 'SIGKILL' });
   if (result.error || result.status !== 0) throw new Error('Reactor runtime preparation failed; check network access and available disk space, then retry the render');
 }
 async function setup() {
@@ -41,13 +41,12 @@ async function setup() {
     if (createHash('sha256').update(bytes).digest('hex') !== digest) throw new Error('Reactor runtime download failed integrity verification');
     await writeFile(archive, bytes);
   }
-  run('tar', ['-xf', archive, '-C', directory]);
+  run('tar', ['-xf', archive, '-C', directory], 30_000);
   const uv = join(directory, ...(windows ? ['uv.exe'] : [`uv-${triple}`, 'uv']));
   // An interrupted installation is repaired in place; no system Python or pip changes.
   run(uv, ['venv', '--python', '3.12', '--managed-python', '--allow-existing', venv]);
   run(uv, ['pip', 'install', '--reinstall-package', 'reactor-sdk', '--python', python, '--only-binary', ':all:', '-r', join(root, 'scripts', 'requirements-reactor.txt')]);
-  run(python, ['-c', 'from reactor_sdk import Reactor; Reactor("reactor/fast-h3")']);
-  await rm(archive, { force: true });
+  run(python, ['-c', 'from reactor_sdk import Reactor; Reactor("reactor/fast-h3")'], 15_000);
   console.log('✅ Reactor runtime ready');
 }
 setup().catch((error) => { console.error(`❌ ${error.message}`); process.exitCode = 1; });

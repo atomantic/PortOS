@@ -7,7 +7,7 @@ import { PATHS } from '../../lib/fileUtils.js';
 
 const execute = promisify(execFile);
 let preparation;
-const probe = (python, expected) => execute(python, ['-c', 'import sys; from importlib.metadata import version; assert version("reactor-sdk") == sys.argv[1]; from reactor_sdk import Reactor; Reactor("reactor/fast-h3")', expected], { timeout: 15_000, maxBuffer: 4096 }).then(() => true, () => false);
+const probe = (python, expected) => execute(python, ['-c', 'import sys; from importlib.metadata import version; assert version("reactor-sdk") == sys.argv[1]; from reactor_sdk import Reactor; Reactor("reactor/fast-h3")', expected], { timeout: 15_000, maxBuffer: 1024 * 1024 }).then(() => true, () => false);
 
 export async function ensureReactorRuntime() {
   const requirements = await readFile(join(PATHS.root, 'scripts', 'requirements-reactor.txt'), 'utf8');

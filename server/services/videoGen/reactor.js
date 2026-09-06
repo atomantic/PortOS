@@ -280,6 +280,7 @@ async function runReactorVideo(job, jobId, {
     });
     entry.stop = null;
     if (entry.aborted) return finalizeCanceled(job, jobId);
+    videoGenEvents.emit('activity', { generationId: jobId });
     broadcastSse(job, { type: 'status', message: 'Minting reactor.inc session…' });
     const { jwt } = await mintReactorToken(apiKey);
     if (entry.aborted) return finalizeCanceled(job, jobId);
