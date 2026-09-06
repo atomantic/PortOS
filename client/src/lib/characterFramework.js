@@ -91,6 +91,9 @@ export const CHARACTER_PSYCHOLOGY_EDITOR_FIELDS = Object.freeze([
 export const CHARACTER_PSYCHOLOGY_NOTE_FIELD = Object.freeze({
   name: 'assessmentNote',
   label: 'Why',
+  // The Universe editor has room to spell the escape hatch out; the compact
+  // Writers Room row editor renders label + placeholder only.
+  hint: 'Required for unknown / not-applicable. A hive, a weather front, or an intelligence with no interior is a legitimate answer — say so here rather than inventing a human interior.',
   placeholder: 'why this character has no legible theory of control, or how to read one for a nonhuman',
   max: CHARACTER_PSYCHOLOGY_LIMITS.assessmentNote,
 });
@@ -100,3 +103,10 @@ export const CHARACTER_PSYCHOLOGY_DRIVE_HINTS = Object.freeze({
   connection: 'being known, kept, belonged to',
   status: 'perceived value to a group — respect, standing, being counted; NOT wealth or dominance',
 });
+
+// The two leaves every drive axis carries. Labelled per axis by the editors
+// (`survival desire`), so only the placeholder copy lives here.
+export const CHARACTER_PSYCHOLOGY_DRIVE_LEAVES = Object.freeze([
+  { name: 'desire', placeholder: 'what they reach for on this axis', max: CHARACTER_PSYCHOLOGY_LIMITS.drive },
+  { name: 'fear', placeholder: 'what they are bracing against on this axis', max: CHARACTER_PSYCHOLOGY_LIMITS.drive },
+]);
