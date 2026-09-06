@@ -1,10 +1,42 @@
 import BibleSection, { BibleAiBadge } from './BibleSection';
 import {
+  CHARACTER_ARC_TYPES,
+  CHARACTER_FRAMEWORK_EDITOR_FIELDS,
+  CHARACTER_MOTIVATIONS_FIELD,
+  CHARACTER_SECRETS_FIELD,
+} from '../../lib/characterFramework';
+import {
   listWritersRoomCharacters,
   createWritersRoomCharacter,
   updateWritersRoomCharacter,
   deleteWritersRoomCharacter,
 } from '../../services/apiWritersRoom';
+
+// Adapter over the shared narrative-framework definitions (#6417): the same
+// Ghost → Wound → Lie → Need → Want copy the Universe cast editor renders,
+// mapped onto BibleSection's compact field config. Deliberately NOT a copy of
+// the universe editor — the media / voice / identity-pack surfaces stay there.
+const ARC_TYPE_HINTS = Object.freeze({
+  positive: 'positive — overcomes the Lie',
+  negative: 'negative — consumed by the Lie',
+  flat: 'flat — holds the truth, changes the world',
+});
+const FRAMEWORK_FIELDS = [
+  { key: CHARACTER_MOTIVATIONS_FIELD.name, label: CHARACTER_MOTIVATIONS_FIELD.label, placeholder: CHARACTER_MOTIVATIONS_FIELD.placeholder, kind: 'multiline', rows: 2, heading: 'Character framework' },
+  ...CHARACTER_FRAMEWORK_EDITOR_FIELDS.map((f) => ({ key: f.name, label: f.label, placeholder: f.placeholder, kind: 'multiline', rows: 2 })),
+  {
+    key: 'arcType',
+    label: 'Arc type',
+    placeholder: 'unset',
+    kind: 'select',
+    options: CHARACTER_ARC_TYPES.map((value) => ({ value, label: ARC_TYPE_HINTS[value] || value })),
+  },
+  { key: CHARACTER_SECRETS_FIELD.name, label: `${CHARACTER_SECRETS_FIELD.label} (one per line)`, placeholder: CHARACTER_SECRETS_FIELD.placeholder, kind: 'lines', rows: 3 },
+];
+// The framework is optional by design — a character with no Ghost isn't
+// incomplete — so it stays out of the row's "Missing: …" warning, which
+// exists to flag the render-critical fields.
+const FRAMEWORK_KEYS = FRAMEWORK_FIELDS.map((f) => f.key);
 
 const CHARACTER_CONFIG = {
   icon: null,
@@ -24,11 +56,15 @@ const CHARACTER_CONFIG = {
     { key: 'personality', label: 'Personality', placeholder: 'Temperament, voice, quirks', kind: 'multiline', rows: 2 },
     { key: 'background', label: 'Background', placeholder: 'Who they are, where they come from', kind: 'multiline', rows: 2 },
     { key: 'notes', label: 'Notes', placeholder: 'Anything else worth tracking', kind: 'multiline', rows: 2 },
+    ...FRAMEWORK_FIELDS,
   ],
   bodyField: 'physicalDescription',
   bodyEmptyText: 'No physical description — image gen will use scene context only',
-  detailBlocks: [],
-  blanksExcludeKeys: ['notes', 'aliases'],
+  detailBlocks: [
+    { key: 'want', label: 'Want', marginClass: 'mt-1' },
+    { key: 'need', label: 'Need', marginClass: '' },
+  ],
+  blanksExcludeKeys: ['notes', 'aliases', ...FRAMEWORK_KEYS],
   renderTitle: (item, { light }) => (
     <span className={`font-semibold ${light ? 'text-gray-900' : 'text-white'}`}>{item.name}</span>
   ),

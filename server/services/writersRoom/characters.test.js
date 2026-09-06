@@ -184,3 +184,86 @@ describe('writers room — characters merge', () => {
     expect(updated.firstAppearance).toBe('Chapter 1');
   });
 });
+
+describe('writers room — character narrative framework (#6417)', () => {
+  it('creates, patches and clears the framework the Universe bible already stores', async () => {
+    const id = await newWork();
+    const created = await createCharacter(id, {
+      name: 'Wren Calloway',
+      motivations: 'Keep the crew fed; never be the one who leaves.',
+      ghost: 'Left behind at the relay station at nine.',
+      wound: 'Reads every silence as abandonment.',
+      lie: 'I only matter while I am useful.',
+      need: 'Being wanted is not the same as being needed.',
+      want: 'Buy back the family salvage license.',
+      arcType: 'positive',
+      secrets: ['Sold the license years ago', 'Cannot read the old charts'],
+    });
+    expect(created.id).toMatch(/^wr-char-/);
+    expect(created.lie).toBe('I only matter while I am useful.');
+    expect(created.arcType).toBe('positive');
+    expect(created.secrets).toEqual(['Sold the license years ago', 'Cannot read the old charts']);
+
+    // Patch one belief field; every other framework value is untouched.
+    const patched = await updateCharacter(id, created.id, {
+      need: 'Being wanted is enough.',
+    });
+    expect(patched.need).toBe('Being wanted is enough.');
+    expect(patched.ghost).toBe('Left behind at the relay station at nine.');
+    expect(patched.secrets).toHaveLength(2);
+
+    // Present-but-empty is a real clear, not an absent key.
+    const cleared = await updateCharacter(id, created.id, {
+      lie: '', arcType: null, secrets: [],
+    });
+    expect(cleared.lie).toBe('');
+    expect(cleared.arcType).toBeNull();
+    expect(cleared.secrets).toEqual([]);
+    expect(cleared.need).toBe('Being wanted is enough.');
+
+    const [reloaded] = await listCharacters(id);
+    expect(reloaded.want).toBe('Buy back the family salvage license.');
+    expect(reloaded.lie).toBe('');
+    expect(reloaded.arcType).toBeNull();
+  });
+
+  it('persists the links, wardrobes and voice id the route schema already accepted', async () => {
+    // All three were validated by writersRoomCharacter*Schema but missing from
+    // the store's editableFields, so the write was accepted and silently
+    // dropped — the same class of bug as the framework itself.
+    const id = await newWork();
+    const other = await createCharacter(id, { name: 'Ines Mbeki' });
+    const c = await createCharacter(id, {
+      name: 'Wren Calloway',
+      relationshipLinks: [{ targetCharacterId: other.id, type: 'rival', description: 'Same salvage claim.' }],
+      wardrobes: [{ name: 'Dock coat', description: 'Oil-stained canvas.' }],
+      voiceId: 'kokoro:af_heart',
+    });
+    expect(c.relationshipLinks).toHaveLength(1);
+    expect(c.relationshipLinks[0].targetCharacterId).toBe(other.id);
+    expect(c.wardrobes[0].name).toBe('Dock coat');
+    expect(c.voiceId).toBe('kokoro:af_heart');
+  });
+
+  it('extraction never clobbers an authored framework field', async () => {
+    const id = await newWork();
+    const authored = await createCharacter(id, {
+      name: 'Wren Calloway',
+      lie: 'AUTHORED — I only matter while I am useful.',
+      arcType: 'positive',
+    });
+    const merged = await mergeExtractedCharacters(id, [{
+      name: 'wren calloway',
+      lie: 'EXTRACTED — she fears the dark.',
+      arcType: 'negative',
+      ghost: 'EXTRACTED — left behind at the relay station.',
+      secrets: ['Sold the license'],
+    }]);
+    const refreshed = merged.find((x) => x.id === authored.id);
+    expect(refreshed.lie).toBe('AUTHORED — I only matter while I am useful.');
+    expect(refreshed.arcType).toBe('positive');
+    // Blank fields are still filled from prose — no-clobber, not no-write.
+    expect(refreshed.ghost).toBe('EXTRACTED — left behind at the relay station.');
+    expect(refreshed.secrets).toEqual(['Sold the license']);
+  });
+});

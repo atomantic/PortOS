@@ -15,6 +15,18 @@ You are an editorial reader giving a single round of constructive feedback on a 
 {{draftBody}}
 ```
 
+{{#castFrameworkJson}}
+## Authored character framework
+
+The writer has already declared the following for this cast — their motivations, the Ghost that wounded them, the Wound itself, the Lie they believe, the Need that answers it, the Want they chase, the arc they intend, and the secrets they keep. This is the PLAN, not a description of the draft.
+
+```json
+{{castFrameworkJson}}
+```
+
+Use it only to judge delivery against intent: where the prose earns a declared beat, and where a declared Lie / Need / arc is asserted in the bible but never dramatized on the page. Do not restate the plan back as a strength, do not treat a field the writer left blank as a defect, and do not invent framework the writer has not declared. Character issues that reference the plan belong in `issues` with `category: "character"`, anchored to a real `excerpt` like every other issue.
+{{/castFrameworkJson}}
+
 ## Task
 
 Read the entire draft. Then produce one editorial pass that covers:

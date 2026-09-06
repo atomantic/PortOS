@@ -113,6 +113,10 @@ export * from './streamLines.js';
 export * from './taskDataInputCatalog.js';
 // The canon field caps storyBible.js sanitizes against, as a pure leaf.
 export * from './bibleLimits.js';
+// The narrative-character framework field list, as a pure leaf — storyBible.js
+// re-exports CHARACTER_ARC_TYPES from here, so keep this flat export ahead of
+// the namespaced storyBible below.
+export * from './characterFramework.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';

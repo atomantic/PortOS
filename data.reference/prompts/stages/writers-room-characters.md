@@ -36,9 +36,21 @@ For every named character (or distinct unnamed character — "the bartender", "t
    - `firstAppearance` — short quote (≤ 120 chars) from the prose where they first show up, or null if not clear.
    - `evidence` — array of 1–3 short verbatim quotes (≤ 120 chars each) from the prose that support the physical description specifically.
 
-2. **Respect existing edits.** If a field in the existing profile is already filled in, keep that value verbatim. Only populate empty / missing fields.
+2. **Propose narrative framework ONLY where the prose supports it.** These fields describe the character's interior, and a wrong guess is worse than a gap — unlike `physicalDescription`, nothing downstream breaks when they stay empty. Emit a field only when the prose gives you something concrete to point at, and leave it out entirely otherwise:
+   - `motivations` — what they are visibly pursuing and what they fear losing.
+   - `ghost` — the past event the prose establishes as the source of their damage.
+   - `wound` — the lasting damage that event left.
+   - `lie` — the false belief they act on, in one sentence ("I only matter if I win").
+   - `need` — the truth that answers the Lie; it may qualify the belief rather than invert it.
+   - `want` — the concrete external goal they chase, usually in tension with the Need.
+   - `arcType` — `positive` (overcomes the Lie), `negative` (consumed by it), or `flat` (already holds the truth and changes the world instead). Omit unless the draft actually shows the shape.
+   - `secrets` — things they hide from others or from themselves, one per entry.
 
-3. **Visually differentiate every character in the cast.** Before finalizing, scan all `physicalDescription` values you're producing AND every non-empty `physicalDescription` in the existing profiles above. **No two characters may be visually interchangeable** — if you produce two adult women in dark jackets with brown hair, an image model will render them as the same person. Pick distinguishing choices across:
+   **Do not invent a backstory to fill these in.** An empty framework field is a correct answer for a character the prose has not opened up; a fabricated Ghost silently becomes canon the writer then has to argue with. When you propose one from indirect evidence rather than something stated on the page, add the field name to `missingFromProse` (e.g. `ghost`, `lie`) so the writer can see which reads are inference. The rule in step 5 about committing to a renderable detail applies to `physicalDescription` alone — never to the framework.
+
+3. **Respect existing edits.** If a field in the existing profile is already filled in, keep that value verbatim. Only populate empty / missing fields. This applies to every framework field above: a Ghost, Lie, Want, Need, arc type, or secret the writer has already authored is authoritative even when the prose seems to contradict it.
+
+4. **Visually differentiate every character in the cast.** Before finalizing, scan all `physicalDescription` values you're producing AND every non-empty `physicalDescription` in the existing profiles above. **No two characters may be visually interchangeable** — if you produce two adult women in dark jackets with brown hair, an image model will render them as the same person. Pick distinguishing choices across:
    - ethnicity / heritage (e.g. East Asian, Afro-Caribbean, Mediterranean, Pacific Islander, Nordic — be specific, not generic "white" or "diverse")
    - age decade (mid-20s vs late-30s vs 50s reads completely different)
    - hair (color, length, texture, style — don't give two characters the same dark bob)
@@ -46,13 +58,13 @@ For every named character (or distinct unnamed character — "the bartender", "t
    - signature garment + palette (one character's "rumpled jacket" should not collide with another's)
    When two characters would otherwise collide on a dimension, deliberately push one in a different direction.
 
-4. **Commit when prose is silent, then log it.** When the prose doesn't specify a renderable detail (hair color, ethnicity, exact wardrobe), DO NOT leave `physicalDescription` blank on that axis — pick a specific, opinionated choice that fits the character's role and differentiates them from the rest of the cast. Then list the field path in `missingFromProse` (e.g. `physicalDescription.hairColor`) so the writer knows you committed without prose evidence and can override if needed. The bible drives image gen — empty axes produce identical-looking characters. A committed-but-flagged choice is always better than a gap.
+5. **Commit when prose is silent, then log it.** When the prose doesn't specify a renderable detail (hair color, ethnicity, exact wardrobe), DO NOT leave `physicalDescription` blank on that axis — pick a specific, opinionated choice that fits the character's role and differentiates them from the rest of the cast. Then list the field path in `missingFromProse` (e.g. `physicalDescription.hairColor`) so the writer knows you committed without prose evidence and can override if needed. The bible drives image gen — empty axes produce identical-looking characters. A committed-but-flagged choice is always better than a gap.
 
-5. Do not include characters who are merely referenced (e.g. "her dead father") unless they appear in a scene. Use your judgment.
+6. Do not include characters who are merely referenced (e.g. "her dead father") unless they appear in a scene. Use your judgment.
 
 ## Output contract
 
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no commentary:
+Return ONLY valid JSON matching this shape — no prose, no markdown fence, no commentary. The framework keys (`motivations` through `secrets`) are OPTIONAL: omit any the prose does not support rather than emitting an empty or invented value.
 
 ```json
 {
@@ -64,9 +76,17 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "physicalDescription": "string",
       "personality": "string",
       "background": "string",
+      "motivations": "string",
+      "ghost": "string",
+      "wound": "string",
+      "lie": "string",
+      "need": "string",
+      "want": "string",
+      "arcType": "positive|negative|flat",
+      "secrets": ["string", ...],
       "firstAppearance": "string or null",
       "evidence": ["string", ...],
-      "missingFromProse": ["physicalDescription.hair", "physicalDescription.eyes", "background", ...]
+      "missingFromProse": ["physicalDescription.hair", "physicalDescription.eyes", "ghost", ...]
     }
   ]
 }

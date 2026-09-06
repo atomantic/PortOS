@@ -124,7 +124,10 @@ const SCENARIOS = [
       personality: '', background: '', notes: '', source: 'user',
     },
     createPrimaryValue: 'Bly',
-    createPayload: { name: 'Bly', aliases: [], role: '', physicalDescription: '', personality: '', background: '', notes: '' },
+    createPayload: {
+      name: 'Bly', aliases: [], role: '', physicalDescription: '', personality: '', background: '', notes: '',
+      motivations: '', ghost: '', wound: '', lie: '', need: '', want: '', arcType: null, secrets: [],
+    },
     createdRecord: {
       id: 'char-2', name: 'Bly', aliases: [], role: '', physicalDescription: '', personality: '',
       background: '', notes: '', source: 'user',
@@ -135,6 +138,7 @@ const SCENARIOS = [
     updatePayload: {
       name: 'Ada', aliases: [], role: 'protagonist', physicalDescription: 'Short, silver hair, sharp eyes.',
       personality: '', background: '', notes: '',
+      motivations: '', ghost: '', wound: '', lie: '', need: '', want: '', arcType: null, secrets: [],
     },
   },
 ];
