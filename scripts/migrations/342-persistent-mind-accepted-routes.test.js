@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import migration from './343-persistent-mind-accepted-routes.js';
+import migration from './342-persistent-mind-accepted-routes.js';
+import thinkingPresetsMigration from './342-persistent-mind-thinking-presets.js';
 
 let rootDir;
 afterEach(async () => {
@@ -10,7 +11,7 @@ afterEach(async () => {
   rootDir = null;
 });
 
-describe('migration 343 accepted thinking routes', () => {
+describe('migration 342-persistent-mind-accepted-routes', () => {
   it('preserves messages, attachments, pause and unknown fields without inventing temporary authority', async () => {
     rootDir = await mkdtemp(join(tmpdir(), 'portos-mind-accepted-routes-'));
     const dir = join(rootDir, 'data', 'cos');
@@ -45,6 +46,35 @@ describe('migration 343 accepted thinking routes', () => {
     });
     expect(await readFile(configPath, 'utf8')).toBe(config);
     await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 0, reason: 'already-applied' });
+  });
+
+  it('still marks unverified messages when the thinking-presets migration runs in the same pass', async () => {
+    // Filename sort ('accepted-routes' < 'thinking-presets') must put this
+    // migration's schemaVersion=7 stamp BEFORE 342-persistent-mind-thinking-
+    // presets bumps straight to PERSISTENT_MIND_SCHEMA_VERSION (8). If the
+    // thinking-presets migration ran first, it would stamp 8 immediately and
+    // this migration's `schemaVersion > 7` gate would then skip — silently
+    // leaving stale queued messages without their missing-route sentinel on
+    // any install that applies both migrations in one multi-version pass.
+    rootDir = await mkdtemp(join(tmpdir(), 'portos-mind-migration-order-'));
+    const dir = join(rootDir, 'data', 'cos');
+    await mkdir(dir, { recursive: true });
+    const temporary = { id: 'temporary', text: 'Keep this too', thinkingPresetId: 'deep' };
+    const state = {
+      persistentMind: {
+        schemaVersion: 6, enabled: true,
+        queuedMessages: [temporary],
+      },
+    };
+    await writeFile(join(dir, 'state.json'), JSON.stringify(state));
+    await writeFile(join(dir, 'config.json'), JSON.stringify({ persistentMindThinkingPresets: { presets: [] } }));
+
+    await expect(migration.up({ rootDir })).resolves.toEqual({ updated: 1 });
+    await expect(thinkingPresetsMigration.up({ rootDir })).resolves.toEqual({ updated: 1 });
+
+    const migrated = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
+    expect(migrated.persistentMind.schemaVersion).toBe(8);
+    expect(migrated.persistentMind.queuedMessages).toEqual([{ ...temporary, thinkingPreset: null }]);
   });
 
   it('does not create a state file or replace invalid input or newer state', async () => {
