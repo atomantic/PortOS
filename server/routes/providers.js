@@ -4,8 +4,11 @@ import {
   getManagementGraph,
   linkBinding,
   previewBindingLink,
+  refreshConnectionCatalog,
   removeConnection,
   unlinkBinding,
+  updateBindingSettings,
+  updateConnectionSettings,
 } from '../services/providerGraph.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -23,6 +26,8 @@ import {
   providerVisionSuiteSchema,
   providerBindingLinkSchema,
   providerBindingUnlinkSchema,
+  providerBindingUpdateSchema,
+  providerConnectionUpdateSchema,
 } from '../lib/validation.js';
 import {
   getProviderRuntimeStatus,
@@ -343,6 +348,41 @@ export function createPortOSProviderRoutes(aiToolkit) {
   // does — the graph never silently orphans a binding to tidy a row away.
   router.delete('/connections/:id', asyncHandler(async (req, res) => {
     res.json(await removeConnection(req.params.id));
+  }));
+
+  /**
+   * Edit one SHARED backend (#6369) — its label, transports and credentials —
+   * and materialize the result into every executable route on it.
+   *
+   * This is the edit the graph exists for: an endpoint or key changed once
+   * rather than retyped per harness. `expectedRevision` is required and
+   * re-checked inside the serialized pass, so an edit made against a row that
+   * has since moved is a 409 instead of a silent overwrite.
+   */
+  router.patch('/connections/:id', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerConnectionUpdateSchema, req.body ?? {});
+    res.json(await updateConnectionSettings({ connectionId: req.params.id, ...input }));
+  }));
+
+  /**
+   * Refresh a connection's SHARED model catalog once for every harness on it.
+   *
+   * An explicit discovery request and nothing more: it lists models, it never
+   * generates, and a failed probe keeps the catalog the connection already had
+   * rather than reporting an empty backend.
+   */
+  router.post('/connections/:id/refresh-models', asyncHandler(async (req, res) => {
+    res.json(await refreshConnectionCatalog(req.params.id));
+  }));
+
+  /**
+   * Edit one harness binding's management state: its label and the subset of
+   * the shared catalog it offers. Never its routes' enablement or consent —
+   * those stay on `PATCH /api/providers/:id`, where granting them is explicit.
+   */
+  router.patch('/bindings/:id', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingUpdateSchema, req.body ?? {});
+    res.json(await updateBindingSettings({ bindingId: req.params.id, ...input }));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {

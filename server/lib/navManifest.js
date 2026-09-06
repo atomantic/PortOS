@@ -87,6 +87,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.writers-room.guide', path: '/writers-room/guide', label: 'Writers Room Guide', section: 'Create', aliases: ['writers-room-guide', 'writing-guide', 'writing-rules', 'word-count', 'length-targets'], keywords: ['microfiction', 'flash fiction', 'short story', 'novelette', 'novella', 'novel length', 'word count', 'character count', 'book length', 'craft', 'writing advice', 'emotional roadmap', 'documentation', 'help'] },
   { id: 'nav.settings.prompts', path: '/prompts', label: 'Prompts', section: 'Settings', tabId: 'prompts', aliases: ['prompts'] },
   { id: 'nav.settings.providers', path: '/ai', label: 'Providers', section: 'Models', tabId: 'providers', aliases: ['providers', 'ai-providers'] },
+  { id: 'nav.settings.connections', path: '/ai/connections', label: 'Backend Connections', section: 'Models', aliases: ['connections', 'backend-connections', 'provider-connections', 'harness-connections'], keywords: ['endpoint', 'shared backend', 'link', 'unlink', 'model catalog', 'ollama', 'api key'] },
   { id: 'nav.settings.fleet-llm', path: '/ai/fleet', label: 'Fleet LLM Setup', section: 'Settings', aliases: ['fleet-llm', 'gpu-host', 'remote-ai-provider'], keywords: ['3090', 'tailscale', 'vllm', 'qwen', 'coding model', 'dedicated host'] },
 
   { id: 'nav.brain.inbox', path: '/brain/inbox', label: 'Inbox', section: 'Brain', tabGroup: 'brain', tabId: 'inbox', aliases: ['brain', 'brain-inbox', 'inbox'] },

@@ -581,6 +581,35 @@ export const providerBindingUnlinkSchema = z.object({
   }).strict().optional().default({}),
 }).strict();
 
+// PATCH /api/providers/connections/:id (#6369).
+//
+// `expectedRevision` is REQUIRED, unlike the link schemas where a preview may
+// omit it: this endpoint always writes, and a shared backend edit that lands on
+// a row the human never saw is exactly the silent overwrite the graph exists to
+// prevent.
+//
+// Credentials are three-valued on purpose — absent preserves, `null` clears, a
+// string sets — so a client that never received the secret (the DTO carries
+// only `hasCredentials`) can edit a label without wiping the key.
+export const providerConnectionUpdateSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  label: z.string().trim().max(200).optional(),
+  transports: z.record(
+    z.string().trim().min(1).max(64),
+    z.object({ baseUrl: z.string().trim().min(1).max(2048) }).strict(),
+  ).optional(),
+  credentials: z.record(z.string().trim().min(1).max(128), z.string().max(4096).nullable()).optional(),
+}).strict();
+
+// PATCH /api/providers/bindings/:id (#6369). Management state only: no
+// `enabled`, because route enablement is an executable-record field that
+// PATCH /api/providers/:id owns and a binding toggle must never grant it.
+export const providerBindingUpdateSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  label: z.string().trim().max(200).optional(),
+  selectedModels: z.array(z.string().trim().min(1).max(512)).max(1000).optional(),
+}).strict();
+
 // POST /api/providers/:id/vision-suite.
 export const providerVisionSuiteSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(256).optional()),

@@ -247,3 +247,56 @@ export async function deleteConnection(connectionId) {
   await query('DELETE FROM ai_connections WHERE id = $1', [connectionId]);
   return { deleted: true };
 }
+
+// --- explicit management mutations (#6369) -----------------------------------
+// Every function below is revision-checked and serialized by `providerGraph.js`
+// BEFORE it is called. They write a whole row rather than a computed SET list:
+// the caller already read the row it is replacing, so a partial-column update
+// would only add a second place for the merge rules to live.
+
+/**
+ * Write a connection's user-editable settings and bump its revision.
+ *
+ * `catalog` is written here too because a refresh is a connection-level edit,
+ * not a per-route one — see `refreshConnectionCatalog`.
+ *
+ * @returns {Promise<number|null>} the new revision, or `null` if the row is gone
+ */
+export async function saveConnectionSettings({ id, label, transports, credentials, catalog }) {
+  const { rows } = await query(
+    `UPDATE ai_connections
+        SET label = $2, transports = $3, credentials = $4, catalog = $5,
+            revision = revision + 1, updated_at = NOW()
+      WHERE id = $1
+      RETURNING revision`,
+    [id, label ?? '', JSON.stringify(transports || {}), JSON.stringify(credentials || {}),
+      JSON.stringify(catalog || { state: 'unknown', models: [] })],
+  );
+  return rows[0]?.revision ?? null;
+}
+
+/**
+ * Write a binding's management settings and bump its revision.
+ *
+ * Deliberately NOT `enabled`: route enablement is an executable-record field
+ * that `PATCH /api/providers/:id` owns, and projecting a binding-level toggle
+ * into it would turn a management edit into an execution consent grant.
+ *
+ * @returns {Promise<number|null>} the new revision, or `null` if the row is gone
+ */
+export async function saveBindingSettings({ id, label, selectedModels }) {
+  const { rows } = await query(
+    `UPDATE ai_harness_bindings
+        SET label = $2, selected_models = $3, revision = revision + 1, updated_at = NOW()
+      WHERE id = $1
+      RETURNING revision`,
+    [id, label ?? '', JSON.stringify(selectedModels || [])],
+  );
+  return rows[0]?.revision ?? null;
+}
+
+/** Record the canonical→executable model aliases a refresh observed on a route. */
+export async function saveRouteModelMap(providerId, modelMap) {
+  await query('UPDATE ai_route_bindings SET model_map = $2, updated_at = NOW() WHERE provider_id = $1',
+    [providerId, JSON.stringify(modelMap || {})]);
+}

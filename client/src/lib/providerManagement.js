@@ -1,0 +1,128 @@
+/**
+ * Reading the provider connection graph (#6369).
+ *
+ * `GET /api/providers/management` returns three flat lists — connections,
+ * harness bindings and executable routes. Every management screen needs the
+ * same joined shape and the same three questions answered about it, so the
+ * joining lives here rather than inside a component:
+ *
+ *   - which harnesses share this backend, and through which executable routes;
+ *   - which routes a shared-model choice would affect;
+ *   - which saved model pins the current subset no longer covers.
+ *
+ * Pure and side-effect-free. The graph is already sanitized server-side (a
+ * connection reports `hasCredentials`, never a secret), so nothing here has to
+ * redact — but nothing here may start inventing identity either: two
+ * connections are the same only when the server says they share an id.
+ */
+
+import { harnessLabel } from '../utils/providerHarnesses.js';
+
+/** Route modes in the order a human reads them: run it, watch it, call it. */
+export const ROUTE_MODE_ORDER = Object.freeze(['cli', 'tui', 'api']);
+
+const byModeOrder = (a, b) => ROUTE_MODE_ORDER.indexOf(a.mode) - ROUTE_MODE_ORDER.indexOf(b.mode);
+
+/**
+ * The graph joined into one row per connection.
+ *
+ * A connection with no bindings is KEPT, not filtered away: reconciliation
+ * deliberately preserves an emptied connection for explicit cleanup, so hiding
+ * it here would make the only row a user can act on invisible. Same for a
+ * binding whose routes have all been deleted.
+ *
+ * @param {{connections?:object[], bindings?:object[], routes?:object[]}} graph
+ * @returns {{connection:object, bindings:{binding:object, label:string, routes:object[]}[], routes:object[]}[]}
+ */
+export function groupGraphByConnection(graph) {
+  const bindings = Array.isArray(graph?.bindings) ? graph.bindings : [];
+  const routes = Array.isArray(graph?.routes) ? graph.routes : [];
+  const routesByBinding = new Map();
+  for (const route of routes) {
+    const list = routesByBinding.get(route.bindingId) || [];
+    list.push(route);
+    routesByBinding.set(route.bindingId, list);
+  }
+
+  return (Array.isArray(graph?.connections) ? graph.connections : []).map((connection) => {
+    const attached = bindings
+      .filter((binding) => binding.connectionId === connection.id)
+      .map((binding) => ({
+        binding,
+        label: binding.label || harnessLabel(binding.harnessId),
+        routes: [...(routesByBinding.get(binding.id) || [])].sort(byModeOrder),
+      }));
+    return {
+      connection,
+      bindings: attached,
+      routes: attached.flatMap((entry) => entry.routes),
+    };
+  });
+}
+
+/** One connection's joined row, or `null` — never a partial match on a label. */
+export const findConnectionGroup = (groups, connectionId) =>
+  groups.find((group) => group.connection.id === connectionId) || null;
+
+/**
+ * The models a binding offers, and where each one came from.
+ *
+ * An EMPTY `selectedModels` means "the whole shared catalog", not "nothing":
+ * an imported binding has never been narrowed, and reading that as an empty
+ * offer would blank every model menu on the install the moment the graph turned
+ * on. Narrowing to nothing is expressed by the UI refusing to save it, not by a
+ * value that also means "untouched".
+ *
+ * @returns {{model:string, selected:boolean}[]} catalog order, never reordered by state
+ */
+export function bindingModelOffer(connection, binding) {
+  const catalog = Array.isArray(connection?.catalog?.models) ? connection.catalog.models : [];
+  const chosen = Array.isArray(binding?.selectedModels) ? binding.selectedModels : [];
+  const narrowed = chosen.length > 0;
+  return catalog.map((model) => ({ model, selected: !narrowed || chosen.includes(model) }));
+}
+
+/**
+ * Models a binding still names that the shared catalog no longer offers.
+ *
+ * Reported rather than repaired. A pin outside the catalog is the single most
+ * common thing a refresh produces — the backend dropped a model — and silently
+ * dropping it from the binding is how a saved selection disappears without
+ * anyone deciding to remove it.
+ */
+export function staleSelectedModels(connection, binding) {
+  const catalog = new Set(Array.isArray(connection?.catalog?.models) ? connection.catalog.models : []);
+  return (Array.isArray(binding?.selectedModels) ? binding.selectedModels : [])
+    .filter((model) => !catalog.has(model));
+}
+
+/**
+ * How to describe a connection's catalog, keeping the three states distinct.
+ *
+ * `known` with zero models is a real answer from a backend with no models
+ * installed; `unknown` is "never asked"; `failed` keeps the models it already
+ * had. Collapsing any two of those into "0 models" is the exact bug the catalog
+ * state field exists to prevent.
+ */
+export function catalogSummary(catalog) {
+  const models = Array.isArray(catalog?.models) ? catalog.models : [];
+  if (catalog?.state === 'failed') {
+    return {
+      tone: 'error',
+      text: models.length > 0
+        ? `Last refresh failed — showing ${models.length} previously known model${models.length === 1 ? '' : 's'}`
+        : 'Last refresh failed — no models known yet',
+      detail: catalog.error || null,
+    };
+  }
+  if (catalog?.state === 'known') {
+    return {
+      tone: models.length > 0 ? 'ok' : 'warn',
+      text: models.length > 0
+        ? `${models.length} model${models.length === 1 ? '' : 's'}`
+        : 'No models installed on this backend',
+      detail: null,
+    };
+  }
+  return { tone: 'muted', text: 'Not refreshed yet', detail: null };
+}

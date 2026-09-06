@@ -293,6 +293,14 @@ export default function App() {
           <Route path="ai/new" element={<AIProviders />} />
           <Route path="ai/fleet" element={<AIProviders />} />
           <Route path="ai/edit/:providerId" element={<AIProviders />} />
+          {/* Backend connection management (#6369). The selected connection is
+              a route param, not local state, so a shared link reopens the same
+              row — and the harness-scoped form is what a "Harnesses → Claude →
+              Connections" walk deep-links to. */}
+          <Route path="ai/connections" element={<AIProviders />} />
+          <Route path="ai/connections/:connectionId" element={<AIProviders />} />
+          <Route path="ai/harnesses/:harnessId/connections" element={<AIProviders />} />
+          <Route path="ai/harnesses/:harnessId/connections/:connectionId" element={<AIProviders />} />
           <Route path="prompts" element={<PromptManager />} />
           <Route path="cos" element={<Navigate to="/cos/tasks" replace />} />
           <Route path="cos/mind/tools" element={<Navigate to="/cos/mind?panel=tools" replace />} />

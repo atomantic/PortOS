@@ -122,6 +122,7 @@ export * from './mediaSearch.js';
 export * from './morsePractice.js';
 export * from './moodBoardItemSrc.js';
 export * from './ports.js';
+export * from './providerManagement.js';
 export * from './rapidReaderPosition.js';
 export * from './registerServiceWorker.js';
 export * from './safeStorage.js';

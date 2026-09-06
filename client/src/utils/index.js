@@ -38,6 +38,7 @@ export * from './providerAssignments.js';
 export * from './providerContextWindows.js';
 export * from './providerEndpoints.js';
 export * from './providerGateways.js';
+export * from './providerHarnesses.js';
 export * from './providerModels.js';
 export * from './providerReadiness.js';
 export * from './providerSelection.js';

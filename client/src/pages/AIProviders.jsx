@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import { Bot, Cpu, Gauge, Network, Package } from 'lucide-react';
+import { Bot, Cpu, Gauge, Link2, Network, Package } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -21,6 +21,7 @@ import ProviderForm from '../components/providers/ProviderForm';
 import CollapsibleSection from '../components/ui/CollapsibleSection';
 import FleetProviderSetup from '../components/providers/FleetProviderSetup';
 import FleetHostSetup from '../components/providers/FleetHostSetup';
+import ProviderConnections from '../components/providers/ProviderConnections';
 
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
@@ -196,11 +197,24 @@ export default function AIProviders() {
   // create route shadow its editor.
   const navigate = useNavigate();
   const location = useLocation();
-  const { providerId: editingProviderId } = useParams();
+  const { providerId: editingProviderId, connectionId, harnessId } = useParams();
   const creatingProvider = location.pathname.replace(/\/+$/, '').endsWith('/ai/new');
   const fleetSetupOpen = location.pathname.replace(/\/+$/, '').endsWith('/ai/fleet');
   const closeForm = useCallback(() => navigate('/ai'), [navigate]);
   const openForm = useCallback((target) => navigate(target ? `/ai/edit/${target.id}` : '/ai/new'), [navigate]);
+
+  // Backend connection management (#6369). Open state and the selected
+  // connection are both route segments, so `/ai/connections/<id>` and the
+  // harness-scoped `/ai/harnesses/<harness>/connections/<id>` are shareable and
+  // reachable from ⌘K and voice — same rule as the provider editor above.
+  const connectionsOpen = /\/ai(?:\/harnesses\/[^/]+)?\/connections(?:\/|$)/.test(
+    `${location.pathname.replace(/\/+$/, '')}`,
+  );
+  const connectionsBase = harnessId ? `/ai/harnesses/${harnessId}/connections` : '/ai/connections';
+  const selectConnection = useCallback(
+    (id) => navigate(id ? `${connectionsBase}/${id}` : connectionsBase, { replace: true }),
+    [navigate, connectionsBase],
+  );
 
   useEffect(() => {
     loadData();
@@ -691,6 +705,8 @@ export default function AIProviders() {
     { id: 'orchestration-profiles', label: 'Orchestration profiles', icon: Cpu, to: '/settings/orchestration' },
     { id: 'compare-models', label: 'Compare local models', icon: Gauge, to: '/models/performance' },
     { id: 'fleet-setup', label: 'Fleet setup', icon: Network, to: '/ai/fleet' },
+    // One backend, edited once, for every harness pointed at it (#6369).
+    { id: 'backend-connections', label: 'Backend connections', icon: Link2, to: '/ai/connections' },
     {
       id: 'load-samples',
       label: loadingSamples ? 'Loading samples…' : 'Load Samples',
@@ -1079,6 +1095,16 @@ export default function AIProviders() {
         flushMs={250}
         description={`Installing ${installingRuntime?.label} from ${installingRuntime?.method === 'script' ? "the vendor's official install script" : 'its global npm package'}.`}
       />
+      {connectionsOpen && (
+        <ProviderConnections
+          open
+          connectionId={connectionId || null}
+          harnessId={harnessId || null}
+          onClose={closeForm}
+          onSelectConnection={selectConnection}
+          onGraphChanged={loadData}
+        />
+      )}
       {fleetSetupOpen && (
         <FleetProviderSetup
           peers={fleetPeers}

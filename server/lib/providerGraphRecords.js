@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
-import { providerConnectionProfile } from './providerConnections.js';
+import { REDACTED_CREDENTIAL, providerConnectionProfile } from './providerConnections.js';
 import {
   PROVIDER_GRAPH_SCHEMA_VERSION,
   buildProviderGraphPreview,
@@ -46,6 +46,10 @@ import { PROVIDER_HARNESS_IDS, ROUTE_MODES, providerRouteMode } from './provider
 const catalogSchema = z.object({
   state: z.enum(['unknown', 'known', 'failed']),
   models: z.array(z.string()),
+  // Why the last refresh failed, already stripped of credential material
+  // (#6369). Optional so rows written before the field existed still parse, and
+  // nullable so a later SUCCESS can clear it without deleting the key.
+  error: z.string().nullable().optional(),
 }).strict();
 
 const connectionDtoSchema = z.object({
@@ -367,3 +371,86 @@ export const reconciliationIsNoop = (plan) =>
   && plan.snapshots.length === 0
   && plan.imports.routes.length === 0
   && plan.regroups.every((regroup) => regroup.connectionAction === 'unchanged' && regroup.bindingId);
+
+// --- explicit management edits (#6369) ---------------------------------------
+
+/**
+ * Merge a credential patch into a connection's stored credentials.
+ *
+ * Three distinct inputs, three distinct outcomes — the sentinel-vs-empty rule
+ * from AGENTS.md, applied to secrets, where conflating them silently destroys
+ * one:
+ *
+ *   - key ABSENT  → preserve the stored secret (the client never had it)
+ *   - value `null`→ an explicit clear
+ *   - a string    → set it
+ *
+ * A client can only have learned `REDACTED_CREDENTIAL` by reading a sanitized
+ * response, so echoing it back is never an intentional value. It is reported as
+ * `rejected` rather than written, because storing `'***'` as the real secret
+ * would break execution in a way no later edit could distinguish from a typo.
+ *
+ * @param {Record<string,string>} current
+ * @param {Record<string,string|null>|undefined} patch
+ * @returns {{credentials: Record<string,string>, rejected: string[]}}
+ */
+export function mergeConnectionCredentials(current, patch) {
+  const credentials = { ...(current || {}) };
+  const rejected = [];
+  for (const [name, value] of Object.entries(patch || {})) {
+    if (value === null) {
+      delete credentials[name];
+      continue;
+    }
+    if (value === REDACTED_CREDENTIAL) {
+      rejected.push(name);
+      continue;
+    }
+    credentials[name] = value;
+  }
+  return { credentials, rejected };
+}
+
+/** Bound on a persisted refresh error, so one runaway provider message cannot bloat a row. */
+const CATALOG_ERROR_MAX = 300;
+
+/**
+ * A refresh failure reduced to something safe to persist and show.
+ *
+ * Provider errors routinely echo the request that produced them, so the
+ * connection's OWN credential values are replaced before anything is stored —
+ * an exact match on known secrets, not a guess at what a secret looks like.
+ *
+ * @param {unknown} error
+ * @param {Record<string,string>} credentials - the connection's raw secrets
+ * @returns {string}
+ */
+export function sanitizeCatalogError(error, credentials = {}) {
+  const raw = (error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error || ''))
+    || 'The model refresh failed';
+  const redacted = Object.values(credentials)
+    .filter((secret) => typeof secret === 'string' && secret.length > 0)
+    .reduce((text, secret) => text.split(secret).join(REDACTED_CREDENTIAL), raw);
+  return redacted.length > CATALOG_ERROR_MAX ? `${redacted.slice(0, CATALOG_ERROR_MAX)}…` : redacted;
+}
+
+/**
+ * The catalog a refresh should leave behind.
+ *
+ * The rule that matters is the one this whole feature exists to protect: a
+ * FAILED probe keeps the models it already knew. Only a successful probe writes
+ * a model list, and a successful probe returning nothing writes `known` with an
+ * empty list — a real answer from a backend whose last model was deleted, not
+ * the same state as "never asked".
+ *
+ * @param {{state:string, models:string[]}} current - the stored catalog
+ * @param {{refreshed: boolean, models?: string[], error?: string|null}} outcome
+ * @returns {{state:'unknown'|'known'|'failed', models:string[], error:string|null}}
+ */
+export function nextConnectionCatalog(current, outcome) {
+  const models = Array.isArray(current?.models) ? current.models : [];
+  if (!outcome?.refreshed) {
+    return { state: 'failed', models, error: outcome?.error ?? 'The model refresh failed' };
+  }
+  return { state: 'known', models: [...new Set(outcome.models || [])], error: null };
+}
