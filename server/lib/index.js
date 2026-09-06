@@ -117,6 +117,7 @@ export * from './bibleLimits.js';
 // re-exports CHARACTER_ARC_TYPES from here, so keep this flat export ahead of
 // the namespaced storyBible below.
 export * from './characterFramework.js';
+export * from './characterIntegrity.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';

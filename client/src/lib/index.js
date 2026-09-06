@@ -26,6 +26,7 @@ export * from './beatColors.js';
 export * from './beatGrid.js';
 export * from './bibleLimits.js';
 export * from './characterFramework.js';
+export * from './characterIntegrity.js';
 export * from './catalogTypes.js';
 export * from './creativeDirectorPlan.js';
 export * from './creativeDirectorPreview.js';

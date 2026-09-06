@@ -364,42 +364,74 @@
       "description": "Character-first planning pass used before the macro arc and again for post-arc reconciliation. It fully authors every series-linked character's narrative profile and render identity, completes causal Ghost/Wound/Lie/Want/Need engines, distinct voices, relationships, secrets, and provisional whole-series transitions before plot generation; afterward it preserves that foundation while permitting only necessary refinements and a small additive set of story-required characters.",
       "model": "heavy",
       "returnsJson": true,
-      "variables": ["phase", "foundationFindingJson", "seriesJson", "outline", "charactersJson"]
+      "variables": [
+        "phase",
+        "foundationFindingJson",
+        "seriesJson",
+        "outline",
+        "charactersJson"
+      ]
     },
     "pipeline-foundation-repair": {
       "name": "Pipeline — Foundation Repair",
       "description": "Judge-directed pre-draft repair for the weak character or craft dimension. It strengthens the referenced core cast and whole-series character arcs as an ensemble, or writes an actionable series voice with concrete exemplars, while preserving established identities and story structure.",
       "model": "heavy",
       "returnsJson": true,
-      "variables": ["dimension", "foundationFindingJson", "seriesJson", "outline", "charactersJson"]
+      "variables": [
+        "dimension",
+        "foundationFindingJson",
+        "seriesJson",
+        "outline",
+        "charactersJson"
+      ]
     },
     "pipeline-panel-editor": {
       "name": "Pipeline — Reader Panel: The Editor",
       "description": "Reader-panel persona (#2170, CWQE Phase 6). A senior developmental/line editor reads a condensed arc digest of the series and answers ~10 qualitative questions (momentum, earned ending, cut candidate, missing scene, thinnest character, best/worst scene, would recommend, haunts you, next book), citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
       "model": "heavy",
       "returnsJson": true,
-      "variables": ["seriesName", "logline", "issueCount", "digest"]
+      "variables": [
+        "seriesName",
+        "logline",
+        "issueCount",
+        "digest"
+      ]
     },
     "pipeline-panel-genre-reader": {
       "name": "Pipeline — Reader Panel: The Genre Reader",
       "description": "Reader-panel persona (#2170, CWQE Phase 6). A voracious genre reader (50+ novels/year) reads a condensed arc digest and answers the panel's ~10 qualitative questions from a pure page-turn-pull perspective, citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
       "model": "heavy",
       "returnsJson": true,
-      "variables": ["seriesName", "logline", "issueCount", "digest"]
+      "variables": [
+        "seriesName",
+        "logline",
+        "issueCount",
+        "digest"
+      ]
     },
     "pipeline-panel-writer": {
       "name": "Pipeline — Reader Panel: The Writer",
       "description": "Reader-panel persona (#2170, CWQE Phase 6). A working novelist reads a condensed arc digest for craft — structure, beats, setup/payoff — and answers the panel's ~10 qualitative questions citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
       "model": "heavy",
       "returnsJson": true,
-      "variables": ["seriesName", "logline", "issueCount", "digest"]
+      "variables": [
+        "seriesName",
+        "logline",
+        "issueCount",
+        "digest"
+      ]
     },
     "pipeline-panel-first-reader": {
       "name": "Pipeline — Reader Panel: The First Reader",
       "description": "Reader-panel persona (#2170, CWQE Phase 6). An ordinary reader with no craft vocabulary reads a condensed arc digest and answers the panel's ~10 qualitative questions as pure emotional response, citing issue numbers. One of four personas whose disagreements feed the panel view + consensus findings.",
       "model": "heavy",
       "returnsJson": true,
-      "variables": ["seriesName", "logline", "issueCount", "digest"]
+      "variables": [
+        "seriesName",
+        "logline",
+        "issueCount",
+        "digest"
+      ]
     },
     "pipeline-reverse-outline": {
       "name": "Pipeline — Reverse Outline (scene segmentation + plotline tagging)",
@@ -1114,6 +1146,20 @@
         "source",
         "shots"
       ]
+    },
+    "universe-cast-integrity-review": {
+      "name": "Universe — Cast Integrity Review",
+      "description": "Review an authored cast for narrative integrity rather than completeness: whether the stated control belief predicts behavior, its origin supports it, the three drives are specific, relationships create pressure, and a plausible challenge can test the strategy. Returns per-character findings with evidence and a suggested edit. Minor roles, flat arcs and explained unknowns are held to lighter requirements.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "universe-character-augment": {
+      "name": "Universe — Augment Populated Character Fields",
+      "description": "Sharpen character fields that are already written but too generic to predict behavior. Distinct from the fill-blanks expand: it rewrites populated prose while preserving the authored intent, and returns per-field proposals the author accepts or rejects individually.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

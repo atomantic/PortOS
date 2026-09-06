@@ -382,6 +382,47 @@ export const differentiateUniverseCast = (universeId, { providerId, model } = {}
     ...options,
   }));
 
+// ── Cast integrity (#6415) ──────────────────────────────────────────────
+// DETERMINISTIC report — no provider call, safe to run on load. Returns
+// `{ findings, coverage, fingerprints, reviewScope }`; `reviewScope` names the
+// provider/model/batch size a semantic review WOULD spend, so the UI can show
+// the cost before the user opts in. Omit `characterIds` for the whole cast.
+export const getUniverseCastIntegrity = (universeId, { characterIds } = {}, options = {}) => {
+  const qs = Array.isArray(characterIds) && characterIds.length
+    ? `?characterIds=${encodeURIComponent(characterIds.join(','))}`
+    : '';
+  return request(`/universe-builder/${encodeURIComponent(universeId)}/characters/integrity${qs}`, options);
+};
+
+// SEMANTIC review — one bounded LLM call. Explicit user action only. Characters
+// past the batch cap come back with status `truncated`, never `passed`.
+export const reviewUniverseCastIntegrity = (universeId, { characterIds, providerId, model } = {}, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/integrity/review`, {
+    method: 'POST',
+    body: JSON.stringify({ characterIds, providerId, model }),
+    ...options,
+  });
+
+// Propose sharper values for POPULATED fields — the augment pass the
+// fill-blanks expand deliberately can't do. Writes NOTHING; returns
+// `{ proposals: [{ field, before, after, rationale }], fingerprint }`.
+export const proposeCharacterAugmentation = (universeId, entryId, { fields, providerId, model } = {}, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/augment`, {
+    method: 'POST',
+    body: JSON.stringify({ fields, providerId, model }),
+    ...options,
+  });
+
+// Apply only the proposals the author selected. `fingerprint` is the character
+// state the preview was reviewed against — a mismatch returns 409 rather than
+// overwriting an edit that landed in the meantime.
+export const applyCharacterAugmentation = (universeId, entryId, { fields, fingerprint } = {}, options = {}) =>
+  trackUniverseWrite(universeId, request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/augment/apply`, {
+    method: 'POST',
+    body: JSON.stringify({ fields, fingerprint }),
+    ...options,
+  }));
+
 // Cross-reference: where each canon entry appears across the universe's
 // linked series. Returns `{ characters: { [entryId]: [{seriesId, seriesName,
 // issueIds, issueCount}] }, settings: ..., objects: ..., seriesCount,
