@@ -16307,6 +16307,22 @@
     },
     {
       "method": "POST",
+      "path": "/api/universe-builder/:id/characters/:entryId/augment",
+      "mountPath": "/api/universe-builder",
+      "sources": [
+        "server/routes/universeBuilder/canon.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/universe-builder/:id/characters/:entryId/augment/apply",
+      "mountPath": "/api/universe-builder",
+      "sources": [
+        "server/routes/universeBuilder/canon.js"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/api/universe-builder/:id/characters/:entryId/expand",
       "mountPath": "/api/universe-builder",
       "sources": [
@@ -16348,6 +16364,22 @@
     {
       "method": "POST",
       "path": "/api/universe-builder/:id/characters/differentiate-cast",
+      "mountPath": "/api/universe-builder",
+      "sources": [
+        "server/routes/universeBuilder/canon.js"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/universe-builder/:id/characters/integrity",
+      "mountPath": "/api/universe-builder",
+      "sources": [
+        "server/routes/universeBuilder/canon.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/universe-builder/:id/characters/integrity/review",
       "mountPath": "/api/universe-builder",
       "sources": [
         "server/routes/universeBuilder/canon.js"
@@ -17868,8 +17900,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2213,
-    "declarations": 2221,
+    "operations": 2217,
+    "declarations": 2225,
     "sourceFiles": 233
   }
 }

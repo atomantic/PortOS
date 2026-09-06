@@ -14,12 +14,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import {
-  Library, Loader2, Users, MapPin, Package, Wand2, Filter, Lock, Unlock, ImagePlus, Sparkles, Plus,
+  Library, Loader2, Users, MapPin, Package, Wand2, Filter, Lock, Unlock, ImagePlus, Sparkles, Plus, ShieldCheck,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import IngredientPicker from '../IngredientPicker';
 import VisionDescribeModal from './VisionDescribeModal';
 import CorrectiveReferenceModal from './CorrectiveReferenceModal';
+import CastIntegrityPanel from './CastIntegrityPanel';
 import { linkCatalogIngredient } from '../../services/apiCatalog';
 import {
   extractUniverseCanon,
@@ -126,6 +127,9 @@ export default function UniverseCanonSection({
   const [renderingJobs, setRenderingJobs] = useState({});
   const [refiningId, setRefiningId] = useState(null);
   const [expandingId, setExpandingId] = useState(null);
+  // Cast integrity (#6415) — opens on the deterministic (free) report; the
+  // semantic review inside is a separate, explicitly-named provider call.
+  const [integrityOpen, setIntegrityOpen] = useState(false);
   const [differentiating, setDifferentiating] = useState(false);
   const [togglingLockId, setTogglingLockId] = useState(null);
   // Ref mirrors togglingLockId for the reentrancy guard so handleToggleLock
@@ -836,6 +840,17 @@ export default function UniverseCanonSection({
           {(!kindFilter || kindFilter === 'characters') ? (
             <button
               type="button"
+              onClick={() => setIntegrityOpen(true)}
+              disabled={charCount < 1}
+              title={charCount < 1 ? 'Add a character first' : 'Review whether the cast holds together — free completeness pass, optional semantic review'}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-port-bg border border-port-border text-gray-300 text-xs hover:border-port-accent/50 hover:text-white disabled:opacity-40"
+            >
+              <ShieldCheck size={12} /> Cast integrity
+            </button>
+          ) : null}
+          {(!kindFilter || kindFilter === 'characters') ? (
+            <button
+              type="button"
               onClick={handleDifferentiate}
               disabled={differentiating || charCount < 2}
               title={charCount < 2 ? 'Need at least 2 characters to differentiate' : 'Rewrite every character so the cast renders visually distinct'}
@@ -949,6 +964,17 @@ export default function UniverseCanonSection({
           entryId={correctTarget.entry.id}
           onApplied={(result) => { if (result?.universe) onUniverseChange(result.universe); }}
           onClose={() => setCorrectTarget(null)}
+        />
+      ) : null}
+
+      {/* Cast integrity — the shared review contract (#6415). Mounted only
+          while open so it doesn't fetch the report until the user asks. */}
+      {integrityOpen ? (
+        <CastIntegrityPanel
+          open
+          universeId={universeId}
+          onUniverseChange={onUniverseChange}
+          onClose={() => setIntegrityOpen(false)}
         />
       ) : null}
     </section>
