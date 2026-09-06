@@ -208,6 +208,7 @@ export default function useReviewerModelOptions() {
       // regardless because grok, like every CLI reviewer, is free-text.
       grok: providerTiers('grok'),
       cursor: providerTiers('cursor'),
+      pi: providerTiers('pi'),
       // Legitimately empty, for grok's documented reason: the shipped kimi
       // provider carries only the configured-default sentinel, which
       // `filterSelectableModels` strips. Free-text keeps the cell usable.
@@ -229,6 +230,8 @@ export default function useReviewerModelOptions() {
       antigravity: providerDefault('antigravity'),
       grok: providerDefault('grok'),
       cursor: providerDefault('cursor'),
+      pi: null, // A bare reviewer uses Pi's own configured default.
+
       kimi: providerDefault('kimi'),
       // Deliberately null even though the Zen records carry one: the reviewer
       // spawns a BARE `opencode`, which falls back to whatever the user's own
