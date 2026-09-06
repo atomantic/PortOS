@@ -1,4 +1,5 @@
 import ProviderModelSelector from '../../../ProviderModelSelector';
+import { providerModeSelectionPolicy } from '../../../../utils/providers.js';
 
 // Compact provider/model/effort pins rendered directly on a schedule card, so
 // the common "point this task at a different model and run it" loop doesn't
@@ -30,7 +31,7 @@ export default function TaskModelQuickControls({ pins, providers, loading = fals
         alwaysShowModel
         compact
         highlightToolUse={!toolFree}
-        selectionPolicy={toolFree ? { provider: (provider) => provider.type === 'api' } : undefined}
+        selectionPolicy={toolFree ? providerModeSelectionPolicy('direct-api') : undefined}
         loading={loading}
         disabled={disabled || saving}
       />

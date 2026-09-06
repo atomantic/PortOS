@@ -531,4 +531,48 @@ describe('orchestration profiles (#5992)', () => {
     expect(getProviderById).toHaveBeenCalledWith('p-pinned');
     expect(result.provider.id).toBe('p-pinned');
   });
+
+  describe('caller execution-mode policy', () => {
+    // The same policy has to hold at all three doors, or the one it is missing
+    // from silently re-admits what the others refused.
+    it('carries the agent caller policy into fallback selection', async () => {
+      const primary = { id: 'p1', type: 'cli' };
+      const fallback = { id: 'p2', type: 'cli', defaultModel: 'm' };
+      getActiveProvider.mockResolvedValue(primary);
+      isProviderAvailable.mockReturnValue(false);
+      getProviderStatus.mockReturnValue({ message: 'down', reason: 'x' });
+      getAllProviders.mockResolvedValue({ providers: [primary, fallback] });
+      getFallbackProvider.mockResolvedValue({ provider: fallback, model: null, source: 'system' });
+      await resolveAgentProviderAndModel({ id: 't', metadata: { fallbackProvider: 'p2' } });
+
+      // An `api` route can never run a CoS agent task, so the chain must not be
+      // allowed to pick one and burn the single retry it has left.
+      expect(getFallbackProvider).toHaveBeenCalledWith('p1', expect.any(Object), 'p2', undefined, {
+        allowedModes: ['cli', 'tui'],
+      });
+    });
+
+    it('refuses a record whose type names no executable mode, permanently', async () => {
+      // A provider record edited to an unrecognized type used to sail past the
+      // `type === 'api'` test and reach spawn, where it dies on an unmapped
+      // dispatch. It is a config error no retry can fix.
+      const broken = { id: 'mystery', type: 'pty' };
+      getActiveProvider.mockResolvedValue(broken);
+      const r = await resolveAgentProviderAndModel(TASK);
+      expect(r).toMatchObject({ ok: false, permanent: true, providerId: 'mystery' });
+      expect(r.error).toContain('no file-writing harness');
+      expect(selectModelForTask).not.toHaveBeenCalled();
+    });
+
+    it('still admits both harness modes — a TUI pin is a legitimate agent route', async () => {
+      // Guards the generalization against over-reach: the agent policy allows
+      // cli AND tui, so tightening it to "cli" would break every TUI-pinned task.
+      const tuiPin = { id: 'claude-code-tui', type: 'tui', models: ['m-default'] };
+      getProviderById.mockResolvedValue(tuiPin);
+      getActiveProvider.mockResolvedValue({ id: 'other', type: 'cli' });
+      const r = await resolveAgentProviderAndModel({ id: 't', metadata: { provider: 'claude-code-tui' } });
+      expect(r.ok).toBe(true);
+      expect(r.provider).toBe(tuiPin);
+    });
+  });
 });

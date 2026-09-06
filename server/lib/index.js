@@ -128,6 +128,7 @@ export * from './ansiStrip.js';
 // barrel's duplicate-identifier collision check.
 export * as antigravity from './antigravity.js';
 export * as childProcess from './childProcess.js';
+export * from './callerModePolicy.js';
 export * from './cliChildEnv.js';
 export * from './agentExecutionProfiles.js';
 export * from './localEndpoint.js';

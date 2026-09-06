@@ -232,6 +232,36 @@ describe('promptRunner — happy paths', () => {
     })).toEqual({ hasImages: false, requiredContextTokens: 1_002 });
   });
 
+  it('refuses an ineligible EXPLICIT provider under a caller mode policy, before any run record', async () => {
+    // A CLI/API-only caller must not run a TUI route it was handed directly —
+    // and it must fail before createRun, or a refused call still leaves a run
+    // record claiming a provider that never executed.
+    await expect(runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p',
+      source: 'test',
+      callerPolicy: 'cli-harness',
+    })).rejects.toMatchObject({ code: 'PROVIDER_MODE_NOT_PERMITTED' });
+    expect(runner.createRun).not.toHaveBeenCalled();
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+  });
+
+  it('sends the caller mode policy to fallback selection alongside the request budget', async () => {
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
+
+    await runPromptThroughProvider({
+      provider: apiProvider(), prompt: 'p', source: 'test', callerPolicy: 'direct-api',
+    });
+
+    // Carried on requestCapabilities so createRun's PROACTIVE swap is bound by
+    // the same rule the explicit pin was — not just the pin.
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({
+      requestCapabilities: expect.objectContaining({ allowedModes: ['api'] }),
+    }));
+    // An undeclared caller keeps the unconstrained shape it always had.
+    expect(buildRequestCapabilities({ prompt: 'p', screenshots: [] }).allowedModes).toBeUndefined();
+  });
+
   it('defaults screenshots to [] when omitted', async () => {
     runner.executeApiRun.mockImplementation(async ({ onComplete }) => onComplete({ success: true }));
 

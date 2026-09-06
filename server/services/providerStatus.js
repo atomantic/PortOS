@@ -110,9 +110,16 @@ export async function markProviderAvailable(providerId) {
 /**
  * Get the best available fallback provider.
  * Returns `{ provider, source, model }` (or null if no fallback is available).
+ *
+ * `requestCapabilities` carries the caller's constraints for THIS request —
+ * `hasImages` / `requiredContextTokens`, and `allowedModes` (the caller's
+ * execution-mode policy from `lib/callerModePolicy.js`, applied to every
+ * candidate tier). It was previously dropped by this wrapper, so an agent caller
+ * could only enforce a policy on the pin it resolved itself and not on the
+ * fallback that might replace it.
  */
-export function getFallbackProvider(primaryProviderId, providers, taskFallbackId = null, taskFallbackModelId = null) {
-  return getProviderStatusService().getFallbackProvider(primaryProviderId, providers, taskFallbackId, taskFallbackModelId);
+export function getFallbackProvider(primaryProviderId, providers, taskFallbackId = null, taskFallbackModelId = null, requestCapabilities = null) {
+  return getProviderStatusService().getFallbackProvider(primaryProviderId, providers, taskFallbackId, taskFallbackModelId, requestCapabilities);
 }
 
 /**

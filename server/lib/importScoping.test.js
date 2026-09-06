@@ -188,6 +188,10 @@ describe('deferred imports stay deferred (#6156)', () => {
 // suites that cross `lib/quotaBurnConfig.js`, so a leaf costs ~200 apiece with
 // nothing to defer. Restore the ~1.5k allowance again rather than inching the
 // number up by a few hundred per PR.
+//
+// #6368 adds `lib/callerModePolicy.js`, another zero-dependency leaf reached by
+// the routing boundary and the lib barrel (~92 instantiations). Same tolerated
+// shape; it fits inside the allowance above.
 const MAX_STATIC_INSTANTIATIONS = 91400;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

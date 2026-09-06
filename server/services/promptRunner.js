@@ -43,6 +43,7 @@ import { createSingleFlight } from '../lib/singleFlight.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens } from '../lib/contextBudget.js';
+import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
 
 // The fallback-lifecycle notifiers live in services/autoFixer.js, which
 // transitively pulls in services/cos.js (PM2 + fs + sockets). Importing it
@@ -70,13 +71,16 @@ export const DEFAULT_TIMEOUT_MS = 300000;
 const API_TIMEOUT_BACKSTOP_GRACE_MS = 2000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
 
-export function buildRequestCapabilities({ prompt, screenshots, outputReserveTokens } = {}) {
+export function buildRequestCapabilities({ prompt, screenshots, outputReserveTokens, callerPolicy = null } = {}) {
   const reserve = Number.isFinite(Number(outputReserveTokens))
     ? Math.max(0, Number(outputReserveTokens))
     : DEFAULT_OUTPUT_RESERVE_TOKENS;
   return {
     requiredContextTokens: estimateTokens(prompt) + reserve,
     hasImages: Array.isArray(screenshots) && screenshots.length > 0,
+    // Only present when the caller declared a mode policy, so an undeclared
+    // caller keeps routing across every mode exactly as it always has.
+    ...(callerPolicy ? { allowedModes: allowedModesFor(callerPolicy) } : {}),
   };
 }
 
@@ -551,6 +555,15 @@ export function assertVisionRunUsedImages(result, requestedProvider) {
  *   must pass this — without it, the CLI/TUI spawn lands in PortOS's own
  *   cwd and the analysis runs against the wrong files. No-op for API
  *   providers (no spawn).
+ * @param {string|string[]|object} [args.callerPolicy] — this caller's
+ *   EXECUTION-MODE policy (a name from `lib/callerModePolicy.js`, a mode array,
+ *   or an inline policy object). Set it when the call site genuinely cannot run
+ *   every mode — a context with no PTY to drive a TUI, or one that must stay on
+ *   a harness-free direct API provider. The policy gates the EXPLICIT provider
+ *   (422 `PROVIDER_MODE_NOT_PERMITTED`, before any run record is written) and
+ *   rides along on `requestCapabilities` so createRun's proactive swap and the
+ *   Tier-3 retry fallback skip ineligible candidates too. Omit (the default) and
+ *   nothing is constrained.
  * @param {boolean} [args.allowFallback=true] — set false when provider/model
  *   identity is part of the feature contract. Disables proactive provider
  *   substitution and every model/provider retry tier after the first attempt.
@@ -1159,8 +1172,19 @@ async function executeProviderRunOnce({
   cwd: cwdOverride,
   screenshots = [],
   outputReserveTokens,
+  callerPolicy = null,
   allowFallback = true,
 }) {
+  // Caller EXECUTION-MODE policy, enforced on the EXPLICIT provider before a run
+  // record exists and carried into fallback selection below, so the pin and the
+  // route that might replace it are judged by one rule.
+  const pinRejection = callerPolicy ? callerModeRejection(provider, callerPolicy) : null;
+  if (pinRejection) {
+    throw new ServerError(
+      `Provider "${provider.id}" ${pinRejection.reason} — this caller cannot run it.`,
+      { status: 422, code: 'PROVIDER_MODE_NOT_PERMITTED' },
+    );
+  }
   if (screenshots.length > 0
       && provider.type !== PROVIDER_TYPES.API
       && !isVisionCapableCliProvider(provider)) {
@@ -1203,7 +1227,7 @@ async function executeProviderRunOnce({
       source,
       workspacePath: effectiveCwd,
       effort,
-      requestCapabilities: buildRequestCapabilities({ prompt, screenshots, outputReserveTokens }),
+      requestCapabilities: buildRequestCapabilities({ prompt, screenshots, outputReserveTokens, callerPolicy }),
       allowFallback,
     });
     runId = runResult.runId;

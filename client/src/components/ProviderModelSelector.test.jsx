@@ -7,6 +7,7 @@ const getToolUseModels = vi.fn();
 vi.mock('../services/apiLocalLlm', () => ({ getToolUseModels: (...a) => getToolUseModels(...a) }));
 
 import ProviderModelSelector from './ProviderModelSelector';
+import { providerModeSelectionPolicy } from '../utils/providers.js';
 import { __resetToolUseModelIdsCache } from '../hooks/useToolUseModelIds.js';
 import SHIPPED_PROVIDERS from '../../../data.reference/providers.json';
 
@@ -169,6 +170,34 @@ describe('ProviderModelSelector', () => {
     expect([...providerSelect.options].map((option) => option.value)).toEqual(['local']);
     expect([...modelSelect.options].map((option) => option.value)).toEqual(['safe-model']);
     expect([...effortSelect.options].map((option) => option.value)).toEqual(['', 'low']);
+  });
+
+it('keeps a saved TUI pin visible with a reason under a CLI/API-only caller policy', () => {
+    // Acceptance for #6368: an ineligible saved value is never hidden and never
+    // silently replaced — the user must be able to SEE what is pinned and why it
+    // cannot run before choosing something else. The sibling CLI route stays a
+    // separate, selectable option, so collapsing the pair would fail this too.
+    renderSelector({
+      providers: [
+        { id: 'claude-code', name: 'Claude Code', type: 'cli' },
+        { id: 'claude-code-tui', name: 'Claude Code TUI', type: 'tui' },
+        { id: 'ollama', name: 'Ollama', type: 'api' },
+      ],
+      selectedProviderId: 'claude-code-tui',
+      availableModels: [],
+      selectionPolicy: providerModeSelectionPolicy('cli-harness'),
+    });
+    const providerSelect = screen.getAllByRole('combobox')[0];
+    const options = [...providerSelect.options];
+    // The eligible CLI route and the INELIGIBLE SAVED PIN are both offered;
+    // an ineligible route nobody pinned is simply not offered at all.
+    expect(options.map((option) => option.value)).toEqual(['claude-code', 'claude-code-tui']);
+    expect(options.find((option) => option.value === 'claude-code').disabled).toBe(false);
+    const pinned = options.find((option) => option.value === 'claude-code-tui');
+    expect(pinned.disabled).toBe(true);
+    expect(pinned.textContent).toMatch(/not permitted/i);
+    // The select still SHOWS the saved pin rather than snapping to a legal one.
+    expect(providerSelect.value).toBe('claude-code-tui');
   });
 
   it('keeps a disallowed saved model visible only as a disabled stale option', () => {
