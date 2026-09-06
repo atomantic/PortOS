@@ -704,8 +704,8 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // say outright that a resolvable conflict proves nothing.
   it('branch-reconcile v3 makes SUPERSEDED an outcome and denies conflicts as evidence, preserving the v2 default', () => {
     const previous = PREVIOUS_DEFAULT_PROMPTS['branch-reconcile'];
-    const v3 = previous[previous.length - 1];
-    const v2 = previous[previous.length - 2];
+    const v3 = previous[2];
+    const v2 = previous[1];
     expect(v3).toContain('SUPERSEDED');
     expect(v3).toContain('not evidence the work is still needed');
     expect(v3).toContain('Nothing reaches a PR unverified');
@@ -721,9 +721,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // issue labels — the same per-issue routing DISPATCH_HINT_FANOUT_GUIDANCE
   // already gives the claim swarm's Phase B, imported verbatim rather than
   // retyped so the two consumers can't drift on vocabulary.
-  it('branch-reconcile v4 routes each fan-out sub-agent by its own branch\'s dispatch labels', () => {
+  it('branch-reconcile v5 routes each fan-out sub-agent by its own branch\'s dispatch labels', () => {
     const current = DEFAULT_TASK_PROMPTS['branch-reconcile'];
-    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(4);
+    expect(PROMPT_VERSIONS['branch-reconcile']).toBe(5);
     expect(current).toContain(DISPATCH_HINT_FANOUT_GUIDANCE);
     expect(current).toContain('Dispatch each sub-agent at ITS OWN branch\'s recommended model and effort');
     // Still carries every v3 behavior — v4 only adds the routing guidance.
@@ -732,7 +732,7 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('Nothing reaches a PR unverified');
 
     const previous = PREVIOUS_DEFAULT_PROMPTS['branch-reconcile'];
-    const v3 = previous[previous.length - 1];
+    const v3 = previous[2];
     expect(v3).not.toContain(DISPATCH_HINT_FANOUT_GUIDANCE);
     expect(v3).not.toBe(current);
   });

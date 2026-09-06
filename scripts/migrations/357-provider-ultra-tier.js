@@ -2,13 +2,24 @@
 import { join } from 'node:path';
 import { atomicWrite, readJSONFileStrict } from '../../server/lib/fileUtils.js';
 
+import { makeAdditiveProviderInsertMigration } from './_lib.js';
+
+const offerFable = makeAdditiveProviderInsertMigration({
+  label: 'Fable Ultra tier',
+  targets: ['claude-code', 'claude-code-tui'].map(id => ({
+    id, retired: 'claude-opus-5', current: 'claude-fable-5-1',
+  })),
+});
+
 export default {
   async up({ rootDir }) {
+    await offerFable.up({ rootDir });
     const path = join(rootDir, 'data/providers.json');
     const { ok, value: data } = await readJSONFileStrict(path, null);
     if (!ok || !data?.providers) return { success: true, skipped: 'no readable providers' };
     let updated = 0;
     for (const provider of Object.values(data.providers)) {
+      if (!provider || typeof provider !== 'object') continue;
       if (Object.hasOwn(provider, 'ultraModel')) continue;
       // Only select a model this install already advertises. Custom catalogs
       // and intentionally empty pins stay under the user's control.

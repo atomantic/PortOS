@@ -24,8 +24,8 @@ Model capability and reasoning effort are independent: Ultra does not imply
 maximum effort. Existing task heuristics, thinking levels, learning escalation,
 provider defaults, and scheduled jobs do not automatically upgrade to Ultra.
 An unset Ultra mapping falls back to Heavy, then the provider default. Existing
-installs receive an optional Ultra field; migration selects Astra/Fable only when
-already present in that provider's catalog and preserves all explicit Ultra pins.
+installs receive an optional Ultra field; migration offers Fable additively on standard Claude catalogs, selects Astra/Fable
+when advertised by the provider, and preserves all explicit Ultra pins.
 No migration calls a provider or starts AI work.
 
 Prefer role/stage tier assignments for portable workflows; keep exact pins for

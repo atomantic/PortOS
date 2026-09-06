@@ -395,6 +395,13 @@ describe('windowed-rate decisions (issue #2617)', () => {
   });
 
   describe('suggestModelTier', () => {
+    it('keeps explicit Ultra outcomes out of automatic tier suggestions', async () => {
+      const data = learningWith({ 'self-improve:x': recoveredMetrics() });
+      data.routingAccuracy = { 'self-improve:x': { ultra: { succeeded: 20, failed: 0 }, medium: { succeeded: 10, failed: 0 } } };
+      loadLearningData.mockResolvedValue(data);
+      expect(await suggestModelTier('self-improve:x')).not.toMatchObject({ suggested: 'ultra' });
+    });
+
     it('no longer suggests heavy for a recovered type (effective rate in the low-success fallback)', async () => {
       loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': recoveredMetrics() }));
       expect(await suggestModelTier('self-improve:x')).toBeNull();

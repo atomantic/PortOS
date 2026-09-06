@@ -333,7 +333,7 @@ async function resolveOrdinaryProviderAndModel(task) {
         providerId: provider.id,
         validModels: provider.models
       });
-      selectedModel = modelSelection.tier === 'ultra' ? (provider.ultraModel || provider.heavyModel || provider.defaultModel) :
+      selectedModel = modelSelection.tier === 'ultra' ? ([provider.heavyModel, provider.defaultModel].find(model => model && provider.models.includes(model)) || null) :
                       modelSelection.tier === 'heavy' ? provider.heavyModel :
                       modelSelection.tier === 'light' ? provider.lightModel :
                       modelSelection.tier === 'medium' ? provider.mediumModel :
