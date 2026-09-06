@@ -1,4 +1,3 @@
-import { PI_COMMAND, parsePiModelList } from './internal/pi.js';
 import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, delimiter, isAbsolute } from 'path';
@@ -1364,6 +1363,7 @@ export function createProviderService(config = {}) {
     },
 
     async _fetchPiModels(provider) {
+      const { PI_COMMAND, parsePiModelList } = await import('./internal/pi.js');
       return this._execCliModelList(provider, PI_COMMAND, parsePiModelList, ['--list-models'],
         (stdout) => /No models available/i.test(stdout) && /\/login/.test(stdout));
     },

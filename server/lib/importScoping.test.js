@@ -39,6 +39,8 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 // Each row: the entry that was narrowed, the module it must no longer
 // statically reach, and why the entry only ever needed a slice of it.
 const NARROWED = [
+  ['services/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
+    'loads version and catalog parsers only when probing a harness'],
   ['lib/db.js', 'lib/db/schema/index.js',
     'the DDL composer is boot-only — ensureSchemaImpl() imports it lazily'],
   ['lib/pipelineValidation.js', 'lib/editorial/checkRegistry.js',
@@ -173,7 +175,11 @@ describe('deferred imports stay deferred (#6156)', () => {
  * inch it up by a hundred each time. It stays thousands below what ONE eager
  * edge into a heavy subtree costs, which is what actually has to fail here.
  */
-const MAX_STATIC_INSTANTIATIONS = 88000;
+// #6350: Pi's vendor leaf is necessarily reached by the shared dispatcher.
+// Deferring catalog/version parsers removes 296 instantiations (88,360 →
+// 88,064). Restore the documented ~1.5k allowance for ordinary leaf growth;
+// keep the negative runtime-installer guard above so eager parsing cannot return.
+const MAX_STATIC_INSTANTIATIONS = 89500;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {

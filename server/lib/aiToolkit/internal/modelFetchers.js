@@ -1,4 +1,4 @@
-import { isPiCommand } from './pi.js';
+import { commandBasename } from './commandBasename.js';
 /**
  * The single per-vendor table behind model refresh.
  *
@@ -124,8 +124,8 @@ export const MODEL_FETCHERS = [
     fetch: '_fetchGatewayModels',
   },
   {
-    key: 'pi', cliMatch: (p) => isPiCommand(p?.command),
-    tuiMatch: (p) => isPiCommand(p?.command), fetch: '_fetchPiModels',
+    key: 'pi', cliMatch: (p) => commandBasename(p?.command) === 'pi',
+    tuiMatch: (p) => commandBasename(p?.command) === 'pi', fetch: '_fetchPiModels',
   },
   {
     key: 'cursor',
