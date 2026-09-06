@@ -25,7 +25,7 @@ import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
-import { finalizeGeneratedVideo } from './generateVideoHelpers.js';
+import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { getSettings } from '../settings.js';
 import { nearestAspectRatio } from '../imageGen/modes.js';
@@ -204,7 +204,7 @@ export async function generateVideo({
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}] fal (${modelId}): ${prompt.slice(0, 60)}…`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
-  broadcastSse(job, { type: 'status', message: 'Submitting to fal.ai…' });
+  emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to fal.ai…');
 
   runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt, duration, aspectRatio: effectiveAspectRatio, sourceImagePath, outputPath, filename, meta })
     .catch((err) => {
@@ -238,7 +238,11 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
       if (status.status === 'ERROR') {
         return finalizeError(job, jobId, `fal.ai render failed: ${status.error || 'unknown error'}`);
       }
-      broadcastSse(job, { type: 'status', message: status.status === 'IN_PROGRESS' ? 'Rendering…' : 'Queued…' });
+      // fal's own queue maps to SUBMIT rather than to the queued step: the
+      // ladder's `queued` is PortOS's local queue, and stepping back to it
+      // after the handover would read as the render having lost its place.
+      if (status.status === 'IN_PROGRESS') emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.RENDER, 'Rendering…');
+      else emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Queued at fal.ai…');
       await new Promise((r) => setTimeout(r, FAL_POLL_INTERVAL_MS));
     }
     if (entry.aborted) return finalizeCanceled(job, jobId);
@@ -252,7 +256,7 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
       return finalizeError(job, jobId, 'fal.ai completed but returned no video URL');
     }
 
-    broadcastSse(job, { type: 'status', message: 'Downloading video…' });
+    emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.FETCH, 'Downloading video…');
     const videoRes = await fetchWithTimeout(videoUrl, {}, FAL_DOWNLOAD_TIMEOUT_MS);
     if (!videoRes.ok) {
       return finalizeError(job, jobId, `fal.ai video download failed: HTTP ${videoRes.status}`);

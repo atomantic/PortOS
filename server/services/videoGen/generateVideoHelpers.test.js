@@ -3,7 +3,7 @@ import { writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { EventEmitter } from 'events';
-import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, bufferChildExit, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, bufferChildExit, RENDER_INPUTS_VERSION, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 
 describe('parseByteProgress', () => {
   it('parses single byte value (e.g., "2.5G")', () => {
@@ -662,5 +662,43 @@ describe('bufferChildExit', () => {
     const proc = new EventEmitter();
     bufferChildExit(proc);
     expect(() => proc.emit('error', new Error('abandoned'))).not.toThrow();
+  });
+});
+
+
+// The cloud lanes used to broadcast their status lines on the provider job's
+// own SSE stream ONLY. The Video Gen page listens to the media-job queue, which
+// relays videoGenEvents — so it saw no status frame at all between "Starting
+// render…" and completion, and its step list had no phase to advance on.
+describe('emitCloudRenderStatus', () => {
+  it('publishes the phase on the provider SSE stream and on videoGenEvents', () => {
+    emitted.length = 0;
+    sse.mockClear();
+    const job = { clients: [], status: 'running' };
+
+    emitCloudRenderStatus(job, 'job-1', CLOUD_RENDER_PHASE.RENDER, 'Reactor session rendering…');
+
+    expect(sse).toHaveBeenCalledWith(job, { type: 'status', message: 'Reactor session rendering…', phase: 'render' });
+    expect(emitted).toEqual([
+      { type: 'activity', payload: { generationId: 'job-1' } },
+      { type: 'status', payload: { generationId: 'job-1', message: 'Reactor session rendering…', phase: 'render' } },
+    ]);
+  });
+
+  // grok narrates on every stdout chunk and fal re-reports the same poll status
+  // every couple of seconds. The heartbeat has to land each time (it is what
+  // the idle watchdog reads); the unchanged line does not.
+  it('repeats the heartbeat but not an unchanged line', () => {
+    emitted.length = 0;
+    sse.mockClear();
+    const job = { clients: [], status: 'running' };
+
+    emitCloudRenderStatus(job, 'job-2', CLOUD_RENDER_PHASE.RENDER, 'Running…');
+    emitCloudRenderStatus(job, 'job-2', CLOUD_RENDER_PHASE.RENDER, 'Running…');
+    emitCloudRenderStatus(job, 'job-2', CLOUD_RENDER_PHASE.FETCH, 'Downloading video…');
+
+    expect(emitted.filter((e) => e.type === 'activity')).toHaveLength(3);
+    expect(emitted.filter((e) => e.type === 'status').map((e) => e.payload.phase)).toEqual(['render', 'fetch']);
+    expect(sse).toHaveBeenCalledTimes(2);
   });
 });

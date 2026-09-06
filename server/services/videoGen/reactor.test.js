@@ -9,7 +9,12 @@ const mocks = vi.hoisted(() => ({ spawn: vi.fn(), finalize: vi.fn(), settings: v
 vi.mock('../../lib/childProcess.js', async (importOriginal) => ({ ...await importOriginal(), spawn: mocks.spawn }));
 vi.mock('./reactorRuntime.js', () => ({ ensureReactorRuntime: mocks.runtime }));
 vi.mock('../../lib/ffmpeg.js', () => ({ extractEvaluationFrames: mocks.samples }));
-vi.mock('./generateVideoHelpers.js', () => ({ finalizeGeneratedVideo: mocks.finalize }));
+// Partial: only the finalize is stubbed. emitCloudRenderStatus is real, so the
+// status/phase frames the Video Gen page reads stay covered by these tests.
+vi.mock('./generateVideoHelpers.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  finalizeGeneratedVideo: mocks.finalize,
+}));
 vi.mock('../settings.js', () => ({ getSettings: mocks.settings }));
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
