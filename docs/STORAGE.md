@@ -226,3 +226,29 @@ Apply this checklist to **every new feature that persists data**, and require it
 `data/model-comparison.json` is `file-primary`: a bounded, externally researched reference snapshot, directly inspectable/importable as a portable JSON document, with no app-record foreign keys, cross-record queries, search index or accumulated history. It follows the local-assessment reference pattern, rather than representing app-native relational records. It is intentionally machine-local and never federated because configuration and quota interpretation can be install-specific. Schema version 1 is seeded for new installs and migration 351 preserves existing catalogs. Rsync backups include it; no backup exclusion, sync cursor or tombstone is added. Source dates and exact benchmark/configuration identities remain attached to metrics. The server rejects future/malformed versions and merges imports through a serialized last-good-preserving write. See [Models Comparison](MODEL-COMPARISON.md).
 
 Optional SDK environments under `data/venvs/` are machine-local, regenerable runtime files, not application records. Reactor provisions its pinned SDK, private Python and checksum-verified uv manager on the first authorized render (or optionally through `npm run setup:reactor`); no seed, migration, database table, or peer synchronization is needed. Data Manager identifies these environments but does not purge them while render processes may use them.
+
+### Private integration API keys
+
+`data/private/api-keys.json` is machine-local `file-primary` configuration,
+not a relational record store or a federation payload. Its directory is owner-only
+(0700) and the file is owner-readable/writable (0600) on POSIX systems. It is not
+mounted under the HTTP asset routes. Filesystem backups include it: protect backup
+access as carefully as the install. This is permission-protected storage, not
+application-level encryption.
+
+Settings > Credentials manages Artificial Analysis, Hugging Face, CivitAI, fal.ai,
+and reactor.inc keys through a write-only endpoint. Existing integration settings
+screens use the same store. Server-side settings readers retain their legacy shape;
+public settings and inventory responses never contain these values. Stored keys
+win over environment fallbacks; clearing a saved key allows an existing environment
+credential (or Hugging Face CLI login) to apply again.
+
+Migration 357 copies existing settings keys before removing their old fields and
+preserves keys already in the private store on retry. There is no seed file. The
+runtime also reads legacy settings until their next save, so independently updated
+installs do not need to re-enter keys. Environment credentials remain supported and
+are not copied automatically. Artificial Analysis saves a supplied key after a
+successful API fetch and subsequent syncs can omit it. Downgrades to versions before
+this store require re-entering keys through the older settings UI or environment.
+Other credentials (provider connections, account-specific logins, and auth) retain
+their existing dedicated stores and management flows.

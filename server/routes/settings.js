@@ -1,3 +1,4 @@
+import { PRIVATE_CREDENTIALS, putCredential } from '../services/privateKeyStore.js';
 import { Router } from 'express';
 import { z } from 'zod';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
@@ -21,7 +22,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
+import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -173,10 +174,22 @@ router.get('/features', asyncHandler(async (_req, res) => {
 }));
 
 // GET /api/settings/credentials
-// Presence + source only. Never a value or masked prefix — the page links out
-// to the existing per-integration tab to enter a secret.
+// Presence + source only. Supported integrations have a separate write-only setter.
 router.get('/credentials', asyncHandler(async (_req, res) => {
   res.json(await getCredentialInventory());
+}));
+
+// Write-only, allowlisted integration credentials; no generic secrets access.
+router.put('/credentials/:id', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(privateCredentialParamsSchema, req.params);
+  const { value } = validateRequest(privateCredentialInputSchema, req.body);
+  const entry = PRIVATE_CREDENTIALS.find(item => item.id === id);
+  await updateSettingsWith(current => {
+    putCredential(current, entry, value);
+    return current;
+  });
+  const inventory = await getCredentialInventory();
+  res.json(inventory.credentials.find(item => item.id === id));
 }));
 
 // POST /api/settings/features/eidoverse/install

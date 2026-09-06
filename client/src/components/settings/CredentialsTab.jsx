@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
-import { getCredentialInventory } from '../../services/api';
+import { getCredentialInventory, saveCredential } from '../../services/api';
 
 const SOURCE_LABEL = {
   settings: 'Settings',
@@ -22,6 +22,19 @@ const TIER_LABEL = {
 export function CredentialsTab() {
   const [payload, setPayload] = useState(null);
   const [error, setError] = useState(null);
+  const [drafts, setDrafts] = useState({});
+  const [saving, setSaving] = useState(null);
+  const [receipt, setReceipt] = useState(null);
+
+  const saveKey = (id, value) => {
+    setSaving(id);
+    setReceipt({ id, message: 'Saving…' });
+    saveCredential(id, value, { silent: true }).then(row => {
+      setPayload(previous => ({ ...previous, credentials: previous.credentials.map(item => item.id === id ? row : item) }));
+      setDrafts(previous => ({ ...previous, [id]: '' }));
+      setReceipt({ id, message: value ? 'Key saved privately.' : 'Saved key cleared. External credentials may still apply.' });
+    }).catch(err => setReceipt({ id, message: err.message })).finally(() => setSaving(null));
+  };
 
   const load = () => {
     setError(null);
@@ -64,7 +77,7 @@ export function CredentialsTab() {
         <p className="text-sm text-gray-400 mt-1">
           {payload.headline || 'Most of PortOS works with no key at all.'}
           {' '}
-          This page shows presence and where a value resolved from — never the value itself. Enter or rotate a secret on its existing settings tab.
+          This page shows presence and where a value resolved from — never the value itself. Save or rotate supported integration keys here. Keys stay on this install in the private data store; blank inputs never reveal saved values.
         </p>
       </div>
 
@@ -113,6 +126,22 @@ export function CredentialsTab() {
                 </p>
               )}
 
+              {credential.editable && (
+                <div className="space-y-2">
+                  <label htmlFor={`credential-${credential.id}`} className="block text-sm">New {credential.label} key</label>
+                  <input id={`credential-${credential.id}`} type="password" autoComplete="new-password"
+                    value={drafts[credential.id] || ''} disabled={saving !== null}
+                    onChange={event => setDrafts(previous => ({ ...previous, [credential.id]: event.target.value }))}
+                    className="w-full bg-port-bg border border-port-border rounded p-2" />
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" disabled={saving !== null || !drafts[credential.id]?.trim()}
+                      onClick={() => saveKey(credential.id, drafts[credential.id])} className="px-3 py-2 rounded bg-port-border disabled:opacity-50">Save key</button>
+                    <button type="button" disabled={saving !== null || credential.source !== 'settings'}
+                      onClick={() => saveKey(credential.id, '')} className="px-3 py-2 rounded bg-port-border disabled:opacity-50">Clear saved key</button>
+                  </div>
+                  {receipt?.id === credential.id && <p role="status" className="text-sm">{receipt.message}</p>}
+                </div>
+              )}
               <div className="flex flex-wrap gap-2 pt-1">
                 {credential.configurePath && (
                   <Link

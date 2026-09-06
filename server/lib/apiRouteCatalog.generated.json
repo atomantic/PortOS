@@ -14586,6 +14586,14 @@
       ]
     },
     {
+      "method": "PUT",
+      "path": "/api/settings/credentials/:id",
+      "mountPath": "/api/settings",
+      "sources": [
+        "server/routes/settings.js"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/api/settings/features",
       "mountPath": "/api/settings",
@@ -17812,8 +17820,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2206,
-    "declarations": 2214,
+    "operations": 2207,
+    "declarations": 2215,
     "sourceFiles": 233
   }
 }

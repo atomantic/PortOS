@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
+// This suite owns scheduler time, not settings or credential I/O.
+vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }))
+
 // Mock modules before import
 vi.mock('./cosEvents.js', () => ({
   cosEvents: { emit: vi.fn() }

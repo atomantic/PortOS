@@ -279,15 +279,12 @@ export default function ModelComparison() {
   };
 
   const handleSyncAA = () => {
-    if (!syncKey.trim()) {
-      setSyncError('Please enter an Artificial Analysis API key.');
-      return;
-    }
     setSyncing(true);
     setSyncError('');
     setSyncStatus('Connecting to Artificial Analysis and syncing models…');
-    syncArtificialAnalysis({ apiKey: syncKey.trim() }, { silent: true })
+    syncArtificialAnalysis({ ...(syncKey.trim() ? { apiKey: syncKey.trim() } : {}) }, { silent: true })
       .then(res => {
+        setSyncKey('');
         setSyncStatus(`Sync successful! Updated ${res.observations} models (${res.total} total).`);
         refreshView();
       })
@@ -651,7 +648,7 @@ export default function ModelComparison() {
           </h3>
           <p className="text-xs text-port-text-muted leading-relaxed">
             Fetch the latest benchmark evaluations, pricing, response times, and reasoning effort measurements from the
-            Artificial Analysis Free API.
+            Artificial Analysis Free API. A key entered here is saved privately after authentication succeeds. Leave blank to reuse a configured key, or manage it in Settings → Credentials.
           </p>
           <div className="space-y-1.5">
             <label htmlFor="aa-api-key" className="text-xs font-medium text-port-text-muted">
@@ -660,7 +657,7 @@ export default function ModelComparison() {
             <input
               id="aa-api-key"
               type="password"
-              placeholder="aa_..."
+              placeholder="Leave blank to use your saved key"
               aria-label="Artificial Analysis API Key"
               className="w-full bg-port-bg text-port-text border border-port-border rounded-lg p-2.5 text-sm font-mono"
               value={syncKey}
@@ -683,7 +680,7 @@ export default function ModelComparison() {
               type="button"
               className="px-4 py-1.5 text-sm bg-port-accent text-port-on-accent rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
               onClick={handleSyncAA}
-              disabled={syncing || !syncKey.trim()}
+              disabled={syncing}
             >
               {syncing ? 'Syncing…' : 'Start Sync'}
             </button>

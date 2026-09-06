@@ -58,6 +58,7 @@ export const CATEGORIES = {
   'browser-profile': { label: 'Browser Profile', description: 'Chrome/Chromium browser data', archivable: false, deletable: true, purgeScope: 'category' },
   cache: { label: 'Remote API and Reading Cache', description: 'Cached remote API metadata and the author-hosted Accelerando reading source — refetched on demand, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
   'calendar': { label: 'Calendar', description: 'Calendar sync data', archivable: true, deletable: false },
+  'private': { label: 'Private Keys', description: 'Machine-local integration credentials — managed in Settings > Credentials', archivable: false, deletable: false },
   'certs': { label: 'TLS Certificates', description: 'HTTPS certificate and private key — purging drops the install back to HTTP', archivable: false, deletable: false },
   'commission-feedback': { label: 'Commission Feedback', description: 'Reactions on creative commissions (file mirror of the Postgres store)', archivable: true, deletable: false },
   'conflict-journal': { label: 'Conflict Journal', description: 'Peer-sync conflict history — diagnostics only, safe to purge', archivable: true, deletable: true, purgeScope: 'category' },

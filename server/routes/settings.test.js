@@ -787,3 +787,20 @@ describe('Settings routes — orchestration profiles (#5992)', () => {
   });
 });
 
+
+it('accepts only registered private keys and never returns the submitted secret', async () => {
+  const { getCredentialInventory } = await import('../services/credentialInventory.js');
+  getCredentialInventory.mockResolvedValue({ credentials: [{ id: 'artificial-analysis', configured: true, source: 'settings', editable: true }] });
+  const app = buildApp();
+  const result = await request(app).put('/api/settings/credentials/artificial-analysis').send({ value: 'example-private-key' });
+  expect(result.status).toBe(200);
+  expect(result.body).toMatchObject({ configured: true });
+  expect(JSON.stringify(result.body)).not.toContain('example-private-key');
+  expect(store.secrets.artificialAnalysis.apiKey).toBe('example-private-key');
+  const publicSettings = await request(app).get('/api/settings');
+  expect(JSON.stringify(publicSettings.body)).not.toContain('example-private-key');
+  expect((await request(app).put('/api/settings/credentials/auth').send({ value: 'example' })).status).toBe(400);
+  expect((await request(app).put('/api/settings/credentials/civitai').send({ value: {}, extra: true })).status).toBe(400);
+  await request(app).put('/api/settings/credentials/artificial-analysis').send({ value: '' });
+  expect(store.secrets.artificialAnalysis.apiKey).toBe('');
+});
