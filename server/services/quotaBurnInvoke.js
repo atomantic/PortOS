@@ -4,11 +4,12 @@
  * A burn step is a REFERENCE to a scheduled task the user already owns
  * (`lib/quotaBurnTaskRef.js`), so "running" it means invoking that task the way
  * anything else invokes it — never re-implementing it. That is the whole point
- * of the reference model: the legacy `quotaBurnJobs/agentPrompt.js` executor
- * calls `cosTaskStore.addTask` directly with a synthesized free-form task, which
- * walks past canonical task generation and every gate that lives in it. That
- * executor still runs the un-migrated legacy steps until #6381 converts them and
- * retires it; nothing NEW goes through it.
+ * of the reference model: the retired `quotaBurnJobs/agentPrompt.js` executor
+ * called `cosTaskStore.addTask` directly with a synthesized free-form task,
+ * which walked past canonical task generation and every gate that lives in it.
+ * #6381 converted the plans that used it and removed it, so this is now the ONLY
+ * way a burn spends quota — a step still carrying a legacy `jobType` resolves to
+ * `LEGACY_UNMIGRATED` here and is refused, never executed.
  *
  * Three reference shapes, three canonical invocations — and no fourth:
  *
@@ -455,6 +456,13 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
         providerId: picked.provider.id,
         model: resolved.effective.model,
         effort: resolved.effective.effort,
+        // The step's run params, which the on-demand engines hand to the
+        // generator as `runOverrides` — layered over the task's saved
+        // `taskMetadata` BEFORE the mode banner and the prompt are built. This
+        // is what carries a migrated issues-only burn's explicit
+        // `fileIssues: true` (#6381); without it the burn would run the
+        // referenced task's SAVED mode and start writing code.
+        params: resolved.effective.params,
       },
     },
   });

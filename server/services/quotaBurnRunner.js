@@ -51,7 +51,6 @@ import { reconcileQuotaBurnReservations, reserveQuotaBurnDispatch } from './quot
 import { getQuotaBurnCompletions, recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';
 import { getActiveQuotaBurnBlocks, recordBurnAgentCompletion } from './quotaBurnDenials.js';
 import { getQuotaBurnConfig, getQuotaBurnReservations, getQuotaBurnRuns, quotaBurnReservationKey, recordQuotaBurnRun } from './quotaBurnStore.js';
-import { countJobPending, runBurnJob } from './quotaBurnJobs/index.js';
 import { countQuotaBurnStepPending, getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
 import { familyHasRunnableJobs, familyIsConfigured, jobIsSpent, quotaBurnJobKey } from '../lib/quotaBurnConfig.js';
 import { applyQuotaBurnAvailability } from '../lib/quotaBurnTaskRef.js';
@@ -93,31 +92,30 @@ const selectJobs = (family, { jobId = null, force = false, completions = {} } = 
 const wireShape = (pending) => ({ count: pending?.count ?? 0, detail: pending?.detail ?? '' });
 
 /**
- * The two invocation lanes, chosen by what the step actually names.
- *
- * A step carrying a `taskRef` runs through the shared reference path
- * (`quotaBurnInvoke.js`) — canonical task generation, all its gates. A step
- * still carrying a legacy `jobType` has no reference to run yet, so it keeps
- * going through the frozen `JOB_MODULES` registry until #6381's migration
- * converts it. Never both, and never a guess: `normalizeQuotaBurnJob` already
- * makes the two mutually exclusive.
- */
-/**
  * What a step names, for the run log and the skip report: the scheduled task it
- * references, or the legacy job type. `jobType` is null on a reference step, so
- * recording it unconditionally wrote `jobType: undefined` on every one of them.
+ * references, or the legacy job type a plan that has not been converted yet is
+ * still carrying. `jobType` is null on a reference step, so recording it
+ * unconditionally wrote `jobType: undefined` on every one of them.
  */
 const stepIdentity = (job) => (job?.taskRef
   ? { taskRef: job.taskRef }
   : { jobType: job?.jobType ?? null });
 
-const probeStep = ({ job, family, catalog }) => (job?.taskRef
-  ? countQuotaBurnStepPending({ step: job, family, catalog })
-  : countJobPending({ job, family }));
+/**
+ * ONE invocation path, whatever the step names.
+ *
+ * There is no second lane any more: the quota-only `JOB_MODULES` registry and
+ * its direct `agentPrompt` executor are retired (#6381), so a step still
+ * carrying a legacy `jobType` has no reference to run and resolves to
+ * `LEGACY_UNMIGRATED` inside the shared path — reported as "nothing pending"
+ * with its migration reason rather than dispatched down an executor that no
+ * longer exists. Keeping the refusal INSIDE the shared path is deliberate: the
+ * page and the runner then say the same thing about the same step.
+ */
+const probeStep = ({ job, family, catalog }) => countQuotaBurnStepPending({ step: job, family, catalog });
 
-const runStep = ({ job, family, candidate, context, force, catalog }) => (job?.taskRef
-  ? invokeQuotaBurnStep({ step: job, family, candidate, context, force, catalog })
-  : runBurnJob({ job, family, candidate, context, force }));
+const runStep = ({ job, family, candidate, context, force, catalog }) =>
+  invokeQuotaBurnStep({ step: job, family, candidate, context, force, catalog });
 
 /**
  * The live task catalog, read at most once per cycle/status pass and only when a

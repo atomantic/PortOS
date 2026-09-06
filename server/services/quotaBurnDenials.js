@@ -225,7 +225,7 @@ export async function clearQuotaBurnBlock(familyId) {
  * after it runs would arrive one wasted agent too late, every time.
  *
  * Only agents spawned BY a burn are considered — `quotaBurnFamily` is stamped on
- * the task by `quotaBurnJobs/agentPrompt.js` and projected onto the agent record
+ * the task by the burn dispatch (`quotaBurnInvoke.js`) and projected onto the agent record
  * at registration. An unrelated agent that happens to hit a usage limit says
  * nothing about whether the burn plan may spend; blocking on it would stall the
  * feature over someone else's failed task.

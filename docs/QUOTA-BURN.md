@@ -528,12 +528,44 @@ model stores a `jobType` and a free-form `params` bag instead of a `taskRef`.
 Those steps still **load** — an install upgrading across the reference model must
 not lose its plan — and `normalizeQuotaBurnJob` marks each one
 `legacy-unmigrated` rather than guessing which scheduled task its copied prompt
-meant. The page renders that reason and no run affordance, so the step keeps its
-place, its order and its name while the conversion service converts it; picking a
-task from the row's own picker converts it by hand at any time. Guessing at
-normalization time would either strand the user's edits or silently duplicate an
-automation, which is why the conversion is a migration rather than a read-time
-inference.
+meant. Guessing at normalization time would either strand the user's edits or
+silently duplicate an automation, which is why the conversion is a migration
+rather than a read-time inference.
+
+Migration `359-quota-burn-task-references.js` performs it, over the one decision
+in `lib/quotaBurnLegacyConversion.js`:
+
+- A prompt that is still a **recognized, unmodified shipped preset** becomes a
+  reference to the scheduled audit it was cloned from (`auditCatalog.js`), with
+  `fileIssues: true` pinned **explicitly** — every burn preset was an issues-only
+  audit, and a scheduled default that says otherwise (or changes later) must not
+  turn it into code-writing work.
+- The two **programmatic** types become references to the scheduled handlers that
+  already implement them, run params intact.
+- Anything **customized, unrecognized, or without a target app** becomes an
+  on-demand **custom scheduled task** holding the user's exact prompt and
+  workflow settings, which the step then references. Recognition is
+  `matchStoredAuditPreset` — migration 305's mission-half rule — never a label
+  and never a partial match: when in doubt the conversion keeps the text, because
+  a preserved prompt is recoverable and a discarded one is not.
+
+Step ids, order, labels, disabled state and `runOnce` survive untouched, so the
+completion ledger, the dispatch ledger and the reservation keys all still resolve.
+A converted built-in reference only becomes **runnable** once its target app has
+that scheduled task enabled — the shared availability ladder decides that, and the
+migration deliberately does not enable a task type on the user's behalf. The
+pre-conversion plan is parked at `data/cos/quota-burn.pre-359.json`.
+
+Until a plan is converted, its steps keep their place, order and name while
+rendering `legacy-unmigrated` and no run affordance — picking a task from the
+row's own picker converts one by hand at any time.
+
+Conversion is idempotent and interrupt-safe: a step that already carries a
+`taskRef` is skipped, and a custom conversion addresses its task by a
+deterministic `job-burn-<family>-<step>` id, so a re-run or a resumed run reuses
+the task it created rather than minting a duplicate automation. The same service
+runs on the PUT path, so a body from an older client is converted before it
+reaches disk instead of being persisted as a step the runner can only refuse.
 
 ## Code map
 
@@ -545,7 +577,8 @@ inference.
 | `server/lib/quotaBurnOrigin.js` | Burn provenance on an on-demand request, and the metadata both on-demand engines stamp from it |
 | `server/lib/taskTargetScope.js` | Which task types act on one app, install-wide, or are programmatic — read by the resolver and the schema |
 | `server/lib/auditCatalog.js` | The audit task types and their file-issues-vs-do-the-work contract |
-| `server/lib/quotaBurnPresets.js` | FROZEN legacy prompt presets — a compatibility input for un-migrated plans |
+| `server/lib/quotaBurnPresets.js` | FROZEN legacy prompt presets — a compatibility input, plus `matchStoredAuditPreset`, the recognition rule migration 359 converts on |
+| `server/lib/quotaBurnLegacyConversion.js` | The ONE legacy-step → reference decision, shared by migration 359 and the PUT compat path |
 | `server/lib/universeBibleCompleteness.js` | What "described" means per kind + depth — the field vocabulary the describe task scans with |
 | `server/lib/quotaWindows.js` | Classifies a window by period — target (broadest) vs limiting (narrowest) |
 | `server/services/quotaBurnInvoke.js` | The shared invocation path: builds the task catalog, resolves a step, layers its overrides, enforces the schedule's own gates, and dispatches |
@@ -556,7 +589,7 @@ inference.
 | `server/services/quotaBurnDenials.js` | The observed-refusal ledger and its `agent:completed` subscriber |
 | `server/services/quotaBurnRunner.js` | The loop, the cycle, and the status feed (which stamps availability onto the config the page reads) |
 | `server/services/scheduledHandlers/` | The programmatic handlers (universe bible descriptions/images) — shared by Scheduled Tasks and Quota Burn |
-| `server/services/quotaBurnJobs/` | The frozen legacy job registry, kept until un-migrated plans are converted |
+| `server/services/quotaBurnConversion.js` | The runtime adapter for that decision: creates the custom task and rewrites the step on a legacy PUT |
 | `server/routes/quotaBurn.js` | `/api/quota-burn` — plan, status, apps/providers catalog, manual runs, re-arm |
 | `client/src/lib/quotaBurnTasks.js` | The client's view of the shared task catalog: grouping, search, reference keys, effective settings, and the PUT payload |
 | `client/src/lib/quotaBurnPatch.js` | The optimistic config merge (mirrors `saveQuotaBurnConfig`) and the dispatch-cap sentinel |

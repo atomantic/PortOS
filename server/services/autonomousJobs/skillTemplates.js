@@ -178,6 +178,15 @@ async function generateTaskFromJob(job) {
       // needed. This is only a completion marker; agentFinalization still
       // requires verifyPrClaim to prove the branch is empty before honoring it.
       ...(meta.noChangeSuccess === true ? { noChangeSuccess: true } : {}),
+      // The "lands no code" posture a job converted from a legacy quota-burn
+      // step carries (#6381). Forwarded beside the git-workflow flags above
+      // because the legacy executor derived all of them together: either of
+      // these forces openPR/simplify off and makes a CLEAN worktree the success
+      // condition, so dropping one here would turn a report-shaped run into a
+      // `pr-missing` retry that burns agent quota on work already done.
+      ...(meta.noCodeOutput != null ? { noCodeOutput: meta.noCodeOutput } : {}),
+      ...(meta.discardWorktree != null ? { discardWorktree: meta.discardWorktree } : {}),
+      ...(meta.worktreeChangesExpected != null ? { worktreeChangesExpected: meta.worktreeChangesExpected } : {}),
       // Optional per-job AI provider + model override. resolveAgentProviderAndModel
       // reads metadata.provider to switch providers and selectModelForTask reads
       // metadata.model as the highest-priority model choice. Absent = active

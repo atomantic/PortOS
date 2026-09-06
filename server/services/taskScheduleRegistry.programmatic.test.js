@@ -6,7 +6,8 @@ import {
   isProgrammaticScheduledTaskType,
 } from './taskScheduleRegistry.js';
 import { SCHEDULED_HANDLER_MODULES } from './scheduledHandlers/index.js';
-import { JOB_MODULES } from './quotaBurnJobs/index.js';
+import { QUOTA_BURN_JOB_TYPES } from '../lib/quotaBurnConfig.js';
+import { planQuotaBurnStepConversion } from '../lib/quotaBurnLegacyConversion.js';
 import { QUOTA_BURN_JOB_CATALOG } from '../lib/quotaBurnConfig.js';
 import { sanitizeTaskMetadata } from '../lib/cosValidation.js';
 
@@ -31,13 +32,25 @@ describe('programmatic scheduled handlers — registration parity', () => {
     expect(isProgrammaticScheduledTaskType('constructor')).toBe(false);
   });
 
-  it('is the SAME module Quota Burn dispatches — one implementation, not two', () => {
-    // #6376 moved these out of quotaBurnJobs/ and left the burn registry
-    // pointing at the shared handler. A second copy would drift the moment one
-    // door's behavior changed.
+  it('is what a legacy programmatic burn step converts INTO — one implementation, not two', () => {
+    // #6376 moved these out of quotaBurnJobs/ and #6381 retired that registry
+    // entirely: a legacy programmatic step now converts to a reference to the
+    // registered handler. A conversion naming anything else would resurrect the
+    // second implementation the move existed to remove.
     for (const taskType of PROGRAMMATIC_SCHEDULED_TASK_TYPES) {
-      expect(JOB_MODULES[taskType], taskType).toBe(SCHEDULED_HANDLER_MODULES[taskType]);
+      const outcome = planQuotaBurnStepConversion({ id: 's1', jobType: taskType, params: { maxEntries: 3 } }, { familyId: 'grok' });
+      expect(outcome.taskRef, taskType).toEqual({ kind: 'builtin', taskType, appId: null });
+      expect(outcome.customJob, taskType).toBeNull();
+      expect(SCHEDULED_HANDLER_MODULES[taskType], taskType).toBeTypeOf('function');
     }
+    // Every legacy job type has a conversion rule — the guard the retired
+    // registry's own parity test used to provide. A type with none would leave a
+    // stored step permanently un-migrated and permanently unavailable.
+    for (const jobType of QUOTA_BURN_JOB_TYPES) {
+      expect(planQuotaBurnStepConversion({ id: 's1', jobType, params: { appId: 'a1', prompt: 'do the thing' } }, { familyId: 'grok' }), jobType)
+        .not.toBeNull();
+    }
+    expect(QUOTA_BURN_JOB_CATALOG.map((entry) => entry.id).sort()).toEqual([...QUOTA_BURN_JOB_TYPES].sort());
   });
 
   it('exports the countPending/run contract from every handler module', async () => {

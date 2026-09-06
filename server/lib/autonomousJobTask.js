@@ -34,6 +34,14 @@ export function generatedJobTaskFields(generated) {
     simplify: meta.simplify,
     // A marked audit may complete successfully with a verified empty branch.
     noChangeSuccess: meta.noChangeSuccess,
+    // The report-shaped posture: the deliverable is an action performed DURING
+    // the run, or a scratch checkout nothing may land from. `FILE_ISSUES_DELIVERY_SETTINGS`
+    // stamps `noCodeOutput` on every issues-only job, and a job converted from a
+    // legacy quota-burn step carries both (#6381) — missing here, the burn lane
+    // queued them as ordinary code work and told the agent to push.
+    noCodeOutput: meta.noCodeOutput,
+    discardWorktree: meta.discardWorktree,
+    worktreeChangesExpected: meta.worktreeChangesExpected,
     // Read by the `job:spawned` listener, which records the execution and
     // re-registers the saved schedule.
     autonomousJob: meta.autonomousJob,

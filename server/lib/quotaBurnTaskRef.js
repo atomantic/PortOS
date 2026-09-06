@@ -321,8 +321,9 @@ export function applyQuotaBurnAvailability(config, catalog = {}) {
  *
  * Three independent gates, deliberately spelled out rather than folded into
  * `enabled`: the user switched it off, the catalog says it cannot run, or it
- * has no reference to run at all (an un-migrated legacy step — which the legacy
- * `JOB_MODULES` executor still handles until #6381 retires it).
+ * has no reference to run at all. The third is an un-migrated legacy step, and
+ * since #6381 retired the quota-only executor there is nothing else for it to
+ * run through — it stays visible and refused rather than dispatched.
  */
 export function quotaBurnStepIsDispatchable(step) {
   return step?.enabled !== false && !step?.unavailable && Boolean(step?.taskRef);

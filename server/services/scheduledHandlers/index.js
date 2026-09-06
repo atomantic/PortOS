@@ -26,7 +26,7 @@
  *     an on-demand request for the task type and calls `runScheduledHandler`
  *     with the task's saved `taskMetadata` as its params and NO `family`.
  *   - Quota Burn's runner reaches the same modules through
- *     `quotaBurnJobs/index.js`, passing the burning `family` so the work stays
+ *     `quotaBurnInvoke.js`, passing the burning `family` so the work stays
  *     pinned to that subscription (see `providerPick.js` /
  *     `universeBibleImages.resolveRenderMode`).
  *

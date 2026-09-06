@@ -35,19 +35,16 @@ import { BIBLE_DESCRIBE_DEPTHS, BIBLE_DESCRIBE_SCOPES } from './universeBibleCom
 export const QUOTA_BURN_FAMILIES = Object.freeze(['claude', 'codex', 'agy', 'grok']);
 
 /**
- * How a queued burn task's description opens: `[Quota burn: <family>] …`.
+ * How a burn task queued by the RETIRED executor opened: `[Quota burn: <family>] …`.
  *
- * `quotaBurnJobs/agentPrompt.js` mints it; migration 225 matches it to back-fill
- * `metadata.quotaBurnFamily` onto tasks queued before that stamp existed. Shared
- * because the two live in different trees and a reworded description would
- * silently make the migration a no-op — leaving exactly the stranded tasks it
- * exists to rescue.
+ * Nothing mints this any more — a burn is dispatched through canonical task
+ * generation and carries `metadata.quotaBurnFamily` from the start (#6381). It
+ * survives as a parser only, for migration 225, which back-fills that metadata
+ * onto tasks queued before the stamp existed and has nothing else to read them
+ * by. Reword it and the migration silently becomes a no-op, leaving exactly the
+ * stranded tasks it exists to rescue.
  */
 export const QUOTA_BURN_TASK_PREFIX = '[Quota burn: ';
-
-/** The description a burn task is queued under. Parsed back by `quotaBurnFamilyOfDescription`. */
-export const burnTaskDescription = (familyId, label, appName) =>
-  `${QUOTA_BURN_TASK_PREFIX}${familyId}] ${label} for ${appName}`;
 
 /**
  * The family id in a burn-task description, or null when it isn't one. Only the
@@ -128,7 +125,8 @@ export const isUnlimitedDispatchCap = (cap) => Number(cap) < 0;
  *
  * `agent-prompt` was the original behavior (spawn a CoS agent in a managed app
  * with a copied prompt); the other two are PROGRAMMATIC jobs PortOS performs
- * itself with no agent in the loop.
+ * itself with no agent in the loop. Migration 359 converts all three
+ * (`lib/quotaBurnLegacyConversion.js`); none of them has an executor any more.
  */
 export const QUOTA_BURN_JOB_TYPE = Object.freeze({
   AGENT_PROMPT: 'agent-prompt',

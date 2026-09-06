@@ -12,16 +12,24 @@ import {
 const provenance = (overrides = {}) => ({ family: 'grok', stepId: 'step-1', ...overrides });
 
 describe('normalizeQuotaBurnProvenance', () => {
-  it('keeps the family, step, limiting reset and the three override pins', () => {
+  it('keeps the family, step, limiting reset, the three override pins and the run params', () => {
+    // The params ride here because they have to reach the PROMPT: the on-demand
+    // engines hand them to the generator as `runOverrides`, which is what lets a
+    // migrated issues-only burn pin `fileIssues: true` explicitly (#6381).
     expect(normalizeQuotaBurnProvenance(provenance({
       limitingResetAt: 1700000000000,
-      overrides: { providerId: 'grok-tui', model: 'm', effort: 'high' },
+      overrides: { providerId: 'grok-tui', model: 'm', effort: 'high', params: { fileIssues: true, maxEntries: 5 } },
     }))).toEqual({
       family: 'grok',
       stepId: 'step-1',
       limitingResetAt: 1700000000000,
-      overrides: { providerId: 'grok-tui', model: 'm', effort: 'high' },
+      overrides: { providerId: 'grok-tui', model: 'm', effort: 'high', params: { fileIssues: true, maxEntries: 5 } },
     });
+  });
+
+  it('drops a non-scalar run param rather than carrying a blob into task metadata', () => {
+    const block = normalizeQuotaBurnProvenance(provenance({ overrides: { params: { fileIssues: true, nested: { a: 1 } } } }));
+    expect(block.overrides.params).toEqual({ fileIssues: true });
   });
 
   it('rejects a block that cannot attribute the burn', () => {

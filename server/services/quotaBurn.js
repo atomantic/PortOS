@@ -8,7 +8,7 @@
  *
  * This module owns the SELECTION half (which family, which window, is the
  * window's dispatch cap spent) and nothing else. The plan lives in
- * `quotaBurnStore.js`, the jobs in `quotaBurnJobs/`, and the loop that ties
+ * `quotaBurnStore.js`, the shared invocation path in `quotaBurnInvoke.js`, and the loop that ties
  * them together in `quotaBurnRunner.js`.
  *
  * Everything here fails CLOSED: an unknown reset time, an unsupported provider,

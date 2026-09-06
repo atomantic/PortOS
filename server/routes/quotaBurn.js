@@ -7,14 +7,11 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, quotaBurnConfigUpdateSchema, quotaBurnRearmSchema, quotaBurnRunSchema } from '../lib/validation.js';
-import { QUOTA_BURN_JOB_CATALOG } from '../lib/quotaBurnConfig.js';
-import { QUOTA_BURN_PROMPT_PRESETS } from '../lib/quotaBurnPresets.js';
-import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 import { clearQuotaBurnJobCompletion } from '../services/quotaBurnCompletions.js';
+import { convertLegacyQuotaBurnPatch } from '../services/quotaBurnConversion.js';
 import { saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
-import { listUniverseNames } from '../services/universeBuilder.js';
 import { listProviders } from '../services/providers.js';
 
 const router = Router();
@@ -29,29 +26,21 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json(await getQuotaBurnStatus({ refresh }));
 }));
 
-// GET /api/quota-burn/catalog — everything the config form needs to build its
-// pickers in one round trip: job types + their param descriptors, the family
-// list, and the app/universe/render-backend options those params select from.
+// GET /api/quota-burn/catalog — what the STEP editor still needs from this
+// route: the managed apps a reference may target and the providers a
+// per-invocation pin may name. The work itself is no longer here — a step
+// references a scheduled task, and those come from the shared schedule/custom-job
+// reads the CoS Schedule and System Tasks pages already make. The legacy job-type
+// catalog and the prompt presets are deliberately NOT served: they are frozen
+// compatibility-and-migration inputs (#6381), and offering them would invite a
+// client to author work that no longer has an executor.
 router.get('/catalog', asyncHandler(async (_req, res) => {
-  const [apps, universes, providers] = await Promise.all([
+  const [apps, providers] = await Promise.all([
     getActiveApps(),
-    // The `{ id, name }` projection, NOT listUniverses() — the picker needs a
-    // label, not every bible on the install. A missing/empty universe store must
-    // not 500 the config page either; the universe job just has nothing to pick.
-    listUniverseNames().catch(() => []),
     listProviders().catch(() => []),
   ]);
   res.json({
-    jobTypes: QUOTA_BURN_JOB_CATALOG,
-    // Prompt templates for `agent-prompt` jobs. Served rather than bundled into
-    // the client so the wording is one server-side edit — and so a job the user
-    // has already tuned is never overwritten by a newer version of the text.
-    presets: QUOTA_BURN_PROMPT_PRESETS,
     apps: (apps || []).map((app) => ({ id: app.id, name: app.name })),
-    universes,
-    // Exactly the modes the media job queue can dispatch — the burn job enqueues
-    // through it, so a backend added there appears in this picker for free.
-    imageModes: QUEUEABLE_IMAGE_MODES,
     providers: providers || [],
   });
 }));
@@ -60,7 +49,11 @@ router.get('/catalog', asyncHandler(async (_req, res) => {
 // merge; a family's `jobs` array replaces.
 router.put('/', asyncHandler(async (req, res) => {
   const patch = validateRequest(quotaBurnConfigUpdateSchema, req.body);
-  const config = await saveQuotaBurnConfig(patch);
+  // An old client may still PUT a legacy `jobType` step. It is converted through
+  // the SAME service the migration used before it reaches disk, so a stale body
+  // can neither downgrade a reference nor create a second automation beside one
+  // that already exists.
+  const config = await saveQuotaBurnConfig(await convertLegacyQuotaBurnPatch(patch));
   res.json({ config });
 }));
 
