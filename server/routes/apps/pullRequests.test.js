@@ -154,6 +154,31 @@ describe('app pull-request routes', () => {
     });
   });
 
+  // The tab's "Run with" picker (mirrors the Issues tab's same picker) — the
+  // follow-up inherits it as its source task's provider/model/effort pin,
+  // exactly the mechanism a manually-targeted claim/replan already uses.
+  it('threads a provider/model/effort override into the follow-up task', async () => {
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/resolve')
+      .send({ provider: 'claude', model: 'claude-opus-5', effort: 'high' });
+
+    expect(response.status).toBe(202);
+    expect(spawnReviewLoopFollowUp).toHaveBeenCalledWith(expect.objectContaining({
+      originalTask: expect.objectContaining({
+        metadata: expect.objectContaining({ provider: 'claude', model: 'claude-opus-5', effort: 'high' }),
+      }),
+    }));
+  });
+
+  it('leaves the follow-up task unpinned when no provider override is sent', async () => {
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/resolve');
+
+    expect(response.status).toBe(202);
+    const { metadata } = spawnReviewLoopFollowUp.mock.calls[0][0].originalTask;
+    expect(metadata).not.toHaveProperty('provider');
+    expect(metadata).not.toHaveProperty('model');
+    expect(metadata).not.toHaveProperty('effort');
+  });
+
   it('threads a fork PR\'s head coordinates through to the follow-up (#6064)', async () => {
     // Resolve is offered on ANY open PR, and a fork head has no
     // `origin/<branch>`: without these the agent is queued and then blocked at
@@ -394,6 +419,16 @@ describe('app pull-request routes', () => {
       requestId: 'demand-abc',
       duplicate: false,
       reviewAction: { taskId: null, status: 'pending' },
+    });
+  });
+
+  it('forwards a provider/model/effort override to the on-demand pr-reviewer request', async () => {
+    const response = await request(app).post('/api/apps/app-001/pull-requests/17/review')
+      .send({ provider: 'claude', model: 'claude-opus-5', effort: 'high' });
+
+    expect(response.status).toBe(202);
+    expect(triggerOnDemandTask).toHaveBeenCalledWith('pr-reviewer', 'app-001', {
+      targetPullRequest: 17, provider: 'claude', model: 'claude-opus-5', effort: 'high',
     });
   });
 

@@ -192,6 +192,15 @@ export const enabledApiProviderFilter = (provider) => Boolean(provider?.enabled)
 export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiProvider(provider);
 
 /**
+ * Stable, module-scoped filter for `useProviderModels({ filter })` on a manual
+ * dispatch picker (a Claim/Replan/Resolve/Review "Run with" control) — only
+ * CODING providers (CLI/TUI agents with a file-writing harness) can run one of
+ * these agent tasks. Hoisted for the same reason as `enabledApiProviderFilter`
+ * above: a stable identity across renders.
+ */
+export const enabledProcessProviderFilter = (provider) => Boolean(provider?.enabled) && isProcessProvider(provider);
+
+/**
  * Whether `provider` is served by an Ollama daemon rather than its nominal
  * cloud/CLI backend: the built-in `ollama` API provider itself (id match), an
  * `api`-type provider whose `endpoint` points at Ollama, or the Claude-Ollama

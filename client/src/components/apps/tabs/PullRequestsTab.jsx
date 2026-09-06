@@ -1,14 +1,17 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react';
 import { Link } from 'react-router';
 import {
-  AlertTriangle, CheckCircle2, ExternalLink, GitBranch, GitMerge,
+  AlertTriangle, Bot, CheckCircle2, ExternalLink, GitBranch, GitMerge,
   GitPullRequest, Loader2, RefreshCw, Rocket, ScanSearch, Search, ShieldAlert, User
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
 import Pill from '../../ui/Pill';
 import toast from '../../ui/Toast';
+import ProviderModelSelector from '../../ProviderModelSelector';
 import { useCosTaskUpdates } from '../../../hooks/useCosTaskUpdates';
+import useProviderModels from '../../../hooks/useProviderModels';
+import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 
@@ -133,6 +136,16 @@ export default function PullRequestsTab({ appId, appName }) {
   const [actions, setActions] = useState(emptyActions);
   const actionsRef = useRef(emptyActions());
   const requestRef = useRef(0);
+
+  // Page-level provider/model/effort pin for every Resolve & merge / PR review
+  // click on this tab — left untouched (blank), a run resolves the install's
+  // active provider, same as the bare button always did. Mirrors the Issues
+  // tab's "Run with" picker: a session convenience, never persisted.
+  const {
+    providers, selectedProviderId, selectedModel, availableModels,
+    setSelectedProviderId, setSelectedModel
+  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, silent: true, withEffort: true });
+  const [effort, setEffort] = useState('');
 
   // One writer for the whole `{ kind: { number: action } }` bag so the ref the
   // socket handler reads and the state React renders can never disagree.
@@ -286,8 +299,16 @@ export default function PullRequestsTab({ appId, appName }) {
     else toast.success(message);
   };
 
+  // The "Run with" picker above the list — left untouched, every field is
+  // `undefined` and the server resolves its own default exactly as before.
+  const providerSettings = {
+    provider: selectedProviderId || undefined,
+    model: selectedModel || undefined,
+    effort: effort || undefined,
+  };
+
   const handleResolve = pullRequest => queueAction('resolve', pullRequest, {
-    call: () => api.resolveAppPullRequest(appId, pullRequest.number),
+    call: () => api.resolveAppPullRequest(appId, pullRequest.number, providerSettings),
     queued: result => (result.started
       ? `Started an agent to resolve and merge ${forgeLabel} #${pullRequest.number}`
       : `Queued an agent to resolve and merge ${forgeLabel} #${pullRequest.number}`
@@ -296,7 +317,7 @@ export default function PullRequestsTab({ appId, appName }) {
   });
 
   const handleReview = pullRequest => queueAction('review', pullRequest, {
-    call: () => api.reviewAppPullRequest(appId, pullRequest.number),
+    call: () => api.reviewAppPullRequest(appId, pullRequest.number, providerSettings),
     queued: `Queued the pr-reviewer task for ${forgeLabel} #${pullRequest.number}`,
     already: `pr-reviewer is already queued for ${forgeLabel} #${pullRequest.number}`,
   });
@@ -355,6 +376,28 @@ export default function PullRequestsTab({ appId, appName }) {
             PR review points the <span className="font-mono">pr-reviewer</span> scheduled task at this one request instead of letting it sweep every open contributor PR. It appears only on requests it can review — opened by someone else against the default branch — and its security scan still holds the review behind approval.
           </p>
         )}
+      </div>
+
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 px-3 py-2 bg-port-card border border-port-border rounded-lg">
+        <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
+          <Bot size={14} /> Run with
+        </span>
+        <div className="flex-1">
+          <ProviderModelSelector
+            providers={providers}
+            selectedProviderId={selectedProviderId}
+            selectedModel={selectedModel}
+            availableModels={availableModels}
+            onProviderChange={(id) => { setSelectedProviderId(id); setEffort(''); }}
+            onModelChange={setSelectedModel}
+            effort={effort}
+            onEffortChange={setEffort}
+            emptyProviderOption="Auto (default)"
+            emptyModelOption="Default model"
+            compact
+            highlightToolUse
+          />
+        </div>
       </div>
 
       {error && (

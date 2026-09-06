@@ -1097,7 +1097,10 @@ export async function getNextTaskType(appId = null, { perpetualOnly = false, con
  * perpetual drain re-issued ITSELF through the same lane after a completed run —
  * automated, and therefore NOT allowed to clear its own brakes.
  */
-export async function triggerOnDemandTask(taskType, appId = null, { emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null, burn = null } = {}) {
+export async function triggerOnDemandTask(taskType, appId = null, {
+  emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null, burn = null,
+  provider = null, model = null, effort = null,
+} = {}) {
   // A targeted run names ONE open PR/MR instead of letting the task pick from
   // the app's whole open set (the PR/MR row's "Review this PR" button). Coerced
   // and validated here so a bad value can't reach the generator's forge filter.
@@ -1112,6 +1115,11 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
   if (origin === ON_DEMAND_ORIGINS.QUOTA_BURN && !burnProvenance) {
     return { error: 'A quota-burn request must name the burning family and its burn step' };
   }
+  // Optional per-request provider/model/effort pin (the PR/MR row's "Run with"
+  // picker) — layered onto the task's metadata by
+  // generateManagedAppImprovementTaskForType as the MOST specific pin, above
+  // the schedule interval and the app's own per-app override.
+  const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
   const request = await updateSchedule(async (schedule) => {
     // Cheap per-task-type check first; the master-flag check pays a state.json read.
     const tasks = schedule.tasks || {};
@@ -1156,7 +1164,8 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
       origin,
       requestedAt: new Date().toISOString(),
       ...(scopedPullRequest ? { targetPullRequest: scopedPullRequest } : {}),
-      ...(burnProvenance ? { burn: burnProvenance } : {})
+      ...(burnProvenance ? { burn: burnProvenance } : {}),
+      ...(providerOverride ? { providerOverride } : {})
     };
 
     schedule.onDemandRequests.push(request);
