@@ -320,6 +320,16 @@ export default function VideoGen() {
     && !remoteTarget.isRemote && !isGrok && !isFal && !isReactor;
   const rendersSleepDisplay = canSleepDisplay && displaySleepEnabled;
 
+  // Does an external provider API own this render? Its weights, sampler and
+  // encoder are all on the far side of an HTTP call, so the local STAGE: ladder
+  // (download weights → load model → encode → sample → mux) describes work this
+  // machine never does and no marker ever lands on — which left the status card
+  // pinned on "Loading model" for the whole render. The status card swaps in the
+  // short submit / render / fetch ladder instead. A federated PEER is
+  // deliberately excluded: it really does load the weights and run the sampler,
+  // it just does so out of view.
+  const rendersOffMachine = isGrok || isFal || isReactor;
+
   // Every gallery-image slot on this page (both frame panels, each multi-keyframe
   // row, each IC-LoRA reference row) opens the SAME GalleryImagePicker modal the
   // Image Gen i2i form uses — a searchable thumbnail grid over the whole gallery.
@@ -1899,6 +1909,7 @@ export default function VideoGen() {
         error={error}
         startedAt={renderStartedAt}
         sleepsDisplay={rendersSleepDisplay}
+        remote={rendersOffMachine}
       />
 
       <MediaJobsQueue kind="video" />

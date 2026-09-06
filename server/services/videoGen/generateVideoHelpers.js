@@ -90,6 +90,21 @@ export const PROMPT_ENCODE_BEGIN_MARKER = 'STAGE:encode-prompt';
 export const PROMPT_ENCODE_END_MARKER = 'STAGE:encode-prompt-done';
 
 /**
+ * A render status line goes out on BOTH wires, always: the videoGen job's own
+ * SSE stream, and `videoGenEvents` for the mediaJobQueue dispatcher to forward
+ * to the page's stream. Publishing on one alone is the bug this collapses —
+ * the cloud lanes broadcast only on the first, so the Video Gen page saw
+ * nothing between "Starting render…" and completion.
+ *
+ * `frame` carries the message and the phase (and, for a download line, its byte
+ * counts); the client maps the phase to a named render step.
+ */
+function publishRenderStatus(job, jobId, frame) {
+  broadcastSse(job, { type: 'status', ...frame });
+  videoGenEvents.emit('status', { generationId: jobId, ...frame });
+}
+
+/**
  * Build the stdout/stderr line handler for one generation. Parses the
  * python child's STATUS:/STAGE:/DOWNLOAD:/tqdm protocol into SSE frames
  * (`broadcastSse`) + queue-dispatcher events (`videoGenEvents`).
@@ -114,16 +129,10 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
   // a missed `started` event. Omitted entirely when there is no estimate — an
   // absent key, never `etaMs: 0`, which a UI would render as "done".
   const etaField = () => (Number.isFinite(job?.etaMs) ? { etaMs: job.etaMs } : {});
-  // Every status line goes out twice: on the videoGen job's own SSE stream, and
-  // on videoGenEvents for the mediaJobQueue dispatcher to forward to the page's
-  // stream. Both carry the phase the last STAGE: marker put us in — the client
-  // maps it to a named render step ("Loading model" / "Rendering" / …), and a
-  // bare STATUS line is often the ONLY thing a runner emits for minutes at a
-  // time, so without the phase it can only be shown as undifferentiated text.
-  const emitStatus = (message, extra = {}) => {
-    broadcastSse(job, { type: 'status', message, phase: currentPhase, ...extra });
-    videoGenEvents.emit('status', { generationId: jobId, message, phase: currentPhase, ...extra });
-  };
+  // Carries the phase the last STAGE: marker put us in — a bare STATUS line is
+  // often the ONLY thing a runner emits for minutes at a time, so without the
+  // phase it can only be shown as undifferentiated text.
+  const emitStatus = (message, extra = {}) => publishRenderStatus(job, jobId, { message, phase: currentPhase, ...extra });
 
   return (raw) => {
     const line = raw.trim();
@@ -598,4 +607,43 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
     videoGenEvents.emit('completed', { generationId: jobId, filename, path: `/data/videos/${filename}`, thumbnail });
   }
   return thumbnail;
+}
+
+/**
+ * The three phases a render owned by an external provider API (Grok, fal.ai,
+ * reactor.inc) actually passes through as far as THIS machine can see. The
+ * provider holds the weights and runs the sampler, so none of the local
+ * `STAGE:` vocabulary applies; the client's `videoRenderPhase.js` maps these
+ * ids onto its short provider step ladder.
+ */
+export const CLOUD_RENDER_PHASE = Object.freeze({
+  /** Handing the job over: runtime prep, auth, the submit call, the provider's own queue. */
+  SUBMIT: 'submit',
+  /** The provider is rendering. */
+  RENDER: 'render',
+  /** Pulling the finished clip back onto this machine. */
+  FETCH: 'fetch',
+});
+
+/**
+ * Publish a cloud-lane status line on BOTH wires: the provider job's own SSE
+ * stream (legacy `/api/video-gen/stream/:id` consumers) and `videoGenEvents`,
+ * which is the only one the media-job queue relays to the Video Gen page. The
+ * cloud lanes used to broadcast on the first alone, so the page saw no status
+ * frame at all between "Starting render…" and completion — and its step list
+ * had no phase to advance on.
+ *
+ * The `activity` heartbeat fires on EVERY call, unconditionally: it is what
+ * keeps the queue watchdog from reaping a provider render that is slow rather
+ * than stuck, and these lanes call this on every stdout chunk (grok) and every
+ * poll tick (fal) precisely because that IS the evidence of life. The line
+ * itself is only re-published when it changed — the same prose repeated every
+ * two seconds tells the user nothing and churns the queue's debounced persist.
+ */
+export function emitCloudRenderStatus(job, jobId, phase, message) {
+  videoGenEvents.emit('activity', { generationId: jobId });
+  const line = `${phase}:${message}`;
+  if (job.cloudStatusLine === line) return;
+  job.cloudStatusLine = line;
+  publishRenderStatus(job, jobId, { message, phase });
 }

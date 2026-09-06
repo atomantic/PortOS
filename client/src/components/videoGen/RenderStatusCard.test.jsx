@@ -38,6 +38,20 @@ describe('RenderStatusCard', () => {
     expect(screen.getByTestId('render-step-queued')).toHaveAttribute('data-state', 'active');
   });
 
+  // reactor.inc / Grok / fal.ai render on the provider's hardware, so the local
+  // ladder's weight-download and model-load steps describe work that never
+  // happens here — and with no local STAGE: markers to advance it, the card sat
+  // on "Loading model" for the whole render and then jumped straight to done.
+  it('shows the provider round trip, not the local weight/model steps, for a cloud render', () => {
+    render(<RenderStatusCard generating remote statusMsg="Reactor session rendering…" phase="render" />);
+
+    expect(screen.queryByTestId('render-step-download')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('render-step-load')).not.toBeInTheDocument();
+    expect(screen.getByTestId('render-step-submit')).toHaveAttribute('data-state', 'done');
+    expect(screen.getByTestId('render-step-render')).toHaveAttribute('data-state', 'active');
+    expect(screen.getByTestId('render-step-fetch')).toHaveAttribute('data-state', 'pending');
+  });
+
   it('shows the error instead of the step list when a render fails', () => {
     render(<RenderStatusCard generating={false} error="Runner exited with code 1" />);
     expect(screen.getByText('Runner exited with code 1')).toBeInTheDocument();
