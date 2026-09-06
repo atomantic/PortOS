@@ -626,12 +626,8 @@ export const CLOUD_RENDER_PHASE = Object.freeze({
 });
 
 /**
- * Publish a cloud-lane status line on BOTH wires: the provider job's own SSE
- * stream (legacy `/api/video-gen/stream/:id` consumers) and `videoGenEvents`,
- * which is the only one the media-job queue relays to the Video Gen page. The
- * cloud lanes used to broadcast on the first alone, so the page saw no status
- * frame at all between "Starting render…" and completion — and its step list
- * had no phase to advance on.
+ * Publish a cloud-lane status line (publishRenderStatus above owns the two
+ * wires it lands on) plus the heartbeat the queue watchdog reads.
  *
  * The `activity` heartbeat fires on EVERY call, unconditionally: it is what
  * keeps the queue watchdog from reaping a provider render that is slow rather
