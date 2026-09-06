@@ -6,8 +6,8 @@ Status: proposed implementation decision for #6359; this PR changes documentatio
 
 Introduce durable, machine-local connection and harness-binding IDs for management,
 while retaining executable provider records and their IDs as the execution and saved
-selection contract. A binding joins one harness to one connection; each binding has
-explicit CLI/TUI routes. A direct API route binds a connection with no harness.
+selection contract. A binding joins a connection to at most one harness; harness bindings have
+explicit CLI/TUI routes. Direct API bindings have no harness and one API route.
 Never resolve a saved route by a display name or silently substitute another mode.
 
 This is the next stage after matching CLI/TUI management cards. It does not authorize
@@ -111,7 +111,7 @@ Binding and route mapping (rows represented together for readability):
 
 ```json
 {
-  "binding": {"id": "binding-example-claude", "connectionId": "conn-example-local", "harnessId": "claude", "enabled": true, "selectedModels": ["example-model"]},
+  "binding": {"id": "binding-example-claude", "revision": 1, "variantKey": "default", "connectionId": "conn-example-local", "harnessId": "claude", "enabled": true, "selectedModels": ["example-model"]},
   "routes": [
     {"providerId": "claude-ollama", "bindingId": "binding-example-claude", "mode": "cli", "modelMap": {"example-model": "example-model"}},
     {"providerId": "claude-ollama-tui", "bindingId": "binding-example-claude", "mode": "tui", "modelMap": {"example-model": "example-model"}}
@@ -121,6 +121,14 @@ Binding and route mapping (rows represented together for readability):
 
 `ai_route_bindings.provider_id` is unique, `binding_id` references the binding row,
 mode is `cli|tui|api`, and binding `harness_id` is nullable only for direct API.
+Require UNIQUE(binding_id, mode). Bindings have a revision and a variantKey;
+UNIQUE(connection_id, harness_id, variant_key), with a separate partial unique index
+for null-harness API bindings, prevents duplicate default bindings. Ordinary add uses
+variantKey `default` and returns an existing binding instead of duplicating it. Multiple
+custom harness configurations on one connection are legitimate: import assigns explicit
+non-default variant keys and distinct display labels rather than combining settings.
+When legacy routes collide on mode, import separate variant bindings. Linking into an
+occupied variant allocates a distinct variant after preview, never discards a route.
 Store the last projected connection-owned field snapshot and pending projection
 revision with each route. Secret-bearing snapshots are private too. Unknown provider
 IDs remain valid legacy routes even when no graph mapping exists. Unknown harnesses
@@ -133,6 +141,7 @@ ambiguous aliases remain visible as unresolved pins and cannot be auto-selected.
 
 Add a proposed local endpoint `GET /api/providers/management` returning
 `{schemaVersion:1, connections:[], bindings:[], routes:[], activeProvider:null}`.
+`activeProvider` is the executable providerId string (or null), identical to the flat API.
 Connection DTOs substitute `hasCredentials` booleans for credentials and omit snapshots.
 Route DTOs include mode, providerId, effective model catalog, prerequisite readiness,
 and explicit eligibility; no credential comparison is performed by the browser.
@@ -147,13 +156,15 @@ Proposed mutations, all Zod-validated and local-only:
 | `POST /api/providers/connections` | kind, name, transports, optional credentials; returns sanitized connection; no generation or discovery |
 | `POST /api/providers/bindings` | connectionId, harnessId (nullable for API), requested modes; create fresh route IDs and disabled routes without changing activeProvider |
 | `PATCH /api/providers/connections/:id` | expectedRevision + explicit changed fields; omitted credentials preserve, explicit clear removes; return 409 on stale edits |
-| `POST /api/providers/bindings/:id/link` | targetConnectionId + expectedRevision + explicit conflict choices; return affected route preview before applying confirmation |
-| `POST /api/providers/bindings/:id/unlink` | clone connection/catalog/credentials to new identity, retain all route IDs and settings |
+| `POST /api/providers/bindings/:id/link` | targetConnectionId + expectedRevisions {binding, sourceConnection, targetConnection} + explicit conflict choices; return affected route preview before applying confirmation |
+| `POST /api/providers/bindings/:id/unlink` | expectedRevisions {binding, sourceConnection}; clone connection/catalog/credentials to new identity, retain all route IDs and settings |
 | `PATCH /api/providers/:id` | existing mode editor remains valid; connection-owned legacy edits detach that binding before changing them |
 | `POST /api/providers/connections/:id/refresh-models` | explicit discovery request only; never prompt generation; retain data on failure |
 
 Link preview is a read-only request using the same validation shape; applying requires
-the preview revisions and explicit user confirmation in the product. These are future
+the preview revisions for every named row and explicit user confirmation in the product.
+Re-check all revisions in the graph transaction; increment every mutated row revision.
+A stale source, target or binding returns 409 and requires a new preview. These are future
 product flows, not an approval requirement for this planning task. No endpoint is
 implemented or added to the route catalog by this PR.
 
@@ -256,7 +267,10 @@ and stacked mobile navigation. Never hide a saved pin merely because it is unava
    Old versions may edit that file without updating the graph. On re-upgrade, compare it
    to the last projected snapshots BEFORE any write. Changed bindings detach/import their
    actual connection values; new provider IDs import independently; deleted records are
-   not resurrected. If sibling values diverge, split their bindings. Unchanged edges retain
+   not resurrected: delete their ai_route_bindings rows and retain any referenced saved
+   selection as a visibly unresolved pin. Keep empty bindings/connections for explicit
+   user cleanup; they cannot generate routes automatically. If sibling values diverge,
+   split their bindings. Unchanged edges retain
    UUIDs. An unrecognized/malformed configuration is preserved as a legacy route for repair.
    This reconciliation runs on every graph-aware startup, not only the one-shot migration.
 7. Restoring only one half of backup requires the same reconciliation; missing graph DB
@@ -272,9 +286,10 @@ it; do not declare compatibility from additive JSON alone.
 ## Peer/client boundary
 
 This stage makes no peer wire change, so no schema bump is justified. Keep connection
-UUIDs, endpoints, credentials, environment and linking graph machine-local. A transferred task retains its existing selection string and receiver resolution
-policy, never a local connection ID. A sender's local UUID cannot identify a receiver's
-backend; an unresolved route must not be redirected by matching vendor or model name. Test capability/status responses for accidental graph or secret leakage.
+UUIDs, endpoints, credentials, environment and linking graph machine-local. A transferred task retains its existing selection string and receiver
+resolution policy, never a local connection ID. A sender's local UUID cannot identify a
+receiver's backend; an unresolved route must not be redirected by matching vendor or
+model name. Test capability/status responses for accidental graph or secret leakage.
 If implementation truly requires new eligibility fields on the peer wire, make that a
 separate negotiated capability change through `server/lib/schemaVersions.js` and the
 capability publisher: old peers receive the existing shape, unsupported routes remain
@@ -306,14 +321,14 @@ JSON examples and whitespace; it does not run live providers or mutate real conf
 Four implementation issues track this decision. Dependencies are explicit;
 this planning issue closes when the design and backlog ship, not when implementation ends.
 
-1. **Read-only graph preview:** schemas, transport adapters, identity and import preview;
+1. **Read-only graph preview (#6366):** schemas, transport adapters, identity and import preview;
    no new persistence or execution changes. Independently useful for inspecting proposed links.
-2. **Durable graph and compatibility projection:** DB records, migration, legacy writes,
+2. **Durable graph and compatibility projection (#6367):** DB records, migration, legacy writes,
    crash recovery and downgrade reconciliation; preserve flat API and route IDs. Depends on 1.
-3. **Mode-safe routing and selectors:** central caller eligibility intersection for active,
+3. **Mode-safe routing and selectors (#6368):** central caller eligibility intersection for active,
    pinned and fallback routes; preserve distinct selector options and stale pins. Can ship
    independently using current executable records, before the graph is persisted.
-4. **Connection management and explicit linking:** accessible/deep-linked flows, shared
+4. **Connection management and explicit linking (#6369):** accessible/deep-linked flows, shared
    model editing, mode overrides and Shell launch; depends on 2 and 3.
 
 Tracker: #6366, #6367, #6368, #6369. Dependencies are recorded on each blocked issue.
