@@ -936,6 +936,15 @@ export const slashdoTaskSchema = createCosTaskSchema
     issueAuthorFilter: z.enum(ISSUE_AUTHOR_FILTERS).optional(),
   });
 
+// POST /api/apps/:id/pull-requests/:number/resolve|review — the Pull Requests
+// tab's "Run with" picker (mirrors the Issues tab's same picker). PICKED
+// from createCosTaskSchema so the provider/model/effort vocabulary and its
+// preprocessors stay identical to every other manual dispatch surface. Every
+// field is optional — an untouched picker resolves the install's active
+// provider, same as the bare button always did.
+export const pullRequestProviderOverrideSchema = createCosTaskSchema
+  .pick({ model: true, provider: true, effort: true });
+
 // POST /api/cos/agents/:id/resume — the resume dialog's edits for a paused
 // agent's next run. PICKED from createCosTaskSchema for the same reason
 // slashdoTaskSchema is: one vocabulary and one set of preprocessors for the

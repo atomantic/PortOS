@@ -9,13 +9,9 @@ import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../l
 import { CodeReviewDefaultsProvider, useCodeReviewDefaults } from '../../hooks/useCodeReviewDefaults';
 import useClaimReviewers from '../../hooks/useClaimReviewers';
 import ClaimReviewerSource from './ClaimReviewerSource';
-import { isProcessProvider } from '../../utils/providers';
+import { enabledProcessProviderFilter } from '../../utils/providers';
 import WorkItemPicker from './WorkItemPicker';
 import * as api from '../../services/api';
-
-// Module-scoped so `useProviderModels` sees a stable predicate — an inline arrow
-// would be a new identity each render, re-firing the hook's fetch effect forever.
-const enabledProcessProviderFilter = (p) => Boolean(p?.enabled) && isProcessProvider(p);
 
 /**
  * Pre-flight settings for an Agent Operations `/do:*` run: for `/do:next`, which

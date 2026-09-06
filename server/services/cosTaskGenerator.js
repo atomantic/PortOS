@@ -839,7 +839,8 @@ async function spawnPriority0OnDemand(ctx) {
         task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
           skipPreconditions: true,
           deferPerpetualDispatch: true,
-          targetPullRequest: request.targetPullRequest ?? null
+          targetPullRequest: request.targetPullRequest ?? null,
+          providerOverride: request.providerOverride ?? null
         });
         if (task) {
           await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
@@ -2908,10 +2909,11 @@ async function resolveAppProviderPin({ app, taskType, appOverride, interval }) {
 /**
  * Layer the provider/model/effort pins onto `metadata`, least specific first:
  * the global schedule interval, then the app's own per-app pin, then a
- * buildTaskInput hook's fully-resolved choice. A model is only ever pinned when
- * explicitly configured — otherwise it stays unset so selectModelForTask resolves
- * the active provider's tier/default model at spawn time (see the note in
- * generateSelfImprovementTaskForType).
+ * buildTaskInput hook's fully-resolved choice, then an explicit per-request
+ * override (the Pull Requests tab's "Run with" picker on one on-demand run). A
+ * model is only ever pinned when explicitly configured — otherwise it stays
+ * unset so selectModelForTask resolves the active provider's tier/default
+ * model at spawn time (see the note in generateSelfImprovementTaskForType).
  */
 function applyOneProviderPin(metadata, pin) {
   // A model pinned with no provider REFINES the layer below (the user picked a
@@ -2933,7 +2935,7 @@ function applyOneProviderPin(metadata, pin) {
   else delete metadata.model;
 }
 
-function applyProviderModelPins(metadata, interval, appPin, hookOverride) {
+function applyProviderModelPins(metadata, interval, appPin, hookOverride, requestOverride) {
   // Least specific first: the task's global Schedule pin. Then the app's own
   // per-app pin, which is the more specific choice — honored for EVERY task type
   // (#4783), not just the one whose buildTaskInput hook read it. Then a
@@ -2944,13 +2946,24 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride) {
   }
   applyOneProviderPin(metadata, appPin);
   applyOneProviderPin(metadata, hookOverride);
+  // Most specific: an explicit per-request pin (e.g. one "PR review" click from
+  // the Pull Requests tab), applied last so it wins over every configured pin
+  // above. A public-review posture still gates the final provider to its own
+  // eligible set at spawn time (resolveAgentProviderAndModel) — an ineligible
+  // pin here is dropped with a warning there, same as any other stored pin.
+  applyOneProviderPin(metadata, { providerId: requestOverride?.provider || null, model: requestOverride?.model || null });
+  if (requestOverride?.effort) {
+    metadata.effort = requestOverride.effort;
+  }
 }
 
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, {
   skipPreconditions = false,
   ignoreTaskId = null,
   deferPerpetualDispatch = false,
-  targetPullRequest = null
+  targetPullRequest = null,
+  // Per-request provider/model/effort pin — see applyProviderModelPins.
+  providerOverride = null
 } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
@@ -3156,7 +3169,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const appPin = hookOverride.providerId
     ? EMPTY_PROVIDER_PIN
     : await resolveAppProviderPin({ app, taskType, appOverride, interval });
-  applyProviderModelPins(metadata, interval, appPin, hookOverride);
+  applyProviderModelPins(metadata, interval, appPin, hookOverride, providerOverride);
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`, metadata);
   stampApprovalReason(metadata, approval);

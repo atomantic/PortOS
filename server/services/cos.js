@@ -1062,7 +1062,8 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
         skipPreconditions: true,
         deferPerpetualDispatch: true,
-        targetPullRequest: request.targetPullRequest ?? null
+        targetPullRequest: request.targetPullRequest ?? null,
+        providerOverride: request.providerOverride ?? null
       });
       if (task) {
         await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
