@@ -966,6 +966,14 @@ export function createProviderService(config = {}) {
       // returning null so `null` keeps exactly ONE meaning out of this function:
       // the provider does not exist. That is what lets the route's 404 say
       // plainly "Provider not found" instead of guessing at a reason.
+      // Pi reports an unauthenticated install as an empty list. That is useful
+      // for first setup, but a lapsed login must not erase a populated catalog.
+      if (resolveModelFetcher(provider)?.key === 'pi' && Array.isArray(fetched)
+        && fetched.length === 0 && provider.models?.length) {
+        const error = new Error('Pi has no authenticated models. Use pi /login before refreshing the stored catalog.');
+        error.status = 502;
+        throw error;
+      }
       const catalog = toModelCatalog(fetched);
       if (catalog === null) {
         const unsupported = new Error(`Model refresh returned nothing for provider '${provider.id}'`);
@@ -1321,11 +1329,13 @@ export function createProviderService(config = {}) {
      * @param {object} provider
      * @param {string} defaultBin - binary to use when the provider pins no command
      * @param {(stdout: string) => string[]} parse - vendor's stdout → ids parser
-     * @returns {Promise<string[]>} a non-empty id list
+     * @param {string[]} [listArgs] - catalog command arguments
+     * @param {(stdout: string) => boolean} [isEmptyCatalog] - explicit empty-catalog response
+     * @returns {Promise<string[]>} parsed ids; empty only when explicitly recognized
      */
-    async _execCliModelList(provider, defaultBin, parse) {
+    async _execCliModelList(provider, defaultBin, parse, listArgs = ['models'], isEmptyCatalog = () => false) {
       const bin = provider?.command || defaultBin;
-      const { command, args } = prepareWindowsSafeSpawn(bin, ['models']);
+      const { command, args } = prepareWindowsSafeSpawn(bin, listArgs);
       const pending = execFileAsync(command, args, {
         timeout: 15000,
         env: { ...process.env, ...provider?.envVars },
@@ -1340,14 +1350,22 @@ export function createProviderService(config = {}) {
       // or not a given binary has the behavior.
       pending.child?.stdin?.end();
       const { stdout } = await pending.catch((err) => {
-        throw new Error(`'${bin} models' failed: ${err?.message || 'could not run the binary'}`);
+        const output = `${err.stdout || ''}\n${err.stderr || ''}`;
+        if (!err.killed && isEmptyCatalog(output)) return { stdout: output };
+        throw new Error(`'${bin} ${listArgs.join(' ')}' failed: ${err?.message || 'could not run the binary'}`);
       });
 
       const listed = parse(stdout);
-      if (listed.length === 0) {
-        throw new Error(`'${bin} models' returned no model ids`);
+      if (listed.length === 0 && !isEmptyCatalog(stdout)) {
+        throw new Error(`'${bin} ${listArgs.join(' ')}' returned no model ids`);
       }
       return listed;
+    },
+
+    async _fetchPiModels(provider) {
+      const { PI_COMMAND, parsePiModelList } = await import('./internal/pi.js');
+      return this._execCliModelList(provider, PI_COMMAND, parsePiModelList, ['--list-models'],
+        (stdout) => /No models available/i.test(stdout) && /\/login/.test(stdout));
     },
 
     /**

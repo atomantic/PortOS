@@ -40,7 +40,6 @@
 import { spawn } from '../lib/childProcess.js';
 import { killProcessTree, prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { commandOutput } from '../lib/commandExists.js';
-import { parseHarnessVersion } from '../lib/harnessOutput.js';
 import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { PROVIDER_VENDORS } from '../lib/providerVendors.js';
@@ -94,6 +93,11 @@ const PROBE_TIMEOUT_MS = 15_000;
 
 /** One row per installable provider runtime, keyed by its vendor row. */
 const RUNTIME_ROWS = [
+  {
+    vendor: 'pi', label: 'Pi Coding Agent CLI',
+    install: { kind: 'npm', package: '@earendil-works/pi-coding-agent@latest' },
+    selfUpdate: ['update'], modelsArgs: ['--list-models'], docsUrl: 'https://pi.dev/docs',
+  },
   {
     vendor: 'claude',
     label: 'Claude Code CLI',
@@ -231,6 +235,7 @@ async function probeRuntimeStatus(runtime, findCommand, probeCommand) {
     ? await probeCommand(versionProbe.command, versionProbe.args, { timeoutMs: PROBE_TIMEOUT_MS })
     : null;
   const installed = typeof probed === 'string';
+  const { parseHarnessVersion } = await import('../lib/harnessOutput.js');
   const version = parseHarnessVersion(probed);
 
   // Windows-only gap: the script-installed vendors publish a PowerShell

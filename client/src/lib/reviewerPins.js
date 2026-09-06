@@ -37,7 +37,7 @@ import {
 // EFFORT_SELECTABLE_REVIEWERS below: `grok`/`opencode`/`kimi` take a model but no
 // pickable effort, and Cursor takes both while carrying its effort INSIDE the
 // model id rather than as a separate flag.
-export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'opencode', 'kimi'];
+export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kimi'];
 
 // The local-LLM backends, which take both a model and an effort.
 export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama', 'mtplx'];
@@ -71,6 +71,7 @@ export const REVIEWER_EFFORT_LEVELS = Object.freeze({
   codex: CODEX_EFFORT_LEVELS,
   antigravity: ANTIGRAVITY_EFFORT_LEVELS,
   cursor: CURSOR_EFFORT_LEVELS,
+  pi: ['low', 'medium', 'high', 'xhigh', 'max'],
   grok: GROK_EFFORT_LEVELS,
   lmstudio: LOCAL_LLM_EFFORT_LEVELS,
   ollama: LOCAL_LLM_EFFORT_LEVELS,
@@ -132,7 +133,7 @@ export const sanitizeReviewerModelInput = (raw) =>
 // never offer a slug the server's enum would reject. Mirror of REVIEWER_VALUES —
 // a reviewer listed here but unknown to the server leaves the user configuring a
 // review-loop reviewer that never runs; the reverse hides one their install has.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
+export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
 
 // The reviewer a task falls back to when none is configured. Mirror of
 // DEFAULT_REVIEWER / DEFAULT_REVIEWERS.

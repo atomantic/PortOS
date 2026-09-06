@@ -30,7 +30,7 @@ import { CURSOR_COMMAND } from './cursor.js';
 // `opencode`/`kimi`/`mtplx` — like `lmstudio` — have no slashdo counterpart, so
 // they are PORTOS_ONLY_REVIEWERS.
 // Mirrored in client/src/components/cos/constants.js → REVIEWER_OPTIONS.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
+export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
 export const REVIEWER_ALIASES = { gemini: 'antigravity', 'cursor-agent': 'cursor' };
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
@@ -71,7 +71,7 @@ export const PORTOS_ONLY_REVIEWERS = ['lmstudio', 'mtplx', 'opencode', 'kimi'];
 // get their model injected server-side by `POST /api/code-review/local`. Add a
 // reviewer here when its CLI gains model selection; the `<reviewer>Model`
 // settings scalar is generated from this roster (codeReviewSettingsSchema).
-export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'opencode', 'kimi'];
+export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kimi'];
 // Every reviewer whose model the user can PICK in the UI: the model-capable CLIs
 // above (threaded into the follow-up prompt as `<reviewer> --model <id>`) plus the
 // local-LLM backends (whose id is injected server-side by
@@ -96,6 +96,7 @@ export const REVIEWER_CLI_BINARIES = {
   codex: 'codex',
   grok: 'grok',
   cursor: CURSOR_COMMAND,
+  pi: 'pi',
   opencode: 'opencode',
   kimi: 'kimi',
 };

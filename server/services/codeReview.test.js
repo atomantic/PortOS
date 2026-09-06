@@ -178,6 +178,7 @@ describe('codeReview helpers', () => {
           claudeModel: 'qwen2.5:7b',
           antigravityModel: 'gemini-3.6-flash',
           grokModel: 'grok-code-fast-1',
+          piModel: 'example/model',
         },
       })
       expect(out).toEqual({
@@ -196,6 +197,7 @@ describe('codeReview helpers', () => {
         claudeModel: 'qwen2.5:7b',
         antigravityModel: 'gemini-3.6-flash',
         grokModel: 'grok-code-fast-1',
+        piModel: 'example/model',
         cursorModel: null,
         opencodeModel: null,
         kimiModel: null,
@@ -302,16 +304,17 @@ describe('codeReview helpers', () => {
       const probed = []
       commandExistsMock.impl = async (binary) => { probed.push(binary); return binary !== 'agy' }
       const out = await getReviewerCliInstalled()
-      expect(out).toEqual({ claude: true, antigravity: false, codex: true, grok: true, cursor: true, opencode: true, kimi: true })
-      expect(probed.sort()).toEqual(['agy', 'claude', 'codex', 'cursor-agent', 'grok', 'kimi', 'opencode'])
+      expect(out).toEqual({ claude: true, antigravity: false, codex: true, grok: true, cursor: true, opencode: true, kimi: true, pi: true })
+      expect(probed.sort()).toEqual(['agy', 'claude', 'codex', 'cursor-agent', 'grok', 'kimi', 'opencode', 'pi'])
     })
 
     it('caches the result within the TTL — a second call does not re-probe', async () => {
       let calls = 0
       commandExistsMock.impl = async () => { calls += 1; return true }
       await getReviewerCliInstalled()
+      const initialCalls = calls
       await getReviewerCliInstalled()
-      expect(calls).toBe(7) // one probe per CLI reviewer, only on the first call
+      expect(calls).toBe(initialCalls) // one probe per CLI reviewer, only on the first call
     })
 
     it('probes with the longer 15s timeout these heavier agentic CLIs need', async () => {

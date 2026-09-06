@@ -288,6 +288,7 @@ export function pinnedPrCompletion(metadata) {
 // Copy only — the ROSTER is `REVIEWER_VALUES` in `client/src/lib/reviewerPins.js`,
 // which the server suite pins against the server's own enum.
 const REVIEWER_COPY = {
+  pi: { label: 'Pi', description: 'Pi Coding Agent CLI reviews the supplied diff without tools' },
   copilot: { label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
   claude: { label: 'Claude', description: 'Claude CLI reviews the PR diff (optional model on Models → Code Reviewers; supports an Ollama-backed Claude for local-only setups)' },
   antigravity: { label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },

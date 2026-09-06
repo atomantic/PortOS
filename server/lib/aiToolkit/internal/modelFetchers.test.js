@@ -15,6 +15,7 @@ const SHIPPED = JSON.parse(readFileSync(resolve(__dirname, '../../../../data.ref
 // failure mode is silent in both directions (a button that 404s, or a feature
 // that vanishes with no error at all).
 const SHIPPED_REFRESHABLE = [
+  'pi-cli', 'pi-tui',
   'antigravity-cli', 'antigravity-tui', 'cerebras', 'claude-code',
   'claude-code-bedrock', 'claude-ollama', 'claude-ollama-tui', 'cursor-cli',
   'cursor-tui', 'grok', 'lmstudio', 'mtplx', 'nvidia-kimi', 'ollama',

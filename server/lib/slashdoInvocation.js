@@ -73,7 +73,7 @@ export const SLASHDO_REVIEWER_INCLUDE_NAMES = Object.freeze(Object.values(SLASHD
  * (whose keys are the same roster); a reviewer added to one and not the other
  * is a drift the test catches.
  */
-export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor', 'opencode', 'kimi']);
+export const LOCAL_AGENT_REVIEWERS = new Set(['claude', 'codex', 'antigravity', 'grok', 'cursor', 'pi', 'opencode', 'kimi']);
 /** Reviewer slugs that drive slashdo's local-model (Ollama-style) loop. */
 const LOCAL_MODEL_REVIEWERS = new Set(['ollama', 'lmstudio', 'mtplx']);
 /**
@@ -98,6 +98,7 @@ const SLASHDO_REVIEWER_SLUGS = Object.freeze({
   claude: 'claude',
   grok: 'grok',
   cursor: 'cursor',
+  pi: 'pi',
   'cursor-agent': 'cursor',
   agy: 'antigravity',
   gemini: 'antigravity',

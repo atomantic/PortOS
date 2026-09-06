@@ -1,3 +1,4 @@
+import { commandBasename } from './commandBasename.js';
 /**
  * The single per-vendor table behind model refresh.
  *
@@ -121,6 +122,10 @@ export const MODEL_FETCHERS = [
     cliMatch: isGatewayBackedProvider,
     tuiMatch: isGatewayBackedProvider,
     fetch: '_fetchGatewayModels',
+  },
+  {
+    key: 'pi', cliMatch: (p) => commandBasename(p?.command) === 'pi',
+    tuiMatch: (p) => commandBasename(p?.command) === 'pi', fetch: '_fetchPiModels',
   },
   {
     key: 'cursor',

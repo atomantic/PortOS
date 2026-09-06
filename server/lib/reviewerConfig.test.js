@@ -184,7 +184,7 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
 
   it('EFFORT_SELECTABLE_REVIEWERS is exactly the reviewers with a non-empty ladder', () => {
     expect([...EFFORT_SELECTABLE_REVIEWERS].sort())
-      .toEqual(['antigravity', 'claude', 'codex', 'cursor', 'grok', 'lmstudio', 'mtplx', 'ollama']);
+      .toEqual(['antigravity', 'claude', 'codex', 'cursor', 'grok', 'lmstudio', 'mtplx', 'ollama', 'pi']);
     for (const reviewer of REVIEWER_VALUES) {
       expect(EFFORT_SELECTABLE_REVIEWERS.includes(reviewer))
         .toBe((reviewerEffortLevels(reviewer) || []).length > 0);
