@@ -191,6 +191,7 @@ export * from './threejsRig.js';
 export * from './threejsSculpt.js';
 export * from './tribe.js';
 export * from './quotaBurnPatch.js';
+export * from './quotaBurnTasks.js';
 export * from './tribeCadence.js';
 export * from './universeBuilderExpand.js';
 export * from './videoTimelineModel.js';
