@@ -69,3 +69,57 @@ describe('JobCard machine output', () => {
     expect(pre.className).toContain('break-all');
   });
 });
+
+// #6375 — the on-demand cadence. The card must not render an arithmetic-derived
+// date for a job with no interval, and the edit form must not offer a
+// time-of-day the job can never honor.
+describe('JobCard on-demand cadence', () => {
+  const ON_DEMAND_JOB = {
+    id: 'job-manual',
+    name: 'Manual only',
+    description: '',
+    type: 'agent',
+    category: 'custom',
+    interval: 'on-demand',
+    intervalMs: null,
+    priority: 'MEDIUM',
+    autonomyLevel: 'manager',
+    enabled: true,
+    lastRun: '2026-01-01T00:00:00.000Z',
+    runCount: 3
+  };
+
+  it('renders "On demand" as the next run instead of a date derived from a null interval', () => {
+    renderCard(ON_DEMAND_JOB);
+
+    expect(screen.getByText('Next: On demand')).toBeTruthy();
+    expect(screen.queryByText(/Invalid Date/)).toBeNull();
+    expect(screen.queryByText(/NaN/)).toBeNull();
+  });
+
+  it('never shows the Due badge, however long ago the job last ran', () => {
+    renderCard({ ...ON_DEMAND_JOB, lastRun: null });
+
+    // A never-run recurring job is due immediately; an on-demand one never is.
+    expect(screen.queryByText('Due')).toBeNull();
+  });
+
+  it('labels the cadence from the shared option list', () => {
+    renderCard(ON_DEMAND_JOB);
+    expect(screen.getByText('On Demand')).toBeTruthy();
+  });
+
+  it('offers the cadence and hides the time input once it is selected', () => {
+    renderCard({ ...ON_DEMAND_JOB, interval: 'daily', intervalMs: 86400000, scheduledTime: '09:00' });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    const select = screen.getByLabelText('Interval');
+    expect(screen.getByLabelText('Run at a specific time (leave empty for any time)')).toBeTruthy();
+
+    fireEvent.change(select, { target: { value: 'on-demand' } });
+
+    expect(select.value).toBe('on-demand');
+    expect(screen.queryByLabelText('Run at a specific time (leave empty for any time)')).toBeNull();
+    expect(screen.getByText('Runs only when you press Run now.')).toBeTruthy();
+  });
+});

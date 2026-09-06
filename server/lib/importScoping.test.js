@@ -192,6 +192,12 @@ describe('deferred imports stay deferred (#6156)', () => {
 // #6368 adds `lib/callerModePolicy.js`, another zero-dependency leaf reached by
 // the routing boundary and the lib barrel (~92 instantiations). Same tolerated
 // shape; it fits inside the allowance above.
+//
+// #6375 adds `lib/autonomousJobIntervals.js` — the autonomous-job cadence
+// vocabulary `cosValidation.js` validates against, so ~194 suites reach it. It is
+// a zero-import leaf (its time units are declared locally precisely so it drags
+// nothing); the alternative is re-declaring the cadence list at the Zod boundary,
+// which is the drift that issue exists to close. Fits inside the allowance above.
 const MAX_STATIC_INSTANTIATIONS = 91400;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

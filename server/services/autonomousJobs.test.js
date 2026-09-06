@@ -53,6 +53,8 @@ vi.mock('./autobiography.js', () => ({
 }))
 
 // Import after mocks
+import { computeNextJobRun } from './autonomousJobs/scheduler.js'
+import { ON_DEMAND_INTERVAL, resolveIntervalMs } from '../lib/autonomousJobIntervals.js'
 import {
   agentDataCleanup,
   getAllJobs,
@@ -315,6 +317,79 @@ describe('autonomousJobs', () => {
 
       expect(job.intervalMs).toBe(2 * 60 * 60 * 1000)
       expect(job.interval).toBe('every-2-hours')
+    })
+  })
+
+  // #6375 — the on-demand cadence. Its whole contract is negative (never fires
+  // on a clock) and it is enforced in three separate places, so each is pinned.
+  describe('on-demand cadence (#6375)', () => {
+    const onDemandJob = (overrides = {}) => ({
+      ...mockJobsData.jobs[0],
+      id: 'job-on-demand',
+      interval: ON_DEMAND_INTERVAL,
+      intervalMs: null,
+      enabled: true,
+      ...overrides
+    })
+
+    it('resolveIntervalMs returns the no-interval sentinel, not DAY and not NaN', () => {
+      const resolved = resolveIntervalMs(ON_DEMAND_INTERVAL)
+      expect(resolved).toBeNull()
+      expect(resolved).not.toBe(24 * 60 * 60 * 1000)
+      expect(Number.isNaN(resolved)).toBe(false)
+    })
+
+    it('does not fall through to DAY for a cadence outside the vocabulary', () => {
+      // The old `default: return DAY` silently rescheduled a typo'd cadence daily.
+      expect(resolveIntervalMs('dailyy')).toBeNull()
+    })
+
+    it('is never due — not when never run, and not after a week of elapsed time', async () => {
+      // loadJobs merges the shipped default jobs in, so assert on this job only.
+      readJSONFile.mockResolvedValue({ ...mockJobsData, jobs: [onDemandJob()] })
+      expect((await getDueJobs()).find(j => j.id === 'job-on-demand')).toBeUndefined()
+
+      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+      readJSONFile.mockResolvedValue({ ...mockJobsData, jobs: [onDemandJob({ lastRun: weekAgo })] })
+      expect((await getDueJobs()).find(j => j.id === 'job-on-demand')).toBeUndefined()
+    })
+
+    it('computeNextJobRun returns null rather than an Invalid Date', () => {
+      const next = computeNextJobRun(onDemandJob({ lastRun: '2025-01-01T00:00:00.000Z' }), 'UTC')
+      expect(next).toBeNull()
+      // The regression this closes: lastRun + null === lastRun, a finite past
+      // timestamp that reads as permanently overdue.
+      expect(next).not.toBe(Date.parse('2025-01-01T00:00:00.000Z'))
+    })
+
+    it('createJob stores the sentinel and drops a pinned time-of-day', async () => {
+      const job = await createJob({
+        name: 'Manual only',
+        interval: ON_DEMAND_INTERVAL,
+        scheduledTime: '09:00',
+        promptTemplate: 'Only when asked'
+      })
+
+      expect(job.interval).toBe(ON_DEMAND_INTERVAL)
+      expect(job.intervalMs).toBeNull()
+      expect(job.scheduledTime).toBeNull()
+    })
+
+    it('updateJob switching an existing recurring job to on-demand clears its interval', async () => {
+      const updated = await updateJob('job-test-1', { interval: ON_DEMAND_INTERVAL })
+
+      expect(updated.interval).toBe(ON_DEMAND_INTERVAL)
+      expect(updated.intervalMs).toBeNull()
+    })
+
+    it('every recurring cadence still round-trips to a finite interval', async () => {
+      for (const opt of INTERVAL_OPTIONS.filter(o => o.value !== ON_DEMAND_INTERVAL)) {
+        const job = await createJob({ name: opt.value, interval: opt.value, promptTemplate: 'x' })
+        expect(job.interval, opt.value).toBe(opt.value)
+        expect(job.intervalMs, opt.value).toBe(opt.ms)
+      }
+      const custom = await createJob({ name: 'custom', interval: 'custom', intervalMs: 90_000, promptTemplate: 'x' })
+      expect(custom.intervalMs).toBe(90_000)
     })
   })
 

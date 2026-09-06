@@ -69,6 +69,12 @@ async function createJob(jobData) {
 
     const jobType = jobData.type || 'agent'
 
+    // resolveIntervalMs returns null — the no-interval sentinel — for the
+    // on-demand cadence, so the schedulers arm nothing and a time-of-day has no
+    // recurrence to align to.
+    const interval = jobData.interval || 'weekly'
+    const intervalMs = resolveIntervalMs(interval, jobData.intervalMs)
+
     // Strip agent-specific triggerAction values from shell jobs
     const agentOnlyActions = ['spawn-agent', 'create-task']
     const triggerAction = (jobType === 'shell' && agentOnlyActions.includes(jobData.triggerAction))
@@ -91,9 +97,9 @@ async function createJob(jobData) {
       cronExpression: jobData.cronExpression || null,
       cronSchedule: jobData.cronSchedule || null,
       type: jobType,
-      interval: jobData.interval || 'weekly',
-      intervalMs: resolveIntervalMs(jobData.interval || 'weekly', jobData.intervalMs),
-      scheduledTime: jobData.scheduledTime || null,
+      interval,
+      intervalMs,
+      scheduledTime: intervalMs == null ? null : (jobData.scheduledTime || null),
       weekdaysOnly: jobData.weekdaysOnly || false,
       enabled: jobData.enabled !== undefined ? jobData.enabled : false,
       priority: jobData.priority || 'MEDIUM',
@@ -167,6 +173,9 @@ async function updateJob(jobId, updates) {
     // Recalculate intervalMs if interval changed
     if (updates.interval) {
       job.intervalMs = resolveIntervalMs(updates.interval, updates.intervalMs)
+      // Switching to a no-recurrence cadence (on-demand) leaves no schedule for
+      // a pinned time-of-day to align to.
+      if (job.intervalMs == null) job.scheduledTime = null
     }
 
     // Validate shell jobs have a valid command after all fields are applied

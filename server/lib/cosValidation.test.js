@@ -8,6 +8,7 @@ import {
   taskTemplateSettingsSchema,
 } from './cosValidation.js';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { JOB_INTERVAL_VALUES, ON_DEMAND_INTERVAL } from './autonomousJobIntervals.js';
 
 describe('cosValidation effort field', () => {
   it('accepts every EFFORT_LEVELS value on create and rejects unknown values', () => {
@@ -278,5 +279,30 @@ describe('createCosTaskSchema isInvestigation (#6043)', () => {
       investigationFingerprint: 'auth-error:provider-failure:Example CLI',
     });
     expect(parsed).not.toHaveProperty('investigationFingerprint');
+  });
+});
+
+describe('cosValidation job cadence (#6375)', () => {
+  it('accepts every legal cadence on create', () => {
+    for (const interval of JOB_INTERVAL_VALUES) {
+      expect(createCosJobSchema.safeParse({ name: 'j', interval }).success, interval).toBe(true);
+    }
+  });
+
+  it('rejects a cadence outside the vocabulary on create and update', () => {
+    // Before this enum, `interval` was a bare z.string(): a typo reached disk
+    // and resolveIntervalMs's `default: DAY` silently rescheduled it daily.
+    expect(createCosJobSchema.safeParse({ name: 'j', interval: 'dailyy' }).success).toBe(false);
+    expect(updateCosJobSchema.safeParse({ interval: 'dailyy' }).success).toBe(false);
+  });
+
+  it('accepts the on-demand cadence without an intervalMs', () => {
+    const parsed = createCosJobSchema.parse({ name: 'j', interval: ON_DEMAND_INTERVAL });
+    expect(parsed.interval).toBe(ON_DEMAND_INTERVAL);
+    expect(parsed.intervalMs).toBeUndefined();
+  });
+
+  it('still leaves the cadence optional so an unrelated PATCH does not have to send one', () => {
+    expect(updateCosJobSchema.safeParse({ enabled: false }).success).toBe(true);
   });
 });

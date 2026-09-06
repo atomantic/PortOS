@@ -279,11 +279,15 @@ export function describeCron(expr) {
 }
 
 // Interval-mode cadences for autonomous jobs — the client mirror of
-// `INTERVAL_OPTIONS` in `server/services/autonomousJobs/constants.js`. Values
+// `INTERVAL_OPTIONS` in `server/lib/autonomousJobIntervals.js`. Values
 // must stay in lockstep with `resolveIntervalMs` there, since the server
 // recomputes `intervalMs` from whichever value a picker submits. Lives here
 // rather than in a component so a second job-scheduling surface doesn't fork
-// its own copy of the list.
+// its own copy of the list. `on-demand` is the no-recurrence cadence: the job
+// stays enabled and manually runnable, but no timer is ever armed for it.
+// `server/lib/autonomousJobIntervals.mirror.test.js` fails when the two lists drift.
+export const ON_DEMAND_INTERVAL = 'on-demand';
+
 export const JOB_INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour' },
   { value: 'every-2-hours', label: 'Every 2 Hours' },
@@ -292,5 +296,6 @@ export const JOB_INTERVAL_OPTIONS = [
   { value: 'daily', label: 'Daily' },
   { value: 'weekly', label: 'Weekly' },
   { value: 'biweekly', label: 'Every 2 Weeks' },
-  { value: 'monthly', label: 'Monthly' }
+  { value: 'monthly', label: 'Monthly' },
+  { value: ON_DEMAND_INTERVAL, label: 'On Demand' }
 ];

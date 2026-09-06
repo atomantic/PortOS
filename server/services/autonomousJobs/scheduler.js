@@ -9,7 +9,7 @@
 import { getLocalParts, nextLocalTime } from '../../lib/timezone.js'
 import { getUserTimezone } from '../userTimezone.js'
 import { parseCronToNextRun, parseRecurrenceToNextRun } from '../eventScheduler.js'
-import { DAY } from './constants.js'
+import { DAY, isOnDemandJob } from './constants.js'
 import { loadJobs } from './store.js'
 
 // Reads enabled jobs straight from the store. Scheduler intentionally does NOT
@@ -55,6 +55,11 @@ async function getDueJobs() {
       })
       continue
     }
+
+    // On-demand jobs have no clock — they run only via POST /jobs/:id/trigger.
+    // Without this guard the interval comparison below reads a null intervalMs
+    // as 0 and reports the job due on every sweep.
+    if (isOnDemandJob(job)) continue
 
     // Interval-mode jobs
     const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0
@@ -113,6 +118,10 @@ export function computeNextJobRun(job, timezone) {
       : parseCronToNextRun(job.cronExpression, from, timezone)
     return next?.getTime() ?? null
   }
+
+  // No recurrence to project forward from — the caller renders 'On demand'
+  // rather than an arithmetic-on-null date.
+  if (isOnDemandJob(job)) return null
 
   const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0
   let nextDue = lastRun + job.intervalMs

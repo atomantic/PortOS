@@ -234,4 +234,63 @@ describe('registerSingleJobSchedule', () => {
     expect(cancelEvent).toHaveBeenCalledWith('job:job-disabled');
     expect(scheduleEvent).not.toHaveBeenCalled();
   });
+
+  // #6375 — this is the scheduler that actually arms the timer. An on-demand
+  // job stays enabled (so POST /jobs/:id/trigger still runs it) but must never
+  // be given a fire time; before the cadence existed, a null intervalMs reached
+  // `lastRun + intervalMs` and produced a bogus delay instead.
+  it('arms no timer for an enabled on-demand job, and cancels any stale one', async () => {
+    scheduleEvent.mockClear();
+    cancelEvent.mockClear();
+    getJob.mockResolvedValueOnce({
+      id: 'job-on-demand',
+      name: 'Manual only',
+      enabled: true,
+      interval: 'on-demand',
+      intervalMs: null,
+    });
+
+    await registerSingleJobSchedule('job-on-demand');
+
+    expect(scheduleEvent).not.toHaveBeenCalled();
+    expect(cancelEvent).toHaveBeenCalledWith('job:job-on-demand');
+  });
+
+  it('a weekdaysOnly on-demand job with a stale scheduledTime still arms no timer', async () => {
+    // The synthesized daily/weekday cron path keys on weekdaysOnly, so it would
+    // otherwise capture an on-demand job that carried those fields over.
+    scheduleEvent.mockClear();
+    cancelEvent.mockClear();
+    getJob.mockResolvedValueOnce({
+      id: 'job-on-demand-weekday',
+      name: 'Manual only',
+      enabled: true,
+      interval: 'on-demand',
+      intervalMs: null,
+      weekdaysOnly: true,
+      scheduledTime: '04:30',
+    });
+
+    await registerSingleJobSchedule('job-on-demand-weekday');
+
+    expect(scheduleEvent).not.toHaveBeenCalled();
+  });
+
+  it('still arms a timer for a recurring job', async () => {
+    scheduleEvent.mockClear();
+    getJob.mockResolvedValueOnce({
+      id: 'job-daily',
+      name: 'Daily',
+      enabled: true,
+      interval: 'daily',
+      intervalMs: 86_400_000,
+    });
+
+    await registerSingleJobSchedule('job-daily');
+
+    expect(scheduleEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'job:job-daily', type: 'once' })
+    );
+    expect(scheduleEvent.mock.calls[0][0].delayMs).toBeGreaterThan(0);
+  });
 });
