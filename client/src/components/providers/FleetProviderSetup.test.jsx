@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import FleetProviderSetup from './FleetProviderSetup';
 
@@ -9,6 +9,11 @@ const api = vi.hoisted(() => ({
   revealFleetLlmHostKey: vi.fn().mockResolvedValue({ apiKey: 'k' }),
 }));
 vi.mock('../../services/apiProviders', () => api);
+
+const existingProviders = [
+  { id: 'opencode-1', name: 'My OpenCode', type: 'tui', command: 'opencode', envVars: { OTHER_VAR: '1' }, models: ['old-model'] },
+  { id: 'claude-tui-1', name: 'My Claude Code', type: 'tui', command: 'claude' },
+];
 
 const peers = [
   { id: 'peer-1', name: 'Workstation GPU', host: 'workstation.tailnet.ts.net', enabled: true },
@@ -32,6 +37,42 @@ describe('FleetProviderSetup', () => {
 
     const endpointInput = screen.getByLabelText('GPU host endpoint');
     expect(endpointInput.value).toBe('http://workstation.tailnet.ts.net:18022/v1');
+  });
+
+  it('auto-fetches the API key as soon as a peer is selected from the URL, with no extra click', async () => {
+    api.revealFleetPeerHostKey.mockResolvedValue({ apiKey: 'auto-fetched-key-123456789012' });
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&peerId=peer-1']}>
+        <FleetProviderSetup peers={peers} onClose={() => {}} onCreate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(api.revealFleetPeerHostKey).toHaveBeenCalledWith('peer-1', { silent: true });
+    });
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Enter host API key').value).toBe('auto-fetched-key-123456789012');
+    });
+  });
+
+  it('auto-fetches the API key when a peer is chosen from the dropdown, not just from the URL', async () => {
+    api.revealFleetPeerHostKey.mockResolvedValue({ apiKey: 'dropdown-fetched-key-12345678' });
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client']}>
+        <FleetProviderSetup peers={peers} onClose={() => {}} onCreate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByLabelText('Known PortOS peer'), { target: { value: 'peer-2' } });
+
+    await waitFor(() => {
+      expect(api.revealFleetPeerHostKey).toHaveBeenCalledWith('peer-2', { silent: true });
+    });
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Enter host API key').value).toBe('dropdown-fetched-key-12345678');
+    });
   });
 
   it('fetches API key from host when clicked', async () => {
@@ -82,5 +123,120 @@ describe('FleetProviderSetup', () => {
         })
       );
     });
+  });
+
+  it('prefills this machine\'s own loopback endpoint and key in self-host mode', async () => {
+    api.getFleetLlmHost.mockResolvedValue({ hasApiKey: true, model: 'qwen3.8-27b' });
+    api.revealFleetLlmHostKey.mockResolvedValue({ apiKey: 'self-host-key-1234567890123456' });
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&selfHost=1']}>
+        <FleetProviderSetup onClose={() => {}} onCreate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('GPU host endpoint').value).toBe('http://127.0.0.1:18022/v1');
+    });
+    expect(screen.getByPlaceholderText('Enter host API key').value).toBe('self-host-key-1234567890123456');
+  });
+
+  it('still validates the endpoint in self-host mode if the user edits it away from loopback', async () => {
+    api.getFleetLlmHost.mockResolvedValue({ hasApiKey: true, model: 'qwen3.8-27b' });
+    api.revealFleetLlmHostKey.mockResolvedValue({ apiKey: 'self-host-key-1234567890123456' });
+    const onCreate = vi.fn();
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&selfHost=1']}>
+        <FleetProviderSetup onClose={() => {}} onCreate={onCreate} />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('GPU host endpoint').value).toBe('http://127.0.0.1:18022/v1');
+    });
+    // The self-host bypass exists only for the prefilled loopback value — an
+    // edited-away public endpoint must still fail the private-network check.
+    fireEvent.change(screen.getByLabelText('GPU host endpoint'), { target: { value: 'http://example.com:18022/v1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create fleet provider' }));
+
+    expect(await screen.findByText(/private LAN, MagicDNS, or Tailscale endpoint/)).toBeInTheDocument();
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it('surfaces an error in self-host mode when the host has not been set up yet', async () => {
+    api.getFleetLlmHost.mockResolvedValue({ hasApiKey: false });
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&selfHost=1']}>
+        <FleetProviderSetup onClose={() => {}} onCreate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText(/Complete Model host setup/)).toBeInTheDocument();
+  });
+
+  it('updates an existing provider in place instead of creating a new one when repointing', async () => {
+    const onUpdate = vi.fn().mockResolvedValue({});
+    const onCreate = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&peerId=peer-1']}>
+        <FleetProviderSetup peers={peers} providers={existingProviders} onClose={onClose} onCreate={onCreate} onUpdate={onUpdate} />
+      </MemoryRouter>
+    );
+
+    fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'opencode-1' } });
+    fireEvent.change(screen.getByPlaceholderText('Enter host API key'), { target: { value: 'repoint-key-at-least-24-characters' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider' }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith(
+        'opencode-1',
+        expect.objectContaining({
+          name: 'My OpenCode',
+          apiKey: 'repoint-key-at-least-24-characters',
+          type: 'tui',
+          // The provider's other env var and previously-served model survive
+          // the repoint instead of being clobbered by the fleet defaults.
+          envVars: expect.objectContaining({ OTHER_VAR: '1' }),
+          models: expect.arrayContaining(['old-model', 'qwen3.8-27b']),
+        })
+      );
+    });
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not offer a non-OpenCode TUI provider as a repoint target', async () => {
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&peerId=peer-1']}>
+        <FleetProviderSetup peers={peers} providers={existingProviders} onClose={() => {}} onCreate={vi.fn()} onUpdate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    const providerSelect = await screen.findByLabelText('Provider');
+    // buildFleetProvider always overwrites command/args/envVars with the
+    // OpenCode wiring — repointing a Claude Code TUI provider here would
+    // silently convert it into an OpenCode one out from under the user.
+    expect(within(providerSelect).queryByText(/My Claude Code/)).not.toBeInTheDocument();
+    expect(within(providerSelect).getByText(/My OpenCode/)).toBeInTheDocument();
+  });
+
+  it('resets name/model/harness back to defaults when switching from a selected target back to "create a new provider"', async () => {
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&peerId=peer-1']}>
+        <FleetProviderSetup peers={peers} providers={existingProviders} onClose={() => {}} onCreate={vi.fn()} onUpdate={vi.fn()} />
+      </MemoryRouter>
+    );
+
+    const providerSelect = await screen.findByLabelText('Provider');
+    fireEvent.change(providerSelect, { target: { value: 'opencode-1' } });
+    expect(screen.getByDisplayValue('My OpenCode')).toBeInTheDocument();
+
+    fireEvent.change(providerSelect, { target: { value: '' } });
+    expect(screen.getByDisplayValue('Fleet GPU · OpenCode TUI')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('qwen3.8-27b')).toBeInTheDocument();
   });
 });

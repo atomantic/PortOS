@@ -55,7 +55,9 @@ Other existing PortOS paths remain useful, but solve different problems:
 
 Open **AI Providers → Model host setup → Host**. The banner is visible above the provider list and detects GPU/platform capabilities. On Windows/Linux with an RTX 3090 (24 GB), the recommended action prepares missing weights, preserves the prepared image by digest, selects DFlash 2 and prefix caching, and starts a persistent container. The recorded warm agent-prompt result was **105.3 tok/s**; this is a measured reference, not a speed guarantee for every prompt.
 
-Setup binds the underlying runtime to loopback `:18020` and exposes a bearer-authenticated queue on `:18022`. It creates a direct API provider and moves existing local vLLM providers (including OpenCode's baseURL) through the queue. Competing local LM Studio/Ollama/llama/SGLang/SlotStream providers are disabled; their configurations remain available. Unload other GPU models before starting. PortOS no longer enables the default local backend at boot while dedicated hosting is enabled.
+Setup binds the underlying runtime to loopback `:18020` and exposes a bearer-authenticated queue on `:18022`. It creates a **Direct API** provider — not an OpenCode TUI one — and moves existing local vLLM providers (including OpenCode's baseURL) through the queue. Competing local LM Studio/Ollama/llama/SGLang/SlotStream providers are disabled; their configurations remain available. Unload other GPU models before starting. PortOS no longer enables the default local backend at boot while dedicated hosting is enabled.
+
+Once the host is configured (`hasApiKey` and an endpoint are both present), the host panel itself offers **Set up OpenCode TUI on this machine** — the same "Connect client" walkthrough below, but pre-filled with this machine's own loopback endpoint and key, so running coding agents on the host machine doesn't require hand-copying its own credentials. The provider list on this page also surfaces this as an "add a provider" prompt when the host is serving and no matching provider exists yet.
 
 The status panel checks Docker, prepared weights/key, the loaded model, Tailscale and queue listener. Copy the endpoint and explicitly reveal/copy the key only when connecting a client. The key never appears in the status payload. Driver installation, Docker engine repair, Windows reboot and enabling Docker Desktop startup may still require host interaction. Setup enables the model distro in Docker Desktop, wakes it before retrying a failed WSL integration, and registers a Windows login task to restore PortOS and the prepared container. The login task waits for Docker, never downloads weights or generates tokens, and does nothing when the dedicated-host flag is disabled. Once Docker starts, the container's `unless-stopped` policy restores the model; PortOS restores the queue from its machine-local opt-in flag. Cold model initialization can take 5–7 minutes. Boot makes no generation requests.
 
@@ -77,8 +79,13 @@ On each client PortOS:
    `VLLM_API_KEY`, and keep the served model id in sync.
 4. Choose **OpenCode TUI** for CoS coding agents. Choose **Direct API** for
    PortOS text-generation calls that do not need a file/tool harness.
-5. Create the provider, refresh models, run the card test, then test one small
-   tool-using workspace before making it the default.
+5. Optionally point an existing provider at this host instead of creating a
+   new one: pick it from the **Provider** dropdown (candidates are existing
+   OpenCode TUI and Direct API providers). Its harness type is locked, but its
+   endpoint, key, and model are updated in place — its other env vars and
+   previously-served models are preserved rather than overwritten.
+6. Create (or update) the provider, refresh models, run the card test, then
+   test one small tool-using workspace before making it the default.
 
 OpenCode is the optimal coding harness for this vLLM server because it speaks
 the OpenAI-compatible protocol directly and preserves structured tool calls.

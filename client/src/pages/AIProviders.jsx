@@ -527,6 +527,15 @@ export default function AIProviders() {
     return created;
   };
 
+  // Repoints an existing provider at a fleet host in place, rather than
+  // leaving the user to create a duplicate and manually delete the old one.
+  const handleUpdateFleetProvider = async (id, patch) => {
+    const updated = await api.updateProvider(id, patch);
+    setProviders((current) => current.map((entry) => (entry.id === id ? updated : entry)));
+    toast.success(`${updated.name} is connected to the fleet GPU host`);
+    return updated;
+  };
+
   const handleAddAllSamples = async () => {
     if (addableSamples.length === 0) return;
 
@@ -1066,8 +1075,10 @@ export default function AIProviders() {
       {fleetSetupOpen && (
         <FleetProviderSetup
           peers={fleetPeers}
+          providers={providers}
           onClose={closeForm}
           onCreate={handleCreateFleetProvider}
+          onUpdate={handleUpdateFleetProvider}
           onConfigured={loadData}
         />
       )}

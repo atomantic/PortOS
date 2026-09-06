@@ -6,8 +6,8 @@ import FleetHostSetup from './FleetHostSetup';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { FormField } from '../ui/FormField';
 import Banner from '../ui/Banner';
-import { isLocalEndpoint, isPrivateNetworkEndpoint } from '../../utils/providers';
-import { revealFleetPeerHostKey } from '../../services/apiProviders';
+import { commandBasename, isApiProvider, isLocalEndpoint, isPrivateNetworkEndpoint, isTuiProvider, mergeProviderUpdate } from '../../utils/providers';
+import { getFleetLlmHost, revealFleetLlmHostKey, revealFleetPeerHostKey } from '../../services/apiProviders';
 import { PORTS } from '../../lib/ports.js';
 
 const FLEET_TABS = [
@@ -82,11 +82,17 @@ export const buildFleetProvider = ({ name, endpoint, apiKey, model, harness }) =
   };
 };
 
-export default function FleetProviderSetup({ peers = [], onClose, onCreate, onConfigured }) {
+export default function FleetProviderSetup({ peers = [], providers = [], onClose, onCreate, onUpdate, onConfigured }) {
   const [searchParams] = useSearchParams();
   const initialPeerId = searchParams.get('peerId') || '';
+  // `?selfHost=1` is how the host's own status card (FleetHostSetup) links
+  // here: this machine already runs the queue, so skip peer discovery and
+  // prefill the loopback address host setup already wired the auto-created
+  // Direct API provider to, plus this machine's own key.
+  const selfHost = searchParams.get('selfHost') === '1';
   const [activeTab, setActiveTab] = useDrawerTab('fleetStep', 'architecture', FLEET_TAB_IDS);
   const [selectedPeerId, setSelectedPeerId] = useState(initialPeerId);
+  const [targetProviderId, setTargetProviderId] = useState('');
   const [endpointInput, setEndpointInput] = useState('');
   const [name, setName] = useState('Fleet GPU · OpenCode TUI');
   const [apiKey, setApiKey] = useState('');
@@ -94,17 +100,59 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
   const [harness, setHarness] = useState('tui');
   const [saving, setSaving] = useState(false);
   const [fetchingKey, setFetchingKey] = useState(false);
+  const [selfHostLoading, setSelfHostLoading] = useState(false);
   const [error, setError] = useState('');
   const availablePeers = useMemo(
     () => peers.filter((peer) => peer?.enabled !== false && (peer?.host || peer?.address)),
     [peers],
   );
+  // Repoint targets: providers a fleet endpoint can plausibly replace — an
+  // existing OpenCode TUI or Direct API provider. Without this, the only way
+  // to point an already-created provider at a fleet host was delete-and-recreate.
+  // A TUI provider must already be OpenCode (or have no command set yet) —
+  // `buildFleetProvider` always overwrites `command`/`args`/`envVars` with the
+  // OpenCode wiring, so repointing a Claude/Codex/Grok TUI provider here would
+  // silently convert it into an OpenCode one out from under the user.
+  const repointCandidates = useMemo(
+    () => providers.filter((provider) => (
+      isApiProvider(provider)
+      || (isTuiProvider(provider) && (!provider.command || commandBasename(provider.command) === 'opencode'))
+    )),
+    [providers],
+  );
+  const repointTarget = useMemo(
+    () => providers.find((provider) => provider.id === targetProviderId) || null,
+    [providers, targetProviderId],
+  );
   const endpoint = normalizeEndpoint(endpointInput);
 
+  const fetchKeyFor = async (peerId) => {
+    if (!peerId) return;
+    setFetchingKey(true);
+    setError('');
+    try {
+      const res = await revealFleetPeerHostKey(peerId, { silent: true });
+      if (res?.apiKey) {
+        setApiKey(res.apiKey);
+      } else {
+        setError('Host did not return an API key. Enter it manually.');
+      }
+    } catch (err) {
+      setError(err?.message || 'Could not retrieve API key from host. Enter it manually.');
+    } finally {
+      setFetchingKey(false);
+    }
+  };
+
+  // Selecting a known peer auto-fetches its key too — a user who only fills the
+  // pre-populated fields and clicks Create must not be stopped by a manual
+  // "Fetch API key" click they had no reason to expect: submit rejects a blank
+  // key, but nothing upstream of that prompts for it.
   const selectPeer = (peerId) => {
     setSelectedPeerId(peerId);
     const peer = availablePeers.find(({ id }) => id === peerId);
     setEndpointInput(peer ? endpointForPeer(peer) : '');
+    if (peerId) fetchKeyFor(peerId);
   };
 
   useEffect(() => {
@@ -113,27 +161,57 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
     }
   }, [initialPeerId, availablePeers]);
 
-  const handleFetchKey = async () => {
-    if (!selectedPeerId) return;
-    setFetchingKey(true);
+  // Self-host: this machine already runs the queue on the loopback address
+  // host setup wired the auto-created Direct API provider to (see
+  // `configure()` in server/services/fleetLlmHost.js), so there is no peer to
+  // pick — fetch this machine's own key instead of asking for one by hand.
+  useEffect(() => {
+    if (!selfHost || endpointInput) return;
+    let cancelled = false;
+    setSelfHostLoading(true);
     setError('');
-    try {
-      const res = await revealFleetPeerHostKey(selectedPeerId, { silent: true });
-      if (res?.apiKey) {
-        setApiKey(res.apiKey);
-      } else {
-        setError('Host did not return an API key. Enter it manually.');
+    Promise.all([
+      getFleetLlmHost({ silent: true }).catch(() => null),
+      revealFleetLlmHostKey({ silent: true }).catch(() => null),
+    ]).then(([status, keyRes]) => {
+      if (cancelled) return;
+      if (!status?.hasApiKey) {
+        setError('Complete Model host setup (the GPU host tab) on this machine first, then come back to connect it.');
+        return;
       }
-    } catch (err) {
-      setError(err?.message || 'Could not retrieve API key from host.');
-    } finally {
-      setFetchingKey(false);
-    }
-  };
+      setEndpointInput(`http://127.0.0.1:${DEFAULT_PORT}/v1`);
+      if (status.model) setModel(status.model);
+      if (keyRes?.apiKey) setApiKey(keyRes.apiKey);
+      else setError('Could not read this host\'s API key. Enter it manually from the GPU host tab.');
+    }).finally(() => { if (!cancelled) setSelfHostLoading(false); });
+    return () => { cancelled = true; };
+  }, [selfHost, endpointInput]);
+
+  const handleFetchKey = () => fetchKeyFor(selectedPeerId);
 
   const selectHarness = (next) => {
     setHarness(next);
-    setName(next === 'tui' ? 'Fleet GPU · OpenCode TUI' : 'Fleet GPU · API');
+    if (!targetProviderId) setName(next === 'tui' ? 'Fleet GPU · OpenCode TUI' : 'Fleet GPU · API');
+  };
+
+  // Repointing an existing provider locks the harness to its current type —
+  // an in-place update changes its endpoint/key/model, not what kind of
+  // provider it is.
+  const selectTarget = (id) => {
+    setTargetProviderId(id);
+    const target = providers.find((provider) => provider.id === id);
+    if (!target) {
+      // Back to "create a new provider" — undo whatever a previously
+      // selected target's type/name/model left behind, or the form keeps
+      // showing that provider's values with no visible reason why.
+      setHarness('tui');
+      setName('Fleet GPU · OpenCode TUI');
+      setModel(DEFAULT_MODEL);
+      return;
+    }
+    setHarness(isTuiProvider(target) ? 'tui' : 'api');
+    setName(target.name || name);
+    if (target.defaultModel) setModel(target.defaultModel);
   };
 
   const submit = (event) => {
@@ -141,16 +219,25 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
     setError('');
     if (!name.trim()) return setError('Provider name is required.');
     if (!URL.canParse(endpoint)) return setError('Enter a full HTTP endpoint for the GPU host.');
-    if (isLocalEndpoint(endpoint) || !isPrivateNetworkEndpoint(endpoint)) {
+    // Self-host mode prefills the loopback address on purpose (it's this same
+    // machine) — but if the user then edits that field to something else, the
+    // normal "must be a private/remote endpoint" rule still applies rather
+    // than skipping validation for whatever they typed.
+    if (!(selfHost && isLocalEndpoint(endpoint)) && (isLocalEndpoint(endpoint) || !isPrivateNetworkEndpoint(endpoint))) {
       return setError('Use a private LAN, MagicDNS, or Tailscale endpoint on another machine.');
     }
     if (!apiKey.trim()) return setError('The networked vLLM runtime must have an API key.');
     if (!model.trim()) return setError('Model id is required.');
 
     setSaving(true);
-    return onCreate(buildFleetProvider({ name, endpoint, apiKey, model, harness }))
+    // A partial update replaces whichever fields it names — merge rather than
+    // overwrite so an existing provider's unrelated env vars, models, and
+    // secret markers survive being repointed at a new fleet host.
+    const payload = mergeProviderUpdate(repointTarget, buildFleetProvider({ name, endpoint, apiKey, model, harness }));
+    const save = repointTarget ? onUpdate(repointTarget.id, payload) : onCreate(payload);
+    return save
       .then(onClose)
-      .catch((err) => setError(err?.message || 'Could not create the fleet provider.'))
+      .catch((err) => setError(err?.message || 'Could not save the fleet provider.'))
       .finally(() => setSaving(false));
   };
 
@@ -208,10 +295,31 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
       {activeTab === 'client' && (
         <form onSubmit={submit} className="space-y-4">
           <Banner tone="info" icon={Network}>
-            Create this provider on each client PortOS instance. The saved endpoint and the spawned OpenCode harness will point at the same fleet host.
+            {selfHost
+              ? (selfHostLoading
+                ? 'Reading this machine\'s own model host endpoint and API key…'
+                : 'This machine already runs the queue — its endpoint and key are filled in below. Pick a provider to point at it, or create a new one.')
+              : 'Create this provider on each client PortOS instance. The saved endpoint and the spawned OpenCode harness will point at the same fleet host.'}
           </Banner>
 
-          {availablePeers.length > 0 && (
+          {repointCandidates.length > 0 && (
+            <FormField label="Provider" hint="Point an existing provider at this fleet host, or create a new one.">
+              <select
+                value={targetProviderId}
+                onChange={(event) => selectTarget(event.target.value)}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+              >
+                <option value="">Create a new provider</option>
+                {repointCandidates.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name} ({isTuiProvider(provider) ? 'OpenCode TUI' : 'Direct API'})
+                  </option>
+                ))}
+              </select>
+            </FormField>
+          )}
+
+          {availablePeers.length > 0 && !selfHost && (
             <FormField label="Known PortOS peer">
               <select
                 value={selectedPeerId}
@@ -241,11 +349,15 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
             />
           </FormField>
 
-          <FormField label="Harness">
+          <FormField
+            label="Harness"
+            hint={targetProviderId ? 'Locked to the selected provider\'s existing type.' : undefined}
+          >
             <select
               value={harness}
               onChange={(event) => selectHarness(event.target.value)}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+              disabled={Boolean(targetProviderId)}
+              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
             >
               <option value="tui">OpenCode TUI — coding agents (recommended)</option>
               <option value="api">Direct API — text and thinking workflows</option>
@@ -300,10 +412,12 @@ export default function FleetProviderSetup({ peers = [], onClose, onCreate, onCo
             <Link to="/instances" className="text-sm text-port-accent hover:underline">Manage peers</Link>
             <button
               type="submit"
-              disabled={saving}
+              disabled={saving || selfHostLoading}
               className="px-4 py-2 rounded-lg bg-port-accent hover:bg-port-accent/80 text-white disabled:opacity-50"
             >
-              {saving ? 'Creating…' : 'Create fleet provider'}
+              {saving
+                ? (targetProviderId ? 'Updating…' : 'Creating…')
+                : (targetProviderId ? 'Update provider' : 'Create fleet provider')}
             </button>
           </div>
         </form>
