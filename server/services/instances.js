@@ -488,7 +488,7 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       // Once true, handleAnnounce never auto-overwrites — it's the only way to
       // honor "the user explicitly cleared this; stay on IP" against a peer
       // that keeps announcing its DNS name.
-      hostManual: !!normalizedHost,
+      hostManual: transport === 'tailcat' || !!normalizedHost,
       port,
       name: validName(name, normalizedHost || address),
       // Optional transport marker (e.g. 'tailcat'). Never carries the tc address —
@@ -524,13 +524,15 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
   return peer;
 }
 
-export async function removePeer(id) {
+export async function removePeer(id, { cleanupForward = true } = {}) {
   disconnectFromPeer(id);
   // Tear down a managed tailcat forward if this peer was added via tc address.
   // Dynamic import avoids a static cycle with tailcatPeer → addPeer.
-  await import('./tailcatPeer.js')
-    .then(({ stopForwardForPeer }) => stopForwardForPeer(id))
-    .catch((err) => console.log(`⚠️ instances: stopping tailcat forward failed: ${err.message}`));
+  const data = await loadData();
+  if (cleanupForward && data.peers.some(peer => peer.id === id && peer.transport === 'tailcat')) {
+    await import('./tailcatPeer.js')
+      .then(({ stopForwardForPeer }) => stopForwardForPeer(id));
+  }
   const removed = await withData(async (data) => {
     const idx = data.peers.findIndex(p => p.id === id);
     if (idx === -1) return null;
@@ -944,7 +946,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       existing.lastSeen = new Date().toISOString();
       existing.status = 'online';
       existing.instanceId = instanceId;
-      existing.port = port;
+      if (existing.transport !== 'tailcat') existing.port = port;
       // Only auto-update name if still an IP address (preserve user-set names)
       const sanitized = validName(name, null);
       if (sanitized && isIPAddress(existing.name)) {

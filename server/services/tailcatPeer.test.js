@@ -13,7 +13,7 @@ import { DEFAULT_TAILCAT_LOCAL_PORT, DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/
 
 const EXAMPLE_TC = 'tcEXAMPLE' + 'A'.repeat(40);
 
-function fakeChild({ exitImmediately = false, exitCode = 1 } = {}) {
+function fakeChild() {
   const child = new EventEmitter();
   child.killed = false;
   child.stderr = new EventEmitter();
@@ -22,9 +22,6 @@ function fakeChild({ exitImmediately = false, exitCode = 1 } = {}) {
     child.killed = true;
     child.emit('exit', 0, null);
   });
-  if (exitImmediately) {
-    queueMicrotask(() => Promise.resolve()) //.then(() => child.emit('exit', exitCode, null));
-  }
   return child;
 }
 
@@ -70,14 +67,14 @@ describe('tailcatPeer helpers', () => {
     const result = await ensureTailcatInstalled({
       detect: async () => {
         calls += 1;
-        return calls === 1 ? null : '/home/box/go/bin/tailcat';
+        return calls === 1 ? null : '/mock/go/bin/tailcat';
       },
       goBin: 'go',
       runGoInstall,
       probeGo: async () => true,
     });
     expect(runGoInstall).toHaveBeenCalledOnce();
-    expect(result).toEqual({ bin: '/home/box/go/bin/tailcat', installed: true });
+    expect(result).toEqual({ bin: '/mock/go/bin/tailcat', installed: true });
   });
 
   it('ensureTailcatInstalled fails clearly when Go is absent', async () => {
@@ -101,7 +98,10 @@ describe('tailcatPeer helpers', () => {
 
   it('startForwardProcess spawns tailcat forward with local:remote mapping', async () => {
     const child = fakeChild();
-    const spawnFn = vi.fn(() => child);
+    const spawnFn = vi.fn(() => {
+      queueMicrotask(() => child.stderr.emit('data', 'forwarding 127.0.0.1:15555 -> remote localhost:5555\n'));
+      return child;
+    });
     const started = await startForwardProcess({
       bin: '/usr/bin/tailcat',
       tcAddress: EXAMPLE_TC,
@@ -132,6 +132,40 @@ describe('tailcatPeer helpers', () => {
       spawnFn,
       readyMs: 5_000,
     })).rejects.toThrow(/exited early/);
+  });
+
+  it('times out and kills a process that never confirms its listener', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild();
+    const result = startForwardProcess({ bin: 'tailcat', tcAddress: EXAMPLE_TC,
+      localPort: 15555, spawnFn: () => child, readyMs: 8000 });
+    const assertion = expect(result).rejects.toThrow('startup timed out');
+    await vi.advanceTimersByTimeAsync(8000);
+    await assertion;
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    vi.useRealTimers();
+  });
+
+  it('never exposes capability diagnostics across repeated or split chunks', async () => {
+    const child = fakeChild();
+    const result = startForwardProcess({ bin: 'tailcat', tcAddress: EXAMPLE_TC,
+      localPort: 15555, spawnFn: () => child });
+    child.stderr.emit('data', EXAMPLE_TC.slice(0, 10));
+    child.stderr.emit('data', EXAMPLE_TC.slice(10) + EXAMPLE_TC);
+    child.emit('error', new Error(EXAMPLE_TC));
+    await expect(result).rejects.toThrow(/^tailcat forward process failed$/);
+  });
+
+  it('rolls back the peer and child when saving its restart mapping fails', async () => {
+    const child = fakeChild();
+    const removePeerFn = vi.fn(async () => {});
+    await expect(addPeerViaTailcat({ tcAddress: EXAMPLE_TC,
+      ensureInstalled: async () => ({ bin: 'tailcat' }), allocatePort: async () => 15555,
+      startForward: async () => child, addPeerFn: async () => ({ id: 'peer-rollback' }),
+      persistForwardEntry: async () => { throw new Error('disk full'); }, removePeerFn,
+    })).rejects.toThrow('disk full');
+    expect(child.killed).toBe(true);
+    expect(removePeerFn).toHaveBeenCalledWith('peer-rollback', { cleanupForward: false });
   });
 
   it('addPeerViaTailcat installs, forwards, and registers loopback peer', async () => {

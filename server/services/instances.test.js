@@ -1487,6 +1487,17 @@ describe('instances.js', () => {
       expect(instanceEvents.emit).toHaveBeenCalledWith('peers:updated', expect.any(Array));
     });
 
+    it('preserves a tailcat listener when its remote announces a different endpoint', async () => {
+      readJSONFile.mockResolvedValue({ self: null, peers: [{
+        id: 'peer-tunnel', instanceId: 'remote-example', transport: 'tailcat',
+        address: '127.0.0.1', port: 15555, host: null, hostManual: true,
+        name: 'Example peer', directions: ['outbound'],
+      }] });
+      const { peer } = await handleAnnounce({ address: '192.0.2.10', port: 5555,
+        instanceId: 'remote-example', host: 'peer.example.com' });
+      expect(peer).toMatchObject({ address: '127.0.0.1', port: 15555, host: null });
+    });
+
     it('should update existing peer matched by instanceId but preserve user-set name', async () => {
       const existing = {
         id: 'p1',

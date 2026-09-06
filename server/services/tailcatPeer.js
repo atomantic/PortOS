@@ -208,8 +208,7 @@ export async function allocateLocalPort({
 
 /**
  * Start `tailcat forward <tc> local:remote`. Injected `spawnFn` for tests.
- * Resolves once the child stays alive briefly (CLI prints listener lines to
- * stdout/stderr; we treat non-immediate exit as success).
+ * Resolves only after the CLI confirms that the requested listener is bound.
  */
 export async function startForwardProcess({
   bin,
@@ -236,36 +235,36 @@ export async function startForwardProcess({
     })
   );
 
-  let stderr = '';
-  child.stderr?.on('data', (chunk) => {
-    // Never retain the full tc address from diagnostic lines — keep a short tail.
-    const text = String(chunk).replace(tcAddress.trim(), redactTcAddress(tcAddress));
-    stderr += text;
-    if (stderr.length > 4_000) stderr = stderr.slice(-4_000);
-  });
+  // Diagnostics can split or repeat bearer capabilities across chunks. Never
+  // propagate them; recognize only the CLI's listener-ready line.
   child.stdout?.on('data', () => {});
-
   await new Promise((resolve, reject) => {
     let settled = false;
-    const fail = (err) => {
+    let pending = '';
+    const finish = (error) => {
       if (settled) return;
       settled = true;
+      pending = '';
       clearTimeout(timer);
-      reject(err);
+      child.stderr?.removeListener('data', onData);
+      child.stderr?.on('data', () => {});
+      if (error) {
+        try { child.kill('SIGTERM'); } catch { /* process already gone */ }
+        reject(error);
+      } else resolve();
     };
-    const ok = () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve();
+    const onData = (chunk) => {
+      pending = (pending + String(chunk)).slice(-4096);
+      if (pending.includes(`forwarding 127.0.0.1:${localPort} -> remote localhost:${remotePort}`)) {
+        finish();
+      }
     };
-    const timer = setTimeout(ok, Math.min(readyMs, 1_500));
-    child.once('error', (err) => fail(err));
-    child.once('exit', (code, signal) => {
-      fail(new Error(
-        `tailcat forward exited early (code=${code}, signal=${signal}): ${stderr.trim() || 'no output'}`
-      ));
-    });
+    const timer = setTimeout(() => finish(new Error('tailcat listener startup timed out')), readyMs);
+    child.stderr?.on('data', onData);
+    child.on('error', () => finish(new Error('tailcat forward process failed')));
+    child.once('exit', (code, signal) => finish(new Error(
+      `tailcat forward exited early (code=${code}, signal=${signal})`
+    )));
   });
 
   console.log(
@@ -318,6 +317,7 @@ export async function addPeerViaTailcat({
   startForward = startForwardProcess,
   addPeerFn = addPeer,
   persistForwardEntry = persistForward,
+  removePeerFn = removeInstancePeer,
 } = {}) {
   const trimmed = String(tcAddress || '').trim();
   if (!isValidTcAddress(trimmed)) {
@@ -367,6 +367,12 @@ export async function addPeerViaTailcat({
     localPort,
     remotePort,
     createdAt: new Date().toISOString(),
+  }).catch(async (error) => {
+    child.kill('SIGTERM');
+    liveForwards.delete(peer.id);
+    // The failed mapping write must not be retried before removing the peer.
+    await removePeerFn(peer.id, { cleanupForward: false });
+    throw error;
   });
 
   return peer;
