@@ -23,6 +23,10 @@ const state = {
   invokeResult: undefined,
   catalog: { builtin: {}, custom: {} },
   catalogReads: 0,
+  reservations: {},
+  reserved: [],
+  reserveOk: true,
+  settlement: { accepted: 0, refused: 0 },
 };
 
 vi.mock('./providerUsage.js', () => ({
@@ -33,6 +37,22 @@ vi.mock('./quotaBurnStore.js', () => ({
   getQuotaBurnConfig: vi.fn(async () => state.config),
   getQuotaBurnRuns: vi.fn(async () => state.runs),
   recordQuotaBurnRun: vi.fn(async (entry) => { state.runs.unshift(entry); }),
+  // `null` — not a throw — is the module's real "could not read" signal, so the
+  // stub speaks the contract the runner is tested against.
+  getQuotaBurnReservations: vi.fn(async () => state.reservations),
+  quotaBurnReservationKey: (familyId, stepId) => `${familyId}::${stepId}`,
+}));
+
+// Settlement is doubled at the same altitude as the invocation path: this suite
+// owns the runner's accounting CONTRACT — reserve an asynchronous acceptance,
+// charge a synchronous one — while `quotaBurnAcceptance.test.js` owns what
+// settling a reservation actually does.
+vi.mock('./quotaBurnAcceptance.js', () => ({
+  reconcileQuotaBurnReservations: vi.fn(async () => state.settlement),
+  reserveQuotaBurnDispatch: vi.fn(async (record) => {
+    state.reserved.push(record);
+    return state.reserveOk;
+  }),
 }));
 
 // The shared REFERENCE path. Doubled at the same altitude as the legacy
@@ -138,6 +158,10 @@ beforeEach(() => {
   state.invokePending = {};
   state.invoked = [];
   state.invokeResult = undefined;
+  state.reservations = {};
+  state.reserved = [];
+  state.reserveOk = true;
+  state.settlement = { accepted: 0, refused: 0 };
   state.catalog = { builtin: {}, custom: {} };
   state.catalogReads = 0;
   __resetQuotaBurnRunner();
@@ -873,5 +897,126 @@ describe('reference steps route through the shared invocation path', () => {
     const grok = status.families.find((family) => family.id === 'grok');
     expect(grok.jobs).toEqual([{ id: 'ref', ranAt: null, pending: { count: 1, detail: 'ready to run scheduled task "ux"' } }]);
     expect(countJobPending).not.toHaveBeenCalled();
+  });
+});
+
+// #6379. A reference step's work is not accepted when the request is recorded —
+// an on-demand engine may still refuse it — so the runner must reserve rather
+// than charge, and the cap must keep counting the reservation until
+// `quotaBurnAcceptance.js` settles it. Charging at the request is the #3179
+// undercount one hop earlier: the ledger says "spent" for work that never ran,
+// and a `runOnce` step retires without having done anything.
+describe('charging the cap and the run-once ledger exactly once', () => {
+  const refPlan = (jobs) => normalizeQuotaBurnConfig({
+    enabled: true,
+    families: { grok: { enabled: true, resetWithinHours: 24, jobs } },
+  });
+  const asyncStep = (overrides = {}) => refPlan([
+    { id: 'ref', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' }, ...overrides },
+  ]);
+  const held = (overrides = {}) => ({
+    'grok::ref': {
+      familyId: 'grok', stepId: 'ref', dispatchKey: 'grok:1', charge: true, runOnce: false,
+      requestId: 'demand-1', at: now, chargedAt: null, ...overrides,
+    },
+  });
+  // The key the ladder will actually gate on for this card's window — a
+  // reservation only holds a cap slot when it names the same one.
+  const liveWindowKey = async () =>
+    (await import('./quotaBurn.js')).windowKey('grok', { resetsAt }, { now });
+
+  beforeEach(() => {
+    state.invokePending = { ref: { count: 1, detail: 'ready' } };
+    state.invokeResult = { dispatched: true, summary: 'Requested "ux"', awaiting: { requestId: 'demand-1' } };
+  });
+
+  it('reserves an asynchronous acceptance instead of charging it', async () => {
+    state.config = asyncStep({ runOnce: true });
+
+    const result = await runQuotaBurnCycle();
+
+    expect(result.dispatched).toBe(true);
+    expect(state.reserved).toEqual([{
+      familyId: 'grok', stepId: 'ref', dispatchKey: expect.any(String), charge: true, runOnce: true, requestId: 'demand-1',
+    }]);
+    // Neither ledger moves until the request is joined to a real task.
+    expect(state.recorded).toHaveLength(0);
+    expect(state.completed).toHaveLength(0);
+    expect(state.runs[0]).toMatchObject({ requestId: 'demand-1', pending: true, charged: false, taskId: null });
+  });
+
+  it('charges a synchronous acceptance directly and records the task it queued', async () => {
+    state.config = asyncStep({ runOnce: true });
+    // The custom-job and programmatic lanes queue (or perform) the work inside
+    // the call, so there is no request to wait on — and no reservation to take.
+    state.invokeResult = { dispatched: true, summary: 'Queued "job"', detail: { taskId: 'cos-5' } };
+
+    await runQuotaBurnCycle();
+
+    expect(state.reserved).toHaveLength(0);
+    expect(state.recorded).toHaveLength(1);
+    expect(state.completed).toEqual(['grok:ref']);
+    expect(state.runs[0]).toMatchObject({ pending: false, charged: true, taskId: 'cos-5' });
+  });
+
+  it('skips a step whose earlier burn is still awaiting acceptance', async () => {
+    state.config = refPlan([
+      { id: 'ref', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } },
+      { id: 'other', enabled: true, taskRef: { kind: 'builtin', taskType: 'docs', appId: 'app-1' } },
+    ]);
+    state.invokePending = { ref: { count: 1 }, other: { count: 1 } };
+    state.reservations = held();
+
+    const result = await runQuotaBurnCycle();
+
+    // The reserved step is passed over — no second request, no second charge —
+    // and the walk moves on to the next step in the plan.
+    expect(state.invoked.map((entry) => entry.stepId)).toEqual(['other']);
+    expect(result.jobId).toBe('other');
+  });
+
+  it('counts a reservation against the window cap while it is in flight', async () => {
+    state.config = normalizeQuotaBurnConfig({
+      enabled: true,
+      families: { grok: { enabled: true, resetWithinHours: 24, maxDispatchesPerWindow: 1, jobs: [
+        { id: 'ref', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } },
+      ] } },
+    });
+    // Reserved against the window this cycle would select, but not yet charged.
+    // Reading the cap off the charged ledger alone would let this cycle dispatch
+    // a second burn the plan had already committed.
+    state.reservations = { 'grok::other': { ...held()['grok::ref'], stepId: 'other', dispatchKey: await liveWindowKey() } };
+
+    const result = await runQuotaBurnCycle();
+
+    expect(result.dispatched).toBe(false);
+    expect(result.reason).toContain('dispatch cap reached (1/1)');
+  });
+
+  it('refuses to run a cycle it cannot read the reservations for', async () => {
+    state.config = asyncStep();
+    state.reservations = null;
+
+    const result = await runQuotaBurnCycle();
+
+    // Same posture as the dispatch ledger: reading an unreadable file as "nothing
+    // pending" would re-queue a step already in flight and re-open its cap slot.
+    expect(result).toMatchObject({ dispatched: false, reason: 'pending reservations read failed' });
+    expect(state.invoked).toHaveLength(0);
+  });
+
+  it('settles nothing when the page reads status', async () => {
+    const { reconcileQuotaBurnReservations } = await import('./quotaBurnAcceptance.js');
+    state.config = asyncStep();
+    state.reservations = held({ dispatchKey: await liveWindowKey() });
+
+    const { status } = await getQuotaBurnStatus();
+
+    // A probe read must perform no ledger write — opening the page is not a spend.
+    expect(reconcileQuotaBurnReservations).not.toHaveBeenCalled();
+    expect(state.recorded).toHaveLength(0);
+    expect(state.completed).toHaveLength(0);
+    // It still SHOWS the reserved burn as used, because it is committed already.
+    expect(status.families.find((family) => family.id === 'grok').dispatchesUsed).toBe(1);
   });
 });
