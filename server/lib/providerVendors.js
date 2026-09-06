@@ -454,8 +454,10 @@ const OPENCODE = {
       matchProvider: isLocalOpencodeProvider,
     },
     [PUBLIC_REVIEW_ACTIONS_POSTURE]: {
-      // Attachable on every backend (MTPLX and gateways included): unlike the
-      // no-tool gate there is no model-capability probe involved.
+      // No `spawnArgs` here — see the builder's docstring above: OpenCode
+      // ships no sandbox, so this row is never an enforcement and the
+      // attachable builder below is unreachable through the posture gate
+      // (`enforcesPublicReviewPosture` requires `spawnArgs`).
       tuiSpawnArgs: opencodePublicReviewActionsTuiSpawnArgs,
       matchProvider: matchOpencodeBinary,
     },
@@ -903,12 +905,7 @@ export function buildVendorSpawnConfig(provider, ctx) {
       }
       return recipe.tuiSpawnArgs(provider, ctx);
     }
-    if (recipe?.spawnArgs) return recipe.spawnArgs(provider, ctx);
-    // See supportsPublicReviewPosture for why the actions stage may fall
-    // through to the vendor's ordinary headless recipe and the gate may not.
-    if (!supportsPublicReviewPosture(provider, posture)) {
-      throw new Error(`Provider '${providerLabel(provider)}' has no enforced ${posture} public-review posture`);
-    }
+    return recipe.spawnArgs(provider, ctx);
   }
   const vendor = PROVIDER_VENDORS.find((v) => v.spawnArgs && matchesProvider(v, provider));
   return vendor.spawnArgs(provider, ctx);

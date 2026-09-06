@@ -361,9 +361,10 @@ describe('public-review provider postures', () => {
     // …as do non-binary records, whatever their vendor.
     expect(supportsTuiPublicReviewActionsProvider({ id: 'claude-api', type: 'api', command: 'claude' })).toBe(false);
     expect(supportsTuiPublicReviewActionsProvider({ id: 'opencode-api', type: 'api', command: 'opencode' })).toBe(false);
-    // #6238 — OpenCode is attachable on EVERY backend: unlike the no-tool gate
-    // (Ollama-only — see the `mtplxBacked` cases above) there is no
-    // model-capability probe involved, so an MTPLX or gateway wrapper qualifies.
+    // #6238's attachable OpenCode recipe was later withdrawn from the
+    // sandboxed-actions posture entirely (see "rejects both headless and
+    // attachable OpenCode actions without OS isolation" below) — an MTPLX or
+    // gateway wrapper is no more eligible than any other OpenCode backend.
     expect(supportsTuiPublicReviewActionsProvider({ id: 'opencode-tui', type: 'tui', command: 'opencode', mtplxBacked: true })).toBe(false);
     expect(supportsTuiPublicReviewActionsProvider({ id: 'opencode-cli', type: 'cli', command: 'opencode' })).toBe(false);
     expect(supportsTuiPublicReviewPosture({ id: 'opencode-tui', type: 'tui', command: 'opencode', ollamaBacked: true }, PUBLIC_REVIEW_NO_TOOL_POSTURE)).toBe(false);
