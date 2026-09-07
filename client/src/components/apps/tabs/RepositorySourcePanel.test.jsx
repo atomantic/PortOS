@@ -6,6 +6,8 @@ vi.mock('../../../services/api', () => ({
   getAppRepositorySources: vi.fn(),
   syncAppRepositoryFork: vi.fn(),
   handleSelfRestart: vi.fn(),
+  getProviders: vi.fn(),
+  addCosTask: vi.fn(),
 }));
 vi.mock('../../../hooks/useAppOperation', () => ({
   useAppOperation: vi.fn(),
@@ -14,6 +16,7 @@ vi.mock('../../../hooks/useAppOperation', () => ({
 import * as api from '../../../services/api';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 import RepositorySourcePanel from './RepositorySourcePanel';
+import { MemoryRouter } from 'react-router';
 
 const source = ({
   id,
@@ -414,3 +417,22 @@ describe('PortOS self-update restart handoff', () => {
     expect(screen.getByRole('button', { name: 'Check sources' })).toBeDisabled();
   });
 });
+
+ it('replaces unsafe dirty-checkout updates with an explicitly configured recovery task', async () => {
+  const status = canonicalStatus();
+  status.sources[0].clean = false;
+  api.getAppRepositorySources.mockResolvedValue(status);
+  api.getProviders.mockResolvedValue({ activeProvider: 'example-cli', providers: [{ id: 'example-cli', name: 'Example CLI', type: 'cli', enabled: true, models: ['example-model'], defaultModel: 'example-model' }] });
+  api.addCosTask.mockResolvedValue({ id: 'task-example' });
+  render(<MemoryRouter><RepositorySourcePanel appId="app-example" appName="Example App" /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: 'Resolve with agent' }));
+  expect(screen.queryByRole('button', { name: 'Update app' })).not.toBeInTheDocument();
+  expect(api.addCosTask).not.toHaveBeenCalled();
+  const start = screen.getByRole('button', { name: 'Start recovery agent' });
+  await waitFor(() => expect(start).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'example-model' } });
+  fireEvent.click(start);
+  await screen.findByRole('link', { name: 'Recovery queued · View agents' });
+  expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({ app: 'app-example', provider: 'example-cli', model: 'example-model', useWorktree: false, openPR: false, whenDone: 'commit-push', prompt: expect.stringContaining('including untracked files and the index') }), { silent: true });
+  expect(useAppOperation().startUpdate).not.toHaveBeenCalled();
+ });

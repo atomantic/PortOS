@@ -21,6 +21,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import AppOperationBanner from '../AppOperationBanner';
+import GitRecoveryAction from './GitRecoveryAction';
 import { useAppOperation } from '../../../hooks/useAppOperation';
 
 const statusTone = {
@@ -150,7 +151,7 @@ function RepositoryCard({ source }) {
   );
 }
 
-export default function RepositorySourcePanel({ appId, appName, onUpdated, refreshKey = 0 }) {
+export default function RepositorySourcePanel({ appId, appName, onUpdated, refreshKey = 0, hasLocalChanges = false }) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -219,6 +220,7 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
     || (source.origin?.isFork && source.forkVsUpstream?.available === false)
   ));
   const canUpdate = sources.every((source) => source.present) && status?.updatePullsAll;
+  const needsRecovery = hasLocalChanges || sources.some(source => source.clean === false || source.localVsOrigin?.state === 'diverged');
   const shouldOfferUpdate = status?.updateAvailable || remoteUnknown;
   const primaryLabel = forkNeedsSync
     ? 'Sync fork & update app'
@@ -245,6 +247,10 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
   };
 
   const handleManagedUpdate = () => {
+    if (needsRecovery) {
+      setUpdateIntent(null);
+      return;
+    }
     const intent = updateIntent;
     setUpdateIntent(null);
     setUpdateRequested(true);
@@ -356,7 +362,8 @@ export default function RepositorySourcePanel({ appId, appName, onUpdated, refre
                   {forkDiverged ? 'Fork needs reconciliation' : syncingFork ? 'Syncing fork...' : 'Sync fork'}
                 </button>
               )}
-              {shouldOfferUpdate && (
+              {needsRecovery && <GitRecoveryAction key={appId} appId={appId} appName={appName} disabled={syncingFork || operationBusy || updateRequested} />}
+              {shouldOfferUpdate && !needsRecovery && (
                 <button
                   onClick={() => setUpdateIntent({ syncFork: forkNeedsSync })}
                   disabled={!canUpdate || syncingFork || operationBusy || updateRequested}
