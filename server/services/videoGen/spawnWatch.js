@@ -21,6 +21,8 @@ import {
   makeVideoGenLineHandler,
   finalizeGeneratedVideo,
   isWatchdogSuccess,
+  isNativeTeardownAbort,
+  verifyPostCompletionOutputs,
   describeSignalDeath,
   planPromptEncodingRetry,
   bufferChildExit,
@@ -139,6 +141,14 @@ export async function spawnAndWatchVideo({
     });
   } catch { /* preview is best-effort; the final video remains authoritative */ }
 
+  // Every file this render was asked to write, in the order the runner emits
+  // them. Job-level (a relaunch renders the SAME outputs), and the yardstick the
+  // post-completion teardown recovery below measures a child's result claims
+  // against — so "it printed a path" can never stand in for "it printed OUR path".
+  const expectedOutputPaths = batch
+    ? batch.map((item) => join(PATHS.videos, item.filename))
+    : [outputPath];
+
   // ── one render child, fully wired ──────────────────────────────────────────
   // Everything per-CHILD lives in here — the process handle, the completion watchdog, the
   // line readers, the close handler — so the same job can be relaunched once
@@ -163,6 +173,11 @@ export async function spawnAndWatchVideo({
     // we only killed a post-completion teardown hang) rather than reporting the
     // generic "killed, likely OOM" failure.
     let completionWatchdogFired = false;
+    // Which of `expectedOutputPaths` THIS child reported finished, by exact
+    // path. Minted per child rather than stamped on `job` — `job` outlives a
+    // prompt-encode relaunch, and the dead child's completion claim must never
+    // vouch for its replacement's output (#6501).
+    const completedOutputs = new Set();
     const clearCompletionWatchdog = () => {
       if (completionWatchdog) {
         clearTimeout(completionWatchdog);
@@ -276,6 +291,7 @@ export async function spawnAndWatchVideo({
         return;
       }
       receivedOutputs += 1;
+      completedOutputs.add(itemPath);
       outputTail = outputTail.then(async () => {
         const thumbnail = await finalizeGeneratedVideo({
           job, jobId: item.id, outputPath: itemPath, filename: itemFilename,
@@ -309,6 +325,10 @@ export async function spawnAndWatchVideo({
         }
         if (parsed.video_path) {
           job.resultJson = parsed;
+          // Completion evidence only when the child names the exact file THIS
+          // job asked for. An unrelated path still arms the watchdog (the child
+          // is clearly past its render) but proves nothing about our output.
+          if (expectedOutputPaths.includes(parsed.video_path)) completedOutputs.add(parsed.video_path);
           // The result JSON is the strongest "work is done" signal — arm the
           // watchdog so a post-completion teardown hang can't wedge the job.
           armCompletionWatchdog();
@@ -389,10 +409,37 @@ export async function spawnAndWatchVideo({
         // disk still fails loudly below.
         await outputTail;
         if (batchError) throw batchError;
-        const watchdogSuccess = (!batch || batchResults.length === batch.length)
+        const allOutputsFinalized = !batch || batchResults.length === batch.length;
+        const watchdogSuccess = allOutputsFinalized
           && isWatchdogSuccess({ completionWatchdogFired, signal, outputPath });
+        // Everything below asks the same question twice — did this child die in
+        // a way we have not already forgiven? — so name it once.
+        const unforgivenExit = code !== 0 && !watchdogSuccess;
 
-        if (code !== 0 && !watchdogSuccess) {
+        // A VERIFIED post-completion native teardown abort is also a success
+        // (#6501): the H3 MLX runner wrote and muxed its clip, printed the
+        // emit_result contract naming this job's output, and only then aborted
+        // inside native interpreter teardown. Gated hard — this child's own
+        // result claim, a freshly written non-empty file, and an ffprobe reading
+        // that matches the request. A warm batch recovers only once EVERY output
+        // is accepted and finalized; a partial batch stays failed with the
+        // results it already saved. The synchronous gate runs first so no
+        // ordinary failure pays for a probe.
+        let teardownRecovered = false;
+        if (unforgivenExit && allOutputsFinalized
+          && isNativeTeardownAbort({ runtime: model.runtime, signal, childKilled: proc.killed })) {
+          const verdict = await verifyPostCompletionOutputs({
+            outputPaths: expectedOutputPaths,
+            completedOutputs,
+            startedAtMs: job.renderStartedAtMs,
+            expectedFrames: parsedNumFrames,
+            fps: meta?.fps,
+          });
+          teardownRecovered = verdict.ok;
+          if (!verdict.ok) console.log(`⚠️ teardown abort stays a failure [${jobId.slice(0, 8)}]: ${verdict.reason}`);
+        }
+
+        if (unforgivenExit && !teardownRecovered) {
           job.status = 'error';
           let reason;
           const failure = diagnostics.failure({ prompts: [meta?.prompt, meta?.negativePrompt] });
@@ -426,6 +473,15 @@ export async function spawnAndWatchVideo({
         } else {
           if (watchdogSuccess) {
             console.log(`⚠️ video child force-killed (completion teardown hang) — output is intact [${jobId.slice(0, 8)}]`);
+          }
+          if (teardownRecovered) {
+            // One concise, scrubbed warning: names the fault and nothing about
+            // this machine or where the file lives. The completion event below
+            // is the only terminal event this job emits.
+            const message = `The renderer aborted during native teardown after finishing — the verified video was kept (${signal})`;
+            console.log(`⚠️ ${message} [${jobId.slice(0, 8)}]`);
+            broadcastSse(job, { type: 'status', message });
+            videoGenEvents.emit('status', { generationId: jobId, message });
           }
           if (batch) {
             if (batchResults.length !== batch.length) throw new Error(`Video batch stopped after ${batchResults.length}/${batch.length} outputs.`);

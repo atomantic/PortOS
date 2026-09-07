@@ -10,7 +10,9 @@
 
 import { existsSync, statSync } from 'fs';
 import { broadcastSse } from '../../lib/sseUtils.js';
-import { generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
+import {
+  generateThumbnail, optimizeForStreaming, probeFrameCount, probeVideoDuration,
+} from '../../lib/ffmpeg.js';
 import { formatBytes } from '../../lib/fileUtils.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { videoGenEvents } from './events.js';
@@ -503,6 +505,150 @@ export function planPromptEncodingRetry({ signal = null, stderr = '', promptEnco
 export function isWatchdogSuccess({ completionWatchdogFired, signal, outputPath }) {
   return completionWatchdogFired && signal === 'SIGKILL'
     && existsSync(outputPath) && statSync(outputPath).size > 0;
+}
+
+// ── verified post-completion native teardown abort (#6501) ──────────────────
+//
+// The MiniMax H3 MLX runner can finish its render, mux the clip, print the
+// `emit_result` completion contract from scripts/_minimax_h3_common.py, and
+// THEN abort inside native interpreter teardown. The clip on disk is complete;
+// only the interpreter died. Without recognition, that delivered render is
+// absent from history and counted against the media queue's repeated-failure
+// hold.
+//
+// This is deliberately the narrowest possible recovery. It is NOT a general
+// "the file looks fine, call it a win" rule: an ordinary nonzero exit, a
+// missing python module, an idle timeout, a user cancel, a truncated clip and
+// a pre-completion crash all keep failing exactly as before.
+
+/**
+ * The single runtime this recovery covers. `minimax_h3_cuda` (Windows/Linux
+ * diffusers) and `minimax_h3_ref2va` (the signed native release) are excluded
+ * by construction rather than by an allowlist that could drift open — neither
+ * has the MLX teardown fault, and both must keep their current outcomes.
+ */
+export const POST_COMPLETION_ABORT_RUNTIME = 'minimax_h3';
+
+/**
+ * Signals that can carry a native-interpreter teardown abort. SIGABRT only for
+ * now: a bare nonzero exit is an ordinary failure, SIGKILL belongs to the
+ * completion watchdog (and to the OOM killer), and SIGSEGV/SIGBUS are real
+ * native crashes that can equally well happen mid-render.
+ */
+const NATIVE_TEARDOWN_SIGNALS = new Set(['SIGABRT']);
+
+/**
+ * The cheap synchronous gate: does this child's death even LOOK like the H3
+ * MLX teardown abort? Runs before the (async, ffprobe-backed) output
+ * verification so an ordinary failure never pays for a probe.
+ *
+ * `childKilled` is `proc.killed`, i.e. PortOS asked this child to die — a user
+ * cancel or either watchdog. A death we caused is never a spontaneous teardown
+ * abort to recover from, whatever signal it finally landed on.
+ *
+ * @param {object} opts
+ * @param {string} [opts.runtime] - the render model's runtime id
+ * @param {string|null} [opts.signal] - the signal from the child's 'close'
+ * @param {boolean} [opts.childKilled] - `proc.killed`
+ * @param {string} [opts.platform] - `process.platform` of the host
+ * @returns {boolean}
+ */
+export function isNativeTeardownAbort({ runtime = null, signal = null, childKilled = false, platform = process.platform } = {}) {
+  // MLX is Apple-Silicon only, so a Windows/Linux host reporting this runtime
+  // is a misconfiguration rather than the fault this recovery knows about.
+  if (platform !== 'darwin') return false;
+  if (runtime !== POST_COMPLETION_ABORT_RUNTIME) return false;
+  if (childKilled) return false;
+  return NATIVE_TEARDOWN_SIGNALS.has(signal);
+}
+
+// A filesystem whose mtime resolution is whole seconds (rather than APFS/ext4
+// nanoseconds) can stamp a file written milliseconds after the spawn with the
+// second BEFORE it. One second of slack absorbs that without weakening the
+// check that matters — a stale output from an earlier render is minutes old.
+const OUTPUT_MTIME_SLACK_MS = 1000;
+
+// The muxer can round a stream's reported length by a frame or two, and the
+// container duration of a clip carrying an audio track is not exactly
+// frames/fps. Both tolerances stay tight on purpose: the probe exists to
+// reject a TRUNCATED clip, which loses far more than this.
+const frameTolerance = (expectedFrames) => Math.max(2, Math.ceil(expectedFrames * 0.02));
+const durationToleranceSeconds = (expectedSeconds) => Math.max(0.25, expectedSeconds * 0.05);
+
+/**
+ * Verify that a post-completion abort really did leave the requested render on
+ * disk. Every check must pass; each returns the reason it did not so the caller
+ * can log why a teardown abort stayed a failure.
+ *
+ * The checks, in order of cost:
+ *   1. This child reported EVERY expected output by its exact path. The caller
+ *      collects that evidence per child, so a stray progress sentence, an
+ *      unrelated path, or a previous child's result cannot satisfy it.
+ *   2. The request is measurable — we know when the render started and how many
+ *      frames at what rate it asked for. Missing any of that is "cannot
+ *      verify", which is a refusal, never a pass.
+ *   3. Each file exists, is non-empty, and was written AFTER this render
+ *      started. File existence alone is not evidence: a same-named output from
+ *      an earlier render would satisfy it.
+ *   4. ffprobe reads a frame count and a duration consistent with the request.
+ *      A probe that could not answer (`null` — no ffprobe, unreadable file) is
+ *      an explicit "unknown" and refuses recovery; it must never collapse into
+ *      "consistent".
+ *
+ * @param {object} ctx
+ * @param {string[]} ctx.outputPaths - every file this render was asked to write
+ * @param {Set<string>} ctx.completedOutputs - paths THIS child reported done
+ * @param {number} ctx.startedAtMs - Date.now() stamped just before the spawn
+ * @param {number} ctx.expectedFrames - frames the request asked for
+ * @param {number} ctx.fps - frame rate the request asked for
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+export async function verifyPostCompletionOutputs({ outputPaths, completedOutputs, startedAtMs, expectedFrames, fps }) {
+  if (!Array.isArray(outputPaths) || outputPaths.length === 0) {
+    return { ok: false, reason: 'the render declared no expected output' };
+  }
+  const reported = completedOutputs instanceof Set ? completedOutputs : new Set();
+  const unreported = outputPaths.filter((path) => !reported.has(path)).length;
+  if (unreported > 0) {
+    return { ok: false, reason: `${unreported}/${outputPaths.length} expected outputs were never reported complete by this child` };
+  }
+  if (!Number.isFinite(startedAtMs) || startedAtMs <= 0) {
+    return { ok: false, reason: 'the render start time was not recorded' };
+  }
+  if (!Number.isFinite(expectedFrames) || expectedFrames <= 0 || !Number.isFinite(fps) || fps <= 0) {
+    return { ok: false, reason: 'the requested frame count or frame rate is unknown' };
+  }
+  const expectedSeconds = expectedFrames / fps;
+  for (const [index, outputPath] of outputPaths.entries()) {
+    const label = outputPaths.length > 1 ? `output ${index + 1}/${outputPaths.length}` : 'the output';
+    if (!existsSync(outputPath)) return { ok: false, reason: `${label} is not on disk` };
+    let stats;
+    // The file can be unlinked between the existsSync above and this stat
+    // (cleanup, an external move), and this runs from a child 'close' handler
+    // where an uncaught throw would take the process with it.
+    try {
+      stats = statSync(outputPath);
+    } catch (err) {
+      return { ok: false, reason: `${label} could not be read: ${err.message}` };
+    }
+    if (!(stats?.size > 0)) return { ok: false, reason: `${label} is empty` };
+    if (!Number.isFinite(stats.mtimeMs) || stats.mtimeMs < startedAtMs - OUTPUT_MTIME_SLACK_MS) {
+      return { ok: false, reason: `${label} predates this render` };
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const frames = await probeFrameCount(outputPath);
+    if (!Number.isFinite(frames)) return { ok: false, reason: `${label} could not be probed for frames` };
+    if (Math.abs(frames - expectedFrames) > frameTolerance(expectedFrames)) {
+      return { ok: false, reason: `${label} carries ${frames} frames, not the ${expectedFrames} requested` };
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const seconds = await probeVideoDuration(outputPath);
+    if (!Number.isFinite(seconds)) return { ok: false, reason: `${label} could not be probed for duration` };
+    if (Math.abs(seconds - expectedSeconds) > durationToleranceSeconds(expectedSeconds)) {
+      return { ok: false, reason: `${label} runs ${seconds.toFixed(2)}s, not the ${expectedSeconds.toFixed(2)}s requested` };
+    }
+  }
+  return { ok: true };
 }
 
 /**
