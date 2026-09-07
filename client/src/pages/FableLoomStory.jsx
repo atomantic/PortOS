@@ -598,7 +598,7 @@ export default function FableLoomStory({ view = 'graph' }) {
       </header>
 
       {seriesPlanOpen ? (
-        <LoomSeriesPlan loom={loom} onLoomUpdate={setLoom} />
+        <LoomSeriesPlan loom={loom} universe={linkedUniverse} onLoomUpdate={setLoom} />
       ) : !episode ? (
         <div className="flex-1 grid place-items-center p-8 text-center">
           <div>

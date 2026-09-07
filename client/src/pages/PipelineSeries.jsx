@@ -41,6 +41,8 @@ import { recommendStructure, describeStructure } from '../lib/seasonStructure';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
 import RecordRenderPinRow from '../components/imageGen/RecordRenderPinRow';
+import CharacterEvolutionLens from '../components/character/CharacterEvolutionLens';
+import { EVOLUTION_STAGES, isDeclaredEvolution } from '../lib/characterEvolution.js';
 
 const PIPELINE_SIDEBAR_KEY = 'portos-pipeline-series-sidebar-collapsed';
 
@@ -457,7 +459,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
 
       <FactReferenceSection series={series} patchSeries={patchSeries} />
 
-      <CharacterArcsSection series={series} patchSeries={patchSeries} />
+      <CharacterArcsSection series={series} universes={universes} patchSeries={patchSeries} />
 
       <div className="block">
         <div className="flex items-center justify-between mb-1">
@@ -894,8 +896,11 @@ function FactReferenceSection({ series, patchSeries }) {
 // permissive — a freshly-added blank arc simply doesn't persist until named. The
 // arc.transitions editorial check reconciles its detected change moments against
 // what's authored here and flags characters with no transition scenes (flat arcs).
-function CharacterArcsSection({ series, patchSeries }) {
+function CharacterArcsSection({ series, universes, patchSeries }) {
   const arcs = Array.isArray(series.characterArcs) ? series.characterArcs : [];
+  // The linked universe's cast, for the read-only psychology baseline beside
+  // each lens. Absent when no universe is linked — the lens still authors fine.
+  const cast = universes?.find((u) => u.id === series.universeId)?.characters || [];
   const setArcs = (next) => patchSeries({ characterArcs: next });
   const setArc = (i, patch) => setArcs(arcs.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
   const addArc = () => setArcs([...arcs, { characterName: '', want: '', need: '', startState: '', endState: '', transitions: [] }]);
@@ -1032,6 +1037,30 @@ function CharacterArcsSection({ series, patchSeries }) {
                   ))}
                 </div>
               </div>
+
+              <details className="mt-2">
+                <summary className="min-h-[32px] cursor-pointer text-[10px] uppercase tracking-wider text-gray-600">
+                  Evolution lens
+                  <span className="ml-2 normal-case tracking-normal text-[11px] text-gray-500">
+                    {isDeclaredEvolution(arc.evolution) ? arc.evolution.outcome : 'not declared'}
+                    {' · '}{arc.evolution?.stages?.length || 0}/{EVOLUTION_STAGES.length} stages
+                  </span>
+                </summary>
+                <div className="pt-2">
+                  <CharacterEvolutionLens
+                    idPrefix={`arc-${i}`}
+                    host="pipelineSeries"
+                    evolution={arc.evolution || null}
+                    anchors={{
+                      transitions: transitions
+                        .filter((t) => t.id)
+                        .map((t) => ({ id: t.id, label: t.label || t.kind || t.id })),
+                    }}
+                    psychology={cast.find((c) => c.id === arc.characterId)?.psychology}
+                    onChange={(evolution) => setArc(i, { evolution })}
+                  />
+                </div>
+              </details>
             </div>
           );
         })}
