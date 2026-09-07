@@ -105,7 +105,8 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 // Code Review Defaults resolver — mocked so tests can control the install-wide
 // default reviewer list threaded into buildAgentPrompt without touching disk.
-// Default matches pickCodeReviewDefaults's unset shape (`['copilot']`).
+// Most prompt-builder cases need an explicit reviewer to exercise their
+// completion text; opt-in/empty-default cases override this fixture locally.
 vi.mock('./codeReview.js', () => ({
   getCodeReviewDefaults: vi.fn().mockResolvedValue({ reviewers: ['copilot'] }),
 }));
@@ -1290,11 +1291,11 @@ describe('buildLightContextPrompt', () => {
       // gate only recognized OpenCode + lean mode, so codex fell through to the
       // slashdo path.
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
+        makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['copilot'] } }),
         '/r',
         { branchName: 'claim/x', worktreePath: '/tmp/wt', baseBranch: 'main' },
         isTruthyMeta,
-        { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
+        { isTui: true, providerId: 'codex-tui', providerCommand: 'codex', defaultReviewers: ['copilot'] });
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).toMatch(/does NOT have slashdo/);
       expect(prompt).not.toMatch(/`\/do:pr`/);
@@ -1697,6 +1698,7 @@ describe('buildLightContextPrompt', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {
           reviewLoopFollowUp: true,
+          reviewLoopReviewers: ['copilot'],
           reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
           reviewLoopPRBranch: 'b',
           reviewLoopPRNumber: 9,
@@ -1706,7 +1708,7 @@ describe('buildLightContextPrompt', () => {
         }}),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
-        isTruthyMeta);
+        isTruthyMeta, { defaultReviewers: ['copilot'] });
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
       expect(prompt).toMatch(/task-src-1/);
       expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --merge --delete-branch/);
@@ -1903,8 +1905,8 @@ describe('buildLightContextPrompt', () => {
     });
 
     it('does not leak default usernames/stop-mode/reviewer-applies when no Code Review Defaults are set', () => {
-      // Same task, no `codeReviewDefaults` option → the lone-copilot default,
-      // which suppresses `--review-with` entirely and emits none of the flags.
+      // Same task, no `codeReviewDefaults` option → the empty install default,
+      // which emits none of the reviewer flags.
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true, reviewLoop: true } }),
         '/r',
@@ -3014,7 +3016,7 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
 
 // #2507 — CoS app-improve/self-improvement tasks pin no `reviewers`, so the
 // review loop must resolve them from the install's Code Review Defaults
-// (settings.codeReview.reviewers) rather than the hardcoded copilot default,
+// (settings.codeReview.reviewers) rather than a hardcoded reviewer,
 // which stalls on installs without GitHub Copilot review enabled.
 describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (#2507)', () => {
   const reviewLoopTask = () => makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: false } });
@@ -3030,11 +3032,11 @@ describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (
     expect(prompt).not.toMatch(/--review-with copilot/);
   });
 
-  it('falls back to copilot (unchanged behavior) when no default is configured', async () => {
-    vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['copilot'] });
+  it('keeps review opt-in when no default is configured', async () => {
+    vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: [] });
     const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
-    // Lone-copilot default is suppressed from --review-with (buildReviewWithArgs
-    // isDefaultOnly), so /do:pr runs without an explicit reviewer flag.
+    // An empty default is suppressed from --review-with, so /do:pr runs without
+    // an explicit reviewer flag.
     expect(prompt).toMatch(/`\/do:pr`/);
     expect(prompt).not.toMatch(/--review-with claude/);
   });
@@ -3047,7 +3049,7 @@ describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (
     expect(prompt).not.toMatch(/--review-with claude/);
   });
 
-  it('degrades to the hardcoded copilot default when the settings read fails', async () => {
+  it('keeps review opt-in when the settings read fails', async () => {
     vi.mocked(getCodeReviewDefaults).mockRejectedValueOnce(new Error('settings unavailable'));
     const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
     expect(prompt).toMatch(/`\/do:pr`/);
@@ -3549,11 +3551,10 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
       expect(skipArg()).not.toContain('ollama-review-loop');
     });
 
-    it('prunes NOTHING on an unconfigured install (a lone copilot default is the unset shape)', async () => {
-      // pickCodeReviewDefaults collapses "nothing configured" to ['copilot'], so a
-      // lone copilot can't authorize pruning — and pinning --review-with copilot on
-      // an install without Copilot review is the #2507 stall.
-      vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: ['copilot'] });
+    it('prunes NOTHING on an unconfigured install', async () => {
+      // An empty default cannot authorize pruning or pin a reviewer on an
+      // install that has not opted into code review.
+      vi.mocked(getCodeReviewDefaults).mockResolvedValue({ reviewers: [] });
       const prompt = await buildAgentPrompt(
         slashdoTask(), {}, '/r', null, isTruthyMeta,
         { providerType: 'cli', providerId: 'codex' });

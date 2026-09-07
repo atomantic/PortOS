@@ -299,11 +299,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // `settings.codeReview.reviewers`). Threaded as the `normalizeReviewers`
   // fallback so a task that pins no `reviewers` (e.g. every app-improve /
   // self-improvement scheduled task) resolves to the configured default
-  // instead of the hardcoded `copilot` — which stalls the review loop on
-  // installs without GitHub Copilot review enabled (issue #2507). Unset →
-  // `['copilot']` (getCodeReviewDefaults returns the copilot fallback), so
-  // behavior is unchanged when nothing is configured. A settings read error
-  // degrades to the hardcoded default inside normalizeReviewers.
+  // instead of a hardcoded reviewer. Unset → [] (getCodeReviewDefaults keeps
+  // code review opt-in), so a fresh install does not silently start a review
+  // loop. A settings read error likewise leaves the reviewer list empty.
   //
   // Resolved BEFORE the slashdo section below, which prunes the reviewer
   // variants a run can't reach out of the command body (#3110).
@@ -335,7 +333,8 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // leave-open, JIRA, or a merge gate with no reviewer to invoke — doesn't pay
   // for the read and the staging write. The reviewer-list term matters too: the
   // section only inlines the recipe when a SPAWNABLE CLI reviewer resolves, so a
-  // copilot-only or username-only list (the default install) would otherwise
+  // copilot-only or username-only list (including an unconfigured install)
+  // would otherwise
   // read + `atomicWrite` 56KB and then render nothing from it.
   const isInlineNeedingRecipes = inlinePrLifecycleSection(task, {
     providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
@@ -493,7 +492,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
 ` : '';
 
   // Resolve the user's ordered reviewer list + flags (task metadata wins; else the
-  // install's configured Code Review Defaults; else `[copilot]`). Declared up here
+  // install's configured Code Review Defaults; else `[]`). Declared up here
   // so the TUI completion block can thread `--review-with …` into `/do:pr`.
   // Thread the install's Code Review Defaults as the fallback for ALL five
   // reviewer fields (not just `reviewers`) with task-over-default precedence —
@@ -872,7 +871,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else
   // the install's configured Code Review Defaults threaded from buildAgentPrompt;
-  // else `[copilot]`). Flows as `/do:pr --review-with a,b,c [--review-stop-on-*]
+  // else `[]`). Flows as `/do:pr --review-with a,b,c [--review-stop-on-*]
   // [--reviewer-applies]`. All five fields fall back to the defaults with
   // task-over-default precedence (see the matching block in buildAgentPrompt and
   // resolveReviewLoopOptions) — not just the reviewer list.

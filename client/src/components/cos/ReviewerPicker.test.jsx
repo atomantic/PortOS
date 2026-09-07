@@ -97,7 +97,7 @@ describe('ReviewerPicker', () => {
 
   it('shows the empty-state hint when no reviewers are selected', () => {
     render(<ReviewerPicker reviewers={[]} onChange={() => {}} />);
-    expect(screen.getByText(/none — follows your default AI provider/)).toBeInTheDocument();
+    expect(screen.getByText(/none — code review is disabled by default/)).toBeInTheDocument();
   });
 
   it('de-dupes a malformed list with duplicates (order-preserving)', () => {

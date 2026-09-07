@@ -11,7 +11,7 @@
  * This module must stay Zod-free — it is pure reviewer domain vocabulary.
  */
 import { isPlainObject } from './objects.js';
-import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel, commandBasename, isConfiguredDefaultModel } from './providerModels.js';
+import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel } from './providerModels.js';
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
 
@@ -33,7 +33,7 @@ import { CURSOR_COMMAND } from './cursor.js';
 export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
 export const REVIEWER_ALIASES = { gemini: 'antigravity', 'cursor-agent': 'cursor' };
 export const DEFAULT_REVIEWER = 'copilot';
-export const DEFAULT_REVIEWERS = ['copilot'];
+export const DEFAULT_REVIEWERS = [];
 // Reviewers that resolve to a local-LLM backend (rather than a CLI or GitHub
 // bot). Used by the code-review endpoint, settings panel, and prompt builder
 // to gate model-id resolution.
@@ -1133,11 +1133,10 @@ function markSuffixes(token, optSet, maxLookup, modelLookup, effortLookup) {
 /**
  * Resolve task metadata to an ordered, deduped reviewer list. Prefers the new
  * `reviewers` array; falls back to the legacy single `reviewer` string. When
- * the metadata yields nothing, returns `fallback` (default `['copilot']`) —
- * pass the settings-resolved defaults here so a Review Loop run picks up the
- * user's Code Review Defaults instead of the hardcoded copilot when the task
- * itself didn't pin reviewers. Filters to known reviewers and preserves
- * first-occurrence order.
+ * the metadata yields nothing, returns `fallback` (empty by default) — pass the
+ * settings-resolved defaults here so a Review Loop run picks up the user's Code
+ * Review Defaults when the task itself didn't pin reviewers. Filters to known
+ * reviewers and preserves first-occurrence order.
  */
 export function normalizeReviewers(meta, fallback = DEFAULT_REVIEWERS) {
   const raw = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
@@ -1167,8 +1166,8 @@ export function normalizeReviewers(meta, fallback = DEFAULT_REVIEWERS) {
  * Resolve the keyed (enum) reviewer list, honoring the "username-only" case: an
  * EXPLICITLY empty keyed list with username reviewers present (e.g. copilot was
  * stripped on a non-GitHub forge) stays empty rather than falling back to the
- * copilot default normalizeReviewers would apply. Absent/legacy input still
- * normalizes to the default. Single source for the guard shared by
+ * install default normalizeReviewers would apply. Absent/legacy input still
+ * normalizes to the configured default. Single source for the guard shared by
  * `buildReviewWithArgs` and the review-loop follow-up prompt builder.
  */
 export function resolveKeyedReviewers(reviewers, hasUsernames) {
@@ -1179,7 +1178,7 @@ export function resolveKeyedReviewers(reviewers, hasUsernames) {
 /**
  * Build the comma-separated reviewer token list used to fill the `{reviewers}`
  * placeholder in claim/plan prompts: keyed reviewers (falling back to the
- * default when empty) followed by `@user` tokens for the reviewer usernames.
+ * configured default when empty) followed by `@user` tokens for the reviewer usernames.
  * Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix, and
  * reviewers carrying a `reviewerMaxRounds` cap get `~max=<n>` after it. A
  * reviewer with a `reviewerModels` pin gets slashdo's `[<model>]` selector
@@ -1281,68 +1280,4 @@ export function buildReviewWithArgs(reviewers, {
   }
   if (reviewerApplies && hasNonCopilot) parts.push('--reviewer-applies');
   return parts.join(' ');
-}
-
-/**
- * The reviewer slug an AI provider config would review as, or `null` when the
- * provider is nothing the Review Loop can run (a hosted API provider with no
- * spawnable CLI, an unrecognized binary).
- *
- * Two ways in, matching how the two reviewer kinds are actually identified:
- * a local-LLM reviewer is named by PROVIDER ID (`ollama`/`lmstudio`/`mtplx` —
- * it has no binary; `POST /api/code-review/local` talks to the daemon), and a
- * CLI reviewer is named by the BINARY its provider spawns, looked up through
- * `REVIEWER_CLI_BINARIES` so the slug↔executable mapping stays in one table
- * (`antigravity` is the stored slug, `agy` the command — see that constant).
- *
- * An Ollama/SGLang-backed `claude` or `opencode` wrapper resolves to the
- * `claude` / `opencode` reviewer on purpose: the reviewer runs the same binary
- * against the same environment, and its model pin is free text precisely so a
- * locally-served id can be named.
- *
- * @param {{id?:string, command?:string}|null|undefined} provider
- * @returns {string|null}
- */
-export function reviewerForProvider(provider) {
-  if (!isPlainObject(provider)) return null;
-  const id = typeof provider.id === 'string' ? provider.id.trim().toLowerCase() : '';
-  if (LOCAL_LLM_REVIEWERS.includes(id)) return id;
-  const command = commandBasename(provider.command);
-  if (!command) return null;
-  return Object.entries(REVIEWER_CLI_BINARIES).find(([, binary]) => binary === command)?.[0] || null;
-}
-
-/**
- * Code Review Defaults derived from the install's DEFAULT AI provider — the
- * reviewer chain an install gets before anyone opens Settings › Code Reviewers.
- *
- * The historical fallback was a hardcoded `['copilot']`, which is wrong on two
- * counts: an install with no GitHub Copilot subscription gets a review that
- * never arrives, and an install that has already told PortOS which agent it
- * wants to run gets a different one for review with no way to have known. So
- * the fallback follows the active provider instead — same vendor, same model,
- * same reasoning effort — and only falls back to `DEFAULT_REVIEWERS` when the
- * provider maps to no reviewer at all (a hosted API provider, or none set).
- *
- * The model is dropped when it is a `*-configured-default` sentinel: that
- * string is a marker meaning "whatever the CLI is configured for", not an id
- * the reviewer's `--model` could take. The effort is dropped when it falls
- * outside that reviewer's own ladder, the same drop-don't-clamp rule
- * `normalizeReviewerEffort` applies everywhere else.
- *
- * Returns `null` (not a partial object) when there is nothing to derive, so the
- * caller can tell "no provider-derived default" from "derived, with no pins".
- *
- * @param {{id?:string, command?:string, defaultModel?:string, effort?:string}|null|undefined} provider
- * @returns {{reviewer: string, model: string|null, effort: string|null}|null}
- */
-export function codeReviewDefaultsFromProvider(provider) {
-  const reviewer = reviewerForProvider(provider);
-  if (!reviewer) return null;
-  const rawModel = provider.defaultModel;
-  return {
-    reviewer,
-    model: isConfiguredDefaultModel(rawModel) ? null : (normalizeReviewerModel(rawModel, reviewer) ?? null),
-    effort: normalizeReviewerEffort(provider.effort, reviewer) ?? null,
-  };
 }

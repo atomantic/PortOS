@@ -34,7 +34,6 @@ import {
   normalizeReviewerMaxRounds,
   resolveReviewerMaxRounds,
   reviewerEffortsFromDefaults,
-  codeReviewDefaultsFromProvider,
   resolveReviewerPins,
   normalizeReviewerEffort,
   prioritizeToolFreeReviewers,
@@ -47,7 +46,6 @@ import {
   resolveGoalFidelityConfig,
 } from '../lib/goalFidelity.js'
 import { getSettings, settingsEvents } from './settings.js'
-import { getActiveProvider } from './providers.js'
 import { getBaseUrl as getLmStudioBaseUrl } from './lmStudioManager.js'
 import {
   getBaseUrl as getOllamaBaseUrl,
@@ -82,12 +80,10 @@ export function isLocalLlmReviewer(backend) {
  * The reviewer chain the user actually configured, with aliases mapped and
  * unknown enum values dropped — empty when they have configured none.
  *
- * Its own function because "did the user choose a chain?" is asked twice and the
- * two answers must agree exactly: `pickCodeReviewDefaults` uses it to decide
- * whether to derive defaults from the active AI provider, and
- * `getCodeReviewDefaults` uses it to decide whether it may memoize the result.
- * A settings.json holding only junk (`reviewers: ['bogus']`) has configured
- * nothing, and both callers have to see that the same way.
+ * Its own function because the settings-backed chain must be normalized in one
+ * place before the defaults are returned. A settings.json holding only junk
+ * (`reviewers: ['bogus']`) has configured nothing, so it receives the empty
+ * install default just like an absent reviewer list.
  */
 function configuredReviewers(settings) {
   const raw = settings && typeof settings === 'object' ? settings.codeReview : null
@@ -102,31 +98,19 @@ function configuredReviewers(settings) {
  * in bogus reviewer names. Returns a value-only shape (no I/O) so the spawner
  * and `GET /api/code-review/defaults` can share.
  *
- * `activeProvider` is the install's DEFAULT AI provider (the caller's, because
- * this function does no I/O). With no configured reviewer chain the defaults
- * follow that provider — its reviewer slug, its default model, its reasoning
- * effort — rather than the hardcoded `copilot`, which reviews through a GitHub
- * subscription the install may not have and ignores the agent the user already
- * chose. `DEFAULT_REVIEWERS` remains the last resort, for a provider that maps
- * to no reviewer (a hosted API provider) or none being set at all.
- *
- * A provider-derived model/effort is only a DEFAULT: a stored `<reviewer>Model`
- * / `<reviewer>Effort` scalar still wins, so pinning one reviewer's model does
- * not silently un-derive the rest.
+ * An unconfigured install has no reviewer chain. Reviewers are opt-in through
+ * this settings slice or a task-local override; the active AI provider does not
+ * silently turn itself into a code reviewer.
  */
-export function pickCodeReviewDefaults(settings, { activeProvider = null } = {}) {
+export function pickCodeReviewDefaults(settings) {
   const raw = settings && typeof settings === 'object' ? settings.codeReview : null
   const effortDefaults = reviewerEffortsFromDefaults(raw)
   const reviewers = configuredReviewers(settings)
-  // Only consulted when the user has configured no chain of their own — a saved
-  // chain is an explicit choice and must not be re-derived from the provider.
-  const derived = reviewers.length ? null : codeReviewDefaultsFromProvider(activeProvider)
   return {
-    reviewers: reviewers.length ? reviewers : (derived ? [derived.reviewer] : [...DEFAULT_REVIEWERS]),
+    reviewers: reviewers.length ? reviewers : [...DEFAULT_REVIEWERS],
     // Arbitrary GitHub reviewer usernames appended to `--review-with` to gate the
     // merge. Normalized so a hand-edited settings.json can't smuggle in unsafe
-    // tokens. Empty array = none configured (distinct from the copilot fallback
-    // reviewers get).
+    // tokens. Empty array = none configured.
     usernames: normalizeReviewUsernames(raw?.usernames),
     // Reviewer identities marked non-blocking (`~opt`). Normalized so a
     // hand-edited settings.json can't smuggle in junk. Empty = none optional.
@@ -164,7 +148,7 @@ export function pickCodeReviewDefaults(settings, { activeProvider = null } = {})
       MODEL_SELECTABLE_REVIEWERS.map((reviewer) => {
         const stored = raw?.[`${reviewer}Model`]
         if (typeof stored === 'string' && stored) return [`${reviewer}Model`, stored]
-        return [`${reviewer}Model`, derived?.reviewer === reviewer ? derived.model : null]
+        return [`${reviewer}Model`, null]
       })
     ),
     // Per-reviewer reasoning-effort defaults. Unlike the model scalars above these
@@ -180,7 +164,7 @@ export function pickCodeReviewDefaults(settings, { activeProvider = null } = {})
     ...Object.fromEntries(
       EFFORT_SELECTABLE_REVIEWERS.map((reviewer) => [
         `${reviewer}Effort`,
-        effortDefaults[reviewer] ?? (derived?.reviewer === reviewer ? derived.effort : null),
+        effortDefaults[reviewer] ?? null,
       ])
     ),
   }
@@ -206,19 +190,8 @@ export function __resetCodeReviewDefaultsCache() { cachedSettings = null; cached
 export async function getCodeReviewDefaults() {
   if (cachedDefaults) return cachedDefaults
   if (!cachedSettings) cachedSettings = await getSettings()
-  const configured = configuredReviewers(cachedSettings).length > 0
-  // `getActiveProvider` needs an initialized AI toolkit, which an early-boot
-  // caller (or a unit-test process) may not have — a failed read just means no
-  // provider-derived default, never a failed resolve. It reads the toolkit's own
-  // in-memory provider cache, so an unconfigured install pays no disk I/O for it.
-  const activeProvider = configured ? null : await getActiveProvider().catch(() => null)
-  const defaults = pickCodeReviewDefaults(cachedSettings, { activeProvider })
-  // Only a settings-derived answer is memoized: `settings:updated` invalidates it
-  // completely. A provider-derived one has no such event — the active provider
-  // lives in its own store — so it is re-resolved per call rather than pinned to
-  // whichever vendor happened to be active when the cache was first filled.
-  if (configured) cachedDefaults = defaults
-  return defaults
+  cachedDefaults = pickCodeReviewDefaults(cachedSettings)
+  return cachedDefaults
 }
 
 /**
