@@ -6,7 +6,7 @@ import {
   PROVIDER_GRAPH_SCHEMA_VERSION,
   buildProviderGraphPreview,
 } from './providerGraphPreview.js';
-import { PROVIDER_HARNESS_IDS, ROUTE_MODES, providerRouteMode } from './providerHarnesses.js';
+import { PROVIDER_HARNESSES, PROVIDER_HARNESS_IDS, ROUTE_MODES, providerRouteMode } from './providerHarnesses.js';
 import {
   effectiveModelAliases,
   modelAliasRevision,
@@ -14,6 +14,7 @@ import {
   staleModelAliases,
 } from './providerModelAliases.js';
 import { routeSettingsRevision, routeSettingsSchema } from './providerRouteSettings.js';
+import { CREATABLE_CONNECTION_KINDS, connectionKindLabel } from './providerRouteRecipes.js';
 
 // `PROVIDER_GRAPH_SCHEMA_VERSION` is deliberately NOT re-exported: it is one
 // wire version shared with the preview, and two flat `export *` modules in this
@@ -117,6 +118,41 @@ const routeDtoSchema = z.object({
   tuiCommandLine: z.string().optional(),
 }).strict();
 
+// What a client may CREATE (#6369). Both are constants derived from the code
+// registries, published rather than mirrored into the browser: which harnesses
+// carry a command recipe, and which backend kinds a minted route can honestly
+// describe, are server decisions with no rendered value the browser could
+// recompute. Additive, so `PROVIDER_GRAPH_SCHEMA_VERSION` stays at 1 and an
+// older client simply ignores them.
+const creatableHarnessSchema = z.object({
+  id: z.enum(PROVIDER_HARNESS_IDS),
+  label: z.string().min(1),
+  modes: z.array(z.enum(ROUTE_MODES)).min(1),
+  protocol: z.string().min(1),
+  // The credential key this program needs on the connection, and whether it
+  // refuses to start without one — so the form can say so BEFORE the create.
+  credentialKey: z.string().min(1),
+  credentialRequired: z.boolean(),
+}).strict();
+
+const creatableKindSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+}).strict();
+
+/** The static half of the create surface. Derived from code, never from rows. */
+const CREATABLE = Object.freeze({
+  harnesses: Object.freeze(PROVIDER_HARNESSES.filter((harness) => harness.recipe).map((harness) => Object.freeze({
+    id: harness.id,
+    label: harness.label,
+    modes: [...harness.modes],
+    protocol: harness.protocol,
+    credentialKey: harness.recipe.credential.via === 'env' ? harness.recipe.credential.name : 'apiKey',
+    credentialRequired: harness.recipe.credential.required === true,
+  }))),
+  kinds: Object.freeze(CREATABLE_CONNECTION_KINDS.map((id) => Object.freeze({ id, label: connectionKindLabel(id) }))),
+});
+
 /** The full `GET /api/providers/management` body. */
 export const managementGraphSchema = z.object({
   schemaVersion: z.literal(PROVIDER_GRAPH_SCHEMA_VERSION),
@@ -124,6 +160,8 @@ export const managementGraphSchema = z.object({
   connections: z.array(connectionDtoSchema),
   bindings: z.array(bindingDtoSchema),
   routes: z.array(routeDtoSchema),
+  creatableHarnesses: z.array(creatableHarnessSchema),
+  creatableConnectionKinds: z.array(creatableKindSchema),
 }).strict();
 
 /**
@@ -153,6 +191,8 @@ export function toManagementGraphDto({ connections, bindings, routes, activeProv
   return managementGraphSchema.parse({
     schemaVersion: PROVIDER_GRAPH_SCHEMA_VERSION,
     activeProvider: typeof activeProvider === 'string' ? activeProvider : null,
+    creatableHarnesses: CREATABLE.harnesses,
+    creatableConnectionKinds: CREATABLE.kinds,
     connections: connections.map(({ id, revision, kind, label, transports, credentials, catalog }) => ({
       id,
       revision,
@@ -189,6 +229,17 @@ export function toManagementGraphDto({ connections, bindings, routes, activeProv
     }),
   });
 }
+
+/**
+ * One connection row, sanitized exactly as `GET /api/providers/management`
+ * sanitizes it (#6369).
+ *
+ * Routed through {@link toManagementGraphDto} rather than mapped separately, so
+ * the create response and the graph response cannot drift into publishing
+ * different things — there is one strict schema and one mapper.
+ */
+export const toConnectionDto = (connection) =>
+  toManagementGraphDto({ connections: [connection], bindings: [], routes: [] }).connections[0];
 
 // --- import ------------------------------------------------------------------
 

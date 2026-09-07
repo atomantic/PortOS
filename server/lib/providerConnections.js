@@ -60,8 +60,15 @@ const TRANSPORT_ENV_VARS = Object.freeze({
   OPENAI_BASE_URL: 'openai',
 });
 
-/** Env vars that carry connection CREDENTIALS, including each gateway's key var. */
-const CREDENTIAL_ENV_VARS = Object.freeze([
+/**
+ * Env vars that carry connection CREDENTIALS, including each gateway's key var.
+ *
+ * Exported because it is also the set a freshly MINTED route may materialize a
+ * connection's credentials into (`providerRouteRecipes.js`): an env var outside
+ * this list is not read back as a credential here, so writing one would make a
+ * new route describe a connection it is not actually on.
+ */
+export const CONNECTION_CREDENTIAL_ENV_VARS = Object.freeze([
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
@@ -187,7 +194,7 @@ export function providerConnectionProfile(provider) {
     ownedFields.apiKey = record.apiKey;
     if (isNonEmptyString(record.apiKey)) credentials.apiKey = record.apiKey;
   }
-  for (const name of CREDENTIAL_ENV_VARS) {
+  for (const name of CONNECTION_CREDENTIAL_ENV_VARS) {
     if (!Object.hasOwn(envVars, name)) continue;
     ownedEnvVars[name] = envVars[name];
     if (isNonEmptyString(envVars[name])) credentials[name] = envVars[name];

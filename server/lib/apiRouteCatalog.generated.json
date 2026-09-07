@@ -13913,6 +13913,14 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/providers/bindings",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
+      ]
+    },
+    {
       "method": "PATCH",
       "path": "/api/providers/bindings/:id",
       "mountPath": "/api/providers",
@@ -14014,6 +14022,14 @@
       "mountPath": "/api/providers/comparison",
       "sources": [
         "server/routes/modelComparison.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/providers/connections",
+      "mountPath": "/api/providers",
+      "sources": [
+        "server/routes/providers.js"
       ]
     },
     {
@@ -17972,8 +17988,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2226,
-    "declarations": 2234,
+    "operations": 2228,
+    "declarations": 2236,
     "sourceFiles": 233
   }
 }

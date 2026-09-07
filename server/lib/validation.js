@@ -14,6 +14,7 @@ import {
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
+import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
 import {
   FEDERATED_MEDIA_ASSET_MAX_COUNT,
@@ -580,6 +581,53 @@ export const providerBindingUnlinkSchema = z.object({
     binding: z.number().int().positive().optional(),
     sourceConnection: z.number().int().positive().optional(),
   }).strict().optional().default({}),
+}).strict();
+
+// POST /api/providers/connections (#6369) — a NEW backend.
+//
+// This schema bounds the SHAPE only. Which backend kinds and transport
+// protocols are real is checked by `connectionBlocker` in the service, which
+// already owns the harness/transport registries — importing them here would
+// pull that subtree into the one module nearly every route validates through
+// (`lib/importScoping.test.js`), for two enum lists and no extra safety.
+//
+// Exactly ONE transport, and this is the load-bearing rule: a provider record
+// names one endpoint, so the profile a minted route reports always declares one
+// transport. A connection declaring two would not be the connection its own
+// routes describe, and reconciliation would clone each binding onto a fresh
+// single-transport row on the next pass — silently undoing the create.
+//
+// Credentials take no `null` here, unlike the PATCH above: there is nothing yet
+// to clear, so a null would only be a typo with a destructive reading.
+export const providerConnectionCreateSchema = z.object({
+  kind: z.string().trim().min(1).max(64),
+  label: z.string().trim().min(1).max(200),
+  transports: z.record(
+    z.string().trim().min(1).max(64),
+    z.object({ baseUrl: z.string().trim().min(1).max(2048) }).strict(),
+  ).refine((value) => Object.keys(value).length === 1, {
+    message: 'Declare exactly one transport protocol for this backend',
+  }),
+  credentials: z.record(
+    z.string().trim().min(1).max(128),
+    z.string().min(1).max(4096),
+  ).optional().default({}),
+}).strict();
+
+// POST /api/providers/bindings (#6369) — a NEW harness configuration on an
+// existing backend, and the executable routes it owns.
+//
+// `harnessId` accepts every registry id, not only the creatable ones: a harness
+// with no command recipe gets the service's explanation of WHY it cannot be
+// pointed at a backend, which is more useful than a schema enum error. `null`
+// is the direct API binding and is spelled explicitly rather than by omission,
+// because "no harness" is a real choice here, not a missing field.
+export const providerBindingCreateSchema = z.object({
+  connectionId: z.string().uuid(),
+  harnessId: z.enum(PROVIDER_HARNESS_IDS).nullable(),
+  modes: z.array(z.enum(ROUTE_MODES)).min(1).max(ROUTE_MODES.length)
+    .refine((value) => new Set(value).size === value.length, { message: 'Name each mode once' }),
+  label: z.string().trim().min(1).max(200).optional(),
 }).strict();
 
 // PATCH /api/providers/connections/:id (#6369).

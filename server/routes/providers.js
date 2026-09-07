@@ -1,6 +1,8 @@
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/providerGraphPreview.js';
 import {
+  createBinding,
+  createConnection,
   getManagementGraph,
   linkBinding,
   previewBindingLink,
@@ -26,9 +28,11 @@ import {
   codexLoginStartSchema,
   providerVisionTestSchema,
   providerVisionSuiteSchema,
+  providerBindingCreateSchema,
   providerBindingLinkSchema,
   providerBindingUnlinkSchema,
   providerBindingUpdateSchema,
+  providerConnectionCreateSchema,
   providerConnectionUpdateSchema,
   providerRouteModelAliasSchema,
   providerRouteSettingsUpdateSchema,
@@ -321,6 +325,39 @@ export function createPortOSProviderRoutes(aiToolkit) {
    */
   router.get('/management', asyncHandler(async (_req, res) => {
     res.set('Cache-Control', 'no-store').json(await getManagementGraph());
+  }));
+
+  /**
+   * Add a NEW backend to the graph (#6369) — mock flow 3 in the decision
+   * record: a distinct remote endpoint with its own credentials, created as its
+   * own identity even when its model names match a backend already configured.
+   *
+   * Creation only. Nothing is probed, no model list is fetched, no route is
+   * minted and `activeProvider` does not move: a connection with no binding is
+   * a legitimate row the user then attaches a harness to.
+   */
+  router.post('/connections', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerConnectionCreateSchema, req.body ?? {});
+    res.status(201).json(await createConnection(input));
+  }));
+
+  /**
+   * Add a harness to an existing backend (#6369) — mock flow 2: the same
+   * daemon, driven by a second program, as an INDEPENDENT binding with its own
+   * executable route ids.
+   *
+   * The route records are minted from the harness's command recipe
+   * (`PROVIDER_HARNESSES[].recipe`), which is what this endpoint waited on: the
+   * registry could classify an existing record but not describe how to spawn a
+   * fresh one.
+   *
+   * Every minted route arrives DISABLED with no model pins. Creating a route is
+   * a management act; executing one is a separate grant on `PATCH
+   * /api/providers/:id`, and nothing here launches, probes or generates.
+   */
+  router.post('/bindings', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingCreateSchema, req.body ?? {});
+    res.status(201).json(await createBinding(input));
   }));
 
   /**

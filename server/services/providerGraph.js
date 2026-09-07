@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
-import { compareBackendEndpoints, withConnectionOwnedFields } from '../lib/providerConnections.js';
+import {
+  compareBackendEndpoints,
+  providerConnectionProfile,
+  sameConnectionIdentity,
+  withConnectionOwnedFields,
+} from '../lib/providerConnections.js';
 import {
   connectionOwnedSnapshot,
   mergeConnectionCredentials,
@@ -8,6 +13,7 @@ import {
   planGraphReconciliation,
   reconciliationIsNoop,
   sanitizeCatalogError,
+  toConnectionDto,
   toManagementGraphDto,
 } from '../lib/providerGraphRecords.js';
 import { resolveRouteModels } from '../lib/providerGraphPreview.js';
@@ -17,7 +23,15 @@ import {
   effectiveModelAliases,
   modelAliasRevision,
 } from '../lib/providerModelAliases.js';
+import { harnessById } from '../lib/providerHarnesses.js';
 import { effortLevelsForProvider } from '../lib/providerModels.js';
+import {
+  bindingBlocker,
+  buildRouteRecord,
+  connectionBlocker,
+  connectionKindLabel,
+  mintRouteIds,
+} from '../lib/providerRouteRecipes.js';
 import {
   routeSettingsFor,
   routeSettingsRevision,
@@ -37,6 +51,7 @@ import {
   saveConnectionSettings,
   saveRouteModelAliases,
   saveRouteModelMap,
+  writeGraph,
 } from './providerGraphStore.js';
 
 /**
@@ -407,8 +422,20 @@ async function projectRoutes(providerIds, connection) {
  * @returns {Promise<string[]>} the ids that existed and were written
  */
 function writeProviderPatches(patches) {
+  return duringProviderWrite(() => providerService().applyProviderPatches(patches));
+}
+
+/**
+ * Hold the re-entrancy latch across any provider-file write made from inside a
+ * serialized pass — a projection patch, or a freshly minted route.
+ *
+ * See {@link writeProviderPatches} for why this is load-bearing rather than
+ * defensive: the toolkit's post-save hook calls back into the graph, and
+ * without the latch that call would queue behind the pass awaiting this write.
+ */
+function duringProviderWrite(work) {
   reconciling = true;
-  return providerService().applyProviderPatches(patches).finally(() => { reconciling = false; });
+  return Promise.resolve().then(work).finally(() => { reconciling = false; });
 }
 
 /**
@@ -752,6 +779,172 @@ export function updateRouteModelAliases({ providerId, expectedRevision, aliases 
       modelMap: effectiveModelAliases(route.modelMap, overrides),
       modelAliasOverrides: overrides,
       modelAliasRevision: modelAliasRevision(overrides),
+    };
+  });
+}
+
+// --- creating a backend and a harness on it (#6369) ---------------------------
+//
+// The two writes that ADD to the graph rather than editing it. Both are local
+// I/O only: creating a backend probes nothing, and creating a harness binding
+// mints DISABLED routes — configuration never generates, never launches and
+// never grants execution consent (AGENTS.md "No cold-bootstrap LLM calls").
+
+/**
+ * Create a new backend connection.
+ *
+ * Deliberately NOT deduplicated against the connections already stored. Two
+ * backends that look identical — same vendor, same model names, even the same
+ * URL reached differently — are still two backends until a human says
+ * otherwise, and inferring otherwise is exactly what the identity rules in
+ * `providerConnections.js` exist to forbid. Linking stays an explicit,
+ * previewed act.
+ *
+ * The catalog starts `unknown`, not empty: nothing has been asked yet, and
+ * `[]` would claim a backend with no models. Discovery is the separate,
+ * explicitly requested `POST /connections/:id/refresh-models`.
+ */
+export function createConnection({ kind, label, transports, credentials }) {
+  return serialize(async () => {
+    requireGraph();
+    const blocker = connectionBlocker({ kind, transports });
+    if (blocker) throw new ServerError(blocker.message, { status: 400, code: blocker.code });
+    const connection = {
+      id: randomUUID(),
+      revision: 1,
+      kind,
+      label,
+      transports,
+      credentials: credentials || {},
+      catalog: { state: 'unknown', models: [] },
+    };
+    await writeGraph({ connections: [connection], bindings: [], routes: [] });
+    console.log(`🔗 Created provider connection ${connection.id} (${kind}, no routes yet)`);
+    return { connection: toConnectionDto(connection) };
+  });
+}
+
+/**
+ * Create a harness binding on an existing backend, plus one executable route
+ * per requested mode.
+ *
+ * This is the create the whole registry work was blocked on: minting a route
+ * needs a per-harness COMMAND RECIPE (`PROVIDER_HARNESSES[].recipe`), because
+ * the graph could previously only classify records it was handed, never
+ * describe how to spawn a fresh one.
+ *
+ * Three guarantees, in the order they are enforced:
+ *
+ *   1. **Refuse before writing.** `bindingBlocker` rejects a harness with no
+ *      recipe, a mode it has no support for, a backend whose transport it does
+ *      not speak, and a backend missing a credential the program requires.
+ *   2. **A minted route must describe the connection it was minted for.** The
+ *      record is fed straight back through `providerConnectionProfile` and
+ *      compared with `sameConnectionIdentity`. A mismatch is refused rather
+ *      than stored, because reconciliation would otherwise clone the binding
+ *      onto a connection of its own on the very next pass.
+ *   3. **Nothing is enabled.** The binding and every route arrive disabled with
+ *      no model pins and no transport consent. Enabling stays an explicit act
+ *      on the route editor, which is where granting execution belongs.
+ *
+ * The `projected` snapshot is read back off the records the toolkit actually
+ * wrote, so the graph starts in agreement with `providers.json` and the
+ * reconcile this write triggers is a no-op.
+ */
+export function createBinding({ connectionId, harnessId, modes, label }) {
+  return serialize(async () => {
+    requireGraph();
+    const graph = await readGraph();
+    const connection = requireRow(graph.connections, connectionId, 'Connection', 'CONNECTION_NOT_FOUND');
+
+    // A backend mid-projection is precisely where the graph and providers.json
+    // disagree about the endpoint and credentials this route would be built
+    // from, so a new route decided against it would be built from values still
+    // in dispute. Same guard every other mutation on a connection applies.
+    requireSettledRoutes(connectionFanout(graph, connection.id).routes);
+
+    const blocker = bindingBlocker({ harnessId, modes, connection });
+    if (blocker) {
+      const badRequest = blocker.code === 'PROVIDER_HARNESS_NOT_CREATABLE'
+        || blocker.code === 'PROVIDER_HARNESS_MODE_UNSUPPORTED';
+      throw new ServerError(blocker.message, { status: badRequest ? 400 : 409, code: blocker.code });
+    }
+
+    const { providers, activeProvider } = await providerService().getAllProviders();
+    const taken = new Set([...providers.map((provider) => provider.id), ...graph.routes.map((route) => route.providerId)]);
+    const ids = mintRouteIds({ harnessId, kind: connection.kind, modes, taken });
+    const harnessLabel = harnessId ? harnessById(harnessId).label : 'Direct API';
+    const name = label || `${harnessLabel} · ${connection.label || connectionKindLabel(connection.kind)}`;
+
+    const records = modes.map((mode) => buildRouteRecord({
+      harnessId,
+      mode,
+      providerId: ids[mode],
+      name: mode === 'tui' ? `${name} TUI` : name,
+      connection,
+    }));
+    for (const record of records) {
+      if (!sameConnectionIdentity(providerConnectionProfile(record), asProfile(connection))) {
+        throw new ServerError(
+          `A ${harnessLabel} route cannot describe this backend as it is configured; adjust the backend's transport or credentials first`,
+          { status: 409, code: 'PROVIDER_GRAPH_CONNECTION_INCOMPATIBLE' });
+      }
+    }
+
+    const bindingId = randomUUID();
+    const binding = {
+      id: bindingId,
+      revision: 1,
+      connectionId: connection.id,
+      harnessId,
+      // `default` when this harness is not already on the backend, a labeled
+      // variant otherwise — two configurations of one program on one backend
+      // are both legitimate and must not collapse into each other.
+      variantKey: allocateVariantKey(graph, connection.id, { id: bindingId, harnessId }),
+      label: name,
+      enabled: false,
+      selectedModels: [],
+    };
+
+    // If a create fails part-way, the records that landed simply have no graph
+    // row yet — the next reconciliation pass imports them as their own fragment
+    // rather than losing them. That is the same path a legacy write takes.
+    await duringProviderWrite(async () => {
+      for (const record of records) await providerService().createProvider(record);
+    });
+
+    const { providers: written, activeProvider: activeAfter } = await providerService().getAllProviders();
+    const byId = new Map(written.map((provider) => [provider.id, provider]));
+    const routes = modes
+      .filter((mode) => byId.has(ids[mode]))
+      .map((mode) => ({
+        providerId: ids[mode],
+        bindingId: binding.id,
+        mode,
+        modelMap: {},
+        modelAliasOverrides: {},
+        projected: connectionOwnedSnapshot(byId.get(ids[mode])),
+        pending: null,
+        pendingRevision: null,
+      }));
+    await writeGraph({ connections: [], bindings: [binding], routes });
+
+    console.log(`🔗 Created ${harnessLabel} binding ${binding.id} on connection ${connection.id}: `
+      + `${routes.map((route) => route.providerId).join(', ')} (disabled)`);
+    return {
+      connectionId: connection.id,
+      bindingId: binding.id,
+      harnessId,
+      variantKey: binding.variantKey,
+      label: binding.label,
+      enabled: false,
+      routeIds: routes.map((route) => route.providerId),
+      // Reported rather than hidden: the toolkit adopts the first route as the
+      // system default on an install that has none, and a disabled route being
+      // named the default grants no execution — but the caller should still be
+      // told its default moved.
+      activeProvider: activeAfter ?? null,
+      activeProviderChanged: (activeAfter ?? null) !== (activeProvider ?? null),
     };
   });
 }
