@@ -35,7 +35,7 @@ import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
 import { CD_MAX_SCENE_RETRIES } from '../creativeDirectorPrompts.js';
 import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
-import { grokVideoJobParams, resolveVideoBackendPin } from '../videoGen/backendPin.js';
+import { videoBackendJobParams, resolveVideoBackendPin } from '../videoGen/backendPin.js';
 import { mediaJobEvents } from '../mediaJobQueue/index.js';
 import { enqueueUnattendedMediaJob, hasConfiguredMediaRoute } from '../federatedMedia/defaultRouting.js';
 import { getSettings } from '../settings.js';
@@ -82,7 +82,7 @@ export async function runSceneRender(project, scene) {
   // to Grok still rendered every scene on the MLX runtime, and the pythonPath
   // guard below failed the whole project even when Grok was the pinned backend.
   const videoPin = resolveVideoBackendPin(project, settings);
-  const useGrok = videoPin.mode === VIDEO_GEN_MODE.GROK;
+  const useLocal = videoPin.mode === VIDEO_GEN_MODE.LOCAL;
 
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
   // Fail fast when local video gen isn't configured. Without this guard the
@@ -91,12 +91,12 @@ export async function runSceneRender(project, scene) {
   // — none of which can ever succeed without operator intervention. Mark
   // the scene failed and let advanceAfterSceneSettled flag the project so
   // the user can configure pythonPath and Resume from the UI. Only the local
-  // lane needs it — a Grok render shells out to the CLI and never touches
-  // Python (the media-job queue gates its own pythonPath check the same way).
+  // lane needs this runtime — cloud backends provision/use their own execution
+  // path (the media-job queue gates local readiness the same way).
   // A routed video render never touches local Python — on a machine that
   // routes precisely BECAUSE it cannot render locally, this gate would fail
   // every scene the provider was going to handle (#4348).
-  if (!useGrok && !pythonPath && !(await hasConfiguredMediaRoute('video'))) {
+  if (useLocal && !pythonPath && !(await hasConfiguredMediaRoute('video'))) {
     // A pin that named a cloud backend but resolved to local means the ladder
     // degraded it (the backend's `enabled` toggle is off). Say so — otherwise
     // the user reads "configure Python" on a project they explicitly pinned to
@@ -209,24 +209,13 @@ export async function runSceneRender(project, scene) {
     height: renderParams.height,
     sourceImagePath,
   };
-  const params = useGrok
-    ? {
-      ...shared,
-      // Scene duration is authored in the local lane's continuous seconds;
-      // grokVideoJobParams snaps it up to a length Grok actually delivers.
-      // Geometry rides along in `shared` — grok.js reads it to derive the
-      // project's aspect ratio for the base image.
-      ...grokVideoJobParams(settings, { sourceImagePath, durationSeconds: scene.durationSeconds }),
-      creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
-    }
-    : {
-      ...shared,
+  const sceneParams = {
+    ...shared,
+    creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
+    disableAudio: project.disableAudio === true,
+    ...(useLocal ? {
       pythonPath,
-      // A pinned local model (the commission's `generation.videoModelId`, or the
-      // creative-agent render default) wins over the project's own modelId —
-      // the project's is the creation-time default, the pin is the user's
-      // explicit later choice.
-      modelId: videoPin.modelId || project.modelId,
+      modelId: project.modelId,
       numFrames: renderParams.numFrames,
       fps: renderParams.fps,
       steps: renderParams.steps,
@@ -234,16 +223,8 @@ export async function runSceneRender(project, scene) {
       tiling: 'auto',
       mode: sourceImagePath ? 'image' : 'text',
       imageStrength: effectiveImageStrength,
-      // Smoke-test / dev knob: skips the mlx_video audio-gen pass to cut
-      // wall-clock per scene roughly in half. Project-level so every scene
-      // in the project inherits the same setting.
-      disableAudio: project.disableAudio === true,
-      creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
-    };
-
-  if (useGrok) {
-    console.log(`☁️  CD scene ${scene.sceneId} rendering on grok (${params.duration}s clip)`);
-  }
+    } : {}),
+  };
 
   const owner = `cd:${project.id}:${scene.sceneId}`;
   // The scene is ALREADY persisted as 'rendering' by this point, and the
@@ -254,10 +235,13 @@ export async function runSceneRender(project, scene) {
   // advance the project. Settle it through the normal failure path instead.
   let jobId;
   try {
+    const params = videoBackendJobParams(settings, videoPin, sceneParams, { durationSeconds: scene.durationSeconds });
     ({ jobId } = await enqueueUnattendedMediaJob({ kind: 'video', params, owner }));
   } catch (error) {
     console.error(`❌ CD scene ${scene.sceneId}: could not queue the render: ${error.message}`);
-    await handleRenderFailed(project.id, scene.sceneId, error.message || 'could not queue the render');
+    await handleRenderFailed(project.id, scene.sceneId, error.message || 'could not queue the render', {
+      retry: error.code !== 'VIDEO_BACKEND_INPUT_UNSUPPORTED' && error.code !== 'VIDEO_BACKEND_UNSUPPORTED',
+    });
     return null;
   }
 
@@ -453,13 +437,13 @@ async function handleRenderCanceled(projectId, sceneId) {
   await advanceAfterSceneSettled(projectId);
 }
 
-async function handleRenderFailed(projectId, sceneId, errorMsg) {
+async function handleRenderFailed(projectId, sceneId, errorMsg, { retry = true } = {}) {
   const fresh = await getProject(projectId);
   if (!fresh) return;
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
   if (!scene) return;
   const nextRetry = (scene.retryCount || 0) + 1;
-  if (nextRetry <= CD_MAX_SCENE_RETRIES) {
+  if (retry && nextRetry <= CD_MAX_SCENE_RETRIES) {
     console.log(`🔁 CD scene ${sceneId} render failed (${errorMsg}) — retry ${nextRetry}/${CD_MAX_SCENE_RETRIES}`);
     await updateScene(projectId, sceneId, { status: 'pending', retryCount: nextRetry });
     const updated = { ...scene, retryCount: nextRetry };

@@ -41,10 +41,16 @@ vi.mock('../videoGen/local.js', () => ({
 vi.mock('./completionHook.js', () => ({ advanceAfterSceneSettled: vi.fn(async () => {}) }));
 vi.mock('../../lib/ffmpeg.js', () => ({ verifyVideoPlayable: vi.fn(async () => ({ ok: true })) }));
 
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  resolveGalleryImage: vi.fn(() => null),
+}));
+
 import { runSceneRender } from './sceneRunner.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
-import { updateScene } from './local.js';
+import { updateScene, getProject } from './local.js';
+import { resolveGalleryImage } from '../../lib/fileUtils.js';
 
 const LOCAL_READY = { imageGen: { local: { pythonPath: '/usr/bin/python3' } } };
 const GROK_READY = { imageGen: { grok: { enabled: true, grokPath: '/usr/local/bin/grok' } } };
@@ -62,7 +68,11 @@ const scene = (over = {}) => ({
 
 const enqueuedParams = () => enqueueJob.mock.calls[0][0].params;
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  getProject.mockResolvedValue(null);
+  resolveGalleryImage.mockReturnValue(null);
+});
 
 describe('runSceneRender — unpinned (local) behavior is unchanged', () => {
   it('builds local MLX params when nothing is pinned', async () => {
@@ -178,5 +188,50 @@ describe('runSceneRender — local model pin', () => {
     });
     await runSceneRender(project(), scene());
     expect(enqueuedParams().modelId).toBe('target-default-model');
+  });
+});
+
+
+describe('runSceneRender — Reactor and fal pins', () => {
+  it('queues a Reactor starting-frame scene without local Python or local model knobs', async () => {
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    resolveGalleryImage.mockReturnValue('/tmp/example-frame.png');
+    const jobId = await runSceneRender(
+      project({ aspectRatio: '9:16', renderBackend: { video: { mode: 'reactor' } } }),
+      scene({ sourceImageFile: 'example-frame.png' }),
+    );
+    expect(jobId).toBe('job-1');
+    expect(enqueuedParams()).toMatchObject({
+      mode: 'reactor', videoMode: 'image', seconds: 8, aspect: '9:16',
+      sourceImagePath: '/tmp/example-frame.png',
+      creativeDirector: { projectId: 'proj-1', sceneId: 'scene-1' },
+    });
+    for (const key of ['pythonPath', 'modelId', 'numFrames', 'steps', 'apiKey', 'settings']) {
+      expect(enqueuedParams()).not.toHaveProperty(key);
+    }
+  });
+
+  it('queues fal with its pinned endpoint and scene duration when no local Python exists', async () => {
+    getSettings.mockResolvedValue({ videoGen: { fal: { apiKey: 'example-test-key' } } });
+    const jobId = await runSceneRender(
+      project({ renderBackend: { video: { mode: 'fal', modelId: 'fal-ai/example/text-to-video' } } }),
+      scene(),
+    );
+    expect(jobId).toBe('job-1');
+    expect(enqueuedParams()).toMatchObject({ mode: 'fal', videoMode: 'text', duration: 8, modelId: 'fal-ai/example/text-to-video' });
+    expect(enqueuedParams()).not.toHaveProperty('pythonPath');
+    expect(enqueuedParams()).not.toHaveProperty('numFrames');
+  });
+
+  it('fails unsupported output once with a repair message instead of retrying an impossible render', async () => {
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    const selected = project({ disableAudio: true, renderBackend: { video: { mode: 'reactor' } }, treatment: { scenes: [scene()] } });
+    getProject.mockResolvedValue(selected);
+    expect(await runSceneRender(selected, scene())).toBeNull();
+    expect(enqueueJob).not.toHaveBeenCalled();
+    expect(updateScene).toHaveBeenLastCalledWith('proj-1', 'scene-1', expect.objectContaining({
+      status: 'failed', evaluation: expect.objectContaining({ notes: expect.stringContaining('audio-disabled output') }),
+    }));
+    expect(updateScene.mock.calls.filter(([, , patch]) => patch.status === 'rendering')).toHaveLength(1);
   });
 });

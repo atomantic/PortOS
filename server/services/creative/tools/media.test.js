@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock only what the media tools reach for. The queue is the observable
 // boundary — every assertion here is about the params that land on it, because
@@ -47,6 +47,8 @@ beforeEach(() => {
   getProject.mockResolvedValue(null);
   getCommissionMusicContextForProject.mockResolvedValue(null);
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('model-aware autonomous video controls', () => {
   it('uses the same H3 options as Video Gen and drops controls its UI disables', () => {
@@ -301,7 +303,7 @@ describe('render-backend pin — video (#3135)', () => {
     getSettings.mockResolvedValue({ imageGen: {} });
     getProject.mockResolvedValue(projectWithPin({ video: { mode: 'local' } }));
 
-    for (const backendToken of ['grok', 'local']) {
+    for (const backendToken of ['grok', 'local', 'fal', 'reactor']) {
       await run('media_enqueueVideoJob', { prompt: 'p', mode: backendToken, sourceImagePath: '/tmp/f.png' }, { projectId: 'cd-1' });
       expect(enqueued().params).toEqual({ prompt: 'p', sourceImagePath: '/tmp/f.png' });
     }
@@ -561,5 +563,90 @@ describe('routed video keeps the controls its guard inspects (#4348)', () => {
 
     await run('media_enqueueVideoJob', { prompt: 'p', disableAudio: true }, { projectId: 'cd-1' });
     expect(enqueued().params.disableAudio).toBe(true);
+  });
+});
+
+
+describe('cloud video pins reach the queue without local model reconciliation', () => {
+  const cloudProject = (video) => ({
+    ...projectWithPin({ video }),
+    aspectRatio: '9:16', quality: 'standard', targetDurationSeconds: 8,
+    modelId: 'local-project-model',
+  });
+
+  it('preserves Reactor duration, portrait canvas and starting frame despite planner backend guesses', async () => {
+    getSettings.mockResolvedValue({
+      videoGen: { reactor: { apiKey: 'example-test-key' } },
+      renderDefaults: { 'creative-agent': { videoModel: 'local-default-model' } },
+    });
+    getProject.mockResolvedValue(cloudProject({ mode: 'reactor' }));
+    await run('media_enqueueVideoJob', {
+      prompt: 'An example lighthouse', mode: 'grok', modelId: 'local-planner-model',
+      sourceImagePath: '/tmp/example-frame.png', durationSeconds: 8,
+    }, { projectId: 'cd-1' });
+
+    const { params } = enqueued();
+    expect(params).toMatchObject({
+      mode: 'reactor', videoMode: 'image', seconds: 8, aspect: '9:16',
+      sourceImagePath: '/tmp/example-frame.png',
+    });
+    expect(params.height).toBeGreaterThan(params.width);
+    for (const key of ['modelId', 'pythonPath', 'numFrames', 'fps', 'steps', 'apiKey', 'settings']) {
+      expect(params).not.toHaveProperty(key);
+    }
+  });
+
+  it('preserves Reactor native continuation parameters', async () => {
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    getProject.mockResolvedValue(projectWithPin({ video: { mode: 'reactor' } }));
+    await run('media_enqueueVideoJob', {
+      prompt: 'Continue the example shot', continueFromClipId: 'example-clip', seconds: 9,
+      aspect: '4:3', seed: 0,
+    }, { projectId: 'cd-1' });
+    expect(enqueued().params).toMatchObject({ mode: 'reactor', continueFromClipId: 'example-clip', seconds: 9, aspect: '4:3', seed: 0 });
+  });
+
+  it('uses the fal endpoint pin without borrowing a local model or dropping the clip duration', async () => {
+    getSettings.mockResolvedValue({
+      videoGen: { fal: { apiKey: 'example-test-key' } },
+      renderDefaults: { 'creative-agent': { videoModel: 'local-default-model' } },
+    });
+    getProject.mockResolvedValue(cloudProject({ mode: 'fal', modelId: 'fal-ai/example/text-to-video' }));
+    await run('media_enqueueVideoJob', { prompt: 'An example scene', modelId: 'local-planner-model' }, { projectId: 'cd-1' });
+    expect(enqueued().params).toMatchObject({ mode: 'fal', videoMode: 'text', modelId: 'fal-ai/example/text-to-video', duration: 8 });
+    expect(enqueued().params).not.toHaveProperty('numFrames');
+  });
+
+  it('lets fal choose its image model when only the backend is pinned globally', async () => {
+    getSettings.mockResolvedValue({
+      videoGen: { mode: 'fal', fal: { apiKey: 'example-test-key' } },
+      renderDefaults: { 'creative-agent': { videoModel: 'local-default-model' } },
+    });
+    getProject.mockResolvedValue(cloudProject(null));
+    await run('media_enqueueVideoJob', { prompt: 'An example scene', modelId: 'local-planner-model', sourceImagePath: '/tmp/example.png' }, { projectId: 'cd-1' });
+    expect(enqueued().params).toMatchObject({ mode: 'fal', videoMode: 'image', duration: 8 });
+    expect(enqueued().params).not.toHaveProperty('modelId');
+  });
+
+  it('does not reuse a fal endpoint model when a legacy unavailable pin falls back to local', async () => {
+    vi.stubEnv('FAL_KEY', '');
+    getSettings.mockResolvedValue({ renderDefaults: { 'creative-agent': { videoModel: 'example-local-model' } } });
+    getProject.mockResolvedValue(projectWithPin({ video: { mode: 'fal', modelId: 'fal-ai/example/text-to-video' } }));
+    await run('media_enqueueVideoJob', { prompt: 'An example scene', mode: 'fal' }, { projectId: 'cd-1' });
+    expect(enqueued().params).toEqual({ prompt: 'An example scene', modelId: 'example-local-model' });
+  });
+
+  it.each([
+    { mode: 'fflf', keyframes: [{ frame: 0, filename: 'example.png' }] },
+    { mode: 'reactor', videoMode: 'a2v', audioFilePath: '/tmp/example.wav' },
+    { mode: 'text', disableAudio: true },
+    { mode: 'text', batchSize: 2 },
+    { mode: 'image', sourceImagePath: '/tmp/example.png', loras: [{ path: '/tmp/example.safetensors', scale: 1 }] },
+  ])('rejects unsupported cloud conditioning before enqueue: %j', async (params) => {
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    getProject.mockResolvedValue(cloudProject({ mode: 'reactor' }));
+    await expect(run('media_enqueueVideoJob', { prompt: 'An example scene', ...params }, { projectId: 'cd-1' }))
+      .rejects.toMatchObject({ code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
   });
 });
