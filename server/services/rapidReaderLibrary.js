@@ -3,13 +3,13 @@ import { createCollectionStore } from '../lib/collectionStore.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { htmlToText } from '../lib/htmlToText.js';
 import { fetchPublicText } from '../lib/safeUrlFetch.js';
+import { countWords } from '../lib/textUtils.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
 export const RAPID_READER_LIBRARY_SCHEMA_VERSION = 1;
 export const MAX_RAPID_READER_TEXT_BYTES = 2 * 1024 * 1024;
 const MAX_TITLE_LENGTH = 200;
 const now = () => new Date().toISOString();
-const wordCount = (text) => (text.match(/\S+/g) || []).length;
 const textBytes = (text) => Buffer.byteLength(text, 'utf8');
 const normalizeText = (text) => typeof text === 'string' ? text.trim() : '';
 const normalizeTitle = (title) => typeof title === 'string' ? title.trim().slice(0, MAX_TITLE_LENGTH) : '';
@@ -22,7 +22,7 @@ export const rapidReaderLibraryStore = createCollectionStore({
     const text = normalizeText(record?.text);
     const title = normalizeTitle(record?.title);
     if (!record?.id || !text || !title || !['paste', 'fetch', 'accelerando'].includes(record.sourceType)) return null;
-    return { ...record, title, text, author: typeof record.author === 'string' ? record.author : null, sourceUrl: typeof record.sourceUrl === 'string' ? record.sourceUrl : null, wordCount: wordCount(text) };
+    return { ...record, title, text, author: typeof record.author === 'string' ? record.author : null, sourceUrl: typeof record.sourceUrl === 'string' ? record.sourceUrl : null, wordCount: countWords(text) };
   },
 });
 
@@ -57,17 +57,17 @@ export async function createPastedRapidReaderEntry({ title, author, text }) {
   const cleanText = normalizeText(text); const cleanTitle = normalizeTitle(title); assertText(cleanText);
   if (!cleanTitle) throw new ServerError('Title is required', { status: 400, code: 'VALIDATION_ERROR' });
   const timestamp = now();
-  return saveEntry({ id: uuidv4(), title: cleanTitle, author: normalizeTitle(author) || null, sourceUrl: null, sourceType: 'paste', text: cleanText, wordCount: wordCount(cleanText), addedAt: timestamp, updatedAt: timestamp });
+  return saveEntry({ id: uuidv4(), title: cleanTitle, author: normalizeTitle(author) || null, sourceUrl: null, sourceType: 'paste', text: cleanText, wordCount: countWords(cleanText), addedAt: timestamp, updatedAt: timestamp });
 }
 export async function fetchRapidReaderEntry({ url, title }) {
   const source = await fetchPublicText(url, { blockPrivate: true, maxBytes: MAX_RAPID_READER_TEXT_BYTES, timeoutMs: 20_000 });
   if (!source) throw new ServerError('Could not fetch the requested URL', { status: 502, code: 'FETCH_FAILED' });
   const text = normalizeText(htmlToText(source)); assertText(text);
   const timestamp = now(); const derivedTitle = normalizeTitle(title) || normalizeTitle(titleFromHtml(source)) || hostnameFor(url);
-  return saveEntry({ id: uuidv4(), title: derivedTitle, author: null, sourceUrl: url, sourceType: 'fetch', text, wordCount: wordCount(text), addedAt: timestamp, updatedAt: timestamp });
+  return saveEntry({ id: uuidv4(), title: derivedTitle, author: null, sourceUrl: url, sourceType: 'fetch', text, wordCount: countWords(text), addedAt: timestamp, updatedAt: timestamp });
 }
 export async function deleteRapidReaderLibraryEntry(id) { await getRapidReaderLibraryEntry(id); await rapidReaderLibraryStore.deleteOne(id); }
 export async function upsertAccelerandoShelfEntry(book) {
   const current = await rapidReaderLibraryStore.loadOne('accelerando'); const timestamp = now(); const text = normalizeText(book.text); assertText(text);
-  return saveEntry({ id: 'accelerando', title: book.title, author: book.author, sourceUrl: book.sourceUrl, sourceType: 'accelerando', text, wordCount: wordCount(text), addedAt: current?.addedAt || timestamp, updatedAt: timestamp });
+  return saveEntry({ id: 'accelerando', title: book.title, author: book.author, sourceUrl: book.sourceUrl, sourceType: 'accelerando', text, wordCount: countWords(text), addedAt: current?.addedAt || timestamp, updatedAt: timestamp });
 }

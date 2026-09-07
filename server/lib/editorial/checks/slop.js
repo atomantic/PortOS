@@ -6,7 +6,6 @@
 import {
   MIN_DENSITY_OCCURRENCES,
   countSectionBreaks,
-  countWords,
   emDashDensityPer1000,
   findAiTells,
   findBannedWordsTier1,
@@ -15,6 +14,7 @@ import {
   paragraphLengthUniformity,
   sectionIssue,
   splitPhraseList,
+  tokenizeWords,
   transitionOpenerRatio,
   z,
 } from '../checkInfra.js';
@@ -83,7 +83,7 @@ export const slopChecks = [
         const { number, location } = sectionIssue(s);
 
         // Tier 1 — density-scaled, one finding per offending section.
-        const words = countWords(text);
+        const words = tokenizeWords(text).length;
         const hits = words > 0 ? findBannedWordsTier1(text, { allowWords, extraWords }) : [];
         if (hits.length) {
           const rate = Math.round((hits.length / words) * 1000 * 10) / 10;
@@ -264,7 +264,7 @@ export const slopChecks = [
       for (const s of sections) {
         if (findings.length >= max) break;
         const text = s?.content || '';
-        const words = countWords(text);
+        const words = tokenizeWords(text).length;
         const { number, location } = sectionIssue(s);
 
         const emDash = emDashDensityPer1000(text);

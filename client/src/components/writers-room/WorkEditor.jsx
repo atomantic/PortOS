@@ -46,7 +46,8 @@ import {
 } from '../../services/apiWritersRoom';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 import { STATUS_LABELS } from './labels';
-import { countWords, formatDurationSec } from '../../utils/formatters';
+import { formatDurationSec } from '../../utils/formatters';
+import { countWords } from '../../lib/textUtils';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
 import LiveContinuationPanel from './LiveContinuationPanel';
 import LiveRenderPanel from './LiveRenderPanel';

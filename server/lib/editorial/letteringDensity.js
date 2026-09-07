@@ -12,8 +12,9 @@
  *
  * PURE + side-effect-free so it is unit-testable and so the SAME helper backs
  * both the server-side editorial check (`comic.lettering-density` in
- * checkRegistry.js) and the client comic-script stage inline warnings (mirrored
- * to `client/src/lib/letteringDensity.js` — keep the two byte-for-byte in sync).
+ * checkRegistry.js) and the client comic-script stage inline warnings
+ * (`client/src/lib/letteringDensity.js` re-exports this module, so the browser
+ * bundle runs this code rather than a copy).
  *
  * A "balloon" is a discrete lettering element the reader's eye lands on: each
  * dialogue entry is one balloon, and each caption box is one (captions repeat —
@@ -22,6 +23,8 @@
  * panel/page WORD load, but it is rendered as a sound effect rather than a
  * balloon, so it does NOT count toward the balloon tally.
  */
+
+import { countWords } from '../textUtils.js';
 
 // Industry rules-of-thumb (all overridable via the check's config). A balloon
 // much over ~20–25 words reads as a wall of text; a panel over ~45–50 words
@@ -38,15 +41,6 @@ export const DEFAULT_LETTERING_THRESHOLDS = Object.freeze({
 // Local copy so this stays self-contained and the client re-export needs nothing
 // from checkRegistry.
 const LETTERING_SEVERITIES = ['high', 'medium', 'low'];
-
-// Count words in a free-text lettering string. A "word" is a run of
-// non-whitespace, so hyphenates and contractions count once and punctuation
-// rides along — close enough for a density heuristic. Non-strings → 0.
-export function countWords(text) {
-  if (typeof text !== 'string') return 0;
-  const matched = text.trim().match(/\S+/g);
-  return matched ? matched.length : 0;
-}
 
 // Severity scaled by how far over the threshold a count runs (#1313 "severity
 // scaled by overflow"): ≥2× the limit is `high`, ≥1.4× is `medium`, otherwise a

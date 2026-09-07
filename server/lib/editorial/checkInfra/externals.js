@@ -29,6 +29,7 @@ import {
   findPassiveVoice,
   filterPassiveVoice,
   findGestures,
+  tokenizeWords,
 } from '../proseTics.js';
 import {
   findWordEchoes,
@@ -110,6 +111,7 @@ export {
   renderCharacterEvolutionsForPrompt,
   splitScenes,
   summarizeStoryboardShots,
+  tokenizeWords,
   transitionOpenerRatio,
   canonHasRevealGated,
   revealGatedCanonRows,

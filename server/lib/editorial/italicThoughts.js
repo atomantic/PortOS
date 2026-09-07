@@ -14,6 +14,8 @@
  * siblings handle the judgment cases this can't.
  */
 
+import { countWords } from '../textUtils.js';
+
 // Markdown italic delimiters. Asterisk italics are a single `*` NOT part of a
 // `**`/`***` bold run; underscore italics are a single `_` with non-word edges
 // (so `snake_case` and `__bold__` are never mistaken for emphasis). Each span is
@@ -21,12 +23,6 @@
 // paragraph, not an inline italic clause.
 const ASTERISK_ITALIC_RE = /(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g;
 const UNDERSCORE_ITALIC_RE = /(?<![\w_])_(?!_)([^_\n]+?)_(?![\w_])/g;
-
-// Count whitespace-delimited words in an italic span's inner text.
-function wordCount(text) {
-  const m = String(text).trim().match(/\S+/g);
-  return m ? m.length : 0;
-}
 
 /**
  * Find italicized runs in `text` that read as internal-thought narration —
@@ -54,7 +50,7 @@ export function findItalicThoughts(text, opts = {}) {
     let m;
     while ((m = re.exec(text)) !== null) {
       const inner = m[1].trim();
-      const words = wordCount(inner);
+      const words = countWords(inner);
       if (words < minWords) continue;
       matches.push({ inner, index: m.index, anchor: m[0], words });
     }

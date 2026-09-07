@@ -1,11 +1,12 @@
 /**
- * The RegExp escape, from the module that owns it on both sides.
+ * Pure prose helpers, from the module that owns them on both sides.
  *
- * Only `escapeRegExp` is re-exported — it is the only member the browser bundle
- * has a caller for, and a flat `export *` would put the server’s `countWords`
- * in the client barrel beside the one in `utils/formatters.js`.
- *
- * Imported rather than copied so the two runtimes cannot drift; the file stays so
- * every `lib/textUtils` import path in the client is unchanged.
+ * `escapeRegExp` and `countWords` are named re-exports of
+ * `server/lib/textUtils.js` — imported rather than copied so the two runtimes
+ * cannot drift: the word count the Writers Room and autobiography editors show
+ * beside a draft is the same `\S+` rule the server stores for it. Named rather
+ * than `export *` so this file stays the list of what the browser bundle has a
+ * caller for; the file itself stays so every `lib/textUtils` import path in the
+ * client is unchanged.
  */
-export { escapeRegExp } from '../../../server/lib/textUtils.js';
+export { countWords, escapeRegExp } from '../../../server/lib/textUtils.js';

@@ -191,8 +191,15 @@ function toWordSet(words) {
 
 /**
  * Tokenize prose into words with their absolute character offsets. Apostrophes
- * are kept inside a word ("couldn't") so contractions stay whole. Exported so
- * ./repetition.js shares one tokenization with the word-level scanners.
+ * are kept inside a word ("couldn't") so contractions stay whole.
+ *
+ * This is the ONE spelling of the editorial "prose word" — a run of letters, so
+ * numerals, dashes and markdown tokens never pad a per-1000-word denominator —
+ * and `tokenizeWords(text).length` is the prose word count every density rate,
+ * rhythm metric and slop score shares. It differs on purpose from
+ * `lib/textUtils.js#countWords`, the whitespace count the rest of the app shows
+ * readers. `proseTics.test.js` fails the suite when the character class is
+ * re-spelled anywhere else under server/.
  *
  * @param {string} text
  * @returns {Array<{ word: string, lower: string, index: number }>}

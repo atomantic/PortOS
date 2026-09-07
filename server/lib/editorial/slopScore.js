@@ -368,10 +368,6 @@ export function findTheWaySimiles(text) {
   return out;
 }
 
-function countSentenceWords(s) {
-  return (s.match(/[A-Za-z][A-Za-z']*/g) || []).length;
-}
-
 /**
  * Runs of `minRun`+ consecutive very short sentences ("Fast. Precise.
  * Deadly.") — the punchy triadic-fragment rhythm LLM prose overuses.
@@ -401,7 +397,7 @@ export function findTriadicShortSentences(text, opts = {}) {
     runCount = 0;
   };
   for (let i = 0; i < sentences.length; i += 1) {
-    const wc = countSentenceWords(sentences[i].text);
+    const wc = tokenizeWords(sentences[i].text).length;
     if (wc > 0 && wc <= maxWords) {
       if (runStart === -1) runStart = i;
       runCount += 1;

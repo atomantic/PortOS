@@ -76,8 +76,8 @@ export function findRepeatedOpeners(text, opts = {}) {
   const minRun = Math.max(2, Number.isInteger(opts.minRun) ? opts.minRun : 3);
   // The opening word of each sentence (lowercased) + its offset.
   const openers = sentences.map((s) => {
-    const m = /[A-Za-z][A-Za-z']*/.exec(s.text);
-    return { word: m ? m[0] : '', lower: m ? m[0].toLowerCase() : '', index: s.index };
+    const [first] = tokenizeWords(s.text);
+    return { word: first?.word ?? '', lower: first?.lower ?? '', index: s.index };
   });
   const out = [];
   let runStart = 0;
@@ -113,7 +113,7 @@ export function measureSentenceRhythm(text, opts = {}) {
   const sentences = splitSentences(text);
   const minSentences = Number.isInteger(opts.minSentences) && opts.minSentences > 1 ? opts.minSentences : 5;
   if (sentences.length < minSentences) return null;
-  const lengths = sentences.map((s) => (s.text.match(/[A-Za-z][A-Za-z']*/g) || []).length);
+  const lengths = sentences.map((s) => tokenizeWords(s.text).length);
   const count = lengths.length;
   const mean = lengths.reduce((a, b) => a + b, 0) / count;
   if (mean <= 0) return null;

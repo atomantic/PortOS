@@ -7,6 +7,7 @@
 
 import { createHash } from 'crypto';
 import { composeStyleNotes } from '../../lib/styleGuide.js';
+import { countWords } from '../../lib/textUtils.js';
 import { renderCharacterArcsForPrompt } from '../../lib/seriesCharacterArc.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { isBlankString, isBlankArray } from '../universeCharacterExpand.js';
@@ -410,7 +411,7 @@ export function renderArc(series, issues = [], { maxChars = Infinity, includeArc
       .filter((issue) => issue?.seasonId === season.id)
       .map((issue) => {
         const synopsis = issue?.stages?.idea?.input || '(no synopsis)';
-        const words = synopsis === '(no synopsis)' ? 0 : synopsis.trim().split(/\s+/).filter(Boolean).length;
+        const words = synopsis === '(no synopsis)' ? 0 : countWords(synopsis);
         const metadata = [
           issue.arcRole ? `role=${issue.arcRole}` : 'role=unset',
           issue.lengthProfile ? `length=${issue.lengthProfile}` : 'length=unset',

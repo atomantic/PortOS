@@ -22,6 +22,8 @@
  * this with the linter and the backend submission.
  */
 
+import { countWords } from './textUtils.js';
+
 export const BEAT_MAX_WORDS = 35;
 export const BEAT_MAX_SPEAKERS = 2;
 export const MAX_CHAIN_LENGTH = 6;
@@ -38,11 +40,6 @@ export const DEFAULT_FPS = 24;
 // server/AGENTS.md.
 export const H3_FRAME_STEP = 17;
 export const H3_FRAME_OFFSET = 5;
-
-const countWords = (text) => {
-  const t = (text || '').trim();
-  return t ? t.split(/\s+/).length : 0;
-};
 
 /** Total words across a beat's action + dialogue lines. */
 export const beatWordCount = (beat) => (beat?.lines || []).reduce((sum, l) => sum + countWords(l.text), 0);

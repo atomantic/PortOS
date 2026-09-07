@@ -136,9 +136,12 @@ const ESCAPE_IDIOMS = [
   /(?:^|[^\w$.])(?:const|let|var|function)\s+escapeRegExp\b/,
 ];
 
-const escapeIdiomCount = (source) => ESCAPE_IDIOMS
+// How many times the most-spelled idiom in `idioms` appears in `source`.
+const idiomCount = (idioms) => (source) => idioms
   .map((idiom) => source.match(new RegExp(idiom.source, 'g'))?.length ?? 0)
   .reduce((most, count) => Math.max(most, count), 0);
+
+const escapeIdiomCount = idiomCount(ESCAPE_IDIOMS);
 
 describe('no private escapeRegExp', () => {
   it('leaves lib/textUtils.js as the only RegExp-escape implementation under server/', () => {
@@ -176,6 +179,64 @@ describe('no private escapeRegExp', () => {
     expect(collectClientSources().length).toBeGreaterThan(100);
     expect(escapeIdiomCount("const escapeRegExp = (s) => s;")).toBeGreaterThan(0);
     expect(escapeIdiomCount('const x = 1;')).toBe(0);
+  });
+});
+
+// `countWords` had the same history as the escape: extracted here as "the
+// canonical whitespace-token count", then re-spelled in five product modules and
+// the client's formatters — whose copy justified itself with "the client cannot
+// import from server/", untrue since #6364. Same remedy: key on the counting
+// IDIOMS rather than the identifier, since the copies were pastes under three
+// names and four under none. The whitespace-token match is how every named copy
+// counted; split-and-drop-empties is how the inline ones did. A `matchAll` or a
+// `re.exec` loop over the same class is NOT matched — those are the tokenizers
+// that need each token's position (rapid reader, tab notation, clichés), and a
+// tokenizer is not a count.
+//
+// A bare split-on-whitespace `.length` (no filter) is deliberately absent: it is
+// the five-field cron check's spelling far more often than a word count, and the
+// one word-count use (the brain digest's word cap) truncates with the same split,
+// so it is at least internally consistent.
+const WORD_COUNT_IDIOMS = [
+  // The whitespace-token match used as a count.
+  /\.match\(\/\\S\+\/g\)/,
+  // The split-and-drop-empties count.
+  /\.split\(\/\\s\+\/\)\.filter\(Boolean\)\.length/,
+  // A helper re-declared under either conventional name.
+  /(?:^|[^\w$.])(?:(?:const|let|var)\s+(?:countWords|wordCount)\s*=\s*(?:async\s*)?\(|function\s+(?:countWords|wordCount)\s*\()/,
+];
+
+const wordCountIdiomCount = idiomCount(WORD_COUNT_IDIOMS);
+
+describe('no private countWords', () => {
+  it('leaves lib/textUtils.js as the only whitespace word count under server/', () => {
+    const offenders = collectServerSources()
+      .filter((rel) => rel !== 'lib/textUtils.js')
+      .filter((rel) => wordCountIdiomCount(readServerSource(rel)) > 0);
+    expect(
+      offenders,
+      `these re-spell the word count — import countWords from lib/textUtils.js instead: ${offenders.join(', ')}`
+    ).toEqual([]);
+  });
+
+  // The client walk allows no exemption either: `client/src/lib/textUtils.js`
+  // re-exports this module's count, and the formatters copy is gone.
+  it('leaves no whitespace word count anywhere under client/src/', () => {
+    const offenders = collectClientSources()
+      .filter((rel) => wordCountIdiomCount(readClientSource(rel)) > 0);
+    expect(
+      offenders,
+      `these re-spell the word count — import countWords from lib/textUtils.js instead: ${offenders.join(', ')}`
+    ).toEqual([]);
+  });
+
+  it('detects a re-spelled count under any of its idioms, and not a tokenizer', () => {
+    expect(wordCountIdiomCount(readServerSource('lib/textUtils.js'))).toBeGreaterThan(0);
+    expect(wordCountIdiomCount('const wordCount = (t) => t.split(/\\s+/).filter(Boolean).length;')).toBeGreaterThan(0);
+    expect(wordCountIdiomCount('function countWords(text) { return 0; }')).toBeGreaterThan(0);
+    expect(wordCountIdiomCount('for (const m of text.matchAll(/\\S+/g)) {}')).toBe(0);
+    expect(wordCountIdiomCount('const isCron = value.trim().split(/\\s+/).length === 5;')).toBe(0);
+    expect(wordCountIdiomCount('const wordCount = useMemo(() => countWords(body), [body]);')).toBe(0);
   });
 });
 

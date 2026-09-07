@@ -9,7 +9,6 @@ export {
   DEFAULT_LETTERING_THRESHOLDS,
   LETTERING_SEVERITIES,
   analyzeComicLettering,
-  countWords,
   overflowSeverity,
   panelLetteringMetrics,
   sanitizeLetteringThresholds,

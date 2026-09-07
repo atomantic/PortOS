@@ -11,6 +11,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { recordTombstone } from '../lib/tombstones.js';
+import { countWords } from '../lib/textUtils.js';
 import {
   queueAutobiographyConfigWrite,
   queueAutobiographyStoriesWrite
@@ -298,7 +299,7 @@ export async function saveStory({ promptId, content, parentStoryId, customPrompt
       themeLabel: isFollowUp ? (parentStory?.themeLabel || 'Unknown') : (prompt?.themeLabel || 'Unknown'),
       promptText: customPromptText || prompt?.text || '',
       content,
-      wordCount: content.split(/\s+/).filter(Boolean).length,
+      wordCount: countWords(content),
       createdAt: new Date().toISOString(),
       ...(parentStoryId && { parentStoryId })
     };
@@ -329,7 +330,7 @@ export async function updateStory(storyId, content) {
     if (!story) return null;
 
     story.content = content;
-    story.wordCount = content.split(/\s+/).filter(Boolean).length;
+    story.wordCount = countWords(content);
     story.updatedAt = new Date().toISOString();
 
     await saveStories(data);

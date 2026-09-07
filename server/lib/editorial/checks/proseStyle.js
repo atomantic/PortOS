@@ -12,7 +12,6 @@ import {
   STYLE_CONFORMANCE_STAGE,
   TELLING_EMOTION_STAGE,
   VOICE_CONSISTENCY_STAGE,
-  countWords,
   escalateSeverity,
   filterPassiveVoice,
   findAdverbs,
@@ -37,6 +36,7 @@ import {
   sectionIssue,
   splitPhraseList,
   styleGuideExpectations,
+  tokenizeWords,
   z,
 } from '../checkInfra.js';
 import {
@@ -564,7 +564,7 @@ export const proseStyleChecks = [
       for (const s of sections) {
         if (findings.length >= max) break;
         const text = s?.content || '';
-        const words = countWords(text);
+        const words = tokenizeWords(text).length;
         if (words === 0) continue;
         const hits = findAdverbs(text, { allowWords, extraWords });
         if (!hits.length) continue;

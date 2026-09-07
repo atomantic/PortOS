@@ -535,17 +535,6 @@ export function throughputLabel(perf) {
 }
 
 /**
- * Count whitespace-separated words in a string. Mirrors the canonical
- * server-side `countWords` in `server/lib/textUtils.js` (the client cannot
- * import from `server/`) so client + server word counts always agree.
- */
-export function countWords(text) {
-  if (typeof text !== 'string') return 0;
-  const m = text.trim().match(/\S+/g);
-  return m ? m.length : 0;
-}
-
-/**
  * Format a number of seconds as MM:SS (e.g. 75 → "01:15"), or H:MM:SS once the
  * total reaches an hour (e.g. 3661 → "1:01:01"). Used for sprint timers and
  * other countdowns. Negative and non-finite values clamp to 0.
