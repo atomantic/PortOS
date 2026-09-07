@@ -117,6 +117,16 @@ $ curl http://127.0.0.1:15555/api/system/health/details
 curl: (56) Recv failure: Connection reset by peer      # after ~10s, every time
 ```
 
+So the add does not stop at "the listener is up". Once the forward is bound,
+PortOS sends one request through it (`/api/system/health` on the loopback port,
+which is in the always-public set, so a password-gated remote still answers).
+**Any** HTTP response counts — this probes the transport, not the API, so a 401
+from a gating proxy or a 404 from an older remote is still proof that bytes
+crossed. When nothing answers, the add fails with `TAILCAT_TUNNEL_UNREACHABLE`
+and tailcat's own explanation, the child is killed, and no peer is registered —
+the saved address keeps the forward retryable. Registering the peer anyway would
+hand the operator a federation peer that looks added and can never answer.
+
 The only place tailcat says why is its post-startup stderr
 (`dial remote port 5555: context deadline exceeded`), which PortOS used to
 drain and discard. It now **reads** that stream for the lifetime of the child:
@@ -134,7 +144,8 @@ failed request, so a forward that is still broken keeps refreshing it, while one
 that started working again goes quiet — a latched "no route" would be the same
 lie as a permanently green "running", pointing the other way.
 
-**When you see `no route`,** the tunnel — not PortOS — is what to look at. The
+**When an add reports the tunnel could not reach the remote, or a live forward
+shows `no route`,** the tunnel — not PortOS — is what to look at. The
 usual cause on macOS is a local network filter (Little Snitch and friends)
 denying the `tailcat` binary itself: `tailcat forward --verbose` then logs a
 relay connect that dies the instant it is established, while `curl` to the same
