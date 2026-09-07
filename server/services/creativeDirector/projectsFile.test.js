@@ -67,6 +67,22 @@ const project = (id, extra = {}) => ({
 const journalEntries = () => cj.conflictJournalStore().loadAll();
 
 describe('projectsFile federation merge', () => {
+  it('keeps the saved plan and completed results when a replan removes a required producer', async () => {
+    const p = await file.createProject({ name: 'Example production', modelId: 'example', aspectRatio: '16:9', quality: 'draft', targetDurationSeconds: 60 });
+    const producer = { stepId: 'source', toolName: 'pipeline_createSeries' };
+    const consumer = { stepId: 'consumer', toolName: 'pipeline_generateStage', dependsOn: ['source'] };
+    await file.setPlan(p.id, { steps: [producer, consumer] });
+    await file.updatePlanStep(p.id, 'source', { status: 'done', result: { id: 'example-series' } });
+    const saved = await file.getProject(p.id);
+    const writesBefore = writeCounter.project;
+    await expect(file.setPlan(p.id, { steps: [consumer] })).rejects.toThrow('Unknown dependency: source');
+    expect(writeCounter.project).toBe(writesBefore);
+    expect(await file.getProject(p.id)).toEqual(saved);
+    const revised = await file.setPlan(p.id, { steps: [consumer, producer] });
+    expect(revised.plan.replanRounds).toBe(1);
+    expect(revised.plan.steps[1]).toMatchObject({ status: 'done', result: { id: 'example-series' } });
+  });
+
   it('persists Video draft preferences and prevents removing the workspace barrier', async () => {
     const p = await file.createProject({
       name: 'Example short', workspace: 'video', modelId: '', aspectRatio: '16:9',
