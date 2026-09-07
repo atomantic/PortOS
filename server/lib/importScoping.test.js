@@ -88,6 +88,27 @@ describe('narrowed imports stay narrow (#6009)', () => {
   });
 });
 
+// Serve must never acquire outbound peer registration through shared CLI support.
+describe('Tailcat shared owners stay independent of forwarding (#6570)', () => {
+  it.each(['services/tailcatServe.js', 'services/tailcatRuntime.js', 'lib/tailcatAddress.js'])(
+    '%s does not reach forward orchestration or instance registration', (entry) => {
+      const closure = staticImportClosure(abs(entry)).files;
+      expect(closure.has(abs(entry))).toBe(true);
+      expect(closure.has(abs('services/tailcatPeer.js'))).toBe(false);
+      expect(closure.has(abs('services/instances.js'))).toBe(false);
+    },
+  );
+
+  it('both dial directions reach the shared owners and forwarding retains registration', () => {
+    for (const entry of ['services/tailcatPeer.js', 'services/tailcatServe.js']) {
+      expect(reaches(entry, 'services/tailcatRuntime.js')).toBe(true);
+      expect(reaches(entry, 'lib/tailcatAddress.js')).toBe(true);
+    }
+    expect(reaches('services/tailcatRuntime.js', 'lib/tailcatVersion.js')).toBe(true);
+    expect(reaches('services/tailcatPeer.js', 'services/instances.js')).toBe(true);
+  });
+});
+
 /**
  * Deferred imports (#6156).
  *

@@ -24,13 +24,12 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { PORTS } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
+import { ensureTailcatInstalled, primeDerpMapCache } from './tailcatRuntime.js';
 import {
-  ensureTailcatInstalled,
-  primeDerpMapCache,
   isValidTcAddress,
   redactTcAddress,
   redactTailcatDiagnostics,
-} from './tailcatPeer.js';
+} from '../lib/tailcatAddress.js';
 
 const SERVE_FILE = dataPath('tailcat-serve.json');
 const ADDR_FILE = dataPath('tailcat-serve.addr');

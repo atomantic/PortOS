@@ -363,3 +363,16 @@ tailcat forward <tcADDR> 15555:5565
 
 - [PORTS.md](../PORTS.md) — `TAILCAT_FORWARD` / `15555`
 - [tailscale/tailcat](https://github.com/tailscale/tailcat) — CLI reference
+
+
+## Code ownership
+
+Shared CLI discovery, version-gated installation, and DERP cache priming live in
+`server/services/tailcatRuntime.js`; pure capability validation and diagnostic
+redaction live in `server/lib/tailcatAddress.js`. Both dial directions import
+these owners directly. `tailcatPeer.js` retains compatibility re-exports and
+owns forward storage, child processes, port allocation, tunnel verification,
+peer registration, rollback, retry, and restore. `tailcatServe.js` owns serve
+storage, keys, and lifecycle; `tailcatIngress.js` owns the isolated remote
+ingress listener. Version parsing and the minimum supported version remain in
+`server/lib/tailcatVersion.js`.

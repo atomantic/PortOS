@@ -30,6 +30,13 @@ vi.mock('../lib/bufferedSpawn.js', async (original) => ({
 }));
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 
+// No installed CLI or package manager: exercise the real shared installation failure.
+vi.mock('../lib/commandExists.js', () => ({ commandOutput: vi.fn().mockResolvedValue(null) }));
+vi.mock('../lib/processEnv.js', async (original) => ({
+  ...(await original()),
+  findCommandOnPath: vi.fn().mockReturnValue(null),
+}));
+
 const EXAMPLE_TC = 'tcEXAMPLE' + 'C'.repeat(40);
 
 function fakeChild() {
@@ -53,6 +60,15 @@ describe('tailcatServe helpers', () => {
 
   afterEach(() => {
     _resetLiveServeForTests();
+  });
+
+  it('surfaces shared installation failure without starting a tunnel', async () => {
+    const startServe = vi.fn();
+    await expect(ensureTailcatServe({ startServe })).rejects.toMatchObject({
+      status: 503, code: 'TAILCAT_MISSING',
+    });
+    expect(startServe).not.toHaveBeenCalled();
+    expect(await getTailcatServeStatus()).toMatchObject({ live: false });
   });
 
   it('parses --json listenAddr and rejects placeholders', () => {
