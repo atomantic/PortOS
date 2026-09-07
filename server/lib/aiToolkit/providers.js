@@ -1344,10 +1344,13 @@ export function createProviderService(config = {}) {
         typeof cachedModelIds === 'function'
           ? Promise.resolve().then(() => cachedModelIds(provider)).catch(() => null)
           : null,
-        probeServed().then((result) => ({ result }), (error) => ({ error })),
+        // `ok` carries the outcome rather than the error's truthiness — the
+        // same absent-vs-falsy sentinel rule the rest of this file follows, so
+        // the two reads below say which case they mean instead of inferring it.
+        probeServed().then((result) => ({ ok: true, result }), (error) => ({ ok: false, error })),
       ]);
       if (!Array.isArray(cached) || cached.length === 0) {
-        if (probed.error) throw probed.error;
+        if (!probed.ok) throw probed.error;
         return probed.result;
       }
       const catalog = toModelCatalog(probed.result) || { models: [], contextWindows: {} };
@@ -1358,7 +1361,7 @@ export function createProviderService(config = {}) {
       // `defaultModel`, so dropping it would prune the pin off a provider merely
       // because its server was stopped. A SUCCESSFUL probe stays authoritative,
       // so a genuinely delisted model still disappears.
-      const stale = probed.error && Array.isArray(provider?.models) ? provider.models : [];
+      const stale = !probed.ok && Array.isArray(provider?.models) ? provider.models : [];
       return {
         models: [...new Set([...catalog.models, ...stale, ...cached])],
         contextWindows: catalog.contextWindows,

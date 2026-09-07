@@ -1674,6 +1674,11 @@ rl.on('line', (line) => {
         expect((await hostedService.getProviderById(provider.id)).models).toEqual([SERVED]);
       });
 
+      // A rejection carrying a falsy value is still a failure. Keyed on the
+      // outcome rather than the error's truthiness, or this probe reads as a
+      // success whose catalog is `undefined` — swallowed instead of rethrown,
+      // and treated as authoritative so the record's own ids get pruned.
+
       it('leaves a provider the host does not claim exactly as the endpoint answered', async () => {
         servesModels(['gpt-example']);
         const provider = await hostedService.createProvider({
