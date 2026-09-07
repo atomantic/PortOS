@@ -235,6 +235,51 @@ describe('UsagePage federated quota readings', () => {
   });
 });
 
+describe('UsagePage mobile provider-card layout', () => {
+  const metricsCard = {
+    family: 'image_gen',
+    label: 'Image Gen',
+    supported: true,
+    plan: 'pro',
+    limits: [],
+    activity: [],
+    metrics: [
+      { key: 'codex', label: 'Codex · image_gen', value: 'No renders · 24h', detail: 'quota not reported by this CLI' },
+      { key: 'grok', label: 'Grok · image_gen', value: 'No renders · 24h', detail: 'quota not reported by this CLI' },
+    ],
+    fleet: {
+      count: 2,
+      instances: [
+        { instanceId: 'inst-self', name: null, self: true, fetchedAt: '2026-09-03T10:00:00.000Z' },
+        { instanceId: 'inst-peer', name: 'Example Box', self: false, fetchedAt: '2026-09-03T11:00:00.000Z' },
+      ],
+    },
+  };
+
+  // Two cards share the row at phone width, so the header badges are
+  // desktop-only and the observed-count tiles stack. Both were regressions the
+  // class strings alone did not deliver: `Pill` used to re-assert its own
+  // `inline-flex` over the caller's `hidden` (see OWN_DISPLAY in Pill.jsx), and
+  // two columns of tiles inside a half-width card wrapped every label onto four
+  // lines.
+  it('hides the header badges and stacks the count tiles at phone width', async () => {
+    api.getProviderUsage.mockResolvedValue({ providers: [metricsCard] });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+
+    await screen.findByRole('heading', { name: 'Image Gen' });
+    for (const badge of [screen.getByText('pro'), screen.getByText('2 instances')]) {
+      const tokens = badge.className.split(/\s+/);
+      expect(tokens).toContain('hidden');
+      expect(tokens).not.toContain('inline-flex');
+    }
+
+    const tileGrid = screen.getByText('Codex · image_gen').closest('.grid');
+    expect(tileGrid.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(['grid-cols-1', 'sm:grid-cols-2'])
+    );
+  });
+});
+
 describe('arrangeQuotaCells', () => {
   const q = (family) => ({ family, label: family });
 

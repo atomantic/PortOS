@@ -50,7 +50,7 @@ function UsageMeter({ limit }) {
   return (
     <div className="py-1 sm:py-2 border-b border-port-border last:border-0">
       <div className="flex items-baseline justify-between gap-2 mb-0.5 sm:mb-1">
-        <span className="text-white text-xs sm:text-base truncate">{limit.label}</span>
+        <span className="text-white text-xs sm:text-base truncate" title={limit.label}>{limit.label}</span>
         <span className="shrink-0 text-gray-400 text-[10px] sm:text-sm">
           {remaining == null ? '—' : `${remaining}% left`}
         </span>
@@ -107,7 +107,9 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-2 sm:rounded-xl sm:p-4">
       <div className="flex items-center justify-between gap-1 sm:gap-2 mb-1 sm:mb-2">
-        <h3 className="text-sm sm:text-base font-semibold text-white truncate">{quota.label}</h3>
+        {/* min-w-0 so the provider name shrinks with the card instead of being
+            crushed to nothing by the fixed-width controls beside it. */}
+        <h3 className="min-w-0 text-sm sm:text-base font-semibold text-white truncate">{quota.label}</h3>
         <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           {quota.plan && quota.plan !== 'unknown' && (
             <Pill tone="context" size="xs" className="hidden sm:inline-flex">{quota.plan}</Pill>
@@ -174,7 +176,10 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
           {/* Backends with no queryable quota report observed counts instead of
               a meter — a percentage we cannot measure must not be invented. */}
           {quota.metrics?.length > 0 && (
-            <div className="grid grid-cols-2 gap-2">
+            // One tile per row on a phone: these cells sit inside an already
+            // half-width mobile card, and two columns of it wrapped a tile's
+            // label and detail onto four lines apiece.
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {quota.metrics.map((m) => (
                 <StatTile key={m.key} label={m.label} value={m.value} detail={m.detail} />
               ))}
@@ -182,7 +187,7 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled }) {
           )}
 
           {quota.activity?.length > 0 && (
-            <div className="hidden sm:grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+            <div className="hidden sm:grid sm:grid-cols-2 gap-2 pt-1">
               {quota.activity.map((a) => (
                 <StatTile
                   key={a.period}
