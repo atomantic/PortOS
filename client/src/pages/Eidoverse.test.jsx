@@ -265,7 +265,38 @@ describe('Eidoverse hosted page', () => {
     await user.type(screen.getByLabelText('My Eidoverse name'), '-edited');
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
     await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ labelAliases, humanName: 'example-portos-user-edited' }), { silent: true },
+      expect.objectContaining({
+        labelAliases,
+        humanName: 'example-portos-user-edited',
+        cosId: 'portos-cos',
+      }), { silent: true },
+    ));
+  });
+
+  it('saves a CoS join name and offers the mind identity suggestion', async () => {
+    const user = userEvent.setup();
+    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+      ...worldResponse,
+      suggestedCosId: 'Helm',
+    });
+    api.updateEidoverseWorldConfig.mockResolvedValueOnce({
+      ...worldResponse,
+      cos: { id: 'Helm', enabled: true },
+      suggestedCosId: null,
+      human: worldResponse.identity,
+    });
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    const cosInput = screen.getByLabelText('CoS / Persistent Mind name');
+    expect(cosInput).toHaveValue('portos-cos');
+    expect(screen.getByRole('button', { name: 'Use mind name (Helm)' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Use mind name (Helm)' }));
+    expect(cosInput).toHaveValue('Helm');
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ cosId: 'Helm', humanName: 'example-portos-user' }),
+      { silent: true },
     ));
   });
 
