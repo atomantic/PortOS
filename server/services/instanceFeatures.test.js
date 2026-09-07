@@ -305,7 +305,7 @@ describe('instance features', () => {
 
     const { features } = await getInstanceFeatures();
     expect(Object.fromEntries(features.map((f) => [f.id, f.enabled])))
-      .toEqual({ post: true, datadog: true, jira: false, eidoverse: false, gsd: true, openclaw: true, health: true, rigging: false, facetime: false });
+      .toEqual({ post: true, datadog: true, jira: false, eidoverse: false, gsd: false, openclaw: false, health: true, rigging: false, facetime: false });
   });
 
   it('rejects an unknown feature id', async () => {

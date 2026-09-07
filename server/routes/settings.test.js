@@ -184,10 +184,9 @@ describe('Settings routes — instance feature participation', () => {
       enabled: false,
       setup: expect.objectContaining({ installed: false }),
     }));
-    // GSD remains enabled by default so existing app planning tabs stay
-    // available unless the install explicitly opts out.
-    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: true }));
-    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'openclaw', enabled: true }));
+    // GSD and OpenClaw ship disabled by default; the install opts in.
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: false }));
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'openclaw', enabled: false }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'health', enabled: true }));
   });
 
