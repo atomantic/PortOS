@@ -360,6 +360,7 @@ export * from './sharingOrigin.js';
 export * from './syncIntegrity.js';
 export * from './syncWire.js';
 export * from './tailscale.js';
+export * from './tailcatAddress.js';
 export * from './tailcatVersion.js';
 
 // === Search & indexing ===
