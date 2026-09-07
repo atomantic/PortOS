@@ -579,13 +579,25 @@ export const EFFORT_SELECTABLE_REVIEWERS = Object.freeze(Object.keys(REVIEWER_EF
  * The ladder for ONE reviewer token, or `null` when it takes no effort. Accepts
  * the `gemini` alias; an `@username` token resolves to null like any non-reviewer.
  *
+ * For `codex` reviewers, the ladder is gated on the pinned model: gpt-6 family
+ * models reject `minimal`, dropping it from the ladder. Pass the model id to get
+ * the right tier set for that model; omit it to get the default static ladder.
+ *
  * @param {string} reviewer - reviewer slug
+ * @param {string|null|undefined} [model] - optional pinned model id (codex only)
  * @returns {readonly string[]|null}
  */
-export function reviewerEffortLevels(reviewer) {
+export function reviewerEffortLevels(reviewer, model = null) {
   if (typeof reviewer !== 'string') return null;
   const slug = reviewer.trim().toLowerCase();
-  return REVIEWER_EFFORT_LEVELS[REVIEWER_ALIASES[slug] ?? slug] || null;
+  const normalized = REVIEWER_ALIASES[slug] ?? slug;
+
+  // For codex, derive the ladder from the model if provided
+  if (normalized === 'codex' && model) {
+    return effortLevelsForProvider({ id: 'codex', command: 'codex' }, model);
+  }
+
+  return REVIEWER_EFFORT_LEVELS[normalized] || null;
 }
 
 /**
@@ -599,6 +611,9 @@ export function reviewerEffortLevels(reviewer) {
  * `antigravity: 'max'`, the exact values the drop-don't-clamp contract exists to
  * reject.
  *
+ * For `codex` reviewers, pass the pinned model id to gate the ladder on gpt-6
+ * family models that reject `minimal`.
+ *
  * Returns the level, or `undefined` when it isn't usable: a non-string, a level
  * outside that reviewer's own ladder (`agy` really does reject `--effort max`),
  * or a reviewer with no effort control at all. Deliberately NOT clamped the way
@@ -606,12 +621,17 @@ export function reviewerEffortLevels(reviewer) {
  * per-reviewer list, so an out-of-ladder entry means the stored config is stale
  * or hand-edited, and silently reviewing at a *different* effort than the one
  * displayed is worse than falling back to the reviewer's own default.
+ *
+ * @param {string} raw - raw effort value
+ * @param {string} reviewer - reviewer slug
+ * @param {string|null|undefined} [model] - optional pinned model id (codex only)
+ * @returns {string|undefined}
  */
-export function normalizeReviewerEffort(raw, reviewer) {
+export function normalizeReviewerEffort(raw, reviewer, model = null) {
   if (typeof raw !== 'string') return undefined;
   const effort = raw.trim().toLowerCase();
   if (!effort) return undefined;
-  return reviewerEffortLevels(reviewer)?.includes(effort) ? effort : undefined;
+  return reviewerEffortLevels(reviewer, model)?.includes(effort) ? effort : undefined;
 }
 
 /**
@@ -849,14 +869,18 @@ export function reviewerEffortsFromDefaults(defaults) {
  * reached with raw task metadata (`reviewLoopReviewerEfforts`), which no
  * normalizer has necessarily touched.
  *
+ * For `codex` reviewers, pass the pinned model id to reject `minimal` on gpt-6
+ * family models that don't accept it.
+ *
  * @param {string} reviewer - reviewer slug
  * @param {string|null|undefined} effort
+ * @param {string|null|undefined} [model] - optional pinned model id (codex only)
  * @returns {string[]}
  */
-export function reviewerEffortArgs(reviewer, effort) {
+export function reviewerEffortArgs(reviewer, effort, model = null) {
   const binary = reviewerCliBinary(reviewer);
   if (!binary) return [];
-  const level = normalizeReviewerEffort(effort, reviewer);
+  const level = normalizeReviewerEffort(effort, reviewer, model);
   if (!level) return [];
   return buildEffortArgs(level, { id: reviewer, command: binary });
 }

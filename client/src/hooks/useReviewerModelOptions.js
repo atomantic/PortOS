@@ -254,10 +254,12 @@ export default function useReviewerModelOptions() {
     // empty catalog, unset model, or the configured-default sentinel — and the full
     // static ladder stands there, the same null-means-fall-back contract
     // `effortLevelsForProvider` uses. `[]` is a real answer: that model has no
-    // effort tiers at all.
+    // effort tiers at all. For `codex`, the model gates `minimal` on gpt-6 family
+    // models that reject it (model-gating is already handled by reviewerEffortLevels).
     const modelEffortLevels = (reviewer, model = null) => {
-      const ladder = reviewerEffortLevels(reviewer);
-      if (!ladder || normalizeReviewerSlug(reviewer) !== 'antigravity') return ladder;
+      const slug = normalizeReviewerSlug(reviewer);
+      const ladder = reviewerEffortLevels(reviewer, model);
+      if (!ladder || slug !== 'antigravity') return ladder;
       return antigravityModelEffortLevels(model, antigravityCatalog) ?? ladder;
     };
 

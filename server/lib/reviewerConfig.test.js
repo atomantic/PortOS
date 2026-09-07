@@ -16,6 +16,7 @@ import {
   buildReviewWithArgs,
   LOCAL_LLM_EFFORT_LEVELS,
   reviewerEffortLevels,
+  normalizeReviewerEffort,
   normalizeReviewerEfforts,
   resolveReviewerEfforts,
   reviewerEffortsFromDefaults,
@@ -810,6 +811,42 @@ describe('codeReviewDefaultsFromProvider', () => {
   it('returns null when the provider maps to no reviewer', () => {
     expect(codeReviewDefaultsFromProvider({ id: 'openrouter', type: 'api' })).toBeNull();
     expect(codeReviewDefaultsFromProvider(null)).toBeNull();
+  });
+});
+
+// Model-gated effort levels: gpt-6 family models reject `minimal`, so the effort
+// ladder for a codex reviewer changes when the model is pinned.
+describe('model-gated reviewer effort levels', () => {
+  it('returns the full ladder for codex without a model', () => {
+    expect(reviewerEffortLevels('codex')).toContain('minimal');
+  });
+
+  it('drops minimal from codex ladder for gpt-6 models', () => {
+    expect(reviewerEffortLevels('codex', 'gpt-6-astra')).not.toContain('minimal');
+    expect(reviewerEffortLevels('codex', 'gpt-6-astra')).toContain('low');
+  });
+
+  it('keeps minimal for gpt-5 models', () => {
+    expect(reviewerEffortLevels('codex', 'gpt-5.6')).toContain('minimal');
+  });
+
+  it('normalizes effort against the model-gated ladder', () => {
+    expect(normalizeReviewerEffort('minimal', 'codex', 'gpt-6-astra')).toBeUndefined();
+    expect(normalizeReviewerEffort('low', 'codex', 'gpt-6-astra')).toBe('low');
+    expect(normalizeReviewerEffort('minimal', 'codex', 'gpt-5.6')).toBe('minimal');
+  });
+
+  it('emits effort args from model-gated effort level', () => {
+    // Normalizes against the model-gated ladder, so minimal for gpt-6 becomes no args
+    expect(reviewerEffortArgs('codex', 'minimal', 'gpt-6-astra')).toEqual([]);
+    // But normal effort works
+    expect(reviewerEffortArgs('codex', 'high', 'gpt-6-astra')).toContain('model_reasoning_effort=high');
+  });
+
+  it('mirrors the model-gated ladder client-side', async () => {
+    const client = await import('../../client/src/lib/reviewerPins.js');
+    expect(client.reviewerEffortLevels('codex')).toContain('minimal');
+    expect(client.reviewerEffortLevels('codex', 'gpt-6-astra')).not.toContain('minimal');
   });
 });
 
