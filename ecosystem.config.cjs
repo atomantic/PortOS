@@ -130,6 +130,7 @@ const PORTS = {
   SGLANG_QWEN: 18021,  // Loopback SGLang Qwen3.8-27B container (Hopper/Blackwell) — started by the operator, never by PortOS
   // Loopback listener for `tailcat forward <tc> LOCAL:5555` when adding a federated
   // peer without a Tailscale account. Prefer 15555; if busy, PortOS picks the next free port.
+  TAILCAT_INGRESS: 5565, // Loopback-only remote API ingress for managed Tailcat serve
   TAILCAT_FORWARD: 15555,
   POSTGRES: pgMode === 'native' ? 5432 : 5561 // Active PostgreSQL port (unused in file mode)
 };

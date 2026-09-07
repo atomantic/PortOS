@@ -3,21 +3,42 @@
 PortOS can federate with another install over
 [tailcat](https://github.com/tailscale/tailcat) — Tailscale's userspace
 WireGuard + DERP data plane **without** a Tailscale account, daemon, or
-tailnet. Use this when an untrusted sandbox (or any machine that cannot join
-your tailnet) needs to reach a home PortOS on `:5555`.
+tailnet. Use this when a trusted peer that cannot join your tailnet needs remote API access to PortOS.
 
 ## Port standard
 
 | Side | Port | Role |
 |------|------|------|
-| Home / remote PortOS | **5555** | Existing PortOS API (`PORTS.API`) |
+| Home / remote PortOS | **5565** | Loopback remote ingress (`PORTS.TAILCAT_INGRESS`), started by managed serve |
 | Operator / client PortOS | **15555** (preferred) | Local `tailcat forward` listener (`PORTS.TAILCAT_FORWARD` / `DEFAULT_TAILCAT_LOCAL_PORT`) |
 
-Mapping: `tailcat forward <tcADDR> 15555:5555` binds `127.0.0.1:15555` to the
-remote's `:5555`. If `15555` is already taken, PortOS walks upward to the next
+Mapping: `tailcat forward <tcADDR> 15555:5565` binds `127.0.0.1:15555` to the
+remote's `:5565`. If `15555` is already taken, PortOS walks upward to the next
 free loopback port and registers the peer at that local port instead.
 
 No `tailcat serve all`, no exit-node mode, and no Tailscale daemon are used.
+
+## Remote authority and upgrades
+
+Managed serve exposes the **remote** PortOS API on loopback `:5565`, with the same
+HTTP/HTTPS mode and optional instance authentication as the main API. The listener
+marks requests as remote before dispatch, so Agent Context MCP and its manifest
+reject them even though Tailcat connects from localhost. Headers cannot claim local
+authority. Local MCP clients on the main API or HTTP mirror continue to work.
+
+A Tailcat capability still grants normal remote PortOS API access. Share it only
+with trusted peers; this is not a restricted API for an untrusted sandbox.
+Managed serve cannot be redirected to the main API, its HTTP mirror, or another
+port. Manually serving `5555` or `5553` bypasses this protection.
+
+Migration 370 moves existing managed serve configuration to `5565`, preserving the
+key/address and enabled flag. **Both ends need the new port:** new forwards default
+to `5565`, while saved forwards keep their old remote port because the other install
+may not have upgraded. After the remote upgrades, use **Retry on :5565** on its
+forward row. New peers have a **Remote Tailcat port** field; select `5555` only for
+an older, explicitly trusted peer still serving its legacy API. Older clients must
+upgrade or run a manual forward targeting `5565`; the new server never reopens a
+raw `5555` tunnel for compatibility.
 
 ## Dial direction (who initiates)
 
@@ -25,8 +46,8 @@ Two polarities, one transport. You do **not** need both directions for v1.
 
 | Choice | This node does | Other node does | When to use |
 | --- | --- | --- | --- |
-| **Dial them** | Paste their `tc…`, run `tailcat forward`, register peer at `127.0.0.1:<local>` | Runs `tailcat serve` (PortOS-managed or CLI) for `:5555` | This node can dial out freely (common for a sandbox / VPS). |
-| **They dial us** | PortOS starts **serve** for `:5555`, you **Copy** our `tc…` | Pastes our address as **Dial them** on their Instances UI | This node is a poor dialer (client firewall / Little Snitch often blocks home `tailcat forward`) but a good *listener*; the other side is a better outbound initiator. |
+| **Dial them** | Paste their `tc…`, run `tailcat forward`, register peer at `127.0.0.1:<local>` | Runs `tailcat serve` (PortOS-managed or CLI) for `:5565` | This node can dial out freely (common for a sandbox / VPS). |
+| **They dial us** | PortOS starts **serve** for `:5565`, you **Copy** our `tc…` | Pastes our address as **Dial them** on their Instances UI | This node is a poor dialer (client firewall / Little Snitch often blocks home `tailcat forward`) but a good *listener*; the other side is a better outbound initiator. |
 
 Hypothesis (non-binding): reverse polarity helps when the current node is a better
 outbound initiator than the peer that should dial it — use the product option;
@@ -116,7 +137,7 @@ shutdown stops forwards while retaining their restart metadata.
 
 **Serve** is persisted separately in machine-local `data/tailcat-serve.json`
 (enabled flag, status, local port, key name, last error, and the listen
-address). PortOS runs `tailcat serve --full-address --json --key=portos-api 5555`
+address). PortOS runs `tailcat serve --full-address --json --key=portos-api 5565`
 (not `serve all`, not exit-node), restores serve on boot when enabled, and stops
 the child on shutdown. The serve status API returns the full `tc…` address so
 the Instances UI can offer **Copy** — that is *this node's* capability to share
@@ -128,7 +149,7 @@ placeholders such as `<tcADDR>` or `tcEXAMPLE…` only.
 | Serve surface | What it does |
 | --- | --- |
 | `GET /api/instances/peers/tailcat/serve` | Status: live/enabled/ports/key, copyable `tcAddress` when known, redacted preview, last error. |
-| `POST …/serve` | Ensure serve is running for `PORTS.API` (5555). |
+| `POST …/serve` | Ensure serve is running for `PORTS.TAILCAT_INGRESS` (5565). |
 | `POST …/serve/retry` | Restart from the saved config. |
 | `DELETE …/serve` | Stop serve and disable restore-on-boot. |
 
@@ -277,7 +298,7 @@ a host should hand out a `--full-address`, which embeds the relay info and needs
 no map fetch on either end:
 
 ```bash
-tailcat serve --full-address --key=new 5555
+tailcat serve --full-address --key=new 5565
 ```
 
 ## Privacy
@@ -289,7 +310,7 @@ tailcat serve --full-address --key=new 5555
 
 ## Grok Bot / agent sandbox setup (copy/paste)
 
-Use this when an **untrusted agent sandbox** should run PortOS and hand the
+Use this when an **trusted agent peer** should run PortOS and hand the
 operator a tailcat address so the home install can federate in.
 
 ### On the sandbox (serve)
@@ -300,8 +321,9 @@ brew install tailcat
 # or: go install github.com/tailscale/tailcat/cmd/tailcat@latest
 # or (Linux/Windows only): a release from https://github.com/tailscale/tailcat/releases
 
-# PortOS already listening on :5555 in the sandbox, then:
-tailcat serve --key=new 5555
+# First start managed serve in Instances to bring up the remote ingress.
+# Manual Tailcat processes must target that ingress, never the main :5555 API:
+tailcat serve --key=new 5565
 # stderr prints: 🐈 Server listening with new address: <tcADDR>
 ```
 
@@ -313,7 +335,7 @@ Optional named key (stable address across restarts — still a secret):
 
 ```bash
 tailcat genkey --key=portos-sandbox
-tailcat serve --key=portos-sandbox 5555
+tailcat serve --key=portos-sandbox 5565
 ```
 
 ### On the operator PortOS (forward + peer)
@@ -323,7 +345,7 @@ In **Instances → Add Peer → Tailcat address**, paste `<tcADDR>`.
 Or manually:
 
 ```bash
-tailcat forward <tcADDR> 15555:5555
+tailcat forward <tcADDR> 15555:5565
 # then Add Peer → Host/port is not used for loopback; prefer the UI Tailcat path
 # which registers 127.0.0.1:15555 for you.
 ```
@@ -331,10 +353,10 @@ tailcat forward <tcADDR> 15555:5555
 ### Checklist for agents
 
 - [ ] PortOS up on sandbox `:5555`
-- [ ] Prefer **Instances → Tailcat serve** (or CLI `tailcat serve --key=… 5555`) — not `serve all`, not exit-node
+- [ ] Prefer **Instances → Tailcat serve** (or CLI `tailcat serve --key=… 5565`) — not `serve all`, not exit-node
 - [ ] Both sides on Tailcat **≥0.6.0** (`tailcat version`); upgrade if Dial-them / serve fails with `TAILCAT_VERSION_TOO_OLD` or ping-ok / TCP-timeout PSK mismatch
 - [ ] Hand operator `<tcADDR>` out of band only (Copy from UI)
-- [ ] Operator uses **Dial them** (local **15555 → 5555**), *or* if home dials time out, home uses **They dial us** and the sandbox Dials them
+- [ ] Operator uses **Dial them** (local **15555 → 5565**), *or* if home dials time out, home uses **They dial us** and the sandbox Dials them
 - [ ] Never write real `tc…` values into git, PR text, or federated logs
 
 ## Related

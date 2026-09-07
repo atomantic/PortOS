@@ -11,7 +11,7 @@ import { getSyncStatus, syncWithPeer } from '../services/syncOrchestrator.js';
 import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { DEFAULT_PEER_PORT } from '../lib/ports.js';
+import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_REMOTE_PORT, PORTS } from '../lib/ports.js';
 import * as tailcatPeer from '../services/tailcatPeer.js';
 import * as tailcatServe from '../services/tailcatServe.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
@@ -258,11 +258,12 @@ const addTailcatPeerSchema = z.object({
   tcAddress: z.string().trim().min(24).max(2048),
   protocol: z.enum(['http', 'https']).default('http'),
   name: z.string().optional(),
-  auth: peerAuthSchema
+  auth: peerAuthSchema,
+  remotePort: z.number().int().min(1).max(65535).default(DEFAULT_TAILCAT_REMOTE_PORT),
 });
 
 // POST /api/instances/peers/tailcat — add a peer via tailcat forward (no Tailscale account).
-// Starts `tailcat forward <tc> LOCAL:5555` (LOCAL defaults to 15555) and registers
+// Starts `tailcat forward <tc> LOCAL:5565` (LOCAL defaults to 15555) and registers
 // a loopback peer. The classic POST /peers path still rejects 127/8.
 router.post('/peers/tailcat', asyncHandler(async (req, res) => {
   const data = validateRequest(addTailcatPeerSchema, req.body);
@@ -285,7 +286,8 @@ router.get('/peers/tailcat/forwards', asyncHandler(async (_req, res) => {
 // using the stored capability, registering its peer if the original add never got
 // that far.
 router.post('/peers/tailcat/forwards/:id/retry', asyncHandler(async (req, res) => {
-  const peer = await tailcatPeer.retryTailcatForward(req.params.id);
+  const data = validateRequest(z.object({ remotePort: z.number().int().min(1).max(65535).optional() }), req.body || {});
+  const peer = await tailcatPeer.retryTailcatForward(req.params.id, data);
   res.json(instances.sanitizePeerForClient(peer));
 }));
 
@@ -303,13 +305,13 @@ router.get('/peers/tailcat/serve', asyncHandler(async (_req, res) => {
   res.json(await tailcatServe.getTailcatServeStatus());
 }));
 
-// POST /api/instances/peers/tailcat/serve — ensure serve is running for PORTS.API.
+// POST /api/instances/peers/tailcat/serve — ensure serve is running for the remote ingress only.
 router.post('/peers/tailcat/serve', asyncHandler(async (req, res) => {
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
-  const status = await tailcatServe.ensureTailcatServe({
-    localPort: Number.isInteger(body.localPort) ? body.localPort : undefined,
-    keyName: typeof body.keyName === 'string' ? body.keyName : undefined,
-  });
+  const data = validateRequest(z.object({
+    localPort: z.literal(PORTS.TAILCAT_INGRESS).optional(),
+    keyName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).optional(),
+  }), req.body || {});
+  const status = await tailcatServe.ensureTailcatServe(data);
   res.status(200).json(status);
 }));
 

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render as renderUI, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import TailcatServePanel from '../components/instances/TailcatServePanel';
 import { AddPeerForm } from './Instances.jsx';
+import { DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
 import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT } from '../lib/ports.js';
 import { addPeer, addTailcatPeer, startTailcatServe, getTailcatServe, stopTailcatServe } from '../services/api';
 
@@ -78,7 +79,7 @@ describe('AddPeerForm tailcat path', () => {
     const tc = 'tcEXAMPLE' + 'B'.repeat(40);
     fireEvent.change(screen.getByLabelText('Tailcat address'), { target: { value: tc } });
     fireEvent.click(screen.getByRole('button', { name: 'Add via tailcat' }));
-    await waitFor(() => expect(addTailcatPeer).toHaveBeenCalledWith({ tcAddress: tc }));
+    await waitFor(() => expect(addTailcatPeer).toHaveBeenCalledWith({ tcAddress: tc, remotePort: DEFAULT_TAILCAT_REMOTE_PORT }));
     expect(addPeer).not.toHaveBeenCalled();
   });
 
@@ -89,7 +90,7 @@ describe('AddPeerForm tailcat path', () => {
     fireEvent.change(screen.getByLabelText('Tailcat address'), { target: { value: tc } });
     fireEvent.click(screen.getByLabelText('Remote PortOS uses HTTPS'));
     fireEvent.click(screen.getByRole('button', { name: 'Add via tailcat' }));
-    await waitFor(() => expect(addTailcatPeer).toHaveBeenCalledWith({ tcAddress: tc, protocol: 'https' }));
+    await waitFor(() => expect(addTailcatPeer).toHaveBeenCalledWith({ tcAddress: tc, protocol: 'https', remotePort: DEFAULT_TAILCAT_REMOTE_PORT }));
   });
 
   it('keeps classic host/port add working' , async () => {
@@ -136,7 +137,7 @@ describe('AddPeerForm dial direction', () => {
     const tc = 'tcEXAMPLE' + 'B'.repeat(40);
     fireEvent.change(screen.getByLabelText('Tailcat address'), { target: { value: tc } });
     fireEvent.click(screen.getByRole('button', { name: 'Add via tailcat' }));
-    await waitFor(() => expect(addTailcatPeer).toHaveBeenCalledWith({ tcAddress: tc }));
+    await waitFor(() => expect(addTailcatPeer).toHaveBeenCalledWith({ tcAddress: tc, remotePort: DEFAULT_TAILCAT_REMOTE_PORT }));
   });
 
   it('switches to They dial us and starts serve instead of pasting', async () => {

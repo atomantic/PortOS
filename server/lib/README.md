@@ -592,3 +592,5 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `privateSecurityPolicy.js` | Private assessment task identity, immutable delivery posture, and report schema. |
 
 | `privateSecuritySandbox.js` | Loopback-only local-provider gate and macOS Seatbelt launch with isolated CLI home and scratch workspace. |
+
+| `requestOrigin.js` | `remoteRequestHandler` and `isRemoteRequest` preserve remote transport identity across a localhost hop without trusting client headers. |

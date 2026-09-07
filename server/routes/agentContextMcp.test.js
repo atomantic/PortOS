@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { createTailcatIngressServer } from '../services/tailcatIngress.js';
+import { Server } from 'socket.io';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -137,4 +139,27 @@ describe('agentContextMcp route', () => {
     expect(response.status).toBe(405);
     expect(response.headers.allow).toBe('POST');
   });
+});
+
+it('denies remote ingress MCP even without Origin or with forged locality headers', async () => {
+  mocks.callAgentContextTool.mockClear();
+  mocks.getAgentContextManifest.mockResolvedValue(enabledManifest);
+  const app = buildApp();
+  app.get('/api/system/health', (_req, res) => res.json({ status: 'ok' }));
+  const { server } = createTailcatIngressServer(app);
+  const io = new Server(server);
+  // Engine.IO wraps the request listener; the remote marker must survive it.
+  const ingress = server.listeners('request')[0];
+  expect((await request(ingress).get('/api/system/health')).body).toEqual({ status: 'ok' });
+  const response = await request(ingress).post('/api/agent-context/mcp')
+    .set('Accept', 'application/json, text/event-stream')
+    .set('X-Forwarded-For', '127.0.0.1')
+    .set('X-PortOS-Local', 'true')
+    .send({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'context_profile', arguments: {} } });
+  expect(response.status).toBe(403);
+  expect(response.body.code).toBe('AGENT_CONTEXT_LOCAL_ONLY');
+  expect(mocks.callAgentContextTool).not.toHaveBeenCalled();
+  const direct = await request(app).get('/api/agent-context/manifest');
+  expect(direct.status).toBe(200);
+  io.close();
 });

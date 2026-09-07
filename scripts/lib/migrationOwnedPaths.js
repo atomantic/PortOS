@@ -28,4 +28,6 @@ export const MIGRATION_OWNED_PATHS = new Set([
   // copy of a plan they never had.
   'cos/quota-burn.json',
   'cos/quota-burn.pre-359.json',
+  // Migration 370 preserves this install's managed Tailcat serve consent/key.
+  'tailcat-serve.json',
 ]);

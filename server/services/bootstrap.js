@@ -985,6 +985,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // hangs forever — the real cause of the reconcile "stopping apps" hang.
     await withGrace('Socket.IO', 3000, (finish) =>
       io.close((err) => finish(err ? `⚠️ Error closing Socket.IO: ${err.message}` : '✅ Socket.IO closed', !!err)));
+    await import('./tailcatIngress.js').then(({ stopTailcatIngress }) => stopTailcatIngress())
+      .catch(() => console.error('❌ Tailcat ingress shutdown failed'));
     // Close BOTH servers explicitly. Whichever one io.close() already closed resolves
     // immediately (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
     // the bounded backstop in closeServer guarantees neither can hang shutdown even

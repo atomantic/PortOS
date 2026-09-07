@@ -1,3 +1,4 @@
+import { isRemoteRequest } from '../lib/requestOrigin.js';
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -36,7 +37,7 @@ export function isAllowedAgentContextOrigin(origin) {
 }
 
 const requireLocalRequest = (req, _res, next) => {
-  if (!isLoopbackAddress(req.socket.remoteAddress)) {
+  if (isRemoteRequest(req) || !isLoopbackAddress(req.socket.remoteAddress)) {
     throw new ServerError('Agent context accepts loopback connections only', {
       status: 403,
       code: 'AGENT_CONTEXT_LOCAL_ONLY',

@@ -172,6 +172,7 @@ import { errorMiddleware } from './lib/errorHandler.js';
 import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
 import { JSON_BODY_LIMIT } from './lib/uploadLimits.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
+import { configureTailcatIngress } from './services/tailcatIngress.js';
 import { createModelComparisonRoutes } from './routes/modelComparison.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
@@ -209,6 +210,7 @@ remoteDesktopBroker.mountWebSocket(localHttpServer);
 // handshake must carry a valid token cookie or Authorization: Bearer header
 // (set by POST /api/auth/login). No-op when auth is off.
 io.use(socketAuthGate);
+configureTailcatIngress({ app, io, certDir: CERT_DIR, httpsEnabled });
 
 // Initialize socket handlers
 initSocket(io);

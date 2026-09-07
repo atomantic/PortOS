@@ -26,7 +26,7 @@ import {
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { SchemaGapBadge } from '../components/instances/SchemaGapBadge';
-import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT } from '../lib/ports.js';
+import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT, DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
 import PeerMediaProviderPanel from '../components/instances/PeerMediaProviderPanel';
 import UnattendedRenderRouting from '../components/instances/UnattendedRenderRouting';
 import BrainParityPanel from '../components/instances/BrainParityPanel';
@@ -219,6 +219,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
   const [dialDirection, setDialDirection] = useState('dial-them'); // 'dial-them' | 'they-dial-us'
   const [address, setAddress] = useState('');
   const [tcAddress, setTcAddress] = useState('');
+  const [tailcatRemotePort, setTailcatRemotePort] = useState(String(DEFAULT_TAILCAT_REMOTE_PORT));
   const [tailcatHttps, setTailcatHttps] = useState(false);
   const [port, setPort] = useState(String(DEFAULT_PEER_PORT));
   const [name, setName] = useState('');
@@ -234,7 +235,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
       if (dialDirection === 'they-dial-us') return; // serve path uses its own buttons
       if (!tcAddress.trim()) return;
       setAdding(true);
-      const data = { tcAddress: tcAddress.trim() };
+      const data = { tcAddress: tcAddress.trim(), remotePort: Number(tailcatRemotePort) };
       if (tailcatHttps) data.protocol = 'https';
       if (name.trim()) data.name = name.trim();
       if (password) data.auth = { username: username.trim(), password };
@@ -337,6 +338,10 @@ export function AddPeerForm({ onAdd, addressRef }) {
             required
             className="bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent flex-1 min-w-[200px] font-mono"
           />
+          <input type="number" aria-label="Remote Tailcat port" min="1" max="65535" required
+            value={tailcatRemotePort} onChange={(event) => setTailcatRemotePort(event.target.value)}
+            title="Use the port shown beside the remote serve address; older manually served peers may use 5555"
+            className="w-24 bg-port-bg border border-port-border rounded px-3 py-2 text-sm" />
           <input
             aria-label="Peer name"
             value={name}
@@ -356,7 +361,8 @@ export function AddPeerForm({ onAdd, addressRef }) {
         <div className="space-y-3">
           <p className="text-[11px] text-gray-500 leading-snug">
             Start serve on this node, copy our <span className="font-mono">tc…</span> address,
-            and paste it into the <em>other</em> PortOS as <strong>Dial them</strong>.
+            and paste it into the <em>other</em> PortOS as <strong>Dial them</strong>
+            using remote port <strong>{serveStatus?.localPort || DEFAULT_TAILCAT_REMOTE_PORT}</strong>.
             Use this when the other machine is a better outbound initiator
             (client firewall / Little Snitch often blocks home dials).
           </p>
@@ -1282,11 +1288,11 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
     }
   };
 
-  const handleForwardRetry = async () => {
+  const handleForwardRetry = async (remotePort) => {
     const forwardId = peer.tailcatForward?.id;
     if (!forwardId) return;
     setForwardBusy(true);
-    const updated = await retryTailcatForward(forwardId).catch(() => null);
+    const updated = await retryTailcatForward(forwardId, remotePort ? { remotePort } : {}).catch(() => null);
     setForwardBusy(false);
     onRefresh();
     if (!updated) return;

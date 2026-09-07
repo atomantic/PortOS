@@ -231,7 +231,7 @@ describe('POST /api/instances/peers/tailcat', () => {
     const res = await request(buildApp()).post('/api/instances/peers/tailcat')
       .send({ tcAddress: ` ${tcAddress} `, protocol: 'https', auth });
     expect(res.status).toBe(201);
-    expect(addPeerViaTailcat).toHaveBeenCalledWith({ tcAddress, protocol: 'https', auth });
+    expect(addPeerViaTailcat).toHaveBeenCalledWith({ tcAddress, protocol: 'https', auth, remotePort: 5565 });
     expect(instances.sanitizePeerForClient).toHaveBeenCalledWith(peer);
     expect(res.body).toEqual(peer);
   });
@@ -269,7 +269,7 @@ describe('saved tailcat forward routes', () => {
     retryTailcatForward.mockResolvedValue(peer);
     const res = await request(buildApp()).post('/api/instances/peers/tailcat/forwards/fwd_1/retry');
     expect(res.status).toBe(200);
-    expect(retryTailcatForward).toHaveBeenCalledWith('fwd_1');
+    expect(retryTailcatForward).toHaveBeenCalledWith('fwd_1', {});
     expect(instances.sanitizePeerForClient).toHaveBeenCalledWith(peer);
   });
 
@@ -324,4 +324,11 @@ describe('tailcat serve routes', () => {
     expect(stop.status).toBe(200);
     expect(stopTailcatServe).toHaveBeenCalledWith({ disable: true });
   });
+});
+
+it('rejects main API and HTTP mirror ports for managed serving', async () => {
+  for (const localPort of [5555, 5553]) {
+    const response = await request(buildApp()).post('/api/instances/peers/tailcat/serve').send({ localPort });
+    expect(response.status).toBe(400);
+  }
 });

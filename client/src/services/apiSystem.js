@@ -342,7 +342,7 @@ export const addTailcatPeer = (data) => request('/instances/peers/tailcat', { me
 // Saved tailcat forwards. Rows never carry the tc address — only its redacted
 // form — so a failed forward can be retried without re-pasting the capability.
 export const getTailcatForwards = (options) => request('/instances/peers/tailcat/forwards', options);
-export const retryTailcatForward = (id) => request(`/instances/peers/tailcat/forwards/${id}/retry`, { method: 'POST' });
+export const retryTailcatForward = (id, data = {}) => request(`/instances/peers/tailcat/forwards/${id}/retry`, { method: 'POST', body: JSON.stringify(data) });
 export const forgetTailcatForward = (id) => request(`/instances/peers/tailcat/forwards/${id}`, { method: 'DELETE' });
 // Managed tailcat serve on this node (PORTS.API). Status may include the full
 // tc address so the operator can Copy it — this is our own serve capability.

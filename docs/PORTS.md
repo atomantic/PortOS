@@ -42,7 +42,8 @@ Common port labels:
 | 18022 | PortOS model host | - | Opt-in bearer-authenticated inference queue for dedicated hosts; one active generation. See [fleet host](./features/fleet-llm-host.md). |
 | 18020 | vLLM (Docker) | - | Loopback vLLM Qwen3.8-27B / DFlash 2 container on an RTX 3090 host. Started explicitly from host setup or by the operator. Dedicated hosting opts into Docker restart persistence. See [features/qwen38-rtx3090.md](./features/qwen38-rtx3090.md). |
 | 18021 | SGLang (Docker) | - | Loopback SGLang Qwen3.8-27B container on a Hopper/Blackwell host. Operator-started (`docker compose up -d`) — PortOS never brings it up on boot. See [features/sglang-qwen38.md](./features/sglang-qwen38.md). |
-| 15555 | tailcat forward (loopback) | - | Preferred local listener for federated peers over [tailcat](https://github.com/tailscale/tailcat) (`PORTS.TAILCAT_FORWARD` / `DEFAULT_TAILCAT_LOCAL_PORT`). Maps `127.0.0.1:15555` → remote PortOS `:5555` (the remote side runs `tailcat serve` on `PORTS.API`). If busy, PortOS picks the next free port. Dial polarity / managed serve: [features/tailcat-peers.md](./features/tailcat-peers.md). |
+| 5565 | Tailcat remote ingress (loopback) | - | On demand via managed serve; same HTTP/HTTPS as API, but transport-marked remote requests cannot invoke local-only MCP. |
+| 15555 | tailcat forward (loopback) | - | Preferred local listener for federated peers over [tailcat](https://github.com/tailscale/tailcat) (`PORTS.TAILCAT_FORWARD` / `DEFAULT_TAILCAT_LOCAL_PORT`). Maps `127.0.0.1:15555` → remote ingress `:5565` (the remote side runs managed `tailcat serve`). Saved legacy remote ports are retained until explicitly changed. If busy, PortOS picks the next free port. Dial polarity / managed serve: [features/tailcat-peers.md](./features/tailcat-peers.md). |
 
 ## How `:5555`, `:5553`, and `:5554` Relate
 
@@ -134,7 +135,7 @@ PortOS automatically detects ports from env vars:
 | Range | Purpose |
 |-------|---------|
 | 5553-5561 | PortOS core services (includes the `:5553` loopback mirror and the `portos-db` Docker container on `:5561`) |
-| 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5568 llama-server. Unassigned but still reserved: 5565-5567, 5569 |
+| 5562-5569 | Reserved for PortOS extensions. Assigned: 5562 whisper, 5563 Eidoverse bridge (on demand), 5564 slotstream (on demand), 5565 Tailcat ingress (on demand), 5568 llama-server. Unassigned but still reserved: 5566-5567, 5569 |
 | 5570-5599 | User applications — **put managed apps here** |
 
 > **A collision inside `5553-5569` is silent, not loud.** The natural assumption is
