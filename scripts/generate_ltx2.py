@@ -2211,13 +2211,13 @@ def _refuse_if_streaming_distilled_adapter_missing(pipe, active: bool) -> None:
             raise SystemExit(
                 f"Block streaming needs a pre-fused transformer-distilled*.safetensors in "
                 f"{model_dir} at the default LoRA strength, and none was found. Refusing "
-                "before Stage 1 renders rather than failing at the Stage 1→2 swap."
+                "before Stage 1 renders rather than failing at the Stage 1->2 swap."
             )
         return
     lora_path = model_dir / pipe._distilled_lora
     if not lora_path.exists():
         raise SystemExit(
-            f"Block streaming needs {lora_path} for the Stage 1→2 swap at LoRA strength "
+            f"Block streaming needs {lora_path} for the Stage 1->2 swap at LoRA strength "
             f"{strength:g}, and it was not found. Refusing before Stage 1 renders."
         )
 
