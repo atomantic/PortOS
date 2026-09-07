@@ -2,6 +2,7 @@ import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
 import { createTailscaleServers, watchCertReload } from '../../lib/tailscale-https.js';
 import { certPaths } from '../../lib/certPaths.js';
+import { isPortReachable } from '../lib/connectivity.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { PORTS } from '../lib/ports.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -10,13 +11,6 @@ import { EIDOVERSE_PORT } from './eidoverse.js';
 const BAD_GATEWAY_BODY = 'Eidoverse Worlds is not running.';
 const HOST_DESCRIPTOR_PATH = '/host';
 const EMBED_CONFIG_PATH = '/embed-config';
-
-// Where a conflicting listener would sit. A local squatter almost always claims
-// loopback — Docker publishes to 127.0.0.1, dev servers bind localhost — and
-// loopback is also the address this bridge's own traffic arrives on when the
-// page is opened from the host itself.
-const CONFLICT_PROBE_HOST = '127.0.0.1';
-const CONFLICT_PROBE_TIMEOUT_MS = 300;
 const FORWARDED_HEADER_NAMES = new Set(['host', 'x-forwarded-host', 'x-forwarded-proto']);
 
 const targetAuthority = (host, port) => `${host}:${port}`;
@@ -267,20 +261,13 @@ export function createEidoverseHost({
    * this bridge receives nothing and logs that it is listening. `listen` cannot
    * surface that, so probe before binding and fail loudly instead.
    */
-  const portIsClaimed = () => new Promise((resolve) => {
+  const portIsClaimed = async () => {
     // Port 0 asks the OS for a free ephemeral port, so there is nothing to
     // collide with — and it is not a connectable address to probe.
-    if (!listenPort) return resolve(false);
+    if (!listenPort) return false;
 
-    const probe = createConnection({ host: CONFLICT_PROBE_HOST, port: listenPort });
-    const settle = (claimed) => {
-      probe.destroy();
-      resolve(claimed);
-    };
-    probe.once('connect', () => settle(true));
-    probe.once('error', () => settle(false));
-    probe.setTimeout(CONFLICT_PROBE_TIMEOUT_MS, () => settle(false));
-  });
+    return isPortReachable({ host: '127.0.0.1', port: listenPort, timeoutMs: 300 });
+  };
 
   const openListener = async () => {
     if (await portIsClaimed()) {

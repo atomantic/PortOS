@@ -2,10 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { createConnection } from 'node:net';
 import { platform } from 'node:os';
 import { createWebSocketStream, WebSocketServer } from 'ws';
+import { isPortReachable } from '../lib/connectivity.js';
 
 const LOOPBACK_HOST = '127.0.0.1';
 const DEFAULT_VNC_PORT = 5900;
-const PROBE_TIMEOUT_MS = 750;
 const SESSION_TTL_MS = 5 * 60 * 1000;
 const CONNECTED_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const TOKEN_BYTES = 32;
@@ -21,7 +21,7 @@ export const createRemoteDesktopBroker = ({
   host = LOOPBACK_HOST,
   port = parseVncPort(process.env.PORTOS_VNC_PORT),
   now = () => Date.now(),
-  connect = createConnection,
+  probeFn = isPortReachable,
   connectedSessionTtlMs = CONNECTED_SESSION_TTL_MS,
 } = {}) => {
   const sessions = new Map();
@@ -34,20 +34,7 @@ export const createRemoteDesktopBroker = ({
     }
   };
 
-  const probe = () => new Promise((resolve) => {
-    const socket = connect({ host, port });
-    let settled = false;
-    const finish = (reachable) => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      resolve(reachable);
-    };
-    socket.setTimeout(PROBE_TIMEOUT_MS);
-    socket.once('connect', () => finish(true));
-    socket.once('timeout', () => finish(false));
-    socket.once('error', () => finish(false));
-  });
+  const probe = () => probeFn({ host, port, timeoutMs: 750 });
 
   const status = async () => ({
     supported: true,
