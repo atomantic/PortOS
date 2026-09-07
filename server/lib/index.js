@@ -253,6 +253,7 @@ export * as fileUtils from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './forgeIssueState.js';
 export * from './portosEnv.js';
+export * from './portosRootPlaceholder.js';
 export * from './homePath.js';
 export * from './jsonIo.js';
 export * from './settingsStore.js';
