@@ -1,20 +1,15 @@
 /**
- * Searchable metadata projection of the generated HTTP route inventory.
+ * Searchable metadata projection of the HTTP route inventory.
  *
- * The generated manifest answers what is mounted. This module adds stable,
- * explicitly-inferred documentation metadata without importing Express route
- * modules or their service graphs.
+ * `apiRouteGraph.js` answers what is mounted, derived from the route modules
+ * on first use. This module adds stable, explicitly-inferred documentation
+ * metadata without importing Express route modules or their service graphs.
  */
 
-import { readFileSync } from 'node:fs';
 import { ALWAYS_PUBLIC_API_PATHS } from './apiAccessPolicy.js';
 import { modeledApiOperationKeys } from './apiOperationContracts.js';
 import { API_REGISTRY, resolveApiAccess } from './apiRegistry.js';
-
-const routeManifest = JSON.parse(readFileSync(
-  new URL('./apiRouteCatalog.generated.json', import.meta.url),
-  'utf8',
-));
+import { getApiRouteCatalog } from './apiRouteGraph.js';
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const PROCESS_ACTION_RE = /\/(start|stop|restart|launch|open|install|uninstall|execute|run|cancel|interrupt|resume|pause|reload|sync|update)(?:\/|$)/i;
@@ -72,9 +67,8 @@ export const pathParametersFor = (path) => {
   }));
 };
 
-export const getApiRouteCatalog = () => routeManifest;
-
 export const buildApiCatalog = (settings = {}) => {
+  const routeManifest = getApiRouteCatalog();
   const operations = routeManifest.routes.map((route) => {
     const domain = apiDomainForPath(route.path);
     const key = `${route.method} ${route.path}`;
@@ -95,12 +89,8 @@ export const buildApiCatalog = (settings = {}) => {
   const modeled = operations.filter((operation) => operation.contractStatus === 'modeled').length;
 
   return {
-    // Mirrors the manifest rather than restating it: this projection reshapes
-    // `operations[]` but never changes the shape independently, so a hand-copied
-    // literal here could only ever drift from the file it describes.
-    schemaVersion: routeManifest.schemaVersion,
-    generatedFrom: 'server/index.js and mounted Express routers',
-    regenerateCommand: 'node scripts/generate-api-route-catalog.js',
+    schemaVersion: 2,
+    derivedFrom: routeManifest.derivedFrom,
     stats: { ...routeManifest.stats, domains: domains.length, modeled, generated: operations.length - modeled },
     domains,
     externallyExposableApis: resolveApiAccess(settings),

@@ -350,13 +350,14 @@ const structuralTestsFor = (changedFiles, trackedSet) => {
   if (changedFiles.some((path) => /^server\/lib\//.test(path))) {
     add('server/lib/index.test.js');
   }
-  // The generated-manifest drift tests regenerate from the tree and compare;
-  // they import neither the route modules nor the stage call sites they scan,
-  // so no import edge selects them. Without this rule a route added on a
-  // scoped plan merged with a stale catalog (#5898), and every later full-plan
-  // PR inherited the red drift test until someone committed a regeneration.
+  // These guards read the tree rather than importing it, so no import edge
+  // selects them: the route-graph guard catches a route file nothing mounts,
+  // the parity guard a client wrapper stranded by a renamed mount, and the
+  // prompt-stage drift test a stale manifest — which is what a scoped plan
+  // let merge before this rule existed (#5898).
   if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path))) {
-    add('scripts/generate-api-route-catalog.test.js');
+    add('server/lib/apiRouteGraph.test.js');
+    add('server/lib/apiRouteParity.test.js');
     add('scripts/generate-prompt-stage-call-sites.test.js');
   }
   // The socket guard readdir-scans server/sockets/ rather than importing it, so

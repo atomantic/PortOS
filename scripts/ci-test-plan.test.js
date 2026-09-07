@@ -483,25 +483,24 @@ describe('CI test impact planner', () => {
     expect(clientSide.server.files).toContain('server/lib/eidoverseWorldReset.parity.test.js');
   });
 
-  it('runs the generated-manifest drift tests whenever a server source changes', () => {
-    const tracked = [
-      ...TRACKED,
-      'server/routes/settings.js',
-      'scripts/generate-api-route-catalog.test.js',
+  it('runs the tree-scanning route and prompt-stage guards whenever a server source changes', () => {
+    const treeGuards = [
+      'server/lib/apiRouteGraph.test.js',
+      'server/lib/apiRouteParity.test.js',
       'scripts/generate-prompt-stage-call-sites.test.js',
     ];
-    const drift = ['scripts/generate-api-route-catalog.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'];
+    const tracked = [...TRACKED, 'server/routes/settings.js', ...treeGuards];
 
-    // A new route on a scoped plan is exactly the case that shipped a stale catalog.
+    // An unmounted route file or a renamed mount on a scoped plan.
     const route = buildCiTestPlan(['server/routes/settings.js'], { trackedFiles: tracked });
     expect(route.full).toBe(false);
-    expect(route.server.files).toEqual(expect.arrayContaining(drift));
+    expect(route.server.files).toEqual(expect.arrayContaining(treeGuards));
     // Any server module can add a literal stage-key call site.
     const service = buildCiTestPlan(['server/services/auth.js'], { trackedFiles: tracked });
-    expect(service.server.files).toEqual(expect.arrayContaining(drift));
-    // A client-only change has nothing to regenerate.
+    expect(service.server.files).toEqual(expect.arrayContaining(treeGuards));
+    // A client-only change has nothing to scan.
     const client = buildCiTestPlan(['client/src/lib/catalogLinks.js'], { trackedFiles: tracked });
-    expect(client.server.files).not.toEqual(expect.arrayContaining(drift));
+    expect(client.server.files).not.toEqual(expect.arrayContaining(treeGuards));
   });
 
   it('fails closed to the full suite for a python script nothing pins', () => {

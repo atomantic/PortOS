@@ -1,54 +1,45 @@
-#!/usr/bin/env node
 /**
- * Generate the complete HTTP route inventory consumed by the PortOS API
- * Explorer and internal OpenAPI document.
+ * The mounted HTTP route graph, derived from source at first use.
  *
  * Express routers are the runtime source of truth, but Express 5 deliberately
  * hides a nested router's mount path inside a matcher closure. Introspecting
- * private router internals would therefore lose paths such as
- * `/api/brain/songbook/*` and would couple PortOS to an undocumented Express
- * representation. This scanner follows the checked-in source graph instead:
+ * private router internals would lose paths such as `/api/brain/songbook/*`
+ * and couple PortOS to an undocumented Express representation. This scanner
+ * follows the checked-in source graph instead:
  *
  *   server/index.js app.use('/api/...', router)
  *     -> route module imports
  *     -> router.use('/optional-prefix', childRouter)
  *     -> router.get/post/put/patch/delete(...)
  *
- * PortOS route paths are string literals by convention, so the generated file
- * is deterministic, works in packaged installs without a source scan, and is
- * guarded against drift by `generate-api-route-catalog.test.js`.
+ * PortOS route paths are string literals by convention, so the scan is
+ * deterministic, and it reads exactly the route modules the server is running,
+ * so it cannot be stale. `getApiRouteCatalog()` runs it once per process, the
+ * way `socketEventInventory.js` derives the Socket.IO inventory; why it is not
+ * a committed manifest is in `server/AGENTS.md` ("Generated manifests").
  *
- * The manifest records WHICH FILE declares an operation, never which line.
- * Line numbers move whenever anything above a declaration is edited, so a
- * manifest carrying them is rewritten by refactors that change no route at
- * all — which turns the drift guard into a rebase/merge conflict generator on
- * every parallel branch. Declarations are therefore identified semantically
- * (`file#routerId METHOD /path`, see `routeDeclarationKey`), and coverage is
- * verified by comparing two fresh in-memory scans instead of pointing the
- * committed file back at the source it was derived from. Same rule as
- * `promptStageCallSites.generated.json`, enforced for every checked-in manifest
- * by `server/lib/generatedManifests.test.js`.
- *
- * Usage: node scripts/generate-api-route-catalog.js
+ * `scanRouteGraph()` also returns every declaration's content key
+ * (`routeDeclarationKey`) so `apiRouteGraph.test.js` can prove the walk reaches
+ * every declaration under `server/routes/` by comparing two in-memory scans.
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { readFileSync, statSync } from 'node:fs';
+import { dirname, extname, join, relative, resolve } from 'node:path';
+import { resolveCodeRootForModule } from './dataRoot.js';
+import { toModuleKey } from './staticImportGraph.js';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-export const REPO_ROOT = resolve(HERE, '..');
-export const MANIFEST_RELATIVE_PATH = 'server/lib/apiRouteCatalog.generated.json';
-export const REGENERATE_COMMAND = 'node scripts/generate-api-route-catalog.js';
-const SCHEMA_VERSION = 2;
+const DEFAULT_REPO_ROOT = resolveCodeRootForModule(import.meta.url);
 
 const INDEX_RELATIVE_PATH = 'server/index.js';
+const DERIVED_FROM = Object.freeze(['server/index.js', 'server/routes/**/*.js', 'server/lib/aiToolkit/routes/*.js']);
 const ROUTE_METHODS = Object.freeze(['delete', 'get', 'head', 'options', 'patch', 'post', 'put']);
 const ROUTE_METHOD_SET = new Set([...ROUTE_METHODS, 'all']);
 
 const DEFAULT_IMPORT_RE = /\bimport\s+([A-Za-z_$][\w$]*)\s+from\s*(['"])(\.{1,2}\/[^'"\n]+)\2\s*;?/g;
-const NAMED_IMPORT_RE = /\bimport\s*\{([\s\S]*?)\}\s*from\s*(['"])(\.{1,2}\/[^'"\n]+)\2\s*;?/g;
+// `[^}]*` rather than a lazy `[\s\S]*?`: the lazy form can run from a bare
+// package import (`import { Router } from 'express'`) into the next relative
+// import and swallow that statement's first binding.
+const NAMED_IMPORT_RE = /\bimport\s*\{([^}]*)\}\s*from\s*(['"])(\.{1,2}\/[^'"\n]+)\2\s*;?/g;
 const ROUTER_DECL_RE = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:express\.)?Router\s*\(/g;
 const DEFAULT_EXPORT_RE = /\bexport\s+default\s+([A-Za-z_$][\w$]*)\s*;?/;
 const ROUTE_DECL_RE = /\b([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete|head|options|all)\(\s*(['"])([^'"\n]*)\3/g;
@@ -57,23 +48,17 @@ const APP_MOUNT_RE = /\bapp\.use\(\s*(['"])(\/(?:api|sdapi)[^'"\n]*)\1\s*,\s*([A
 const COMPOSED_ROUTER_RE = /^([A-Za-z_$][\w$]*)\.routes\.([A-Za-z_$][\w$]*)$/;
 const RETURN_COMPOSED_ROUTER_RE = /\breturn\s+([A-Za-z_$][\w$]*\.routes\.[A-Za-z_$][\w$]*)\s*;/;
 
-const toPosix = (path) => path.split(sep).join('/');
+const isFile = (path) => statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 
-const isFile = (path) => {
-  return existsSync(path) && statSync(path).isFile();
-};
+const isDirectory = (path) => statSync(path, { throwIfNoEntry: false })?.isDirectory() === true;
 
-const isDirectory = (path) => {
-  return existsSync(path) && statSync(path).isDirectory();
-};
-
-export function resolveLocalModule(fromFile, specifier) {
+const resolveLocalModule = (fromFile, specifier) => {
   const candidate = resolve(dirname(fromFile), specifier);
   if (extname(candidate) && isFile(candidate)) return candidate;
   if (isFile(`${candidate}.js`)) return `${candidate}.js`;
   if (isDirectory(candidate) && isFile(join(candidate, 'index.js'))) return join(candidate, 'index.js');
   return null;
-}
+};
 
 const importedName = (fragment) => {
   const normalized = fragment.trim().replace(/^type\s+/, '');
@@ -82,7 +67,7 @@ const importedName = (fragment) => {
   return match ? { imported: match[1], local: match[2] || match[1] } : null;
 };
 
-export function parseImports(source, filePath) {
+const parseImports = (source, filePath) => {
   const imports = new Map();
   for (const match of source.matchAll(DEFAULT_IMPORT_RE)) {
     const resolved = resolveLocalModule(filePath, match[3]);
@@ -97,10 +82,11 @@ export function parseImports(source, filePath) {
     }
   }
   return imports;
-}
+};
 
 /**
- * Position-independent identity for one `router.<method>('<path>')` call.
+ * Content identity for one `router.<method>('<path>')` call, stable across
+ * the two scans the coverage guard compares.
  *
  * Two declarations collide when the same file registers the same method and
  * path on the same router *name* — normally a duplicate registration rather
@@ -109,9 +95,6 @@ export function parseImports(source, filePath) {
  * `router`, so distinct bindings could collide and silently undercount. That
  * is why `scanRouteGraph` reports `duplicateDeclarationKeys` instead of just
  * folding them into a Set — see the collision assertion in the test.
- *
- * Unlike a line number, this key survives every edit that does not change the
- * declaration itself.
  */
 export const routeDeclarationKey = ({ source, routerId, method, path }) =>
   `${source}#${routerId} ${method.toUpperCase()} ${path || '/'}`;
@@ -123,8 +106,9 @@ const resolveComposedRouter = (expression, repoRoot) => {
   return isFile(file) ? { file, imported: 'factory-router' } : null;
 };
 
-export function parseRouteModule(filePath, repoRoot = REPO_ROOT) {
+export function parseRouteModule(filePath, repoRoot = DEFAULT_REPO_ROOT) {
   const source = readFileSync(filePath, 'utf8');
+  const moduleKey = toModuleKey(relative(repoRoot, filePath));
   const routerIds = new Set([...source.matchAll(ROUTER_DECL_RE)].map((match) => match[1]));
   const imports = parseImports(source, filePath);
   const defaultExport = source.match(DEFAULT_EXPORT_RE)?.[1] || null;
@@ -136,12 +120,7 @@ export function parseRouteModule(filePath, repoRoot = REPO_ROOT) {
     if (!routerIds.has(match[1]) || !ROUTE_METHOD_SET.has(match[2])) continue;
     const methods = match[2] === 'all' ? ROUTE_METHODS : [match[2]];
     for (const method of methods) {
-      routes.push({
-        routerId: match[1],
-        method,
-        path: match[4],
-        source: toPosix(relative(repoRoot, filePath)),
-      });
+      routes.push({ routerId: match[1], method, path: match[4], source: moduleKey });
     }
   }
 
@@ -174,7 +153,7 @@ const joinRoutePath = (...parts) => {
   return `/${joined}`.replace(/\/{2,}/g, '/');
 };
 
-export function parseTopLevelMounts({ source, filePath }) {
+const parseTopLevelMounts = ({ source, filePath }) => {
   const imports = parseImports(source, filePath);
   const mounts = [];
   for (const match of source.matchAll(APP_MOUNT_RE)) {
@@ -183,14 +162,14 @@ export function parseTopLevelMounts({ source, filePath }) {
     mounts.push({ mountPath: match[2], filePath: imported.file });
   }
   return mounts;
-}
+};
 
 /**
  * Walk the mounted route graph and return everything the scan learned,
- * including the `declarationKeys` that never reach the manifest —
+ * including the `declarationKeys` that never reach the catalog —
  * `buildApiRouteCatalog` narrows this to the serializable subset.
  */
-export function scanRouteGraph({ repoRoot = REPO_ROOT, indexSource } = {}) {
+export function scanRouteGraph({ repoRoot = DEFAULT_REPO_ROOT, indexSource } = {}) {
   const indexPath = join(repoRoot, INDEX_RELATIVE_PATH);
   const source = indexSource ?? readFileSync(indexPath, 'utf8');
   const topLevelMounts = parseTopLevelMounts({ source, filePath: indexPath });
@@ -306,10 +285,11 @@ export function scanRouteGraph({ repoRoot = REPO_ROOT, indexSource } = {}) {
   };
 }
 
+/** The serializable route inventory: `{ derivedFrom, mounts, routes, stats }`. */
 export function buildApiRouteCatalog(options = {}) {
   const { mounts, routes, declarationKeys, sourceFileCount } = scanRouteGraph(options);
   return {
-    schemaVersion: SCHEMA_VERSION,
+    derivedFrom: DERIVED_FROM,
     mounts,
     routes,
     stats: {
@@ -321,20 +301,8 @@ export function buildApiRouteCatalog(options = {}) {
   };
 }
 
-export const serializeApiRouteCatalog = (catalog) => `${JSON.stringify(catalog, null, 2)}\n`;
-
-export function generateApiRouteCatalog(repoRoot = REPO_ROOT) {
-  return buildApiRouteCatalog({ repoRoot });
-}
-
-export function readApiRouteCatalog(repoRoot = REPO_ROOT) {
-  return JSON.parse(readFileSync(join(repoRoot, MANIFEST_RELATIVE_PATH), 'utf8'));
-}
-
-function main() {
-  const catalog = generateApiRouteCatalog();
-  writeFileSync(join(REPO_ROOT, MANIFEST_RELATIVE_PATH), serializeApiRouteCatalog(catalog), 'utf8');
-  console.log(`📚 Wrote ${MANIFEST_RELATIVE_PATH}: ${catalog.stats.operations} operations from ${catalog.stats.declarations} declarations across ${catalog.stats.mounts} mounts`);
-}
-
-if (isDirectlyInvoked(import.meta.url)) main();
+// Once per process, on the first request that needs it: route modules cannot
+// change under a running server without a restart, and deferring the ~50 ms
+// scan past import keeps it off every suite that merely reaches this module.
+let cachedCatalog = null;
+export const getApiRouteCatalog = () => (cachedCatalog ??= buildApiRouteCatalog());

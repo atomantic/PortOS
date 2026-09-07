@@ -8,8 +8,10 @@ import {
 } from './apiCatalog.js';
 
 describe('apiCatalog', () => {
-  it('projects every generated route with searchable metadata', () => {
+  it('projects every mounted route with searchable metadata', () => {
     const catalog = buildApiCatalog({});
+    expect(catalog.schemaVersion).toBe(2);
+    expect(catalog.derivedFrom).toContain('server/routes/**/*.js');
     expect(catalog.stats.operations).toBe(catalog.operations.length);
     expect(catalog.stats.domains).toBe(catalog.domains.length);
     expect(catalog.stats.modeled + catalog.stats.generated).toBe(catalog.stats.operations);

@@ -12,20 +12,22 @@ job and confirmation extensions retained in the [unified design spec](./superpow
 
 The current source contains:
 
-- 146 mounted HTTP prefixes, 2,138 deduplicated HTTP operations, and 2,141
-  route declarations in `server/lib/apiRouteCatalog.generated.json`.
+- An HTTP inventory (146 mounted prefixes, 2,138 deduplicated operations, and
+  2,141 route declarations at the time of the audit) derived from the mounted
+  Express routers by `server/lib/apiRouteGraph.js` on first use, then cached
+  for the lifetime of the server process.
 - A Socket.IO inventory derived from server and client call sites on first use,
-  then cached for the lifetime of the server process.
+  then cached the same way.
 - 22 provider-neutral semantic tools: one `cos.create-task` tool and 21
   semantic adapters inherited from the voice registry.
 - Five read-only context tools on the Agent Tools MCP transport. The MCP
   transport may additionally advertise the 21 semantic adapters when its
   separate read/write grants are enabled.
 
-The generated route catalog is the exhaustive HTTP map. Socket.IO events are
-derived directly from their source declarations, so there is no second checked-in
-event manifest to regenerate. The in-app API Explorer and the following endpoints
-expose both inventories at runtime:
+The route catalog is the exhaustive HTTP map. Both it and the Socket.IO
+inventory are derived directly from their source declarations, so there is no
+checked-in manifest to regenerate for either. The in-app API Explorer and the
+following endpoints expose both inventories at runtime:
 
 | Surface | Endpoint | Contract |
 |---|---|---|
@@ -36,9 +38,8 @@ expose both inventories at runtime:
 | Socket.IO spec | `GET /api/api-docs/asyncapi.json` | AsyncAPI 3 document for the Socket.IO transport. |
 | HTTP tool resource | `GET /api/api-docs/tools.min.json` | Minimized provider-neutral records for the operations annotated `x-portos-tool`, with an HTTP binding and declared failure codes. Schemas are JSON Schema, sized for an agent to read whole. |
 
-Run `npm run generate:api-docs` after HTTP route declarations change. Socket.IO
-event declarations require no regeneration; the server derives and caches their
-inventory from source.
+Neither HTTP route nor Socket.IO event declarations require a regeneration
+step; the server derives and caches both inventories from source.
 
 ## Endpoint map
 
@@ -281,7 +282,8 @@ exposable merely because they appear in the internal OpenAPI inventory.
    semantic advertisements while disabled or document the intentionally
    inspectable grant state more prominently.
 
-Evidence anchors for these findings are the generated manifest `stats`,
+Evidence anchors for these findings are the route catalog `stats` served by
+`GET /api/api-docs/catalog.json`,
 `VOICE_ADAPTERS` in `server/services/cosToolRegistry.js`, the catalog query
 schema in `server/lib/cosToolContracts.js`, the async task policy and normalized
 result path in `server/services/cosToolRegistry.js`, and
@@ -289,8 +291,9 @@ result path in `server/services/cosToolRegistry.js`, and
 
 ## Validation
 
-- `node scripts/generate-api-route-catalog.js` — regenerated deterministic
-  HTTP manifest: 2,138 operations / 2,141 declarations / 146 mounts.
+- `server/lib/apiRouteGraph.test.js` — source-derived HTTP inventory (at audit
+  time 2,138 operations / 2,141 declarations / 146 mounts), coverage of every
+  declaration under `server/routes/`, and representative-route pins.
 - `server/lib/socketEventInventory.test.js` — source-derived Socket.IO inventory,
   representative-event coverage, direction normalization, and runner-tree exclusion.
 - Focused Vitest execution was attempted but this isolated worktree has no

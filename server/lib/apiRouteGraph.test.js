@@ -1,21 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
-  MANIFEST_RELATIVE_PATH,
-  REGENERATE_COMMAND,
-  REPO_ROOT,
   buildApiRouteCatalog,
-  generateApiRouteCatalog,
+  getApiRouteCatalog,
   parseRouteModule,
-  readApiRouteCatalog,
   routeDeclarationKey,
   scanRouteGraph,
-  serializeApiRouteCatalog,
-} from './generate-api-route-catalog.js';
-import { POSITION_INVARIANCE_FAILURE, generateAcrossShiftedSources, walkFiles } from './lib/positionInvariance.js';
+} from './apiRouteGraph.js';
+import { SERVER_DIR, collectServerSources } from './testHelper.js';
 
 const write = (root, path, source) => {
   const target = join(root, path);
@@ -23,9 +18,9 @@ const write = (root, path, source) => {
   writeFileSync(target, source, 'utf8');
 };
 
-describe('API route catalog scanner', () => {
+describe('API route graph scanner', () => {
   it('resolves top-level mounts, imported child routers, local subrouters, and aliases', () => {
-    const root = mkdtempSync(join(tmpdir(), 'portos-api-catalog-'));
+    const root = mkdtempSync(join(tmpdir(), 'portos-api-route-graph-'));
     write(root, 'server/index.js', `
       import widgetsRoutes from './routes/widgets.js';
       app.use('/api/widgets', widgetsRoutes);
@@ -62,7 +57,7 @@ describe('API route catalog scanner', () => {
   });
 
   it('deduplicates the same operation while retaining every declaration source', () => {
-    const root = mkdtempSync(join(tmpdir(), 'portos-api-catalog-'));
+    const root = mkdtempSync(join(tmpdir(), 'portos-api-route-graph-'));
     write(root, 'server/index.js', `
       import routes from './routes/index.js';
       app.use('/api/demo', routes);
@@ -92,7 +87,7 @@ describe('API route catalog scanner', () => {
   });
 
   it('follows named factory returns and composed toolkit router properties', () => {
-    const root = mkdtempSync(join(tmpdir(), 'portos-api-catalog-'));
+    const root = mkdtempSync(join(tmpdir(), 'portos-api-route-graph-'));
     write(root, 'server/index.js', `
       import { createRuns } from './routes/runs.js';
       import { createProviders } from './routes/providers.js';
@@ -140,66 +135,19 @@ describe('API route catalog scanner', () => {
       'POST /api/runs/:id/stop',
     ]);
   });
-
-  // The property that keeps this manifest out of every rebase, tested directly:
-  // shifting every line in every scanned source must not move one byte of the
-  // output. Because it asserts the rule rather than the vocabulary that breaks
-  // it, this catches a position recorded under ANY key — `at`, `span`, `row`, a
-  // `loc: [412, 8]` tuple, a `foo.js#L412` anchor — where the tree-wide net in
-  // `server/lib/generatedManifests.test.js` can only deny-list names it knows.
-  it('generates a byte-identical catalog after every source line shifts', () => {
-    const root = mkdtempSync(join(tmpdir(), 'portos-api-catalog-'));
-    write(root, 'server/index.js', `
-      import widgetsRoutes from './routes/widgets.js';
-      app.use('/api/widgets', widgetsRoutes);
-    `);
-    write(root, 'server/routes/widgets.js', `
-      import { Router } from 'express';
-      import childRoutes from './widgets-child.js';
-      const router = Router();
-      router.get('/', handler);
-      router.use('/child', childRoutes);
-      export default router;
-    `);
-    write(root, 'server/routes/widgets-child.js', `
-      import { Router } from 'express';
-      const router = Router();
-      router.patch('/:id', handler);
-      export default router;
-    `);
-
-    // Where each declaration sits, which is exactly what the manifest must NOT
-    // encode. Used only to prove the shift below is big enough to be noticed.
-    const declarationLines = (repoRoot) => walkFiles(join(repoRoot, 'server')).map((path) => readFileSync(path, 'utf8')
-      .split('\n')
-      .flatMap((line, index) => (/router\.(get|patch|post)\(/.test(line) ? [`${path}:${index + 1}`] : []))
-      .join(',')).join('|');
-
-    const { before, after, shiftedFiles } = generateAcrossShiftedSources(root, () => ({
-      catalog: serializeApiRouteCatalog(buildApiRouteCatalog({ repoRoot: root })),
-      declarationLines: declarationLines(root),
-    }));
-
-    expect(shiftedFiles).toHaveLength(3);
-    expect(after.catalog, POSITION_INVARIANCE_FAILURE).toBe(before.catalog);
-    // Bypass probe: a generator that DID record positions would have churned
-    // here, so the assertion above is not just observing a stable fixture.
-    expect(after.declarationLines).not.toBe(before.declarationLines);
-  });
 });
 
-describe('generated API route catalog', () => {
-  // One scan serves every coverage assertion below — each call re-reads and
-  // re-parses the whole ~229-file route graph.
+describe('mounted route graph', () => {
+  // The coverage guards need `declarationKeys`, which the cached catalog does
+  // not carry, so they share one extra scan; everything else reads the
+  // process-wide catalog.
   let scan;
   const routeGraph = () => (scan ??= scanRouteGraph());
 
-  it('matches a fresh scan of the mounted route graph', () => {
-    const stale = `${MANIFEST_RELATIVE_PATH} is stale — run \`${REGENERATE_COMMAND}\` and commit the result.`;
-    const fresh = generateApiRouteCatalog();
-    expect(fresh, stale).toEqual(readApiRouteCatalog());
-    expect(readFileSync(join(REPO_ROOT, MANIFEST_RELATIVE_PATH), 'utf8'), stale)
-      .toBe(serializeApiRouteCatalog(fresh));
+  it('shares the first-use scan across the server process', () => {
+    const first = getApiRouteCatalog();
+    expect(getApiRouteCatalog()).toBe(first);
+    expect(first.stats.operations).toBeGreaterThan(2_000);
   });
 
   // Content keying trades a line number's uniqueness for a name's, so the one
@@ -207,20 +155,20 @@ describe('generated API route catalog', () => {
   // Set would just swallow the second one and undercount; this makes it loud.
   it('gives every declaration in a file a distinct key', () => {
     expect(routeGraph().duplicateDeclarationKeys, [
-      'Two route declarations in one file produced the same catalog key, so the',
-      'second is invisible to the coverage guard and to stats.declarations. Either',
-      'it is a genuine duplicate registration (delete one), or two routers in that',
-      'file share a variable name through shadowing (rename one).',
+      'Two route declarations in one file produced the same key, so the second is',
+      'invisible to the coverage guard and to stats.declarations. Either it is a',
+      'genuine duplicate registration (delete one), or two routers in that file',
+      'share a variable name through shadowing (rename one).',
     ].join(' ')).toEqual([]);
   });
 
-  // Both sides of this comparison are fresh in-memory scans, which is what
-  // lets the committed manifest stay free of line numbers: the manifest never
-  // has to point back at the source it was derived from for the guard to work.
+  // Both sides are fresh in-memory scans: the walk from `server/index.js`
+  // versus every declaration parsed straight out of `server/routes/`. A route
+  // file nothing mounts, or a subrouter nothing `use()`s, shows up here.
   it('covers every HTTP declaration mounted below /api or /sdapi', () => {
     const { declarationKeys } = routeGraph();
-    const routeFiles = walkFiles(join(REPO_ROOT, 'server', 'routes'))
-      .filter((path) => path.endsWith('.js') && !path.endsWith('.test.js'));
+    const routeFiles = collectServerSources(join(SERVER_DIR, 'routes')).map((path) => join(SERVER_DIR, path));
+    expect(routeFiles.length).toBeGreaterThan(100);
     const omitted = [];
     for (const file of routeFiles) {
       for (const route of parseRouteModule(file).routes) {
@@ -234,14 +182,11 @@ describe('generated API route catalog', () => {
     expect(omitted).toEqual([]);
   });
 
-  it('is a unique, stable, complete inventory with source pointers', () => {
-    const catalog = readApiRouteCatalog();
-    expect(catalog.stats.mounts).toBeGreaterThan(140);
-    expect(catalog.stats.operations).toBeGreaterThan(2_000);
-    expect(catalog.routes).toHaveLength(catalog.stats.operations);
-    expect(new Set(catalog.routes.map((route) => `${route.method} ${route.path}`)).size)
-      .toBe(catalog.routes.length);
-    for (const route of catalog.routes) {
+  it('is a unique, complete inventory with source pointers', () => {
+    const { mounts, routes } = getApiRouteCatalog();
+    expect(mounts.length).toBeGreaterThan(140);
+    expect(new Set(routes.map((route) => `${route.method} ${route.path}`)).size).toBe(routes.length);
+    for (const route of routes) {
       expect(route.path).toMatch(/^\/(?:api|sdapi)(?:\/|$)/);
       expect(route.sources.length).toBeGreaterThan(0);
       for (const source of route.sources) {
@@ -252,7 +197,7 @@ describe('generated API route catalog', () => {
   });
 
   it('pins representative nested, aliased, toolkit, and public routes', () => {
-    const operations = new Set(readApiRouteCatalog().routes.map((route) => `${route.method} ${route.path}`));
+    const operations = new Set(getApiRouteCatalog().routes.map((route) => `${route.method} ${route.path}`));
     for (const operation of [
       'POST /api/brain/songbook/import/url',
       'GET /api/providers/readiness',
@@ -269,11 +214,8 @@ describe('generated API route catalog', () => {
 
   it('covers every declaration in the mounted toolkit providers and runs routers', () => {
     const { declarationKeys } = routeGraph();
-    for (const relativePath of [
-      'server/lib/aiToolkit/routes/providers.js',
-      'server/lib/aiToolkit/routes/runs.js',
-    ]) {
-      for (const route of parseRouteModule(join(REPO_ROOT, relativePath)).routes) {
+    for (const relativePath of ['lib/aiToolkit/routes/providers.js', 'lib/aiToolkit/routes/runs.js']) {
+      for (const route of parseRouteModule(join(SERVER_DIR, relativePath)).routes) {
         const key = routeDeclarationKey(route);
         expect(declarationKeys.has(key), key).toBe(true);
       }
