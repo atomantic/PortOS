@@ -151,6 +151,7 @@ import { outcomesStore as liOutcomesStore } from './layeredIntelligenceOutcomes.
 import * as gameStore from './games/store.js';
 import * as fableLoomStore from './fableLoom/store.js';
 import { prerequisitesMetForRouting } from './providerPrerequisites.js';
+import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
 
 /**
@@ -263,7 +264,15 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // this host (#4611), so a run falls through to the next candidate instead
       // of dying at spawn time. Sync by contract: it reads the runtime probe's
       // cache and never blocks.
-      prerequisitesMet: prerequisitesMetForRouting
+      prerequisitesMet: prerequisitesMetForRouting,
+      // MTPLX and Slotstream each serve one checkpoint per process and report
+      // only that one, so a refresh could never surface a newly downloaded
+      // checkpoint — and for Slotstream it pruned the record's other shipped ids.
+      // This lets the refresh merge in what is actually on disk; it answers
+      // `null` for every other provider, reads a local cache rather than calling
+      // a model, and imports each runtime's manager lazily so neither subtree
+      // reaches the boot closure (see `services/localCachedModels.js`).
+      cachedModelIds: localCachedModelIds
     }),
 
     // Compatibility shims for services that import from the old service files.

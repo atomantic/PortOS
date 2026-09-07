@@ -63,14 +63,19 @@ export function createAIToolkit(config = {}) {
     // Host persistence hook fired after every providers.json write — see
     // createProviderService(). PortOS keeps its provider connection graph
     // reconciled through it; unset standalone.
-    onProvidersSaved = null
+    onProvidersSaved = null,
+    // Host probe for the checkpoints a one-model-per-process local runtime has
+    // cached but is not serving — see createProviderService(). Unset
+    // standalone, so a refresh reports only what the endpoint answers with.
+    cachedModelIds = null
   } = config;
 
   const providerService = createProviderService({
     dataDir,
     providersFile,
     sampleFile: sampleProvidersFile,
-    onProvidersSaved
+    onProvidersSaved,
+    cachedModelIds
   });
 
   let providerStatusService = null;

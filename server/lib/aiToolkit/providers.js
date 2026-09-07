@@ -466,7 +466,16 @@ export function createProviderService(config = {}) {
     // its machine-local provider connection graph (#6367) reconciled with a
     // file any old client, migration or downgraded release may also write.
     // Unset standalone, so the toolkit behaves exactly as before.
-    onProvidersSaved = null
+    onProvidersSaved = null,
+    // Host hook: the model ids a LOCAL one-checkpoint-per-process runtime has
+    // on disk but is not currently serving. `(provider) => Promise<string[]|null>`,
+    // where `null` means "not that kind of provider, or the cache could not be
+    // read" — deliberately distinct from `[]` ("read, and nothing is cached"),
+    // which must not resurrect a stale list. Injected rather than imported
+    // because reading a cache means host I/O and this directory stays
+    // self-contained (see AGENTS.md); PortOS supplies MTPLX's `mtplx models
+    // --json` listing from `services/mtplxServerManager.js`.
+    cachedModelIds = null
   } = config;
 
   const PROVIDERS_PATH = join(dataDir, providersFile);
@@ -978,24 +987,35 @@ export function createProviderService(config = {}) {
         // `else if` chain this used to be — see internal/modelFetchers.js.
         const tuiFetcher = provider.type === 'tui' ? resolveModelFetcher(provider) : null;
 
-        if (provider.type === 'api') {
-          fetched = await this._refreshAPIProviderModels(provider);
-        } else if (provider.type === 'cli') {
-          fetched = await this._refreshCLIProviderModels(provider);
-        } else if (tuiFetcher) {
-          fetched = await this[tuiFetcher.fetch](provider);
-        } else {
+        const probe = provider.type === 'api'
+          ? () => this._refreshAPIProviderModels(provider)
+          : provider.type === 'cli'
+            ? () => this._refreshCLIProviderModels(provider)
+            : tuiFetcher
+              ? () => this[tuiFetcher.fetch](provider)
+              : null;
+
+        if (!probe) {
           // No branch matched — this provider type/shape has no fetcher. Say so,
           // the same 400 the CLI arm's own fall-through throws. Previously this
           // fell out as `fetched === null` and the route rendered it as
           // `404 Provider not found or not an API type`, which is exactly the
           // false message the rethrow above set out to stop showing: a plain
           // `codex-tui`/`grok-tui` provider exists and its type is fine, it just
-          // has no catalog to fetch.
+          // has no catalog to fetch. Thrown OUT here rather than from inside the
+          // wrapper below, which is allowed to answer over a failed probe — a
+          // provider with no fetcher at all must still 400.
           const unsupported = new Error(`Model refresh not supported for ${provider.type} provider '${provider.id}'`);
           unsupported.status = 400;
           throw unsupported;
         }
+
+        // ONE wrapper over every arm rather than a per-vendor call: which
+        // providers have cached-but-unserved models is the host's question, not
+        // this dispatch's, and the shipped MTPLX records alone span two arms (an
+        // unmarked `api` record plus the `mtplxBacked` OpenCode wrappers the
+        // fetcher table routes). The hook answers `null` for everything else.
+        fetched = await this._withCachedCheckpoints(provider, probe);
       } catch (error) {
         console.error(`Failed to refresh models for ${provider.name}:`, error.message);
         // RETHROW rather than collapsing to null. `null` means one specific
@@ -1268,14 +1288,84 @@ export function createProviderService(config = {}) {
      * guarded generic parser instead of executing an OpenCode model-list command
      * (which would inventory the harness, not the MTPLX runtime).
      *
+     * That endpoint answers with a single id no matter how many checkpoints are
+     * cached; `fetchProviderModelCatalog` merges the rest in around every arm
+     * (see `_withCachedCheckpoints`), so this stays the plain probe its siblings
+     * below are.
+     *
      * This only runs from an explicit refresh request; seeding the disabled
      * provider never starts MTPLX, downloads a model, or issues an LLM call.
      *
      * @param {object} provider
-     * @returns {Promise<string[]>}
+     * @returns {Promise<{models: string[], contextWindows: Record<string, number>}>}
      */
     async _fetchMtplxModels(provider) {
       return this._refreshAPIProviderModels(provider);
+    },
+
+    /**
+     * Add the checkpoints a one-model-per-process local runtime has ON DISK to
+     * whatever its server is answering with right now.
+     *
+     * MTPLX and Slotstream load a single checkpoint and report only that one
+     * through `/v1/models` — so a refresh after pulling a second checkpoint
+     * returned the same lone id it returned before, and the newly downloaded
+     * weights were unreachable from the provider's model list. The cache is the
+     * honest catalog of what the machine can serve;
+     * `providerReadiness.catalogCheck` already grades `servesOneModel` runtimes
+     * leniently for exactly this reason (one servable id is all such a provider
+     * needs), and the pinned-model check still flags a provider aimed at a
+     * checkpoint the daemon has not loaded.
+     *
+     * The served probe comes FIRST in the merged list: it is the one id that is
+     * live right now, so it stays the natural default. Its context windows are
+     * kept as-is — a cached-but-unloaded checkpoint declares none, and guessing
+     * one would be worse than the caller's own fallback.
+     *
+     * A failed probe is survivable here and only here: when the cache lists
+     * something servable, a stopped daemon still has a real catalog to report,
+     * so the refresh succeeds instead of failing with `HTTP error`. With nothing
+     * cached the probe's error is rethrown unchanged, preserving the
+     * throw-don't-degrade posture `_refreshAPIProviderModels` documents.
+     *
+     * @param {object} provider
+     * @param {() => Promise<unknown>} probeServed
+     */
+    async _withCachedCheckpoints(provider, probeServed) {
+      // Both probes start before either is awaited: they are independent, and on
+      // the MTPLX path one is a subprocess while the other is an HTTP request to
+      // a daemon that may be down — sequentially that is the subprocess PLUS a
+      // connect timeout on every refresh click, rather than the longer of the two.
+      //
+      // `Promise.resolve().then` around the host call, not just `.catch` after
+      // it: a probe that throws SYNCHRONOUSLY would otherwise unwind past the
+      // handler and fail a refresh the endpoint could have answered on its own.
+      const [cached, probed] = await Promise.all([
+        typeof cachedModelIds === 'function'
+          ? Promise.resolve().then(() => cachedModelIds(provider)).catch(() => null)
+          : null,
+        // `ok` carries the outcome rather than the error's truthiness — the
+        // same absent-vs-falsy sentinel rule the rest of this file follows, so
+        // the two reads below say which case they mean instead of inferring it.
+        probeServed().then((result) => ({ ok: true, result }), (error) => ({ ok: false, error })),
+      ]);
+      if (!Array.isArray(cached) || cached.length === 0) {
+        if (!probed.ok) throw probed.error;
+        return probed.result;
+      }
+      const catalog = toModelCatalog(probed.result) || { models: [], contextWindows: {} };
+      // A failed probe means the daemon is not answering — NOT that its
+      // launch-line id stopped existing. That id is in a different namespace
+      // from the cache (MTPLX answers as a slug its launch line minted, its
+      // cache yields HF repo ids) and is typically the record's own
+      // `defaultModel`, so dropping it would prune the pin off a provider merely
+      // because its server was stopped. A SUCCESSFUL probe stays authoritative,
+      // so a genuinely delisted model still disappears.
+      const stale = !probed.ok && Array.isArray(provider?.models) ? provider.models : [];
+      return {
+        models: [...new Set([...catalog.models, ...stale, ...cached])],
+        contextWindows: catalog.contextWindows,
+      };
     },
 
     /**
