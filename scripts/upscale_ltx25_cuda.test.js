@@ -321,11 +321,18 @@ describe.skipIf(!pyBin)('upscale_ltx25_cuda.py — adapter fusion guard (#6513)'
 // the MLX runner, exercised here because this runner is the one that would
 // commit a CUDA render to it.
 describe.skipIf(!pyBin)('upscale_ltx25_cuda.py — reference downscale factor (#6513)', () => {
-  it('reads the factor off the weight and enforces it against the stage-1 dims', () => {
+  it('reads the factor off the weight and enforces it against the output the conditioned stage renders at', () => {
     expect(call(`runner.reference_downscale_factor(runner.read_safetensors_header(${JSON.stringify(ADAPTER)}))`))
       .toBe('2');
     expect(call('runner.assert_reference_scale_fits(2, 1728, 1024) or "OK"')).toBe('OK');
-    expect(call('runner.assert_reference_scale_fits(4, 1028, 1024) or "OK"'))
-      .toMatch(/^REJECTED:.*divisible by 8/);
+    expect(call('runner.assert_reference_scale_fits(4, 1088, 1024) or "OK"'))
+      .toMatch(/^REJECTED:.*divisible by 128/);
+  }, PY_TEST_TIMEOUT_MS);
+
+  // Same recipe as MLX: upstream's `ICLoraPipeline` renders stage 1 at half
+  // the dims it is handed, so the runner requests twice the output and skips
+  // stage 2. Shared through the contract module so the two cannot drift.
+  it('requests twice the output through the shared contract', () => {
+    expect(call('runner.conditioned_stage_request(1024, 576)')).toBe('(2048, 1152)');
   }, PY_TEST_TIMEOUT_MS);
 });

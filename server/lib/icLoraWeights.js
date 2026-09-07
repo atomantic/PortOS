@@ -170,20 +170,16 @@ export const IC_LORA_MODES = Object.freeze({
     revision: '5863fdef3eaa8b2d69fa22e259a1d75fede215dd',
     // Exact, from the repo's blob listing — not an estimate. Do not round it.
     sizeBytes: 327_322_640,
-    // UNKNOWN, deliberately, and it STAYS unknown here. Every other entry's
-    // factor was read from the weight's safetensors `__metadata__`; this
-    // weight's file is gated, so there is nothing for the repo to read. `null`
-    // means "no constraint asserted", which icResolutionIssue treats as "impose
-    // no rule" rather than guessing a factor and either rejecting valid
-    // resolutions or green-lighting bad ones.
-    //
-    // #6512 resolved this by MEASURING instead of transcribing: an install that
-    // has accepted the terms and downloaded the weight reads the real value out
-    // of the file it holds (`readIcLoraReferenceDownscaleFactor` below, and
-    // `reference_downscale_factor` in `scripts/upscale_ltx25.py`, which enforces
-    // it). Hardcoding a number here would put a value nobody in this repo can
-    // verify ahead of the one every user can — so leave it null.
-    referenceDownscaleFactor: null,
+    // Read from the weight's safetensors `__metadata__.reference_downscale_factor`
+    // — "2" — on 2026-09-07, off the file at the pinned revision above
+    // (sha256 984851b769ea2bcb4c9e0a239a7676239e42c6a6001ddc69943b41ff0b283c1d),
+    // on an install that had accepted the license (#6512). The model card
+    // states the same value. The entry was `null` until then precisely because
+    // the file is gated and nothing in this repo could open it; the value here
+    // is the DECLARED one, and `readIcLoraReferenceDownscaleFactor` below still
+    // reads the real file whenever an install holds it, so a re-pinned weight
+    // that changes its factor is measured rather than trusted.
+    referenceDownscaleFactor: 2,
     // The clip being upscaled is the single reference.
     minReferences: 1,
     maxReferences: 1,

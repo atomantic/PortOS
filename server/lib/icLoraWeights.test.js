@@ -120,13 +120,15 @@ describe('IC-LoRA registry', () => {
     expect(icResolutionIssue(IC_LORA_MODES.control, 704, 448)).toBeNull();
   });
 
-  it('asserts no resolution rule for a weight whose factor has not been read', () => {
-    // The upscaler's file is gated, so its `reference_downscale_factor` is
-    // unknown rather than known-to-be-1. Guessing either way is the bug: a
-    // guessed 2 rejects valid resolutions, and treating a non-number as a
-    // divisor produces a nonsense message. Both must yield "no rule".
-    expect(IC_LORA_MODES['pixel-upscale'].referenceDownscaleFactor).toBeNull();
-    expect(icResolutionIssue(IC_LORA_MODES['pixel-upscale'], 705, 449)).toBeNull();
+  it('applies the upscaler factor now that it has been measured, and no rule for an unread one', () => {
+    // The upscaler's factor was read off the gated weight (#6512), so the
+    // plan can state its rule before a download. A weight whose factor is
+    // genuinely unknown must still yield "no rule": guessing rejects valid
+    // resolutions, and treating a non-number as a divisor produces a nonsense
+    // message.
+    expect(icResolutionIssue(IC_LORA_MODES['pixel-upscale'], 705, 449)).toMatch(/divisible by 2/);
+    expect(icResolutionIssue(IC_LORA_MODES['pixel-upscale'], 704, 448)).toBeNull();
+    expect(icResolutionIssue({ referenceDownscaleFactor: null }, 705, 449)).toBeNull();
     expect(icResolutionIssue({ referenceDownscaleFactor: undefined }, 705, 449)).toBeNull();
     expect(icResolutionIssue({ referenceDownscaleFactor: '2' }, 705, 449)).toBeNull();
   });
@@ -411,18 +413,22 @@ describe('the LTX-2.5 Pixel Spatial Upscaler weight (#6502)', () => {
   });
 });
 
-// #6512. The Pixel Spatial Upscaler entry holds `referenceDownscaleFactor: null`
-// because its file is gated and nobody in this repo can read it — so the value
-// is MEASURED off the weight an install downloaded rather than transcribed from
-// a card. `measured` is what keeps "the weight declares 1" apart from "nobody
-// has read it yet": both impose no rule, but only one is a fact.
+// #6512. The Pixel Spatial Upscaler's factor was MEASURED off the gated weight
+// once an install could open it, and the registry now declares that value — but
+// the file is still read whenever it is present, so `measured` keeps "the
+// registry says 2" apart from "this file says 2": a re-pinned weight that
+// changes its factor is measured rather than trusted.
 describe('readIcLoraReferenceDownscaleFactor', () => {
   const upscaler = () => icLoraSpecByKey('pixel-upscale');
+
+  it('declares the measured factor so the plan can state the rule before the weight is downloaded', () => {
+    expect(upscaler().referenceDownscaleFactor).toBe(2);
+  });
 
   it('falls back to the registry value when nothing is cached, without reading a file', async () => {
     mockFindCachedRepoFile.mockResolvedValue(null);
     expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
-      .toEqual({ factor: null, measured: false });
+      .toEqual({ factor: 2, measured: false });
     expect(mockReadSafetensorsHeader).not.toHaveBeenCalled();
   });
 
@@ -444,12 +450,13 @@ describe('readIcLoraReferenceDownscaleFactor', () => {
   });
 
   // An UNREADABLE header is not a measurement of anything. Collapsing it into a
-  // measured 1 would assert a rule off a file we failed to open.
+  // measured 1 would assert a rule off a file we failed to open; the declared
+  // registry value stands, unmeasured.
   it('does not claim a measurement when the header cannot be read', async () => {
     mockFindCachedRepoFile.mockResolvedValue('/cache/truncated.safetensors');
     mockReadSafetensorsHeader.mockResolvedValue(null);
     expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
-      .toEqual({ factor: null, measured: false });
+      .toEqual({ factor: 2, measured: false });
   });
 
   // A 2.3 weight already carries a verified number, so a cached read must agree

@@ -24,21 +24,38 @@ import json
 import struct
 from pathlib import Path
 
-# The LTX-2.5 two-stage grid, mirrored from `LTX_GRID` in
-# `server/services/videoGen/upscalePlan.js` and confirmed against both runtimes:
-# stage 1 renders at `height // 2` / `width // 2` and the video VAE compresses
-# spatially by 32, so the OUTPUT axis must be divisible by 64 (upstream's own
-# `assert_resolution(..., is_two_stage=True)` asserts exactly that). Temporal
-# compression is 8 and the reference encoder needs a (1 + 8k)-frame input, so
-# `frames % 8 == 1` with a floor of 9.
+# The LTX-2.5 grid, mirrored from `LTX_GRID` in
+# `server/services/videoGen/upscalePlan.js` and confirmed against both runtimes.
+# The video VAE compresses spatially by 32, and the upscaler's reference has to
+# land on that grid at HALF the output (see `assert_reference_scale_fits`), so
+# the OUTPUT axis must be divisible by 64 — which is also what upstream's own
+# `assert_resolution(..., is_two_stage=True)` demands of the request both
+# runners make (`conditioned_stage_request` below). Temporal compression is 8
+# and the reference encoder needs a (1 + 8k)-frame input, so `frames % 8 == 1`
+# with a floor of 9.
 SPATIAL_MULTIPLE = 64
 FRAME_MODULUS = 8
 FRAME_REMAINDER = 1
 MIN_FRAMES = 9
 
-# Stage 1 renders at half the requested output, and it is those halved dims the
-# IC encoder divides by `reference_downscale_factor`.
-STAGE1_DIVISOR = 2
+# The VAE's spatial compression: the reference clip is resized onto this grid
+# before it is encoded, so a reference that is not a multiple of it gets
+# resampled — which for an upscaler means conditioning on a blurred source.
+VAE_SPATIAL_COMPRESSION = 32
+
+# How both `ICLoraPipeline`s interpret the `height`/`width` they are handed:
+# as the dims of the OPTIONAL latent-upsample stage 2, with the IC-conditioned
+# stage 1 rendering at exactly half of that. The Pixel Spatial Upscaler is the
+# standard single-stage IC-LoRA video-to-video recipe (Lightricks' IC-LoRA
+# guide and their ComfyUI reference workflow run it "single-stage distilled at
+# your set resolution", reference at half), so a runner asks for TWICE the
+# output and skips stage 2: stage 1 then renders AT the output size with the
+# source as a native-resolution reference, and the decoded clip is the output.
+# Requesting the output itself would render stage 1 at half the output —
+# conditioning on the source downscaled by another 2x — and hand the second
+# doubling to the latent upsampler, which is exactly the pixel-faithful
+# refinement the adapter is not.
+PIPELINE_REQUEST_MULTIPLIER = 2
 
 # The upscale contract carries no prompt (#6511): the source clip is the whole
 # conditioning signal, and inventing text steering would push synthesized detail
@@ -183,20 +200,32 @@ def reference_downscale_factor(header: "dict | None") -> int:
     return scale if scale >= 1 else 1
 
 
+def conditioned_stage_request(width: int, height: int) -> "tuple[int, int]":
+    """The `(width, height)` a runner hands the pipeline so stage 1 renders at the output.
+
+    Paired with `skip_stage_2=True` on both runtimes — see
+    `PIPELINE_REQUEST_MULTIPLIER`. Kept as one helper so the two runners cannot
+    disagree about which stage the output comes from.
+    """
+    return width * PIPELINE_REQUEST_MULTIPLIER, height * PIPELINE_REQUEST_MULTIPLIER
+
+
 def assert_reference_scale_fits(scale: int, width: int, height: int) -> None:
-    """Enforce the adapter's own resolution rule on the STAGE-1 dimensions.
+    """Enforce the adapter's own resolution rule on the conditioned stage's dims.
 
     `append_ic_lora_reference_video_conditionings` divides the dims it is HANDED
-    by the factor, and both pipelines hand it `height // 2` / `width // 2`.
-    Stating the rule in OUTPUT terms is what makes the message actionable — the
-    user picked an output size, not a stage size.
+    by the factor and snaps the result onto the VAE grid. With
+    `conditioned_stage_request` those dims ARE the output, so the reference is
+    `output / scale` — and for the upscaler that must be the (padded) source's
+    own size, or the source is resampled before it conditions anything. Hence
+    the output must divide by `scale * 32`. Stating the rule in OUTPUT terms is
+    what makes the message actionable — the user picked an output size.
     """
     if scale <= 1:
         return
-    stage_h, stage_w = height // STAGE1_DIVISOR, width // STAGE1_DIVISOR
-    if stage_h % scale == 0 and stage_w % scale == 0:
+    required = scale * VAE_SPATIAL_COMPRESSION
+    if height % required == 0 and width % required == 0:
         return
-    required = scale * STAGE1_DIVISOR
     raise SystemExit(
         f"This adapter downscales its reference by {scale}, so the output dimensions must be "
         f"divisible by {required}; got {width}x{height}."

@@ -50,6 +50,14 @@ import {
 
 const MAX_SEED = 2 ** 32 - 1;
 const STAGE_RE = /^STAGE:\s*(\S+)\s*(.*)$/;
+// Both runners emit these once, before the pipeline loads: the runtime
+// fingerprint (`scripts/_runner_common.py emit_runtime_fingerprint`) and the
+// adapter's `reference_downscale_factor` read off the weight. They are
+// provenance, so they are captured here and written onto the history row —
+// a render can then be tied to the exact ltx/mlx/torch + chip stack and the
+// factor it enforced, the way a plain render's row carries `runtime`.
+const RUNTIME_PREFIX = 'RUNTIME:';
+const REFERENCE_DOWNSCALE_RE = /^UPSCALE_REFERENCE_DOWNSCALE:\s*(\d+)\s*$/;
 const STDERR_TAIL_LINES = 20;
 
 // jobId → the in-flight run's cancel handles. Module-local rather than the
@@ -212,6 +220,7 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
   // so signal it immediately instead of waiting for a render nobody wants.
   if (entry.canceled) cancel(jobId);
   const stderrTail = [];
+  const provenance = { runtime: null, referenceDownscale: null };
   const onLine = (line, isStderr) => {
     const text = String(line).trim();
     if (!text || PYTHON_NOISE_RE.test(text)) return;
@@ -220,6 +229,17 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
       if (stderrTail.length > STDERR_TAIL_LINES) stderrTail.shift();
     }
     videoGenEvents.emit('activity', { generationId: jobId });
+    if (text.startsWith(RUNTIME_PREFIX)) {
+      // A malformed payload stays in the stderr tail rather than becoming a
+      // half-parsed fingerprint on the row.
+      try { provenance.runtime = JSON.parse(text.slice(RUNTIME_PREFIX.length)); } catch { /* keep null */ }
+      return;
+    }
+    const downscale = REFERENCE_DOWNSCALE_RE.exec(text);
+    if (downscale) {
+      provenance.referenceDownscale = Number(downscale[1]);
+      return;
+    }
     const stage = STAGE_RE.exec(text);
     if (stage) {
       videoGenEvents.emit('status', { generationId: jobId, phase: stage[1], message: stage[2] || stage[1] });
@@ -240,7 +260,7 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
     };
     proc.on('error', (err) => settle({ ok: false, reason: `spawn failed: ${err.message}` }));
     proc.on('close', (code, signal) => {
-      if (code === 0) { settle({ ok: true }); return; }
+      if (code === 0) { settle({ ok: true, ...provenance }); return; }
       const tail = stderrTail.slice(-4).join(' | ');
       const how = signal ? `killed (${signal})` : `exit ${code}`;
       settle({ ok: false, reason: tail ? `upscale runner ${how}: ${tail}` : `upscale runner ${how}` });
@@ -394,6 +414,12 @@ export async function runVideoUpscale({
       upscaleMethod: 'ltx',
       upscaleRuntime: runtime,
       upscaleAdapter: adapterKey,
+      // Measured by the runner off the weight it fused, and the rule it
+      // enforced — null when the runner did not report one.
+      upscaleReferenceDownscale: rendered.referenceDownscale ?? null,
+      // Same shape a plain render's row carries: the exact ltx/mlx/torch +
+      // chip + OS stack this clip rendered on. Absent when not reported.
+      ...(rendered.runtime ? { runtime: rendered.runtime } : {}),
       // What the grid actually required of this source, kept beside the result
       // so a reader can tell a padded render from a conforming one.
       upscaleAlignment: {
