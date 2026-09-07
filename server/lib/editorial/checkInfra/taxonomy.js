@@ -74,6 +74,20 @@ export const SEVERITIES = CHECK_SEVERITIES;
 //                                 want, need, startState, endState, transitions[] }`). The
 //                                 arc.transitions check reconciles detected change moments
 //                                 against these authored transitions + flat-arc warnings.
+//   - 'series.characterArcs.evolution'
+//                               — the OPTIONAL five-stage evolution lens nested in those
+//                                 authored arcs (`series.characterArcs[].evolution`, #6440):
+//                                 the staged causal chain tested belief → external pressure →
+//                                 choice → cost paid → final behavioral proof, plus the DECLARED
+//                                 outcome (full-change / tragic-refusal / flat-testing /
+//                                 partial-open). A NARROWER token than 'series.characterArcs' on
+//                                 purpose: character.secondary-arc and arc.climax-agency read the
+//                                 lens but not the want/need/start/end model, so pointing them at
+//                                 the whole arcs token would stale their findings on an edit they
+//                                 never saw (the same split 'comicScript.layout' makes against
+//                                 'comicScript.pacing'). Fingerprinted as the RENDERED lens block,
+//                                 so a deleted transition beat that turns a stage anchor stale
+//                                 stales the finding too.
 //   - 'storyboard.shots'        — the per-issue storyboard shot lists
 //                                 (`stages.storyboards.scenes[].shots[]`) the
 //                                 visual-continuity check (#1315) reasons over:
@@ -128,6 +142,7 @@ export const EDITORIAL_SOURCES = Object.freeze([
   'reverseOutline.plotlines',
   'editorialArcs',
   'series.characterArcs',
+  'series.characterArcs.evolution',
   'storyboard.shots',
   'comicScript',
   'comicScript.pacing',

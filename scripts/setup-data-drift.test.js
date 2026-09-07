@@ -69,6 +69,11 @@ const EXPECTED_STAGE_OLD = {
   'fableloom-plan-shots.md': ['4cf0fb96d4e9a17a8ae8285ec134f37f'],
   'fableloom-review-shots.md': ['699ba1189f67338728b74834269759a9'],
   'fableloom-generate-series-plan.md': ['2591cf4ca6cc160765f029fcc497dc35'],
+  'pipeline-editorial-character-consistency.md': ['69bbee3a1bb126b2675d8b00f5aef48c'],
+  'pipeline-editorial-secondary-arc.md': ['8a96ce93f6592fed3d30e221497739a4'],
+  'pipeline-editorial-arc-transitions.md': ['72e27707f0dc82eab84eed74e9707587'],
+  'pipeline-editorial-arc-regression.md': ['85b15c9e913fe8a436d407f1562a2b10'],
+  'pipeline-editorial-climax-agency.md': ['1bca84f9a0b7cde84e20e43702a12ffa'],
 };
 const EXPECTED_STAGE_NEW = {
   'pipeline-idea-expansion.md': 'a032e4a724251ed3e3495d33c4dbab8e',
@@ -116,6 +121,11 @@ const EXPECTED_STAGE_NEW = {
   'fableloom-plan-shots.md': '9b1cd4b406ee327d6dc3fcbd57b48483',
   'fableloom-review-shots.md': '8cf5fe685cc5f75537caddea1d272a00',
   'fableloom-generate-series-plan.md': '27336d8c64e6193aecd1ba697f52315e',
+  'pipeline-editorial-character-consistency.md': 'bbefd9b033cc7830752acf87722659a0',
+  'pipeline-editorial-secondary-arc.md': 'a9bd4dd9a06bc571f0363e0031d9a5d7',
+  'pipeline-editorial-arc-transitions.md': '46cb5444f41d05fb7bdbc219d62619b2',
+  'pipeline-editorial-arc-regression.md': '8e34b3a84cd7f948592a2a94b28caee4',
+  'pipeline-editorial-climax-agency.md': '255ad29214f48e6dd1c17adbb5887478',
 };
 const EXPECTED_PARTIAL_OLD = {
   'bible-deference.md': ['218f0e85643609ed85a12b1ccc7b5a8d'],

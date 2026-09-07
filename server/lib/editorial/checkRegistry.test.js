@@ -1654,7 +1654,7 @@ describe('character.consistency — LLM check (#1582)', () => {
     expect(check.scope).toBe('series');
     expect(check.category).toBe('character');
     expect(check.severityDefault).toBe('medium');
-    expect(check.sources).toEqual(['manuscript', 'canon', 'reverseOutline', 'series.characterArcs']);
+    expect(check.sources).toEqual(['manuscript', 'canon', 'reverseOutline', 'series.characterArcs', 'series.characterArcs.evolution']);
     expect(check.needsManuscript).toBe(true);
   });
 
@@ -1871,7 +1871,7 @@ describe('arc.climax-agency — LLM check (#1583)', () => {
     expect(check.scope).toBe('series');
     expect(check.category).toBe('arc');
     expect(check.severityDefault).toBe('medium');
-    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'series.arc.readerMap', 'series.arc.themes']);
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'series.arc.readerMap', 'series.arc.themes', 'series.characterArcs.evolution']);
     expect(check.needsManuscript).toBe(true);
   });
 
@@ -2108,7 +2108,7 @@ describe('character.secondary-arc — LLM check (#1585)', () => {
     expect(check.scope).toBe('series');
     expect(check.category).toBe('arc');
     expect(check.severityDefault).toBe('low');
-    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'canon']);
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'canon', 'series.characterArcs.evolution']);
     expect(check.needsManuscript).toBe(true);
   });
 
@@ -3456,7 +3456,7 @@ describe('arc.regression — LLM check (#1619)', () => {
     expect(check.kind).toBe('llm');
     expect(check.scope).toBe('series');
     expect(check.category).toBe('arc');
-    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'series.characterArcs']);
+    expect(check.sources).toEqual(['manuscript', 'reverseOutline', 'series.characterArcs', 'series.characterArcs.evolution']);
     expect(check.needsManuscript).toBe(true);
   });
 

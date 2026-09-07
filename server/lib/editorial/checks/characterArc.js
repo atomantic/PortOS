@@ -15,19 +15,31 @@ import {
   eachRelationshipLink,
   relationshipCanon,
   renderCharacterArcsForPrompt,
+  renderCharacterEvolutionsForPrompt,
   runManuscriptLlmCheck,
   sceneGroundingSummary,
   secondaryCharacterPresenceSummary,
   z,
 } from '../checkInfra.js';
 
+// The OPTIONAL five-stage evolution lens (#6442), rendered for whichever cast
+// members carry one. It states what the authored arc alone cannot: the staged
+// causal chain (tested belief → external pressure → choice → cost paid → final
+// behavioral proof) and the DECLARED outcome, which is what lets a review
+// separate a deliberate flat or tragic ending from a gap, and an unearned claim
+// of completion from a legitimately open one. Five checks read it, so it is
+// built here once: unset ⇒ '', the templates' {{#characterEvolution}} section
+// renders nothing, and every one of them degrades to exactly its pre-lens
+// behavior.
+const evolutionBlock = (ctx) => renderCharacterEvolutionsForPrompt(ctx.series?.characterArcs) || '';
+
 export const characterArcChecks = [
   {
     id: 'character.consistency',
-    sources: ['manuscript', 'canon', 'reverseOutline', 'series.characterArcs'],
+    sources: ['manuscript', 'canon', 'reverseOutline', 'series.characterArcs', 'series.characterArcs.evolution'],
     label: 'Character consistency (unearned personality shift)',
     description:
-      'LLM scan for UNEARNED characterization changes: a reserved character who suddenly cracks jokes with no arc beat, an established trait silently contradicted (a stated fear, allergy, or skill the prose breaks), or POV-character knowledge that changes mid-scene without on-page learning. Reconciles the prose against the established canon character traits (personality, fixed traits, mannerisms, speech), the reverse-outline scene ordering, and the AUTHORED per-character arcs — so an intentional, earned transition is NOT flagged. Degrades to a prose-only scan when no canon or outline exists.',
+      'LLM scan for UNEARNED characterization changes: a reserved character who suddenly cracks jokes with no arc beat, an established trait silently contradicted (a stated fear, allergy, or skill the prose breaks), or POV-character knowledge that changes mid-scene without on-page learning. Reconciles the prose against the established canon character traits (personality, fixed traits, mannerisms, speech), the reverse-outline scene ordering, and the AUTHORED per-character arcs — so an intentional, earned transition is NOT flagged. When the optional five-stage evolution lens is authored, a shift the lens accounts for reads as earned too. Degrades to a prose-only scan when no canon or outline exists.',
     scope: 'series',
     kind: 'llm',
     category: 'character',
@@ -69,17 +81,20 @@ export const characterArcChecks = [
       const canonTraits = canonCharacterTraitsSummary(ctx.canon);
       const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
       const characterArcs = renderCharacterArcsForPrompt(ctx.series?.characterArcs) || '';
+      const characterEvolution = evolutionBlock(ctx);
       return runManuscriptLlmCheck(ctx, {
         stage: CHARACTER_CONSISTENCY_STAGE,
         category: 'character',
-        // canonTraits + sceneMap grow with cast/scene count; characterArcs is
-        // bounded — so largest-first trimming absorbs the cut into those.
-        context: { canonTraits, sceneMap, characterArcs },
+        // canonTraits + sceneMap grow with cast/scene count; characterArcs and
+        // characterEvolution are bounded — so largest-first trimming absorbs the
+        // cut into those.
+        context: { canonTraits, sceneMap, characterArcs, characterEvolution },
         buildVars: (manuscript, _meta, c) => ({
           manuscript,
           canonTraits: c.canonTraits,
           sceneMap: c.sceneMap,
           characterArcs: c.characterArcs,
+          characterEvolution: c.characterEvolution,
         }),
         // A personality shift is only visible against what came BEFORE — the
         // reserved-character baseline lives in an early chunk and the unearned
@@ -96,10 +111,10 @@ export const characterArcChecks = [
   },
   {
     id: 'character.secondary-arc',
-    sources: ['manuscript', 'reverseOutline', 'canon'],
+    sources: ['manuscript', 'reverseOutline', 'canon', 'series.characterArcs.evolution'],
     label: 'Secondary-character arcs (recurring non-POV cast)',
     description:
-      'LLM scan — the non-POV sibling of pov.justified (#1295). Tallies recurring NON-POV characters from the reverse-outline scene map (present in multiple scenes but never holding the viewpoint) and judges whether each shows meaningful change across the story: a flat side character who is the same at the end as at the start, or one who regresses with no purpose. A world of flat side characters drains a story\'s texture. Does NOT flag a genuine walk-on (a one-scene minor) or a deliberately-static figure whose constancy is the point (an anchor/foil the protagonist changes against); judges only the recurring cast. Because a flat arc is a whole-story claim, the verdict lands on the final manuscript part once every scene is in view; degrades to a whole-manuscript scan when no outline exists.',
+      'LLM scan — the non-POV sibling of pov.justified (#1295). Tallies recurring NON-POV characters from the reverse-outline scene map (present in multiple scenes but never holding the viewpoint) and judges whether each shows meaningful change across the story: a flat side character who is the same at the end as at the start, or one who regresses with no purpose. A world of flat side characters drains a story\'s texture. Does NOT flag a genuine walk-on (a one-scene minor), a deliberately-static figure whose constancy is the point (an anchor/foil the protagonist changes against), or a cast member whose optional evolution lens declares a flat-testing / tragic-refusal ending; judges only the recurring cast. Because a flat arc is a whole-story claim, the verdict lands on the final manuscript part once every scene is in view; degrades to a whole-manuscript scan when no outline exists.',
     scope: 'series',
     kind: 'llm',
     category: 'arc',
@@ -157,15 +172,17 @@ export const characterArcChecks = [
       const secondaryCast = secondaryCharacterPresenceSummary(ctx.reverseOutline, { minScenes });
       const canonRoster = canonRosterNamesSummary(ctx.canon);
       const canonTraits = canonCharacterTraitsSummary(ctx.canon);
+      const characterEvolution = evolutionBlock(ctx);
       return runManuscriptLlmCheck(ctx, {
         stage: SECONDARY_ARC_STAGE,
         category: 'arc',
-        context: { secondaryCast, canonRoster, canonTraits },
+        context: { secondaryCast, canonRoster, canonTraits, characterEvolution },
         buildVars: (manuscript, meta, c) => ({
           manuscript,
           secondaryCast: c.secondaryCast,
           canonRoster: c.canonRoster,
           canonTraits: c.canonTraits,
+          characterEvolution: c.characterEvolution,
           finalPart: meta?.isFinal ? 'true' : '',
         }),
         // A flat arc is only visible across the WHOLE story — a character
@@ -188,10 +205,10 @@ export const characterArcChecks = [
   },
   {
     id: 'arc.transitions',
-    sources: ['manuscript', 'reverseOutline', 'series.characterArcs'],
+    sources: ['manuscript', 'reverseOutline', 'series.characterArcs', 'series.characterArcs.evolution'],
     label: 'Character-arc transitions (change moments + flat arcs)',
     description:
-      'Scans each character\'s scenes for genuine change moments — a decision, a realization, a point of no return, a relapse, a sacrifice — and proposes transition beats with anchor quotes. Reconciles detected change moments against the AUTHORED per-character arcs (series.characterArcs): flags a transition the prose delivers but the arc never recorded, an authored transition the prose never pays off, and a character who carries the story but has no transition scenes at all (a flat arc).',
+      'Scans each character\'s scenes for genuine change moments — a decision, a realization, a point of no return, a relapse, a sacrifice — and proposes transition beats with anchor quotes. Reconciles detected change moments against the AUTHORED per-character arcs (series.characterArcs): flags a transition the prose delivers but the arc never recorded, an authored transition the prose never pays off, and a character who carries the story but has no transition scenes at all (a flat arc). Reads the optional five-stage evolution lens alongside them, so a change moment the lens explains counts as documented and a declared flat/tragic ending is not a flat arc.',
     scope: 'series',
     kind: 'llm',
     category: 'arc',
@@ -226,11 +243,17 @@ export const characterArcChecks = [
       // "missing/unjustified authored transition" reconciliation arm).
       const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
       const characterArcs = renderCharacterArcsForPrompt(ctx.series?.characterArcs) || '';
+      const characterEvolution = evolutionBlock(ctx);
       return runManuscriptLlmCheck(ctx, {
         stage: ARC_TRANSITIONS_STAGE,
         category: 'arc',
-        context: { sceneMap, characterArcs },
-        buildVars: (manuscript, _meta, c) => ({ manuscript, sceneMap: c.sceneMap, characterArcs: c.characterArcs }),
+        context: { sceneMap, characterArcs, characterEvolution },
+        buildVars: (manuscript, _meta, c) => ({
+          manuscript,
+          sceneMap: c.sceneMap,
+          characterArcs: c.characterArcs,
+          characterEvolution: c.characterEvolution,
+        }),
         // Arc change moments accrue across the whole manuscript — a flat-arc
         // verdict needs to see whether a character ever changed in a LATER
         // chunk. Roll a "transitions seen so far" digest forward so a
@@ -244,10 +267,10 @@ export const characterArcChecks = [
   },
   {
     id: 'arc.regression',
-    sources: ['manuscript', 'reverseOutline', 'series.characterArcs'],
+    sources: ['manuscript', 'reverseOutline', 'series.characterArcs', 'series.characterArcs.evolution'],
     label: 'Character-arc regression / premature closure',
     description:
-      'LLM scan of the SHAPE of each character\'s progress across the whole series — not the change moments themselves (that is arc.transitions) but whether the arc holds together end to end. Flags an unmotivated REGRESSION (a character grows, then reverts to their old self with no purpose or earned reason — distinct from a deliberate, dramatized relapse), a CIRCULAR arc (the character ends in the same state they began, the growth cancelled out with nothing gained), and PREMATURE CLOSURE (the arc fully resolves early — e.g. issue 3 of 10 — and the character is flat for the rest of the series, deflating the back half). Reads the stitched manuscript plus the reverse-outline scene map and the AUTHORED per-character arcs (series.characterArcs) to reconcile the planned end-state against what the prose delivers; degrades to a whole-manuscript scan when no outline or authored arcs exist. Whole-arc verdicts are gated to the final manuscript part so a mid-arc character whose later growth is still ahead is not false-flagged.',
+      'LLM scan of the SHAPE of each character\'s progress across the whole series — not the change moments themselves (that is arc.transitions) but whether the arc holds together end to end. Flags an unmotivated REGRESSION (a character grows, then reverts to their old self with no purpose or earned reason — distinct from a deliberate, dramatized relapse), a CIRCULAR arc (the character ends in the same state they began, the growth cancelled out with nothing gained), and PREMATURE CLOSURE (the arc fully resolves early — e.g. issue 3 of 10 — and the character is flat for the rest of the series, deflating the back half). Reads the stitched manuscript plus the reverse-outline scene map and the AUTHORED per-character arcs (series.characterArcs) to reconcile the planned end-state against what the prose delivers; degrades to a whole-manuscript scan when no outline or authored arcs exist. Reads the optional five-stage evolution lens too, so a declared tragic-refusal revert is intent rather than regression and a declared partial-open ending is not premature closure. Whole-arc verdicts are gated to the final manuscript part so a mid-arc character whose later growth is still ahead is not false-flagged.',
     scope: 'series',
     kind: 'llm',
     category: 'arc',
@@ -282,12 +305,14 @@ export const characterArcChecks = [
       // {{#sceneMap}} renders nothing.
       const characterArcs = renderCharacterArcsForPrompt(ctx.series?.characterArcs) || '';
       const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      const characterEvolution = evolutionBlock(ctx);
       return runManuscriptLlmCheck(ctx, {
         stage: ARC_REGRESSION_STAGE,
         category: 'arc',
-        // sceneMap grows unbounded with scene count; characterArcs is bounded by the
-        // roster — so largest-first trimming absorbs the cut into sceneMap.
-        context: { characterArcs, sceneMap },
+        // sceneMap grows unbounded with scene count; characterArcs and
+        // characterEvolution are bounded by the roster — so largest-first
+        // trimming absorbs the cut into sceneMap.
+        context: { characterArcs, sceneMap, characterEvolution },
         // `isFinal` gates the whole-arc verdicts — regression, a circular arc, and
         // premature closure can only be judged once the WHOLE arc is in view. An
         // earlier chunk can't know a reverted character grows back, an apparent
@@ -298,6 +323,7 @@ export const characterArcChecks = [
           manuscript,
           characterArcs: c.characterArcs,
           sceneMap: c.sceneMap,
+          characterEvolution: c.characterEvolution,
           finalPart: meta?.isFinal ? 'true' : '',
         }),
         // Each character's progress accrues across the whole manuscript — the
@@ -342,10 +368,10 @@ export const characterArcChecks = [
   },
   {
     id: 'arc.climax-agency',
-    sources: ['manuscript', 'reverseOutline', 'series.arc.readerMap', 'series.arc.themes'],
+    sources: ['manuscript', 'reverseOutline', 'series.arc.readerMap', 'series.arc.themes', 'series.characterArcs.evolution'],
     label: 'Climax / resolution power (passive protagonist at the climax)',
     description:
-      'LLM scan for a weak climax: the story\'s payoff scene should be the protagonist\'s HARDEST, most ACTIVE choice — the moment they drive the resolution. Flags a passive climax (an ally rescues them, the antagonist self-destructs, a coincidence resolves it, or events simply happen TO the protagonist) and a climax that resolves the PLOT but not the emotional/thematic core the story set up. Reconciles the prose against the authored reader-map payoffs (what the reader was promised) and the declared themes, using the reverse-outline scene map to locate the climax; degrades to a whole-manuscript scan when no reader-map, themes, or outline exists. Complements plot.structure-momentum (passive protagonist arc-wide) by focusing the lens on the single climax scene.',
+      'LLM scan for a weak climax: the story\'s payoff scene should be the protagonist\'s HARDEST, most ACTIVE choice — the moment they drive the resolution. Flags a passive climax (an ally rescues them, the antagonist self-destructs, a coincidence resolves it, or events simply happen TO the protagonist) and a climax that resolves the PLOT but not the emotional/thematic core the story set up. Reconciles the prose against the authored reader-map payoffs (what the reader was promised) and the declared themes, using the reverse-outline scene map to locate the climax; degrades to a whole-manuscript scan when no reader-map, themes, or outline exists. When the protagonist carries the optional five-stage evolution lens, also judges whether the climax delivers its final-proof stage as character behavior rather than a purely external victory. Complements plot.structure-momentum (passive protagonist arc-wide) by focusing the lens on the single climax scene.',
     scope: 'series',
     kind: 'llm',
     category: 'arc',
@@ -382,13 +408,14 @@ export const characterArcChecks = [
       const authoredPayoffs = authoredPayoffsSummary(ctx.series?.arc?.readerMap);
       const declaredThemes = declaredThemesSummary(ctx.series?.arc?.themes);
       const sceneMap = sceneGroundingSummary(ctx.reverseOutline);
+      const characterEvolution = evolutionBlock(ctx);
       return runManuscriptLlmCheck(ctx, {
         stage: CLIMAX_AGENCY_STAGE,
         category: 'arc',
-        // sceneMap grows unbounded with scene count; authoredPayoffs and
-        // declaredThemes are bounded — so largest-first trimming absorbs the cut
-        // into sceneMap.
-        context: { authoredPayoffs, declaredThemes, sceneMap },
+        // sceneMap grows unbounded with scene count; authoredPayoffs,
+        // declaredThemes and characterEvolution are bounded — so largest-first
+        // trimming absorbs the cut into sceneMap.
+        context: { authoredPayoffs, declaredThemes, sceneMap, characterEvolution },
         // `isFinal` gates the verdict — the climax is the END of the arc, so it
         // can only be identified and judged once the whole manuscript is in view.
         // An earlier chunk can't know which scene is the climax (or whether a
@@ -399,6 +426,7 @@ export const characterArcChecks = [
           authoredPayoffs: c.authoredPayoffs,
           declaredThemes: c.declaredThemes,
           sceneMap: c.sceneMap,
+          characterEvolution: c.characterEvolution,
           finalPart: meta?.isFinal ? 'true' : '',
         }),
         // The climax's agency is judged against the whole arc's setup — the
