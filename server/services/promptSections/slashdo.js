@@ -75,12 +75,12 @@ function resolveSlashdoReviewContract(task, { codeReviewDefaults = null, default
     reviewerEfforts: resolvedEfforts
   } = resolveReviewerConfig(task.metadata, codeReviewDefaults, defaultReviewers);
 
-  // A resolved lone `copilot` with no usernames is ambiguous: it's what an
-  // unconfigured install produces (`pickCodeReviewDefaults` and
-  // `normalizeReviewers` both fall back to `['copilot']`), so it can't be told
-  // apart from a real choice UNLESS something names it explicitly. Absent that,
-  // treat it as unconfigured and prune nothing — pinning `--review-with copilot`
-  // where Copilot review isn't enabled is the #2507 stall.
+  // A resolved lone `copilot` with no usernames is ambiguous on older task
+  // records: it was what an unconfigured install used to produce, so it can't
+  // be told apart from a real choice UNLESS something names it explicitly.
+  // Absent that, treat it as unconfigured and prune nothing — pinning
+  // `--review-with copilot` where Copilot review isn't enabled is the #2507
+  // stall. Fresh installs now resolve to an empty reviewer list.
   //
   // Marking copilot OPTIONAL — or giving it a `~max=<n>` round cap — is such an
   // explicit naming: nothing defaults to either suffix, so both are deliberate
