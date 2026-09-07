@@ -21,7 +21,7 @@ import {
   getPeerFullSyncCoverage,
   getBrainParityReports,
   retryTailcatForward, forgetTailcatForward,
-  startTailcatServe, getTailcatServe,
+  startTailcatServe,
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
@@ -34,6 +34,8 @@ import BrainParitySchedule from '../components/instances/BrainParitySchedule';
 import TailnetHelpBanner from '../components/instances/TailnetHelpBanner';
 import TailcatForwardsPanel from '../components/instances/TailcatForwardsPanel';
 import TailcatServePanel from '../components/instances/TailcatServePanel';
+import { TailcatServeProvider, useTailcatServe } from '../components/instances/TailcatServeProvider';
+import TailcatAddress from '../components/instances/TailcatAddress';
 import TailcatForwardStatus from '../components/instances/TailcatForwardStatus';
 import { timeAgo, timeUntil } from '../utils/formatters';
 import { directionalCounts, describeDirectional } from '../lib/syncCounts';
@@ -224,13 +226,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [adding, setAdding] = useState(false);
-  const [serveBusy, setServeBusy] = useState(false);
-  const [serveStatus, setServeStatus] = useState(null);
-
-  const refreshServe = async () => {
-    const data = await getTailcatServe({ silent: true }).catch(() => null);
-    setServeStatus(data && typeof data === 'object' ? data : null);
-  };
+  const { status: serveStatus, busy: serveBusy, run: runServe } = useTailcatServe();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -275,24 +271,8 @@ export function AddPeerForm({ onAdd, addressRef }) {
   };
 
   const ensureOurServe = async () => {
-    setServeBusy(true);
-    const result = await startTailcatServe({}).catch(() => null);
-    setServeBusy(false);
-    await refreshServe();
-    if (!result) return;
-    onAdd?.();
-    toast.success('Tailcat serve is running — copy the address for the other node');
-  };
-
-  const copyOurAddress = async () => {
-    const addr = serveStatus?.tcAddress;
-    if (!addr) return;
-    try {
-      await navigator.clipboard.writeText(addr);
-      toast.success('Address copied — paste it on the other PortOS as Dial them');
-    } catch {
-      toast.error('Could not copy to clipboard');
-    }
+    const result = await runServe(() => startTailcatServe({}), 'Tailcat serve is running — copy the address for the other node');
+    if (result) onAdd?.();
   };
 
   const canSubmit = mode === 'tailcat'
@@ -318,7 +298,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
           type="button"
           aria-pressed={mode === 'tailcat'}
           disabled={adding || serveBusy}
-          onClick={() => { setMode('tailcat'); refreshServe(); }}
+          onClick={() => setMode('tailcat')}
           className={`text-xs px-2.5 py-1 rounded border transition-colors ${mode === 'tailcat' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
         >
           Tailcat
@@ -339,7 +319,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
             type="button"
             aria-pressed={dialDirection === 'they-dial-us'}
             disabled={adding || serveBusy}
-            onClick={() => { setDialDirection('they-dial-us'); refreshServe(); }}
+            onClick={() => setDialDirection('they-dial-us')}
             className={`text-xs px-2.5 py-1 rounded border transition-colors ${dialDirection === 'they-dial-us' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
           >
             They dial us
@@ -389,21 +369,9 @@ export function AddPeerForm({ onAdd, addressRef }) {
             >
               {serveBusy ? 'Starting...' : (serveStatus?.live ? 'Serve running' : 'Start serve')}
             </button>
-            <button
-              type="button"
-              disabled={!serveStatus?.tcAddress || serveBusy}
-              onClick={copyOurAddress}
-              className="border border-port-border hover:border-port-accent disabled:opacity-50 text-gray-300 px-4 py-2 rounded text-sm transition-colors"
-            >
-              Copy our address
-            </button>
           </div>
-          {serveStatus?.hasAddress && (
-            <p className="text-[11px] font-mono text-gray-400 break-all">
-              {serveStatus.tcAddressRedacted || 'tc…'}
-              <span className="text-gray-600"> (redacted — use Copy for the full address)</span>
-            </p>
-          )}
+          <TailcatAddress address={serveStatus?.tcAddress} preview={serveStatus?.tcAddressRedacted}
+            disabled={serveBusy} label="Copy our address" />
         </div>
       ) : (
       <div className="flex flex-wrap gap-2">
@@ -1520,6 +1488,10 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
 }
 
 export default function Instances() {
+  return <TailcatServeProvider><InstancesContent /></TailcatServeProvider>;
+}
+
+function InstancesContent() {
   // The Add Peer form is always on screen above the peer grid, so the empty
   // state's call to action focuses its address field rather than opening one.
   const peerAddressRef = useRef(null);

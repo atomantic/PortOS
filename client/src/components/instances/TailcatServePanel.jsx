@@ -6,11 +6,11 @@
  * capability). Never log it; never put it on a peer record.
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { Copy, RefreshCw, Square, Play, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
-import toast from '../ui/Toast';
+import { RefreshCw, Square, Play, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 import Pill from '../ui/Pill';
-import { getTailcatServe, startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/api';
+import { startTailcatServe, retryTailcatServe, stopTailcatServe } from '../../services/api';
+import { useTailcatServe } from './TailcatServeProvider';
+import TailcatAddress from './TailcatAddress';
 import { PORTS } from '../../lib/ports';
 import { timeAgo } from '../../utils/formatters';
 
@@ -18,35 +18,9 @@ const STATUS_TONE = { active: 'success', pending: 'muted', failed: 'warning', st
 const STATUS_ICON = { active: CheckCircle2, pending: Clock, failed: AlertCircle, stopped: Clock };
 
 export default function TailcatServePanel({ onChange, compact = false }) {
-  const [status, setStatus] = useState(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    const data = await getTailcatServe({ silent: true }).catch(() => null);
-    setStatus(data && typeof data === 'object' ? data : null);
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const run = async (fn, successMsg) => {
-    setBusy(true);
-    const result = await fn().catch(() => null);
-    setBusy(false);
-    await load();
-    if (!result) return;
-    onChange?.();
-    if (successMsg) toast.success(successMsg);
-  };
-
-  const copyAddress = async () => {
-    const addr = status?.tcAddress;
-    if (!addr) return;
-    try {
-      await navigator.clipboard.writeText(addr);
-      toast.success('Tailcat address copied — paste it on the other PortOS as Dial them');
-    } catch {
-      toast.error('Could not copy to clipboard');
-    }
+  const { status, busy, run: runServe } = useTailcatServe();
+  const run = async (fn, message) => {
+    if (await runServe(fn, message)) onChange?.();
   };
 
   const label = status?.live
@@ -87,17 +61,6 @@ export default function TailcatServePanel({ onChange, compact = false }) {
             {status?.keyName ? ` · key=${status.keyName}` : ''}
           </span>
           <div className="ml-auto flex items-center gap-1">
-            {status?.hasAddress && status?.tcAddress && (
-              <button
-                type="button"
-                onClick={copyAddress}
-                disabled={busy}
-                title="Copy full tc address for the other node"
-                className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-white disabled:opacity-50 border border-port-border rounded px-2 py-1 transition-colors"
-              >
-                <Copy size={11} /> Copy address
-              </button>
-            )}
             {!status?.live && (
               <button
                 type="button"
@@ -129,12 +92,7 @@ export default function TailcatServePanel({ onChange, compact = false }) {
           </div>
         </div>
 
-        {status?.hasAddress && (
-          <p className="text-[11px] font-mono text-gray-400 mt-2 break-all select-all">
-            {status.tcAddressRedacted || 'tc…'}
-            <span className="text-gray-600"> (redacted preview — use Copy for the full address)</span>
-          </p>
-        )}
+        <TailcatAddress address={status?.tcAddress} preview={status?.tcAddressRedacted} disabled={busy} />
 
         {status?.lastError && status?.status !== 'active' && (
           <p className="text-[11px] text-port-error mt-2 leading-snug break-words">

@@ -154,7 +154,7 @@ export async function getTailcatServeStatus() {
   }
   return {
     enabled: entry.enabled,
-    status: live ? 'active' : entry.status,
+    status: live ? 'active' : (entry.status === 'active' ? 'stopped' : entry.status),
     live,
     localPort: entry.localPort,
     keyName: entry.keyName,
@@ -328,16 +328,26 @@ export async function startServeProcess({
 }
 
 function killLiveServe() {
-  if (liveServe?.child && !liveServe.child.killed) {
-    try { liveServe.child.kill('SIGTERM'); } catch { /* best-effort */ }
-  }
+  const child = liveServe?.child;
+  // Relinquish ownership before signalling: a synchronous exit is intentional.
   liveServe = null;
+  if (child && !child.killed) {
+    try { child.kill('SIGTERM'); } catch { /* best-effort */ }
+  }
 }
 
 function trackServe(child, localPort, keyName) {
   liveServe = { child, localPort, keyName };
-  child.on('exit', () => {
-    if (liveServe?.child === child) liveServe = null;
+  const owned = liveServe;
+  child.on('exit', (code, signal) => {
+    if (liveServe !== owned) return;
+    // Serialize the terminal write behind startup persistence. Retry/stop may
+    // already own the lifecycle lock, in which case their newer state wins.
+    void withLifecycle(async () => {
+      if (shuttingDown || liveServe !== owned) return;
+      liveServe = null;
+      await markServeFailed(new Error(`tailcat serve exited (code=${code}, signal=${signal})`));
+    }).catch((err) => console.error(`❌ Could not record tailcat serve exit: ${redactTailcatDiagnostics(err.message)}`));
   });
 }
 

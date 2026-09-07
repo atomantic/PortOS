@@ -1,5 +1,6 @@
+import { TailcatServeProvider } from './TailcatServeProvider';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render as renderUI, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../services/api', () => ({
@@ -72,4 +73,46 @@ describe('TailcatServePanel', () => {
     await user.click(await screen.findByRole('button', { name: 'Stop' }));
     await waitFor(() => expect(stopTailcatServe).toHaveBeenCalled());
   });
+});
+
+function render(ui) { return renderUI(<TailcatServeProvider>{ui}</TailcatServeProvider>); }
+
+it('reveals the full address for manual copying when clipboard is unavailable', async () => {
+  getTailcatServe.mockResolvedValue(serving);
+  const user = userEvent.setup();
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+  render(<TailcatServePanel />);
+  await user.click(await screen.findByRole('button', { name: 'Copy address' }));
+  expect(screen.getByRole('textbox', { name: 'Full Tailcat address' })).toHaveValue(serving.tcAddress);
+  await user.click(screen.getByRole('button', { name: 'Hide address' }));
+  expect(screen.queryByRole('textbox', { name: 'Full Tailcat address' })).not.toBeInTheDocument();
+});
+
+it('does not overwrite a start receipt with an older in-flight status read', async () => {
+  let resolveRead;
+  getTailcatServe.mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve; }));
+  startTailcatServe.mockResolvedValue(serving);
+  const user = userEvent.setup();
+  render(<TailcatServePanel />);
+  await user.click(screen.getByRole('button', { name: 'Start serve' }));
+  expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument();
+  await act(async () => resolveRead(stopped));
+  expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+});
+
+it('keeps the newest status when visibility refreshes overlap', async () => {
+  let resolveOld;
+  getTailcatServe.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+    .mockResolvedValue({ ...stopped, status: 'failed', lastError: 'Process exited' });
+  render(<TailcatServePanel />);
+  await act(async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(await screen.findByText('Process exited')).toBeInTheDocument();
+  await act(async () => resolveOld(serving));
+  expect(screen.getByText('Process exited')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
 });
