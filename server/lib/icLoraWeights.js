@@ -30,10 +30,27 @@
 
 import { findCachedRepoFile } from './hfCache.js';
 
-// One entry per shipped remix mode. `minReferences`/`maxReferences` are the
-// weight's contract: the Python helper receives them as flags (never a second
-// hardcoded table) so this registry stays the single source of truth across
-// both languages.
+// The base model the MLX `ICLoraPipeline` remix path is pinned to. A weight
+// whose `baseModel` is anything else is registered here for PROVISIONING only —
+// it rides the same download/verify/repair surface, but it must never reach the
+// render-mode enum, because fusing a 2.5 adapter into the 2.3 pipeline loads
+// without erroring and produces garbage rather than a clean failure.
+export const IC_LORA_REMIX_BASE_MODEL = 'ltx-2.3';
+
+// One entry per registered IC-LoRA weight. `minReferences`/`maxReferences` are
+// the weight's contract: the Python helper receives them as flags (never a
+// second hardcoded table) so this registry stays the single source of truth
+// across both languages.
+//
+// `baseModel` is which LTX release the adapter was trained against, and
+// `mode` is the PortOS remix mode it is offered as — `null` for a weight that
+// is not a remix mode at all (the Pixel Spatial Upscaler is an upscale
+// adapter, reached from the upscale flow rather than the render form). The two
+// fields are INDEPENDENT gates: `listIcLoraRemixModes` requires both.
+//
+// `revision` pins the HF commit the weight is fetched and cache-resolved at.
+// `null` means unpinned — the historical behavior for the 2.3 weights, which
+// resolve out of whatever snapshot the install happens to hold.
 //
 // `referenceDownscaleFactor` is informational (the pipeline reads the real
 // value from the weight's safetensors metadata): the IC encoder divides the
@@ -46,11 +63,15 @@ import { findCachedRepoFile } from './hfCache.js';
 // The MIRRORED fields (label/description/referenceKind/uploadLabel/the counts/
 // the factor) are duplicated in client/src/lib/videoGenParams.js so the form can
 // validate pre-submit; icLoraWeights.parity.test.js diffs the two so a change
-// here can't silently leave the client accepting what the server rejects.
+// here can't silently leave the client accepting what the server rejects. That
+// mirror covers REMIX MODES only — a non-remix weight has no form surface, so
+// mirroring it would ship a field the client never reads.
 export const IC_LORA_MODES = Object.freeze({
   control: Object.freeze({
     id: 'control',
     mode: 'ic-control',
+    baseModel: 'ltx-2.3',
+    revision: null,
     label: 'Control',
     description: 'Structure + motion from a control clip',
     // Drives the panel's upload copy + `accept` filter, so a new mode needs no
@@ -69,6 +90,8 @@ export const IC_LORA_MODES = Object.freeze({
   colorize: Object.freeze({
     id: 'colorize',
     mode: 'ic-colorize',
+    baseModel: 'ltx-2.3',
+    revision: null,
     label: 'Colorize',
     description: 'Color restored onto a black-and-white clip',
     uploadLabel: 'Upload a B&W clip to restore',
@@ -90,6 +113,8 @@ export const IC_LORA_MODES = Object.freeze({
   ingredients: Object.freeze({
     id: 'ingredients',
     mode: 'ic-ingredients',
+    baseModel: 'ltx-2.3',
+    revision: null,
     label: 'Ingredients',
     description: 'A scene recomposed from 2-8 reference stills (characters, props, settings)',
     uploadLabel: 'Upload a reference still (character / prop / setting)',
@@ -125,28 +150,111 @@ export const IC_LORA_MODES = Object.freeze({
     // user must pre-download the weight through PortOS' single-file path first.
     requiresPreDownload: true,
   }),
+  // NOT a remix mode (`mode: null`) and NOT on the remix base model — the
+  // Pixel Spatial Upscaler is a 2x reference-conditioned upscale adapter for
+  // LTX-2.5, reached from the video upscale flow (#6502) rather than the render
+  // form. It is registered here so it rides the one provisioning surface every
+  // other IC weight uses.
+  'pixel-upscale': Object.freeze({
+    id: 'pixel-upscale',
+    mode: null,
+    baseModel: 'ltx-2.5',
+    label: 'Pixel Spatial Upscaler',
+    description: '2x reference-conditioned upscale that synthesizes detail (LTX-2.5)',
+    uploadLabel: 'Upscale an existing clip',
+    repo: 'Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler',
+    filename: 'ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors',
+    // Pinned so an install can't silently resolve a different commit's weight
+    // out of an older snapshot. Read from the HF repo metadata on 2026-09-07.
+    revision: '5863fdef3eaa8b2d69fa22e259a1d75fede215dd',
+    // Exact, from the repo's blob listing — not an estimate. Do not round it.
+    sizeBytes: 327_322_640,
+    // UNKNOWN, deliberately. Every other entry's factor was read from the
+    // weight's safetensors `__metadata__`, and this weight's file is gated —
+    // so there is nothing to read yet. `null` means "no constraint asserted",
+    // which icResolutionIssue treats as "impose no rule" rather than guessing
+    // a factor and either rejecting valid resolutions or green-lighting bad
+    // ones. Fill it in from the real metadata once an install with accepted
+    // terms can read the header (#6512).
+    referenceDownscaleFactor: null,
+    // The clip being upscaled is the single reference.
+    minReferences: 1,
+    maxReferences: 1,
+    referenceKind: 'video',
+    // Gated: the model card 401s anonymously and the weight needs an accepted
+    // license plus an HF token. There is deliberately NO mirror — #6502 rules
+    // out adopting a third-party release mirror or side-stepping the terms.
+    gated: true,
+    // Suppresses resolveIcLoraWeight's bare-repo-id fallback: handing a gated
+    // repo id to a pipeline's own resolver produces a 401 deep inside a render
+    // instead of an actionable "download the weight first" error.
+    requiresPreDownload: true,
+  }),
 });
 
-// Every registered spec, in declaration order. Consumers use this instead of
-// reaching into IC_LORA_MODES directly so the container shape stays private.
+// Every registered spec, in declaration order — the PROVISIONING surface
+// (download / verify / repair / cache probe), which covers weights that are not
+// remix modes. Consumers use this instead of reaching into IC_LORA_MODES
+// directly so the container shape stays private.
 export const listIcLoraWeights = () => Object.values(IC_LORA_MODES);
+
+// A weight is offered as a render remix mode only if it both carries a `mode`
+// value and targets the base model the remix pipeline is pinned to. A weight
+// failing either test is still provisioned, just never rendered with.
+const isRemixSpec = (spec) => !!spec?.mode && spec.baseModel === IC_LORA_REMIX_BASE_MODEL;
+
+export const listIcLoraRemixModes = () => listIcLoraWeights().filter(isRemixSpec);
 
 // PortOS `mode` values that route to the IC-LoRA pipeline. Every entry is
 // `ic-<id>` so a single prefix test identifies the family, and the route enum
 // stays a closed list derived from the registry (never hand-maintained).
 export const IC_LORA_MODE_VALUES = Object.freeze(
-  Object.values(IC_LORA_MODES).map((m) => m.mode),
+  listIcLoraRemixModes().map((m) => m.mode),
 );
 
 export const isIcLoraMode = (mode) => typeof mode === 'string' && IC_LORA_MODE_VALUES.includes(mode);
 
 // `ic-control` → the registry entry, or null for anything else. Accepts the
 // bare id (`control`) too so callers that already stripped the prefix work.
+//
+// REMIX MODES ONLY. Every caller is on the render path, where resolving a
+// non-remix weight would let an upscale adapter be fused into the 2.3 remix
+// pipeline. Provisioning callers, which legitimately need the whole registry,
+// use `icLoraSpecByKey` instead.
 export const icLoraSpecForMode = (mode) => {
   if (typeof mode !== 'string' || !mode) return null;
   const id = mode.startsWith('ic-') ? mode.slice(3) : mode;
+  const spec = IC_LORA_MODES[id] || null;
+  return isRemixSpec(spec) ? spec : null;
+};
+
+// The stable identifier a weight is addressed by outside the render path — the
+// remix mode when it has one, else its registry id. This is what the models
+// status payload reports and what the download/repair routes take as a param,
+// so an existing client URL (`/ic-loras/ic-control/download`) is unchanged.
+export const icLoraWeightKey = (spec) => (spec ? (spec.mode || spec.id) : null);
+
+// Resolve ANY registered weight by its `icLoraWeightKey`, for the provisioning
+// endpoints. Also accepts a bare registry id so a caller that already stripped
+// the `ic-` prefix works, matching icLoraSpecForMode's tolerance.
+export const icLoraSpecByKey = (key) => {
+  if (typeof key !== 'string' || !key) return null;
+  const direct = listIcLoraWeights().find((spec) => icLoraWeightKey(spec) === key);
+  if (direct) return direct;
+  const id = key.startsWith('ic-') ? key.slice(3) : key;
   return IC_LORA_MODES[id] || null;
 };
+
+// Every addressable weight key, for the "expected one of …" error the
+// provisioning routes raise on an unknown param.
+export const IC_LORA_WEIGHT_KEYS = Object.freeze(listIcLoraWeights().map(icLoraWeightKey));
+
+// Whether this weight must be located by its EXACT (repo, filename, revision)
+// rather than by a repo-wide cache verdict. True for a mirrored spec (the
+// aggregate mirror reports `cached` off any unrelated resident weight) and for
+// a revision-pinned spec (a repo-wide check would happily accept a different
+// commit's snapshot). Both cases also make an unscoped integrity walk wrong.
+export const icLoraProbesExactFile = (spec) => !!(spec && (spec.mirrorRepo || spec.revision));
 
 // Every IC-LoRA HF repo, for the integrity-scan / status surface. The mirror
 // repos are deliberately EXCLUDED: an unscoped integrity scan walks each repo's
@@ -161,11 +269,17 @@ export const icLoraRepos = () => listIcLoraWeights().map((m) => m.repo);
 // exactly one answer.
 export const icLoraWeightCandidates = (spec) => {
   if (!spec) return [];
-  const candidates = [{ repo: spec.repo, filename: spec.filename, mirror: false }];
+  const candidates = [{
+    repo: spec.repo, filename: spec.filename, revision: spec.revision || null, mirror: false,
+  }];
   if (spec.mirrorRepo) {
     candidates.push({
       repo: spec.mirrorRepo,
       filename: spec.mirrorFilename || spec.filename,
+      // The pinned revision belongs to the OFFICIAL repo's history; a mirror is
+      // a different repository whose commits have nothing to do with it, so
+      // pinning it there would resolve nothing. Mirrors stay unpinned.
+      revision: null,
       mirror: true,
     });
   }
@@ -196,9 +310,14 @@ export const assertIcReferenceCount = (spec, count, fail) => {
 // requires the OUTPUT dimensions to divide evenly by it. Returns a human message
 // when they don't, else null. Mirrored client-side (icResolutionIssue in
 // client/src/lib/videoGenParams.js) so the form can warn before submit.
+// A `null`/absent factor is UNKNOWN, not 1 — the weight's metadata hasn't been
+// read yet (a gated file nobody with accepted terms has opened). Both resolve
+// to "assert no rule", but they must stay distinguishable: guessing a factor
+// here would either reject valid resolutions or green-light ones the pipeline
+// will refuse deep inside a render.
 export const icResolutionIssue = (spec, width, height) => {
-  const scale = spec?.referenceDownscaleFactor ?? 1;
-  if (scale <= 1) return null;
+  const scale = spec?.referenceDownscaleFactor;
+  if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 1) return null;
   if (Number(width) % scale === 0 && Number(height) % scale === 0) return null;
   return `${spec.label} mode needs a resolution divisible by ${scale} (its reference encoder downscales by ${scale}); got ${width}×${height}.`;
 };
@@ -213,8 +332,11 @@ export const findCachedIcLoraWeight = async (spec) => {
   for (const candidate of icLoraWeightCandidates(spec)) {
     // findCachedRepoFile, NOT inspectModelCache: the latter recursively walks and
     // stats every weight in the snapshot, which for the aggregate mirror means
-    // hundreds of GB of unrelated files. This resolves the one filename directly.
-    const path = await findCachedRepoFile(candidate.repo, candidate.filename);
+    // hundreds of GB of unrelated files. This resolves the one filename directly,
+    // inside the PINNED revision's snapshot when the spec pins one.
+    const path = await findCachedRepoFile(candidate.repo, candidate.filename, {
+      revision: candidate.revision,
+    });
     if (path) return { ...candidate, path };
   }
   return null;
@@ -234,11 +356,17 @@ export const findCachedIcLoraWeight = async (spec) => {
 // Returns `{ path, cached, spec, repo? }`: `cached` is true only when a real local
 // file was found, so callers can warn the user that an un-cached weight means a
 // silent multi-hundred-MB pull at render time.
-export const resolveIcLoraWeight = async (mode) => {
-  const spec = icLoraSpecForMode(mode);
+export const resolveIcLoraWeightSpec = async (spec) => {
   if (!spec) return null;
   const cached = await findCachedIcLoraWeight(spec);
   if (cached) return { path: cached.path, cached: true, spec, repo: cached.repo };
   if (spec.requiresPreDownload) return { path: null, cached: false, spec };
   return { path: spec.repo, cached: false, spec };
 };
+
+export const resolveIcLoraWeight = async (mode) => resolveIcLoraWeightSpec(icLoraSpecForMode(mode));
+
+// The provisioning/upscale-flow counterpart: resolves ANY registered weight by
+// its `icLoraWeightKey`, including weights that are not remix modes. Same return
+// shape, so a caller outside the render path reads one contract.
+export const resolveIcLoraWeightByKey = async (key) => resolveIcLoraWeightSpec(icLoraSpecByKey(key));

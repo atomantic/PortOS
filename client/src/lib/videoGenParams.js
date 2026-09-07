@@ -421,9 +421,12 @@ export const icLoraSpecForMode = (mode) => IC_LORA_MODES.find((m) => m.mode === 
 // when the output dimensions aren't divisible by the weight's reference-downscale
 // factor, else null. One implementation so the panel's warning and the submit
 // gate can never disagree.
+// A null/absent factor means UNKNOWN (a gated weight whose metadata hasn't been
+// read yet), not 1. Both assert no rule, but the non-number guard keeps the two
+// implementations byte-for-byte equivalent rather than agreeing by accident.
 export const icResolutionIssue = (spec, width, height) => {
-  const scale = spec?.referenceDownscaleFactor ?? 1;
-  if (scale <= 1) return null;
+  const scale = spec?.referenceDownscaleFactor;
+  if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 1) return null;
   if (Number(width) % scale === 0 && Number(height) % scale === 0) return null;
   return `${spec.label} mode needs a resolution divisible by ${scale} (its reference encoder downscales by ${scale}); got ${width}×${height}.`;
 };

@@ -17,7 +17,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { listIcLoraWeights, icResolutionIssue as serverIcResolutionIssue } from './icLoraWeights.js';
+import {
+  listIcLoraWeights, listIcLoraRemixModes,
+  icResolutionIssue as serverIcResolutionIssue,
+} from './icLoraWeights.js';
 import {
   IC_LORA_MODES as CLIENT_MODES,
   IC_LORA_MODE_VALUES as CLIENT_MODE_VALUES,
@@ -34,7 +37,12 @@ const MIRRORED_FIELDS = [
   'minReferences', 'maxReferences',
 ];
 
-const SERVER_MODES = listIcLoraWeights();
+// REMIX MODES, not every registered weight. The client mirror exists so the
+// render form can validate before submit, and a weight that is not a remix mode
+// has no form surface — mirroring it would ship the client a row it never
+// renders. The guard below is what keeps that scoping honest: it fails if a
+// non-remix weight ever leaks into the mirror.
+const SERVER_MODES = listIcLoraRemixModes();
 
 describe('IC-LoRA registry — server↔client parity', () => {
   it('exposes the same mode ids in the same order', () => {
@@ -52,6 +60,20 @@ describe('IC-LoRA registry — server↔client parity', () => {
     }
   });
 
+  it('keeps weights that are not remix modes out of the client mirror', () => {
+    // The registry's provisioning list is a superset of the remix modes. A
+    // non-remix weight (the LTX-2.5 upscale adapter) rides the download/verify
+    // surface but must never reach the form — so it must be absent from the
+    // mirror AND from the mode-value enum the route builds its z.enum from.
+    const nonRemix = listIcLoraWeights().filter((s) => !SERVER_MODES.includes(s));
+    expect(nonRemix.length, 'expected at least one non-remix weight to guard').toBeGreaterThan(0);
+    for (const spec of nonRemix) {
+      expect(CLIENT_MODES.some((m) => m.mode === spec.mode)).toBe(false);
+      expect(CLIENT_MODES.some((m) => m.label === spec.label)).toBe(false);
+      expect(CLIENT_MODE_VALUES).not.toContain(spec.mode);
+    }
+  });
+
   it('icResolutionIssue agrees across server and client', () => {
     // Covers divisible, both-odd, one-odd, and the factor-1 (no-rule) case for
     // every registered mode — the client's warning text is also the server's
@@ -66,5 +88,10 @@ describe('IC-LoRA registry — server↔client parity', () => {
     }
     expect(clientIcResolutionIssue({ referenceDownscaleFactor: 1 }, 705, 449)).toBeNull();
     expect(serverIcResolutionIssue({ referenceDownscaleFactor: 1 }, 705, 449)).toBeNull();
+    // An UNKNOWN factor (the gated upscaler, whose metadata nobody with accepted
+    // terms has read yet) asserts no rule on either side rather than defaulting
+    // to a guessed divisor.
+    expect(clientIcResolutionIssue({ referenceDownscaleFactor: null }, 705, 449)).toBeNull();
+    expect(serverIcResolutionIssue({ referenceDownscaleFactor: null }, 705, 449)).toBeNull();
   });
 });

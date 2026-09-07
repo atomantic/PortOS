@@ -21,8 +21,8 @@ vi.mock('../../lib/videoDraftDecoders.js', () => ({
 }));
 
 vi.mock('../../lib/icLoraWeights.js', () => ({
-  IC_LORA_MODE_VALUES: ['ic-control'],
-  icLoraSpecForMode: vi.fn(() => null),
+  IC_LORA_WEIGHT_KEYS: ['ic-control'],
+  icLoraSpecByKey: vi.fn(() => null),
   icLoraRepos: vi.fn(() => []),
 }));
 
