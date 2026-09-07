@@ -87,9 +87,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(gitlab).toContain('Never force-delete with `-D`');
   });
 
-  it('plan-task v18 scheduled default omits review while preserving CI and v17', () => {
+  it('plan-task v18 scheduled default omits review while plan-task-claim preserves it', () => {
     const current = DEFAULT_TASK_PROMPTS['plan-task'];
-    const previous = PREVIOUS_DEFAULT_PROMPTS['plan-task'].at(-1);
+    const claimFlow = DEFAULT_TASK_PROMPTS['plan-task-claim'];
 
     expect(PROMPT_VERSIONS['plan-task']).toBe(18);
     expect(current).not.toContain('## Phase 6 — Review locally');
@@ -97,9 +97,9 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).not.toContain('LOCAL reviewers');
     expect(current).not.toContain('PR-SIDE reviewers');
     expect(current).toContain('gh pr checks <num> --required --watch --fail-fast');
-    expect(previous).toContain('## Phase 6 — Review locally');
-    expect(previous).toContain('{reviewers}');
-    expect(previous).not.toBe(current);
+    expect(claimFlow).toContain('## Phase 6 — Review locally');
+    expect(claimFlow).toContain('{reviewers}');
+    expect(claimFlow).not.toBe(current);
   });
 
   afterEach(() => {
@@ -340,6 +340,11 @@ describe('taskPromptDefaults integrity snapshot', () => {
     'code-reviewer-review',
     'code-reviewer-implement',
     'branch-cleanup',
+    // The manual /do:next PLAN claim's default body: taskPromptService reads it
+    // only as a claimFlow fallback when the STORED 'plan-task' prompt is a
+    // shipped default (see getTaskPrompt) — it is never itself persisted to a
+    // schedule, so it carries no PROMPT_VERSIONS entry of its own (issue #6479).
+    'plan-task-claim',
   ];
 
   it('every persisted default prompt is versioned, so none is silently exempt from auto-upgrade', () => {

@@ -25,7 +25,7 @@ vi.mock('../lib/slashdoLoader.js', () => ({
   loadSlashdoLib: vi.fn(async (name) => `# ${name} lens\n${BACKREFERENCE_BAIT}`),
 }));
 
-import { getTaskPrompt, getStagePrompt, DEFAULT_TASK_PROMPTS, PREVIOUS_DEFAULT_PROMPTS } from './taskPromptService.js';
+import { getTaskPrompt, getStagePrompt, DEFAULT_TASK_PROMPTS } from './taskPromptService.js';
 import { getTaskInterval } from './taskSchedule.js';
 import { loadSlashdoFile, loadSlashdoLib } from '../lib/slashdoLoader.js';
 import { PATHS } from '../lib/fileUtils.js';
@@ -116,7 +116,7 @@ describe('claim-flow prompt variants', () => {
 
     expect(scheduled).not.toContain('## Phase 6 — Review locally');
     expect(scheduled).toContain('gh pr checks <num> --required --watch --fail-fast');
-    const expectedManual = PREVIOUS_DEFAULT_PROMPTS['plan-task'].at(-1)
+    const expectedManual = DEFAULT_TASK_PROMPTS['plan-task-claim']
       .replace(/\{worktreesRoot\}/g, PATHS.worktrees);
     expect(manual).toBe(expectedManual);
     expect(manual).toContain('## Phase 6 — Review locally');
