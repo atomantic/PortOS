@@ -101,8 +101,11 @@ export const finalizeUpscaleOutput = async (renderedPath, outPath, {
       ...H264_ENCODE_ARGS,
       ...BT709_CONTAINER_ARGS,
       '-c:a', 'copy',
+      // The ONLY length bound. Never add `-shortest` (or `-t`): an AAC track
+      // routinely runs a few ms short of its video, and either would trim the
+      // video to match (#6514). The source's own container pairs these two
+      // lengths already, so the deliverable keeps both.
       '-frames:v', String(Math.round(frameCount)),
-      '-shortest',
       '-movflags', '+faststart',
       '-y', outPath,
     ],

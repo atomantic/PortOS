@@ -60,6 +60,13 @@ describe('finalizeUpscaleOutput', () => {
     expect(argFor('-frames:v')).toBe('121');
   });
 
+  // #6514: an AAC track a few ms short of its video must not trim it — the
+  // frame bound is the only output-length bound (see the source comment).
+  it('never lets the audio track shorten the video', async () => {
+    await finalize();
+    expect(ffmpeg.runs.at(-1).args.filter((a) => a === '-shortest' || a === '-t')).toEqual([]);
+  });
+
   it('maps the source audio OPTIONALLY, so a silent source is a silent output rather than a failure', async () => {
     await finalize();
     const args = ffmpeg.runs.at(-1).args;
