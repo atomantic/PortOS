@@ -328,7 +328,7 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
           <h2 className="text-lg font-medium">Video draft</h2>
           <p className="text-port-text-muted">Stage: {project.status}. Production is blocked until revision approvals and dispatch controls are available. Next: refine your brief, source references, and model selections.</p>
           <p className="whitespace-pre-wrap">{project.userStory || 'Add a brief to describe this video.'}</p>
-          <p className="text-sm">Target: {project.videoDraft?.durationRange?.min}–{project.videoDraft?.durationRange?.max} seconds · {project.aspectRatio} · {project.quality}</p>
+          <p className="text-sm">Exact target: {project.targetDurationSeconds} seconds (requested: {project.videoDraft?.durationRange?.min}–{project.videoDraft?.durationRange?.max} seconds) · {project.aspectRatio} · {project.quality}</p>
           <p className="text-sm">Review: {project.videoDraft?.reviewPolicy || 'review'} · Checkpoints: {(project.videoDraft?.checkpoints || []).join(', ')}</p>
           <button onClick={() => setEditingDraft(true)} className="px-3 py-2 rounded bg-port-accent text-white">Edit draft</button>
           <VideoDraftDrawer open={editingDraft} onClose={() => setEditingDraft(false)} project={project} onSaved={saved => setProject(prev => ({ ...prev, ...saved }))} />

@@ -182,14 +182,16 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     cast = [], generateFirstPass = false, directive = null,
     modelOverrides = {}, renderBackend = null,
   } = input;
+  const videoDraft = input.workspace === 'video'
+    ? creativeDirectorVideoDraftSchema.parse(input.videoDraft || {
+      durationRange: { min: targetDurationSeconds, max: targetDurationSeconds },
+    }) : null;
   return {
     id,
     name,
     ...(input.workspace === 'video' ? {
       workspace: 'video',
-      videoDraft: creativeDirectorVideoDraftSchema.parse(input.videoDraft || {
-        durationRange: { min: targetDurationSeconds, max: targetDurationSeconds },
-      }),
+      videoDraft,
     } : {}),
     status: 'draft',
     createdAt: now,
@@ -197,7 +199,9 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     aspectRatio,
     quality,
     modelId,
-    targetDurationSeconds,
+    targetDurationSeconds: videoDraft
+      ? Math.min(videoDraft.durationRange.max, Math.max(videoDraft.durationRange.min, targetDurationSeconds))
+      : targetDurationSeconds,
     styleSpec,
     startingImageFile,
     userStory,
@@ -343,6 +347,10 @@ export function applyProjectPatch(project, patch) {
   }
   const next = { ...project, ...patch, updatedAt: new Date().toISOString() };
   if ('videoDraft' in patch) next.videoDraft = creativeDirectorVideoDraftSchema.parse(patch.videoDraft);
+  if (next.workspace === 'video' && next.videoDraft && ('videoDraft' in patch || 'targetDurationSeconds' in patch)) {
+    const { min, max } = next.videoDraft.durationRange;
+    next.targetDurationSeconds = Math.min(max, Math.max(min, next.targetDurationSeconds));
+  }
   if ('renderBackend' in patch) next.renderBackend = normalizeRenderBackend(patch.renderBackend);
   // Normalize the whole override object on write so stored records never carry
   // empty/model-only stage stubs; the client sends the full object each save.

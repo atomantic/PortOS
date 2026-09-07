@@ -67,6 +67,18 @@ const project = (id, extra = {}) => ({
 const journalEntries = () => cj.conflictJournalStore().loadAll();
 
 describe('projectsFile federation merge', () => {
+  it('bounds Video targets on create and range edits and preserves them across reload', async () => {
+    const p = await file.createProject({ name: 'Example short', workspace: 'video', modelId: '', aspectRatio: '16:9', quality: 'draft', targetDurationSeconds: 240, videoDraft: { durationRange: { min: 60, max: 180 } } });
+    expect(p.targetDurationSeconds).toBe(180);
+    await file.updateProject(p.id, { targetDurationSeconds: 120 });
+    await file.updateProject(p.id, { name: 'Revised short', videoDraft: { ...p.videoDraft, durationRange: { min: 60, max: 150 } } });
+    expect((await file.getProject(p.id)).targetDurationSeconds).toBe(120);
+    await file.updateProject(p.id, { videoDraft: { ...p.videoDraft, durationRange: { min: 130, max: 150 } } });
+    expect((await file.getProject(p.id)).targetDurationSeconds).toBe(130);
+    const legacy = await file.createProject({ name: 'Legacy project', modelId: '', aspectRatio: '16:9', quality: 'draft', targetDurationSeconds: 240 });
+    expect((await file.getProject(legacy.id)).targetDurationSeconds).toBe(240);
+  });
+
   it('keeps the saved plan and completed results when a replan removes a required producer', async () => {
     const p = await file.createProject({ name: 'Example production', modelId: 'example', aspectRatio: '16:9', quality: 'draft', targetDurationSeconds: 60 });
     const producer = { stepId: 'source', toolName: 'pipeline_createSeries' };
