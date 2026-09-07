@@ -364,6 +364,7 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `requestAbort.js` | `abortSignalFromResponse(res)` — AbortSignal that fires only when an Express client disconnects *before the response finishes* (keyed off `res` close + `writableEnded`). Plus `anyAbortSignal(signals)` — combine several signals into one (native `AbortSignal.any` with a Node-18 fallback). |
 | `readResponseJson.js` | Read a `Response` body as JSON, tolerating a non-JSON/HTML error page (no `Unexpected token <` crash). Object callers need no opts; pass `{ fallback, emptyValue }` for arrays or to surface the raw error text. |
 | `peerHttpClient.js` | Federation HTTP/Socket.IO client (TLS validation off — Tailnet is the trust boundary). |
+| `peerProbeDiagnostics.js` | Classify federated peer probe failures (`local_refused` / `tunnel_dial` / `probe_http` / timeout / auth / DNS) so Instances UI and logs can tell a dead local forward from a tunnel dial miss from a PortOS health-details failure; messages stay redacted (no full `tc…` capabilities). |
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
 | `peerUrl.js` | Build the base URL for a peer. |
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |

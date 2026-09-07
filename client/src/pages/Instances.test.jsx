@@ -20,6 +20,9 @@ vi.mock('../services/api', () => ({
   listPeerSubscriptions: vi.fn(),
   getPeerFullSyncCoverage: vi.fn(),
   getBrainParityReports: vi.fn(),
+  getTailcatForwards: vi.fn().mockResolvedValue({ forwards: [] }),
+  retryTailcatForward: vi.fn(),
+  forgetTailcatForward: vi.fn(),
 }));
 
 vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));

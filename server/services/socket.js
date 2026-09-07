@@ -13,6 +13,7 @@ import { moltworldWsEvents } from './moltworldWs.js';
 import { queueEvents } from './moltworldQueue.js';
 import { instanceEvents } from './instanceEvents.js';
 import { sanitizePeerForClient } from './instances.js';
+import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
@@ -484,7 +485,10 @@ function setupInstanceEventForwarding() {
   // route applies. `data` is the full peers array.
   instanceEvents.on('peers:updated', (data) => {
     const sanitized = Array.isArray(data) ? data.map(sanitizePeerForClient) : data;
-    broadcastToInstances('instances:peers:updated', sanitized);
+    // Best-effort attach; never block the broadcast if forward metadata is busy.
+    Promise.resolve(Array.isArray(sanitized) ? attachTailcatForwardsToPeers(sanitized) : sanitized)
+      .then((enriched) => broadcastToInstances('instances:peers:updated', enriched))
+      .catch(() => broadcastToInstances('instances:peers:updated', sanitized));
   });
   // Realtime sync lifecycle for the Instances cards: { phase, peerId, ... }.
   // No secrets — just a peer instanceId + counts — so forward as-is.

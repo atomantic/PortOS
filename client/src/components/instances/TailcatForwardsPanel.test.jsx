@@ -32,6 +32,18 @@ const failedForward = {
   live: false,
 };
 
+const linkedForward = {
+  ...failedForward,
+  id: 'fwd_linked',
+  peerId: 'peer-grokbot',
+  name: 'grokbot',
+  status: 'active',
+  localPort: 15555,
+  live: true,
+  lastError: null,
+  lastErrorAt: null,
+};
+
 describe('TailcatForwardsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -43,6 +55,14 @@ describe('TailcatForwardsPanel', () => {
     const { container } = render(<TailcatForwardsPanel />);
     await waitFor(() => expect(getTailcatForwards).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('hides forwards that already belong to a peer card', async () => {
+    getTailcatForwards.mockResolvedValue({ forwards: [linkedForward, failedForward] });
+    render(<TailcatForwardsPanel peerIds={['peer-grokbot']} />);
+    expect(await screen.findByText('sandbox')).toBeInTheDocument();
+    expect(screen.queryByText('grokbot')).not.toBeInTheDocument();
+    expect(screen.getByText(/needs attention/)).toBeInTheDocument();
   });
 
   it('surfaces what tailcat actually said, which is the whole point of saving the forward', async () => {

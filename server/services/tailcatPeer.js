@@ -257,6 +257,56 @@ export async function listTailcatForwards() {
 }
 
 /**
+ * Client-safe forward summary attached onto a peer with transport === 'tailcat'.
+ * Same fields as listTailcatForwards rows (already redacted) so the peer card
+ * can be the primary surface without a second mental model.
+ */
+export function summarizeTailcatForwardForPeer(forward) {
+  if (!forward) return null;
+  return {
+    id: forward.id,
+    peerId: forward.peerId,
+    tcAddress: forward.tcAddress,
+    localPort: forward.localPort,
+    remotePort: forward.remotePort,
+    name: forward.name,
+    protocol: forward.protocol,
+    hasAuth: forward.hasAuth,
+    status: forward.status,
+    lastError: forward.lastError,
+    lastErrorAt: forward.lastErrorAt,
+    createdAt: forward.createdAt,
+    live: forward.live,
+    tunnelError: forward.tunnelError,
+    tunnelErrorAt: forward.tunnelErrorAt,
+  };
+}
+
+/**
+ * Attach `tailcatForward` onto sanitized peer payloads. Peers that are not
+ * tailcat transport are unchanged. A missing forward (e.g. metadata wiped)
+ * still gets `tailcatForward: null` so the UI can say so explicitly.
+ */
+export async function attachTailcatForwardsToPeers(peers) {
+  if (!Array.isArray(peers) || peers.length === 0) return peers;
+  if (!peers.some((p) => p?.transport === 'tailcat')) return peers;
+  const forwards = await listTailcatForwards();
+  const byPeerId = new Map(
+    forwards.filter((f) => f.peerId).map((f) => [f.peerId, summarizeTailcatForwardForPeer(f)]),
+  );
+  return peers.map((peer) => {
+    if (peer?.transport !== 'tailcat') return peer;
+    return { ...peer, tailcatForward: byPeerId.get(peer.id) || null };
+  });
+}
+
+export async function attachTailcatForwardToPeer(peer) {
+  if (!peer || peer.transport !== 'tailcat') return peer;
+  const [enriched] = await attachTailcatForwardsToPeers([peer]);
+  return enriched;
+}
+
+/**
  * Where a freshly installed `tailcat` can land. PATH is checked first, then the
  * install directories a package manager uses but a long-running server process
  * may never have inherited: GOBIN / GOPATH/bin for `go install`, and the

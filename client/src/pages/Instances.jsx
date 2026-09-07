@@ -20,6 +20,7 @@ import {
   listPeerSubscriptions,
   getPeerFullSyncCoverage,
   getBrainParityReports,
+  retryTailcatForward, forgetTailcatForward,
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
@@ -31,6 +32,7 @@ import BrainParityPanel from '../components/instances/BrainParityPanel';
 import BrainParitySchedule from '../components/instances/BrainParitySchedule';
 import TailnetHelpBanner from '../components/instances/TailnetHelpBanner';
 import TailcatForwardsPanel from '../components/instances/TailcatForwardsPanel';
+import TailcatForwardStatus from '../components/instances/TailcatForwardStatus';
 import { timeAgo, timeUntil } from '../utils/formatters';
 import { directionalCounts, describeDirectional } from '../lib/syncCounts';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -1052,10 +1054,50 @@ function PeerAuthEditor({ peer, onRefresh }) {
   );
 }
 
+function ProbeDiagnostics({ peer, probing, onProbe }) {
+  const last = peer.lastProbe;
+  return (
+    <div className="mt-2 rounded-lg border border-port-border bg-port-bg/60 p-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] uppercase tracking-wider text-gray-500">Health check</span>
+        <button
+          type="button"
+          onClick={onProbe}
+          disabled={probing}
+          className="inline-flex items-center gap-1 text-[11px] text-port-accent hover:text-white disabled:opacity-50 border border-port-accent/40 rounded px-2 py-1 transition-colors"
+          title="Force an immediate health/details probe"
+        >
+          <RefreshCw size={11} className={probing ? 'animate-spin' : ''} />
+          {probing ? 'Checking…' : 'Check now'}
+        </button>
+      </div>
+      {last ? (
+        <p className={`mt-1.5 text-[11px] leading-snug break-words ${last.ok ? 'text-port-success' : 'text-port-warning'}`}>
+          {last.ok ? 'ok' : (last.class || 'failed')}
+          {last.httpStatus != null && ` · HTTP ${last.httpStatus}`}
+          {last.latencyMs != null && ` · ${last.latencyMs}ms`}
+          {last.at && ` · ${timeAgo(last.at)}`}
+          {!last.ok && last.message && (
+            <span className="block text-gray-400 mt-0.5">{last.message}</span>
+          )}
+          {peer.consecutiveFailures > 0 && peer.nextProbeAt && (
+            <span className="block text-gray-500 mt-0.5">
+              next probe {timeUntil(peer.nextProbeAt) ?? '—'}
+            </span>
+          )}
+        </p>
+      ) : (
+        <p className="mt-1.5 text-[11px] text-gray-500">No probe result yet — run a health check.</p>
+      )}
+    </div>
+  );
+}
+
 function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState('');
   const [probing, setProbing] = useState(false);
+  const [forwardBusy, setForwardBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   // Peer subs are loaded once at this level and shared with SchemaGapBadge and
@@ -1166,9 +1208,42 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
 
   const handleProbe = async () => {
     setProbing(true);
-    await probePeer(peer.id).catch(() => null);
+    const result = await probePeer(peer.id).catch(() => null);
     onRefresh();
     setProbing(false);
+    if (!result) {
+      toast.error(`Health check failed for ${peer.name}`);
+      return;
+    }
+    if (result.status === 'online') {
+      const ms = result.lastProbe?.latencyMs;
+      toast.success(`Health check ok${ms != null ? ` (${ms}ms)` : ''}`);
+    } else {
+      const detail = result.lastProbe?.message || result.lastProbe?.class || 'offline';
+      toast.error(`Health check: ${detail}`);
+    }
+  };
+
+  const handleForwardRetry = async () => {
+    const forwardId = peer.tailcatForward?.id;
+    if (!forwardId) return;
+    setForwardBusy(true);
+    const updated = await retryTailcatForward(forwardId).catch(() => null);
+    setForwardBusy(false);
+    onRefresh();
+    if (!updated) return;
+    toast.success(`Tailcat forward restarted on 127.0.0.1:${updated.port}`);
+  };
+
+  const handleForwardForget = async () => {
+    const forwardId = peer.tailcatForward?.id;
+    if (!forwardId) return;
+    setForwardBusy(true);
+    const removed = await forgetTailcatForward(forwardId).catch(() => null);
+    setForwardBusy(false);
+    if (!removed) return;
+    onRefresh();
+    toast.success('Tailcat forward and peer removed');
   };
 
   const handleSync = async () => {
@@ -1305,7 +1380,22 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
         <PeerAuthEditor peer={peer} onRefresh={onRefresh} />
       </div>
 
+      {peer.transport === 'tailcat' && (
+        <div className="mb-2">
+          <div className="text-[11px] uppercase tracking-wider text-gray-500 mb-1">Tailcat forward</div>
+          <TailcatForwardStatus
+            forward={peer.tailcatForward}
+            busy={forwardBusy}
+            onRetry={peer.tailcatForward?.id ? handleForwardRetry : undefined}
+            onForget={peer.tailcatForward?.id ? handleForwardForget : undefined}
+            compact
+          />
+        </div>
+      )}
+
       <HealthSummary health={peer.lastHealth} version={peer.version} />
+
+      <ProbeDiagnostics peer={peer} probing={probing} onProbe={handleProbe} />
 
       <div className="mt-2 text-xs text-gray-600">
         Last seen: {timeAgo(peer.lastSeen)}
@@ -1433,7 +1523,7 @@ export default function Instances() {
 
       {/* Also outside the peer-count guard: a tailcat forward whose start failed
           never registered a peer, so this is the only surface that can retry it. */}
-      <TailcatForwardsPanel onChange={fetchData} />
+      <TailcatForwardsPanel onChange={fetchData} peerIds={peers.map((p) => p.id)} />
 
       {peers.length > 0 && (
         <div>
