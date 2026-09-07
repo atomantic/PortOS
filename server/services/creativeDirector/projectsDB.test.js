@@ -73,6 +73,17 @@ describe.skipIf(!runDb)('projectsDB round-trip', () => {
     await close();
   });
 
+  it('round-trips and clears cognitive effort through create and patch', async () => {
+    const pin = { providerId: 'example-agent', model: 'example-model', effort: 'high' };
+    const p = await db.createProject({ ...CREATE_INPUT, modelOverrides: { plan: pin } });
+    created.push(p.id);
+    expect((await db.getProject(p.id)).modelOverrides.plan).toEqual(pin);
+    await db.updateProject(p.id, { modelOverrides: { plan: { ...pin, effort: null } } });
+    expect((await db.getProject(p.id)).modelOverrides.plan).toEqual({ providerId: pin.providerId, model: pin.model });
+    await db.updateProject(p.id, { modelOverrides: {} });
+    expect((await db.getProject(p.id)).modelOverrides).toEqual({});
+  });
+
   it('creates, reads back, and lists a project (lossless shape)', async () => {
     const p = await db.createProject(CREATE_INPUT);
     created.push(p.id);

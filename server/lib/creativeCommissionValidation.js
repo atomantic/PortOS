@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EFFORT_LEVELS } from './providerModels.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
@@ -327,6 +328,7 @@ function refineGenerationForAbilityIfTargetPresent(data, ctx) {
 // API-type provider injected into an agent task trips the harness-boundary guard
 // (see agentBridge.js). Bounded to 120 chars like the CD project pin.
 export const creativeCommissionAssignmentSchema = z.object({
+  effort: z.preprocess(v => v === '' ? undefined : v, z.enum(EFFORT_LEVELS).nullable().optional()),
   providerId: z.string().trim().max(120).nullable().optional(),
   model: z.string().trim().max(120).nullable().optional(),
 });

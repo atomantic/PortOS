@@ -866,3 +866,9 @@ describe('submitCommissionFeedback', () => {
     ).rejects.toMatchObject({ code: ERR_NOT_FOUND });
   });
 });
+
+
+it('keeps effort on a valid commission assignment and clears orphaned effort', () => {
+  expect(sanitizeCommission({ id: 'example', assignment: { providerId: 'agent', effort: 'high' } }).assignment).toEqual({ providerId: 'agent', model: null, effort: 'high' });
+  expect(sanitizeCommission({ id: 'example', assignment: { effort: 'high' } }).assignment).toEqual({ providerId: null, model: null });
+});

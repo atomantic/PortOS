@@ -534,3 +534,11 @@ describe('applyPlanStepUpdate', () => {
     expect(updated).toBeNull();
   });
 });
+
+
+it('validates optional effort without changing legacy provider-only pins', async () => {
+  const { creativeDirectorStagePinSchema } = await import('../../lib/creativeDirectorValidation.js');
+  expect(creativeDirectorStagePinSchema.parse({ providerId: 'agent', effort: 'high' })).toEqual({ providerId: 'agent', effort: 'high' });
+  expect(creativeDirectorStagePinSchema.safeParse({ providerId: 'agent', effort: 'unlimited' }).success).toBe(false);
+  expect(normalizeModelOverrides({ plan: creativeDirectorStagePinSchema.parse({ providerId: 'agent', effort: '' }) })).toEqual({ plan: { providerId: 'agent' } });
+});

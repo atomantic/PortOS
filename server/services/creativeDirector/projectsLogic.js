@@ -11,6 +11,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { creativeDirectorTreatmentSchema, creativeDirectorPlanSchema } from '../../lib/validation.js';
 import { PROJECT_STATUSES, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
@@ -25,7 +26,7 @@ const isStr = (v) => typeof v === 'string';
 
 // Per-project AI model override (per-project CD provider/model pins). Stored on
 // the project record as `modelOverrides.{treatment,plan,evaluation}` — each an
-// optional `{ providerId, model }`. Only stages that name a `providerId` are
+// optional `{ providerId, model, effort }`. Only stages that name a `providerId` are
 // kept, so the stored object never carries empty stubs (a blank stage means
 // "inherit the global AI Assignment"). Additive: the whole record round-trips
 // through the JSONB `data` column verbatim in sanitizeProjectForSync, so this
@@ -42,7 +43,8 @@ export function normalizeModelOverrides(raw) {
     const model = isStr(v.model) ? v.model.trim() : '';
     // A model without a provider can't be resolved (the runtime keys on the
     // provider first), so drop a model-only stage — it would inherit anyway.
-    if (providerId) out[stage] = { providerId, ...(model ? { model } : {}) };
+    const effort = stage !== 'evaluation' && EFFORT_LEVELS.includes(v.effort) ? v.effort : null;
+    if (providerId) out[stage] = { providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
   }
   return out;
 }
@@ -84,10 +86,13 @@ export function normalizeRenderBackend(raw) {
  * for whatever provider the assignment names). See `lib/llmRoutePin.js` for why
  * that differs from the per-field `resolveLlmRoutePin`.
  *
- * Returns `{ providerId, model }` with STRING values ('' when unset), not the
+ * Returns `{ providerId, model, effort? }` with STRING values ('' when unset), not the
  * shared lib's `null`s: `getStageAssignment` and `resolveVisionEvalTarget` both
  * branch on plain falsiness and spread the result into task metadata, so keeping
- * the two dimensions as strings is this resolver's own contract.
+ * the route dimensions as strings is this resolver's own contract. Effort is
+ * additive and omitted when cleared, invalid, or evaluating through vision.
+ * Legacy provider-only records keep provider defaults; both storage adapters
+ * round-trip this optional JSON field without a migration.
  */
 export function resolveStagePin(stage, project, settings) {
   const chosen = pickLlmRoutePinLayer(
@@ -97,6 +102,7 @@ export function resolveStagePin(stage, project, settings) {
   return {
     providerId: isStr(chosen?.providerId) ? chosen.providerId : '',
     model: isStr(chosen?.model) ? chosen.model : '',
+    ...(stage !== 'evaluation' && EFFORT_LEVELS.includes(chosen?.effort) ? { effort: chosen.effort } : {}),
   };
 }
 
