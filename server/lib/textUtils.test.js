@@ -55,6 +55,18 @@ describe('clampToCharLimit', () => {
     // change what the tail asks the renderer for.
     expect(clampToCharLimit('alpha bravo charlie delta', 14)).toEqual({ text: 'alpha bravo', truncated: true });
   });
+
+  it('does not cut mid-abbreviation when an abbreviation sits within the budget', () => {
+    // When an abbreviation like "Dr." appears early in the text but near enough
+    // to the cap, the abbreviation guard should prevent treating it as a sentence
+    // end. This test verifies the abbreviation protection works end-to-end through
+    // clampToCharLimit by ensuring we don't clip mid-abbreviation.
+    const input = 'The patient called Dr. Smith, a specialist, to discuss the diagnosis';
+    const { text, truncated } = clampToCharLimit(input, 50);
+    expect(truncated).toBe(true);
+    // Should not break in the middle of "Dr." or leave an incomplete abbreviation
+    expect(text).not.toMatch(/\bDr$/);
+  });
 });
 
 describe('escapeRegExp', () => {

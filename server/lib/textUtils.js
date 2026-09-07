@@ -115,16 +115,10 @@ export function trimToClause(v, max) {
 /**
  * Bound a string to a hard character cap, cutting on a natural boundary.
  *
- * `trimTo` above slices blindly, which is right for a log field and wrong for
- * text a human or a renderer reads: a mid-word cut reads as corruption, and in
- * a render prompt it can change what the final phrase asks for. Cut at the last
- * sentence end when one sits deep enough in the allowance (60%+, so an
- * abbreviation or a decimal near the start can't throw the prompt away), else
- * at the last word boundary, else at the cap.
- *
- * Returns `{ text, truncated }` so the caller can TELL the user the text was
- * cut — a silent trim reads as the model losing detail on its own. A
- * non-positive/non-finite `max` means "no cap" and passes the text through.
+ * Delegates to `trimToClause` for sentence-aware boundary detection. Returns
+ * `{ text, truncated }` so the caller can TELL the user the text was cut — a
+ * silent trim reads as the model losing detail on its own. A non-positive/
+ * non-finite `max` means "no cap" and passes the text through.
  *
  * Distinct from the two capping helpers that append a marker — `clampText`
  * (`promptFencing.js`, `… [truncated]`) and `truncateForTelegram`
@@ -139,13 +133,7 @@ export function trimToClause(v, max) {
 export function clampToCharLimit(text, max) {
   const value = typeof text === 'string' ? text : '';
   if (!Number.isFinite(max) || max <= 0 || value.length <= max) return { text: value, truncated: false };
-  const cut = value.slice(0, max);
-  const sentenceEnd = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('!'), cut.lastIndexOf('?'));
-  const wordEnd = cut.lastIndexOf(' ');
-  const at = sentenceEnd >= max * 0.6 ? sentenceEnd + 1
-    : wordEnd > 0 ? wordEnd
-      : max;
-  return { text: cut.slice(0, at).trim(), truncated: true };
+  return { text: trimToClause(value, max), truncated: true };
 }
 
 /**
