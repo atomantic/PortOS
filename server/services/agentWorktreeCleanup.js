@@ -6,12 +6,9 @@
  * recovery tasks when a merge or PR creation fails. Extracted from
  * agentLifecycle.js as a self-contained leaf so the completion-cleanup
  * orchestrator (agentCompletionCleanup.js) can import it without a circular
- * dependency back into agentLifecycle.js.
- *
- * agentLifecycle.js re-exports these three functions for backward
- * compatibility (agentManagement.js and subAgentSpawner.js import
- * `cleanupAgentWorktree` / `spawnMergeRecoveryTask` / `spawnReviewLoopFollowUp`
- * from there).
+ * dependency back into agentLifecycle.js. Consumers import these functions from
+ * here directly — the agentLifecycle.js pass-through re-exports were retired
+ * with the subAgentSpawner barrel (#3450).
  */
 
 import { existsSync } from 'fs';
@@ -757,8 +754,9 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * agent that began the shipped work over.
  *
  * Call this AFTER `cleanupAgentWorktree` so it reflects what actually survived, and
- * from all three spawn sites — `spawnDirectly` (agentCliSpawning.js), the TUI
- * `finish()` (agentTuiSpawning.js), and `handleAgentCompletion`
+ * from all three completion paths — the two in-process spawners (`spawnDirectly` in
+ * agentCliSpawning.js and the TUI `finish()` in agentTuiSpawning.js, both through
+ * `runSpawnerCompletionCleanup`) and `handleAgentCompletion`
  * (agentCompletionCleanup.js, runner mode). Only the runner path used to do it, so a
  * failed direct-CLI/TUI run left a branch full of commits nothing would ever point a
  * retry at.

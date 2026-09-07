@@ -22,9 +22,8 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
+import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
-import { normalizeReviewers } from '../lib/validation.js';
-import { resolveReviewLoopOptions } from './codeReview.js';
 import { safeJSONParse, PATHS, writeFileGuarded } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { isKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
@@ -41,8 +40,8 @@ import { resolveForgeTokenEnv } from './git.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
-import { prClaimWasVerified, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
-import { canTypeSlashCommands, agentOwnsPrWorkflow } from '../lib/slashdoInvocation.js';
+import { prClaimWasVerified } from '../lib/prDisposition.js';
+import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
 import { doneSentinelPath } from '../lib/agentSentinel.js';
 import { isHostShuttingDown, shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
@@ -330,15 +329,10 @@ export async function getClaudeSettingsEnv() {
 
 /**
  * Spawn agent directly (fallback when runner not available).
- * `cleanupWorktreeFn` and `isTruthyMetaFn` are passed in rather than
- * imported directly. The agentLifecycle.js ↔ agentCliSpawning.js import
- * graph is bidirectional (agentLifecycle calls `spawnDirectly`, this file
- * calls `finalizeAgent`) and ES module hoisting handles it for top-level
- * function references — but importing `cleanupAgentWorktree` /
- * `isTruthyMeta` at module top level would force their `agentLifecycle`
- * and `subAgentSpawner` modules to initialize before this one, racing
- * the cycle in ways that surfaced as `undefined` reads on cold start.
- * Passing them via the options object defers the lookup to call time.
+ * `isTruthyMetaFn` is the lifecycle's shared metadata predicate, passed in by
+ * the caller and threaded on to `finalizeAgent`. Completion cleanup is not
+ * injected: `runSpawnerCompletionCleanup` is imported at top level, since
+ * nothing in its static closure reaches this module or agentLifecycle.js.
  */
 export async function spawnDirectly({
   agentId,
@@ -352,7 +346,6 @@ export async function spawnDirectly({
   agentDir,
   executionId,
   laneName,
-  cleanupWorktreeFn,
   isTruthyMetaFn,
   safetyProfile = null,
 }) {
@@ -859,7 +852,7 @@ export async function spawnDirectly({
     // portos-server's descendants). Abandon rather than finalize, for the same
     // reasons as the TUI path (#3202): finalizing would charge the task's
     // failure budget — and possibly file an investigation task — for a fault the
-    // agent didn't have, and its cleanup hands the worktree to `cleanupWorktreeFn`,
+    // agent didn't have, and its cleanup hands the worktree to `cleanupAgentWorktree`,
     // which removes a clean tree, discarding the state a resume needs. Leaving
     // the record `running` is what lets the next boot's orphan sweep see this
     // agent in the host-shutdown marker and requeue it as interrupted.
@@ -906,33 +899,29 @@ export async function spawnDirectly({
     // review → merge (#3733): a slashdo-capable Claude runs `/simplify` +
     // `/do:pr`, codex/grok/agy/OpenCode run the plain `git`/`gh` equivalent from
     // the same prompt (see buildCliCompletionSection in agentPromptBuilder.js).
-    // Mirror that here so PortOS doesn't double-fire push+PR creation.
-    const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
-    const directLeanMode = isOllamaClaudeProvider(provider);
-    const directAgentOwnsPR = directOpenPR && agentOwnsPrWorkflow({
+    // Resolved from the live provider descriptor — the same reading the TUI
+    // path takes up front — so PortOS doesn't double-fire push+PR creation; see
+    // `resolvePrOwnership` for why finalize's `prClaimExpected` and cleanup's
+    // `agentOwnsPR` are two predicates (#3358).
+    const prOwnership = resolvePrOwnership({
+      task,
+      isTruthyMeta: isTruthyMetaFn,
       providerType: PROVIDER_TYPES.CLI,
-      leanMode: directLeanMode,
-    });
-    // PR-claim verification (#3358) stays on the SLASH-command predicate: it runs
-    // BEFORE the cleanup below, and cleanup now backstops a harness that skipped
-    // its own PR step — failing the run here for a PR that is about to exist
-    // would turn a recovered handoff into a false needs-attention.
-    const directPrClaimExpected = directOpenPR && canTypeSlashCommands({
       providerId: provider?.id,
       providerCommand: provider?.command,
-      leanMode: directLeanMode,
+      leanMode: isOllamaClaudeProvider(provider),
     });
     // Whether finalize's check ACTUALLY produced a forge answer (filled in from
     // its return below) — not the same question as whether one was expected.
     // Finalize substitutes `{ok:true}` for a user-terminated run and for a check
     // that threw, and a throw from finalize skips the assignment entirely; in all
     // three cases nothing was verified, so cleanup must ask rather than stand down.
-    let directPrClaimVerified = false;
+    let prClaimVerified = false;
     let noChangesToShip = false;
 
-    // try/finally so a throw from finalizeAgent still runs the local
-    // cleanup (worktree, pid unregister, activeAgents delete). Mirrors the
-    // TUI path's pattern.
+    // try/finally so a throw from finalizeAgent still runs the local cleanup
+    // (the shared completion dispatch, pid unregister, activeAgents delete).
+    // Mirrors the TUI path's pattern.
     // See the TUI path: a PR-claim downgrade must reach cleanup, or a run that
     // opened no PR is cleaned up as a success and loses its retry state (#3358).
     let cleanupSuccess = finalSuccess;
@@ -952,60 +941,27 @@ export async function spawnDirectly({
         error: finalError || undefined,
         completionReason: terminatedByUser ? 'user-terminated' : undefined,
         workspacePath: cwd,
-        prExpected: directPrClaimExpected,
+        prExpected: prOwnership.prClaimExpected,
         // The run window the commit criterion is evaluated against (#3637).
         startedAt: agentData?.startedAt ?? null,
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
-      directPrClaimVerified = prClaimWasVerified(finalized?.prVerdict);
+      prClaimVerified = prClaimWasVerified(finalized?.prVerdict);
       noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
     } finally {
-      // Advance a staged pipeline exactly as the runner/TUI path does through
-      // runAgentCompletionCleanup. This path only ever ran finalize + worktree
-      // cleanup, so a stage that spawned directly — every public-review stage,
-      // any cli-typed provider — completed without queuing its successor: the
-      // pr-reviewer Eligibility Gate recorded its decision and the pipeline
-      // simply stopped. Before the worktree goes, since a stage precondition
-      // may read it. Lazy import for the same module-cycle reason as
-      // cleanupWorktreeFn; sanctioned try/catch — this is a child 'close'
-      // handler, not a request.
-      if (task?.metadata?.pipeline) {
-        try {
-          const { handlePipelineProgression } = await import('./agentCompletionCleanup.js');
-          await handlePipelineProgression(task, agentId, cleanupSuccess);
-        } catch (err) {
-          console.error(`❌ Pipeline progression failed for ${agentId}: ${err.message}`);
-        }
-      }
-      const directPrCompletion = resolvePrCompletion(task.metadata);
-      const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
-      const reviewOptions = await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn });
-      await cleanupWorktreeFn(agentId, cleanupSuccess, {
-        prCreation: resolvePrCreation({
-          taskOpenPR: directOpenPR,
-          agentOwnsPr: directAgentOwnsPR,
-          prClaimVerified: directPrClaimVerified,
-          noChangesToShip,
-        }),
-        prCompletion: directPrCompletion,
-        ...reviewOptions,
-        skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
-        description: task.description,
-        agentOutput: outputBuffer,
-        originalTask: task
-      }).catch(err => console.error(`❌ CLI worktree cleanup failed for ${agentId}: ${err.message}`));
-
-      // Release the retry hold: flip the failed task back to `pending` carrying a
-      // pointer at whatever the run left behind — the branch (or whole worktree)
-      // `cleanupWorktreeFn` just preserved because the run failed with commits on
-      // it. Without the pointer the retry starts clean and redoes work already
-      // sitting on disk (#3368); without the hold that release replaces, the retry
-      // could be dequeued before the pointer landed (#3373). Imported lazily for the
-      // same reason `cleanupWorktreeFn` is injected: pulling the cleanup graph in at
-      // module top level races this file's own init in the agentLifecycle cycle.
-      await import('./agentWorktreeCleanup.js')
-        .then(({ releaseRetryHold }) => releaseRetryHold({ agentId, task, success: cleanupSuccess }))
-        .catch(err => console.error(`❌ CLI retry-hold release failed for ${agentId}: ${err.message}`));
+      // Pipeline progression → worktree cleanup with the PR disposition →
+      // retry-hold release, in the one owner both in-process spawners share.
+      // Caught so a throw there cannot skip the in-memory teardown below — this
+      // is a child 'close' handler, outside any request lifecycle.
+      await runSpawnerCompletionCleanup({
+        agentId,
+        task,
+        success: cleanupSuccess,
+        prOwnership,
+        prClaimVerified,
+        noChangesToShip,
+        outputBuffer,
+      }).catch(err => console.error(`❌ CLI completion cleanup failed for ${agentId}: ${err.message}`));
 
       unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
       activeAgents.delete(agentId);

@@ -123,11 +123,15 @@ vi.mock('./prProbe.js', () => ({
   probePrForBranch: vi.fn().mockResolvedValue({ prState: null, prUrl: null, prNumber: null, cli: null, readable: true }),
 }));
 
-// Lazily imported by finish()'s cleanup block to record a failed run's resume
-// pointer (#3368). Mocked so the test doesn't pull the real cleanup graph
-// (cos.js, worktreeManager, recoveryTasks) in behind it.
-vi.mock('./agentWorktreeCleanup.js', () => ({
-  releaseRetryHold: vi.fn().mockResolvedValue({}),
+// finish() hands the run to the shared completion dispatch (pipeline
+// progression → worktree cleanup with the PR disposition → retry-hold release).
+// Doubled at that boundary: what this suite owns is that the TUI path dispatches
+// with the right verdict and PR ownership, and only when it should — the
+// dispatch's own sequence is pinned in agentCompletionCleanup.test.js. Mocking
+// it also keeps the real cleanup graph (cos.js, worktreeManager, recoveryTasks)
+// out of this suite.
+vi.mock('./agentCompletionCleanup.js', () => ({
+  runSpawnerCompletionCleanup: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('fs', () => ({
@@ -234,7 +238,7 @@ import {
   PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
 } from '../lib/agentExecutionProfiles.js';
-import { releaseRetryHold } from './agentWorktreeCleanup.js';
+import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { spawnTuiSessionViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import * as agentLifecycle from './agentFinalization.js';
@@ -640,10 +644,7 @@ describe('spawnTuiAgent runtime', () => {
     const agentDir = overrides.agentDir ?? '/tmp/agentdir';
     const executionId = overrides.executionId ?? null;
     const laneName = overrides.laneName ?? null;
-    const helpers = overrides.helpers ?? {
-      cleanupWorktreeFn: vi.fn().mockResolvedValue(undefined),
-      isTruthyMetaFn: (v) => !!v
-    };
+    const helpers = overrides.helpers ?? { isTruthyMetaFn: (v) => !!v };
     return spawnTuiAgent({
       agentId,
       task,
@@ -941,34 +942,38 @@ describe('spawnTuiAgent runtime', () => {
     await completeDone;
   });
 
-  it('backstops a slashdo-free TUI PR instead of creating one outright (#3733)', async () => {
-    const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
+  it('hands a slashdo-free TUI to the dispatch as owning its PR with nothing verified (#3733)', async () => {
+    const task = {
+      id: 'task-1',
+      description: 'do the thing',
+      metadata: { openPR: true, prCompletion: 'review-then-merge', reviewers: ['codex'] },
+    };
     const spawnPromise = runSpawn({
       provider: { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', envVars: {} },
-      task: {
-        id: 'task-1',
-        description: 'do the thing',
-        metadata: { openPR: true, prCompletion: 'review-then-merge', reviewers: ['codex'] },
-      },
-      helpers: { cleanupWorktreeFn, isTruthyMetaFn: (value) => value === true || value === 'true' },
+      task,
+      helpers: { isTruthyMetaFn: (value) => value === true || value === 'true' },
     });
     await flushMicrotasks();
 
     await capturedOnExit({ exitCode: 0, killed: false });
     await spawnPromise;
 
-    // The codex TUI drives its own push → PR → review → merge, so PortOS only
-    // steps in when the forge says no PR exists — hence prCreation: if-missing.
-    expect(cleanupWorktreeFn).toHaveBeenCalledWith('agent-1', true, expect.objectContaining({
-      prCreation: 'if-missing',
-      prCompletion: 'review-then-merge',
-      reviewers: ['codex'],
-      skipMerge: true,
+    // The codex TUI drives its own push → PR → review → merge but cannot type
+    // `/do:pr`, so finalize verified no claim — the dispatch maps that to a
+    // forge-checked `if-missing` backstop (pinned in agentCompletionCleanup.test.js).
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'agent-1',
+      task,
+      success: true,
+      prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: false },
+      prClaimVerified: false,
     }));
+    // …and finalize was told not to verify a claim this session cannot make —
+    // failing it there would pre-empt the backstop cleanup is about to run.
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ prExpected: false }));
   });
 
   it('a lean --bare TUI still hands its PR to PortOS outright', async () => {
-    const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
     const spawnPromise = runSpawn({
       provider: { id: 'claude-ollama-tui', name: 'Lean Claude TUI', type: 'tui', command: 'claude', ollamaBacked: true, envVars: {} },
       leanMode: true,
@@ -977,16 +982,17 @@ describe('spawnTuiAgent runtime', () => {
         description: 'do the thing',
         metadata: { openPR: true, prCompletion: 'review-then-merge' },
       },
-      helpers: { cleanupWorktreeFn, isTruthyMetaFn: (value) => value === true || value === 'true' },
+      helpers: { isTruthyMetaFn: (value) => value === true || value === 'true' },
     });
     await flushMicrotasks();
 
     await capturedOnExit({ exitCode: 0, killed: false });
     await spawnPromise;
 
-    expect(cleanupWorktreeFn).toHaveBeenCalledWith('agent-1', true, expect.objectContaining({
-      prCreation: 'always',
-      skipMerge: false,
+    // Neither predicate holds for a `--bare` session, so the dispatch opens the
+    // PR itself (`always`) and may auto-merge the branch.
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
+      prOwnership: { taskOpenPR: true, agentOwnsPR: false, prClaimExpected: false },
     }));
   });
 
@@ -1008,7 +1014,6 @@ describe('spawnTuiAgent runtime', () => {
   });
 
   it('does not double-fire a PR owned by a slashdo-capable Claude TUI', async () => {
-    const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
     // finalize asked the forge and got an answer for a real branch — the only
     // shape that lets cleanup skip its own query (see `prClaimWasVerified`).
     vi.mocked(agentLifecycle.finalizeAgent).mockResolvedValueOnce({
@@ -1021,52 +1026,40 @@ describe('spawnTuiAgent runtime', () => {
         description: 'do the thing',
         metadata: { openPR: true, prCompletion: 'review-then-merge' },
       },
-      helpers: { cleanupWorktreeFn, isTruthyMetaFn: (value) => value === true || value === 'true' },
+      helpers: { isTruthyMetaFn: (value) => value === true || value === 'true' },
     });
     await flushMicrotasks();
 
     await capturedOnExit({ exitCode: 0, killed: false });
     await spawnPromise;
 
-    // `never`, not `if-missing`: finalize already ran `verifyPrClaim` for a
-    // slashdo-capable session, so a second forge query would be pure duplication.
-    expect(cleanupWorktreeFn).toHaveBeenCalledWith('agent-1', true, expect.objectContaining({
-      prCreation: 'never',
-      prCompletion: 'review-then-merge',
-      skipMerge: true,
+    // finalize ran `verifyPrClaim` for a slashdo-capable session and the verdict
+    // reaches the dispatch as verified, so it never queries the forge again.
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
+      prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: true },
+      prClaimVerified: true,
     }));
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ prExpected: true }));
   });
 
-  // A failed TUI run's branch is preserved by cleanup when it holds commits; without
-  // this call nothing ever points the retry at it and the work is redone from
-  // scratch (#3368). Runs after cleanup so it reflects what actually survived.
-  it('records a resume pointer after cleanup when the run failed', async () => {
-    vi.mocked(releaseRetryHold).mockClear();
-    const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
+  // The dispatch releases the retry hold with this verdict (#3368 — its ordering
+  // after worktree cleanup is pinned in agentCompletionCleanup.test.js). What
+  // this pins is that finish() hands it the REAL verdict: a hardcoded value
+  // would stamp resume pointers on every completed run, or on none.
+  it('hands the dispatch the run verdict — failure on a non-zero exit, success on a clean one', async () => {
     const task = { id: 'task-1', description: 'do the thing', metadata: {} };
-    const spawnPromise = runSpawn({ task, helpers: { cleanupWorktreeFn, isTruthyMetaFn: (v) => !!v } });
+    const failed = runSpawn({ task });
     await flushMicrotasks();
-
     await capturedOnExit({ exitCode: 1, killed: false });
-    await spawnPromise;
+    await failed;
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-1', task, success: false }));
 
-    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'agent-1', task, success: false });
-    expect(cleanupWorktreeFn.mock.invocationCallOrder[0])
-      .toBeLessThan(vi.mocked(releaseRetryHold).mock.invocationCallOrder[0]);
-  });
-
-  // The helper no-ops on success (unit-tested in cleanupAgentWorktree.test.js) —
-  // what this pins is that finish() hands it the real verdict, not a hardcoded
-  // false that would stamp pointers on every completed run.
-  it('passes the success verdict through on a clean run', async () => {
-    vi.mocked(releaseRetryHold).mockClear();
-    const spawnPromise = runSpawn({ helpers: { cleanupWorktreeFn: vi.fn().mockResolvedValue(undefined), isTruthyMetaFn: (v) => !!v } });
+    vi.mocked(runSpawnerCompletionCleanup).mockClear();
+    const clean = runSpawn();
     await flushMicrotasks();
-
     await capturedOnExit({ exitCode: 0, killed: false });
-    await spawnPromise;
-
-    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    await clean;
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 
   // ── CoS agents stay alive while provider output is silent ────────────────────
@@ -2492,14 +2485,13 @@ describe('spawnTuiAgent runtime', () => {
   // Reported in #3202: `pm2 restart portos-server` TreeKills the agent's PTY.
   // node-pty reports that as exit code 0, so `success: code === 0 && !killed`
   // recorded a run that had produced nothing as SUCCESSFUL — and worse, finalize
-  // handed the worktree to cleanupWorktreeFn, destroying the state a resume
-  // needs. Both halves are asserted here.
+  // handed the worktree to cleanup, destroying the state a resume needs. Both
+  // halves are asserted here.
   describe('host restart (#3202)', () => {
     afterEach(() => resetHostShutdownFlagForTests());
 
     it('abandons instead of finalizing when the PTY dies during shutdown', async () => {
-      const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
-      const spawnPromise = runSpawn({ helpers: { cleanupWorktreeFn, isTruthyMetaFn: (v) => !!v } });
+      const spawnPromise = runSpawn();
       await flushMicrotasks();
 
       markHostShuttingDown();
@@ -2510,7 +2502,7 @@ describe('spawnTuiAgent runtime', () => {
 
       // No outcome recorded, and — critically — the worktree is left alone.
       expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
-      expect(cleanupWorktreeFn).not.toHaveBeenCalled();
+      expect(runSpawnerCompletionCleanup).not.toHaveBeenCalled();
       // The record stays `running`; only the phase label is refined, so boot
       // recovery still sees it as an agent to reconcile from the marker.
       expect(vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.some(

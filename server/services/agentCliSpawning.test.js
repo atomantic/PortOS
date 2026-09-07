@@ -56,8 +56,15 @@ vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn(),
 }));
+// The close handler hands the run to the shared completion dispatch (pipeline
+// progression → worktree cleanup with the PR disposition → retry-hold release).
+// Doubled at that boundary: what this suite owns is that the direct-CLI path
+// dispatches with the right verdict and PR ownership, and only when it should —
+// the dispatch's own sequence is pinned in agentCompletionCleanup.test.js.
+// Mocking it also keeps the real cleanup graph (cos.js, git.js, worktreeManager)
+// out of this suite.
 vi.mock('./agentCompletionCleanup.js', () => ({
-  handlePipelineProgression: vi.fn().mockResolvedValue(undefined),
+  runSpawnerCompletionCleanup: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('./agentState.js', () => ({
   activeAgents: new Map(),
@@ -105,12 +112,6 @@ vi.mock('../lib/childProcess.js', () => ({
   execFile: vi.fn(),
 }));
 
-// Lazily imported by the close handler's cleanup block to record a failed run's
-// resume pointer (#3368). Mocked so the test doesn't pull the real cleanup graph
-// (cos.js, git.js, worktreeManager) in behind it.
-vi.mock('./agentWorktreeCleanup.js', () => ({
-  releaseRetryHold: vi.fn().mockResolvedValue({}),
-}));
 vi.mock('./ollamaAgentContext.js', () => ({
   ensureOllamaAgentContext: vi.fn(async () => ({ skipped: true })),
 }));
@@ -122,7 +123,7 @@ vi.mock('../lib/privateSecuritySandbox.js', () => ({
 }));
 
 import { buildCliSpawnConfig, createStreamJsonParser, spawnDirectly } from './agentCliSpawning.js';
-import { releaseRetryHold } from './agentWorktreeCleanup.js';
+import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
 // Real module — the flag is a plain process-local boolean, so driving it
@@ -568,7 +569,6 @@ describe('stream error containment', () => {
     agentDir: '/tmp',
     executionId: null,
     laneName: null,
-    cleanupWorktreeFn: vi.fn().mockResolvedValue(undefined),
     isTruthyMetaFn: vi.fn().mockReturnValue(false),
   };
 
@@ -586,7 +586,8 @@ describe('stream error containment', () => {
     (await import('./agentRunTracking.js')).completeAgentRun.mockResolvedValue(undefined);
     (await import('./agentFinalization.js')).finalizeAgent.mockResolvedValue(undefined);
     // Completion waits must observe this test, not a previous cleanup call.
-    minimalArgs.cleanupWorktreeFn.mockClear().mockResolvedValue(undefined);
+    runSpawnerCompletionCleanup.mockClear();
+    runSpawnerCompletionCleanup.mockResolvedValue(undefined);
     vi.mocked(existsSync).mockReturnValue(false);
     vi.mocked(isOllamaBackedProvider).mockReturnValue(false);
     vi.mocked(ensureOllamaAgentContext).mockResolvedValue({ skipped: true });
@@ -731,7 +732,7 @@ describe('stream error containment', () => {
     });
 
     await expect(spawnDirectly(minimalArgs)).resolves.toBe('agent-test');
-    await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
+    await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled(), { interval: 5 });
 
     expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'agent-test',
@@ -865,7 +866,7 @@ describe('stream error containment', () => {
 
     fakeProcess.emit('close', 0);
     await spawnPromise;
-    await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
+    await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled(), { interval: 5 });
 
     expect(agentStateMocks.appendAgentOutputLines).toHaveBeenCalledWith('agent-test', [
       '⚠️ Example context warning',
@@ -1250,71 +1251,61 @@ describe('stream error containment', () => {
     });
   });
 
-  it('threads the ordered reviewer list while forcing public review into non-applying mode', async () => {
-    const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
-    const args = {
-      ...minimalArgs,
-      task: {
-        id: 'task-rv',
-        description: 'do stuff',
-        metadata: { reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean', reviewerApplies: true },
-      },
-      cleanupWorktreeFn,
-      isTruthyMetaFn: (v) => v === true,
+  it('hands a slashdo-capable harness to the dispatch as owning its PR, with the claim expected', async () => {
+    const { finalizeAgent } = await import('./agentFinalization.js');
+    finalizeAgent.mockClear();
+    const task = {
+      id: 'task-rv',
+      description: 'do stuff',
+      metadata: { openPR: true, reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean' },
     };
 
-    spawnDirectly(args);
+    spawnDirectly({ ...minimalArgs, task, isTruthyMetaFn: (v) => v === true });
     await new Promise((r) => setTimeout(r, 10));
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));
     fakeProcess.emit('close', 0);
     // spawnDirectly returns before the close handler's async cleanup finishes.
-    await vi.waitFor(() => expect(cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
+    await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledTimes(1), { interval: 5 });
 
-    expect(cleanupWorktreeFn).toHaveBeenCalledTimes(1);
-    const opts = cleanupWorktreeFn.mock.calls[0][2];
-    expect(opts.reviewers).toEqual(['codex', 'antigravity']);
-    expect(opts.reviewStopMode).toBe('on-clean');
-    expect(opts.reviewerApplies).toBe(false);
-    // The removed singular key must NOT be passed.
-    expect(opts.reviewer).toBeUndefined();
+    // A claude-code CLI both owns its PR workflow and can type `/do:pr`, so
+    // finalize was expected to verify the claim (its mock here verified none).
+    // The reviewer metadata travels on the task; the dispatch resolves it against
+    // the Code Review Defaults (agentCompletionCleanup.test.js).
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: minimalArgs.agentId,
+      task,
+      success: true,
+      prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: true },
+      prClaimVerified: false,
+    }));
+    // The claim predicate, not the ownership one, is what finalize verifies (#3358).
+    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ prExpected: true }));
   });
 
-  // A failed direct-CLI run's branch is preserved by cleanup when it holds commits;
-  // without this call nothing ever points the retry at it and the work is redone
-  // from scratch (#3368). Runs after cleanup so it reflects what actually survived.
-  it('records a resume pointer after cleanup when the run failed', async () => {
-    releaseRetryHold.mockClear();
-    const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
+  // The dispatch releases the retry hold with this verdict (#3368 — its ordering
+  // after worktree cleanup is pinned in agentCompletionCleanup.test.js). What
+  // this pins is that the close handler hands it the REAL verdict: a hardcoded
+  // value would stamp resume pointers on every completed run, or on none.
+  it('hands the dispatch the run verdict — failure on a non-zero exit, success on a clean one', async () => {
     const task = { id: 'task-rp', description: 'do stuff', metadata: {} };
-
-    spawnDirectly({ ...minimalArgs, task, cleanupWorktreeFn, isTruthyMetaFn: (v) => v === true });
+    spawnDirectly({ ...minimalArgs, task, isTruthyMetaFn: (v) => v === true });
     await new Promise((r) => setTimeout(r, 10));
     fakeProcess.emit('close', 1);
-    await vi.waitFor(() => expect(releaseRetryHold).toHaveBeenCalled(), { interval: 5 });
+    await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: minimalArgs.agentId, task, success: false }),
+    ), { interval: 5 });
 
-    expect(releaseRetryHold).toHaveBeenCalledWith({
-      agentId: minimalArgs.agentId, task, success: false,
-    });
-    expect(cleanupWorktreeFn.mock.invocationCallOrder[0])
-      .toBeLessThan(releaseRetryHold.mock.invocationCallOrder[0]);
-  });
-
-  // The helper no-ops on success (unit-tested in cleanupAgentWorktree.test.js) —
-  // what this pins is that the close handler hands it the real verdict, not a
-  // hardcoded false that would stamp pointers on every completed run.
-  it('passes the success verdict through on a clean run', async () => {
-    releaseRetryHold.mockClear();
-    const task = { id: 'task-rp-ok', description: 'do stuff', metadata: {} };
-
-    spawnDirectly({ ...minimalArgs, task, cleanupWorktreeFn: vi.fn().mockResolvedValue(undefined), isTruthyMetaFn: (v) => v === true });
+    runSpawnerCompletionCleanup.mockClear();
+    fakeProcess = makeFakeProcess();
+    spawnDirectly({ ...minimalArgs, task: { id: 'task-rp-ok', description: 'do stuff', metadata: {} }, isTruthyMetaFn: (v) => v === true });
     await new Promise((r) => setTimeout(r, 10));
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));
     fakeProcess.emit('close', 0);
-    await vi.waitFor(() => expect(releaseRetryHold).toHaveBeenCalled(), { interval: 5 });
-
-    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true }),
+    ), { interval: 5 });
   });
 
   // pm2's TreeKill takes direct-CLI children down with portos-server exactly as
@@ -1323,41 +1314,6 @@ describe('stream error containment', () => {
   // didn't have, and hand its worktree to cleanup, discarding the state a resume
   // needs. The run is abandoned instead, leaving the record `running` for the
   // next boot's orphan sweep to reconcile from the host-shutdown marker.
-  describe('pipeline progression on close', () => {
-    // The runner/TUI completion path advances a staged pipeline through
-    // runAgentCompletionCleanup; this direct path only ran finalize + worktree
-    // cleanup, so every directly-spawned stage (all public-review stages)
-    // completed without queuing its successor.
-    it('advances the pipeline before the worktree is cleaned up', async () => {
-      const { handlePipelineProgression } = await import('./agentCompletionCleanup.js');
-      handlePipelineProgression.mockClear();
-      const order = [];
-      handlePipelineProgression.mockImplementation(async () => { order.push('pipeline'); });
-      minimalArgs.cleanupWorktreeFn.mockImplementation(async () => { order.push('worktree'); });
-      const task = { id: 'task-1', description: 'stage', metadata: { pipeline: { status: 'running', currentStage: 1, stages: [{}, {}, {}] } } };
-
-      const spawnPromise = spawnDirectly({ ...minimalArgs, task });
-      await new Promise((r) => setTimeout(r, 10));
-      fakeProcess.emit('close', 0);
-      await spawnPromise.catch(() => {});
-      await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
-
-      expect(handlePipelineProgression).toHaveBeenCalledWith(task, 'agent-test', true);
-      expect(order).toEqual(['pipeline', 'worktree']);
-    });
-
-    it('does not touch pipeline progression for an ordinary task', async () => {
-      const { handlePipelineProgression } = await import('./agentCompletionCleanup.js');
-      handlePipelineProgression.mockClear();
-      const spawnPromise = spawnDirectly(minimalArgs);
-      await new Promise((r) => setTimeout(r, 10));
-      fakeProcess.emit('close', 0);
-      await spawnPromise.catch(() => {});
-      await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
-      expect(handlePipelineProgression).not.toHaveBeenCalled();
-    });
-  });
-
   describe('host restart (#3202)', () => {
     // The outer beforeEach re-sets implementations but not call history, and the
     // mocks are module-scoped — clear so "was it called" reads only this test.
@@ -1376,18 +1332,17 @@ describe('stream error containment', () => {
       fakeProcess.emit('close', code);
     };
 
-    it('abandons without finalizing or cleaning up the worktree', async () => {
-      const cleanupWorktreeFn = vi.fn().mockResolvedValue(undefined);
+    it('abandons without finalizing or dispatching cleanup', async () => {
       const { finalizeAgent } = await import('./agentFinalization.js');
 
-      await runToClose({ ...minimalArgs, cleanupWorktreeFn });
+      await runToClose({ ...minimalArgs });
       await vi.waitFor(() => expect(agentStateMocks.updateAgent).toHaveBeenCalledWith(
         minimalArgs.agentId,
         { metadata: { phase: 'interrupted', interruptedBy: 'host-shutdown' } },
       ), { interval: 5 });
 
       expect(finalizeAgent).not.toHaveBeenCalled();
-      expect(cleanupWorktreeFn).not.toHaveBeenCalled();
+      expect(runSpawnerCompletionCleanup).not.toHaveBeenCalled();
       // The breadcrumb the orphan sweep falls back on when no marker names the agent.
       expect(agentStateMocks.updateAgent).toHaveBeenCalledWith(
         minimalArgs.agentId,
@@ -1401,7 +1356,7 @@ describe('stream error containment', () => {
       userTerminatedAgents.add(minimalArgs.agentId);
 
       await runToClose({ ...minimalArgs });
-      await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
+      await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled(), { interval: 5 });
 
       expect(finalizeAgent).toHaveBeenCalledWith(
         expect.objectContaining({ terminatedByUser: true, success: false }),
@@ -1417,7 +1372,7 @@ describe('stream error containment', () => {
         path === join(minimalArgs.workspacePath, '.agent-done-agent-test'));
 
       await runToClose({ ...minimalArgs }, null);
-      await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
+      await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalled(), { interval: 5 });
 
       expect(finalizeAgent).toHaveBeenCalledWith(
         expect.objectContaining({

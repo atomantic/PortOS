@@ -15,20 +15,19 @@ import { updateAgent } from './cosAgentLifecycle.js';
 import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 import { resolveErrorAnalysis } from './agentTuiSpawning/finalizeHelpers.js';
 import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
+import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import { PATHS, watchForFile } from '../lib/fileUtils.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { doneSentinelName, doneSentinelPath as resolveDoneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
-import { PR_CREATION, prClaimWasVerified, resolvePrCompletion, resolvePrCreation, leavesPrForHuman } from '../lib/prDisposition.js';
-import { canTypeSlashCommands, agentOwnsPrWorkflow } from '../lib/slashdoInvocation.js';
+import { prClaimWasVerified, leavesPrForHuman } from '../lib/prDisposition.js';
+import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
 import { mergeGateOwed, resolveMergeGateVerdict, buildMergeGateReprompt } from '../lib/mergeGateContract.js';
 import { probePrForBranch } from './prProbe.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
-import { normalizeReviewers } from '../lib/validation.js';
 import * as git from './git.js';
-import { resolveReviewLoopOptions } from './codeReview.js';
 import { spawnTuiSessionViaRunner, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import { resolveInteractiveShell } from '../lib/interactiveShellResolver.js';
 import { formatShellCommandLine } from '../lib/shellCd.js';
@@ -666,7 +665,6 @@ export async function spawnTuiAgent({
   agentDir,
   executionId,
   laneName,
-  cleanupWorktreeFn,
   isTruthyMetaFn,
   leanMode = false,
   useDurableRunner = false,
@@ -707,16 +705,26 @@ export async function spawnTuiAgent({
   // → merge, whether or not it can type `/do:pr` (#3733) — a Claude TUI runs
   // the slashdo command, codex/antigravity/grok/OpenCode run the plain
   // `git`/`gh` equivalent from the same prompt. Only a lean `--bare` session
-  // still hands the lifecycle back to PortOS. Computed once up front (rather
-  // than inside finish()) so the merge-gate contract check below and finish()
-  // itself read the same answer.
-  const taskOpenPR = isTruthyMetaFn(task.metadata?.openPR);
-  const agentOwnsPR = taskOpenPR && agentOwnsPrWorkflow({ providerType: PROVIDER_TYPES.TUI, leanMode });
+  // still hands the lifecycle back to PortOS. Resolved once up front (rather
+  // than inside finish()) so the merge-gate contract check below and the
+  // completion dispatch finish() hands off to read the same answer.
+  const prOwnership = resolvePrOwnership({
+    task,
+    isTruthyMeta: isTruthyMetaFn,
+    providerType: PROVIDER_TYPES.TUI,
+    providerId: provider?.id,
+    providerCommand: provider?.command,
+    leanMode,
+  });
   // Does this run's own task shape say it owed a merge (#5876)? A run PortOS
   // still backstops (no PR at all, or a lean session) or one whose prompt
   // hands the PR to a human (JIRA, claim flow) never owed one, so the
   // contract check below is inert for those — see mergeGateContract.js.
-  const mergeGateIsOwed = mergeGateOwed({ taskOpenPR, ownsPrWorkflow: agentOwnsPR, leaveOpen: leavesPrForHuman(task) });
+  const mergeGateIsOwed = mergeGateOwed({
+    taskOpenPR: prOwnership.taskOpenPR,
+    ownsPrWorkflow: prOwnership.agentOwnsPR,
+    leaveOpen: leavesPrForHuman(task),
+  });
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
   const commandName = tuiConfig.command.split('/').pop();
   let finalized = false;
@@ -1125,20 +1133,11 @@ export async function spawnTuiAgent({
       completionError: finalError,
     });
 
-    // `taskOpenPR` / `agentOwnsPR` are computed once, up front, near
-    // `doneSentinelPath` — the merge-gate contract check above reads the same
-    // answer this cleanup path does, so neither side can believe the other
-    // owns the PR (#3733).
-    const taskReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
-    // …but PR-claim verification (#3358) stays keyed on the SLASH-command
-    // predicate. A run PortOS still backstops (it re-checks the forge at cleanup
-    // and opens the PR itself when the agent skipped it) must not be failed here
-    // for a PR that is about to exist — finalize runs before that net.
-    const prClaimExpected = taskOpenPR && canTypeSlashCommands({
-      providerId: provider?.id,
-      providerCommand: provider?.command,
-      leanMode,
-    });
+    // `prOwnership` was resolved once, up front, near `doneSentinelPath`, so the
+    // merge-gate contract check above and the completion dispatch below read the
+    // same answer (#3733); see `resolvePrOwnership` for why finalize's
+    // `prClaimExpected` and cleanup's `agentOwnsPR` are two predicates (#3358).
+    //
     // Whether finalize's check ACTUALLY produced a forge answer, filled in from
     // its return below. Deliberately not `prClaimExpected`: finalize substitutes
     // `{ok:true}` for a user-terminated run and for a check that threw, and a
@@ -1148,10 +1147,10 @@ export async function spawnTuiAgent({
     let noChangesToShip = false;
 
     // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
-    // hook crash) still runs the local cleanup — sentinel removal, worktree
-    // cleanup, pid unregister, activeAgents delete, session kill. Without
-    // this, a memory-extraction crash would strand the worktree and the
-    // shell session on disk.
+    // hook crash) still runs the local cleanup — sentinel removal, the shared
+    // completion dispatch (pipeline, worktree, retry hold), pid unregister,
+    // activeAgents delete, session kill. Without this, a memory-extraction
+    // crash would strand the worktree and the shell session on disk.
     // The verdict finalizeAgent actually persisted. A PR-claim downgrade (#3358)
     // must reach cleanup too — cleaning up as a success removes the worktree and
     // deletes the local branch, destroying the state the retry needs. Left at
@@ -1174,7 +1173,7 @@ export async function spawnTuiAgent({
         error: finalError || undefined,
         completionReason: reason,
         workspacePath: cwd,
-        prExpected: prClaimExpected,
+        prExpected: prOwnership.prClaimExpected,
         // The run window the commit criterion is evaluated against (#3637).
         startedAt: agentData?.startedAt ?? null,
       });
@@ -1186,38 +1185,19 @@ export async function spawnTuiAgent({
       // its own file and may still be running.
       if (doneSentinelPath) await rm(doneSentinelPath).catch(() => {});
 
-      const prCreation = resolvePrCreation({ taskOpenPR, agentOwnsPr: agentOwnsPR, prClaimVerified, noChangesToShip });
-      // Only the two modes that can still open a PR (and thus spawn a follow-up
-      // that needs these) pay for the resolve. `never` — the dominant path, an
-      // agent that opened and landed its own PR — discards them.
-      const reviewOptions = prCreation !== PR_CREATION.NEVER
-        ? await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn })
-          .catch(err => {
-            emitLog('warn', `TUI review options unavailable for ${agentId}: ${err.message}`, { agentId });
-            return {};
-          })
-        : {};
-      await cleanupWorktreeFn(agentId, cleanupSuccess, {
-        prCreation,
-        prCompletion: resolvePrCompletion(task.metadata),
-        ...reviewOptions,
-        skipMerge: taskReviewLoopFollowUp || agentOwnsPR,
-        description: task.description,
-        agentOutput: getOutputBuffer(),
-        originalTask: task
-      }).catch(err => emitLog('warn', `TUI worktree cleanup failed for ${agentId}: ${err.message}`, { agentId }));
-
-      // Release the retry hold: flip the failed task back to `pending` carrying a
-      // pointer at whatever the run left behind — the branch (or whole worktree)
-      // `cleanupWorktreeFn` just preserved because the run failed with commits on
-      // it. Without the pointer the retry starts clean and redoes work already
-      // sitting on disk (#3368); without the hold that release replaces, the retry
-      // could be dequeued before the pointer landed (#3373). Imported lazily for the
-      // same reason `cleanupWorktreeFn` is injected: pulling the cleanup graph in at
-      // module top level races this file's own init in the agentLifecycle cycle.
-      await import('./agentWorktreeCleanup.js')
-        .then(({ releaseRetryHold }) => releaseRetryHold({ agentId, task, success: cleanupSuccess }))
-        .catch(err => emitLog('warn', `TUI retry-hold release failed for ${agentId}: ${err.message}`, { agentId }));
+      // Pipeline progression → worktree cleanup with the PR disposition →
+      // retry-hold release, in the one owner both in-process spawners share.
+      // Caught so a throw there cannot skip the in-memory teardown below — this
+      // runs off a PTY exit, outside any request lifecycle.
+      await runSpawnerCompletionCleanup({
+        agentId,
+        task,
+        success: cleanupSuccess,
+        prOwnership,
+        prClaimVerified,
+        noChangesToShip,
+        outputBuffer: getOutputBuffer(),
+      }).catch(err => emitLog('warn', `TUI completion cleanup failed for ${agentId}: ${err.message}`, { agentId }));
 
       if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
       activeAgents.delete(agentId);
@@ -1230,7 +1210,7 @@ export async function spawnTuiAgent({
    *
    * Deliberately NOT `finish()`: finalizing here would record an outcome for a
    * run that never reached one, and its cleanup path removes the `.agent-done`
-   * sentinel and hands the worktree to `cleanupWorktreeFn` — destroying exactly
+   * sentinel and hands the worktree to `cleanupAgentWorktree` — destroying exactly
    * the state a resume needs. So this only stops the machinery and flushes what
    * was captured; the agent record stays `running` and the worktree stays on
    * disk. The next boot's orphan sweep reads the host-shutdown marker, sees this

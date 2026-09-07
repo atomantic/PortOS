@@ -541,6 +541,47 @@ export function resolveOwnsPrWorkflow({ persisted, providerId = null, providerCo
 }
 
 /**
+ * The three PR answers a spawned run needs, from ONE reading of the task and
+ * the LIVE provider descriptor. Both in-process spawners call this once — the
+ * TUI `finish()` path up front, because its merge-gate contract check (#5876)
+ * reads `agentOwnsPR` before the run completes; the direct-CLI `close` handler
+ * at exit — and hand the result to `runSpawnerCompletionCleanup`, so the
+ * ownership question and the cleanup that acts on it can never read different
+ * answers (#3733).
+ *
+ * `agentOwnsPR` (does the harness drive its own push → PR → merge?) and
+ * `prClaimExpected` (does finalize verify a PR claim for it?) are deliberately
+ * two predicates: a harness that owns the workflow but cannot TYPE `/do:pr` is
+ * backstopped by cleanup, which re-checks the forge and opens the PR itself
+ * when the agent skipped it — failing it at finalize for a PR that is about to
+ * exist would turn a recovered hand-off into a false needs-attention (#3358).
+ *
+ * The runner-event path answers the same question from the PERSISTED record
+ * via `resolveOwnsPrWorkflow` — see `runCompletionCleanupSteps`. That record
+ * is stamped at spawn time from the prompt's own gate (`metadata.ownsPrWorkflow`,
+ * task-shape aware), which the spawners do not read yet: `agentOwnsPR` here is
+ * still provider-only, as both spawners derived it before this helper existed.
+ * Converging the two is #6551.
+ *
+ * @param {Object} opts
+ * @param {Object} opts.task
+ * @param {(value: unknown) => boolean} opts.isTruthyMeta
+ * @param {string|null} [opts.providerType] - `'tui' | 'cli'`
+ * @param {string|null} [opts.providerId]
+ * @param {string|null} [opts.providerCommand]
+ * @param {boolean} [opts.leanMode]
+ * @returns {{ taskOpenPR: boolean, agentOwnsPR: boolean, prClaimExpected: boolean }}
+ */
+export function resolvePrOwnership({ task, isTruthyMeta, providerType = null, providerId = null, providerCommand = null, leanMode = false }) {
+  const taskOpenPR = isTruthyMeta(task?.metadata?.openPR);
+  return {
+    taskOpenPR,
+    agentOwnsPR: taskOpenPR && agentOwnsPrWorkflow({ providerType, leanMode }),
+    prClaimExpected: taskOpenPR && canTypeSlashCommands({ providerId, providerCommand, leanMode }),
+  };
+}
+
+/**
  * Resolve the concrete invocation for a slashdo-backed task.
  *
  * @param {Object} opts
