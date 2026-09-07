@@ -50,6 +50,12 @@ const DERP_MAP_FETCH_TIMEOUT_MS = 15_000;
 const DIAGNOSTIC_TAIL_CHARS = 4096;
 const DIAGNOSTIC_MAX_CHARS = 320;
 const PORT_SCAN_LIMIT = 32;
+// How long a delivery failure keeps describing the tunnel. tailcat re-emits the
+// line on every failed request, so a still-broken forward keeps refreshing it,
+// while one that started working again simply goes quiet and ages out. Without
+// a window a single blip would latch "no route" forever — the same lie as a
+// permanently green "running", pointing the other way.
+const TUNNEL_ERROR_FRESH_MS = 5 * 60 * 1000;
 const DEFAULT_DATA = { version: 1, forwards: [] };
 
 const withLock = createMutex();
@@ -97,6 +103,27 @@ export function redactTailcatDiagnostics(text) {
     .filter(Boolean);
   const joined = lines.slice(-3).join(' | ');
   return joined.length > DIAGNOSTIC_MAX_CHARS ? `${joined.slice(0, DIAGNOSTIC_MAX_CHARS)}…` : joined;
+}
+
+/**
+ * tailcat's per-connection delivery failures. `tailcat forward` binds its local
+ * listener eagerly and only brings the WireGuard/DERP tunnel up when a
+ * connection arrives, so a forward whose relay is blocked still binds, still
+ * reports `active`, and still shows `running` — while every request through it
+ * is reset once the dial deadline expires. That line is the only place tailcat
+ * says so, which is why the post-startup stderr has to be read rather than
+ * drained: the operator's symptom is "the loopback says running but nothing
+ * answers", and this is the sentence that explains it.
+ *
+ * Deliberately narrow. Relay reconnects and netcheck chatter are normal even on
+ * a healthy tunnel; a failed dial is not.
+ */
+const RUNTIME_FAILURE_PATTERN = /^.*\bdial remote\b.*$/m;
+
+/** The redacted tailcat line explaining a failed delivery, or null. */
+export function classifyTailcatRuntimeError(text) {
+  const match = RUNTIME_FAILURE_PATTERN.exec(String(text || ''));
+  return match ? redactTailcatDiagnostics(match[0]) || null : null;
 }
 
 async function loadForwards() {
@@ -194,21 +221,33 @@ async function markForwardFailed(id, error, patchFn = patchForward) {
  */
 export async function listTailcatForwards() {
   const entries = await readForwards();
-  return entries.map((entry) => ({
-    id: entry.id,
-    peerId: entry.peerId,
-    tcAddress: redactTcAddress(entry.tcAddress),
-    localPort: entry.localPort,
-    remotePort: entry.remotePort,
-    name: entry.name,
-    protocol: entry.protocol,
-    hasAuth: !!entry.auth,
-    status: entry.status,
-    lastError: entry.lastError,
-    lastErrorAt: entry.lastErrorAt,
-    createdAt: entry.createdAt,
-    live: liveForwards.has(entry.id),
-  }));
+  return entries.map((entry) => {
+    // In-memory, never persisted: it describes the child running right now, and
+    // a per-connection failure repeating every few seconds would thrash the file.
+    const recorded = liveForwards.get(entry.id)?.child?.tailcatRuntimeError || null;
+    const runtimeError = recorded && Date.now() - Date.parse(recorded.at) < TUNNEL_ERROR_FRESH_MS
+      ? recorded
+      : null;
+    return {
+      id: entry.id,
+      peerId: entry.peerId,
+      tcAddress: redactTcAddress(entry.tcAddress),
+      localPort: entry.localPort,
+      remotePort: entry.remotePort,
+      name: entry.name,
+      protocol: entry.protocol,
+      hasAuth: !!entry.auth,
+      status: entry.status,
+      lastError: entry.lastError,
+      lastErrorAt: entry.lastErrorAt,
+      createdAt: entry.createdAt,
+      live: liveForwards.has(entry.id),
+      // "running" only ever meant the local listener is bound. This is the
+      // separate answer to "can it actually carry a request?".
+      tunnelError: runtimeError?.message || null,
+      tunnelErrorAt: runtimeError?.at || null,
+    };
+  });
 }
 
 /**
@@ -503,6 +542,28 @@ export async function startForwardProcess({
     safeChildProcessOptions({ env: safeChildProcessEnv(), stdio: ['ignore', 'pipe', 'pipe'] }));
   ownedChildren.add(child);
   child.stdout?.on('data', () => {});
+  // Liveness of the listener is not liveness of the tunnel — see
+  // RUNTIME_FAILURE_PATTERN. Null until tailcat reports it cannot deliver.
+  child.tailcatRuntimeError = null;
+
+  // Post-startup stderr is read, not merely drained. The rolling buffer holds
+  // at most one partial line, so a diagnostic split across chunk boundaries is
+  // still recognizable and no capability bytes are retained beyond a line.
+  let runtimeTail = '';
+  const observeRuntime = (text) => {
+    runtimeTail = (runtimeTail + text).slice(-DIAGNOSTIC_TAIL_CHARS);
+    const lastNewline = runtimeTail.lastIndexOf('\n');
+    if (lastNewline === -1) return;
+    const complete = runtimeTail.slice(0, lastNewline);
+    runtimeTail = runtimeTail.slice(lastNewline + 1);
+    const message = classifyTailcatRuntimeError(complete);
+    if (!message) return;
+    // Once per distinct reason: a blocked relay repeats this every request.
+    if (child.tailcatRuntimeError?.message !== message) {
+      console.error(`❌ tailcat forward 127.0.0.1:${localPort} cannot reach the remote — ${message}`);
+    }
+    child.tailcatRuntimeError = { message, at: new Date().toISOString() };
+  };
 
   // tailcat's own diagnostics can contain the bearer capability, so the raw tail
   // is bounded, redacted on the way into an error, and no longer accumulated once
@@ -531,10 +592,16 @@ export async function startForwardProcess({
     const poller = setInterval(() => {
       isListening(localPort).then((listening) => { if (listening) finish(); }, () => {});
     }, probeMs);
-    // Stays attached past startup so the pipe keeps draining, but stops
-    // accumulating: settled means the capability bytes are no longer kept.
+    // Stays attached past startup: the startup tail stops accumulating (settled
+    // means those capability bytes are no longer kept) and the same pipe becomes
+    // the runtime health signal.
     child.stderr?.on('data', (chunk) => {
-      if (settled) return;
+      if (settled) {
+        // Stream callback, outside any request lifecycle: an uncaught throw here
+        // would take the whole server down.
+        try { observeRuntime(String(chunk)); } catch { /* diagnostics only */ }
+        return;
+      }
       tail = (tail + String(chunk)).slice(-DIAGNOSTIC_TAIL_CHARS);
       if (readyPattern.test(tail)) finish();
     });

@@ -9,6 +9,12 @@
  * makes that recoverable: it names which forward is down, what tailcat actually
  * said, and offers Retry without the address ever coming back to the browser.
  *
+ * It also separates "the listener is bound" from "the tunnel can carry a
+ * request". tailcat binds its loopback port eagerly and only dials the remote
+ * once traffic arrives, so a forward whose relay is blocked stays `active` and
+ * `running` while every request through it is reset — which reads as a working
+ * loopback that simply refuses to answer.
+ *
  * Rows carry only the redacted address. Nothing here can reveal the capability.
  */
 
@@ -74,13 +80,28 @@ export default function TailcatForwardsPanel({ onChange }) {
       </p>
       <ul className="space-y-2">
         {forwards.map(forward => {
-          const StatusIcon = STATUS_ICON[forward.status] || Clock;
+          // A bound listener is not a working tunnel: tailcat binds eagerly and
+          // only dials the remote when a request arrives, so a forward whose
+          // relay is blocked reports `active`/`running` while every request
+          // through it is reset. Show that as its own state instead of green.
+          const broken = forward.live && !!forward.tunnelError;
+          const StatusIcon = broken ? AlertCircle : (STATUS_ICON[forward.status] || Clock);
           const busy = busyId === forward.id;
+          const failure = broken
+            ? { message: forward.tunnelError, at: forward.tunnelErrorAt }
+            : (forward.status !== 'active' && forward.lastError
+              ? { message: forward.lastError, at: forward.lastErrorAt }
+              : null);
           return (
             <li key={forward.id} className="bg-port-bg border border-port-border rounded-lg p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <Pill tone={STATUS_TONE[forward.status] || 'bare'} size="xs" bordered={false} icon={StatusIcon}>
-                  {forward.live ? 'running' : forward.status}
+                <Pill
+                  tone={broken ? 'warning' : (STATUS_TONE[forward.status] || 'bare')}
+                  size="xs"
+                  bordered={false}
+                  icon={StatusIcon}
+                >
+                  {broken ? 'no route' : (forward.live ? 'running' : forward.status)}
                 </Pill>
                 <span className="text-sm text-white truncate">
                   {forward.name || forward.tcAddress}
@@ -111,10 +132,10 @@ export default function TailcatForwardsPanel({ onChange }) {
                   </button>
                 </div>
               </div>
-              {forward.status !== 'active' && forward.lastError && (
+              {failure && (
                 <p className="text-[11px] text-port-error mt-2 leading-snug break-words">
-                  {forward.lastError}
-                  {forward.lastErrorAt && <span className="text-gray-500"> · {timeAgo(forward.lastErrorAt)}</span>}
+                  {failure.message}
+                  {failure.at && <span className="text-gray-500"> · {timeAgo(failure.at)}</span>}
                 </p>
               )}
             </li>
