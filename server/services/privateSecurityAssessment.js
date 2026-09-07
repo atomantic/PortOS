@@ -101,7 +101,7 @@ export async function processTaskOutput({ success, payload, task, agentId }, dep
   const report = scrubSecretTokensDeep(parsed.data);
   // Treat model prose as text, not active Markdown images/HTML that could
   // cause the report viewer to fetch a model-selected exfiltration URL.
-  const prose = (value) => String(value).replace(/[\\`*_\[\]<>]/g, '\\$&');
+  const prose = (value) => String(value).replace(/[\\`*_\[\]<>]/g, (character) => `\\${character}`);
   const knownFiles = new Map(scope.files.map(({ file, lines }) => [file, lines]));
   if (report.findings.some((finding) => !knownFiles.has(finding.file) || finding.line > knownFiles.get(finding.file))) {
     return { accepted: false, permanent: true, success: false, reason: 'private-security-evidence-outside-snapshot' };

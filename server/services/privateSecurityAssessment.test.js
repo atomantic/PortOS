@@ -52,13 +52,14 @@ describe('private assessment workflow', () => {
     const task = { metadata: { app: 'example' }, privateSecurityScope: {
       commit: 'a'.repeat(40), files: [{ file: 'auth.js', lines: 2 }], omittedFiles: 3, limitations: 'Static subset',
     } };
-    const payload = { summary: '![tracking](https://example.com/image)', limitations: 'Needs review', findings: [{
+    const payload = { summary: '![tracking](https://example.com/image) <img src="https://example.com/image"> `code` *bold* _emphasis_', limitations: 'Needs review', findings: [{
       title: 'Missing authorization', severity: 'high', confidence: 'medium', file: 'auth.js', line: 1,
       evidence: 'An untrusted caller reaches this route.', remediation: 'Check authorization before access.', verification: 'Add a forbidden-user route test.',
     }] };
     expect(await processTaskOutput({ success: true, task, payload, agentId: 'agent-test' }, { review })).toMatchObject({ success: true, findings: 1 });
     expect(review.createItem.mock.calls[0][0]).toMatchObject({ metadata: { privateSecurity: true } });
     expect(review.createItem.mock.calls[0][0].description).toContain('\\[tracking\\]');
+    expect(review.createItem.mock.calls[0][0].description).toContain('\\<img src="https://example.com/image"\\> \\`code\\` \\*bold\\* \\_emphasis\\_');
     review.createItem.mockClear();
     payload.findings[0].file = '../outside.js';
     expect(await processTaskOutput({ success: true, task, payload, agentId: 'agent-test' }, { review })).toMatchObject({ success: false });
