@@ -217,6 +217,51 @@ describe('PATCH /api/providers/connections/:id', () => {
     expect(patches['claude-ollama']).not.toHaveProperty('enabled');
   });
 
+  it('projects an endpoint-backed route through its declared protocol, preserving executable settings', async () => {
+    const api = {
+      id: 'example-api', type: 'api', ollamaBacked: true, enabled: false,
+      endpoint: DAEMON_OPENAI, apiKey: 'example-api-key',
+      models: ['example-model'], defaultModel: 'example-model', customField: 'keep',
+    };
+    const data = graphFixture();
+    const bindingId = '55555555-5555-4555-8555-555555555555';
+    data.bindings.push({ ...data.bindings[1], id: bindingId, harnessId: null });
+    data.connections[0].credentials.apiKey = api.apiKey;
+    data.routes.push(route(api.id, bindingId, 'api', {
+      fields: { endpoint: api.endpoint, apiKey: api.apiKey }, envVars: {}, hasEnvVars: false,
+    }));
+    store.readGraph.mockResolvedValue(data);
+    providerService.getAllProviders.mockResolvedValue({
+      activeProvider: api.id, providers: [CLAUDE_CLI, CLAUDE_TUI, CODEX_CLI, api],
+    });
+    let executable;
+    providerService.applyProviderPatches.mockImplementation(async (patches) => {
+      executable = { ...api, ...patches[api.id] };
+      return Object.keys(patches);
+    });
+
+    const res = await request(app()).patch(`/api/providers/connections/${CONNECTION}`)
+      .send({
+        expectedRevision: 3,
+        // Anthropic is first deliberately: map order must not select the API wire.
+        transports: {
+          anthropic: { baseUrl: 'https://daemon.example.com/anthropic' },
+          openai: { baseUrl: 'https://daemon.example.com/v1' },
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(executable).toEqual({ ...api, endpoint: 'https://daemon.example.com/v1' });
+    // Crash recovery must stage the same endpoint that execution receives.
+    const pending = store.commitPendingProjection.mock.calls[0][0]
+      .find((entry) => entry.providerId === api.id);
+    expect(pending.owned).toEqual({
+      fields: { endpoint: executable.endpoint, apiKey: api.apiKey },
+      envVars: {}, hasEnvVars: false,
+    });
+    expect(res.body).not.toHaveProperty('credentials');
+  });
+
   it('stages the projection before writing the file and acknowledges only after', async () => {
     const order = [];
     store.commitPendingProjection.mockImplementation(async () => { order.push('stage'); });

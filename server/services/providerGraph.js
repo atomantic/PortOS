@@ -3,6 +3,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import {
   compareBackendEndpoints,
   providerConnectionProfile,
+  projectConnectionOwnedFields,
   withConnectionOwnedFields,
 } from '../lib/providerConnections.js';
 import {
@@ -399,7 +400,7 @@ async function projectRoutes(providerIds, connection) {
   const byId = new Map(providers.map((provider) => [provider.id, provider]));
   const projections = providerIds
     .filter((providerId) => byId.has(providerId))
-    .map((providerId) => ({ providerId, owned: ownedFromConnection(byId.get(providerId), connection) }));
+    .map((providerId) => ({ providerId, owned: projectConnectionOwnedFields(byId.get(providerId), connection) }));
   if (projections.length === 0) return [];
 
   await commitPendingProjection(projections);
@@ -436,33 +437,6 @@ function writeProviderPatches(patches) {
 function duringProviderWrite(work) {
   reconciling = true;
   return Promise.resolve().then(work).finally(() => { reconciling = false; });
-}
-
-/**
- * The connection-owned snapshot a route should carry once bound to
- * `connection`: the record's own owned KEY SET (so the split stays lossless for
- * this record's shape) filled with the connection's values.
- */
-function ownedFromConnection(provider, connection) {
-  const owned = connectionOwnedSnapshot(provider);
-  const baseUrl = Object.values(connection.transports)[0]?.baseUrl ?? null;
-  const fields = { ...owned.fields };
-  if (Object.hasOwn(fields, 'endpoint') && baseUrl !== null) fields.endpoint = baseUrl;
-  if (Object.hasOwn(fields, 'apiKey')) fields.apiKey = connection.credentials.apiKey ?? fields.apiKey;
-  const envVars = { ...owned.envVars };
-  for (const name of Object.keys(envVars)) {
-    if (Object.hasOwn(connection.credentials, name)) {
-      envVars[name] = connection.credentials[name];
-      continue;
-    }
-    // `ANTHROPIC_BASE_URL` names the anthropic transport, not merely "a URL":
-    // a connection that speaks several protocols has a different base URL for
-    // each, and picking the first would point the harness at the wrong port.
-    const protocol = /_BASE_URL$/.test(name) ? name.replace(/_BASE_URL$/, '').toLowerCase() : null;
-    const url = protocol ? connection.transports[protocol]?.baseUrl ?? baseUrl : null;
-    if (url) envVars[name] = url;
-  }
-  return { fields, envVars, hasEnvVars: owned.hasEnvVars };
 }
 
 // --- explicit management edits (#6369) ---------------------------------------

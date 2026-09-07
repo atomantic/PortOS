@@ -261,6 +261,40 @@ export function withConnectionOwnedFields(routeRecord, owned) {
 }
 
 /**
+ * The connection-owned snapshot a route should carry once bound to
+ * `connection`: the record's own owned KEY SET (so the split stays lossless for
+ * this record's shape) filled with the connection's values. Uses the same
+ * protocol and env ownership rules as the reader above; the graph service owns
+ * only staging, writing and acknowledging this snapshot. Route-owned inline
+ * configuration and unknown fields remain outside the projection.
+ */
+export function projectConnectionOwnedFields(provider, connection) {
+  const { owned, protocol } = providerConnectionProfile(provider);
+  // Read and project through the same protocol classification. Map insertion
+  // order must not send an OpenAI endpoint to a connection's Anthropic wire.
+  // Retain the legacy fallback for connections declaring only another wire.
+  const baseUrl = connection.transports[protocol]?.baseUrl
+    ?? Object.values(connection.transports)[0]?.baseUrl ?? null;
+  const fields = { ...owned.fields };
+  if (Object.hasOwn(fields, 'endpoint') && baseUrl !== null) fields.endpoint = baseUrl;
+  if (Object.hasOwn(fields, 'apiKey')) fields.apiKey = connection.credentials.apiKey ?? fields.apiKey;
+  const envVars = { ...owned.envVars };
+  for (const name of Object.keys(envVars)) {
+    if (Object.hasOwn(connection.credentials, name)) {
+      envVars[name] = connection.credentials[name];
+      continue;
+    }
+    // `ANTHROPIC_BASE_URL` names the anthropic transport, not merely "a URL":
+    // a connection that speaks several protocols has a different base URL for
+    // each, and picking the first would point the harness at the wrong port.
+    const envProtocol = TRANSPORT_ENV_VARS[name];
+    const url = envProtocol ? connection.transports[envProtocol]?.baseUrl ?? baseUrl : null;
+    if (url) envVars[name] = url;
+  }
+  return { fields, envVars, hasEnvVars: owned.hasEnvVars };
+}
+
+/**
  * A stable, SECRET-FREE bucket key. Two profiles can only be the same
  * connection if their keys match — but a matching key is not sufficient, which
  * is why {@link sameConnectionIdentity} still compares real credentials.
