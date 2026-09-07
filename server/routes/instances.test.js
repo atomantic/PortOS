@@ -35,12 +35,25 @@ vi.mock('../services/tailcatPeer.js', async (original) => ({
   retryTailcatForward: vi.fn(),
   forgetTailcatForward: vi.fn(),
 }));
+vi.mock('../services/tailcatServe.js', async (original) => ({
+  ...(await original()),
+  getTailcatServeStatus: vi.fn(),
+  ensureTailcatServe: vi.fn(),
+  retryTailcatServe: vi.fn(),
+  stopTailcatServe: vi.fn(),
+}));
 import {
   addPeerViaTailcat,
   listTailcatForwards,
   retryTailcatForward,
   forgetTailcatForward,
 } from '../services/tailcatPeer.js';
+import {
+  getTailcatServeStatus,
+  ensureTailcatServe,
+  retryTailcatServe,
+  stopTailcatServe,
+} from '../services/tailcatServe.js';
 import instancesRoutes from './instances.js';
 
 const buildApp = () => {
@@ -266,5 +279,49 @@ describe('saved tailcat forward routes', () => {
     expect(res.status).toBe(200);
     expect(forgetTailcatForward).toHaveBeenCalledWith('fwd_1');
     expect(res.body).toEqual({ id: 'fwd_1', peerId: 'peer-example' });
+  });
+});
+
+
+describe('tailcat serve routes', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns serve status including a copyable address shape', async () => {
+    const status = {
+      enabled: true,
+      status: 'active',
+      live: true,
+      localPort: 5555,
+      keyName: 'portos-api',
+      tcAddress: 'tcEXAMPLE' + 'A'.repeat(40),
+      tcAddressRedacted: 'tcEX…AAAA',
+      hasAddress: true,
+      lastError: null,
+      lastErrorAt: null,
+    };
+    getTailcatServeStatus.mockResolvedValue(status);
+    const res = await request(buildApp()).get('/api/instances/peers/tailcat/serve');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(status);
+  });
+
+  it('starts serve via POST', async () => {
+    const status = { enabled: true, live: true, status: 'active', localPort: 5555, keyName: 'portos-api', hasAddress: true };
+    ensureTailcatServe.mockResolvedValue(status);
+    const res = await request(buildApp()).post('/api/instances/peers/tailcat/serve').send({});
+    expect(res.status).toBe(200);
+    expect(ensureTailcatServe).toHaveBeenCalled();
+    expect(res.body).toEqual(status);
+  });
+
+  it('retries and stops serve', async () => {
+    retryTailcatServe.mockResolvedValue({ enabled: true, live: true, status: 'active' });
+    stopTailcatServe.mockResolvedValue({ enabled: false, live: false, status: 'stopped' });
+    const retry = await request(buildApp()).post('/api/instances/peers/tailcat/serve/retry');
+    expect(retry.status).toBe(200);
+    expect(retryTailcatServe).toHaveBeenCalled();
+    const stop = await request(buildApp()).delete('/api/instances/peers/tailcat/serve');
+    expect(stop.status).toBe(200);
+    expect(stopTailcatServe).toHaveBeenCalledWith({ disable: true });
   });
 });

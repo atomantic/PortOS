@@ -344,6 +344,12 @@ export const addTailcatPeer = (data) => request('/instances/peers/tailcat', { me
 export const getTailcatForwards = (options) => request('/instances/peers/tailcat/forwards', options);
 export const retryTailcatForward = (id) => request(`/instances/peers/tailcat/forwards/${id}/retry`, { method: 'POST' });
 export const forgetTailcatForward = (id) => request(`/instances/peers/tailcat/forwards/${id}`, { method: 'DELETE' });
+// Managed tailcat serve on this node (PORTS.API). Status may include the full
+// tc address so the operator can Copy it — this is our own serve capability.
+export const getTailcatServe = (options) => request('/instances/peers/tailcat/serve', options);
+export const startTailcatServe = (data) => request('/instances/peers/tailcat/serve', { method: 'POST', body: JSON.stringify(data || {}) });
+export const retryTailcatServe = () => request('/instances/peers/tailcat/serve/retry', { method: 'POST' });
+export const stopTailcatServe = () => request('/instances/peers/tailcat/serve', { method: 'DELETE' });
 export const updatePeer = (id, data) => request(`/instances/peers/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const removePeer = (id) => request(`/instances/peers/${id}`, { method: 'DELETE' });
 export const connectPeer = (id) => request(`/instances/peers/${id}/connect`, { method: 'POST' });

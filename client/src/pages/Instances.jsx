@@ -21,6 +21,7 @@ import {
   getPeerFullSyncCoverage,
   getBrainParityReports,
   retryTailcatForward, forgetTailcatForward,
+  startTailcatServe, getTailcatServe,
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
@@ -32,6 +33,7 @@ import BrainParityPanel from '../components/instances/BrainParityPanel';
 import BrainParitySchedule from '../components/instances/BrainParitySchedule';
 import TailnetHelpBanner from '../components/instances/TailnetHelpBanner';
 import TailcatForwardsPanel from '../components/instances/TailcatForwardsPanel';
+import TailcatServePanel from '../components/instances/TailcatServePanel';
 import TailcatForwardStatus from '../components/instances/TailcatForwardStatus';
 import { timeAgo, timeUntil } from '../utils/formatters';
 import { directionalCounts, describeDirectional } from '../lib/syncCounts';
@@ -211,6 +213,8 @@ function SelfCard({ self, onUpdate, syncStatus, tailnetInfo }) {
 // same default the form actually submits — see Instances.test.jsx).
 export function AddPeerForm({ onAdd, addressRef }) {
   const [mode, setMode] = useState('classic'); // 'classic' | 'tailcat'
+  // Dial polarity for Tailcat: we dial their serve, or they dial ours.
+  const [dialDirection, setDialDirection] = useState('dial-them'); // 'dial-them' | 'they-dial-us'
   const [address, setAddress] = useState('');
   const [tcAddress, setTcAddress] = useState('');
   const [tailcatHttps, setTailcatHttps] = useState(false);
@@ -220,10 +224,18 @@ export function AddPeerForm({ onAdd, addressRef }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [adding, setAdding] = useState(false);
+  const [serveBusy, setServeBusy] = useState(false);
+  const [serveStatus, setServeStatus] = useState(null);
+
+  const refreshServe = async () => {
+    const data = await getTailcatServe({ silent: true }).catch(() => null);
+    setServeStatus(data && typeof data === 'object' ? data : null);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (mode === 'tailcat') {
+      if (dialDirection === 'they-dial-us') return; // serve path uses its own buttons
       if (!tcAddress.trim()) return;
       setAdding(true);
       const data = { tcAddress: tcAddress.trim() };
@@ -262,7 +274,30 @@ export function AddPeerForm({ onAdd, addressRef }) {
     toast.success('Peer added');
   };
 
-  const canSubmit = mode === 'tailcat' ? !!tcAddress.trim() : !!address.trim();
+  const ensureOurServe = async () => {
+    setServeBusy(true);
+    const result = await startTailcatServe({}).catch(() => null);
+    setServeBusy(false);
+    await refreshServe();
+    if (!result) return;
+    onAdd?.();
+    toast.success('Tailcat serve is running — copy the address for the other node');
+  };
+
+  const copyOurAddress = async () => {
+    const addr = serveStatus?.tcAddress;
+    if (!addr) return;
+    try {
+      await navigator.clipboard.writeText(addr);
+      toast.success('Address copied — paste it on the other PortOS as Dial them');
+    } catch {
+      toast.error('Could not copy to clipboard');
+    }
+  };
+
+  const canSubmit = mode === 'tailcat'
+    ? (dialDirection === 'dial-them' && !!tcAddress.trim())
+    : !!address.trim();
 
   return (
     <form onSubmit={handleSubmit} className="bg-port-card border border-port-border rounded-xl p-5">
@@ -273,7 +308,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
         <button
           type="button"
           aria-pressed={mode === 'classic'}
-          disabled={adding}
+          disabled={adding || serveBusy}
           onClick={() => setMode('classic')}
           className={`text-xs px-2.5 py-1 rounded border transition-colors ${mode === 'classic' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
         >
@@ -282,14 +317,36 @@ export function AddPeerForm({ onAdd, addressRef }) {
         <button
           type="button"
           aria-pressed={mode === 'tailcat'}
-          disabled={adding}
-          onClick={() => setMode('tailcat')}
+          disabled={adding || serveBusy}
+          onClick={() => { setMode('tailcat'); refreshServe(); }}
           className={`text-xs px-2.5 py-1 rounded border transition-colors ${mode === 'tailcat' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
         >
-          Tailcat address
+          Tailcat
         </button>
       </div>
-      {mode === 'tailcat' ? (
+      {mode === 'tailcat' && (
+        <div className="flex flex-wrap gap-2 mb-3" role="group" aria-label="Tailcat dial direction">
+          <button
+            type="button"
+            aria-pressed={dialDirection === 'dial-them'}
+            disabled={adding || serveBusy}
+            onClick={() => setDialDirection('dial-them')}
+            className={`text-xs px-2.5 py-1 rounded border transition-colors ${dialDirection === 'dial-them' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
+          >
+            Dial them
+          </button>
+          <button
+            type="button"
+            aria-pressed={dialDirection === 'they-dial-us'}
+            disabled={adding || serveBusy}
+            onClick={() => { setDialDirection('they-dial-us'); refreshServe(); }}
+            className={`text-xs px-2.5 py-1 rounded border transition-colors ${dialDirection === 'they-dial-us' ? 'border-port-accent text-white bg-port-accent/20' : 'border-port-border text-gray-500 hover:text-gray-300'}`}
+          >
+            They dial us
+          </button>
+        </div>
+      )}
+      {mode === 'tailcat' && dialDirection === 'dial-them' ? (
         <div className="flex flex-wrap gap-2">
           <input
             ref={addressRef}
@@ -314,6 +371,39 @@ export function AddPeerForm({ onAdd, addressRef }) {
           >
             {adding ? 'Connecting...' : 'Add via tailcat'}
           </button>
+        </div>
+      ) : mode === 'tailcat' && dialDirection === 'they-dial-us' ? (
+        <div className="space-y-3">
+          <p className="text-[11px] text-gray-500 leading-snug">
+            Start serve on this node, copy our <span className="font-mono">tc…</span> address,
+            and paste it into the <em>other</em> PortOS as <strong>Dial them</strong>.
+            Use this when the other machine is a better outbound initiator
+            (client firewall / Little Snitch often blocks home dials).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={serveBusy || serveStatus?.live}
+              onClick={ensureOurServe}
+              className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white px-4 py-2 rounded text-sm font-medium transition-colors"
+            >
+              {serveBusy ? 'Starting...' : (serveStatus?.live ? 'Serve running' : 'Start serve')}
+            </button>
+            <button
+              type="button"
+              disabled={!serveStatus?.tcAddress || serveBusy}
+              onClick={copyOurAddress}
+              className="border border-port-border hover:border-port-accent disabled:opacity-50 text-gray-300 px-4 py-2 rounded text-sm transition-colors"
+            >
+              Copy our address
+            </button>
+          </div>
+          {serveStatus?.hasAddress && (
+            <p className="text-[11px] font-mono text-gray-400 break-all">
+              {serveStatus.tcAddressRedacted || 'tc…'}
+              <span className="text-gray-600"> (redacted — use Copy for the full address)</span>
+            </p>
+          )}
         </div>
       ) : (
       <div className="flex flex-wrap gap-2">
@@ -353,7 +443,7 @@ export function AddPeerForm({ onAdd, addressRef }) {
         </button>
       </div>
       )}
-      {mode === 'tailcat' && (
+      {mode === 'tailcat' && dialDirection === 'dial-them' && (
         <>
           <label htmlFor="tailcat-https" className="flex items-center gap-2 text-sm text-gray-400 mt-3">
             <input id="tailcat-https" type="checkbox" checked={tailcatHttps}
@@ -1523,6 +1613,8 @@ export default function Instances() {
 
       {/* Also outside the peer-count guard: a tailcat forward whose start failed
           never registered a peer, so this is the only surface that can retry it. */}
+      <TailcatServePanel onChange={fetchData} />
+
       <TailcatForwardsPanel onChange={fetchData} peerIds={peers.map((p) => p.id)} />
 
       {peers.length > 0 && (
