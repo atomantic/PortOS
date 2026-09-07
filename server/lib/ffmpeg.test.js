@@ -6,6 +6,7 @@ import { join, resolve } from 'path';
 
 import {
   verifyVideoPlayable, safeUnder, runFfmpegProcess, hasAudioStream, buildTrimConcatArgs,
+  probeVideoStreamInfo, findFfmpeg,
   BT709_TAG_FILTER, BT709_CONTAINER_ARGS, bt709TagFilter, supportsSetparamsFilter, __resetSetparamsProbe,
 } from './ffmpeg.js';
 
@@ -52,6 +53,48 @@ describe('verifyVideoPlayable', () => {
     } else {
       expect(res.ok).toBe(true);
     }
+  });
+});
+
+// Geometry probe behind the upscale plan endpoint (#6509). Every field is
+// independently nullable, because a plan that reports an unmeasured axis as 0
+// would disclose a target size the render then contradicts.
+describe('probeVideoStreamInfo', () => {
+  let tmpDir;
+  beforeAll(() => { tmpDir = mkdtempSync(join(tmpdir(), 'portos-probe-test-')); });
+  afterAll(() => { rmSync(tmpDir, { recursive: true, force: true }); });
+
+  it('reports every field as unknown for an invalid path', async () => {
+    const unknown = { width: null, height: null, fps: null, frameCount: null };
+    expect(await probeVideoStreamInfo('')).toEqual(unknown);
+    expect(await probeVideoStreamInfo(null)).toEqual(unknown);
+    expect(await probeVideoStreamInfo(undefined)).toEqual(unknown);
+  });
+
+  it('reports unknown rather than zero for a file ffprobe cannot read', async () => {
+    const junk = join(tmpDir, 'junk.mp4');
+    writeFileSync(junk, Buffer.alloc(64, 0));
+    expect(await probeVideoStreamInfo(junk)).toEqual({ width: null, height: null, fps: null, frameCount: null });
+  });
+
+  it('reads back the real geometry of a clip it just encoded', async () => {
+    const ffmpeg = await findFfmpeg();
+    // The host may have no ffmpeg; the null-safety contract above still holds
+    // and is what the plan endpoint depends on.
+    if (!ffmpeg) return;
+    const clip = join(tmpDir, 'probe.mp4');
+    const made = await runFfmpegProcess({
+      bin: ffmpeg,
+      args: ['-f', 'lavfi', '-i', 'testsrc=size=96x64:rate=10:duration=1', '-pix_fmt', 'yuv420p', '-y', clip],
+      stderrTailBytes: 0,
+    });
+    if (!made.ok) return;
+    const info = await probeVideoStreamInfo(clip);
+    expect(info.width).toBe(96);
+    expect(info.height).toBe(64);
+    expect(info.fps).toBeCloseTo(10, 5);
+    // nb_frames is header-dependent; when present it must be the real count.
+    if (info.frameCount !== null) expect(info.frameCount).toBe(10);
   });
 });
 

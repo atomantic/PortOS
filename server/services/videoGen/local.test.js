@@ -260,6 +260,9 @@ vi.mock('../../lib/ffmpeg.js', async () => ({
   // disturbing that default.
   probeFrameCount: vi.fn(probeMockImpl.probeFrameCount),
   probeVideoDuration: vi.fn(probeMockImpl.probeVideoDuration),
+  // The upscale plan endpoint (#6509) reads source geometry through this one.
+  // Unused by the render paths here, but the module graph still links it.
+  probeVideoStreamInfo: vi.fn(async () => ({ width: 768, height: 512, fps: 24, frameCount: 25 })),
   trimVideoFromFrame: vi.fn(async (_videoPath, outPath) => ({ ok: true, outPath })),
   hasAudioStream: vi.fn(async () => false),
   // The real builder is pure and covered by ffmpeg.test.js; keep it real here

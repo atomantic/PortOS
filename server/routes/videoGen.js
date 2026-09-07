@@ -43,8 +43,14 @@ import {
   extractLastFrame,
   stitchVideos,
   upscaleHistoryItem,
+  planUpscaleHistoryItem,
   resolveFflfLtx2PixelBudget,
 } from '../services/videoGen/local.js';
+// The method enum comes from the pure contract module rather than through
+// local.js's re-export: it is a constant, and reading it off the mockable
+// provider surface would make every suite that mocks local.js responsible for
+// re-declaring it just so this file's route schemas can be built.
+import { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../services/videoGen/upscalePlan.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
@@ -1174,10 +1180,35 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
   res.json(await extractLastFrame(parsed.data));
 }));
 
+// An absent body is exactly Lanczos, so every pre-#6509 client keeps its
+// current behavior without sending anything new.
+const upscaleBodySchema = z.object({
+  method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
+});
+
+// Query form of the same choice, for the read-only plan endpoint.
+const upscalePlanQuerySchema = z.object({
+  method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
+});
+
+// What the user must see BEFORE submitting (#6509): source geometry, the target
+// the method would produce, the padding the model grid needs, and whether this
+// machine can actually run the method. Read-only — it queues no job and pulls
+// no weight.
+router.get('/upscale/:id/plan', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const query = upscalePlanQuerySchema.safeParse(req.query ?? {});
+  if (!query.success) failValidation(query);
+  res.json({ ok: true, plan: await planUpscaleHistoryItem(parsed.data, query.data) });
+}));
+
 router.post('/upscale/:id', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
-  const entry = await upscaleHistoryItem(parsed.data);
+  const body = upscaleBodySchema.safeParse(req.body ?? {});
+  if (!body.success) failValidation(body);
+  const entry = await upscaleHistoryItem(parsed.data, body.data);
   res.json({ ok: true, video: entry });
 }));
 

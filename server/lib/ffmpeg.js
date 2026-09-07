@@ -244,6 +244,58 @@ export const probeFrameCount = async (videoPath) => {
   return (await run(false)) ?? (await run(true));
 };
 
+// Probe the video stream geometry in ONE ffprobe call: pixel dimensions, the
+// average frame rate, and the header frame count. Callers that need a frame
+// count they can trust on any container should still fall back to
+// `probeFrameCount` (which pays for a decode pass when the header lacks
+// nb_frames) — this returns `frameCount: null` rather than guessing.
+//
+// Every field is independently nullable: an unreadable axis is "unknown", never
+// 0, so a caller cannot read a failed probe as a real measurement.
+export const probeVideoStreamInfo = async (videoPath) => {
+  const empty = { width: null, height: null, fps: null, frameCount: null };
+  if (typeof videoPath !== 'string' || !videoPath) return empty;
+  // Keyed output (`nokey=0`), NOT positional: ffprobe prints requested entries in
+  // its own internal field order rather than the order they were asked for, so
+  // destructuring the lines would silently swap two fields the day that order
+  // changes. Reading `key=value` costs nothing and cannot mis-bind.
+  const stdout = await runFfprobe([
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=width,height,avg_frame_rate,nb_frames',
+    '-of', 'default=noprint_wrappers=1',
+    videoPath,
+  ]);
+  const fields = new Map(stdout.split(/\r?\n/).map((line) => {
+    const at = line.indexOf('=');
+    return at === -1 ? null : [line.slice(0, at).trim(), line.slice(at + 1).trim()];
+  }).filter(Boolean));
+  const width = fields.get('width');
+  const height = fields.get('height');
+  const frameRate = fields.get('avg_frame_rate');
+  const frames = fields.get('nb_frames');
+  const positiveInt = (value) => {
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  // ffprobe reports avg_frame_rate as a rational ("24000/1001"), and "0/0" for
+  // a stream it could not measure.
+  const parseRate = (value) => {
+    if (!value) return null;
+    const [num, den] = value.split('/');
+    const n = parseFloat(num);
+    const d = den === undefined ? 1 : parseFloat(den);
+    if (!Number.isFinite(n) || !Number.isFinite(d) || d === 0 || n <= 0) return null;
+    return n / d;
+  };
+  return {
+    width: positiveInt(width),
+    height: positiveInt(height),
+    fps: parseRate(frameRate),
+    frameCount: positiveInt(frames),
+  };
+};
+
 // Sanity-check that a rendered video file is actually playable: the file
 // exists on disk, has non-zero bytes, and ffprobe can decode at least one
 // video frame from it. Returns `{ ok: true }` on success and
