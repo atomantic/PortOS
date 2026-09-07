@@ -39,7 +39,7 @@ import {
   isCanonCharacterId,
   isStoryBeatId,
   optIssueNumber,
-  renderCharacterEvolutionForPrompt,
+  renderCharacterEvolutionListForPrompt,
   sanitizeCharacterEvolution,
 } from './characterEvolution.js';
 import { trimTo, trimToClause } from './textUtils.js';
@@ -246,18 +246,5 @@ export function characterArcEvidenceRefs(arc) {
  * degrade to exactly its pre-lens behavior.
  */
 export function renderCharacterEvolutionsForPrompt(arcs) {
-  if (!Array.isArray(arcs)) return null;
-  const blocks = [];
-  for (const arc of arcs) {
-    if (!arc || typeof arc !== 'object') continue;
-    const lens = renderCharacterEvolutionForPrompt(arc.evolution, characterArcEvidenceRefs(arc));
-    if (!lens) continue;
-    const name = arc.characterName || '(unnamed character)';
-    // Indent the lens body under its character so a multi-character block stays
-    // readable — the renderer already indents stage lines two spaces relative
-    // to the outcome line, and this preserves that nesting.
-    const body = lens.split('\n').map((line) => `    ${line}`).join('\n');
-    blocks.push(`- ${name}\n${body}`);
-  }
-  return blocks.length ? blocks.join('\n') : null;
+  return renderCharacterEvolutionListForPrompt(arcs, characterArcEvidenceRefs);
 }

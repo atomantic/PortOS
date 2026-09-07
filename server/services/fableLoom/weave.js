@@ -19,6 +19,7 @@ import { runStagedLLM } from '../stageRunner.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { resolveLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { renderStoryCanonDigest } from '../../lib/universePromptRenderers.js';
+import { renderCharacterEvolutionListForPrompt } from '../../lib/characterEvolution.js';
 import { GRAPH_ISSUE_CODES, analyzeEpisodeGraph, describeGraphForPrompt } from '../../lib/fableLoomGraph.js';
 import {
   FABLELOOM_CAMERA_MOVEMENT_VALUES,
@@ -45,7 +46,7 @@ import {
   participationContractForPrompt,
 } from '../../lib/fableLoomParticipation.js';
 import { getUniverse } from '../universeBuilder.js';
-import { LOOM_LIMITS, findEpisode, findNode, getLoom, mutateLoom } from './records.js';
+import { LOOM_LIMITS, fableLoomEvolutionEvidenceRefs, findEpisode, findNode, getLoom, mutateLoom } from './records.js';
 import { asLoomFormat, loomFormatLabel, narrationFormatContract, sceneFormatContract } from './formats.js';
 
 const TRANSCRIPT_TURNS_MAX = 12;
@@ -263,6 +264,19 @@ const seriesPlanDigest = (loom) => JSON.stringify({
     beatOutline: storyOutline ? describeStoryOutlineForPrompt(storyOutline) : '(missing)',
   })),
 }, null, 2);
+
+// The OPTIONAL five-stage evolution lens (#6443), rendered for whichever cast
+// members carry one. `seriesPlanDigest` above is a hand-picked projection of
+// `loom.seriesPlan` — it whitelists fields, so the lens would NOT ride along
+// inside it — and the plan review needs the lens gated on its own anyway:
+// unset ⇒ '', the template's {{#characterEvolutions}} section renders nothing,
+// and the review degrades to exactly its pre-lens behavior. Anchors resolve
+// against the whole loom (episode ids and scene keys are loom-wide), so a stage
+// pointing at a deleted episode reads `[stale]` instead of passing as proof.
+const characterEvolutionsDigest = (loom) => renderCharacterEvolutionListForPrompt(
+  loom.seriesPlan?.characterEvolutions,
+  fableLoomEvolutionEvidenceRefs(loom),
+) || '';
 
 const seriesTeleplayDigest = (loom) => loom.episodes.map((episode) => [
   `## Episode ${episode.number}: ${episode.title || 'Untitled'}`,
@@ -1054,6 +1068,7 @@ export async function reviewSeriesPlan(loomId, { providerId, model, effort, oper
     storyContext: [storyContext(loom, undefined, { includeSeriesPlan: false }), planningOnly ? 'PRE-OUTLINE REVIEW: Evaluate the arc, challenge design and episode assignments. Missing or stale episode outlines are expected at this stage and will be drafted or repaired next; do not report their absence as a plan defect. Keep plot-point notes concise; episode beat outlines have their own fields.' : ''].filter(Boolean).join('\n'),
     canonDigest: canonDigest || '(none)',
     seriesPlanJson: seriesPlanDigest(loom),
+    characterEvolutions: characterEvolutionsDigest(loom),
   }, { providerId, model, effort, operationId }, {
     action: 'review-series-plan', label: 'Reviewing series plan', source: 'fableloom-review-series-plan',
   });
