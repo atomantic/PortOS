@@ -26,6 +26,7 @@ const REFERENCE = fileURLToPath(import.meta.url);
 const upscale = (extra = {}) => ({
   runtime: 'ltx25',
   sourceVideoPath: REFERENCE,
+  baseModelPath: '/fixture/cache/ltx25-mlx-q8',
   icLoraWeightPath: '/fixture/cache/pixel-spatial-upscaler.safetensors',
   icMinReferences: 1,
   icMaxReferences: 1,
@@ -43,6 +44,7 @@ describe('buildLtxUpscaleArgs (#6511)', () => {
       bin: '/fixture/ltx-2.5-mlx/.venv/bin/python3',
       args: [
         '/fixture/scripts/upscale_ltx25.py',
+        '--model', '/fixture/cache/ltx25-mlx-q8',
         '--ic-lora-path', '/fixture/cache/pixel-spatial-upscaler.safetensors',
         '--ic-reference', REFERENCE,
         '--ic-min-references', '1',
@@ -74,6 +76,14 @@ describe('buildLtxUpscaleArgs (#6511)', () => {
   ])('refuses to render when %s is missing', (_label, extra) => {
     expect(() => buildLtxUpscaleArgs({ ...upscale(extra), outputPath: '/fixture/out.mp4' }))
       .toThrow(expect.objectContaining({ code: 'IC_LORA_REFERENCE_BOUNDS_MISSING' }));
+  });
+
+  // Same reason as the adapter refusal below, one layer up: the runner is handed
+  // a RESOLVED snapshot dir, and every LTX loader turns an unstattable path into
+  // `snapshot_download` — a ~68 GB pull nobody announced (#6512).
+  it('refuses an un-cached base checkpoint rather than letting the runner resolve one', () => {
+    expect(() => buildLtxUpscaleArgs({ ...upscale({ baseModelPath: null }), outputPath: '/fixture/out.mp4' }))
+      .toThrow(expect.objectContaining({ code: 'UPSCALE_BASE_MODEL_UNRESOLVED' }));
   });
 
   it('refuses an un-downloaded adapter rather than handing the pipeline a repo id', () => {

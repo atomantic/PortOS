@@ -38,11 +38,33 @@ export const ltxUpscaleRuntimeId = (platform = process.platform) => (
   LTX_UPSCALE_RUNTIME_BY_PLATFORM[platform] || null
 );
 
+// The base checkpoint each generative backend renders against. #6511 keeps the
+// model out of the REQUEST on purpose — the adapter was trained against one
+// LTX-2.5 checkpoint, so letting a user pick another would condition an upscale
+// on weights it was never trained for. It is still a dependency that has to be
+// LOCATED, so the runtime names its own pin here and the dispatch resolves it
+// cache-only, exactly like every other pinned LTX entry (generateVideo.js).
+export const LTX_UPSCALE_BASE_MODEL_BY_RUNTIME = Object.freeze({
+  ltx25: 'ltx25_mlx_q8',
+  ltx25_cuda: 'ltx25_cuda_distilled',
+});
+
+export const ltxUpscaleBaseModelId = (runtime) => (
+  LTX_UPSCALE_BASE_MODEL_BY_RUNTIME[runtime] || null
+);
+
 // The LTX-2.5 two-stage grid, mirrored from `validate_args` in
 // `scripts/generate_ltx25_cuda.py`: output dimensions must be divisible by 64
-// and the frame count must satisfy `frames % 8 == 1` with a floor of 9. The
-// MLX runner (#6512) must establish the same rule from the model card; if it
-// turns out to differ, this constant is the single place both read.
+// and the frame count must satisfy `frames % 8 == 1` with a floor of 9.
+//
+// #6512 confirmed the MLX backend imposes the SAME rule, and read it off the
+// pinned runtime rather than the gated model card: `ICLoraPipeline.generate`
+// renders Stage 1 at `height // 2` / `width // 2`, and
+// `compute_video_latent_shape` compresses spatially by 32 — so the OUTPUT axis
+// must divide by 64. Temporal compression is 8 and the IC reference encoder
+// needs a (1 + 8k)-frame input, which is the frame rule. Both runners now read
+// the rule from here; `scripts/upscale_ltx25.py` mirrors the numbers with a
+// comment pointing back, the way the CUDA runner already does.
 export const LTX_GRID = Object.freeze({
   spatialMultiple: 64,
   frameModulus: 8,

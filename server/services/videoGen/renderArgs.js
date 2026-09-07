@@ -993,13 +993,17 @@ const LTX_UPSCALE_RUNNERS = Object.freeze({
  * There is deliberately no model id here. The base LTX-2.5 checkpoint is the
  * runner's own pinned dependency (#6512 / #6513), not a user-selectable render
  * model, so naming one would invite an upscale conditioned on a checkpoint the
- * adapter was never trained against.
+ * adapter was never trained against. `baseModelPath` is that pinned checkpoint
+ * already RESOLVED to a local snapshot by the dispatch — a located dependency,
+ * not a choice — because the runner must never resolve it itself: every LTX
+ * pipeline's loader falls back to `snapshot_download` for a path it cannot
+ * stat, which for a ~68 GB pack is an unannounced pull mid-render.
  *
  * `width`/`height`/`numFrames` are the ALIGNED target the caller already padded
  * its source up to, so this builder asserts the grid rather than re-deriving it.
  */
 export const buildLtxUpscaleArgs = ({
-  runtime, sourceVideoPath, icLoraWeightPath, icMinReferences, icMaxReferences,
+  runtime, sourceVideoPath, baseModelPath, icLoraWeightPath, icMinReferences, icMaxReferences,
   width, height, numFrames, fps, seed, outputPath,
 }) => {
   const runner = LTX_UPSCALE_RUNNERS[runtime];
@@ -1010,6 +1014,12 @@ export const buildLtxUpscaleArgs = ({
     );
   }
   assertByovRuntimeInstalled(runtime);
+  if (!baseModelPath) {
+    throw new ServerError(
+      'The LTX-2.5 model pack this backend renders against is not cached — download or repair it in Video Gen first.',
+      { status: 400, code: 'UPSCALE_BASE_MODEL_UNRESOLVED' },
+    );
+  }
   if (!icLoraWeightPath) {
     throw new ServerError(
       'The Pixel Spatial Upscaler weight is not downloaded — download it from the model panel first.',
@@ -1050,6 +1060,7 @@ export const buildLtxUpscaleArgs = ({
     bin: runner.bin,
     args: [
       runner.script,
+      '--model', baseModelPath,
       '--ic-lora-path', icLoraWeightPath,
       '--ic-reference', sourceVideoPath,
       '--ic-min-references', bound(icMinReferences, '--ic-min-references'),

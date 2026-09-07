@@ -109,6 +109,11 @@ const conformingPlan = () => ({
   },
   runtime: { id: 'ltx25', label: 'LTX-2.5 MLX', supported: true, installed: true, reason: null },
   adapter: { key: 'pixel-upscale', label: 'Pixel Spatial Upscaler', cached: true },
+  baseModel: {
+    id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', repo: 'MrMofer/ltx-2.5-mlx-q8',
+    revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
+    path: '/cache/ltx25-mlx-q8', cached: true, reason: null,
+  },
 });
 
 const sourceRow = (extra = {}) => ({
@@ -132,6 +137,7 @@ const jobParams = (overrides = {}) => ({
   runtime: 'ltx25',
   adapterPath: '/cache/pixel-upscale.safetensors',
   adapterKey: 'pixel-upscale',
+  baseModelPath: '/cache/ltx25-mlx-q8',
   icMinReferences: 1,
   icMaxReferences: 1,
   seed: 4242,
@@ -189,6 +195,7 @@ describe('enqueueLtxUpscale', () => {
       runtime: 'ltx25',
       adapterKey: 'pixel-upscale',
       adapterPath: '/cache/pixel-upscale.safetensors',
+      baseModelPath: '/cache/ltx25-mlx-q8',
       icMinReferences: 1,
       icMaxReferences: 1,
       seed: expect.any(Number),
@@ -247,6 +254,22 @@ describe('enqueueLtxUpscale', () => {
     state.adapter = { path: null, cached: false, spec: { minReferences: 1, maxReferences: 1 } };
     await expect(enqueueLtxUpscale(SOURCE_ID))
       .rejects.toMatchObject({ status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  // #6512: the ~68 GB base pack is a THIRD download, independent of the venv and
+  // the adapter. The runner is handed a resolved snapshot path precisely so it
+  // never resolves one itself — every LTX loader falls back to
+  // `snapshot_download` for a path it cannot stat, which here would be an
+  // unannounced 68 GB pull in the middle of a render.
+  it('refuses when the base LTX-2.5 pack is not downloaded, even with runtime and adapter ready', async () => {
+    state.plan.baseModel = {
+      id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', repo: 'MrMofer/ltx-2.5-mlx-q8',
+      revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
+      path: null, cached: false, reason: 'LTX-2.5 MLX Q8 is not downloaded — download or repair it in Video Gen.',
+    };
+    await expect(enqueueLtxUpscale(SOURCE_ID))
+      .rejects.toMatchObject({ status: 400, code: 'UPSCALE_BASE_MODEL_UNRESOLVED' });
     expect(enqueueJob).not.toHaveBeenCalled();
   });
 

@@ -36,11 +36,25 @@ const READY_PLAN = {
     key: 'pixel-upscale', label: 'Pixel Spatial Upscaler', repo: 'Lightricks/example', filename: 'weight.safetensors',
     sizeBytes: 327_322_640, gated: true, cached: true,
   },
+  baseModel: {
+    id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', repo: 'Example/ltx25-mlx-q8', revision: 'abc1234',
+    path: '/cache/ltx25-mlx-q8', cached: true, reason: null,
+  },
 };
 
 const missingAdapterPlan = () => ({
   ...READY_PLAN,
   adapter: { ...READY_PLAN.adapter, cached: false },
+});
+
+const missingBaseModelPlan = () => ({
+  ...READY_PLAN,
+  baseModel: {
+    ...READY_PLAN.baseModel,
+    path: null,
+    cached: false,
+    reason: 'LTX-2.5 MLX Q8 is not downloaded — download or repair it in Video Gen.',
+  },
 });
 
 const unsupportedRuntimePlan = () => ({
@@ -124,5 +138,17 @@ describe('VideoUpscaleDrawer', () => {
     render(<VideoUpscaleDrawer item={null} onClose={vi.fn()} onUpscaled={vi.fn()} />);
     expect(getUpscalePlan).not.toHaveBeenCalled();
     expect(screen.queryByRole('dialog')).toBeFalsy();
+  });
+
+  // #6512: the base pack is a third, independent download. Before this the
+  // drawer read ready off runtime + adapter alone and offered a button for a
+  // job the dispatch refuses with UPSCALE_BASE_MODEL_UNRESOLVED.
+  it('disables the generative method when the base model pack is missing', async () => {
+    getUpscalePlan.mockResolvedValue({ plan: missingBaseModelPlan() });
+    render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    await waitFor(() => expect(getUpscalePlan).toHaveBeenCalled());
+
+    expect(screen.getByLabelText(/LTX-2\.5 generative/i).disabled).toBe(true);
+    expect(screen.getByText(/is not downloaded/i)).toBeTruthy();
   });
 });
