@@ -212,6 +212,7 @@ describe('POST /api/cos/tasks — client-queued investigations (#6043)', () => {
       useWorktree: true,
       openPR: true,
       prCompletion: 'review-then-merge',
+      noChangeSuccess: true,
     }), 'user');
   });
 
@@ -257,6 +258,7 @@ describe('POST /api/cos/tasks — client-queued investigations (#6043)', () => {
       useWorktree: true,
       openPR: true,
       prCompletion: 'review-then-merge',
+      noChangeSuccess: true,
     });
   });
 

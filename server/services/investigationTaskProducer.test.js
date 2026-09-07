@@ -144,6 +144,7 @@ describe('fileInvestigationTask — a user-queued investigation (#6043)', () => 
       useWorktree: true,
       openPR: true,
       prCompletion: 'review-then-merge',
+      noChangeSuccess: true,
       approvalRequired: false,
       approvalReason: null,
       isInvestigation: true,

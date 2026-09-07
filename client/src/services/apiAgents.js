@@ -210,7 +210,7 @@ export const relaunchCosAgent = (id, overrides = {}, options = {}) => request(`/
 });
 export const killCosAgent = (id, options = {}) => request(`/cos/agents/${id}/kill`, { method: 'POST', ...options });
 export const getCosAgentStats = (id, options) => request(`/cos/agents/${id}/stats`, options);
-export const getCosAgentPrompt = (id) => request(`/cos/agents/${id}/prompt`);
+export const getCosAgentPrompt = (id, options = {}) => request(`/cos/agents/${id}/prompt`, options);
 export const deleteCosAgent = (id, options = {}) => request(`/cos/agents/${id}`, { method: 'DELETE', ...options });
 export const clearCompletedCosAgents = (options = {}) => request('/cos/agents/completed', { method: 'DELETE', ...options });
 export const submitCosAgentFeedback = (id, feedback, options = {}) => request(`/cos/agents/${id}/feedback`, {

@@ -266,7 +266,8 @@ function hasIssuePartialTrailer(body, issueNumber) {
 
 function isVerifiedNoChangeTask(task) {
   const isPersistedTrue = (value) => value === true || value === 'true';
-  return isPersistedTrue(task?.metadata?.autonomousJob) && isPersistedTrue(task?.metadata?.noChangeSuccess);
+  return (isPersistedTrue(task?.metadata?.autonomousJob) || isPersistedTrue(task?.metadata?.isInvestigation))
+    && isPersistedTrue(task?.metadata?.noChangeSuccess);
 }
 
 /**
