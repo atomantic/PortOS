@@ -748,6 +748,41 @@ describe('creativeDirector routes', () => {
   describe('PATCH /:id/plan — stepId grammar (#2773)', () => {
     const validStep = { stepId: 'create-series', toolName: 'pipeline_createSeries', args: { name: 'Nova' }, dependsOn: [] };
 
+    // Each case catches a different graph defect that otherwise reaches the
+    // executor as ambiguous identity or a permanently unrunnable consumer.
+    it.each([
+      ['duplicate identity', [{ stepId: 'a' }, { stepId: 'a' }], 'Duplicate step ID'],
+      ['missing producer', [{ stepId: 'a', dependsOn: ['missing'] }], 'Unknown dependency'],
+      ['self dependency', [{ stepId: 'a', dependsOn: ['a'] }], 'Dependency cycle'],
+      ['cycle behind a runnable root', [
+        { stepId: 'root' }, { stepId: 'a', dependsOn: ['root', 'b'] }, { stepId: 'b', dependsOn: ['a'] },
+      ], 'Dependency cycle'],
+    ])('rejects %s before saving or dispatching', async (_name, steps, message) => {
+      const planAdvance = await import('../services/creativeDirector/planAdvance.js');
+      const r = await request(app).patch('/api/creative-director/cd-1/plan')
+        .send({ steps: steps.map(step => ({ ...validStep, ...step })) });
+      expect(r.status).toBe(400);
+      expect(JSON.stringify(r.body)).toContain(message);
+      expect(cdService.setPlan).not.toHaveBeenCalled();
+      expect(planAdvance.advanceAfterPlanStepSettled).not.toHaveBeenCalled();
+    });
+
+    it('accepts forward and shared dependencies without reordering the authored plan', async () => {
+      const planAdvance = await import('../services/creativeDirector/planAdvance.js');
+      const steps = [
+        { ...validStep, stepId: 'cut', dependsOn: ['left', 'right'] },
+        { ...validStep, stepId: 'left', dependsOn: ['source'] },
+        { ...validStep, stepId: 'right', dependsOn: ['source'] },
+        { ...validStep, stepId: 'source' },
+      ];
+      cdService.getProject.mockResolvedValue({ id: 'cd-1' });
+      cdService.setPlan.mockResolvedValue({ id: 'cd-1', plan: { steps } });
+      const r = await request(app).patch('/api/creative-director/cd-1/plan').send({ steps });
+      expect(r.status).toBe(200);
+      expect(cdService.setPlan).toHaveBeenCalledWith('cd-1', { steps });
+      expect(planAdvance.advanceAfterPlanStepSettled).toHaveBeenCalledWith('cd-1');
+    });
+
     it('accepts a word/hyphen stepId', async () => {
       cdService.getProject.mockResolvedValue({ id: 'cd-1', directive: { goal: 'x', constraints: {} } });
       cdService.setPlan.mockResolvedValue({ id: 'cd-1', plan: { steps: [validStep] } });

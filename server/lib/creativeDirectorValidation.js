@@ -374,7 +374,43 @@ export const creativeDirectorPlanStepSchema = z.object({
 
 export const creativeDirectorPlanSchema = z.object({
   steps: z.array(creativeDirectorPlanStepSchema).min(1).max(60),
-}).strict();
+}).strict().superRefine(({ steps }, ctx) => {
+  // Validate the whole graph before any adapter persists it or the route
+  // nudges dispatch. IDs are also result-reference keys, so duplicate IDs
+  // cannot be resolved by choosing the first/last occurrence.
+  const byId = new Map();
+  let invalid = false;
+  const report = (index, field, message) => {
+    invalid = true;
+    ctx.addIssue({ code: 'custom', path: ['steps', index, field], message });
+  };
+  steps.forEach((step, index) => {
+    if (byId.has(step.stepId)) report(index, 'stepId', `Duplicate step ID: ${step.stepId}`);
+    byId.set(step.stepId, step);
+  });
+  steps.forEach((step, index) => {
+    for (const dependency of step.dependsOn) {
+      if (!byId.has(dependency)) report(index, 'dependsOn', `Unknown dependency: ${dependency}`);
+    }
+  });
+  if (invalid) return;
+
+  // Plans are bounded to 60 steps. Walking ancestors permits forward edges
+  // and shared dependencies while rejecting self-links and longer cycles.
+  const visiting = new Set();
+  const visited = new Set();
+  const hasCycle = (id) => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    if (byId.get(id).dependsOn.some(hasCycle)) return true;
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  const cycleIndex = steps.findIndex((step) => hasCycle(step.stepId));
+  if (cycleIndex !== -1) report(cycleIndex, 'dependsOn', 'Dependency cycle: remove the circular dependency chain');
+});
 
 // Blocked-step triage actions (CDO Phase 4, #2186). The studio UI's Plan tab
 // dispatches one of these against a single plan step:
