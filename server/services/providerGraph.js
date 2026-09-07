@@ -3,7 +3,6 @@ import { ServerError } from '../lib/errorHandler.js';
 import {
   compareBackendEndpoints,
   providerConnectionProfile,
-  sameConnectionIdentity,
   withConnectionOwnedFields,
 } from '../lib/providerConnections.js';
 import {
@@ -12,6 +11,7 @@ import {
   nextConnectionCatalog,
   planGraphReconciliation,
   reconciliationIsNoop,
+  routeBelongsOnConnection,
   sanitizeCatalogError,
   toConnectionDto,
   toManagementGraphDto,
@@ -838,11 +838,15 @@ export function createConnection({ kind, label, transports, credentials }) {
  *   1. **Refuse before writing.** `bindingBlocker` rejects a harness with no
  *      recipe, a mode it has no support for, a backend whose transport it does
  *      not speak, and a backend missing a credential the program requires.
- *   2. **A minted route must describe the connection it was minted for.** The
+ *   2. **A minted route must sit on the connection it was minted for.** The
  *      record is fed straight back through `providerConnectionProfile` and
- *      compared with `sameConnectionIdentity`. A mismatch is refused rather
- *      than stored, because reconciliation would otherwise clone the binding
- *      onto a connection of its own on the very next pass.
+ *      checked with `routeBelongsOnConnection` — the SAME containment test
+ *      reconciliation applies, so a create is judged on exactly the terms the
+ *      next pass will judge it by. A route the row does not contain is refused
+ *      rather than stored, because reconciliation would otherwise clone the
+ *      binding onto a connection of its own on the very next pass. Containment
+ *      rather than identity is what lets one route be minted on a backend that
+ *      declares a second protocol for another harness (#6460).
  *   3. **Nothing is enabled.** The binding and every route arrive disabled with
  *      no model pins and no transport consent. Enabling stays an explicit act
  *      on the route editor, which is where granting execution belongs.
@@ -884,7 +888,7 @@ export function createBinding({ connectionId, harnessId, modes, label }) {
       connection,
     }));
     for (const record of records) {
-      if (!sameConnectionIdentity(providerConnectionProfile(record), asProfile(connection))) {
+      if (!routeBelongsOnConnection(providerConnectionProfile(record), connection)) {
         throw new ServerError(
           `A ${harnessLabel} route cannot describe this backend as it is configured; adjust the backend's transport or credentials first`,
           { status: 409, code: 'PROVIDER_GRAPH_CONNECTION_INCOMPATIBLE' });

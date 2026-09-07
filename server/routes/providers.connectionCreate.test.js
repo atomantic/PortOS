@@ -25,6 +25,7 @@ import express, { Router } from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { providerConnectionProfile, sameConnectionIdentity } from '../lib/providerConnections.js';
+import { planGraphReconciliation, reconciliationIsNoop } from '../lib/providerGraphRecords.js';
 
 const store = {
   readGraph: vi.fn(),
@@ -301,6 +302,9 @@ describe('POST /api/providers/bindings', () => {
   });
 
   it('refuses a backend whose transport the harness does not speak', async () => {
+    // The half of the transport rule that did NOT relax: this row declares the
+    // openai wire and nothing else, so a Claude route on it would name an
+    // endpoint the backend does not serve.
     const res = await request(app()).post('/api/providers/bindings')
       .send({ connectionId: OLLAMA_OPENAI, harnessId: 'claude', modes: ['cli'] });
 
@@ -309,15 +313,49 @@ describe('POST /api/providers/bindings', () => {
     expect(providerService.createProvider).not.toHaveBeenCalled();
   });
 
-  it('refuses a backend a minted route could not describe, before anything is written', async () => {
-    // Two transports: a provider record names one endpoint, so no minted route
-    // could ever report this connection's identity back.
+  it('mints a route on a backend that declares a SECOND protocol for another harness', async () => {
+    // One Ollama daemon reached by Claude on its Anthropic port and by an
+    // OpenAI-compatible harness on `/v1` is ONE backend. A provider record
+    // names one endpoint, so this route describes only the anthropic half —
+    // #6452 made reconciliation judge that by CONTAINMENT, which is what lets
+    // the create through instead of refusing it (#6460).
     const res = await request(app()).post('/api/providers/bindings')
       .send({ connectionId: MULTI, harnessId: 'claude', modes: ['cli'] });
 
-    expect(res.status).toBe(409);
-    expect(providerService.createProvider).not.toHaveBeenCalled();
-    expect(store.writeGraph).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    const record = created().get(res.body.routeIds[0]);
+    // The harness's OWN transport, and only it: the record carries no trace of
+    // the protocol the other harness on this backend speaks.
+    expect(record.envVars).toEqual({ ANTHROPIC_BASE_URL: DAEMON, ANTHROPIC_AUTH_TOKEN: TOKEN });
+    expect(record.endpoint).toBe(DAEMON);
+    expect(record.envVars).not.toHaveProperty('OPENAI_BASE_URL');
+    expect(record.envVars).not.toHaveProperty('OPENAI_API_KEY');
+    expect(record.secretEnvVars).toEqual(['ANTHROPIC_AUTH_TOKEN']);
+  });
+
+  it('leaves that cross-protocol binding untouched through a reconciliation pass', async () => {
+    // The property #6452 established and this create depends on: a route the
+    // stored connection CONTAINS stays on it, rather than being cloned onto a
+    // single-transport connection of its own on the very next pass.
+    const res = await request(app()).post('/api/providers/bindings')
+      .send({ connectionId: MULTI, harnessId: 'claude', modes: ['cli'] });
+    const [written] = store.writeGraph.mock.calls.at(-1);
+
+    const plan = planGraphReconciliation(
+      { connections: graphFixture().connections, bindings: written.bindings, routes: written.routes },
+      [created().get(res.body.routeIds[0])],
+    );
+
+    expect(reconciliationIsNoop(plan)).toBe(true);
+    expect(plan.conflicts).toEqual([]);
+    expect(plan.regroups).toHaveLength(1);
+    expect(plan.regroups[0]).toMatchObject({
+      bindingId: written.bindings[0].id,
+      connectionAction: 'unchanged',
+      // Republished AS STORED — narrowing the row to this route's single
+      // transport would strand the other harness on it.
+      connection: { id: MULTI, transports: { anthropic: { baseUrl: DAEMON }, openai: { baseUrl: DAEMON_OPENAI } } },
+    });
   });
 
   it('refuses a Claude route on a backend with no auth token rather than minting one that cannot start', async () => {
