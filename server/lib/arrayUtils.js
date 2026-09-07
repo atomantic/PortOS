@@ -9,10 +9,10 @@
  * (that comparator violates the sort contract and skews toward certain
  * permutations depending on the engine's sort algorithm).
  */
-export function shuffle(arr) {
+export function shuffle(arr, random = Math.random) {
   const out = [...arr];
   for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(random() * (i + 1));
     [out[i], out[j]] = [out[j], out[i]];
   }
   return out;

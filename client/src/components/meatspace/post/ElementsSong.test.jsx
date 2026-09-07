@@ -269,7 +269,7 @@ describe('ElementsSong — Element Flash recall test', () => {
     // gone) must advance to question 2 rather than doing nothing.
     fireEvent.keyDown(window, { key: 'Enter' });
     await settle();
-    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+    expect(screen.getByText('2 / 5')).toBeInTheDocument();
     expect(screen.getByRole('textbox')).toBeInTheDocument();
   });
 
@@ -293,11 +293,85 @@ describe('ElementsSong — Element Flash recall test', () => {
     const nextBtn = screen.getByText('Next');
     fireEvent.keyDown(nextBtn, { key: 'Enter' });
     await settle();
-    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+    expect(screen.getByText('1 / 5')).toBeInTheDocument();
 
     // A genuine click on Next still advances exactly once.
     fireEvent.click(nextBtn);
     await settle();
-    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+    expect(screen.getByText('2 / 5')).toBeInTheDocument();
   });
+});
+
+
+describe('Element Flash learning cadence', () => {
+  it('interleaves a missed pairing with three questions, then saves both retrieval attempts', async () => {
+    const deck = { ...item, content: { ...item.content, elementMap: {
+      ...item.content.elementMap,
+      Li: { name: 'Lithium', atomicNumber: 3 },
+      Be: { name: 'Beryllium', atomicNumber: 4 },
+    } } };
+    render(<ElementsSong item={deck} mode="element-flash" onBack={() => {}} />);
+    await settle();
+    const current = () => {
+      const label = screen.getByText(/What (symbol|element)\?/);
+      const prompt = label.previousElementSibling.textContent;
+      const [symbol, info] = Object.entries(deck.content.elementMap).find(([sym, info]) =>
+        prompt === info.name || prompt.startsWith(`${sym} (`));
+      return { symbol, answer: label.textContent === 'What symbol?' ? symbol : info.name };
+    };
+    const missed = current().symbol;
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+    expect(screen.getByText(/Answer: .*Study this pairing/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    for (let i = 0; i < 3; i++) {
+      expect(current().symbol).not.toBe(missed);
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: current().answer } });
+      fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    }
+    expect(current().symbol).toBe(missed);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: current().answer } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    fireEvent.click(screen.getByText('Save Progress'));
+    await settle();
+    const attempts = submitMemoryPractice.mock.calls[0][1].results;
+    expect(attempts).toHaveLength(5);
+    expect(attempts.filter(r => r.element === missed).map(r => r.correct)).toEqual([false, true]);
+  });
+
+  it('finishes within 45 turns even when every answer is missed', async () => {
+    render(<ElementsSong item={item} mode="element-flash" onBack={() => {}} />);
+    await settle();
+    let turns = 0;
+    while (screen.queryByRole('button', { name: 'Skip' }) && turns < 46) {
+      fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      turns++;
+    }
+    expect(turns).toBeLessThanOrEqual(45);
+    expect(screen.getByText('Element Flash Complete')).toBeInTheDocument();
+  });
+});
+
+
+it('samples beyond the first fifteen equally weak elements before building the quiz', async () => {
+  const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+  const elementMap = Object.fromEntries(Array.from({ length: 20 }, (_, i) =>
+    [`E${i}`, { name: `Example Element ${i}`, atomicNumber: i }]));
+  render(<ElementsSong item={{ ...item, content: { ...item.content, elementMap } }} mode="element-flash" onBack={() => {}} />);
+  await settle();
+  const seen = [];
+  for (let i = 0; i < 15; i++) {
+    const prompt = screen.getByText('What element?').previousElementSibling.textContent;
+    const symbol = prompt.split(' ')[0];
+    seen.push(symbol);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: elementMap[symbol].name } });
+    fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+  }
+  random.mockRestore();
+  expect(seen).toContain('E15');
+  expect(new Set(seen).size).toBe(15);
+  expect(screen.getByText('Element Flash Complete')).toBeInTheDocument();
 });

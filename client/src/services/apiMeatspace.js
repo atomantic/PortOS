@@ -190,7 +190,7 @@ export const getPostReviewReps = (limit, options = {}) => request(
 export const getPostRecommendations = (limit, options = {}) => request(
   `/meatspace/post/recommendations${limit != null ? `?limit=${limit}` : ''}`,
   { silent: true, ...options }
-);
+).then(result => ({ ...result, recommendations: result.dailyRecommendations ?? result.recommendations }));
 export const getPostMultiplicationProgress = () => request('/meatspace/post/multiplication-progress');
 export const getPostPowersProgress = () => request('/meatspace/post/powers-progress');
 // `options` so a caller with its own catch can pass `{ silent: true }` and not

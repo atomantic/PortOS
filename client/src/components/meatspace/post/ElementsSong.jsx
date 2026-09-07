@@ -1,3 +1,4 @@
+import { shuffle } from '../../../../../server/lib/arrayUtils.js';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge, Layers, RotateCw, ShieldCheck } from 'lucide-react';
 import { submitMemoryPractice, getMemoryMastery, getMemoryItem, attestMemoryMastery } from '../../../services/api';
@@ -699,7 +700,7 @@ function LearnMode({ item, onBack, onComplete }) {
 // Element [symbol, info] entries ordered weakest-mastery-first, so both the
 // study deck and the flash quiz surface the least-known elements first.
 function weakestFirstElements(elementMap, mastery) {
-  return Object.entries(elementMap).sort((a, b) => {
+  return shuffle(Object.entries(elementMap)).sort((a, b) => {
     const progressA = elementMasteryProgress(mastery.elements?.[a[0]]);
     const progressB = elementMasteryProgress(mastery.elements?.[b[0]]);
     return progressA.accuracy - progressB.accuracy;
@@ -877,18 +878,17 @@ function ElementStudyMode({ item, mastery, onBack, onComplete }) {
 function ElementFlashMode({ item, mastery, onBack, onComplete }) {
   const elementMap = item.content?.elementMap || {};
 
-  // Build the quiz once per item/mastery — without memoization the Math.random()
-  // shuffle below re-runs on every render (e.g. each keystroke), reshuffling the
-  // deck and swapping the current question mid-answer.
-  const questions = useMemo(() => {
-    // Prioritize weak elements, then shuffle the weakest slice for quiz variety.
-    return weakestFirstElements(elementMap, mastery).slice(0, 15).sort(() => Math.random() - 0.5).map(([symbol, info]) => {
+  // Own the queue for this mounted practice session so answers can schedule
+  // retries without reshuffling the current question on each keystroke.
+  const [questions, setQuestions] = useState(() => {
+    // Randomize ties before choosing the weak slice, then interleave the deck.
+    return shuffle(weakestFirstElements(elementMap, mastery).slice(0, 15)).map(([symbol, info]) => {
       const askSymbol = Math.random() > 0.5;
       return askSymbol
         ? { prompt: info.name, expected: symbol, element: symbol, label: 'What symbol?' }
         : { prompt: `${symbol} (${info.atomicNumber})`, expected: info.name, element: symbol, label: 'What element?' };
     });
-  }, [elementMap, mastery]);
+  });
 
   const [idx, setIdx] = useState(0);
   const [answer, setAnswer] = useState('');
@@ -935,7 +935,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
 
   if (idx >= questions.length) {
     const correct = results.filter(r => r.correct).length;
-    const pct = Math.round((correct / results.length) * 100);
+    const pct = results.length ? Math.round((correct / results.length) * 100) : 0;
     const scoreColor = pct >= 80 ? 'text-port-success' : pct >= 50 ? 'text-port-warning' : 'text-port-error';
 
     return (
@@ -972,7 +972,25 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
   const q = questions[idx];
 
   function check(skipped = false) {
+    if (showResult) return;
     const isCorrect = !skipped && answer.trim().toLowerCase() === q.expected.toLowerCase();
+    // Corrective feedback now, retrieval after three other questions. Each
+    // target gets at most two retries; the whole practice stays under 45 turns.
+    if (!isCorrect && (q.retry || 0) < 2) {
+      setQuestions(previous => {
+        const deck = [...previous];
+        const alternatives = previous.filter(candidate => candidate.element !== q.element);
+        if (!alternatives.length) return deck;
+        const gap = 3;
+        const missing = Math.max(0, gap - (deck.length - idx - 1));
+        if (deck.length + missing + 1 > 45) return deck;
+        for (let i = 0; i < missing; i++) {
+          deck.push({ ...alternatives[i % alternatives.length], retry: 2 });
+        }
+        deck.splice(idx + gap + 1, 0, { ...q, retry: (q.retry || 0) + 1 });
+        return deck;
+      });
+    }
     setResults(prev => [...prev, { correct: isCorrect, expected: q.expected, answered: answer.trim(), element: q.element }]);
     setShowResult(isCorrect ? 'correct' : 'wrong');
   }
@@ -987,6 +1005,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
         <span className="text-gray-500 text-sm ml-auto">{idx + 1} / {questions.length}</span>
       </div>
 
+      <p className="text-sm text-gray-400">Missed pairs return after other questions for another recall attempt. Up to 45 questions; unfinished learning carries into future practice.</p>
       <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
         <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${((idx + 1) / questions.length) * 100}%` }} />
       </div>
@@ -997,7 +1016,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
 
         {showResult ? (
           <div className={`mt-6 text-lg font-medium ${showResult === 'correct' ? 'text-port-success' : 'text-port-error'}`}>
-            {showResult === 'correct' ? 'Correct!' : `Wrong — answer: ${q.expected}`}
+            {showResult === 'correct' ? 'Correct!' : `Answer: ${q.expected}. Study this pairing before continuing.`}
           </div>
         ) : (
           <input
