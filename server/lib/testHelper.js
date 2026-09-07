@@ -295,6 +295,18 @@ export function readClientSource(rel) {
  */
 export const posixPath = (value) => String(value).split('\\').join('/');
 
+// Save the own descriptor, define the pinned value, and hand back a restore
+// that reinstates exactly what was there. Shared by the two pins below so the
+// descriptor dance has one definition.
+const pinProcessProperty = (name) => (value) => {
+  const original = Object.getOwnPropertyDescriptor(process, name);
+  Object.defineProperty(process, name, { value, configurable: true });
+  return () => {
+    if (original) Object.defineProperty(process, name, original);
+    else delete process[name];
+  };
+};
+
 /**
  * Pin `process.platform` for a test, and return the restore.
  *
@@ -321,14 +333,17 @@ export const posixPath = (value) => String(value).split('\\').join('/');
  * @param {string} value - the platform to report, e.g. `'darwin'` / `'win32'`
  * @returns {() => void} restore — idempotent, safe to call from `afterEach`
  */
-export function pinPlatform(value) {
-  const original = Object.getOwnPropertyDescriptor(process, 'platform');
-  Object.defineProperty(process, 'platform', { value, configurable: true });
-  return () => {
-    if (original) Object.defineProperty(process, 'platform', original);
-    else delete process.platform;
-  };
-}
+export const pinPlatform = pinProcessProperty('platform');
+
+/**
+ * `pinPlatform`'s companion for `process.arch`.
+ *
+ * Pinning the platform alone is not enough to stand in for an Apple Silicon
+ * host: `isAppleSilicon()` reads BOTH, so a darwin pin on an x64 runner still
+ * evaluates as Intel and every `requiresAppleSilicon` model reads unavailable.
+ * A test that means "on an Apple Silicon Mac" has to pin the pair.
+ */
+export const pinArch = pinProcessProperty('arch');
 
 /**
  * Budget for a vitest test that shells out to a real Python interpreter.

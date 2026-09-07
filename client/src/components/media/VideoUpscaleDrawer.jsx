@@ -17,6 +17,7 @@ import { Loader2 } from 'lucide-react';
 import Drawer from '../Drawer';
 import toast from '../ui/Toast';
 import { formatBytes } from '../../utils/formatters';
+import { isHardwareAvailable, hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useSseProgress } from '../../hooks/useSseProgress';
 import { upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl } from '../../services/apiImageVideo';
 
@@ -67,17 +68,28 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
   // (and silently downloading) one itself. Without this the button would read
   // ready for a job the dispatch refuses.
   const baseModelReady = plan?.baseModel?.cached === true;
-  const generativeReady = runtimeReady && adapterReady && baseModelReady;
-  const adapterMissing = !!plan && runtimeReady && !adapterReady;
+  // The host itself is a FOURTH axis (#6537): the machine can have the venv,
+  // the adapter and the whole 68 GB pack and still sit below what the pack needs
+  // of it (the CUDA pack asks for 64 GB of system memory). The dispatch refuses
+  // that host, so offering the button would promise a job that fails. Read
+  // through the shared helper, which already treats an absent annotation — a
+  // plan from an older server — as compatible rather than newly disabling it.
+  // Ordered ahead of the two "not downloaded" reasons because it outranks them:
+  // downloading 72 GB onto a machine that cannot run it helps nobody.
+  const hostReady = isHardwareAvailable(plan?.baseModel);
+  const generativeReady = runtimeReady && hostReady && adapterReady && baseModelReady;
+  const adapterMissing = !!plan && runtimeReady && hostReady && !adapterReady;
   const generativeDisabledReason = !plan
     ? null
     : !runtimeReady
       ? plan.runtime.reason
-      : !adapterReady
-        ? `The ${plan.adapter?.label || 'generative upscale'} adapter is not downloaded yet.`
-        : !baseModelReady
-          ? plan.baseModel?.reason || 'The LTX-2.5 model pack for this backend is not downloaded yet.'
-          : null;
+      : !hostReady
+        ? hardwareUnavailableReason(plan.baseModel?.name || 'The LTX-2.5 pack', plan.baseModel?.hardwareCompatibility)
+        : !adapterReady
+          ? `The ${plan.adapter?.label || 'generative upscale'} adapter is not downloaded yet.`
+          : !baseModelReady
+            ? plan.baseModel?.reason || 'The LTX-2.5 model pack for this backend is not downloaded yet.'
+            : null;
 
   // Inline adapter download (#6510 item 4) — the same provisioning surface
   // every IC-LoRA weight rides (#3100), just triggered from here instead of a

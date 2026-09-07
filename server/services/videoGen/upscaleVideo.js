@@ -115,12 +115,37 @@ const describeLtxAdapter = async () => {
 // without this the drawer would show a ready button for a job that dies minutes
 // later. Cache-only by construction — `inspectModelCache` reads the local HF
 // cache and never fetches, which is what keeps the plan endpoint read-only.
+//
+// The HOST is a fourth axis (#6537), and the only one no download can satisfy:
+// the registry declares what a pack needs of the machine (`ltx25_cuda_distilled`
+// asks for 64 GB of system memory), and a host below that floor cannot run it
+// for an upscale either — an upscale renders at twice the source's linear
+// dimensions, so it sits strictly ABOVE a plain render's peak. Without it the
+// plain render is refused up front with a stated reason while the upscale queues
+// a GPU job that dies seconds later inside the runtime's own loader, which is
+// exactly the "ready button for a job that dies minutes later" this axis exists
+// to prevent. Found on a 32 GB / RTX 3090 Windows host, where the pack's 26 GB
+// text encoder cannot be mapped a second time and both LTX-2.5 CUDA runners die
+// identically in `ltx_core`'s safetensors loader.
+//
+// The plan reports the server's `hardwareCompatibility` ANNOTATION rather than a
+// flattened boolean, exactly as every other model payload does, so the consumers
+// (`enqueueLtxUpscale`, the drawer) share one predicate — `isHardwareCompatible`
+// — instead of each re-deriving the tri-state rule. It stays independent of
+// `cached`: a pack can be fully downloaded onto a host that cannot run it, and
+// reporting that as "not downloaded" would send someone to re-fetch 72 GB that
+// is already on disk.
 const describeLtxBaseModel = async (runtimeId) => {
   const id = ltxUpscaleBaseModelId(runtimeId);
   const model = id ? getVideoModels().find((m) => m.id === id) || null : null;
   if (!model) {
+    // A registry gap is a configuration problem, not a statement about the host,
+    // so it carries NO hardware verdict — an absent annotation stays compatible
+    // and the existing `cached: false` refusal (UPSCALE_BASE_MODEL_UNRESOLVED)
+    // remains the accurate one.
     return {
       id, name: null, repo: null, revision: null, path: null, cached: false,
+      hardwareCompatibility: null,
       reason: `No base LTX-2.5 checkpoint is registered for the ${runtimeId || 'unknown'} backend.`,
     };
   }
@@ -136,6 +161,7 @@ const describeLtxBaseModel = async (runtimeId) => {
     // path that happens to be missing on disk.
     path: cached ? cache.snapshotPath : null,
     cached,
+    hardwareCompatibility: model.hardwareCompatibility ?? null,
     reason: cached ? null : `${model.name} is not downloaded — download or repair it in Video Gen.`,
   };
 };
