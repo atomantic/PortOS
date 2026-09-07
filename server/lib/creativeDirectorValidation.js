@@ -20,9 +20,9 @@ import { CREATIVE_DIRECTOR_GOAL_MAX } from './creativeBriefLimits.js';
 export const creativeDirectorAspectRatioSchema = z.enum(ASPECT_RATIOS);
 export const creativeDirectorQualitySchema = z.enum(QUALITIES);
 
-// Top-level project create. modelId is required because each LTX variant
-// has a different speed/VRAM/quality profile and the project locks it at
-// creation. targetDurationSeconds is capped at 600 (10 min) per the v1 plan
+// Legacy projects require a model at creation. Inert Video drafts may leave
+// it unset and edit production settings before dispatch is supported.
+// targetDurationSeconds is capped at 600 (10 min) per the v1 plan
 // — much beyond that and the agent's treatment quality drifts hard.
 // Strict basename: rejects path separators and the exact `.`/`..` segments.
 // Used for both startingImageFile (project create) and sourceImageFile

@@ -25,3 +25,14 @@ it('edits the same draft without changing workspace or losing source revisions',
   expect(updateCreativeDirectorProject.mock.calls[0][1]).not.toHaveProperty('workspace');
   expect(createCreativeDirectorProject).not.toHaveBeenCalled();
 });
+
+it('restores and saves a Reactor pin even when the local model list is unavailable', async () => {
+  const user = userEvent.setup();
+  const project = { id: 'reactor-draft', name: 'Example reactor', workspace: 'video', modelId: 'saved-local', renderBackend: { image: { mode: 'local' }, video: { mode: 'reactor', modelId: 'fast-h3' } } };
+  updateCreativeDirectorProject.mockResolvedValue(project);
+  render(<MemoryRouter initialEntries={['/?videoDraftTab=production']}><VideoDraftDrawer open project={project} onClose={vi.fn()} onSaved={vi.fn()} /></MemoryRouter>);
+  expect(screen.getByLabelText('Media backend')).toHaveValue('reactor');
+  expect(screen.getByLabelText('Media model')).toHaveValue('fast-h3');
+  await user.click(screen.getByRole('button', { name: 'Save draft' }));
+  await waitFor(() => expect(updateCreativeDirectorProject).toHaveBeenCalledWith('reactor-draft', expect.objectContaining({ renderBackend: project.renderBackend }), { silent: true }));
+});

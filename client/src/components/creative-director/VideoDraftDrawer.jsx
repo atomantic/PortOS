@@ -1,4 +1,5 @@
 import { VIDEO_REVIEW_CHECKPOINTS } from '../../../../server/lib/creativeDirectorPresets.js';
+import { VIDEO_RENDER_MODES, modeLabel } from '../../lib/imageGenBackends.js';
 import { useEffect, useState } from 'react';
 import Drawer from '../Drawer.jsx';
 import useDrawerTab from '../../hooks/useDrawerTab.js';
@@ -29,7 +30,8 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
     setSourceQuery('');
     const draft = project?.videoDraft;
     setForm({ name: project?.name || '', userStory: project?.userStory || '', styleSpec: project?.styleSpec || '',
-      aspectRatio: project?.aspectRatio || '16:9', quality: project?.quality || 'standard', modelId: project?.modelId || '',
+      videoMode: project?.renderBackend?.video?.mode || 'local', backendModelId: project?.renderBackend?.video?.modelId || '',
+      aspectRatio: project?.aspectRatio || '16:9', quality: project?.quality || 'standard', modelId: (project?.renderBackend?.video?.mode === 'local' ? project.renderBackend.video.modelId : '') || project?.modelId || '',
       min: draft?.durationRange?.min || 30, max: draft?.durationRange?.max || 60,
       reviewPolicy: draft?.reviewPolicy || 'review', audioProvider: draft?.audio?.providerId || '', audioModel: draft?.audio?.model || '',
       sources: draft?.sources || catalogIngredientIds.map(id => ({ kind: 'catalog', id })) });
@@ -49,6 +51,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
     const payload = { name: form.name.trim(), userStory: form.userStory, styleSpec: form.styleSpec,
       aspectRatio: form.aspectRatio, quality: form.quality, modelId: form.modelId, targetDurationSeconds: max,
       ...(!project ? { workspace: 'video', catalogIngredientIds: sources.filter(s => s.kind === 'catalog').map(s => s.id) } : {}),
+      renderBackend: { ...project?.renderBackend, video: { ...project?.renderBackend?.video, mode: form.videoMode, modelId: form.videoMode === 'local' ? form.modelId : form.backendModelId || null } },
       videoDraft: { durationRange: { min, max }, sources, audio: { ...(form.audioProvider ? { providerId: form.audioProvider } : {}), ...(form.audioModel ? { model: form.audioModel } : {}) }, reviewPolicy: form.reviewPolicy, checkpoints: project?.videoDraft?.checkpoints || VIDEO_REVIEW_CHECKPOINTS } };
     setSaving(true);
     const saved = await (project ? updateCreativeDirectorProject(project.id, payload, { silent: true }) : createCreativeDirectorProject(payload, { silent: true }))
@@ -67,7 +70,11 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
       {tab === 'production' && <>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{select('aspectRatio', 'Aspect ratio', ['16:9', '9:16', '1:1'].map(x => [x, x]))}{select('quality', 'Quality', ['draft', 'standard', 'high'].map(x => [x, x]))}</div>
         <h3 className="font-medium">Cognitive models</h3><p className="text-sm text-port-text-muted">Inherit Creative Director defaults. After saving, use Models to select providers and models separately for treatment, production planning, and evaluation.</p>
-        {select('modelId', 'Media model', [['', 'Choose before production'], ...models.map(m => [m.id, m.name || m.id])])}
+        <label htmlFor="video-draft-videoMode" className="block text-sm">Media backend<select id="video-draft-videoMode" className={fieldClass} value={form.videoMode || 'local'} onChange={e => { change('videoMode', e.target.value); change('backendModelId', ''); }}>{!VIDEO_RENDER_MODES.includes(form.videoMode) && form.videoMode && <option value={form.videoMode}>{form.videoMode} (saved backend)</option>}{VIDEO_RENDER_MODES.map(mode => <option key={mode} value={mode}>{modeLabel(mode)}</option>)}</select></label>
+        {form.videoMode === 'local' ? select('modelId', 'Media model', [['', 'Choose before production'], ...(form.modelId && !models.some(m => m.id === form.modelId) ? [[form.modelId, `${form.modelId} (saved model unavailable)`]] : []), ...models.map(m => [m.id, m.name || m.id])])
+          : form.videoMode === 'fal' ? input('backendModelId', 'fal.ai model (optional)', { placeholder: 'Use configured fal.ai default', maxLength: 64 })
+          : select('backendModelId', 'Media model', [['', form.videoMode === 'reactor' ? 'fast-h3 (backend default)' : 'Backend default'], ...(form.backendModelId ? [[form.backendModelId, `${form.backendModelId} (saved model)`]] : [])])}
+        <p className="text-sm text-port-text-muted">Backend selections are saved without running providers. Cloud renders may incur charges when production is enabled.</p>
         <h3 className="font-medium">Audio conditioning</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><label htmlFor="video-draft-audioProvider" className="block text-sm">Audio engine<select id="video-draft-audioProvider" className={fieldClass} value={form.audioProvider || ''} onChange={e => { change('audioProvider', e.target.value); change('audioModel', ''); }}><option value="">Choose before production</option>{engines.map(engine => <option key={engine.id} value={engine.id}>{engine.name || engine.id}</option>)}</select></label>{select('audioModel', 'Audio model', [['', 'Engine default'], ...(engines.find(e => e.id === form.audioProvider)?.models || []).map(m => [m.id, m.name || m.id])])}</div>
         {select('reviewPolicy', 'Review policy', [['review', 'Review at checkpoints'], ['autonomous', 'Autonomous after production is enabled']])}
