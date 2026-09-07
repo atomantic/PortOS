@@ -107,6 +107,17 @@ export default defineConfig({
         statements: 30
       }
     },
+    // Vitest 5 clears mock call history before every test by default
+    // (`clearMocks`, which was false through vitest 4). PortOS ACCEPTS that
+    // default rather than pinning it back: it is per-test isolation, not a
+    // behavior change to production code, and both suites are green under it.
+    // Note what it does and does not do — it calls `.mockClear()`, so
+    // `mock.calls` resets while an implementation set by a `vi.mock` factory,
+    // a `beforeAll`, or `mockReturnValue` SURVIVES into the next test. The
+    // consequence worth knowing: an `expect(fn).not.toHaveBeenCalled()` now
+    // proves only that the CURRENT test did not call it, never that no earlier
+    // test in the file did. Assert a cross-test claim inside the test that
+    // makes it.
     globals: true,
     // Global setup: mocks getPeers → [] so test-created records never fan out
     // to live sync peers.  Per-suite vi.mock('./instances.js', …) overrides win.

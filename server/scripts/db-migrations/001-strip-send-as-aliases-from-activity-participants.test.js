@@ -16,10 +16,15 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // Each test sets its own readFile implementation, and the client stub is rebuilt
-// per test, so no beforeEach reset is needed — and adding one is actively harmful:
-// under vitest 4, clearing this factory-created mock makes the errors its
-// implementation throws surface as unhandled test failures even though up()
-// catches them.
+// per test, so no beforeEach reset is needed here.
+//
+// This used to warn that adding one was actively HARMFUL: under vitest 4,
+// clearing this factory-created mock made the errors its implementation throws
+// surface as unhandled test failures even though up() catches them. Vitest 5 no
+// longer behaves that way — and it clears mocks before every test by default
+// (see server/vitest.config.js), so this file now gets that clear whether it
+// asks for one or not, and stays green. An explicit reset is redundant, not
+// dangerous.
 const readFile = vi.fn();
 vi.mock('fs/promises', () => ({ readFile }));
 

@@ -610,7 +610,7 @@ describe('agent TUI spawning', () => {
 // ─── spawnTuiAgent runtime tests ─────────────────────────────────────────────
 
 // Flush the microtask queue (pending Promise continuations). vi.runAllMicrotasksAsync
-// is not available in vitest 4.x — use Promise.resolve() ticks instead.
+// is available in neither vitest 4 nor 5 — use Promise.resolve() ticks instead.
 const flushMicrotasks = () => Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve());
 
 describe('spawnTuiAgent runtime', () => {
