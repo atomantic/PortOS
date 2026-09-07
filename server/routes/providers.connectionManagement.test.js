@@ -773,3 +773,19 @@ describe('PATCH /api/providers/routes/:providerId/model-aliases', () => {
     expect(route.modelAliasOverrides).toEqual({ good: 'example-model' });
   });
 });
+
+describe('boot reconciliation of the shared backend this suite edits', () => {
+  it('leaves the two-protocol connection intact instead of cloning both bindings off it', async () => {
+    // The fixture is the configuration the feature exists for: one daemon, two
+    // protocol ports, two harnesses, one connection row. Each executable record
+    // names ONE endpoint, so no route can ever report the row's full identity —
+    // a reconcile pass that demanded equality would detach every binding onto a
+    // fresh single-transport row and silently undo the link.
+    graph.resetProviderGraphState();
+    store.applyReconciliation.mockClear();
+
+    await graph.initProviderGraph();
+
+    expect(store.applyReconciliation).not.toHaveBeenCalled();
+  });
+});

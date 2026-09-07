@@ -116,11 +116,12 @@ export function connectionBlocker({ kind, transports }) {
  * Why this connection cannot carry a route for this harness, or `null`.
  *
  * The transport rule is stricter than "declares the protocol": the connection
- * must declare that protocol and NOTHING else. A minted record's own profile
- * always names exactly one transport (a provider record has one endpoint), so a
- * connection declaring two would not be the connection its own routes describe
- * — and `planGraphReconciliation` would clone each binding onto a fresh
- * single-transport row on the next pass, silently undoing the create.
+ * must declare that protocol and NOTHING else. It was written that way because
+ * reconciliation demanded a route describe its connection EXACTLY, so a route
+ * minted onto a two-protocol row was cloned straight back off it on the next
+ * pass. #6452 replaced that with containment, so the strictness is now
+ * conservatism rather than a guard against a silently undone create — relaxing
+ * it to "declares the protocol" is tracked in #6460.
  *
  * @returns {{code:string, message:string}|null}
  */

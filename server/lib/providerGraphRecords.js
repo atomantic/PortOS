@@ -246,12 +246,64 @@ export const toConnectionDto = (connection) =>
 /** The connection-owned half of one provider record, as stored in a snapshot. */
 export const connectionOwnedSnapshot = (provider) => providerConnectionProfile(provider).owned;
 
-/** The identity a connection row asserts, secrets included. Server-side only. */
+/**
+ * The identity one ROUTE's profile asserts, secrets included. Server-side only.
+ *
+ * Two routes sharing this key describe the same backend as each other, which is
+ * what keeps a binding's modes together and splits them once they diverge.
+ * Whether a route still belongs on a STORED connection is a different question
+ * — see {@link routeBelongsOnConnection}.
+ */
 const identityKey = ({ kind, transports, credentials }) => JSON.stringify([
   kind,
   Object.entries(transports || {}).sort(([a], [b]) => a.localeCompare(b)),
   Object.entries(credentials || {}).sort(([a], [b]) => a.localeCompare(b)),
 ]);
+
+/**
+ * Whether a stored connection still CONTAINS the backend a route describes.
+ *
+ * A provider record names exactly one endpoint, so a route's profile always
+ * reports exactly one transport — while a connection a human linked across
+ * protocols declares one per protocol (an Ollama daemon reached by Claude on
+ * its Anthropic port and by Codex on its `/v1` port is ONE backend). Demanding
+ * {@link identityKey} equality here would therefore match none of a
+ * multi-transport row's own routes and clone every binding off it, silently
+ * undoing the explicit link the connection graph exists to hold.
+ *
+ * Containment, precisely:
+ *
+ *   - `kind` matches exactly — a route never migrates between backend kinds.
+ *   - The route's transport protocol is DECLARED by the connection at the same
+ *     `baseUrl`. A route declaring no transport at all matches only a
+ *     connection that declares none either: "names no endpoint" must never
+ *     collapse into "sits on whichever backend you like".
+ *   - The route's credentials are a SUBSET of the connection's, with every
+ *     shared key equal. A row carrying one key per protocol is normal (Claude
+ *     sends a token where OpenCode sends none); disagreeing on a key they share
+ *     is a real move, and still detaches.
+ *
+ * `sameConnectionIdentity` stays strict on purpose: it answers "are these two
+ * records the same backend?" at IMPORT time, where equality is what stops an
+ * accidental merge. This is the looser question reconciliation asks about a
+ * link a human already made.
+ */
+function routeBelongsOnConnection(profile, connection) {
+  if (!connection || profile.kind !== connection.kind) return false;
+  const declared = connection.transports || {};
+  const transports = Object.entries(profile.transports || {});
+  if (transports.length === 0) return Object.keys(declared).length === 0;
+  // Both sides must name a real URL. A row hand-edited into `{ anthropic: {} }`
+  // has no endpoint, and letting two absent values compare equal is exactly the
+  // collapse of "not set" into "matches" this rule exists to prevent.
+  const declaresSameEndpoint = ([protocol, transport]) => {
+    const url = declared[protocol]?.baseUrl;
+    return typeof url === 'string' && url !== '' && url === transport?.baseUrl;
+  };
+  if (!transports.every(declaresSameEndpoint)) return false;
+  const secrets = connection.credentials || {};
+  return Object.entries(profile.credentials || {}).every(([name, value]) => secrets[name] === value);
+}
 
 /**
  * Mint durable rows from a read-only preview.
@@ -410,26 +462,31 @@ export function planGraphReconciliation(graph, providers, { mintId = randomUUID 
     const binding = bindingsById.get(bindingId);
     if (!binding) continue;
     const stored = connectionsById.get(binding.connectionId) || null;
-    const storedKey = stored ? identityKey(stored) : null;
     const shared = (bindingsPerConnection.get(binding.connectionId) || 0) > 1;
 
-    // Group this binding's routes by the connection each one now describes.
-    const groups = new Map();
+    // Routes the stored connection still CONTAINS stay on it together, whether
+    // or not they describe it identically — that is what keeps a cross-protocol
+    // link alive. Every other route regroups by the backend it now names.
+    const onStored = [];
+    const moved = new Map();
     for (const entry of entries) {
+      if (routeBelongsOnConnection(entry.profile, stored)) {
+        onStored.push(entry);
+        continue;
+      }
       const key = identityKey(entry.profile);
-      groups.set(key, [...(groups.get(key) || []), entry]);
+      moved.set(key, [...(moved.get(key) || []), entry]);
     }
 
-    // The group that KEEPS this binding is the one still matching the stored
+    // The group that KEEPS this binding is the one still on the stored
     // connection; failing that, the largest, so the fewest routes are moved.
-    const ordered = [...groups.values()].sort((a, b) => b.length - a.length);
-    const keeperIndex = Math.max(0, ordered.findIndex((group) => identityKey(group[0].profile) === storedKey));
-    const [keeper] = ordered.splice(keeperIndex, 1);
+    const ordered = [...moved.values()].sort((a, b) => b.length - a.length);
+    if (onStored.length > 0) ordered.unshift(onStored);
 
-    for (const [index, group] of [keeper, ...ordered].entries()) {
+    for (const [index, group] of ordered.entries()) {
       const isKeeper = index === 0;
       const lead = group[0];
-      const unchanged = isKeeper && storedKey === identityKey(lead.profile);
+      const unchanged = isKeeper && onStored.length > 0;
       // A clone is required whenever the values changed AND the connection row
       // is shared: editing it in place would silently repoint another harness.
       const action = unchanged ? 'unchanged' : (isKeeper && !shared ? 'update' : 'clone');
@@ -458,8 +515,12 @@ export function planGraphReconciliation(graph, providers, { mintId = randomUUID 
           id: action === 'clone' ? mintId() : binding.connectionId,
           kind: lead.profile.kind,
           label: stored && isKeeper ? stored.label : String(lead.provider.name || lead.provider.id),
-          transports: lead.profile.transports,
-          credentials: lead.profile.credentials,
+          // An unchanged row is republished exactly AS STORED rather than
+          // narrowed to the single transport this route happens to name —
+          // otherwise "nothing moved" would still describe a backend the other
+          // harness on it cannot reach.
+          transports: unchanged ? stored.transports : lead.profile.transports,
+          credentials: unchanged ? stored.credentials : lead.profile.credentials,
           catalog: unchanged ? stored.catalog : { state: models.length > 0 ? 'known' : 'unknown', models },
         },
       });

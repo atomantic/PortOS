@@ -307,6 +307,135 @@ describe('reconciling after a downgrade edited providers.json', () => {
   });
 });
 
+describe('a connection several harnesses share through different protocols', () => {
+  // One local daemon reached by Claude on its Anthropic port and Codex on its
+  // OpenAI-compatible port, linked into ONE connection row. A provider record
+  // names one endpoint, so each route reports exactly one transport — the row
+  // therefore CONTAINS what its routes describe rather than equalling it, and a
+  // reconcile pass that demanded equality would clone every binding off it.
+  const DAEMON = 'http://127.0.0.1:11434';
+  const DAEMON_V1 = 'http://127.0.0.1:11434/v1';
+  const TOKEN = 'example-token';
+  const OPENAI_KEY = 'example-openai-key';
+
+  const CODEX_CLI = Object.freeze({
+    id: 'codex-ollama',
+    name: 'Codex on the example daemon',
+    type: 'cli',
+    command: 'codex',
+    ollamaBacked: true,
+    enabled: false,
+    models: ['example-model:8b'],
+    envVars: { OPENAI_BASE_URL: DAEMON_V1, OPENAI_API_KEY: OPENAI_KEY },
+    secretEnvVars: ['OPENAI_API_KEY'],
+  });
+
+  const CONNECTION = 'conn-shared';
+  const CLAUDE_BINDING = 'binding-claude';
+  const CODEX_BINDING = 'binding-codex';
+
+  const shared = () => {
+    const providers = [CLAUDE_CLI, CLAUDE_TUI, CODEX_CLI].map((record) => structuredClone(record));
+    const byId = new Map(providers.map((provider) => [provider.id, provider]));
+    const route = (providerId, bindingId, mode) => ({
+      providerId,
+      bindingId,
+      mode,
+      modelMap: { 'example-model:8b': 'example-model:8b' },
+      projected: connectionOwnedSnapshot(byId.get(providerId)),
+      pending: null,
+      pendingRevision: null,
+    });
+    return {
+      providers,
+      graph: {
+        connections: [{
+          id: CONNECTION,
+          revision: 3,
+          kind: 'ollama',
+          label: 'Example local daemon',
+          transports: { anthropic: { baseUrl: DAEMON }, openai: { baseUrl: DAEMON_V1 } },
+          credentials: { ANTHROPIC_AUTH_TOKEN: TOKEN, OPENAI_API_KEY: OPENAI_KEY },
+          catalog: { state: 'known', models: ['example-model:8b'] },
+        }],
+        bindings: [
+          {
+            id: CLAUDE_BINDING, revision: 4, connectionId: CONNECTION, harnessId: 'claude',
+            variantKey: 'default', label: 'Claude', enabled: true, selectedModels: ['example-model:8b'],
+          },
+          {
+            id: CODEX_BINDING, revision: 2, connectionId: CONNECTION, harnessId: 'codex',
+            variantKey: 'default', label: 'Codex', enabled: false, selectedModels: [],
+          },
+        ],
+        routes: [
+          route('claude-ollama', CLAUDE_BINDING, 'cli'),
+          route('claude-ollama-tui', CLAUDE_BINDING, 'tui'),
+          route('codex-ollama', CODEX_BINDING, 'cli'),
+        ],
+      },
+    };
+  };
+
+  it('survives a reconcile pass with every binding still on it', () => {
+    const { providers, graph } = shared();
+    const plan = planGraphReconciliation(graph, providers, { mintId: minter('new') });
+
+    expect(reconciliationIsNoop(plan)).toBe(true);
+    expect(plan.regroups.every((regroup) => regroup.connectionAction === 'unchanged')).toBe(true);
+    for (const regroup of plan.regroups) expect(regroup.connection.id).toBe(CONNECTION);
+    // The row keeps BOTH protocols: a single-transport route must never narrow
+    // the backend the other harness reaches.
+    for (const regroup of plan.regroups) {
+      expect(Object.keys(regroup.connection.transports).sort()).toEqual(['anthropic', 'openai']);
+    }
+  });
+
+  it('still detaches the one harness whose base URL genuinely moved', () => {
+    const { providers, graph } = shared();
+    for (const id of ['claude-ollama', 'claude-ollama-tui']) {
+      providers.find((provider) => provider.id === id).envVars.ANTHROPIC_BASE_URL = 'http://127.0.0.1:12345';
+    }
+
+    const plan = planGraphReconciliation(graph, providers, { mintId: minter('new') });
+    const claude = plan.regroups.find((regroup) => regroup.routeIds.includes('claude-ollama'));
+    // Shared, so the moved harness gets its own row instead of repointing Codex.
+    expect(claude.connectionAction).toBe('clone');
+    expect(claude.connection.id).not.toBe(CONNECTION);
+    expect(claude.bindingId).toBe(CLAUDE_BINDING);
+    // Codex never noticed.
+    const codex = plan.regroups.find((regroup) => regroup.routeIds.includes('codex-ollama'));
+    expect(codex.connectionAction).toBe('unchanged');
+    expect(codex.connection.id).toBe(CONNECTION);
+  });
+
+  it('detaches a route whose credential disagrees with the shared one', () => {
+    // A subset is normal — two protocols, two keys. A route claiming a
+    // DIFFERENT value for a key the connection already carries is not.
+    const { providers, graph } = shared();
+    for (const id of ['claude-ollama', 'claude-ollama-tui']) {
+      providers.find((provider) => provider.id === id).envVars.ANTHROPIC_AUTH_TOKEN = 'example-other-token';
+    }
+
+    const plan = planGraphReconciliation(graph, providers, { mintId: minter('new') });
+    const claude = plan.regroups.find((regroup) => regroup.routeIds.includes('claude-ollama'));
+    expect(claude.connectionAction).toBe('clone');
+    expect(claude.connection.credentials.ANTHROPIC_AUTH_TOKEN).toBe('example-other-token');
+  });
+
+  it('detaches a route that stopped declaring an endpoint at all', () => {
+    // `Absent` must not collapse into `matches anything`: a record with no
+    // endpoint describes no backend, so it cannot stay on this one.
+    const { providers, graph } = shared();
+    delete providers.find((provider) => provider.id === 'codex-ollama').envVars.OPENAI_BASE_URL;
+
+    const plan = planGraphReconciliation(graph, providers, { mintId: minter('new') });
+    const codex = plan.regroups.find((regroup) => regroup.routeIds.includes('codex-ollama'));
+    expect(codex.connectionAction).toBe('clone');
+    expect(codex.connection.transports).toEqual({});
+  });
+});
+
 describe('a mode-only legacy edit stays route-scoped', () => {
   it('changes no connection-owned value and plans no graph change', () => {
     const providers = providersFixture();
