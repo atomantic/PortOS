@@ -11,8 +11,8 @@ import { getSettings } from '../../settings.js';
 import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../../imageGen/modes.js';
 import { renderTargetDefaults, resolveRenderTargetConfig } from '../../imageGen/cloudProviderConfig.js';
 import { RENDER_TARGET } from '../../../lib/renderTargets.js';
-import { VIDEO_GEN_MODE, VIDEO_GEN_MODES } from '../../videoGen/modes.js';
-import { grokVideoJobParams, resolveVideoBackendPin } from '../../videoGen/backendPin.js';
+import { CLOUD_VIDEO_GEN_MODES } from '../../videoGen/modes.js';
+import { videoBackendJobParams, resolveVideoBackendPin } from '../../videoGen/backendPin.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../../lib/mediaModels.js';
 import { COST_RENDER, resolveOwner } from './shared.js';
 
@@ -251,42 +251,9 @@ async function enforceRenderBackendPin(kind, params, project) {
     // videoGen/backendPin.js, so the two enqueue surfaces resolve identically.
     const videoPin = resolveVideoBackendPin(project, settings);
     if (!videoPin.pinned) return params;
-    if (videoPin.mode !== VIDEO_GEN_MODE.GROK) {
-      // Local video: `params.mode` is the t2v/i2v SEMANTIC for this lane (see
-      // videoGen/modes.js), so a local pin must NOT stamp the backend name over
-      // it — overwriting a real semantic ('fflf', 'a2v', 'extend', an IC-LoRA id)
-      // would silently drop the caller's keyframes/audio.
-      //
-      // But the backend discriminator and the semantic SHARE this one key, so a
-      // planner-authored BACKEND token has to go: 'grok' would dispatch to grok
-      // in defiance of the pin (and defeat the grok-disabled fallback), and
-      // 'local' is worse than useless — local.js treats an unrecognized non-empty
-      // mode as plain text-to-video, so it would silently ignore the step's
-      // sourceImagePath/keyframes. Dropping the key entirely is the correct
-      // repair for both: an unset mode makes local.js INFER the semantic from
-      // keyframes → sourceImagePath → text.
-      const base = VIDEO_GEN_MODES.includes(params?.mode)
-        ? (({ mode: _backendToken, ...rest }) => rest)(params)
-        : (params || {});
-      // The user's pinned model wins over the planner's freehand guess — that
-      // asymmetry is the whole point of a pin. The project pin's model wins
-      // over the target default's (same precedence as the mode ladder); local
-      // is the only video backend that consumes a model id, so no cross-
-      // provider leak guard is needed here.
-      return videoPin.modelId ? { ...base, modelId: videoPin.modelId } : base;
-    }
-    // Clip length crosses a contract boundary into the grok lane (see
-    // grokVideoJobParams). Prefer an explicit `duration` if some caller already
-    // set one; else the step's `durationSeconds` (what the planner writes and
-    // what enforceVideoRenderPreset reconciles); else the project's target.
-    const requestedSeconds = params?.duration ?? params?.durationSeconds ?? project?.targetDurationSeconds;
-    return {
-      ...params,
-      ...grokVideoJobParams(settings, {
-        sourceImagePath: params?.sourceImagePath,
-        durationSeconds: requestedSeconds,
-      }),
-    };
+    return videoBackendJobParams(settings, videoPin, params, {
+      durationSeconds: project?.targetDurationSeconds,
+    });
   }
 
   const pin = project?.renderBackend?.[kind];
@@ -364,7 +331,7 @@ const mediaTool = (kind, label) => ({
       // then happily ship a job the peer renders with audio; a dropped
       // `negativePrompt` just silently changes the render.
       if (kind === 'video'
-        && params?.mode !== VIDEO_GEN_MODE.GROK
+        && !CLOUD_VIDEO_GEN_MODES.includes(params?.mode)
         && !(await hasConfiguredMediaRoute('video'))) {
         params = reconcileVideoParamsWithModel(params, project);
       }

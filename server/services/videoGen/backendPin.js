@@ -20,17 +20,19 @@
  * scene on the local MLX runtime, and an install with no `imageGen.local
  * .pythonPath` failed the whole project up front even though Grok was
  * configured, enabled, and explicitly pinned. This module is the ONE place the
- * resolution ladder and the Grok param shape live, so the two surfaces cannot
+ * resolution ladder and backend job shapes live, so the two surfaces cannot
  * drift apart again.
  *
- * Both helpers take `settings` rather than reading them, so the callers keep
+ * The helpers take `settings` rather than reading them, so the callers keep
  * their existing single settings read per enqueue.
  */
 
 import { RENDER_TARGET, normalizeRenderPinValue } from '../../lib/renderTargets.js';
 import { nearestGrokDuration } from '../../lib/grokVideoClip.js';
+import { nearestReactorAspect } from '../../lib/reactorVideoClip.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { renderTargetDefaults } from '../imageGen/cloudProviderConfig.js';
-import { VIDEO_GEN_MODE, resolveVideoMode, hasVideoPin } from './modes.js';
+import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode, hasVideoPin } from './modes.js';
 
 /**
  * Resolve the video backend for a CD project through the pin ladder: the
@@ -45,11 +47,9 @@ import { VIDEO_GEN_MODE, resolveVideoMode, hasVideoPin } from './modes.js';
  * nothing is pinned" contract (enforceRenderBackendPin) return the caller's
  * params untouched instead of re-deriving them.
  *
- * `modelId` is the pinned LOCAL model: the project pin's own id wins over the
- * target default's, matching the mode ladder's precedence. Local is the only
- * video backend with a model knob (the cloud CLIs pick their own), so there is
- * no cross-provider leak to guard against — but callers must still only apply
- * it on the local branch.
+ * `modelId` belongs to the resolved backend: local catalog pins follow the
+ * existing project → target precedence; fal endpoint pins come only from an
+ * explicit fal project pin. Grok and Reactor use their renderer's own model.
  */
 export function resolveVideoBackendPin(project, settings, { target = RENDER_TARGET.CREATIVE_AGENT } = {}) {
   const raw = project?.renderBackend?.video || null;
@@ -61,7 +61,17 @@ export function resolveVideoBackendPin(project, settings, { target = RENDER_TARG
   // it), but a hand-made or peer-synced project can carry the sentinel.
   const mode = normalizeRenderPinValue(raw?.mode);
   const targetDefaults = renderTargetDefaults(settings, target);
-  const modelId = normalizeRenderPinValue(raw?.modelId) || targetDefaults.videoModel || null;
+  const resolvedMode = resolveVideoMode(mode, settings, { target });
+  // The target videoModel and project.modelId are local catalog choices. fal
+  // accepts an endpoint model only from its own explicit project pin; Reactor
+  // and Grok choose their models in the renderer. A lapsed fal pin must not
+  // pass its endpoint id into the legacy local fallback either.
+  const cloudModelPin = mode === VIDEO_GEN_MODE.FAL || mode === VIDEO_GEN_MODE.REACTOR;
+  const localModelId = (!cloudModelPin && normalizeRenderPinValue(raw?.modelId))
+    || targetDefaults.videoModel || null;
+  const modelId = resolvedMode === VIDEO_GEN_MODE.LOCAL ? localModelId
+    : resolvedMode === VIDEO_GEN_MODE.FAL && mode === VIDEO_GEN_MODE.FAL
+      ? normalizeRenderPinValue(raw?.modelId) : null;
   return {
     // A model pin counts as a pin even with no mode beside it. Naming a local
     // video model IS a configured choice, and the resolved mode for an
@@ -78,7 +88,7 @@ export function resolveVideoBackendPin(project, settings, { target = RENDER_TARG
     // degraded an unusable pin, and only the caller has the context to decide
     // whether that's worth reporting.
     requested: mode,
-    mode: resolveVideoMode(mode, settings, { target }),
+    mode: resolvedMode,
     modelId,
   };
 }
@@ -116,4 +126,82 @@ export function grokVideoJobParams(settings, { sourceImagePath = null, durationS
     duration: nearestGrokDuration(durationSeconds),
     ...(grok.aspectRatio ? { aspectRatio: grok.aspectRatio } : {}),
   };
+}
+
+/**
+ * Apply a resolved creative video pin to the queue's renderer contract. Both
+ * planner tools and direct scenes use this boundary so cloud backend tokens
+ * cannot fall into local text/image mode or local-model reconciliation.
+ *
+ * Local params keep their semantic mode and conditioning intact. Cloud workers
+ * accept a first frame, not local keyframe/audio/LoRA machinery; refuse those
+ * requests before enqueue instead of producing an unconditioned paid clip.
+ * Backend workers retain their own duration/prompt validation before submission
+ * (in particular Reactor's shared short-clip limits, never a project-length clip).
+ */
+export function videoBackendJobParams(settings, pin, params = {}, { durationSeconds } = {}) {
+  if (pin.mode === VIDEO_GEN_MODE.LOCAL) {
+    const base = VIDEO_GEN_MODES.includes(params.mode)
+      ? (({ mode: _backend, ...rest }) => rest)(params)
+      : params;
+    return pin.modelId ? { ...base, modelId: pin.modelId } : base;
+  }
+
+  const semantic = VIDEO_GEN_MODES.includes(params.mode) ? params.videoMode : params.mode;
+  const hasInput = (value) => Array.isArray(value) ? value.length > 0 : Boolean(value);
+  const unsupported = [
+    'keyframes', 'lastImagePath', 'lastImageFile', 'audioFilePath', 'audioFile',
+    'extendFromVideoId', 'extendFromVideoPath', 'icReferencePaths',
+    'icReferenceVideoIds', 'icReferenceImageFiles', 'loras', 'loraPaths', 'loraFilenames',
+  ].filter((key) => hasInput(params[key]));
+  if (semantic && semantic !== 'text' && semantic !== 'image') unsupported.push(`mode ${semantic}`);
+  if (Number(params.chunks) > 1) unsupported.push('chained chunks');
+  if (Number(params.batchSize) > 1) unsupported.push('batched clips');
+  if (params.disableAudio === true) unsupported.push('audio-disabled output');
+  if (params.i2vReferenceMode && params.i2vReferenceMode !== 'anchor') unsupported.push('inspire reference mode');
+  if (params.continueFromClipId && pin.mode !== VIDEO_GEN_MODE.REACTOR) unsupported.push('Reactor clip continuation');
+  if (unsupported.length) {
+    throw new ServerError(
+      `The ${pin.mode} video backend cannot honor ${unsupported.join(', ')}. Remove those inputs or choose a compatible local render backend.`,
+      { status: 400, code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' },
+    );
+  }
+
+  // Keep attribution, geometry and source references, but never carry local
+  // runtime/model knobs into a paid renderer with a different model namespace.
+  const {
+    modelId: _model, pythonPath: _python, numFrames: _frames, fps: _fps,
+    steps: _steps, guidanceScale: _guidance, tiling: _tiling,
+    imageStrength: _strength, disableAudio: _audio, ...base
+  } = params;
+  const sourceImagePath = params.sourceImagePath || null;
+  const duration = params.duration ?? params.durationSeconds ?? durationSeconds;
+  if (pin.mode === VIDEO_GEN_MODE.GROK) {
+    return { ...base, ...grokVideoJobParams(settings, { sourceImagePath, durationSeconds: duration }) };
+  }
+  if (pin.mode === VIDEO_GEN_MODE.FAL) {
+    return {
+      ...base,
+      mode: VIDEO_GEN_MODE.FAL,
+      videoMode: sourceImagePath ? 'image' : 'text',
+      ...(pin.modelId ? { modelId: pin.modelId } : {}),
+      ...(duration != null ? { duration } : {}),
+    };
+  }
+  if (pin.mode === VIDEO_GEN_MODE.REACTOR) {
+    const seconds = params.seconds ?? duration;
+    const aspect = Number(params.width) > 0 && Number(params.height) > 0
+      ? nearestReactorAspect(params.width, params.height)
+      : params.aspect ?? params.aspectRatio;
+    return {
+      ...base,
+      mode: VIDEO_GEN_MODE.REACTOR,
+      videoMode: sourceImagePath ? 'image' : 'text',
+      ...(seconds != null ? { seconds } : {}),
+      ...(aspect ? { aspect } : {}),
+    };
+  }
+  throw new ServerError('Unknown video backend; choose a configured render backend.', {
+    status: 400, code: 'VIDEO_BACKEND_UNSUPPORTED',
+  });
 }
