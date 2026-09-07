@@ -1,5 +1,5 @@
 /**
- * Machine-local `tailcat serve` for the PortOS API port — the reverse polarity
+ * Machine-local `tailcat serve` for the remote ingress port — the reverse polarity
  * of `tailcatPeer.js` forwards.
  *
  * When this node is a better *outbound initiator* than the peer that should
@@ -14,6 +14,7 @@
  * record, never federated, and never committed.
  */
 
+import { ensureTailcatIngress } from './tailcatIngress.js';
 import { mkdir, readFile, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
@@ -34,7 +35,7 @@ import {
 const SERVE_FILE = dataPath('tailcat-serve.json');
 const ADDR_FILE = dataPath('tailcat-serve.addr');
 const DEFAULT_KEY_NAME = 'portos-api';
-const DEFAULT_LOCAL_PORT = PORTS.API;
+const DEFAULT_LOCAL_PORT = PORTS.TAILCAT_INGRESS;
 const SERVE_READY_MS = 20_000;
 const DIAGNOSTIC_TAIL_CHARS = 4096;
 const GENKEY_TIMEOUT_MS = 60_000;
@@ -57,9 +58,8 @@ function normalizeServeEntry(entry) {
   const keyName = typeof entry.keyName === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.keyName)
     ? entry.keyName
     : DEFAULT_KEY_NAME;
-  const localPort = Number.isInteger(entry.localPort) && entry.localPort >= 1 && entry.localPort <= 65535
-    ? entry.localPort
-    : DEFAULT_LOCAL_PORT;
+  // Old managed entries targeted the main API. Never restore that authority.
+  const localPort = DEFAULT_LOCAL_PORT;
   const status = ['active', 'failed', 'stopped', 'pending'].includes(entry.status)
     ? entry.status
     : 'stopped';
@@ -231,8 +231,8 @@ export async function startServeProcess({
   mkdirFn = mkdir,
 } = {}) {
   if (shuttingDown) throw new Error('PortOS is shutting down');
-  if (!Number.isInteger(localPort) || localPort < 1 || localPort > 65535) {
-    throw new ServerError('Invalid local port for tailcat serve', { status: 400, code: 'TAILCAT_SERVE_BAD_PORT' });
+  if (localPort !== DEFAULT_LOCAL_PORT) {
+    throw new ServerError('Managed Tailcat serve must use the remote ingress port', { status: 400, code: 'TAILCAT_SERVE_BAD_PORT' });
   }
 
   await mkdirFn(dirname(addrFile), { recursive: true }).catch(() => null);
@@ -352,6 +352,7 @@ export function ensureTailcatServe(options = {}) {
 async function ensureServe({
   localPort = DEFAULT_LOCAL_PORT,
   keyName = DEFAULT_KEY_NAME,
+  ensureIngress = ensureTailcatIngress,
   ensureInstalled = ensureTailcatInstalled,
   primeDerpMap = primeDerpMapCache,
   ensureKey = ensureServeKey,
@@ -360,7 +361,10 @@ async function ensureServe({
 } = {}) {
   if (shuttingDown) throw new Error('PortOS is shutting down');
 
-  const port = Number.isInteger(localPort) ? localPort : DEFAULT_LOCAL_PORT;
+  if (localPort != null && localPort !== DEFAULT_LOCAL_PORT) {
+    throw new ServerError('Managed Tailcat serve must use the remote ingress port', { status: 400, code: 'TAILCAT_SERVE_BAD_PORT' });
+  }
+  const port = DEFAULT_LOCAL_PORT;
   const key = typeof keyName === 'string' && keyName ? keyName : DEFAULT_KEY_NAME;
 
   // Persist intent before spawn so a failed start stays retryable / restorable.
@@ -395,6 +399,7 @@ async function ensureServe({
   killLiveServe();
 
   try {
+    await ensureIngress();
     const { bin } = await ensureInstalled();
     await Promise.resolve().then(primeDerpMap).catch(() => null);
     await ensureKey({ bin, keyName: key });
@@ -466,6 +471,7 @@ export function restoreServe(options = {}) {
 }
 
 async function restoreTailcatServe({
+  ensureIngress = ensureTailcatIngress,
   ensureInstalled = ensureTailcatInstalled,
   primeDerpMap = primeDerpMapCache,
   ensureKey = ensureServeKey,
@@ -477,6 +483,7 @@ async function restoreTailcatServe({
   if (liveServe) return { restored: false, reason: 'already-live' };
 
   try {
+    await ensureIngress();
     const { bin } = await ensureInstalled();
     await Promise.resolve().then(primeDerpMap).catch(() => null);
     await ensureKey({ bin, keyName: entry.keyName });

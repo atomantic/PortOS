@@ -70,7 +70,7 @@ export default function TailcatServePanel({ onChange, compact = false }) {
             Tailcat serve (this node)
           </h2>
           <p className="text-[11px] text-gray-500 mb-3 leading-snug">
-            Expose this PortOS API (<span className="font-mono">:{PORTS.API}</span>) over
+            Expose this PortOS API (<span className="font-mono">:{PORTS.TAILCAT_INGRESS}</span>) over
             tailcat so a peer that is a better outbound initiator can Dial them
             toward us. No Tailscale account. Copy the address out of band only.
           </p>
@@ -83,7 +83,7 @@ export default function TailcatServePanel({ onChange, compact = false }) {
             {label}
           </Pill>
           <span className="text-[11px] font-mono text-gray-500">
-            serve :{status?.localPort || PORTS.API}
+            serve :{status?.localPort || PORTS.TAILCAT_INGRESS}
             {status?.keyName ? ` · key=${status.keyName}` : ''}
           </span>
           <div className="ml-auto flex items-center gap-1">

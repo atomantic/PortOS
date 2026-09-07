@@ -3,7 +3,7 @@
  * [tailcat](https://github.com/tailscale/tailcat) without a Tailscale account.
  *
  * Flow: ensure the `tailcat` CLI is installed → pre-warm the DERP map cache →
- * start `tailcat forward <tcADDR> LOCAL:5555` (preferred LOCAL=15555) → prove the
+ * start `tailcat forward <tcADDR> LOCAL:5565` (preferred LOCAL=15555) → prove the
  * tunnel actually carries a request → register a normal peer at
  * `127.0.0.1:LOCAL` over HTTP or explicitly selected HTTPS.
  *
@@ -37,6 +37,7 @@ import { peerBaseUrl } from '../lib/peerUrl.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import {
+  PORTS,
   DEFAULT_TAILCAT_LOCAL_PORT,
   DEFAULT_TAILCAT_REMOTE_PORT,
 } from '../lib/ports.js';
@@ -172,7 +173,7 @@ function normalizeForwardEntry(entry) {
     peerId,
     tcAddress: entry.tcAddress,
     localPort: Number.isInteger(entry.localPort) ? entry.localPort : null,
-    remotePort: Number.isInteger(entry.remotePort) ? entry.remotePort : DEFAULT_TAILCAT_REMOTE_PORT,
+    remotePort: Number.isInteger(entry.remotePort) ? entry.remotePort : PORTS.API,
     name: typeof entry.name === 'string' && entry.name ? entry.name : null,
     protocol: entry.protocol === 'https' ? 'https' : 'http',
     // Kept beside the capability so a retry can re-register a password-gated
@@ -852,6 +853,7 @@ async function addTailcatPeer({
   name,
   auth,
   protocol = 'http',
+  remotePort = DEFAULT_TAILCAT_REMOTE_PORT,
   ensureInstalled = ensureTailcatInstalled,
   primeDerpMap = primeDerpMapCache,
   allocatePort = allocateLocalPort,
@@ -862,6 +864,9 @@ async function addTailcatPeer({
   removePeerFn = removeInstancePeer,
   verifyTunnel,
 } = {}) {
+  if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+    throw new ServerError('Invalid remote Tailcat port', { status: 400, code: 'TAILCAT_BAD_PORT' });
+  }
   const trimmed = String(tcAddress || '').trim();
   if (!isValidTcAddress(trimmed)) {
     throw new ServerError('Invalid tailcat address — paste a tc… address from the peer', {
@@ -880,7 +885,7 @@ async function addTailcatPeer({
     peerId: null,
     tcAddress: trimmed,
     localPort: null,
-    remotePort: DEFAULT_TAILCAT_REMOTE_PORT,
+    remotePort,
     name: name || null,
     protocol: protocol === 'https' ? 'https' : 'http',
     auth: auth && typeof auth === 'object' ? auth : null,
@@ -929,7 +934,7 @@ async function startAndRegister({
   // Promise.resolve().then defers the call so a synchronous throw is caught here
   // too, the same guard ensureTailcatInstalled documents for its installers.
   await Promise.resolve().then(primeDerpMap).catch(() => null);
-  const remotePort = DEFAULT_TAILCAT_REMOTE_PORT;
+  const remotePort = entry.remotePort;
   const localPort = await allocatePort({ preferred: entry.localPort || DEFAULT_TAILCAT_LOCAL_PORT });
 
   let child;
@@ -1031,6 +1036,7 @@ export function retryTailcatForward(id, options = {}) {
 }
 
 async function retryForward(id, {
+  remotePort,
   ensureInstalled = ensureTailcatInstalled,
   primeDerpMap = primeDerpMapCache,
   allocatePort = allocateLocalPort,
@@ -1045,6 +1051,15 @@ async function retryForward(id, {
   const entries = await readForwards();
   const entry = entries.find((f) => f.id === id);
   if (!entry) throw new ServerError('Tailcat forward not found', { status: 404 });
+
+  if (remotePort !== undefined) {
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+      throw new ServerError('Invalid remote Tailcat port', { status: 400, code: 'TAILCAT_BAD_PORT' });
+    }
+    const patched = await patchForwardEntry(entry.id, { remotePort });
+    if (!patched) throw new ServerError('Could not update Tailcat remote port', { status: 503 });
+    entry.remotePort = remotePort;
+  }
 
   // A live child on a stale mapping would keep the port and mask the retry.
   killLiveForward(entry.id);
@@ -1098,7 +1113,7 @@ async function restoreTailcatForwards({
     if (!entry.peerId || !peers.some((peer) => peer.id === entry.peerId && peer.transport === 'tailcat'
       && peer.address === '127.0.0.1' && peer.port === entry.localPort)) continue;
     if (!Number.isInteger(entry.localPort) || entry.localPort < 1024 || entry.localPort > 65535
-      || entry.remotePort !== DEFAULT_TAILCAT_REMOTE_PORT) continue;
+      || !Number.isInteger(entry.remotePort) || entry.remotePort < 1 || entry.remotePort > 65535) continue;
     if (liveForwards.has(entry.id)) continue;
     try {
       const child = await startForward({

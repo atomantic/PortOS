@@ -324,7 +324,7 @@ describe('tailcatPeer helpers', () => {
 
   it('allocateLocalPort prefers 15555 then walks upward when busy', async () => {
     expect(DEFAULT_TAILCAT_LOCAL_PORT).toBe(15555);
-    expect(DEFAULT_TAILCAT_REMOTE_PORT).toBe(5555);
+    expect(DEFAULT_TAILCAT_REMOTE_PORT).toBe(5565);
     const isFree = vi.fn(async (port) => port === 15557);
     const port = await allocateLocalPort({ preferred: 15555, isFree, limit: 5 });
     expect(port).toBe(15557);
@@ -446,19 +446,20 @@ describe('tailcatPeer helpers', () => {
     )).toContain('dial remote port 5555: context deadline exceeded');
   });
 
-  it('addPeerViaTailcat installs, forwards, and registers loopback peer', async () => {
+  it.each([5555, DEFAULT_TAILCAT_REMOTE_PORT])('adds a peer using the selected remote port %s', async (remotePort) => {
     const child = fakeChild();
     const addPeerFn = vi.fn(async (data) => ({ id: 'peer-1', ...data }));
     const peer = await addPeerViaTailcat({
       tcAddress: EXAMPLE_TC,
+      remotePort,
       name: 'sandbox',
       ensureInstalled: async () => ({ bin: '/usr/bin/tailcat', installed: false }),
       allocatePort: async () => 15555,
-      startForward: async () => child,
+      startForward: async (options) => { expect(options.remotePort).toBe(remotePort); return child; },
       addPeerFn,
       primeDerpMap: async () => ({ primed: false }),
-      persistForwardEntry: async () => {},
-      patchForwardEntry: async () => ({}),
+      persistForwardEntry: async (entry) => { expect(entry.remotePort).toBe(remotePort); },
+      patchForwardEntry: async (_id, patch) => { expect(patch.remotePort).toBe(remotePort); return {}; },
     });
     expect(addPeerFn).toHaveBeenCalledWith({
       address: '127.0.0.1',
@@ -513,7 +514,7 @@ describe('tailcat lifecycle failure contracts', () => {
     const child = fakeChild();
     let ready = false;
     const pending = startForwardProcess({ bin: 'tailcat', tcAddress: EXAMPLE_TC,
-      localPort: 15555, spawnFn: () => child, probeMs: 5, isListening: async () => false })
+      localPort: 15555, remotePort: 5555, spawnFn: () => child, probeMs: 5, isListening: async () => false })
       .then(() => { ready = true; });
     child.stderr.emit('data', 'forwarding 127.0.0.1:15556 -> remote localhost:5555\n');
     await Promise.resolve();
@@ -748,7 +749,7 @@ describe('saved tailcat forwards', () => {
       patchForwardEntry: async (id, patch) => { patches.push([id, patch]); return { id, ...patch }; },
       getPeersFn: async () => [],
     });
-    expect(startForward).toHaveBeenCalledWith(expect.objectContaining({ tcAddress: EXAMPLE_TC, localPort: 15556 }));
+    expect(startForward).toHaveBeenCalledWith(expect.objectContaining({ tcAddress: EXAMPLE_TC, localPort: 15556, remotePort: 5555 }));
     expect(addPeerFn).toHaveBeenCalledWith(expect.objectContaining({
       address: '127.0.0.1', port: 15556, name: 'sandbox', transport: 'tailcat', protocol: 'https',
     }));
@@ -766,7 +767,8 @@ describe('saved tailcat forwards', () => {
       ensureInstalled: async () => ({ bin: 'tailcat' }),
       primeDerpMap: async () => ({ primed: false }),
       allocatePort: async () => 15557,
-      startForward: async () => fakeChild(),
+      remotePort: DEFAULT_TAILCAT_REMOTE_PORT,
+      startForward: async ({ remotePort }) => { expect(remotePort).toBe(DEFAULT_TAILCAT_REMOTE_PORT); return fakeChild(); },
       addPeerFn,
       patchForwardEntry: async (id, patch) => ({ id, ...patch }),
       getPeersFn: async () => [{ id: 'peer-1', transport: 'tailcat', address: '127.0.0.1', port: 15555 }],

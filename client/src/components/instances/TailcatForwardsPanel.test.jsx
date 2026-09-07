@@ -99,9 +99,9 @@ describe('TailcatForwardsPanel', () => {
     const onChange = vi.fn();
     render(<TailcatForwardsPanel onChange={onChange} />);
 
-    await userEvent.click(await screen.findByRole('button', { name: /Retry/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
 
-    expect(retryTailcatForward).toHaveBeenCalledWith('fwd_1');
+    expect(retryTailcatForward).toHaveBeenCalledWith('fwd_1', {});
     expect(await screen.findByText('running')).toBeInTheDocument();
     expect(onChange).toHaveBeenCalled();
   });
@@ -111,7 +111,7 @@ describe('TailcatForwardsPanel', () => {
     const onChange = vi.fn();
     render(<TailcatForwardsPanel onChange={onChange} />);
 
-    await userEvent.click(await screen.findByRole('button', { name: /Retry/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry' }));
 
     await waitFor(() => expect(getTailcatForwards).toHaveBeenCalledTimes(2));
     expect(screen.getByText(/context deadline exceeded/)).toBeInTheDocument();
@@ -127,4 +127,13 @@ describe('TailcatForwardsPanel', () => {
     await waitFor(() => expect(screen.queryByText('sandbox')).not.toBeInTheDocument());
     expect(getTailcatForwards).toHaveBeenCalledTimes(1);
   });
+});
+
+it('updates the remote port only when the operator chooses the upgraded ingress', async () => {
+  getTailcatForwards.mockResolvedValue({ forwards: [failedForward] });
+  retryTailcatForward.mockResolvedValue({ id: 'peer-example', port: 15555 });
+  const user = userEvent.setup();
+  render(<TailcatForwardsPanel />);
+  await user.click(await screen.findByRole('button', { name: 'Retry on :5565' }));
+  await waitFor(() => expect(retryTailcatForward).toHaveBeenCalledWith(failedForward.id, { remotePort: 5565 }));
 });

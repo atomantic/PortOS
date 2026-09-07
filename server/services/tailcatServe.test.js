@@ -1,3 +1,4 @@
+vi.mock('./tailcatIngress.js', () => ({ ensureTailcatIngress: vi.fn().mockResolvedValue(undefined) }));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
@@ -87,7 +88,7 @@ describe('tailcatServe helpers', () => {
     });
     const started = await startServeProcess({
       bin: '/usr/bin/tailcat',
-      localPort: 5555,
+      localPort: DEFAULT_SERVE_PORT,
       keyName: 'portos-api',
       spawnFn,
       readyMs: 2_000,
@@ -95,10 +96,10 @@ describe('tailcatServe helpers', () => {
       mkdirFn: async () => {},
     });
     expect(started.tcAddress).toBe(EXAMPLE_TC);
-    expect(started.localPort).toBe(5555);
+    expect(started.localPort).toBe(DEFAULT_SERVE_PORT);
     expect(spawnFn).toHaveBeenCalledWith(
       '/usr/bin/tailcat',
-      ['serve', '--verbose', '--full-address', '--json', '--key=portos-api', '5555'],
+      ['serve', '--verbose', '--full-address', '--json', '--key=portos-api', String(DEFAULT_SERVE_PORT)],
       expect.any(Object),
     );
   });
@@ -134,7 +135,7 @@ describe('tailcatServe helpers', () => {
       serve: {
         enabled: true,
         status: 'active',
-        localPort: 5555,
+        localPort: DEFAULT_SERVE_PORT,
         keyName: 'portos-api',
         tcAddress: EXAMPLE_TC,
         lastError: null,
@@ -149,7 +150,7 @@ describe('tailcatServe helpers', () => {
       ensureInstalled: async () => ({ bin: '/x', installed: false }),
       primeDerpMap: async () => ({}),
       ensureKey: async () => ({ created: false, keyName: 'portos-api' }),
-      startServe: async () => ({ child, tcAddress: EXAMPLE_TC, localPort: 5555, keyName: 'portos-api' }),
+      startServe: async () => ({ child, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: 'portos-api' }),
     });
     expect(_liveServeForTests()).not.toBe(null);
 
@@ -168,7 +169,7 @@ describe('tailcatServe helpers', () => {
       serve: {
         enabled: true,
         status: 'active',
-        localPort: 5555,
+        localPort: DEFAULT_SERVE_PORT,
         keyName: 'portos-api',
         tcAddress: EXAMPLE_TC,
         lastError: null,
@@ -182,13 +183,13 @@ describe('tailcatServe helpers', () => {
       ensureInstalled: async () => ({ bin: '/usr/bin/tailcat' }),
       primeDerpMap: async () => ({}),
       ensureKey: async () => ({ created: false, keyName: 'portos-api' }),
-      startServe: async () => ({ child, tcAddress: EXAMPLE_TC, localPort: 5555, keyName: 'portos-api' }),
+      startServe: async () => ({ child, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: 'portos-api' }),
     });
     expect(ok).toEqual({ restored: true });
     expect(_liveServeForTests()?.child).toBe(child);
 
     _resetLiveServeForTests();
-    readJSONFile.mockResolvedValue({ version: 1, serve: { enabled: false, status: 'stopped', localPort: 5555, keyName: 'portos-api', tcAddress: null } });
+    readJSONFile.mockResolvedValue({ version: 1, serve: { enabled: false, status: 'stopped', localPort: DEFAULT_SERVE_PORT, keyName: 'portos-api', tcAddress: null } });
     const skipped = await restoreServe({
       ensureInstalled: async () => ({ bin: '/usr/bin/tailcat' }),
       startServe: async () => { throw new Error('should not run'); },
@@ -204,7 +205,7 @@ describe('tailcatServe helpers', () => {
       serve: {
         enabled: true,
         status: 'failed',
-        localPort: 5555,
+        localPort: DEFAULT_SERVE_PORT,
         keyName: 'portos-api',
         tcAddress: EXAMPLE_TC,
         lastError: 'boom',
@@ -220,14 +221,14 @@ describe('tailcatServe helpers', () => {
       ensureInstalled: async () => ({ bin: '/x' }),
       primeDerpMap: async () => ({}),
       ensureKey: async () => ({ created: false, keyName: 'portos-api' }),
-      startServe: async () => ({ child: first, tcAddress: EXAMPLE_TC, localPort: 5555, keyName: 'portos-api' }),
+      startServe: async () => ({ child: first, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: 'portos-api' }),
     });
 
     const status = await retryTailcatServe({
       ensureInstalled: async () => ({ bin: '/x' }),
       primeDerpMap: async () => ({}),
       ensureKey: async () => ({ created: false, keyName: 'portos-api' }),
-      startServe: async () => ({ child: second, tcAddress: EXAMPLE_TC, localPort: 5555, keyName: 'portos-api' }),
+      startServe: async () => ({ child: second, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: 'portos-api' }),
     });
     expect(first.kill).toHaveBeenCalled();
     expect(status.live).toBe(true);
@@ -245,4 +246,13 @@ describe('tailcatServe helpers', () => {
       tcAddress: null,
     });
   });
+});
+
+it('rejects direct main-port serving before spawning or installing', async () => {
+  const spawnFn = vi.fn();
+  await expect(startServeProcess({ bin: 'tailcat', localPort: 5555, spawnFn })).rejects.toMatchObject({ code: 'TAILCAT_SERVE_BAD_PORT' });
+  const ensureInstalled = vi.fn();
+  await expect(ensureTailcatServe({ localPort: 5555, ensureInstalled })).rejects.toMatchObject({ code: 'TAILCAT_SERVE_BAD_PORT' });
+  expect(spawnFn).not.toHaveBeenCalled();
+  expect(ensureInstalled).not.toHaveBeenCalled();
 });

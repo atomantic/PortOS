@@ -7,6 +7,7 @@
  */
 
 import { RefreshCw, Trash2, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
+import { DEFAULT_TAILCAT_REMOTE_PORT } from '../../lib/ports';
 import Pill from '../ui/Pill';
 import { timeAgo } from '../../utils/formatters';
 
@@ -64,13 +65,20 @@ export function TailcatForwardStatus({
             {onRetry && (
               <button
                 type="button"
-                onClick={onRetry}
+                onClick={() => onRetry()}
                 disabled={busy}
                 title="Restart this forward using the saved tc address"
                 className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-white disabled:opacity-50 border border-port-border rounded px-2 py-1 transition-colors"
               >
                 <RefreshCw size={11} className={busy ? 'animate-spin' : ''} />
                 {busy ? 'Working...' : 'Retry'}
+              </button>
+            )}
+            {onRetry && forward.remotePort !== DEFAULT_TAILCAT_REMOTE_PORT && (
+              <button type="button" disabled={busy} onClick={() => onRetry(DEFAULT_TAILCAT_REMOTE_PORT)}
+                className="text-[11px] border border-port-border rounded px-2 py-1 disabled:opacity-50"
+                title="Use after the remote PortOS upgrades to the isolated Tailcat ingress">
+                Retry on :{DEFAULT_TAILCAT_REMOTE_PORT}
               </button>
             )}
             {showForget && onForget && (
