@@ -49,10 +49,13 @@ export {
 
 // The scheduled plan-task default intentionally omits the review loop, but the
 // manual /do:next PLAN claim still owns the complete claim lifecycle. Keep that
-// path on the last shipped review-capable body rather than silently handing it
-// a partial prompt just because both paths resolve the same task type.
+// path on its own DEFAULT_TASK_PROMPTS['plan-task-claim'] key rather than
+// reading the tail of PREVIOUS_DEFAULT_PROMPTS['plan-task'] — that history is
+// frozen by the integrity snapshot, so the manual-claim body could never be
+// revised, and every future plan-task version bump would silently reposition
+// which retired body the manual claim resolved to (issue #6479).
 const CLAIM_FLOW_DEFAULT_PROMPTS = Object.freeze({
-  'plan-task': PREVIOUS_DEFAULT_PROMPTS['plan-task'].at(-1)
+  'plan-task': DEFAULT_TASK_PROMPTS['plan-task-claim']
 });
 
 // ============================================================
