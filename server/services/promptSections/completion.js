@@ -31,7 +31,9 @@ function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
  * @param {Object} opts
  * @param {boolean} opts.isReadOnly
  * @param {boolean} opts.isTui
- * @param {string} opts.tuiCompletionCommand - `/do:pr` or `/do:push`
+ * @param {string|null} opts.tuiCompletionCommand - `/do:pr` or `/do:push`; `null`
+ *   when PortOS merges the branch back itself and the workflow is commit-only
+ *   (see `portosMergesBranchOnExit`)
  * @param {boolean} [opts.slashdoFree] - TUI without slashdo: the bullet points
  *   at the manual commit + system-handoff workflow instead of a `/do:*` command.
  * @param {Object|null} opts.worktreeInfo
@@ -87,7 +89,9 @@ export function buildCompletionGuidelineBullet({
     // directly unit-tested so the guideline stays correct if that routing changes.
     const howTo = slashdoFree
       ? 'the Completion Workflow above (plain `git` commit + PortOS handoff — this provider has no slashdo commands)'
-      : `the Completion Workflow above (\`${tuiCompletionCommand}\`)`;
+      : tuiCompletionCommand
+        ? `the Completion Workflow above (\`${tuiCompletionCommand}\`)`
+        : 'the Completion Workflow above (commit only — no push; PortOS merges your branch back after you exit)';
     return withNoChangeAuditGuidance(`On successful completion, YOU run ${howTo}, then write the sentinel and stop — PortOS closes the session once it sees the sentinel; do NOT run \`/quit\`.`, noChangeSuccess);
   }
   if (worktreeInfo && willOpenPR) {
@@ -102,7 +106,7 @@ export function buildCompletionGuidelineBullet({
         : ' No review was requested for this task, so a follow-up agent merges the PR once CI is green — do NOT try to merge it yourself; you will have already exited.';
     return withNoChangeAuditGuidance(`On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${reviewSuffix}`, noChangeSuccess);
   }
-  if (worktreeInfo) {
+  if (portosMergesBranchOnExit({ worktreeInfo, willOpenPR })) {
     return withNoChangeAuditGuidance('Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.', noChangeSuccess);
   }
   return whenDone === null ? null : whenDone === 'commit-push'
@@ -322,6 +326,52 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
 }
 
 /**
+ * Does PortOS land this run's branch ITSELF? True under the worktree-without-PR
+ * posture (`useWorktree: true`, `openPR: false`): once the agent exits,
+ * `agentWorktreeCleanup.js` merges the worktree branch into the source checkout
+ * and deletes it (`removeWorktree` with `merge: true`). Nothing on that path
+ * reads a remote copy of the branch, so a push has no consumer — and because
+ * the local branch is deleted the moment the merge lands, a pushed copy becomes
+ * an orphan that the post-completion audit (`agentRepoStateVerification.js`)
+ * reports as "remote branch was never deleted" and hands to a recovery agent.
+ * The `/do:push` completion step this posture used to get produced exactly
+ * that, run after run (every module-hygiene audit on 2026-09-06/07, and user
+ * tasks with the same posture before them — each followed by a recovery agent
+ * that then pushed the merged commit straight to the default branch). So under
+ * this posture the contract is commit-only, on every path that can type slashdo.
+ *
+ * The other worktree contracts (discard, claim flow, PR follow-up, no-code) are
+ * decided BEFORE this question is asked — callers apply their precedence first,
+ * the way `buildCompletionGuidelineBullet` does.
+ *
+ * @param {object} params
+ * @param {object|null} params.worktreeInfo
+ * @param {boolean} params.willOpenPR
+ * @returns {boolean}
+ */
+export function portosMergesBranchOnExit({ worktreeInfo, willOpenPR }) {
+  return Boolean(worktreeInfo) && !willOpenPR;
+}
+
+// The one commit-hygiene sentence every manual commit step composes — the
+// slashdo-free TUI workflow, the PR-owning CLI workflow and the auto-merge
+// commit step — so a hygiene change lands in all three at once.
+const COMMIT_HYGIENE_SENTENCE = 'Stage only the files you changed (never `git add -A` / `git add .`) and commit with a conventional message (`feat:`/`fix:`/`breaking:` prefix, no Co-Authored-By annotations)';
+
+/**
+ * The commit step of a completion workflow whose branch PortOS merges back
+ * (`portosMergesBranchOnExit`). One string for the Claude TUI and Claude CLI
+ * workflows so the two cannot drift into different pushing advice.
+ *
+ * @param {string|null} [baseBranch] - the branch the worktree was cut from
+ * @returns {string}
+ */
+export function buildAutoMergeCommitStep(baseBranch = null) {
+  const target = baseBranch ? `\`${baseBranch}\`` : 'the source branch';
+  return `${COMMIT_HYGIENE_SENTENCE}. Do NOT push and do NOT open a PR: PortOS merges this branch into ${target} in the source checkout after you exit and deletes it, so a pushed copy is never read — it is only left behind on origin.`;
+}
+
+/**
  * Worktree commit-guidance helper for the light prompt. Picks the right
  * single-sentence instruction based on whether the agent will run its own
  * push workflow (TUI or Claude Code CLI with slashdo), reuse an existing PR
@@ -338,7 +388,9 @@ export function worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow = fal
     return withNoChangeAuditGuidance('Commit your changes here — the **Completion** section below drives the push and PR.', noChangeSuccess);
   }
   if (hasSlashdo) {
-    return withNoChangeAuditGuidance('Commit your changes here — the **Completion** section below drives the push.', noChangeSuccess);
+    // Reached in a worktree with no PR: the auto-merge posture
+    // (portosMergesBranchOnExit) — nothing drives a push, so say so.
+    return withNoChangeAuditGuidance('Commit your changes here — do NOT push. PortOS merges this branch back after you exit; the **Completion** section below has the exact step.', noChangeSuccess);
   }
   if (ownsPrWorkflow && willOpenPR) {
     return withNoChangeAuditGuidance('Commit your changes here — the **Completion** section below drives the push, the PR, the review loop, and the merge.', noChangeSuccess);
@@ -471,7 +523,7 @@ function localReviewCompletionInstruction(localReviewRequired = true) {
  * return this IS a Claude session, so `/simplify` and `/do:pr` are both safe to
  * emit without a second provider check.
  */
-export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, ownsPrWorkflow = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
+export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, slashdoFree = false, ownsPrWorkflow = false, portosMergesBranch = false, branchName = null, baseBranch = null, leavePrOpen = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   if (slashdoFree) {
@@ -527,7 +579,11 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
     'When the task is complete, run these in order:',
     '',
     simplifyStep,
-    `2. \`${cmd}${reviewerArg}\`${reviewSuffix}`,
+    // No command under the auto-merge posture: PortOS lands the branch itself,
+    // so step 2 is a plain commit and any push is debris (portosMergesBranchOnExit).
+    portosMergesBranch
+      ? `2. ${buildAutoMergeCommitStep(baseBranch)}`
+      : `2. \`${cmd}${reviewerArg}\`${reviewSuffix}`,
     ...(effortNote ? [`   ${effortNote}`] : []),
     ...merge.lines,
     ...buildSentinelWriteSteps(sentinelStep, sentinelPath, sentinelTail)
@@ -695,7 +751,7 @@ function buildManualTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLET
       : 'This provider does NOT have slashdo (`/do:*`) commands, so finish the handoff with plain `git`. Run these in order:',
     '',
     simplifyStep,
-    '2. Stage only the files you changed (never `git add -A` / `git add .`) and commit with a conventional message (`feat:`/`fix:`/`breaking:` prefix, no Co-Authored-By annotations):',
+    `2. ${COMMIT_HYGIENE_SENTENCE}:`,
     '',
     '   ```bash',
     '   git add <file> [<file> ...]',
@@ -864,7 +920,10 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
-    lines.push(`${step++}. \`/do:push\` — commits your changes and pushes the branch.`);
+    // Slashdo + worktree + no PR (the PR case returned above) is the auto-merge
+    // posture: PortOS lands the branch itself, so the step is a plain commit —
+    // `/do:push` here only left a copy behind on origin (portosMergesBranchOnExit).
+    lines.push(`${step++}. ${buildAutoMergeCommitStep(worktreeInfo.baseBranch || null)}`);
     return lines.join('\n');
   }
   // Non-slashdo CLI that IS a real coding harness (codex, grok/agy, OpenCode):
@@ -879,7 +938,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     lines.push(simplifyEnabled
       ? `${step++}. Before committing, ${SIMPLIFY_INLINE_REVIEW} and fix any findings.`
       : `${step++}. (simplify disabled — skip)`);
-    lines.push(`${step++}. Stage only the files you changed (never \`git add -A\` / \`git add .\`) and commit with a conventional message (\`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations).`);
+    lines.push(`${step++}. ${COMMIT_HYGIENE_SENTENCE}.`);
     if (localReviewSection) {
       lines.push(`${step++}. ${localReviewCompletionInstruction(localReviewRequired)}`);
       lines.push('', localReviewSection, '');

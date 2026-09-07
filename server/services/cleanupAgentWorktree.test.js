@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // --- Mock every dependency agentWorktreeCleanup.js pulls in transitively ---
 
@@ -210,6 +210,14 @@ vi.mock('./prWatcher.js', () => ({
 const findPullRequestForBranchMock = vi.fn().mockResolvedValue({ status: 'unavailable' });
 vi.mock('./github.js', () => ({
   findPullRequestForBranch: (...args) => findPullRequestForBranchMock(...args)
+}));
+
+// `deleteMergedRemoteCopy` reads the remote-tracking ref and runs its
+// lease-protected delete through execGit directly (git.js has no helper for
+// either). Defaults to a non-zero exit — the answer that leaves everything alone.
+const execGitMock = vi.fn().mockResolvedValue({ exitCode: 128, stdout: '', stderr: '' });
+vi.mock('../lib/execGit.js', () => ({
+  execGit: (...args) => execGitMock(...args)
 }));
 
 // The `if-missing` safety net asks finalize's own PR-claim check whether
@@ -2102,5 +2110,91 @@ describe('cleanupAgentWorktree — re-entrancy (duplicate completion paths)', ()
     removeWorktree.mockResolvedValue({ merged: false, removed: true, warnings: [] });
     await cleanupAgentWorktree('agent-1', true, { prCreation: 'never' });
     expect(removeWorktree).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => {
+  // The auto-merge posture (worktree, no PR) lands the branch by local merge and
+  // deletes it. An agent that pushed the branch anyway leaves origin a copy
+  // nothing reads, which the repo-state audit then reports and files a recovery
+  // agent for. Cleanup deletes that copy itself — off the shared clone's
+  // remote-tracking ref (a worktree push updates it, so the common no-push case
+  // never touches the network), only when the pushed tip is already merged, and
+  // lease-protected so a copy origin moved past is refused rather than deleted.
+  const BRANCH = 'cos/task-abc123';
+  const REF = `refs/heads/${BRANCH}`;
+  const SHA = 'a'.repeat(40);
+  const mergedLocally = () => removeWorktree.mockResolvedValue({ merged: true, removed: true, uncommittedSaved: false, warnings: [] });
+  const tracking = (sha) => ({ exitCode: sha ? 0 : 1, stdout: sha ? `${sha}\n` : '', stderr: '' });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // `clearAllMocks` drains calls, not once-queues — reset both mocks so a test
+    // that stops early can never hand its leftover answers to the next one.
+    execGitMock.mockReset().mockResolvedValue({ exitCode: 128, stdout: '', stderr: '' });
+    git.isBranchMergedInto.mockReset().mockResolvedValue(false);
+    getAgent.mockResolvedValue(mockWorktreeAgent());
+  });
+  afterEach(() => removeWorktree.mockResolvedValue(undefined));
+
+  it('deletes origin\'s copy, lease-protected, when the pushed tip is already merged', async () => {
+    mergedLocally();
+    execGitMock
+      .mockResolvedValueOnce(tracking(SHA))
+      .mockResolvedValueOnce({ exitCode: 0, stdout: '', stderr: '' });
+    git.isBranchMergedInto.mockResolvedValueOnce(true);
+    const warnings = await cleanupAgentWorktree('agent-1', true, {});
+    expect(execGitMock).toHaveBeenNthCalledWith(1, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${BRANCH}`], '/mock/workspace', { ignoreExitCode: true });
+    expect(git.isBranchMergedInto).toHaveBeenCalledWith('/mock/workspace', SHA, 'HEAD');
+    expect(execGitMock).toHaveBeenNthCalledWith(2, ['push', `--force-with-lease=${REF}:${SHA}`, 'origin', `:${REF}`], '/mock/workspace', { ignoreExitCode: true });
+    // A clean finish, not a cleanup issue — no warning, so no recovery task.
+    expect(warnings).toEqual([]);
+  });
+
+  it('never touches the network when this clone never pushed the branch', async () => {
+    mergedLocally();
+    execGitMock.mockResolvedValueOnce(tracking(null));
+    await cleanupAgentWorktree('agent-1', true, {});
+    expect(execGitMock).toHaveBeenCalledTimes(1);
+    expect(git.isBranchMergedInto).not.toHaveBeenCalled();
+  });
+
+  it('leaves the copy alone when the pushed tip is not merged into the checkout', async () => {
+    mergedLocally();
+    execGitMock.mockResolvedValueOnce(tracking(SHA));
+    git.isBranchMergedInto.mockResolvedValueOnce(false);
+    const warnings = await cleanupAgentWorktree('agent-1', true, {});
+    expect(execGitMock).toHaveBeenCalledTimes(1);
+    expect(warnings).toEqual([]);
+  });
+
+  it('never asks about the remote unless cleanup actually merged the branch', async () => {
+    removeWorktree.mockResolvedValue({ merged: false, removed: true, uncommittedSaved: false, warnings: [] });
+    await cleanupAgentWorktree('agent-1', true, { skipMerge: true });
+    expect(execGitMock).not.toHaveBeenCalled();
+  });
+
+  it('a refused delete is not a cleanup warning — the repo-state audit reports what is left', async () => {
+    mergedLocally();
+    execGitMock
+      .mockResolvedValueOnce(tracking(SHA))
+      .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: ` ! [rejected] ${BRANCH} (stale info)` });
+    git.isBranchMergedInto.mockResolvedValueOnce(true);
+    const warnings = await cleanupAgentWorktree('agent-1', true, {});
+    // The delete was attempted and refused — the silence is deliberate, not a skip.
+    expect(execGitMock).toHaveBeenCalledTimes(2);
+    expect(execGitMock.mock.calls[1][0][0]).toBe('push');
+    expect(warnings).toEqual([]);
+  });
+
+  it('a git call that throws is swallowed — cleanup still returns its warnings and finishes', async () => {
+    // Every await in the helper carries its own catch; drop one and a spawn
+    // failure rejects the whole cleanup, losing its warnings and the follow-up.
+    mergedLocally();
+    execGitMock
+      .mockResolvedValueOnce(tracking(SHA))
+      .mockRejectedValueOnce(new Error('spawn git ENOENT'));
+    git.isBranchMergedInto.mockResolvedValueOnce(true);
+    await expect(cleanupAgentWorktree('agent-1', true, {})).resolves.toEqual([]);
   });
 });
