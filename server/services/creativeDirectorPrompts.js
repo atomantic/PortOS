@@ -24,6 +24,8 @@ import {
   QUALITY_PRESETS,
   presetToRenderParams,
 } from '../lib/creativeDirectorPresets.js';
+import { GROK_VIDEO_DURATIONS } from '../lib/grokVideoClip.js';
+import { REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_MAX_PROMPT_LENGTH, REACTOR_ASPECTS } from '../lib/reactorVideoClip.js';
 import { PORTOS_API_URL } from '../lib/portosUrls.js';
 import { buildPrompt } from './promptService.js';
 
@@ -71,6 +73,24 @@ function buildTreatmentView(project) {
     apiUrl: PORTOS_API_URL,
     startingImageFileLiteral,
     hasCast,
+    standaloneVideo: project.workspace === 'video',
+    video: {
+      durationRangeJson: JSON.stringify(project.videoDraft?.durationRange || {}),
+      backend: project.renderBackend?.video?.mode || 'inherited (not resolved)',
+      clipLimitsJson: JSON.stringify(project.renderBackend?.video?.mode === 'grok'
+        ? { durationSeconds: GROK_VIDEO_DURATIONS }
+        : project.renderBackend?.video?.mode === 'reactor'
+          ? { minSeconds: REACTOR_MIN_CLIP_SECONDS, maxSeconds: Math.min(10, REACTOR_MAX_CLIP_SECONDS), maxPromptCharacters: REACTOR_MAX_PROMPT_LENGTH, aspectRatios: REACTOR_ASPECTS }
+          : { minSeconds: 1, maxSeconds: 10, backendCompatibility: 'unresolved' }),
+      sourcesJson: JSON.stringify(project.videoDraft?.sources || []),
+      currentTreatmentJson: JSON.stringify(project.treatment ? {
+        script: project.treatment.script,
+        scenes: project.treatment.scenes?.map(({ sceneId, order, intent, prompt, negativePrompt, durationSeconds, sourceImageFile, useContinuationFromPrior, imageStrength, cast }) => ({
+          sceneId, order, intent, prompt, negativePrompt, durationSeconds, sourceImageFile, useContinuationFromPrior, imageStrength, cast,
+        })),
+        artifact: project.treatment.artifact,
+      } : null),
+    },
   };
 }
 

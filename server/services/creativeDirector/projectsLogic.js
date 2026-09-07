@@ -387,6 +387,11 @@ function validateVideoShot(project, scene, isFirst) {
 
 /** Compile the existing treatment into a persisted Video artifact, without dispatch. */
 function compileVideoArtifact(project, treatment) {
+  if (!treatment.script) {
+    throw new ServerError('Video treatments require a production script. Add script text and resubmit the treatment.', {
+      status: 400, code: 'VALIDATION_ERROR',
+    });
+  }
   const scenes = [...treatment.scenes].sort((a, b) => a.order - b.order);
   const ids = new Set();
   const orders = new Set();
