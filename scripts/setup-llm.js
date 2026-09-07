@@ -50,7 +50,7 @@ function installOllama() {
     }
     if (platform === 'linux') {
       console.log('⬇️  Installing Ollama via official script...');
-      execFileSync('bash', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], { stdio: 'inherit' });
+      execFileSync('bash', [join(__dirname, 'install-ollama.sh')], { stdio: 'inherit' });
       return true;
     }
   } catch (err) {
