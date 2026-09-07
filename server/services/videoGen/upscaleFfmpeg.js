@@ -101,8 +101,14 @@ export const finalizeUpscaleOutput = async (renderedPath, outPath, {
       ...H264_ENCODE_ARGS,
       ...BT709_CONTAINER_ARGS,
       '-c:a', 'copy',
+      // The video is bounded to the SOURCE's frame count here, and nothing
+      // else. `-shortest` must not be added: an AAC track routinely runs a few
+      // milliseconds short of its video (priming/padding), and `-shortest`
+      // then cuts the video to the audio's length — the #6514 matrix measured
+      // a 25-frame source come back with 23 frames, and a 23-frame one with
+      // 19. The source's own container already pairs this video length with
+      // this audio length, so the deliverable simply keeps both.
       '-frames:v', String(Math.round(frameCount)),
-      '-shortest',
       '-movflags', '+faststart',
       '-y', outPath,
     ],
