@@ -15,7 +15,7 @@
 
 import {
   COMMISSION_INTENT_MAX, COMMISSION_STYLE_SPEC_MAX, COMMISSION_BRIEF_TAG_MAX,
-} from '../../lib/creativeCommissionValidation.js';
+} from '../../lib/creativeBriefLimits.js';
 
 // The CD directive `goal` this composes is fed straight into `createProject` by
 // the scheduler, which does NOT re-validate it against the route's

@@ -33,6 +33,8 @@ export * as cosValidation from './cosValidation.js';
 export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
 export * as creativeDirectorValidation from './creativeDirectorValidation.js';
+// The brief/goal caps both schemas above and the browser forms share, as a pure leaf.
+export * from './creativeBriefLimits.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
 export * as eidoverseValidation from './eidoverseValidation.js';
 export * as fableLoomValidation from './fableLoomValidation.js';
@@ -123,6 +125,8 @@ export * from './characterEvolutionCoverage.js';
 // the namespaced storyBible below.
 export * from './characterFramework.js';
 export * from './characterIntegrity.js';
+// The cast-integrity vocabulary characterIntegrity.js reports in, as a pure leaf.
+export * from './characterIntegrityVocabulary.js';
 export * from './castIntegrityPrompt.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
 // back-compat — namespace it so the canonical scenePrompt export wins flat.

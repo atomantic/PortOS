@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeDomainAverages, domainLabel, computeGoalProgress, hasGoals,
-  POST_TOPICS, DOMAINS, DRILL_TO_DOMAIN, composedSessionDrillTypes,
-  isTopicEnabled, isMemoryItemEnabled, resolveTopicForDrillType, appliedNumeracyAnswerCorrect,
+  POST_TOPICS, TOPIC_IDS, TOPIC_UI, DOMAINS, DRILL_TO_DOMAIN, composedSessionDrillTypes,
+  appliedNumeracyAnswerCorrect,
   effectiveCognitiveDrillConfig,
 } from './constants';
 
@@ -131,6 +131,16 @@ describe('computeGoalProgress (issue #2100)', () => {
   });
 });
 
+// TOPIC_UI is client-only (icons/colors have no server meaning), but a topic
+// added to the server registry with no UI row would render unstyled and, for a
+// domain, lose its per-domain time budget.
+describe('TOPIC_UI covers the server topic registry', () => {
+  it('declares an icon row for every topic', () => {
+    expect(Object.keys(TOPIC_UI).sort()).toEqual([...TOPIC_IDS].sort());
+    for (const id of TOPIC_IDS) expect(TOPIC_UI[id].icon, id).toBeTruthy();
+  });
+});
+
 // Practice-topic registry (issue #3252). DOMAINS is now DERIVED from POST_TOPICS
 // rather than hand-maintained, so these lock in that the derivation reproduces
 // exactly what the launcher has always composed from.
@@ -234,35 +244,6 @@ describe('composedSessionDrillTypes (issue #3252)', () => {
     ])).toEqual({});
   });
 });
-
-describe('isTopicEnabled / isMemoryItemEnabled client mirrors', () => {
-  it('absent = enabled, so a legacy config runs everything', () => {
-    expect(isTopicEnabled({}, 'wordplay')).toBe(true);
-    expect(isMemoryItemEnabled({}, 'elements-song')).toBe(true);
-  });
-
-  it('only an explicit false disables', () => {
-    expect(isTopicEnabled({ topics: { wordplay: { enabled: false } } }, 'wordplay')).toBe(false);
-    expect(isMemoryItemEnabled({ memory: { items: { 'elements-song': { enabled: false } } } }, 'elements-song')).toBe(false);
-  });
-
-  it('a disabled memory topic disables every item under it', () => {
-    expect(isMemoryItemEnabled({ topics: { memory: { enabled: false } } }, 'raven')).toBe(false);
-  });
-});
-
-describe('resolveTopicForDrillType client mirror', () => {
-  it('splits the llm-drills module into its three topics', () => {
-    expect(resolveTopicForDrillType('bridge-word').id).toBe('wordplay');
-    expect(resolveTopicForDrillType('story-recall').id).toBe('verbal');
-    expect(resolveTopicForDrillType('reframe').id).toBe('imagination');
-  });
-
-  it('returns null for an unmapped type', () => {
-    expect(resolveTopicForDrillType('nope')).toBeNull();
-  });
-});
-
 
 // Mirrors the server's progressive override in `resolveDrillConfig`
 // (server/services/meatspacePost.js). Anything that DESCRIBES a cognitive drill

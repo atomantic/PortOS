@@ -52,7 +52,7 @@ const hasText = (value) => typeof value === 'string' && value.trim().length > 0;
 
 /**
  * Per-lens and whole-report coverage. Mirrors `CHARACTER_REVIEW_STATUSES` in
- * `characterIntegrity.js` on purpose — the two answer the same shaped question
+ * `characterIntegrityVocabulary.js` on purpose — the two answer the same shaped question
  * about a cast, and a second vocabulary for "we did not actually look" is how
  * one of them quietly starts meaning "clean".
  *   - `verified`   — every stage resolved, every reachable path enumerated,

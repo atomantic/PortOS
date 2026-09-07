@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
+import {
+  COMMISSION_BRIEF_TAG_MAX, COMMISSION_INTENT_MAX, COMMISSION_NAME_MAX, COMMISSION_STYLE_SPEC_MAX,
+} from './creativeBriefLimits.js';
 
 // =============================================================================
 // CREATIVE COMMISSION SCHEMAS (Autonomous Creation Engine — #2657, Phase 1)
@@ -76,8 +79,9 @@ export const COMMISSION_RENDER_MODEL_MAX = 64;
 // defaults (`ABILITY_GENERATION_SPEC`), and the ability adapter's data-driven
 // `sanitizeGeneration`. Keeping the bounds here (not re-typed in the schema AND
 // the adapter AND the client) is what stops the four-way drift. The client
-// (commissionForm.js) mirrors these values in its own package — kept in sync by
-// hand; there is no cross-package import.
+// (commissionForm.js) still mirrors these values by hand: this module pulls
+// `zod`, so the browser can import them only once they move to a pure leaf,
+// the way the brief caps did (`creativeBriefLimits.js`).
 // `type: 'id'` is a nullable free-string model id: absent/blank normalizes to
 // `null` (= "the install's default model"), which is why its `default` is null
 // rather than a string. Distinct from the `enum`/`int` numeric-or-member kinds so
@@ -149,17 +153,6 @@ function generationFieldSchema(def) {
   return z.number().int().min(def.min).max(def.max).optional();
 }
 
-export const COMMISSION_NAME_MAX = 200;
-// The intent goes to the PLANNING LLM verbatim (via the CD directive `goal`), so
-// it is sized to hold a full instruction set — a prompting framework, causation
-// and camera rules, an audio policy, and a worked sample prompt — not a line of
-// mood. For scale: MiniMax H3's documented 7000-character ceiling applies to the
-// RENDER prompt the director writes downstream, and a brief that TEACHES how to
-// write that prompt needs several times its length. Raising this also means
-// raising MAX_DIRECTIVE_GOAL_LEN (services/creativeCommissions/directive.js).
-export const COMMISSION_INTENT_MAX = 20000;
-export const COMMISSION_STYLE_SPEC_MAX = 5000;
-export const COMMISSION_BRIEF_TAG_MAX = 120;
 export const COMMISSION_MUSIC_TASTE_ANCHOR_MAX = 5;
 export const COMMISSION_MUSIC_TASTE_PERCENT_MAX = 100;
 export const COMMISSION_MUSIC_TASTE_ENGINE_MAX = 64;

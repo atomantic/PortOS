@@ -30,10 +30,17 @@
  *
  * Used by `services/pipeline/series.js` (sanitize on load/save) and the
  * `arc.transitions` editorial check in `lib/editorial/checkRegistry.js`.
+ *
+ * A pure leaf: the browser bundle imports `CHARACTER_ARC_LIMITS`,
+ * `TRANSITION_KINDS` and `TRANSITION_KIND_LABELS` from here (the arc editor in
+ * `PipelineSeries.jsx` caps its inputs at the numbers the PATCH route enforces),
+ * so this module must reach no Node built-in — ids come from `uuid.js`, which
+ * reads the global WebCrypto (the browser never mints one) — and
+ * `scripts/client-server-import-purity.test.js` walks its import graph.
  */
 
-import { randomUUID } from 'crypto';
 import { BIBLE_LIMITS } from './bibleLimits.js';
+import { v4 as randomUUID } from './uuid.js';
 import {
   characterIdentityKey,
   isCanonCharacterId,
@@ -75,6 +82,17 @@ export const TRANSITION_KINDS = Object.freeze([
   'relapse',
   'sacrifice',
 ]);
+
+// How each kind reads in the arc editor's picker — beside the ids it labels, the
+// way `characterEvolution.js` keeps `EVOLUTION_STAGE_LABELS`; the test pins one
+// label per kind so a new kind cannot reach the picker unlabeled.
+export const TRANSITION_KIND_LABELS = Object.freeze({
+  decision: 'Decision',
+  realization: 'Realization',
+  'point-of-no-return': 'Point of no return',
+  relapse: 'Relapse',
+  sacrifice: 'Sacrifice',
+});
 
 const TRANSITION_ID_PREFIX = 'trn-';
 

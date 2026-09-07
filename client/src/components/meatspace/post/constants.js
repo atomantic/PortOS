@@ -102,67 +102,19 @@ export function countLlmCorrect(scoredResponses = []) {
 // ---------------------------------------------------------------------------
 // Practice topics (issue #3252)
 // ---------------------------------------------------------------------------
-// MIRROR of server/lib/postTopics.js `POST_TOPICS` — the single source of truth
-// for "what am I actually studying?". Keep the two identical: id / label /
-// module / surface / drillTypes are asserted field-for-field by
-// server/lib/postTopics.mirror.test.js, which imports THIS file.
-//
-// Only the plain registry data lives here; the UI-only presentation (icon,
-// color, per-domain time budget) is layered on in TOPIC_UI below, so a topic
-// added server-side shows up here as soon as its UI row is filled in.
-export const POST_TOPICS = [
-  {
-    id: 'math',
-    label: 'Mental Math',
-    module: 'mental-math',
-    surface: 'session',
-    drillTypes: ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation', 'applied-numeracy'],
-  },
-  {
-    id: 'memory',
-    label: 'Memory',
-    module: 'memory',
-    surface: 'session',
-    drillTypes: ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'],
-  },
-  {
-    id: 'wordplay',
-    label: 'Wordplay',
-    module: 'llm-drills',
-    surface: 'session',
-    drillTypes: ['pun-wordplay', 'word-association', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist'],
-  },
-  {
-    id: 'verbal',
-    label: 'Verbal Agility',
-    module: 'llm-drills',
-    surface: 'session',
-    drillTypes: ['story-recall', 'verbal-fluency', 'wit-comeback'],
-  },
-  {
-    id: 'imagination',
-    label: 'Imagination',
-    module: 'llm-drills',
-    surface: 'session',
-    drillTypes: ['what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'],
-  },
-  {
-    id: 'cognitive',
-    label: 'Cognitive',
-    module: 'cognitive',
-    surface: 'session',
-    drillTypes: ['n-back', 'digit-span', 'stroop', 'schulte-table', 'mental-rotation', 'reaction-time', 'task-switching', 'go-no-go', 'flanker'],
-  },
-  {
-    id: 'morse',
-    label: 'Morse',
-    module: null,
-    surface: 'standalone',
-    drillTypes: ['morse-copy', 'morse-head-copy', 'morse-send'],
-  },
-];
+// The practice-topic registry and its enablement predicates are the server's
+// own (server/lib/postTopics.js); only the UI-only presentation lives here, in
+// TOPIC_UI below, and `constants.test.js` checks it has a row for every topic.
+import {
+  POST_TOPICS,
+  TOPIC_IDS,
+  resolveTopicForDrillType,
+  isTopicEnabled,
+  isMemoryPracticeEnabled,
+  isMemoryItemEnabled,
+} from '../../../../../server/lib/postTopics.js';
 
-export const TOPIC_IDS = POST_TOPICS.map(t => t.id);
+export { POST_TOPICS, TOPIC_IDS, resolveTopicForDrillType, isTopicEnabled, isMemoryPracticeEnabled, isMemoryItemEnabled };
 
 // Per-topic presentation. `timeBudgetSec` is only meaningful for topics that
 // compose into a session (it sizes the drill's slice of a 5-minute Quick run);
@@ -176,40 +128,6 @@ export const TOPIC_UI = {
   cognitive: { icon: 'Brain', color: 'text-rose-400', bgColor: 'bg-rose-500/20', timeBudgetSec: 90 },
   morse: { icon: 'Radio', color: 'text-sky-400', bgColor: 'bg-sky-500/20' },
 };
-
-/** The topic that owns a drill type, or `null` for an unmapped/legacy type. */
-export function resolveTopicForDrillType(type) {
-  return POST_TOPICS.find(t => t.drillTypes.includes(type)) || null;
-}
-
-/**
- * Whether a topic participates in composition/recommendations under `config`.
- * MIRRORS the server's `isTopicEnabled` — absent entry = enabled, so a config
- * that predates the `topics` key behaves exactly as it did before.
- */
-export function isTopicEnabled(config, topicId) {
-  if (!topicId) return true;
-  return config?.topics?.[topicId]?.enabled !== false;
-}
-
-/**
- * MIRRORS the server's `isMemoryPracticeEnabled` — the topic entry plus the
- * module block, with no drill type consulted.
- */
-export function isMemoryPracticeEnabled(config) {
-  return isTopicEnabled(config, 'memory') && config?.memory?.enabled !== false;
-}
-
-/**
- * MIRRORS the server's `isMemoryItemEnabled` — a per-item opt-out that keeps the
- * item's mastery/schedule history and its own practice page, and only removes it
- * from the automatic rotation.
- */
-export function isMemoryItemEnabled(config, itemId) {
-  if (!isMemoryPracticeEnabled(config)) return false;
-  if (!itemId) return true;
-  return config?.memory?.items?.[itemId]?.enabled !== false;
-}
 
 // Domain definitions for 5-minute balanced sessions — DERIVED from POST_TOPICS
 // so the domain list has exactly one owner. A POST *domain* is a topic that
