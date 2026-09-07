@@ -1,3 +1,6 @@
+import { tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
+import { isPlainObject } from '../lib/objects.js';
 /**
  * Federated peer-sync HTTP routes.
  *
@@ -222,7 +225,8 @@ router.get('/cos-agent-archive', asyncHandler(async (req, res) => {
   // (or remembering) a path.
   await authorizePeerPull(req, { route: 'cos-agent-archive' });
   const abs = join(PATHS.cos, 'agents', date, agentId, file);
-  if (!existsSync(abs)) {
+  const metadata = safeJSONParse(await tryReadFile(join(PATHS.cos, 'agents', date, agentId, 'metadata.json')), null);
+  if (!isPlainObject(metadata) || isPrivateSecurityTask(metadata) || !existsSync(abs)) {
     throw new ServerError('archive not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.sendFile(abs);

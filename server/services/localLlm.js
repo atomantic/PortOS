@@ -1,3 +1,4 @@
+import { localModelSafety } from '../lib/localModelSafety.js';
 /**
  * Local LLM orchestration — unifies the Ollama and LM Studio backends behind
  * one shape so the UI can list / search / install / delete models, move models
@@ -593,7 +594,7 @@ function lmStudioBadgeCapabilities(m) {
 function annotateInstalledModel(backend, rawModel, normalizedModel, capabilities) {
   const catalogEntry = getCatalog(backend, [rawModel.id]).find((entry) => entry.installed)
   return withHardwareCompatibility(
-    normalizedModel,
+    { ...normalizedModel, ...localModelSafety(catalogEntry?.repository || rawModel.id) },
     capabilities,
     catalogEntry?.hardwareRequirements || rawModel.hardwareRequirements,
   )

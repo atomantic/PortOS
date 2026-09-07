@@ -16,6 +16,18 @@ describe('localLlmCatalog', () => {
   });
 
   describe('getCatalog', () => {
+    it('keeps reduced-safeguard candidates separate with dated provenance and no unreviewed publishers', () => {
+      const models = getCatalog('lmstudio');
+      expect(models.every(m => m.publisherReview !== 'unreviewed')).toBe(true);
+      const security = models.filter(m => m.reducedSafeguards);
+      expect(security).toHaveLength(2);
+      for (const model of security) {
+        expect(model.recommendedFor).toEqual(['security-uncensored']);
+        expect(model.provenance).toMatchObject({ checkedAt: '2026-09-06', baseModel: 'Qwen/Qwen3.8-27B' });
+        expect(model.warning).toContain('sandbox');
+      }
+    });
+
     it('projects entries onto the backend-specific install id', () => {
       const ollama = getCatalog('ollama');
       const gemma = ollama.find((m) => m.key === 'gemma4-12b');
@@ -72,9 +84,9 @@ describe('localLlmCatalog', () => {
       expect(getCatalog('lmstudio', [], { appleSilicon: true }).find((m) => m.key === uncensoredKey)).toMatchObject({
         format: 'mlx',
         id: 'https://huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-MLX',
-        note: expect.stringContaining('Gated on Hugging Face'),
+        note: expect.stringContaining('Sandbox required'),
         repository: 'orcarouter/Qwen3.8-27B-Uncensored-MLX',
-        gated: true
+        gated: false
       });
       expect(getCatalog('lmstudio', ['orcarouter/Qwen3.8-27B-Uncensored-MLX'], { appleSilicon: true })
         .find((m) => m.key === uncensoredKey)?.installed).toBe(true);
@@ -82,11 +94,24 @@ describe('localLlmCatalog', () => {
       expect(getCatalog('ollama', [], { appleSilicon: true }).find((m) => m.key === uncensoredKey)).toMatchObject({
         format: 'mlx',
         id: 'orcarouter/qwen3.8-27b-uncensored-mlx:4bit',
-        size: '15.0 GB'
+        size: '16.1 GB'
       });
       expect(getCatalog('ollama', ['orcarouter/qwen3.8-27b-uncensored-mlx:4bit'], { appleSilicon: true })
         .find((m) => m.key === uncensoredKey)?.installed).toBe(true);
       expect(getCatalog('ollama', [], { appleSilicon: false }).some((m) => m.key === uncensoredKey)).toBe(false);
+    });
+
+    it('offers security specialists separately from reduced-safeguard models on both runtimes', () => {
+      for (const backend of ['ollama', 'lmstudio']) {
+        const specialists = getCatalog(backend).filter((m) => m.category === 'security');
+        expect(specialists.map((m) => m.key)).toEqual(['vulnllm-r-7b-gguf', 'foundation-sec-8b-reasoning']);
+        for (const model of specialists) {
+          expect(model.id).toContain('Q8_0');
+          expect(model.recommendedFor).toEqual(['security']);
+          expect(model.reducedSafeguards).toBe(false);
+          expect(model.publisherReview).toBe('established-publisher');
+        }
+      }
     });
 
     it('returns [] for an unknown backend', () => {

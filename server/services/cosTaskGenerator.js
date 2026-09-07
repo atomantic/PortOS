@@ -1,3 +1,4 @@
+import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 /**
  * CoS Task Generator Module
  *
@@ -3232,6 +3233,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     }
     metadata[key] = value;
   }
+  if (isPrivateSecurityTask({ metadata })) Object.assign(metadata, PRIVATE_SECURITY_DELIVERY);
   await updateAppActivity(app.id, { lastImprovementType: taskType });
   emitLog('info', `Generating improvement task for ${app.name}: ${taskType}`, { appId: app.id, analysisType: taskType });
 

@@ -217,6 +217,24 @@ beforeEach(() => {
 afterAll(() => rmSync(TEMP_ROOT, { recursive: true, force: true }));
 
 describe('spawn setup failure after the worktree exists', () => {
+  it('blocks private setup errors and releases the lane without publishing source details', async () => {
+    const { getConfig } = await import('./cos.js');
+    const { release } = await import('./executionLanes.js');
+    const { emitLog } = await import('./cosEvents.js');
+    const { registerAgent } = await import('./cosAgentLifecycle.js');
+    getConfig.mockRejectedValueOnce(new Error('synthetic sensitive source details'));
+    const task = { id: 'private-setup-task', taskType: 'internal', metadata: { analysisType: 'private-security-assessment' } };
+    expect(await spawnAgentForTask(task)).toBeNull();
+    expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({
+      status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'private-security-setup-failed' }),
+    }), 'internal');
+    expect(release).toHaveBeenCalled();
+    expect(registerAgent).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+    expect(JSON.stringify(emitLog.mock.calls)).not.toContain('synthetic sensitive source details');
+    expect(spawningTasks.has(task.id)).toBe(false);
+  });
+
   // Every failed Stage 2 spawn used to leave its checkout behind: the task
   // stayed pending and each retry cut another worktree.
   it('removes the worktree this attempt cut', async () => {

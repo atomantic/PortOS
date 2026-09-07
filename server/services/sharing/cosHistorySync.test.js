@@ -88,6 +88,24 @@ async function seedArchive(date, agentId, files) {
 }
 
 describe('buildCosHistoryManifest', () => {
+  it.each([undefined, '{', 'null', '[]', '"legacy"', '42'])(
+    'excludes archive files when metadata cannot classify privacy (%s)', async (metadata) => {
+      await seedArchive('2026-06-20', 'agent-unclassified', {
+        ...(metadata === undefined ? {} : { 'metadata.json': metadata }),
+        'output.txt': 'unclassified finding', 'prompt.txt': 'unclassified source',
+      });
+      expect((await buildCosHistoryManifest()).entries).toEqual([]);
+    }
+  );
+
+  it('excludes every archive file of a private assessment', async () => {
+    await seedArchive('2026-06-20', 'agent-private', {
+      'metadata.json': JSON.stringify({ metadata: { taskAnalysisType: 'private-security-assessment' } }),
+      'output.txt': 'private finding', 'prompt.txt': 'private source',
+    });
+    expect((await buildCosHistoryManifest()).entries).toEqual([]);
+  });
+
   it('hashes each archive file, skips index.json + flat running dirs, is deterministic', async () => {
     await seedArchive('2026-06-20', 'agent-abc', {
       'metadata.json': '{"id":"agent-abc"}',

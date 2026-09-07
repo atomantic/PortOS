@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router';
-import { ArrowRightLeft, FlaskConical, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowRightLeft, FlaskConical, RefreshCw, Trash2 } from 'lucide-react';
 import { localLlmTargetKey } from '../../lib/localLlmTargetKey.js';
 import { formatBytes, formatContextLength } from '../../utils/formatters.js';
 import BrailleSpinner from '../BrailleSpinner.jsx';
@@ -69,6 +69,9 @@ export default function LocalLlmInstalledModels({
               </label>
               <div className="min-w-0 flex-1">
                 <div className="text-sm text-white break-all">{model.name}</div>
+                {model.reducedSafeguards && (
+                  <p className="flex gap-1 text-xs text-port-warning" role="note"><AlertTriangle size={14} className="shrink-0" aria-hidden="true" />{model.warning}</p>
+                )}
                 <div className="text-xs text-gray-500 break-words">
                   {[
                     model.params,

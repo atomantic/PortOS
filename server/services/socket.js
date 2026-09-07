@@ -508,13 +508,13 @@ function setupReviewEventForwarding() {
   if (reviewForwardingSetup) return;
   reviewForwardingSetup = true;
   reviewEvents.on('item:created', (data) => {
-    if (ioInstance) ioInstance.emit('review:item:created', data);
+    if (ioInstance) ioInstance.emit('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:updated', (data) => {
-    if (ioInstance) ioInstance.emit('review:item:updated', data);
+    if (ioInstance) ioInstance.emit('review:item:updated', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:deleted', (data) => {
-    if (ioInstance) ioInstance.emit('review:item:deleted', data);
+    if (ioInstance) ioInstance.emit('review:item:deleted', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
 }
 

@@ -1,3 +1,4 @@
+import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 /**
  * Static task-type registry.
  *
@@ -25,6 +26,7 @@ import {
 export { isProgrammaticScheduledTaskType, PROGRAMMATIC_SCHEDULED_TASK_TYPES };
 
 export const SELF_IMPROVEMENT_TASK_TYPES = [
+  PRIVATE_SECURITY_TASK_TYPE,
   'model-comparison-refresh',
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'branch-reconcile', 'issue-reconcile', 'console-errors', 'dependency-updates', 'documentation',
@@ -285,6 +287,7 @@ export const createPrReviewerDefaultStages = () => ([
 // is code-owned and makes the task invisible and non-runnable while that
 // install-wide feature is disabled.
 export const DEFAULT_TASK_INTERVALS = {
+  [PRIVATE_SECURITY_TASK_TYPE]: { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...PRIVATE_SECURITY_DELIVERY } },
   'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
   'security':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'code-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
@@ -619,6 +622,7 @@ export function enforceBranchReconcileBatch(taskType, config) {
 export const TASK_TYPE_DESCRIPTIONS = {
   'ui-bugs': 'Find UI bugs — file issues or implement fixes',
   'mobile-responsive': 'Mobile/responsive audit — file issues or implement fixes',
+  [PRIVATE_SECURITY_TASK_TYPE]: 'Private security assessment — sandboxed local model, report and remediation only; no issues or PRs',
   'security': 'Security audit — file issues or implement fixes',
   'code-quality': 'Code quality — file issues or implement fixes',
   'console-errors': 'Console errors — file issues or implement fixes',
@@ -677,6 +681,7 @@ export function getTaskTypeDescription(taskType) {
  * real execution shape without changing prompt-version migration state.
  */
 export const TASK_TYPE_PROMPT_INFO = Object.freeze({
+  [PRIVATE_SECURITY_TASK_TYPE]: Object.freeze({ mode: 'runtime-generated', description: 'Private assessment of committed source and remediation guidance. Requires a pinned local Ollama or LM Studio CLI provider/model and macOS Seatbelt; tools, remote networking and publishing are disabled. Reports appear in the local Review Hub. No issues or PRs.' }),
   'pr-reviewer': Object.freeze({
     mode: 'runtime-generated',
     description: 'Runs a model-abuse screen, a tool-free eligibility gate, and an optional tool-free code review; the server validates every requested GitHub action.'

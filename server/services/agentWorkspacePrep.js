@@ -1,3 +1,4 @@
+import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent Workspace Preparation
  *
@@ -266,6 +267,14 @@ async function prepareRequestedWorktree({
  * @returns {Promise<object>} discriminated outcome (see module doc)
  */
 export async function prepareAgentWorkspace({ agentId, task }) {
+  if (isPrivateSecurityTask(task)) {
+    const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
+    const workspacePath = privateSecurityScratchCwd(agentId);
+    await ensureDir(workspacePath);
+    return { outcome: 'ready', workspacePath, resolvedAppName: null, worktreeInfo: null,
+      jiraTicket: null, jiraBranchName: null, explicitWorktree: false };
+  }
+
   // Creative Director treatment/plan/evaluate tasks are HTTP-PATCH deliverables
   // and never asked for a worktree. Pin them to an isolated scratch cwd BEFORE
   // the PortOS-root resolution / git-pull / conflict scan, so a CLI/TUI provider

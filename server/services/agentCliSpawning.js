@@ -1,3 +1,4 @@
+import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent CLI Spawning
  *
@@ -418,13 +419,35 @@ export async function spawnDirectly({
   // /dev/stdin` via stdin (POSIX) / temp file (Windows); every other provider via
   // stdin (writePromptToStdin=true).
   const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(cliConfig.command, cliConfig.args, prompt);
-  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
+  const preparedSpawn = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
+  const isolatedSpawn = isPrivateSecurityTask(task)
+    ? await import('../lib/privateSecuritySandbox.js')
+      .then(({ preparePrivateSecuritySpawn }) => preparePrivateSecuritySpawn({ ...preparedSpawn, env: childEnv, cwd, provider }))
+      .catch(async () => {
+        // No child exists yet, so no error/close listener can finish this run.
+        // Keep sandbox paths out of shared diagnostics and fail closed locally.
+        const message = 'Private assessment could not prepare its isolated local harness. Verify the CLI and macOS sandbox, then retry.';
+        cleanupPromptFile();
+        releaseAgentLane({ agentId, success: false, exitCode: 1, executionId, laneName, errorExecutionMessage: message });
+        await finalizeAgent({
+          agentId, task, runId, providerId: provider.id, success: false, exitCode: 1,
+          duration: 0, outputBuffer: '', workspacePath, prExpected: false,
+          error: message, completionReason: 'spawn-error',
+          errorAnalysis: { category: 'actionable', error: message, suggestedFix: message },
+          isTruthyMetaFn,
+        });
+        cosEvents.emit('agent:error', { agentId, taskId: task.id, error: message });
+        return null;
+      })
+    : { ...preparedSpawn, env: childEnv };
+  if (!isolatedSpawn) return null;
+  const { command: spawnCommand, args: spawnArgs } = isolatedSpawn;
 
   const claudeProcess = spawn(spawnCommand, spawnArgs, {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: childEnv
+    env: isolatedSpawn.env
   });
 
   // Every child listener is registered HERE, in the same tick as spawn(), into
@@ -556,7 +579,10 @@ export async function spawnDirectly({
   // load+save each time. The batcher coalesces a ~250ms window; the close/error
   // handlers `await outputBatcher.flush()` so the final lines persist before
   // the agent is finalized. (output.txt is written separately below.)
-  const outputBatcher = createAgentOutputBatcher(agentId);
+  // Findings stay in the local transcript/report, never the shared agent stream.
+  const outputBatcher = isPrivateSecurityTask(task)
+    ? { push() {}, async flush() {} }
+    : createAgentOutputBatcher(agentId);
   if (ollamaContext?.warning) outputBatcher.push(ollamaContext.warning);
   if (ollamaContext?.applied) outputBatcher.push(`🪟 Reloaded Ollama at a ${ollamaContext.contextLength}-token context window`);
 
@@ -730,7 +756,7 @@ export async function spawnDirectly({
       await drainTranscriptWrites();
       await outputBatcher.flush();
       await completeAgent(agentId, { success: false, error: err.message });
-      await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
+      await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
       unregisterSpawnedAgent(claudeProcess.pid);
       activeAgents.delete(agentId);
     } catch (handlerErr) {
@@ -874,7 +900,7 @@ export async function spawnDirectly({
 
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
-    const errorAnalysis = finalSuccess ? null : (immediateFallbackAnalysis || analyzeAgentFailure(analysisBuffer, task, model));
+    const errorAnalysis = finalSuccess || isPrivateSecurityTask(task) ? null : (immediateFallbackAnalysis || analyzeAgentFailure(analysisBuffer, task, model));
 
     // Every CLI agent that is a real coding harness drives its own push → PR →
     // review → merge (#3733): a slashdo-capable Claude runs `/simplify` +
@@ -1022,7 +1048,7 @@ export async function spawnDirectly({
           console.error(`❌ Agent ${agentId} completeAgent failed during recovery: ${completeErr.message}`);
         }
         try {
-          await completeAgentRun(runId, outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
+          await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
         } catch (runErr) {
           console.error(`❌ Agent ${agentId} completeAgentRun failed during recovery: ${runErr.message}`);
         }

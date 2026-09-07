@@ -57,6 +57,8 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 **CoS task queues** (`data/TASKS.md`, `data/COS-TASKS.md`, or configured paths) remain file-primary because direct Markdown editing and watcher-driven updates are supported inputs. `cosTaskStore.js` caches parsed snapshots by file stamp and lazily indexes task IDs; single-task reads clone only the matching record, without grouping or copying either backlog. Store writes invalidate the snapshot and index together; external changes are detected on the next read. This optimization changes no persisted format, config key, or peer payload, so existing installs upgrade without an import or migration. PostgreSQL would permit per-row writes, but a future migration must explicitly replace the direct-edit/watch contract, import both configured sources without losing task metadata/order, and retain recovery copies before switching authority. Merely storing the complete Markdown blob in PostgreSQL would retain whole-queue parsing and rewriting.
 
+**Private security assessments** reuse the existing Review Hub item store for report prose and CoS agent archives for local source/transcripts. They add no store format or database migration. The source inventory stays in run memory; interruption before report validation requires a new assessment. Assessment tasks and all their archive files are excluded from peer federation, and shared socket notifications carry no report prose. Reports follow existing local backup and Review Hub retention; temporary sandbox homes are removed after completion. See [the assessment design and research](research/2026-09-06-private-security-models.md).
+
 **Where it lives.** Filesystem under `./data/` (or an OS-managed sync container). DB may hold metadata/index rows (hashes, word counts, segment indexes) but **not** the body.
 
 **Examples.**
@@ -104,6 +106,8 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 **Definition.** Regenerable, short-lived runtime state. Losing it costs at most an in-flight job or a cache rebuild — never durable user data. It should never be the only home for anything the user expects to persist.
 
 **When to use.** Upload staging, in-flight job queues, caches, and scratch state. If a record must survive a reinstall or be queryable across records, it is **not** `ephemeral-file` — promote it.
+
+**Private security assessments** reuse the existing Review Hub item store for report prose and CoS agent archives for local source/transcripts. They add no store format or database migration. The source inventory stays in run memory; interruption before report validation requires a new assessment. Assessment tasks and all their archive files are excluded from peer federation, and shared socket notifications carry no report prose. Reports follow existing local backup and Review Hub retention; temporary sandbox homes are removed after completion. See [the assessment design and research](research/2026-09-06-private-security-models.md).
 
 **Where it lives.** Filesystem under `./data/`, frequently excluded from backups (see `DEFAULT_EXCLUDES` in `server/services/backup.js`). The DB may hold a durable **job reference** even when the staging bytes are ephemeral.
 
