@@ -13,15 +13,16 @@ import { createCreativeDirectorProject, updateCreativeDirectorProject } from '..
 import VideoDraftDrawer from './VideoDraftDrawer.jsx';
 it('edits the same draft without changing workspace or losing source revisions', async () => {
   const user = userEvent.setup();
-  const project = { id: 'draft-1', workspace: 'video', name: 'Example', videoDraft: { sources: [{ kind: 'catalog', id: 'example', revision: 'r1' }], durationRange: { min: 20, max: 40 }, reviewPolicy: 'review', checkpoints: ['rough-cut'] } };
+  const project = { id: 'draft-1', targetDurationSeconds: 30, workspace: 'video', name: 'Example', videoDraft: { sources: [{ kind: 'catalog', id: 'example', revision: 'r1' }], durationRange: { min: 20, max: 40 }, reviewPolicy: 'review', checkpoints: ['rough-cut'] } };
   updateCreativeDirectorProject.mockResolvedValue(project);
   const saved = vi.fn();
   render(<MemoryRouter><VideoDraftDrawer open project={project} onClose={vi.fn()} onSaved={saved} /></MemoryRouter>);
+  expect(screen.getByText(/Exact target: 30 seconds/)).toBeInTheDocument();
   await user.clear(screen.getByLabelText('Name'));
   await user.type(screen.getByLabelText('Name'), 'Revised');
   await user.click(screen.getByRole('button', { name: 'Save draft' }));
   await waitFor(() => expect(saved).toHaveBeenCalledWith(project));
-  expect(updateCreativeDirectorProject).toHaveBeenCalledWith('draft-1', expect.objectContaining({ name: 'Revised', videoDraft: expect.objectContaining({ sources: project.videoDraft.sources, checkpoints: ['rough-cut'] }) }), { silent: true });
+  expect(updateCreativeDirectorProject).toHaveBeenCalledWith('draft-1', expect.objectContaining({ name: 'Revised', targetDurationSeconds: 30, videoDraft: expect.objectContaining({ sources: project.videoDraft.sources, checkpoints: ['rough-cut'] }) }), { silent: true });
   expect(updateCreativeDirectorProject.mock.calls[0][1]).not.toHaveProperty('workspace');
   expect(createCreativeDirectorProject).not.toHaveBeenCalled();
 });

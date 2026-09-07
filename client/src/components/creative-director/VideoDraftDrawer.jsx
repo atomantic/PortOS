@@ -43,13 +43,14 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
   const change = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
   const input = (key, label, options = {}) => <label htmlFor={`video-draft-${key}`} className="block text-sm">{label}<input id={`video-draft-${key}`} className={fieldClass} value={form[key] ?? ''} onChange={e => change(key, e.target.value)} {...options} /></label>;
   const select = (key, label, choices) => <label htmlFor={`video-draft-${key}`} className="block text-sm">{label}<select id={`video-draft-${key}`} className={fieldClass} value={form[key] || ''} onChange={e => change(key, e.target.value)}>{choices.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>;
+  const exactTarget = Math.min(Number(form.max), Math.max(Number(form.min), project?.targetDurationSeconds ?? Number(form.max)));
   const save = async () => {
     if (!form.name?.trim()) { setTab('brief'); toast.error('Name is required'); return; }
     const min = Number(form.min), max = Number(form.max);
     if (!Number.isInteger(min) || !Number.isInteger(max) || min < 5 || max > 600 || min > max) { setTab('brief'); toast.error('Choose a duration range between 5 and 600 seconds, minimum first'); return; }
     const sources = form.sources || [];
     const payload = { name: form.name.trim(), userStory: form.userStory, styleSpec: form.styleSpec,
-      aspectRatio: form.aspectRatio, quality: form.quality, modelId: form.modelId, targetDurationSeconds: max,
+      aspectRatio: form.aspectRatio, quality: form.quality, modelId: form.modelId, targetDurationSeconds: exactTarget,
       ...(!project ? { workspace: 'video', catalogIngredientIds: sources.filter(s => s.kind === 'catalog').map(s => s.id) } : {}),
       renderBackend: { ...project?.renderBackend, video: { ...project?.renderBackend?.video, mode: form.videoMode, modelId: form.videoMode === 'local' ? form.modelId : form.backendModelId || null } },
       videoDraft: { durationRange: { min, max }, sources, audio: { ...(form.audioProvider ? { providerId: form.audioProvider } : {}), ...(form.audioModel ? { model: form.audioModel } : {}) }, reviewPolicy: form.reviewPolicy, checkpoints: project?.videoDraft?.checkpoints || VIDEO_REVIEW_CHECKPOINTS } };
@@ -66,6 +67,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
         <label htmlFor="video-draft-userStory" className="block text-sm">Brief<textarea id="video-draft-userStory" value={form.userStory || ''} onChange={e => change('userStory', e.target.value)} className={fieldClass} rows={4} maxLength={10000} /></label>
         <label htmlFor="video-draft-styleSpec" className="block text-sm">Style<textarea id="video-draft-styleSpec" value={form.styleSpec || ''} onChange={e => change('styleSpec', e.target.value)} className={fieldClass} rows={3} maxLength={5000} /></label>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{input('min', 'Minimum duration (seconds)', { type: 'number', min: 5, max: 600 })}{input('max', 'Maximum duration (seconds)', { type: 'number', min: 5, max: 600 })}</div>
+        <p className="text-sm text-port-text-muted" aria-live="polite">Exact target: {Number.isFinite(exactTarget) && Number(form.min) <= Number(form.max) ? `${exactTarget} seconds` : 'Choose a valid range'}. Existing targets are preserved within the range; new drafts use the maximum.</p>
       </>}
       {tab === 'production' && <>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{select('aspectRatio', 'Aspect ratio', ['16:9', '9:16', '1:1'].map(x => [x, x]))}{select('quality', 'Quality', ['draft', 'standard', 'high'].map(x => [x, x]))}</div>
