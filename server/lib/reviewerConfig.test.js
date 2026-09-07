@@ -42,8 +42,6 @@ import {
   MAX_REVIEW_USERNAMES,
   MAX_REVIEWER_MAX_ROUNDS,
   normalizeReviewUsernames,
-  reviewerForProvider,
-  codeReviewDefaultsFromProvider,
 } from './reviewerConfig.js';
 // The Zod half of the old cosValidation.js — these cases assert that a reviewer
 // pin survives the schema that persists it, so they need both modules.
@@ -750,67 +748,6 @@ describe('claim reviewer round-trip (prompt CSV ↔ persisted metadata)', () => 
     // three claim generators rather than degrade.
     expect(reviewerConfigMetadata(null)).toEqual({});
     expect(reviewerConfigMetadata({ reviewers: ['bogus'] })).toEqual({});
-  });
-});
-
-describe('reviewerForProvider', () => {
-  it('names a CLI reviewer by the binary its provider spawns', () => {
-    expect(reviewerForProvider({ id: 'claude-code-tui', command: 'claude' })).toBe('claude');
-    expect(reviewerForProvider({ id: 'codex', command: '/opt/homebrew/bin/codex' })).toBe('codex');
-    // The stored slug is `antigravity`; the executable is `agy`.
-    expect(reviewerForProvider({ id: 'antigravity-cli', command: 'agy' })).toBe('antigravity');
-    expect(reviewerForProvider({ id: 'cursor-cli', command: 'cursor-agent' })).toBe('cursor');
-  });
-
-  it('names a local-LLM reviewer by provider id (it has no binary at all)', () => {
-    expect(reviewerForProvider({ id: 'ollama', type: 'api' })).toBe('ollama');
-    expect(reviewerForProvider({ id: 'lmstudio', type: 'api' })).toBe('lmstudio');
-    expect(reviewerForProvider({ id: 'mtplx', type: 'api' })).toBe('mtplx');
-  });
-
-  it('follows the wrapper binary for a locally-served CLI provider', () => {
-    // A locally-served `claude` reviews as `claude`: same binary, same env, and
-    // its model pin is free text precisely so a local id can be named.
-    expect(reviewerForProvider({ id: 'claude-ollama', command: 'claude', ollamaBacked: true })).toBe('claude');
-    expect(reviewerForProvider({ id: 'opencode-vllm', command: 'opencode' })).toBe('opencode');
-  });
-
-  it('returns null for a provider the Review Loop cannot run', () => {
-    // A hosted API provider spawns nothing and is not a local backend.
-    expect(reviewerForProvider({ id: 'openrouter', type: 'api' })).toBeNull();
-    expect(reviewerForProvider({ id: 'mystery', command: 'some-unknown-agent' })).toBeNull();
-    expect(reviewerForProvider(null)).toBeNull();
-    expect(reviewerForProvider('claude')).toBeNull();
-  });
-});
-
-describe('codeReviewDefaultsFromProvider', () => {
-  it('carries the provider model and effort onto its reviewer', () => {
-    expect(codeReviewDefaultsFromProvider({
-      id: 'claude-code', command: 'claude', defaultModel: 'claude-opus-5', effort: 'high',
-    })).toEqual({ reviewer: 'claude', model: 'claude-opus-5', effort: 'high' });
-  });
-
-  it('drops a configured-default sentinel — it is a marker, not a model id', () => {
-    const out = codeReviewDefaultsFromProvider({ id: 'grok-cli', command: 'grok', defaultModel: 'grok-configured-default' });
-    expect(out).toEqual({ reviewer: 'grok', model: null, effort: null });
-  });
-
-  it('drops an effort the reviewer\'s own ladder rejects', () => {
-    // agy really does reject `--effort max`; reviewing at a silently different
-    // level than the one configured is worse than using its own default.
-    expect(codeReviewDefaultsFromProvider({
-      id: 'antigravity-cli', command: 'agy', defaultModel: 'gemini-3.6-flash', effort: 'max',
-    }).effort).toBeNull();
-    // A provider with no effort set at all leaves the reviewer at its own default.
-    expect(codeReviewDefaultsFromProvider({ id: 'codex', command: 'codex' }).effort).toBeNull();
-    // ...as does a value that is not an effort level in the first place.
-    expect(codeReviewDefaultsFromProvider({ id: 'codex', command: 'codex', effort: 'turbo' }).effort).toBeNull();
-  });
-
-  it('returns null when the provider maps to no reviewer', () => {
-    expect(codeReviewDefaultsFromProvider({ id: 'openrouter', type: 'api' })).toBeNull();
-    expect(codeReviewDefaultsFromProvider(null)).toBeNull();
   });
 });
 

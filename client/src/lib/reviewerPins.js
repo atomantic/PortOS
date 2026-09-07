@@ -158,10 +158,10 @@ export const sanitizeReviewerModelInput = (raw) =>
 // review-loop reviewer that never runs; the reverse hides one their install has.
 export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
 
-// The reviewer a task falls back to when none is configured. Mirror of
-// DEFAULT_REVIEWER / DEFAULT_REVIEWERS.
+// The reviewer identity used for Copilot-specific handling. An empty default
+// reviewer list keeps code review opt-in on a fresh install.
 export const DEFAULT_REVIEWER = 'copilot';
-export const DEFAULT_REVIEWERS = [DEFAULT_REVIEWER];
+export const DEFAULT_REVIEWERS = [];
 
 // Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
 // reviewers to gate merging, appended to slashdo's `--review-with` after the

@@ -781,11 +781,11 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
 export async function buildImprovementTaskDescription({ promptTemplate, app, promptTaskType, metadata, blocks }) {
   // Resolve the `{reviewers}` the agent is told to run. When the task itself
   // didn't pin reviewers, fall back to the user's PortOS Code Review Defaults
-  // (Settings → Code Reviewers) rather than the hardcoded `copilot` —
+  // (Settings → Code Reviewers) rather than a hardcoded reviewer —
   // otherwise scheduled tasks like claim-issue, whose prompt drives the review
-  // loop directly, would always tell the agent to use Copilot regardless of the
-  // user's configured reviewers. Settings I/O failures degrade to the hardcoded
-  // default inside normalizeReviewers, so a read error never blocks dispatch.
+  // loop directly, would otherwise ignore the user's configured reviewers.
+  // Settings I/O failures leave the reviewer list empty, so a read error never
+  // silently enables a review.
   //
   // One resolver for the whole bundle (list + usernames + `~opt` set + the three
   // keyed pins). Local-LLM reviewers stay in the operative list; their service

@@ -132,7 +132,7 @@ async function auditRepoState(agentId, success, originalTask, warnings) {
   });
 }
 
-async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREATION.NEVER, prCompletion = null, requestCopilotReview: legacyRequestCopilotReview = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
+async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREATION.NEVER, prCompletion = null, requestCopilotReview: legacyRequestCopilotReview = false, reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, reviewerEfforts = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -289,7 +289,13 @@ async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREAT
         ? prCompletion
         : (legacyRequestCopilotReview ? PR_COMPLETIONS.REVIEW_THEN_MERGE : PR_COMPLETIONS.MERGE_ON_GREEN);
       const runsReviewLoop = resolvedPrCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
-      const reviewerList = normalizeReviewers({ reviewers });
+      // Keep the pre-reviewer-chain API contract for direct callers: the legacy
+      // flag explicitly requested Copilot, whereas an explicitly supplied empty
+      // list means the caller opted into no reviewers. Production callers pass
+      // the resolved list, so a fresh install remains reviewer-free by default.
+      const reviewerList = reviewers === undefined
+        ? (legacyRequestCopilotReview ? [DEFAULT_REVIEWER] : [...DEFAULT_REVIEWERS])
+        : normalizeReviewers({ reviewers });
       const copilotIsFirst = reviewerList[0] === DEFAULT_REVIEWER;
       const nonCopilotReviewers = reviewerList.filter(r => r !== DEFAULT_REVIEWER);
       // Pre-request the native Copilot review ONLY when copilot LEADS the order — it

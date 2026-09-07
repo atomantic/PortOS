@@ -1155,11 +1155,11 @@ describe('validation.js', () => {
   });
 
   describe('normalizeReviewers', () => {
-    it('defaults to [copilot] when absent/empty', () => {
-      expect(normalizeReviewers(undefined)).toEqual(['copilot']);
-      expect(normalizeReviewers({})).toEqual(['copilot']);
-      expect(normalizeReviewers({ reviewers: [] })).toEqual(['copilot']);
-      expect(normalizeReviewers({ reviewers: ['bogus'] })).toEqual(['copilot']);
+    it('defaults to no reviewers when absent/empty', () => {
+      expect(normalizeReviewers(undefined)).toEqual([]);
+      expect(normalizeReviewers({})).toEqual([]);
+      expect(normalizeReviewers({ reviewers: [] })).toEqual([]);
+      expect(normalizeReviewers({ reviewers: ['bogus'] })).toEqual([]);
     });
 
     it('prefers reviewers, falls back to legacy reviewer, preserves order + dedupes', () => {
@@ -1175,12 +1175,12 @@ describe('validation.js', () => {
       expect(normalizeReviewers({ reviewer: 'lmstudio' })).toEqual(['lmstudio']);
     });
 
-    it('uses the fallback when metadata is empty and falls back to copilot when the fallback is invalid', () => {
+    it('uses the fallback when metadata is empty and drops an invalid fallback', () => {
       // Settings-derived defaults flow through when the task didn't pin reviewers.
       expect(normalizeReviewers({}, ['antigravity', 'codex'])).toEqual(['antigravity', 'codex']);
       expect(normalizeReviewers({}, ['gemini', 'codex'])).toEqual(['antigravity', 'codex']);
-      // An all-bogus fallback collapses to the hardcoded copilot, never an empty list.
-      expect(normalizeReviewers({}, ['bogus', null])).toEqual(['copilot']);
+      // An all-bogus fallback collapses to the empty install default.
+      expect(normalizeReviewers({}, ['bogus', null])).toEqual([]);
       // Explicit task metadata still wins over the fallback.
       expect(normalizeReviewers({ reviewers: ['claude'] }, ['antigravity'])).toEqual(['claude']);
     });
@@ -1218,13 +1218,13 @@ describe('validation.js', () => {
   describe('resolveKeyedReviewers', () => {
     it('keeps an explicitly empty list empty only when usernames carry the review', () => {
       expect(resolveKeyedReviewers([], true)).toEqual([]);
-      // No usernames → falls back to the copilot default (can never be empty).
-      expect(resolveKeyedReviewers([], false)).toEqual(['copilot']);
+      // No usernames → follows the empty install default.
+      expect(resolveKeyedReviewers([], false)).toEqual([]);
     });
 
-    it('normalizes a populated list and defaults absent/legacy input to copilot', () => {
+    it('normalizes a populated list and defaults absent/legacy input to the install default', () => {
       expect(resolveKeyedReviewers(['codex', 'gemini'], true)).toEqual(['codex', 'antigravity']);
-      expect(resolveKeyedReviewers(undefined, true)).toEqual(['copilot']);
+      expect(resolveKeyedReviewers(undefined, true)).toEqual([]);
     });
   });
 
@@ -1245,9 +1245,9 @@ describe('validation.js', () => {
       expect(buildReviewersCsv(['copilot', 'codex'], ['@Bot'])).toBe('copilot,codex,@Bot');
     });
 
-    it('falls back to the copilot default when the keyed list is empty', () => {
-      expect(buildReviewersCsv([], [])).toBe('copilot');
-      expect(buildReviewersCsv([], ['Bot'])).toBe('copilot,@Bot');
+    it('keeps the keyed list empty when no reviewers are configured', () => {
+      expect(buildReviewersCsv([], [])).toBe('');
+      expect(buildReviewersCsv([], ['Bot'])).toBe('@Bot');
     });
 
     it('normalizes/strips bogus usernames', () => {

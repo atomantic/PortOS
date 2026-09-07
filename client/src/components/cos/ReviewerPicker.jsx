@@ -164,10 +164,9 @@ export default function ReviewerPicker({
   // Render the parent's list (de-duped, order-preserving) so display === stored
   // state for valid input while staying robust to malformed/legacy duplicates —
   // dupes would otherwise collide on the `key={value}` below and corrupt
-  // reorder/remove. An empty list shows the "follows your default AI provider"
-  // hint and lets the user clear the chain entirely; the server resolves [] to
-  // the active provider's own reviewer (falling back to copilot when that
-  // provider maps to none) — see `codeReviewDefaultsFromProvider`.
+  // reorder/remove. An empty list shows the opt-in hint and lets the user clear
+  // the chain entirely; no reviewer is silently inferred from the active AI
+  // provider.
   const selected = Array.isArray(reviewers) ? [...new Set(reviewers.map(normalizeReviewerValue))] : [];
   const addable = REVIEWER_OPTIONS.filter(o => !selected.includes(o.value));
   const hasNonCopilot = selected.some(r => r !== 'copilot');
@@ -738,7 +737,7 @@ export default function ReviewerPicker({
           </>
         )}
         {selected.length === 0 && (
-          <span className="text-xs text-gray-600 italic">none — follows your default AI provider</span>
+          <span className="text-xs text-gray-600 italic">none — code review is disabled by default</span>
         )}
       </div>
 

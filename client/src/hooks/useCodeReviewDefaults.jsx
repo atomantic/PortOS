@@ -13,7 +13,7 @@ const pinScalars = (source) => Object.fromEntries([
 
 // Resolved "Code Review Defaults" (Models → Code Reviewers) — used by TaskAddForm
 // and ScheduleTab's per-task-type config to seed the picker's fallback state
-// instead of the hardcoded `['copilot']`. Returned shape mirrors the server's
+// instead of a hardcoded reviewer. Returned shape mirrors the server's
 // `getCodeReviewDefaults()` so a consumer can rely on the same field names
 // regardless of whether it reads context or calls the API directly.
 // Mirrors the server's `pickCodeReviewDefaults` shape, including every
