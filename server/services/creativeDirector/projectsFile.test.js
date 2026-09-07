@@ -141,6 +141,7 @@ describe('Video treatment artifacts', () => {
     const wrongDuration = videoTreatment();
     wrongDuration.scenes[0].durationSeconds = 9;
     const writesBefore = writeCounter.project;
+    await expect(file.setTreatment(p.id, { ...videoTreatment(), script: undefined })).rejects.toThrow('require a production script');
     await expect(file.setTreatment(p.id, duplicateId)).rejects.toThrow('unique sceneId');
     await expect(file.setTreatment(p.id, duplicateOrder)).rejects.toThrow('unique sceneId');
     await expect(file.setTreatment(p.id, wrongDuration)).rejects.toThrow('exact target of 120s');
