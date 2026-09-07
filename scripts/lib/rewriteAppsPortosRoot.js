@@ -21,6 +21,10 @@ export function rewriteAppsPortosRoot(dataDir, rootDir) {
   if (!existsSync(appsFile)) return { rewritten: false, appsFile };
   const content = readFileSync(appsFile, 'utf8');
   if (!containsPortosRootToken(content)) return { rewritten: false, appsFile };
-  writeFileSync(appsFile, expandPortosRootToken(content, rootDir));
+  // Expand string values after parsing, then let JSON.stringify escape paths
+  // (Windows backslashes and legal quote characters) at the storage boundary.
+  // Parsing before writing also leaves a malformed registry untouched.
+  const apps = JSON.parse(content, (_key, value) => expandPortosRootToken(value, rootDir));
+  writeFileSync(appsFile, `${JSON.stringify(apps, null, 2)}\n`);
   return { rewritten: true, appsFile, token: PORTOS_ROOT_TOKEN, rootDir };
 }
