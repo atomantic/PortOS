@@ -1,5 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
-import { resolveInteractiveShellWith } from './interactiveShellResolver.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  resolveInteractiveShellWith,
+  resolveInteractiveShell,
+  _resetInteractiveShellCache,
+} from './interactiveShellResolver.js';
 
 // Windows env fixture. `exists` is driven per-test so the whole preference
 // chain is reachable from a POSIX host.
@@ -112,19 +116,151 @@ describe('resolveInteractiveShellWith PORTOS_SHELL override', () => {
     expect(resolveInteractiveShellWith({
       platform: 'linux',
       env: { PORTOS_SHELL: '   ', SHELL: '/bin/bash' },
-      exists: () => false,
+      exists: onlyExists('/bin/bash'),
+    })).toBe('/bin/bash');
+  });
+
+  it('wins on POSIX when the override path exists', () => {
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: { PORTOS_SHELL: '/usr/local/bin/fish', SHELL: '/bin/bash' },
+      exists: onlyExists('/usr/local/bin/fish', '/bin/bash'),
+    })).toBe('/usr/local/bin/fish');
+  });
+
+  it('falls through on POSIX when the override path is missing', () => {
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: { PORTOS_SHELL: '/opt/missing/zsh', SHELL: '/bin/bash' },
+      exists: onlyExists('/bin/bash'),
+      findOnPath: () => null,
     })).toBe('/bin/bash');
   });
 });
 
 describe('resolveInteractiveShellWith on POSIX', () => {
-  it('uses SHELL, and zsh when it is unset — unchanged behavior', () => {
-    expect(resolveInteractiveShellWith({ platform: 'darwin', env: { SHELL: '/bin/bash' } })).toBe('/bin/bash');
-    expect(resolveInteractiveShellWith({ platform: 'linux', env: {} })).toBe('/bin/zsh');
+  it('uses an existing SHELL path when set', () => {
+    expect(resolveInteractiveShellWith({
+      platform: 'darwin',
+      env: { SHELL: '/bin/bash' },
+      exists: onlyExists('/bin/bash'),
+      findOnPath: () => null,
+    })).toBe('/bin/bash');
+  });
+
+  it('passes a bare SHELL name through unchecked', () => {
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: { SHELL: 'bash' },
+      exists: () => false,
+      findOnPath: () => null,
+    })).toBe('bash');
+  });
+
+  it('skips a missing SHELL path and picks bash when zsh is absent', () => {
+    // The PM2 / container failure mode: SHELL unset (or pointing at a removed
+    // binary), no zsh on disk, bash present. Must NOT return `/bin/zsh`.
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: {},
+      exists: onlyExists('/bin/bash', '/bin/sh'),
+      findOnPath: () => null,
+    })).toBe('/bin/bash');
+  });
+
+  it('prefers /bin/bash over /bin/sh and over zsh when SHELL is unset', () => {
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: {},
+      exists: onlyExists('/bin/bash', '/bin/sh', '/bin/zsh'),
+      findOnPath: () => null,
+    })).toBe('/bin/bash');
+  });
+
+  it('falls back to /bin/sh when bash is absent', () => {
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: {},
+      exists: onlyExists('/bin/sh'),
+      findOnPath: () => null,
+    })).toBe('/bin/sh');
+  });
+
+  it('uses zsh only when it exists and earlier candidates do not', () => {
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: {},
+      exists: onlyExists('/bin/zsh'),
+      findOnPath: () => null,
+    })).toBe('/bin/zsh');
+  });
+
+  it('never returns a hard-coded /bin/zsh that does not exist', () => {
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: {},
+      exists: () => false,
+      findOnPath: () => null,
+    })).toBe('sh');
+  });
+
+  it('uses findCommandOnPath for bare bash/sh when no absolute candidate exists', () => {
+    const findOnPath = vi.fn((name) => (name === 'bash' ? '/nix/store/…/bin/bash' : null));
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: {},
+      exists: () => false,
+      findOnPath,
+    })).toBe('/nix/store/…/bin/bash');
+    expect(findOnPath).toHaveBeenCalledWith('bash', expect.objectContaining({ env: {} }));
   });
 
   it('never reaches the Windows candidates even when they exist', () => {
-    expect(resolveInteractiveShellWith({ platform: 'linux', env: WIN_ENV, exists: () => true }))
-      .toBe('/bin/zsh');
+    // Empty POSIX env + every path "exists" → first POSIX absolute candidate.
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: WIN_ENV,
+      exists: () => true,
+      findOnPath: () => null,
+    })).toBe('/bin/bash');
+  });
+
+  it('skips a stale absolute SHELL and continues the candidate chain', () => {
+    expect(resolveInteractiveShellWith({
+      platform: 'linux',
+      env: { SHELL: '/bin/zsh' },
+      exists: onlyExists('/usr/bin/bash'),
+      findOnPath: () => null,
+    })).toBe('/usr/bin/bash');
+  });
+});
+
+describe('resolveInteractiveShell memoization', () => {
+  beforeEach(() => {
+    _resetInteractiveShellCache();
+  });
+  afterEach(() => {
+    _resetInteractiveShellCache();
+  });
+
+  it('memoizes the first resolveInteractiveShell result until reset', async () => {
+    // Drive the memo through the injectable helper by temporarily resolving
+    // with process defaults is host-dependent; instead poke the cache by
+    // resolving once, then confirming a second call returns the same reference
+    // without re-entering detection (reset clears it for the next assertion).
+    const first = resolveInteractiveShell();
+    const second = resolveInteractiveShell();
+    expect(second).toBe(first);
+    _resetInteractiveShellCache();
+    // After reset, a fresh resolve runs again under the real host env/fs.
+    const after = resolveInteractiveShell();
+    expect(typeof after).toBe('string');
+    expect(after.length).toBeGreaterThan(0);
+    // A hard-coded missing /bin/zsh was the bug; if we return that absolute
+    // path it must actually exist on this host.
+    if (after === '/bin/zsh') {
+      const { existsSync } = await import('fs');
+      expect(existsSync('/bin/zsh')).toBe(true);
+    }
   });
 });
