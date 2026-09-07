@@ -233,7 +233,7 @@ function MediaCard({
                 type="button"
                 onClick={() => onUpscale(item)}
                 className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
-                title="Upscale 2× (Lanczos, ~10s)" aria-label="Upscale 2× (Lanczos, ~10s)"
+                title="Upscale 2×" aria-label="Upscale 2×"
               >
                 <Maximize2 className="w-3 h-3" />
               </button>
