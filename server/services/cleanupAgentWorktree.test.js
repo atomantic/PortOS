@@ -5,6 +5,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../lib/childProcess.js', () => ({
   spawn: vi.fn(),
   execSync: vi.fn(),
+  // codeReview also reaches memoryStats through the local daemon managers.
+  exec: vi.fn(),
   // `execFile` is pulled in transitively by codeReview.js → lmStudioManager
   // (via `resolveReviewLoopOptions`'s dependency graph), even though this
   // test never exercises it directly.
