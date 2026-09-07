@@ -92,11 +92,9 @@ const describeLtxRuntime = () => {
 const describeLtxAdapter = async () => {
   const spec = icLoraSpecByKey(LTX_UPSCALE_WEIGHT_KEY);
   const resolved = await resolveIcLoraWeightByKey(LTX_UPSCALE_WEIGHT_KEY);
-  // Read off the downloaded file when there is one, so the registry's honest
-  // `null` for this gated weight resolves to the real number on the installs
-  // that actually hold it (#6512). `measured` keeps "the weight declares 1"
-  // apart from "nobody has read it yet" — both impose no rule, but only one is
-  // a fact.
+  // Read off the downloaded file when there is one (#6512), so a re-pinned
+  // weight is measured rather than trusted; `measured` keeps the registry's
+  // declared value apart from the one this install's file actually carries.
   const { factor, measured } = await readIcLoraReferenceDownscaleFactor(spec);
   return {
     key: icLoraWeightKey(spec),

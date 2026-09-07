@@ -53,18 +53,18 @@ export const ltxUpscaleBaseModelId = (runtime) => (
   LTX_UPSCALE_BASE_MODEL_BY_RUNTIME[runtime] || null
 );
 
-// The LTX-2.5 two-stage grid, mirrored from `validate_args` in
-// `scripts/generate_ltx25_cuda.py`: output dimensions must be divisible by 64
-// and the frame count must satisfy `frames % 8 == 1` with a floor of 9.
+// The LTX-2.5 grid, mirrored from `scripts/_upscale_contract.py`: output
+// dimensions must be divisible by 64 and the frame count must satisfy
+// `frames % 8 == 1` with a floor of 9.
 //
-// #6512 confirmed the MLX backend imposes the SAME rule, and read it off the
-// pinned runtime rather than the gated model card: `ICLoraPipeline.generate`
-// renders Stage 1 at `height // 2` / `width // 2`, and
-// `compute_video_latent_shape` compresses spatially by 32 — so the OUTPUT axis
-// must divide by 64. Temporal compression is 8 and the IC reference encoder
-// needs a (1 + 8k)-frame input, which is the frame rule. Both runners now read
-// the rule from here; `scripts/upscale_ltx25.py` mirrors the numbers with a
-// comment pointing back, the way the CUDA runner already does.
+// #6512 established the rule on both backends from the runtimes and Lightricks'
+// own IC-LoRA recipe rather than the gated card. The upscaler is the standard
+// single-stage IC-LoRA pass at the OUTPUT size with the source as a reference
+// at half of it; the video VAE compresses spatially by 32, so for the reference
+// to land on that grid at exactly the (padded) source's own size — rather than
+// being resampled before it conditions anything — the output must divide by
+// 2 × 32. Temporal compression is 8 and the IC reference encoder needs a
+// (1 + 8k)-frame input, which is the frame rule.
 export const LTX_GRID = Object.freeze({
   spatialMultiple: 64,
   frameModulus: 8,

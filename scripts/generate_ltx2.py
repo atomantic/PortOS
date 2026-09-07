@@ -67,7 +67,6 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-DISTILLED_LORA_25 = "ltx-2.5-22b-distilled-lora-450.safetensors"
 DISTILLED_LORA_V11 = "ltx-2.3-22b-distilled-lora-384-1.1.safetensors"
 DISTILLED_LORA_LEGACY = "ltx-2.3-22b-distilled-lora-384.safetensors"
 
@@ -86,7 +85,16 @@ os.environ.setdefault("LTX2_GEMMA_EVAL_EVERY", "1")
 # for direct and imported execution. _runner_common is stdlib-only at import time, so
 # this is safe from the ltx-2-mlx venv (no torch pulled in).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _runner_common import emit_runtime_fingerprint, parse_user_loras, write_stepwise_preview  # noqa: E402
+from _runner_common import (  # noqa: E402
+    LTX25_DISTILLED_LORA_FILENAME,
+    emit_runtime_fingerprint,
+    parse_user_loras,
+    write_stepwise_preview,
+)
+
+# The 2.5 pack's distilled adapter, shared with the upscale runner so a re-pin
+# is one edit (see _runner_common).
+DISTILLED_LORA_25 = LTX25_DISTILLED_LORA_FILENAME
 
 
 def emit_status(msg: str) -> None:

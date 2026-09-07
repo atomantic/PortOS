@@ -299,6 +299,30 @@ describe('local-only (#6511 item 7)', () => {
 });
 
 describe('runVideoUpscale — success', () => {
+  // Both runners announce the fingerprint of the stack they run on and the
+  // factor they read off the adapter before the pipeline loads. Those are
+  // provenance: a clip must be traceable to the exact runtime and the rule it
+  // enforced, the way a plain render's row carries `runtime` (#6512).
+  it('records the runtime fingerprint and measured reference factor the runner reports', async () => {
+    const fingerprint = { runtime: 'ltx25', versions: { mlx: '0.32.0' }, chip: 'Apple Mx' };
+    const entry = await runWith(() => {
+      state.child.stderr.emit('data', 'UPSCALE_REFERENCE_DOWNSCALE:2\n');
+      state.child.stderr.emit('data', `RUNTIME:${JSON.stringify(fingerprint)}\n`);
+      state.child.stderr.emit('data', 'STAGE:inference\n');
+      finishChild(0);
+    });
+    expect(entry.upscaleReferenceDownscale).toBe(2);
+    expect(entry.runtime).toEqual(fingerprint);
+  });
+
+  it('keeps a malformed fingerprint line off the row instead of half-parsing it', async () => {
+    const entry = await runWith(() => {
+      state.child.stderr.emit('data', 'RUNTIME:{not json\n');
+      finishChild(0);
+    });
+    expect(entry.runtime).toBeUndefined();
+  });
+
   it('writes a new history row carrying the full provenance contract', async () => {
     const completed = [];
     videoGenEvents.on('completed', (e) => completed.push(e));
@@ -322,6 +346,10 @@ describe('runVideoUpscale — success', () => {
       hidden: false,
     });
     expect(entry.renderMs).toBeGreaterThanOrEqual(0);
+    // Nothing reported by the runner → explicit absent sentinels, never a
+    // guessed factor or a half-parsed fingerprint.
+    expect(entry.upscaleReferenceDownscale).toBeUndefined();
+    expect(entry.runtime).toBeUndefined();
     // The source render's timing must not ride along on a row that only paid
     // for the upscale.
     expect(entry.renderStartedAt).not.toBe('2026-01-01T00:00:00.000Z');

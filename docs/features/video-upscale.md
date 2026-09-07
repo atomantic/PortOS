@@ -102,11 +102,36 @@ the script path differ. What stays per-runner is what genuinely differs: the
 runtime it imports, the host it gates on, the pack layout it validates, and the
 rename maps its loader fuses through.
 
+## The recipe
+
+The generative method is Lightricks' standard IC-LoRA video-to-video pass, as
+their IC-LoRA guide and ComfyUI reference workflow run the Pixel Spatial
+Upscaler: the distilled model with the adapter fused at strength 1.0, a single
+denoising stage **at the output resolution**, and the low-resolution clip as
+the in-context reference at half of it (the adapter's
+`reference_downscale_factor` is 2). No text steering is added — the source clip
+is the whole conditioning signal — and the distilled 8-sigma schedule is used
+as-is.
+
+Both runtimes' `ICLoraPipeline` render their conditioned stage at half the size
+they are handed, so the runners request **twice** the output and skip the
+latent-upsample second stage (`PIPELINE_REQUEST_MULTIPLIER` in
+`scripts/_upscale_contract.py` records why).
+
+On macOS the MLX q8 pack may hold the distilled model either pre-fused
+(`transformer-distilled.safetensors`) or as the dev transformer plus the
+450-step distilled LoRA; the runner takes the pre-fused file when present and
+otherwise fuses the distilled LoRA beside the adapter, which the pack documents
+as the equivalent layout. A dev transformer without that LoRA is refused, since
+the distilled schedule is only valid on the distilled model.
+
 ## The model grid, and why nothing is silently lost
 
-LTX-2.5 renders on a two-stage grid: output dimensions must divide by **64**,
-and the frame count must satisfy `frames % 8 == 1` with a floor of **9**. Since
-the scale is 2×, a *source* axis conforms exactly when it divides by 32.
+LTX-2.5 renders on a fixed grid: output dimensions must divide by **64**, and
+the frame count must satisfy `frames % 8 == 1` with a floor of **9**. Since the
+scale is 2×, a *source* axis conforms exactly when it divides by 32 — which is
+also what keeps the reference at the (padded) source's own size on the VAE's
+32-pixel grid rather than resampling it before it conditions anything.
 
 A source that does not conform is **padded, never trimmed** — extra pixels on
 the right/bottom and extra frames on the tail, cropped back off the output

@@ -18,8 +18,11 @@ installs), not inferred from the gated model card:
     that `generate_ltx25_cuda.py` already drives `DistilledPipeline` with, so
     the FP8 cast policy and disk streaming that make a 22B model fit a consumer
     card carry over unchanged. It fuses the adapter into STAGE 1 only
-    (`stage_2` is built with `loras=()`), which is correct here: stage 2 is the
-    latent-upsample refinement pass, not the conditioned one.
+    (`stage_2` is built with `loras=()`) and renders that stage at HALF the
+    `height`/`width` it is handed — so, exactly like the MLX runner, this one
+    requests twice the output and passes `skip_stage_2=True` (see
+    `PIPELINE_REQUEST_MULTIPLIER` in `_upscale_contract.py`); the
+    latent-upsample stage 2 never runs.
   - The LoRA is a `LoraPathStrengthAndSDOps(path, strength, sd_ops)` and the
     `sd_ops` is the runtime's own `LTXV_LORA_COMFY_RENAMING_MAP`. Both come
     from `ltx_core.loader`; naming the map here rather than reimplementing it
@@ -39,12 +42,12 @@ installs), not inferred from the gated model card:
     requires the raw `model.diffusion_model.` prefix and strips it; the LoRA
     map strips a bare `diffusion_model.`. The two meet on the same base names,
     which is exactly what the guard verifies rather than assumes.
-  - The schedule is the fixed distilled one — `DISTILLED_SIGMAS` (8) and
-    `STAGE_2_DISTILLED_SIGMAS` (3) are `__call__` defaults — which is why this
-    runner, like the MLX one, exposes no steps flag.
-  - `assert_resolution(..., is_two_stage=True)` enforces the same `% 64` rule
-    the shared contract does, so a source is refused before a GPU rather than
-    inside the pipeline.
+  - The schedule is the fixed distilled one — `DISTILLED_SIGMAS` (8) is the
+    `__call__` default for stage 1 — which is why this runner, like the MLX
+    one, exposes no steps flag.
+  - `assert_resolution(..., is_two_stage=True)` demands `% 64` of the REQUEST,
+    which the shared contract's `% 64` rule on the output satisfies twice over,
+    so a source is refused before a GPU rather than inside the pipeline.
 
 Audio is deliberately NOT taken from the model. `encode_video` is called with
 `audio=None` and `finalizeUpscaleOutput` (`upscaleFfmpeg.js`) re-muxes the
@@ -73,6 +76,7 @@ from _upscale_contract import (  # noqa: E402
     REFERENCE_STRENGTH,
     add_upscale_arguments,
     assert_reference_scale_fits,
+    conditioned_stage_request,
     entry_shape,
     lora_delta_shapes,
     read_safetensors_header,
@@ -245,9 +249,8 @@ def main() -> None:
     header = read_safetensors_header(args.ic_lora_path)
     scale = reference_downscale_factor(header)
     assert_reference_scale_fits(scale, args.width, args.height)
-    # Recorded rather than guessed: `icLoraWeights.js` holds `null` for this
-    # gated weight precisely because nobody had opened it, and this line is the
-    # measurement (#6508's registry note points here).
+    # The per-install measurement the queue records beside the registry's
+    # declared value — a re-pinned weight is measured, not trusted.
     log(f"UPSCALE_REFERENCE_DOWNSCALE:{scale}")
 
     log("STAGE:verify-adapter")
@@ -310,21 +313,25 @@ def main() -> None:
             offload_mode=OffloadMode.DISK,
         )
 
+    request_width, request_height = conditioned_stage_request(args.width, args.height)
     log("STAGE:inference")
     with heartbeat("ltx25-cuda-upscale-inference"):
-        # No sigma overrides: `DISTILLED_SIGMAS` / `STAGE_2_DISTILLED_SIGMAS`
-        # ARE the distilled schedule (8 + 3) and are this call's defaults.
-        # `images=[]` because the reference is the clip, not a still.
+        # Twice the output + `skip_stage_2` = one conditioned stage AT the
+        # output (see `conditioned_stage_request`).
+        # No sigma override: `DISTILLED_SIGMAS` IS the distilled schedule (8)
+        # and is this call's stage-1 default. `images=[]` because the
+        # reference is the clip, not a still.
         video, _audio, tiling = pipe(
             prompt=args.prompt,
             seed=args.seed,
-            height=args.height,
-            width=args.width,
+            height=request_height,
+            width=request_width,
             num_frames=args.num_frames,
             frame_rate=args.fps,
             images=[],
             video_conditioning=[(reference, REFERENCE_STRENGTH) for reference in args.ic_reference],
             tiling_config=AUTO_TILING,
+            skip_stage_2=True,
         )
 
     output = Path(args.output)

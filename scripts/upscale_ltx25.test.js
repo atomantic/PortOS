@@ -194,14 +194,27 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
     expect(call(`repr(runner.read_safetensors_header(${JSON.stringify(join(scratch, 'nope.safetensors'))}))`)).toBe('None');
   }, PY_TEST_TIMEOUT_MS);
 
-  // The rule the pipeline enforces applies to the STAGE-1 dims, which are half
-  // the output — so a factor of 2 really demands an output divisible by 4. The
-  // message has to speak in output terms because that is what the user chose.
-  it('enforces the adapter factor against the half-resolution stage dims', () => {
+  // The conditioned stage renders AT the output, so the reference is
+  // `output / factor` — and it has to land on the VAE's 32-pixel grid at the
+  // source's own size, or the source is resampled before it conditions
+  // anything. A factor of 2 therefore demands an output divisible by 64, and a
+  // factor of 4 by 128. The message speaks in output terms because that is
+  // what the user chose.
+  it('enforces the adapter factor against the output the conditioned stage renders at', () => {
     expect(call('runner.assert_reference_scale_fits(2, 1728, 1024) or "OK"')).toBe('OK');
     expect(call('runner.assert_reference_scale_fits(1, 100, 100) or "OK"')).toBe('OK');
-    expect(call('runner.assert_reference_scale_fits(4, 1028, 1024) or "OK"'))
-      .toMatch(/^REJECTED:.*divisible by 8/);
+    expect(call('runner.assert_reference_scale_fits(2, 1056, 1024) or "OK"'))
+      .toMatch(/^REJECTED:.*divisible by 64/);
+    expect(call('runner.assert_reference_scale_fits(4, 1088, 1024) or "OK"'))
+      .toMatch(/^REJECTED:.*divisible by 128/);
+  }, PY_TEST_TIMEOUT_MS);
+
+  // Both pipelines render their IC-conditioned stage at HALF the dims they are
+  // handed. The recipe is single-stage at the output with the source at half,
+  // so the runner asks for twice the output and skips stage 2 — a runner that
+  // passed the output through would condition on a further-downscaled source.
+  it('requests twice the output so the conditioned stage renders at the output size', () => {
+    expect(call('runner.conditioned_stage_request(1024, 576)')).toBe('(2048, 1152)');
   }, PY_TEST_TIMEOUT_MS);
 
   // `apply_loras` pairs lora_A with lora_B per weight and skips a prefix missing
@@ -289,5 +302,51 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — transformer header (#6512)', () =>
 
     writeFileSync(join(pack, 'transformer.safetensors'), '');
     expect(resolve(pack)).toBe("'transformer.safetensors'");
+  }, PY_TEST_TIMEOUT_MS);
+
+  // The pinned q8 pack documents two layouts for the distilled model: the
+  // pre-fused file, or the dev transformer plus the 450-step distilled LoRA.
+  // The pipeline's own loader knows only the first, so the runner resolves the
+  // layout itself — and refuses dev WITHOUT the LoRA, because the distilled
+  // schedule on an un-distilled model is not a fallback, it is a wrong render.
+  it('resolves the dev + distilled-LoRA layout, preferring a pre-fused distilled file', () => {
+    const pack = mkdtempSync(join(tmpdir(), 'portos-ltx25-layout-'));
+    const layout = (dir) => call(`(lambda t, loras: [t.name, [(__import__("pathlib").Path(p).name, s) for p, s in loras]])(*runner.resolve_transformer_layout(__import__("pathlib").Path(${JSON.stringify(dir)})))`);
+    expect(layout(pack)).toMatch(/^REJECTED:.*no transformer weight file/);
+
+    writeFileSync(join(pack, 'transformer-dev.safetensors'), '');
+    expect(layout(pack)).toMatch(/^REJECTED:.*carries only transformer-dev\.safetensors/);
+
+    writeFileSync(join(pack, 'ltx-2.5-22b-distilled-lora-450.safetensors'), '');
+    expect(layout(pack)).toBe("['transformer-dev.safetensors', [('ltx-2.5-22b-distilled-lora-450.safetensors', 1.0)]]");
+
+    writeFileSync(join(pack, 'transformer-distilled.safetensors'), '');
+    expect(layout(pack)).toBe("['transformer-distilled.safetensors', []]");
+  }, PY_TEST_TIMEOUT_MS);
+
+  // `ICLoraPipeline.load()` resolves the transformer only while `dit` is None,
+  // so steering a dev-layout pack means loading the resolved file first and
+  // letting the base `load()` skip its own resolution. Exercised against a
+  // stand-in base class so the contract is pinned without the MLX wheel.
+  it('loads the resolved transformer before the base pipeline resolves its own', () => {
+    const source = [
+      'class FakeBase:',
+      '    def __init__(self, model_dir, lora_paths=None):',
+      '        self.model_dir = model_dir; self.lora_paths = lora_paths; self.dit = None; self.upsampler = None; self._loaded = False; self.calls = []',
+      '    def _load_transformer_with_optional_streaming(self, path):',
+      '        self.calls.append(path.name); return "dit"',
+      '    def load(self):',
+      '        self.calls.append("base-load:" + str(self.dit)); self._loaded = True',
+      'from pathlib import Path',
+      'pipe = runner.make_pipeline(FakeBase, Path("/pack"), Path("/pack/transformer-dev.safetensors"), [("adapter", 1.0), ("distilled", 1.0)])',
+      'pipe.load(); pipe.load()',
+      // The latent upsampler slot is pre-seeded so the base load() skips the
+      // ~1 GB stage-2 weight a skip_stage_2 render never touches.
+      // `model_dir` is compared by its last segment: it is passed through
+      // `str(Path)`, which renders the separator per platform.
+      'print(pipe.calls, pipe.lora_paths, Path(pipe.model_dir).name, pipe.upsampler is not None)',
+    ].join('\n');
+    expect(trimmed(runPython(`${importRunner}\n${source}`)))
+      .toBe("['transformer-dev.safetensors', 'base-load:dit', 'base-load:dit'] [('adapter', 1.0), ('distilled', 1.0)] pack True");
   }, PY_TEST_TIMEOUT_MS);
 });

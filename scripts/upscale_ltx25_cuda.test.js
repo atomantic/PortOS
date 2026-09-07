@@ -134,7 +134,7 @@ describe.skipIf(!pyBin)('upscale_ltx25_cuda.py — one argv for both backends (#
     ]);
   }, PY_TEST_TIMEOUT_MS);
 
-  // The distilled schedule is fixed at 8 + 3 sigmas on both runtimes, so there
+  // The distilled schedule is fixed at 8 sigmas on both runtimes, so there
   // is nothing for a steps flag to select; and the pass carries no prompt,
   // because the source clip is the whole conditioning signal.
   it('exposes no steps flag and defaults the prompt to empty', () => {
@@ -316,16 +316,24 @@ describe.skipIf(!pyBin)('upscale_ltx25_cuda.py — adapter fusion guard (#6513)'
   }, PY_TEST_TIMEOUT_MS);
 });
 
-// The adapter's declared factor applies to the STAGE-1 dims, which are half the
-// output — so a factor of 2 really demands an output divisible by 4. Shared with
-// the MLX runner, exercised here because this runner is the one that would
-// commit a CUDA render to it.
+// The adapter's declared factor applies to the output the conditioned stage
+// renders at, and the reference must land on the VAE's 32-pixel grid at the
+// source's own size — so a factor of N demands an output divisible by N × 32.
+// Shared with the MLX runner, exercised here because this runner is the one
+// that would commit a CUDA render to it.
 describe.skipIf(!pyBin)('upscale_ltx25_cuda.py — reference downscale factor (#6513)', () => {
-  it('reads the factor off the weight and enforces it against the stage-1 dims', () => {
+  it('reads the factor off the weight and enforces it against the output the conditioned stage renders at', () => {
     expect(call(`runner.reference_downscale_factor(runner.read_safetensors_header(${JSON.stringify(ADAPTER)}))`))
       .toBe('2');
     expect(call('runner.assert_reference_scale_fits(2, 1728, 1024) or "OK"')).toBe('OK');
-    expect(call('runner.assert_reference_scale_fits(4, 1028, 1024) or "OK"'))
-      .toMatch(/^REJECTED:.*divisible by 8/);
+    expect(call('runner.assert_reference_scale_fits(4, 1088, 1024) or "OK"'))
+      .toMatch(/^REJECTED:.*divisible by 128/);
+  }, PY_TEST_TIMEOUT_MS);
+
+  // Same recipe as MLX: upstream's `ICLoraPipeline` renders stage 1 at half
+  // the dims it is handed, so the runner requests twice the output and skips
+  // stage 2. Shared through the contract module so the two cannot drift.
+  it('requests twice the output through the shared contract', () => {
+    expect(call('runner.conditioned_stage_request(1024, 576)')).toBe('(2048, 1152)');
   }, PY_TEST_TIMEOUT_MS);
 });
