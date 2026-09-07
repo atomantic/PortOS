@@ -1355,6 +1355,80 @@ describe('series plan AI', () => {
     }), expect.objectContaining({ providerOverride: 'writer' }));
   });
 
+  it('sends no evolution block, and a byte-identical plan digest, when no lens is authored', async () => {
+    // The epic's non-negotiable: with the lens unset the review must be exactly
+    // the pre-#6443 review. The gated section renders nothing only if the
+    // variable is '' — and `seriesPlanDigest` must not have grown a field.
+    const { loomId } = await setup();
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'Strong spine.', risks: [] }, runId: 'run-a' });
+    await reviewSeriesPlan(loomId, { planningOnly: true });
+    const variables = runStagedLLM.mock.calls[0][1];
+    expect(variables.characterEvolutions).toBe('');
+    expect(JSON.parse(variables.seriesPlanJson)).not.toHaveProperty('characterEvolutions');
+  });
+
+  it('feeds the authored lens to the plan review and never presents a dead anchor as proof', async () => {
+    const { loomId, episodeId } = await setup();
+    await updateLoom(loomId, {
+      seriesPlan: {
+        characterEvolutions: [
+          {
+            characterName: 'Mara',
+            evolution: {
+              outcome: 'full-change',
+              stages: [
+                { stageId: 'control-strategy-failing', testedBelief: 'Only leverage keeps her safe.' },
+                { stageId: 'final-proof', characterChoice: 'She hands the ledger back.', evidence: { episodeId } },
+              ],
+            },
+          },
+          {
+            characterName: 'Joss',
+            evolution: {
+              outcome: 'tragic-refusal',
+              stages: [{ stageId: 'cost-tested', causalConsequence: 'He keeps the ledger.', evidence: { episodeId: 'ep-deleted-0000' } }],
+            },
+          },
+        ],
+      },
+    });
+    runStagedLLM.mockResolvedValueOnce({ content: { summary: 'The proof lands.', risks: [] }, runId: 'run-b' });
+    await reviewSeriesPlan(loomId, { planningOnly: true });
+    const block = runStagedLLM.mock.calls[0][1].characterEvolutions;
+    expect(block).toContain('- Mara');
+    expect(block).toContain('declared outcome: full-change');
+    expect(block).toContain('declared outcome: tragic-refusal');
+    // Mara's anchor names a live episode; Joss's names a deleted one. Resolving
+    // against the loom is what keeps the dead pointer from reading as proof.
+    expect(block).toContain(`episode ${episodeId} [anchored]`);
+    expect(block).toContain('episode ep-deleted-0000 [stale]');
+  });
+
+  it('accepts an empty risks array from a lens-satisfied plan under the planning gate', async () => {
+    // `editorialAutopilot.runPlanning()` loops while `risks` is non-empty, so a
+    // lens the plan satisfies has to be able to END that loop — the verdict
+    // contract must not read "no evolution risk" as a missing verdict.
+    const { loomId } = await setup();
+    await updateLoom(loomId, {
+      seriesPlan: {
+        characterEvolutions: [{
+          characterName: 'Mara',
+          evolution: { outcome: 'flat-testing', stages: [{ stageId: 'final-proof', characterChoice: 'She holds the line.' }] },
+        }],
+      },
+    });
+    runStagedLLM.mockResolvedValueOnce({
+      content: {
+        summary: 'Every authored stage pays off.',
+        strengths: ['The refusal costs her the crew.'],
+        risks: [],
+        recommendations: [],
+      },
+    });
+    const result = await reviewSeriesPlan(loomId, { planningOnly: true });
+    expect(result.analysis.risks).toEqual([]);
+  });
+
   it('passes complete challenge outcomes and arc endings to review without duplicate plan context', async () => {
     const { loomId, episodeId } = await setup();
     const storyArc = `${'An established turn. '.repeat(340)}The final reconciliation.`;

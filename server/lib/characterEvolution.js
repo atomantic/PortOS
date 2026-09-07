@@ -414,3 +414,37 @@ export function renderCharacterEvolutionForPrompt(evolution, refs = {}) {
   if (!stageLines.length && outcome === 'undeclared' && !note) return null;
   return [`declared outcome: ${outcome}${note}`, ...stageLines].join('\n');
 }
+
+/**
+ * Render every authored lens in a per-character LIST as one prompt block, or
+ * `null` when nothing in the list carries one.
+ *
+ * Both hosts keep a per-character list — `series.characterArcs[]` on the
+ * pipeline side, `loom.seriesPlan.characterEvolutions[]` on the FableLoom side
+ * — and each needs the same nesting, the same "null, not ''" contract (which
+ * is what keeps a consumer's `{{#characterEvolution*}}` section empty and its
+ * behavior byte-identical to pre-lens), and the same per-entry evidence
+ * resolution. Written once here rather than per host, because the rule that
+ * differs is only WHERE the reference sets come from.
+ *
+ * `refs` is either one reference-set object shared by every entry (FableLoom:
+ * episode ids and scene keys are loom-wide) or a function called per entry to
+ * derive its own (pipeline: a lens resolves against ITS OWN arc's transition
+ * beats, never the whole cast's).
+ */
+export function renderCharacterEvolutionListForPrompt(list, refs = {}) {
+  if (!Array.isArray(list)) return null;
+  const refsFor = typeof refs === 'function' ? refs : () => refs;
+  const blocks = [];
+  for (const entry of list) {
+    if (!entry || typeof entry !== 'object') continue;
+    const lens = renderCharacterEvolutionForPrompt(entry.evolution, refsFor(entry));
+    if (!lens) continue;
+    const name = entry.characterName || '(unnamed character)';
+    // Indent the lens body under its character so a multi-character block stays
+    // readable — the renderer already indents stage lines two spaces relative
+    // to the outcome line, and this preserves that nesting.
+    blocks.push(`- ${name}\n${lens.split('\n').map((line) => `    ${line}`).join('\n')}`);
+  }
+  return blocks.length ? blocks.join('\n') : null;
+}
