@@ -80,6 +80,14 @@ describe('localBackendForProvider', () => {
     expect(localBackendForProvider({ endpoint: 'http://localhost:9999' })).toBeNull();
     expect(localBackendForProvider(null)).toBeNull();
   });
+
+  // #6466 gave `localRuntimeKind` an id-based fallback for the shipped `mtplx`
+  // API record, but healing stays scoped to Ollama/LM Studio via this narrower
+  // helper — MTPLX has no PortOS-side installed-model list to heal a stale pin
+  // against, so it must keep returning null here regardless of that change.
+  it('still returns null for the shipped mtplx record — healing is Ollama/LM Studio only', () => {
+    expect(localBackendForProvider({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toBeNull();
+  });
 });
 
 describe('isModelNotFoundError', () => {

@@ -417,6 +417,17 @@ describe('composeProviderEnv — delta for sites that do not spawn directly', ()
     }).CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
   });
 
+  // #6466 named the shipped `mtplx` API record for `localRuntimeKind`, but this
+  // module's Claude-local tuning gates on `isClaudeCommand`, not
+  // `localRuntimeKind` directly — a plain `type: 'api'` record with no
+  // `command` was never a Claude harness and must not become one now.
+  it('leaves the bare mtplx API record untouched — no command, so no Claude tuning', () => {
+    const mtplxApiProvider = { id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1', envVars: {} };
+    const env = composeProviderEnv({ provider: mtplxApiProvider });
+    expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBeUndefined();
+    expect(env.API_TIMEOUT_MS).toBeUndefined();
+  });
+
   // A local daemon sends nothing until prefill completes, and Claude Code has
   // four independent ceilings on that silence — the binding one being the Bun
   // fetch timeout (~360s) that only `API_FORCE_IDLE_TIMEOUT=0` disables. With

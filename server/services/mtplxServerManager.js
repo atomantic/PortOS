@@ -994,13 +994,19 @@ export function isMtplxProvider(provider) {
   if (!isLocalInstanceEndpoint(provider.endpoint)) return false;
   // `localRuntimeKind`, not `localBackendForProvider` — the latter only ever
   // answers 'ollama'/'lmstudio' (it maps those two catalog ports), so it reports
-  // every MTPLX provider as having no local backend at all. The authoritative
-  // signal is the `mtplxBacked` marker the spawner itself keys on.
+  // every MTPLX provider as having no local backend at all. This one call now
+  // covers both marker-backed wrappers (`mtplxBacked`) and the shipped bare API
+  // record (`id === 'mtplx'`) — #6466 collapsed the two hand-rolled checks that
+  // used to live here into `localRuntimeKind` itself.
   if (localRuntimeKind(provider) === 'mtplx') return true;
   // ...and an endpoint-only provider aimed at the port THIS daemon is serving.
   // Deliberately compared against the live launch config rather than treating
   // :8000 as "must be MTPLX" — 8000 is a generic port, and claiming any local
-  // server on it would lazily start MTPLX for someone else's API.
+  // server on it would lazily start MTPLX for someone else's API. This arm
+  // stays here rather than moving into `localRuntimeKind`: it needs the
+  // MANAGED daemon's live port, which only this module tracks, and reading it
+  // from `localProviderRuntime.js` (a side-effect-free module every readiness
+  // check imports) would be a circular import back to this one.
   const managedPort = currentConfig?.port;
   return Boolean(managedPort) && localEndpointPort(provider.endpoint) === managedPort;
 }
@@ -1039,15 +1045,13 @@ export async function mtplxCachedModelIds(provider) {
   // carries every signal below while its checkpoints are on the OTHER machine.
   // Answering there would offer this host's cache as that provider's catalog.
   if (!isLocalInstanceEndpoint(provider?.endpoint)) return null;
-  // Two signals, because the shipped records carry two (#6466 collapses these
-  // into `localRuntimeKind`): `localRuntimeKind` reads
-  // the `mtplxBacked` marker on the OpenCode CLI/TUI wrappers, and `id` names the
-  // API record — a plain OpenAI-compatible endpoint with no marker to read, the
-  // same shortcut `hardwareRequirementsForProvider` takes for it. A bare `:8000`
-  // is deliberately NOT a third: that port is generic, and this must not offer
-  // MTPLX's checkpoints as the catalog of someone else's local API.
-  const ours = localRuntimeKind(provider) === 'mtplx' || provider?.id === 'mtplx';
-  if (!ours) return null;
+  // `localRuntimeKind` now reads both signals the shipped records carry: the
+  // `mtplxBacked` marker on the OpenCode CLI/TUI wrappers, and the bare `id` on
+  // the API record — a plain OpenAI-compatible endpoint with no marker of its
+  // own (#6466). A bare `:8000` is deliberately NOT a third signal here: that
+  // port is generic, and this must not offer MTPLX's checkpoints as the
+  // catalog of someone else's local API.
+  if (localRuntimeKind(provider) !== 'mtplx') return null;
   const binaryPath = resolveMtplxBinary();
   if (!binaryPath) return null;
   if (!(await describeMtplxRuntime(binaryPath)).ready) return null;

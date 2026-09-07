@@ -10,6 +10,7 @@
 
 import os from 'os';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { localRuntimeKind } from './localProviderRuntime.js';
 import { isAppleSilicon } from './platform.js';
 import { getCudaCapability, getCudaComputeCapability } from './cudaCapability.js';
 
@@ -104,13 +105,18 @@ const providerRuntimeRequirements = Object.freeze({
   }),
 });
 
+// The trailing `id === 'mtplx'` shortcut used to duplicate a check
+// `localRuntimeKind` could not make on its own — the shipped `mtplx` record is
+// a plain API endpoint with no `mtplxBacked` marker to read. #6466 gave
+// `localRuntimeKind` an id-based fallback for exactly that record, so the
+// shortcut here is now a call to it instead of a hand-rolled copy.
 const localProvider = (provider) => provider?.ollamaBacked
   || provider?.lmstudioBacked
   || provider?.llamaBacked
   || provider?.mtplxBacked
   || provider?.vllmBacked
   || provider?.sglangBacked
-  || provider?.id === 'mtplx';
+  || localRuntimeKind(provider) === 'mtplx';
 
 const localModelHardwareRequirements = (model) => {
   if (typeof model !== 'string' || !model.trim()) return {};
@@ -354,7 +360,7 @@ export function hardwareRequirementsForLocalLlm(entry) {
 
 /** Resolve inferred and user-configured provider requirements. */
 export function hardwareRequirementsForProvider(provider) {
-  const runtime = provider?.mtplxBacked || provider?.id === 'mtplx'
+  const runtime = localRuntimeKind(provider) === 'mtplx'
     ? 'mtplx'
     : provider?.vllmBacked
       ? 'vllm'
