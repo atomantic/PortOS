@@ -81,6 +81,7 @@ router.get('/', asyncHandler(async (req, res) => {
     telegramStatus,
     appSummary,
     network,
+    settings,
   ] = await Promise.all([
     providersPromise,
     providerPrerequisiteReadinessPromise,
@@ -95,6 +96,7 @@ router.get('/', asyncHandler(async (req, res) => {
     resolveTelegram().catch(() => ({})),
     apps.getAppStatusSummary().catch(() => ({ total: 0 })),
     getNetworkExposureSetupStatus().catch(() => ({})),
+    getSettings(),
   ]);
 
   const rows = buildCapabilityRows({
@@ -116,10 +118,11 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json({
     timestamp: new Date().toISOString(),
     summary: summarizeCapabilities(rows),
-    optionalSummary: summarizeCapabilities(rows.filter((row) => row.setupRequired !== true)),
+    optionalSummary: summarizeCapabilities(rows.filter((row) => row.setupRequired !== true && row.id !== 'network')),
     setup: summarizeSetupCapabilities(rows),
     capabilities: rows,
     network,
+    networkSetupPreference: settings.networkSetupPreference || null,
   });
 }));
 

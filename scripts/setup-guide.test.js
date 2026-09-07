@@ -101,7 +101,7 @@ describe('setup walkthrough formatting', () => {
 
   it('summarizes the next action without claiming setup is complete', () => {
     expect(formatSetupSummary(incompleteGuide)).toBe(
-      'Provision a trusted HTTPS certificate — Enable HTTPS Certificates, then let PortOS fetch the certificate.',
+      'Optional Tailscale setup: Provision a trusted HTTPS certificate — Enable HTTPS Certificates, then let PortOS fetch the certificate.',
     );
   });
 

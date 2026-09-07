@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import toast from '../components/ui/Toast';
 import { Link } from 'react-router';
 import {
   CheckCircle, AlertTriangle, XCircle, Circle, ChevronRight, ListChecks,
@@ -46,6 +48,8 @@ function CapabilityRow({ cap }) {
 }
 
 export default function CapabilityMap() {
+  const [savedPreference, setSavedPreference] = useState(null);
+  const [saving, setSaving] = useState(false);
   const { data, loading } = useAutoRefetch(
     () => api.getCapabilities({ silent: true }),
     20_000,
@@ -67,12 +71,21 @@ export default function CapabilityMap() {
     return <div className="p-6 text-gray-400">Capability map unavailable.</div>;
   }
 
+  const preference = savedPreference ?? data.networkSetupPreference ?? '';
+  const savePreference = (value) => {
+    setSaving(true);
+    api.updateSettings({ networkSetupPreference: value }, { silent: true })
+      .then(() => setSavedPreference(value))
+      .catch((error) => toast.error(error.message || 'Could not save networking preference'))
+      .finally(() => setSaving(false));
+  };
+
   const caps = Array.isArray(data.capabilities) ? data.capabilities : [];
   const summary = data.summary || { ok: 0, warn: 0, error: 0, unconfigured: 0, overall: 'unconfigured' };
   const optionalSummary = data.optionalSummary || summary;
   const setup = data.setup || { total: 0, ready: 0, remaining: 0, complete: false };
   const providerCapability = caps.find((cap) => cap.id === 'providers');
-  const optionalCapabilities = caps.filter((cap) => cap.setupRequired !== true);
+  const optionalCapabilities = caps.filter((cap) => cap.setupRequired !== true && cap.id !== 'network');
   const overallStyle = STATUS_STYLE[optionalSummary.overall] || STATUS_STYLE.unconfigured;
   const OverallIcon = overallStyle.icon;
 
@@ -92,22 +105,37 @@ export default function CapabilityMap() {
       </div>
 
       <p className="text-sm text-gray-500">
-        Finish secure remote access and enable at least one runnable AI provider. Optional integrations stay below as a health overview.
+        Enable at least one runnable AI provider. Networking and other integrations are optional; you can configure them whenever they are useful.
       </p>
 
       <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 sm:p-5">
         <div>
-          <h3 className="font-semibold text-white">1. Tailscale, MagicDNS &amp; HTTPS</h3>
+          <h3 className="font-semibold text-white">Optional networking</h3>
           <p className="mt-1 text-xs text-gray-500">
-            PortOS automates certificate provisioning once Tailscale is connected and HTTPS Certificates are enabled in the tailnet.
+            Choose Tailscale for private device access, Tailcat to bridge instances, or mark networking as not desired. This preference does not start or stop connections.
           </p>
         </div>
-        <NetworkSetupGuide networkExposure={data.network} />
+        <label htmlFor="network-setup-preference" className="block text-sm text-gray-300">Networking preference</label>
+        <select id="network-setup-preference" value={preference} disabled={saving}
+          onChange={(event) => savePreference(event.target.value)}
+          className="w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm text-white">
+          <option value="" disabled>Choose an option (optional)</option>
+          <option value="tailscale">Tailscale — private device access</option>
+          <option value="tailcat">Tailcat — bridge instances</option>
+          <option value="none">Not desired</option>
+        </select>
+        {saving && <p role="status" className="text-xs text-gray-400">Saving preference…</p>}
+        {preference === 'tailscale' && <NetworkSetupGuide networkExposure={data.network} />}
+        {preference === 'tailcat' && <p className="text-sm text-gray-400">
+          Open Instances, choose Tailcat when adding a peer, and dial its address or let it dial yours. Tailscale and its HTTPS certificates are not required.
+          {' '}<Link to="/instances" className="text-port-accent underline">Configure Tailcat bridge</Link>
+        </p>}
+        {preference === 'none' && <p className="text-sm text-gray-400">Networking marked as not desired. You can change this preference at any time.</p>}
       </section>
 
       <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 sm:p-5">
         <div>
-          <h3 className="font-semibold text-white">2. AI provider</h3>
+          <h3 className="font-semibold text-white">AI provider</h3>
           <p className="mt-1 text-xs text-gray-500">
             Enable one option you intend to use: an authenticated subscription CLI, a paid API key, or a local runtime with a downloaded model. PortOS never enables a paid provider or starts model work without your action.
           </p>

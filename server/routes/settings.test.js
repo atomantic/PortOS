@@ -804,3 +804,18 @@ it('accepts only registered private keys and never returns the submitted secret'
   await request(app).put('/api/settings/credentials/artificial-analysis').send({ value: '' });
   expect(store.secrets.artificialAnalysis.apiKey).toBe('');
 });
+
+describe('Settings routes — optional networking preference', () => {
+  beforeEach(() => { store = {}; vi.clearAllMocks(); });
+  it('persists all supported choices and rejects invalid preferences without replacing the saved choice', async () => {
+    for (const networkSetupPreference of ['tailscale', 'tailcat', 'none']) {
+      const saved = await request(buildApp()).put('/api/settings').send({ networkSetupPreference });
+      expect(saved.status).toBe(200);
+      const loaded = await request(buildApp()).get('/api/settings');
+      expect(loaded.body.networkSetupPreference).toBe(networkSetupPreference);
+    }
+    const invalid = await request(buildApp()).put('/api/settings').send({ networkSetupPreference: 'invalid' });
+    expect(invalid.status).toBe(400);
+    expect(store.networkSetupPreference).toBe('none');
+  });
+});

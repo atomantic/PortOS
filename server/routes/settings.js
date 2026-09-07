@@ -22,7 +22,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
+import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -321,6 +321,9 @@ router.put('/', asyncHandler(async (req, res) => {
   // whole slice rather than .partial()ing away that pairing rule.
   if (req.body?.location !== undefined) {
     validateRequest(locationSettingsSchema, req.body.location);
+  }
+  if (req.body?.networkSetupPreference !== undefined) {
+    validateRequest(networkSetupPreferenceSchema, req.body.networkSetupPreference);
   }
   if (req.body?.hideFirstRunCard !== undefined) {
     validateRequest(hideFirstRunCardSchema, req.body.hideFirstRunCard);

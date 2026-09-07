@@ -91,7 +91,7 @@ describe('GET /api/capabilities', () => {
     expect(res.body.capabilities).toHaveLength(9);
     expect(res.body.summary).toMatchObject({ overall: expect.any(String), total: 9 });
     expect(res.body.optionalSummary).toMatchObject({ overall: expect.any(String), total: 7 });
-    expect(res.body.setup).toEqual({ total: 2, ready: 2, remaining: 0, complete: true });
+    expect(res.body.setup).toEqual({ total: 1, ready: 1, remaining: 0, complete: true });
     expect(res.body.network.setup.complete).toBe(true);
     // every row is fully formed + deep-links to settings
     for (const c of res.body.capabilities) {
@@ -206,4 +206,15 @@ describe('GET /api/capabilities', () => {
       detail: { available: 1, blocked: 0, standby: 2, setupReady: 1 },
     });
   });
+});
+
+it('does not require networking on an install without Tailscale', async () => {
+  const { getNetworkExposureSetupStatus } = await import('../lib/networkExposure.js');
+  const { getSettings } = await import('../services/settings.js');
+  getNetworkExposureSetupStatus.mockResolvedValueOnce({ setup: { complete: false }, tailscale: { available: false } });
+  getSettings.mockResolvedValue({ networkSetupPreference: 'tailcat' });
+  const res = await request(makeApp()).get('/api/capabilities');
+  expect(res.body.setup).toEqual({ total: 1, ready: 1, remaining: 0, complete: true });
+  expect(byId(res.body, 'network').setupRequired).toBe(false);
+  expect(res.body.networkSetupPreference).toBe('tailcat');
 });

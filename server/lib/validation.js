@@ -1744,6 +1744,8 @@ export const locationSettingsSchema = z.object({
 // Durable "don't show this again" for the dashboard first-run card (#5640).
 // Top-level general-settings boolean — same record as timezone/location, never
 // localStorage. Absent means show; only an explicit true suppresses.
+export const networkSetupPreferenceSchema = z.enum(['tailscale', 'tailcat', 'none']);
+
 export const hideFirstRunCardSchema = z.boolean();
 
 // Grok Imagegen settings slice (`imageGen.grok`) — the Grok Build CLI backend
