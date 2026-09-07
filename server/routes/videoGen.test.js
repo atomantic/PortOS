@@ -288,7 +288,9 @@ import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmissi
 import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
 import { getTrack } from '../services/tracks/index.js';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
-import { listIcLoraWeights } from '../lib/icLoraWeights.js';
+import {
+  listIcLoraWeights, listIcLoraRemixModes, IC_LORA_MODES, icLoraWeightKey,
+} from '../lib/icLoraWeights.js';
 import videoGenRoutes, { isAudioMime, LOCAL_ONLY_VIDEO_PARAMS } from './videoGen.js';
 
 // isAudioMime is the gating function inside the fileFilter callback. The
@@ -3024,6 +3026,53 @@ describe('videoGen routes', () => {
         expect(rejected.status).toBe(400);
       }
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The IC-LoRA provisioning endpoints span the whole weight registry, not just
+  // the remix modes — the LTX-2.5 upscale adapter (#6502) is downloadable and
+  // repairable without ever being a render mode. These pin that split.
+  describe('IC-LoRA provisioning endpoints', () => {
+    const upscaler = IC_LORA_MODES['pixel-upscale'];
+
+    it('downloads a pinned weight single-file, at its pinned revision', async () => {
+      const res = await request(app).get(`/api/video-gen/ic-loras/${icLoraWeightKey(upscaler)}/download`);
+      expect(res.status).toBe(200);
+      const [{ fallbacks, repo }] = sseDownload.start.mock.calls[0];
+      // Never a whole-repo snapshot: the pin names one commit and one file, and
+      // a bare `repo` argument would ignore both.
+      expect(repo).toBeUndefined();
+      expect(fallbacks).toEqual([{
+        repo: upscaler.repo,
+        only: [upscaler.filename],
+        revision: upscaler.revision,
+      }]);
+    });
+
+    it('keeps an unpinned, un-mirrored weight on the cheap whole-repo path', async () => {
+      const res = await request(app).get('/api/video-gen/ic-loras/ic-control/download');
+      expect(res.status).toBe(200);
+      const [args] = sseDownload.start.mock.calls[0];
+      expect(args.repo).toBe(IC_LORA_MODES.control.repo);
+      expect(args.fallbacks).toBeUndefined();
+    });
+
+    it('404s an unknown weight key and names the real ones', async () => {
+      const res = await request(app).get('/api/video-gen/ic-loras/not-a-weight/download');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toMatch(/pixel-upscale/);
+      expect(res.body.error).toMatch(/ic-control/);
+    });
+
+    it('rejects the upscale adapter as a render mode', async () => {
+      // The registry entry exists, so the only thing keeping it out of a render
+      // is the mode enum. Every spelling must 400 rather than reaching the
+      // LTX-2.3 remix pipeline it cannot be fused into.
+      expect(listIcLoraRemixModes()).not.toContain(upscaler);
+      for (const mode of ['pixel-upscale', 'ic-pixel-upscale']) {
+        const res = await request(app).post('/api/video-gen/').send({ prompt: 'Example shot', mode });
+        expect(res.status).toBe(400);
+      }
     });
   });
 

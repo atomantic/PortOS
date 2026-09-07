@@ -54,8 +54,8 @@ import { VIDEO_GEN_LOCAL_ONLY_FIELDS } from '../services/videoGen/requestFields.
 import { attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
 import {
-  IC_LORA_MODE_VALUES, icLoraSpecForMode, listIcLoraWeights,
-  icLoraWeightCandidates, findCachedIcLoraWeight,
+  IC_LORA_MODE_VALUES, icLoraSpecForMode, listIcLoraWeights, listIcLoraRemixModes,
+  icLoraWeightCandidates, findCachedIcLoraWeight, icLoraWeightKey, icLoraProbesExactFile,
 } from '../lib/icLoraWeights.js';
 import { publicTextEncoderOption } from '../lib/videoTextEncoders.js';
 import { DRAFT_DECODE_IDS } from '../lib/videoDraftDecoders.js';
@@ -188,7 +188,7 @@ const optionalInt = (min, max, label) => z.preprocess(
 // weight raising its own maxReferences doesn't get rejected by a stale literal in
 // the schema before the per-mode assertion below can speak. Per-weight bounds are
 // still enforced against the mode's own spec (assertIcReferenceCount).
-const MAX_IC_REFERENCES = Math.max(...listIcLoraWeights().map((s) => s.maxReferences));
+const MAX_IC_REFERENCES = Math.max(...listIcLoraRemixModes().map((s) => s.maxReferences));
 
 // Chain ceiling — 8 × ~5min ≈ 40min on an M3 Max keeps the worst-case wall time
 // bounded. Shared by `chunks` and the per-chunk prompt list so the two can never
@@ -667,22 +667,27 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
         integrity: cached ? summarizeVerify(verify) : null,
       };
     })),
-    // IC-LoRA remix weights (issue #3100). Each is a separate several-hundred-MB
-    // pull the IC render path needs, so they get the same cached/size/integrity
-    // shape as the models — that's what lets the mode panel render a Download
-    // badge and a Repair banner with the existing components.
+    // IC-LoRA weights (issue #3100). Each is a separate several-hundred-MB pull,
+    // so they get the same cached/size/integrity shape as the models — that's
+    // what lets the mode panel render a Download badge and a Repair banner with
+    // the existing components. This is the PROVISIONING list, so it spans weights
+    // that are not remix modes (the LTX-2.5 upscale adapter, #6502) and reports
+    // each by its `icLoraWeightKey` rather than assuming a `mode` value exists.
     Promise.all(listIcLoraWeights().map(async (spec) => {
-      // A mirrored spec (Ingredients) can't use the repo-wide verdict: its
-      // official repo is gated and its mirror is a 708 GB aggregate that reports
-      // `cached` off any unrelated weight. Probe the ONE file across both
-      // candidates instead, and skip the integrity walk (which would stat/hash
-      // every sibling weight in that mirror).
-      if (spec.mirrorRepo) {
+      // A spec that must be located by its exact file can't use the repo-wide
+      // verdict. Two reasons, both fatal to it: a mirrored spec (Ingredients)
+      // has a 708 GB aggregate mirror that reports `cached` off any unrelated
+      // weight, and a revision-pinned spec would accept a DIFFERENT commit's
+      // snapshot. Probe the ONE file across the candidates instead, and skip the
+      // integrity walk (which would stat/hash every sibling weight in a mirror).
+      if (icLoraProbesExactFile(spec)) {
         const found = await findCachedIcLoraWeight(spec);
         return {
-          id: spec.mode, repo: spec.repo, label: spec.label,
+          id: icLoraWeightKey(spec), repo: spec.repo, label: spec.label,
+          baseModel: spec.baseModel, revision: spec.revision || null,
+          requiresPreDownload: !!spec.requiresPreDownload,
           estimatedBytes: spec.sizeBytes,
-          gated: !!spec.gated, mirrorRepo: spec.mirrorRepo,
+          gated: !!spec.gated, mirrorRepo: spec.mirrorRepo || null,
           cached: !!found,
           resolvedRepo: found?.repo || null,
           // The badge falls back to `estimatedBytes` when sizeBytes is 0, and the
@@ -693,7 +698,9 @@ router.get('/models/status', asyncHandler(async (_req, res) => {
         };
       }
       return {
-        id: spec.mode, repo: spec.repo, label: spec.label,
+        id: icLoraWeightKey(spec), repo: spec.repo, label: spec.label,
+        baseModel: spec.baseModel, revision: spec.revision || null,
+        requiresPreDownload: !!spec.requiresPreDownload,
         estimatedBytes: spec.sizeBytes,
         gated: !!spec.gated,
         ...await repoCacheStatus(spec.repo),
@@ -761,25 +768,31 @@ router.get('/models/:modelId/download', asyncHandler(async (req, res) => {
 // but are NOT listVideoModels() entries, so the model-id-keyed routes above
 // can't reach them. Keyed by the PortOS remix mode ('ic-control', …) so the
 // client uses the same identifier it puts in the render payload.
-// Download one IC weight. A spec with a `mirrorRepo` is fetched SINGLE-FILE and
-// only ever single-file: the official Ingredients repo is gated (an anonymous
-// pull 401s) and its un-gated mirror is the ~708 GB `DeepBeepMeep/LTX-2`
-// aggregate, so a snapshot of either would either fail or fill the user's disk.
-// Candidates are tried in order (official → mirror) so a user WITH an HF token
-// gets the first-party weight and a user without one still succeeds via the
-// mirror — no token, no extra button. The exact filename is pinned so the mirror
-// can't hand back a sibling weight.
+// Download one IC weight. An exact-file spec is fetched SINGLE-FILE and only ever
+// single-file. For Ingredients that is because the official repo is gated (an
+// anonymous pull 401s) and its un-gated mirror is the ~708 GB `DeepBeepMeep/LTX-2`
+// aggregate, so a snapshot of either would either fail or fill the user's disk;
+// for a revision-pinned spec it is because the pinned commit and filename are the
+// whole point of the pin. Candidates are tried in order (official → mirror) so a
+// user WITH an HF token gets the first-party weight and a user without one still
+// succeeds via the mirror — no token, no extra button. The exact filename is
+// pinned so a mirror can't hand back a sibling weight.
+//
+// A spec with NO mirror (the LTX-2.5 upscaler) therefore has exactly one
+// candidate: a gated failure surfaces with its actionable "accept the license"
+// message rather than being downgraded on the way to a fallback that isn't there.
 router.get('/ic-loras/:mode/download', asyncHandler(async (req, res) => {
   const spec = icLoraSpecFromParam(req.params.mode);
   const force = req.query.force === '1';
-  if (!spec.mirrorRepo) {
+  if (!icLoraProbesExactFile(spec)) {
     await startHfDownloadStream({ req, res, repo: spec.repo, force });
     return;
   }
   await startHfDownloadStream({
     req,
     res,
-    fallbacks: icLoraWeightCandidates(spec).map((c) => ({ repo: c.repo, only: [c.filename] })),
+    fallbacks: icLoraWeightCandidates(spec)
+      .map((c) => ({ repo: c.repo, only: [c.filename], revision: c.revision })),
     // The repo-wide `cached` verdict is meaningless for the aggregate mirror (it
     // reports cached as soon as ANY unrelated weight is resident), so gate the
     // already-have short-circuit on this exact weight instead.
@@ -797,7 +810,7 @@ router.post('/ic-loras/:mode/repair', asyncHandler(async (req, res) => {
   // the WHOLE snapshot — against the 708 GB aggregate mirror that would stat (and
   // under `deep`, hash) every unrelated LTX weight the user has. Delete just this
   // weight and let the single-file download re-fetch it.
-  if (spec.mirrorRepo) {
+  if (icLoraProbesExactFile(spec)) {
     const found = await findCachedIcLoraWeight(spec);
     if (!found) return res.json({ deep, deleted: [], repos: [spec.repo] });
     await repairCachedFile(found.path);

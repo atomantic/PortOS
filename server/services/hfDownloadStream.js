@@ -91,6 +91,13 @@ export async function startHfDownloadStream({ req, res, repo, revision = null, r
   // and the per-attempt failures to report if none did.
   let succeededRepo = null;
   const attemptErrors = [];
+  // The typed error kinds the failed attempts reported. When every attempt
+  // failed the SAME way — always true for a single-candidate spec — that kind is
+  // still the honest verdict, so it survives into the final frame instead of
+  // being flattened to a generic `all_sources_failed` the UI can't act on. The
+  // one that matters is `gated_repo`: the client keys its "accept the license
+  // and save an HF token" affordance off it.
+  const attemptKinds = [];
   for (let i = 0; i < targets.length; i += 1) {
     const { repo: r, only: onlyFiles, ignore: ignorePatterns, revision } = targets[i];
     const isLastTarget = i === targets.length - 1;
@@ -218,14 +225,18 @@ export async function startHfDownloadStream({ req, res, repo, revision = null, r
     // A user cancel must not silently roll onto the next candidate.
     if (result?.errorKind === 'cancelled') return safeEnd();
     attemptErrors.push(`${r}: ${result?.errorMessage || 'unknown error'}`);
+    attemptKinds.push(result?.errorKind || 'download_failed');
   }
 
   if (!aborted) {
     if (firstSuccessWins) {
       if (!succeededRepo) {
+        const sharedKind = attemptKinds.length > 0 && attemptKinds.every((k) => k === attemptKinds[0])
+          ? attemptKinds[0]
+          : 'all_sources_failed';
         send({
           type: 'error',
-          kind: 'all_sources_failed',
+          kind: sharedKind,
           message: `Every source failed — ${attemptErrors.join('; ')}`,
         });
         return safeEnd();

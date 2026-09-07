@@ -19,6 +19,10 @@ vi.mock('../lib/mediaModels.js', () => ({
 vi.mock('../lib/hfCache.js', async (importOriginal) => ({
   ...(await importOriginal()),
   inspectModelCache: vi.fn(async () => ({ cached: true, sizeBytes: 100, snapshotPath: '/snap' })),
+  // IO-bound like its siblings: the IC-weight status probe resolves one exact
+  // file out of the HF cache, and leaving it real made this suite walk the
+  // developer's actual ~/.cache through a partially-mocked `fs`.
+  findCachedRepoFile: vi.fn(async () => null),
   verifyModelCache: vi.fn(async (repoId, opts) => ({
     repoId, status: 'bad', cached: false, sizeBytes: 0, snapshotPath: '/snap',
     checkedDeep: !!opts?.deep,
