@@ -100,6 +100,15 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
       return null;
     });
     setSubmitting(false);
+    // The two methods answer with different keys because they finish at
+    // different times (#6511): Lanczos runs inline and hands back the finished
+    // row, while the generative pass is a multi-minute GPU render that answers
+    // with the queued job and lands in history when it completes.
+    if (result?.job) {
+      toast.success('Queued — watch it in the render queue');
+      onClose();
+      return;
+    }
     if (result?.video) {
       onUpscaled(result.video);
       toast.success('Upscaled 2×');
