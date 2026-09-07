@@ -342,9 +342,11 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — transformer header (#6512)', () =>
       'pipe.load(); pipe.load()',
       // The latent upsampler slot is pre-seeded so the base load() skips the
       // ~1 GB stage-2 weight a skip_stage_2 render never touches.
-      'print(pipe.calls, pipe.lora_paths, pipe.model_dir, pipe.upsampler is not None)',
+      // `model_dir` is compared by its last segment: it is passed through
+      // `str(Path)`, which renders the separator per platform.
+      'print(pipe.calls, pipe.lora_paths, Path(pipe.model_dir).name, pipe.upsampler is not None)',
     ].join('\n');
     expect(trimmed(runPython(`${importRunner}\n${source}`)))
-      .toBe("['transformer-dev.safetensors', 'base-load:dit', 'base-load:dit'] [('adapter', 1.0), ('distilled', 1.0)] /pack True");
+      .toBe("['transformer-dev.safetensors', 'base-load:dit', 'base-load:dit'] [('adapter', 1.0), ('distilled', 1.0)] pack True");
   }, PY_TEST_TIMEOUT_MS);
 });
