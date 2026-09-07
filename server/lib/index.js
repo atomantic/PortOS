@@ -342,6 +342,7 @@ export * from './httpsState.js';
 export * from './isSafeHref.js';
 export * from './networkExposure.js';
 export * from './peerHttpClient.js';
+export * from './peerProbeDiagnostics.js';
 export * from './peerSelfHost.js';
 export * from './peerUrl.js';
 export * from './pinterestFeed.js';
