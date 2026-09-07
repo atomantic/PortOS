@@ -926,3 +926,79 @@ describe('FableLoom editorial cast integrity (#6415)', () => {
     expect(withCast.passed).toBe(withoutCast.passed);
   });
 });
+
+describe('character evolution branch coverage in the editorial diagnostics (#6444)', () => {
+  const dependencies = { universe: null, voiceProfiles: [], canonDigest: '' };
+
+  const evolutionStage = (stageId, sceneKey) => ({
+    stageId,
+    characterChoice: 'She stops negotiating and walks onto the bridge.',
+    evidence: { episodeId: 'episode-example', sceneKey },
+  });
+
+  const lensedLoom = (stages, outcome = 'full-change') => {
+    const base = makeLoom();
+    return sanitizeLoom({
+      ...base,
+      seriesPlan: {
+        ...base.seriesPlan,
+        characterEvolutions: [{
+          characterId: 'chr-mara',
+          characterName: 'Mara',
+          evolution: { outcome, stages },
+        }],
+      },
+    });
+  };
+
+  it('adds nothing at all to a loom that never opted into the lens', async () => {
+    // The optional-lens non-negotiable, asserted as a literal baseline: a
+    // pre-#6444 install's diagnostics must be byte-identical, so the coverage
+    // block and every stat it contributes are omitted rather than nulled.
+    const diagnostics = await collectFableLoomEditorialDiagnostics(makeLoom(), dependencies);
+
+    expect(Object.hasOwn(diagnostics, 'evolutionCoverage')).toBe(false);
+    expect(Object.keys(diagnostics.stats).filter((key) => /evolution/i.test(key))).toEqual([]);
+    expect(__testing.diagnosticLines(diagnostics)).not.toMatch(/evolution/i);
+    expect(__testing.compactEditorialDiagnostics(diagnostics).findings
+      .some((finding) => finding.category === 'character')).toBe(false);
+  });
+
+  it('reports an unearned inheritance as a character finding without gating the run', async () => {
+    // `left` and `right` rejoin at the ending scene, and only `left` proves the
+    // commitment — a viewer who took `right` arrives having never watched it.
+    const lensed = lensedLoom([evolutionStage('commitment-to-change', 'left')]);
+    const plain = await collectFableLoomEditorialDiagnostics(makeLoom(), dependencies);
+    const diagnostics = await collectFableLoomEditorialDiagnostics(lensed, dependencies);
+
+    expect(diagnostics.evolutionCoverage.stats.unearnedInheritanceCount).toBe(1);
+    expect(diagnostics.stats.evolutionCoverageStatus).toBe('findings');
+    const characterFindings = __testing.compactEditorialDiagnostics(diagnostics).findings
+      .filter((item) => item.category === 'character');
+    // The rejoin scene is also this graph's only ending, so it is both the
+    // inherited convergence and the ending the declared change never reaches.
+    const inherited = characterFindings.find((item) => item.problem.includes('Buried Wire'));
+    expect(inherited).toMatchObject({
+      severity: 'medium', episodeId: 'episode-example', nodeId: 'ending',
+    });
+    expect(inherited.suggestion).toBeTruthy();
+    expect(characterFindings.some((item) => item.problem.includes('Signal found'))).toBe(true);
+    expect(characterFindings.every((item) => item.pathId)).toBe(true);
+    // Reported, never gating — and the graph the editor is handed is untouched.
+    expect(diagnostics.passed).toBe(plain.passed);
+    expect(__testing.exactGraphIdContract(lensed.episodes[0]))
+      .toBe(__testing.exactGraphIdContract(makeLoom().episodes[0]));
+    expect(__testing.teleplayDigest(lensed)).toBe(__testing.teleplayDigest(makeLoom()));
+  });
+
+  it('carries an unreviewed lens through to the editor instead of a silent pass', async () => {
+    const diagnostics = await collectFableLoomEditorialDiagnostics(
+      lensedLoom([evolutionStage('final-proof', 'a-deleted-scene')]),
+      dependencies,
+    );
+
+    expect(diagnostics.stats.evolutionCoverageStatus).toBe('unreviewed');
+    expect(diagnostics.stats.unreviewedEvolutionLenses).toBe(1);
+    expect(__testing.diagnosticLines(diagnostics)).toContain('Character evolution coverage: unreviewed');
+  });
+});

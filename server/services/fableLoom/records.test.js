@@ -1315,6 +1315,22 @@ describe('per-character evolution lens on the series plan (#6440)', () => {
     )).toBe('stale');
   });
 
+  it('resolves an anchor at an expanded scene that has no outline beat', async () => {
+    // A graph-first episode has node ids and no outline; before #6444 the ref
+    // set was built from outline scene keys alone, so a live scene read as a
+    // deleted one and the stage could never be verified.
+    let loom = await makeLoom({ name: 'A graph-first loom' });
+    loom = await addEpisode(loom.id, { title: 'Pilot' });
+    const episodeId = loom.episodes[0].id;
+    loom = await addNode(loom.id, episodeId, { title: 'The Split' });
+    const { id: nodeId } = loom.episodes[0].nodes[0];
+    expect(loom.episodes[0].storyOutline).toBeFalsy();
+
+    const refs = fableLoomEvolutionEvidenceRefs(loom);
+    expect(evolutionEvidenceStatus({ episodeId, sceneKey: nodeId }, refs)).toBe('anchored');
+    expect(evolutionEvidenceStatus({ episodeId, sceneKey: 'node-deleted' }, refs)).toBe('stale');
+  });
+
   it('preserves the lens when a v7 peer wins an unrelated LWW edit', async () => {
     const loom = await seedLoomWithLens();
     const { characterEvolutions: _dropped, ...planWithoutLens } = loom.seriesPlan;

@@ -282,7 +282,11 @@ function sanitizeSeriesPlan(raw, episodes) {
 
 /**
  * Reference sets a FableLoom evolution lens's evidence anchors resolve
- * against — every episode id, and every outline scene key across the loom.
+ * against — every episode id, and every scene an anchor can name across the
+ * loom: expanded teleplay node ids AND authored outline keys. The sync
+ * contract makes those the same string once an outline is expanded, so the
+ * union only widens for a graph-first episode whose outline was never written
+ * — where a live scene must not read as a deleted one.
  * Hand it to `evolutionEvidenceStatus` so a stage pointing at a deleted
  * episode or a renamed scene reports `stale` rather than passing as proof.
  */
@@ -290,6 +294,9 @@ export function fableLoomEvolutionEvidenceRefs(loom) {
   const episodes = Array.isArray(loom?.episodes) ? loom.episodes : [];
   const sceneKeys = new Set();
   for (const episode of episodes) {
+    for (const node of episode?.nodes || []) {
+      if (node?.id) sceneKeys.add(node.id);
+    }
     for (const scene of episode?.storyOutline?.scenes || []) {
       if (scene?.key) sceneKeys.add(scene.key);
     }
