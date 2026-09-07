@@ -8,7 +8,6 @@
 import { join } from 'path';
 import { rm } from 'node:fs/promises';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
-import { privateSecurityScratchCwd } from '../lib/privateSecuritySandbox.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { emitLog } from './cosEvents.js';
 // The DEFINING module, not a barrel (#3450). This module is one
@@ -1435,6 +1434,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
       .catch(err => emitLog('warn', `Could not clear interrupted breadcrumb on ${agentId}: ${err.message}`, { agentId }));
   }
   if (isPrivateSecurityTask({ metadata: agentMetadata })) {
+    const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
     await rm(privateSecurityScratchCwd(agentId), { recursive: true, force: true });
   }
   const task = await getTaskByIdFn(taskId).catch(() => null);
@@ -1453,6 +1453,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   // hand its transcript to an ordinary investigation or retry provider.
   if (isPrivateSecurityTask(task) || isPrivateSecurityTask({ metadata: agentMetadata })) {
     if (task.status === 'completed') return;
+    const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
     await rm(privateSecurityScratchCwd(agentId), { recursive: true, force: true });
     await updateTask(taskId, { status: 'blocked', metadata: { ...task.metadata,
       blockedAt: new Date().toISOString(), blockedCategory: 'private-security-assessment-failed',

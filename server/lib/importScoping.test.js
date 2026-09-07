@@ -105,6 +105,8 @@ describe('narrowed imports stay narrow (#6009)', () => {
 // [entry, target, why, specifier] — same first three columns as NARROWED above,
 // plus the specifier the call site must still name in its `await import()`.
 const DEFERRED = [
+  ['services/agentManagement.js', 'lib/privateSecuritySandbox.js',
+    'loads sandbox cleanup only for private assessments', '../lib/privateSecuritySandbox.js'],
   ['services/cos.js', 'services/persistentMindAdapter.js',
     'is registered once at daemon start, but pulls the CoS tool registry, voice tools, ask service and image-gen backends',
     './persistentMindAdapter.js'],
@@ -216,7 +218,13 @@ describe('deferred imports stay deferred (#6156)', () => {
 // commit/push/PR instructions. No new eager edge into a heavy subtree: the
 // production change adds only `lib/auditCatalog.js` (a zero-import leaf) to
 // `autonomousJobs/skillTemplates.js`, worth 2.
-const MAX_STATIC_INSTANTIATIONS = 93200;
+// #6434: after deferring the private sandbox at all three CoS call sites,
+// this branch measures 93,722 versus 93,229 on its current main base. The
+// remaining +493 is the shared policy/provenance leaves and two boundary
+// suites, not an eager sandbox/runtime subtree. Main already exceeded the
+// previous ceiling; restore the documented ~1.5k ordinary-growth allowance.
+// The DEFERRED row above prevents the avoidable sandbox edge from returning.
+const MAX_STATIC_INSTANTIATIONS = 95200;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {

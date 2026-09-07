@@ -1,5 +1,4 @@
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
-import { privateSecurityEndpoint } from '../lib/privateSecuritySandbox.js';
 import { supportsPublicReviewProvider } from '../lib/providerVendors.js';
 /**
  * Agent Provider Resolution
@@ -38,6 +37,7 @@ import { publicReviewPostureForTask, resolvePublicReviewProvider } from './publi
  */
 export async function resolveAgentProviderAndModel(task) {
   if (isPrivateSecurityTask(task)) {
+    const { privateSecurityEndpoint } = await import('../lib/privateSecuritySandbox.js');
     Object.assign(task.metadata, PRIVATE_SECURITY_DELIVERY);
     delete task.metadata.pipeline;
     const provider = task.metadata.provider ? await getProviderById(task.metadata.provider) : null;

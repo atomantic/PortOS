@@ -1,5 +1,4 @@
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
-import { privateSecurityScratchCwd } from '../lib/privateSecuritySandbox.js';
 /**
  * Agent Workspace Preparation
  *
@@ -269,6 +268,7 @@ async function prepareRequestedWorktree({
  */
 export async function prepareAgentWorkspace({ agentId, task }) {
   if (isPrivateSecurityTask(task)) {
+    const { privateSecurityScratchCwd } = await import('../lib/privateSecuritySandbox.js');
     const workspacePath = privateSecurityScratchCwd(agentId);
     await ensureDir(workspacePath);
     return { outcome: 'ready', workspacePath, resolvedAppName: null, worktreeInfo: null,
