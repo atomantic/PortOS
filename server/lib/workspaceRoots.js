@@ -15,10 +15,11 @@ import { homedir, tmpdir } from 'os';
 //
 // Repos legitimately live on secondary volumes, so the defaults cover home plus
 // the places each platform mounts them: /Volumes (macOS), /mnt + /media (Linux),
-// and — because Windows has no such directory — any lettered non-system drive,
-// via the rule below. Windows also drops the POSIX literals entirely: there is
-// no /tmp or /opt there, and `resolve('/tmp')` means "\tmp on whatever drive the
-// process happens to be on", which is both meaningless and non-deterministic.
+// /workspace (Docker/devcontainer/agent layouts), and — because Windows has no
+// such directory — any lettered non-system drive, via the rule below. Windows
+// also drops the POSIX literals entirely: there is no /tmp or /opt there, and
+// `resolve('/tmp')` means "\tmp on whatever drive the process happens to be
+// on", which is both meaningless and non-deterministic.
 //
 // Operators extend either platform with PORTOS_WORKSPACE_ROOTS, split on the
 // platform path delimiter (`;` on Windows, where `:` would cut `D:\repos` at
@@ -30,7 +31,7 @@ const IS_WINDOWS = process.platform === 'win32';
 
 export const DEFAULT_WORKSPACE_ROOTS = IS_WINDOWS
   ? [homedir(), tmpdir()]
-  : [homedir(), '/tmp', '/Users', '/Volumes', '/mnt', '/media', '/opt'];
+  : [homedir(), '/tmp', '/Users', '/Volumes', '/mnt', '/media', '/opt', '/workspace'];
 
 // The drive Windows itself is installed on, e.g. `C:`. Everything on it stays
 // confined to the roots above, so C:\Windows and C:\Program Files are out.
