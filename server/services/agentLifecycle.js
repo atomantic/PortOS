@@ -744,6 +744,14 @@ async function runAgentSpawn(task) {
       ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR)
       : null;
 
+    const ownsPrWorkflow = inlinePrLifecycleSection(task, {
+      providerType: provider.type,
+      providerId: provider.id,
+      providerCommand: provider.command,
+      leanMode,
+      worktreeInfo,
+      isTruthyMetaFn: isTruthyMeta,
+    }) !== null;
     await registerAgent(agentId, task.id, {
       instanceId,
       workspacePath,
@@ -802,14 +810,7 @@ async function runAgentSpawn(task) {
       // every one of them — routing a Creative Director reasoning run into the
       // did-you-open-it net, which then opened a PR for it and filed a HIGH
       // notification blaming the agent for skipping a step it was never given.
-      ownsPrWorkflow: inlinePrLifecycleSection(task, {
-        providerType: provider.type,
-        providerId: provider.id,
-        providerCommand: provider.command,
-        leanMode,
-        worktreeInfo,
-        isTruthyMetaFn: isTruthyMeta,
-      }) !== null,
+      ownsPrWorkflow,
       model: selectedModel,
       // The reasoning-effort override this run was dispatched with (null when the
       // task pinned none). Persisted next to the model because the Resume Agent
@@ -1037,6 +1038,7 @@ async function runAgentSpawn(task) {
         laneName,
         isTruthyMetaFn: isTruthyMeta,
         leanMode,
+        ownsPrWorkflow,
         useDurableRunner: dispatchUseRunner,
         safetyProfile,
       });
@@ -1058,6 +1060,7 @@ async function runAgentSpawn(task) {
       executionId: toolExecution.id,
       laneName,
       isTruthyMetaFn: isTruthyMeta,
+      ownsPrWorkflow,
       safetyProfile,
     });
   } catch (err) {
