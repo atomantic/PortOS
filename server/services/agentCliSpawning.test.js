@@ -730,17 +730,18 @@ describe('stream error containment', () => {
     });
 
     await expect(spawnDirectly(minimalArgs)).resolves.toBe('agent-test');
-    await new Promise((r) => setTimeout(r, 30));
 
-    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 'agent-test',
-      exitCode: 2,
-      success: false,
-      // The output the child managed to write before exiting is exactly what
-      // explains the failure, so it has to survive the buffering too.
-      outputBuffer: expect.stringContaining('unknown flag --nope'),
-    }));
-    expect(activeAgents.has('agent-test')).toBe(false);
+    await vi.waitFor(() => {
+      expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+        agentId: 'agent-test',
+        exitCode: 2,
+        success: false,
+        // The output the child managed to write before exiting is exactly what
+        // explains the failure, so it has to survive the buffering too.
+        outputBuffer: expect.stringContaining('unknown flag --nope'),
+      }));
+      expect(activeAgents.has('agent-test')).toBe(false);
+    });
   });
 
   // ─── Lifecycle ledger — the first-output boundary (#4540) ─────────────────
@@ -1267,11 +1268,10 @@ describe('stream error containment', () => {
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));
     fakeProcess.emit('close', 0);
+
     // The close handler is fire-and-forget (spawnDirectly returns agentId
     // synchronously) — wait for the async handler's finally block to run.
-    await new Promise((r) => setTimeout(r, 80));
-
-    expect(cleanupWorktreeFn).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(cleanupWorktreeFn).toHaveBeenCalledTimes(1));
     const opts = cleanupWorktreeFn.mock.calls[0][2];
     expect(opts.reviewers).toEqual(['codex', 'antigravity']);
     expect(opts.reviewStopMode).toBe('on-clean');
@@ -1291,10 +1291,11 @@ describe('stream error containment', () => {
     spawnDirectly({ ...minimalArgs, task, cleanupWorktreeFn, isTruthyMetaFn: (v) => v === true });
     await new Promise((r) => setTimeout(r, 10));
     fakeProcess.emit('close', 1);
-    await new Promise((r) => setTimeout(r, 80));
 
-    expect(releaseRetryHold).toHaveBeenCalledWith({
-      agentId: minimalArgs.agentId, task, success: false,
+    await vi.waitFor(() => {
+      expect(releaseRetryHold).toHaveBeenCalledWith({
+        agentId: minimalArgs.agentId, task, success: false,
+      });
     });
     expect(cleanupWorktreeFn.mock.invocationCallOrder[0])
       .toBeLessThan(releaseRetryHold.mock.invocationCallOrder[0]);
@@ -1312,9 +1313,10 @@ describe('stream error containment', () => {
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));
     fakeProcess.emit('close', 0);
-    await new Promise((r) => setTimeout(r, 80));
 
-    expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    await vi.waitFor(() => {
+      expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    });
   });
 
   // pm2's TreeKill takes direct-CLI children down with portos-server exactly as
@@ -1340,10 +1342,11 @@ describe('stream error containment', () => {
       await new Promise((r) => setTimeout(r, 10));
       fakeProcess.emit('close', 0);
       await spawnPromise.catch(() => {});
-      await new Promise((r) => setTimeout(r, 30));
 
-      expect(handlePipelineProgression).toHaveBeenCalledWith(task, 'agent-test', true);
-      expect(order).toEqual(['pipeline', 'worktree']);
+      await vi.waitFor(() => {
+        expect(handlePipelineProgression).toHaveBeenCalledWith(task, 'agent-test', true);
+        expect(order).toEqual(['pipeline', 'worktree']);
+      });
     });
 
     it('does not touch pipeline progression for an ordinary task', async () => {
