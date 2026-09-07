@@ -6,8 +6,8 @@ import { safeRemoveStorage, safeWriteStorage } from '../lib/safeStorage';
 
 const hostUrl = 'https://world.example.com/';
 const objects = [{ id: 'portos-design-v2-signal-app-example', route: '/apps' }];
-function Harness({ projected = objects, onTravel, capture } = {}) {
-  const frame = useEidoverseFrame(hostUrl, projected, onTravel);
+function Harness({ projected = objects, onTravel, onIdentityRename, capture } = {}) {
+  const frame = useEidoverseFrame(hostUrl, projected, onTravel, onIdentityRename);
   capture?.(frame);
   const location = useLocation();
   return <>
@@ -83,6 +83,46 @@ describe('hosted Eidoverse frame navigation', () => {
     expect(onTravel).toHaveBeenCalledExactlyOnceWith('peer-example');
   });
 
+  it('accepts a bounded identity draft only from the negotiated current frame session', () => {
+    const onIdentityRename = vi.fn();
+    render(<MemoryRouter><Harness onIdentityRename={onIdentityRename} /></MemoryRouter>);
+    const iframe = screen.getByTitle('Test renderer');
+    const source = iframe.contentWindow;
+    const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(iframe);
+    const [hello] = post.mock.calls.at(-1);
+    expect(hello.capabilities.identityRenameRequest).toBe(1);
+    const ready = { type: 'eidoverse:ready', version: 1, nonce: hello.nonce,
+      capabilities: { identityRenameRequest: 1 } };
+    const request = { type: 'eidoverse:identity-rename', version: 1, nonce: hello.nonce,
+      name: '  Example Visitor  ' };
+    send(source, request);
+    send(source, ready);
+    for (const [data, extra] of [
+      [request, { origin: 'https://attacker.example.com' }],
+      [request, { source: window }],
+      [{ ...request, nonce: 'stale' }, {}],
+      [{ ...request, name: 'x'.repeat(65) }, {}],
+      [{ ...request, name: 'line\nbreak' }, {}],
+    ]) send(source, data, extra);
+    expect(onIdentityRename).not.toHaveBeenCalled();
+    send(source, request);
+    expect(onIdentityRename).toHaveBeenCalledExactlyOnceWith('Example Visitor');
+  });
+
+  it('refuses identity drafts from a renderer without the negotiated capability', () => {
+    const onIdentityRename = vi.fn();
+    render(<MemoryRouter><Harness onIdentityRename={onIdentityRename} /></MemoryRouter>);
+    const iframe = screen.getByTitle('Test renderer');
+    const source = iframe.contentWindow;
+    const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(iframe);
+    const [hello] = post.mock.calls.at(-1);
+    send(source, { type: 'eidoverse:ready', version: 1, nonce: hello.nonce, capabilities: {} });
+    send(source, { type: 'eidoverse:identity-rename', version: 1, nonce: hello.nonce, name: 'Example Visitor' });
+    expect(onIdentityRename).not.toHaveBeenCalled();
+  });
+
   it('requires the hosted window, exact origin, current handshake and projected section route', () => {
     mount();
     const frame = screen.getByTitle('Test renderer');
@@ -92,6 +132,7 @@ describe('hosted Eidoverse frame navigation', () => {
     const [hello, origin] = post.mock.calls.at(-1);
     expect(origin).toBe('https://world.example.com');
     expect(hello).toMatchObject({ type: 'portos:connect', version: 1, labelVisibility: 'off' });
+    expect(hello.capabilities.identityRenameRequest).toBeUndefined();
     expect(Object.keys(hello).sort()).toEqual(['capabilities', 'labelVisibility', 'nonce', 'type', 'version']);
     const navigation = { type: 'eidoverse:navigate', version: 1, nonce: hello.nonce, entityId: objects[0].id, route: '/apps' };
     send(source, navigation); // No handshake yet.

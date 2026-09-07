@@ -3,13 +3,16 @@ import { useNavigate } from 'react-router';
 import {
   EIDOVERSE_FRAME_VERSION,
   EIDOVERSE_LABEL_PREFERENCES,
+  eidoverseIdentityRenameName,
   eidoverseNavigationTarget,
   isEidoverseFrameMessage,
 } from '../lib/eidoverseFrame';
-export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null) {
+export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null, onIdentityRename = null) {
   const frameRef = useRef(null);
   const travelRef = useRef(onTravel);
   travelRef.current = onTravel;
+  const identityRenameRef = useRef(onIdentityRename);
+  identityRenameRef.current = onIdentityRename;
   const objectsRef = useRef(objects);
   objectsRef.current = objects;
   const sessionRef = useRef(null);
@@ -44,7 +47,7 @@ export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null
       const data = event.data;
       if (data.type === 'eidoverse:ready') {
         clearTimeout(timer);
-        session.capabilities = Object.fromEntries(['objectLabels', 'portosNavigation', 'labelPreferences', 'worldDeparture', 'objectInteraction']
+        session.capabilities = Object.fromEntries(['objectLabels', 'portosNavigation', 'labelPreferences', 'worldDeparture', 'objectInteraction', 'identityRenameRequest']
           .map((key) => [key, data.capabilities?.[key] === 1]));
         setConnection({ status: 'ready', capabilities: session.capabilities });
         if (session.capabilities.labelPreferences) source.postMessage({
@@ -59,12 +62,19 @@ export default function useEidoverseFrame(hostUrl, objects = [], onTravel = null
         const object = objectsRef.current.find((entry) => entry.id === data.entityId);
         if (object?.travelPeerId && travelRef.current) travelRef.current(object.travelPeerId);
         else navigate(target);
+      } else if (data.type === 'eidoverse:identity-rename' && session.capabilities.identityRenameRequest) {
+        const name = eidoverseIdentityRenameName(data);
+        if (name !== null) identityRenameRef.current?.(name);
       }
     };
     window.addEventListener('message', receive);
     source.postMessage({
       type: 'portos:connect', version: EIDOVERSE_FRAME_VERSION, nonce,
-      capabilities: { portosNavigation: 1, labelPreferences: 1 },
+      capabilities: {
+        portosNavigation: 1,
+        labelPreferences: 1,
+        ...(identityRenameRef.current ? { identityRenameRequest: 1 } : {}),
+      },
       labelVisibility: preferenceRef.current,
     }, origin);
     return () => {

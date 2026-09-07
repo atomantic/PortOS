@@ -439,6 +439,23 @@ describe('Eidoverse hosted page', () => {
     expect(screen.queryByRole('link', { name: 'Open Eidoverse without PortOS controls' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'World controls' })).not.toBeInTheDocument();
     expect(screen.queryByText('Your PortOS, made spatial')).not.toBeInTheDocument();
+
+    const source = frame.contentWindow;
+    const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(frame);
+    const [hello] = post.mock.calls.at(-1);
+    act(() => window.dispatchEvent(new MessageEvent('message', {
+      source, origin: new URL(frame.src).origin,
+      data: { type: 'eidoverse:ready', version: 1, nonce: hello.nonce,
+        capabilities: { identityRenameRequest: 1 } },
+    })));
+    act(() => window.dispatchEvent(new MessageEvent('message', {
+      source, origin: new URL(frame.src).origin,
+      data: { type: 'eidoverse:identity-rename', version: 1, nonce: hello.nonce,
+        name: 'Example Solo Visitor' },
+    })));
+    expect(await screen.findByLabelText('My Eidoverse name')).toHaveValue('Example Solo Visitor');
+    expect(screen.getByRole('heading', { name: 'Eidoverse · world only' })).toBeInTheDocument();
   });
 
   it('keeps a successful local save visible when projection fails', async () => {
@@ -454,6 +471,61 @@ describe('Eidoverse hosted page', () => {
     expect(await screen.findByText('Saved locally and queued for projection.')).toBeInTheDocument();
     expect(await screen.findByText('Example projection failure')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Check the Eidoverse runtime' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
+  });
+
+  it('stages a renderer name request in World Design and retains it when save fails', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const frame = await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    const worldInput = screen.getByLabelText('World name');
+    await user.type(worldInput, '-draft');
+    await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    const source = frame.contentWindow;
+    const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(frame);
+    const [hello] = post.mock.calls.at(-1);
+    expect(hello.capabilities.identityRenameRequest).toBe(1);
+    act(() => window.dispatchEvent(new MessageEvent('message', {
+      source, origin: new URL(frame.src).origin,
+      data: { type: 'eidoverse:ready', version: 1, nonce: hello.nonce,
+        capabilities: { identityRenameRequest: 1 } },
+    })));
+    act(() => window.dispatchEvent(new MessageEvent('message', {
+      source, origin: new URL(frame.src).origin,
+      data: { type: 'eidoverse:identity-rename', version: 1, nonce: hello.nonce,
+        name: 'Example Visitor' },
+    })));
+
+    const nameInput = await screen.findByLabelText('My Eidoverse name');
+    expect(screen.getByRole('tab', { name: 'Experience' })).toHaveAttribute('aria-selected', 'true');
+    expect(nameInput).toHaveValue('Example Visitor');
+    expect(screen.getByLabelText('World name')).toHaveValue('portos-draft');
+    expect(screen.getByText(/Save and project leaves the current session and re-enters/)).toBeInTheDocument();
+
+    api.updateEidoverseWorldConfig.mockRejectedValueOnce(new Error('Example identity save failure'));
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    expect(await screen.findByText('Example identity save failure')).toBeInTheDocument();
+    expect(nameInput).toHaveValue('Example Visitor');
+    expect(screen.getByLabelText('World name')).toHaveValue('portos-draft');
+    expect(api.updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ world: 'portos-draft', humanName: 'Example Visitor' }),
+      { silent: true },
+    );
+    expect(frame).toHaveAttribute('src', `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos&name=example-portos-user`);
+
+    api.updateEidoverseWorldConfig.mockResolvedValueOnce({
+      ...worldResponse,
+      world: 'portos-draft',
+      identity: { name: 'Example Visitor' },
+      human: { name: 'Example Visitor' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    await waitFor(() => expect(frame).toHaveAttribute(
+      'src',
+      `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos-draft&name=Example+Visitor`,
+    ));
   });
 
   it('keeps newer edits intact while an earlier save is in flight', async () => {

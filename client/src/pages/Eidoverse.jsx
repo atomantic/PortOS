@@ -9,7 +9,7 @@ import {
   SlidersHorizontal,
   Tags,
 } from 'lucide-react';
-import { Link, useLocation } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import useEidoverseFrame from '../hooks/useEidoverseFrame';
@@ -170,7 +170,9 @@ function reconcileResetAliases(current, submitted, after, reset, sources) {
 }
 
 export default function Eidoverse() {
-  const { pathname } = useLocation();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { pathname } = location;
   const solo = pathname.replace(/\/+$/, '') === '/eidoverse/solo';
   const requestGeneration = useRef(0);
   const configDraftRevision = useRef(0);
@@ -197,8 +199,28 @@ export default function Eidoverse() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
 
+  const markConfigDirty = useCallback(() => {
+    configDraftRevision.current += 1;
+    setDraftDirty(true);
+    setConfigStatus((current) => current === 'saving' ? current : '');
+  }, []);
+
+  const stageIdentityRename = useCallback((name) => {
+    markConfigDirty();
+    setHumanName(name);
+    setSettingsOpen(true);
+    const search = new URLSearchParams(location.search);
+    search.set('eidoverseTab', 'experience');
+    navigate({ pathname: location.pathname, search: search.toString() }, { replace: true });
+  }, [location.pathname, location.search, markConfigDirty, navigate]);
+
   const travelRef = useRef(null);
-  const frame = useEidoverseFrame(hostUrl, worldState?.projection?.lastSummary?.objects, (peerId) => travelRef.current?.(peerId));
+  const frame = useEidoverseFrame(
+    hostUrl,
+    worldState?.projection?.lastSummary?.objects,
+    (peerId) => travelRef.current?.(peerId),
+    stageIdentityRename,
+  );
 
   const applyWorldResponse = useCallback((updated, { replaceDraft = true } = {}) => {
     setWorldState((current) => current
@@ -358,12 +380,6 @@ export default function Eidoverse() {
       clearTimeout(projectionPollTimer.current);
     };
   }, [prepare]);
-
-  const markConfigDirty = useCallback(() => {
-    configDraftRevision.current += 1;
-    setDraftDirty(true);
-    setConfigStatus((current) => current === 'saving' ? current : '');
-  }, []);
 
   const mutateRecipe = useCallback((mutator) => {
     markConfigDirty();
@@ -613,6 +629,39 @@ export default function Eidoverse() {
     </>
   );
 
+  const worldDrawer = (
+    <EidoverseWorldDrawer
+      open={settingsOpen}
+      onClose={() => setSettingsOpen(false)}
+      worldState={worldState}
+      worldName={worldName}
+      setWorldName={setWorldName}
+      humanName={humanName}
+      setHumanName={setHumanName}
+      cosId={cosId}
+      setCosId={setCosId}
+      suggestedCosId={worldState?.suggestedCosId || null}
+      recipeDraft={recipeDraft}
+      assetOverridesDraft={assetOverridesDraft}
+      labelAliasesDraft={labelAliasesDraft}
+      mutateLabelAlias={mutateLabelAlias}
+      frameConnection={frame.connection}
+      labelVisibility={frame.labelVisibility}
+      onLabelVisibilityChange={frame.changeLabelVisibility}
+      appId={appId}
+      mutateRecipe={mutateRecipe}
+      mutateAssetOverride={mutateAssetOverride}
+      markDirty={markConfigDirty}
+      configStatus={configStatus}
+      projectionStatus={projectionStatus}
+      dirty={draftDirty}
+      onSave={saveWorldConfig}
+      onProject={() => { if (!draftDirty) void runProjection().catch(() => {}); }}
+      onReset={(scope, districtId) => { void runConfigAction({ reset: { scope, ...(districtId ? { districtId } : {}) } }); }}
+      onRefreshAssets={() => { if (!draftDirty) void runConfigAction({ refreshAssets: true }); }}
+    />
+  );
+
   // Chromeless world-only surface: same hostUrl iframe as the embedded page,
   // without a top-level navigation to /eidoverse-host/ (Safari stuck-splash).
   if (solo) {
@@ -633,6 +682,7 @@ export default function Eidoverse() {
           </Link>
         </header>
         {frameStage}
+        {worldDrawer}
       </div>
     );
   }
@@ -659,36 +709,7 @@ export default function Eidoverse() {
 
       {frameStage}
 
-      <EidoverseWorldDrawer
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        worldState={worldState}
-        worldName={worldName}
-        setWorldName={setWorldName}
-        humanName={humanName}
-        setHumanName={setHumanName}
-        cosId={cosId}
-        setCosId={setCosId}
-        suggestedCosId={worldState?.suggestedCosId || null}
-        recipeDraft={recipeDraft}
-        assetOverridesDraft={assetOverridesDraft}
-        labelAliasesDraft={labelAliasesDraft}
-        mutateLabelAlias={mutateLabelAlias}
-        frameConnection={frame.connection}
-        labelVisibility={frame.labelVisibility}
-        onLabelVisibilityChange={frame.changeLabelVisibility}
-        appId={appId}
-        mutateRecipe={mutateRecipe}
-        mutateAssetOverride={mutateAssetOverride}
-        markDirty={markConfigDirty}
-        configStatus={configStatus}
-        projectionStatus={projectionStatus}
-        dirty={draftDirty}
-        onSave={saveWorldConfig}
-        onProject={() => { if (!draftDirty) void runProjection().catch(() => {}); }}
-        onReset={(scope, districtId) => { void runConfigAction({ reset: { scope, ...(districtId ? { districtId } : {}) } }); }}
-        onRefreshAssets={() => { if (!draftDirty) void runConfigAction({ refreshAssets: true }); }}
-      />
+      {worldDrawer}
     </div>
   );
 }
