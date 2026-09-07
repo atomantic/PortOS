@@ -73,10 +73,14 @@ import {
 import {
   PROVIDER_USAGE_LIMIT_PAUSE_REASON,
   isHardProviderUsageLimitError,
+  isUsageLimitPauseReason,
+  usageLimitProbeDelayMs,
 } from '../lib/persistentMindUsageLimit.js';
+import { isProviderAvailable, markProviderUsageLimit } from './providerStatus.js';
 
 export const PERSISTENT_MIND_WAKE_EVENT_ID = 'cos-persistent-mind-wake';
 export const PERSISTENT_MIND_WATCHDOG_EVENT_ID = 'cos-persistent-mind-watchdog';
+export const PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID = 'cos-persistent-mind-usage-limit-probe';
 export const PERSISTENT_MIND_WATCHDOG_INTERVAL_MS = 30_000;
 
 let turnAdapter = null;
@@ -84,6 +88,8 @@ let activeRun = null;
 let activeAbortController = null;
 let runtimeGeneration = 0;
 let supervisorStopping = false;
+/** Zero-based attempt count for the in-flight usage-limit readiness probe. */
+let usageLimitProbeAttempt = 0;
 
 const nowIso = () => new Date().toISOString();
 const errorMessage = (error) => String(error?.message || error || 'Persistent mind turn failed')
@@ -514,6 +520,112 @@ async function scheduleNextWake() {
   });
 }
 
+function cancelUsageLimitProbe() {
+  cancel(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
+}
+
+/**
+ * Lightweight readiness check for a usage-limit autopause.
+ * Uses provider status + pinned profile resolve — never opens a mind turn.
+ */
+async function probePinnedProviderAfterUsageLimit() {
+  const root = await loadState();
+  const providerId = root.config?.persistentMindProfile?.providerId;
+  if (typeof providerId === 'string' && providerId && !isProviderAvailable(providerId)) {
+    return { ok: false, reason: 'pinned-provider-unavailable' };
+  }
+  const resolved = await resolvePersistentMindProfile(root.config?.persistentMindProfile);
+  if (!resolved.ok) {
+    return { ok: false, reason: resolved.error || 'pinned-provider-unresolved' };
+  }
+  return { ok: true, providerId: resolved.provider?.id || providerId || null };
+}
+
+function scheduleUsageLimitProbe(attempt = 0) {
+  if (supervisorStopping || !isDaemonRunning()) return;
+  usageLimitProbeAttempt = Math.max(0, Number.isFinite(attempt) ? Math.floor(attempt) : 0);
+  cancelUsageLimitProbe();
+  const delayMs = usageLimitProbeDelayMs(usageLimitProbeAttempt);
+  schedule({
+    id: PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID,
+    type: 'once',
+    delayMs: Math.max(1, delayMs),
+    handler: async () => {
+      try {
+        await checkPersistentMindUsageLimitRecovery();
+      } catch (error) {
+        console.error(`❌ Persistent mind usage-limit probe failed: ${error.message}`);
+        const mind = await getPersistentMindState().catch(() => null);
+        if (mind && mind.status === 'paused' && isUsageLimitPauseReason(mind.pauseReason)) {
+          scheduleUsageLimitProbe(usageLimitProbeAttempt + 1);
+        }
+      }
+    },
+    metadata: {
+      description: 'Persistent CoS mind usage-limit readiness probe',
+      attempt: usageLimitProbeAttempt,
+    },
+  });
+}
+
+/**
+ * If paused solely for a provider usage limit, probe readiness and auto-resume
+ * when the pinned provider is usable again. Other pause reasons are ignored.
+ */
+export async function checkPersistentMindUsageLimitRecovery() {
+  const mind = await getPersistentMindState();
+  if (mind.status !== 'paused' || !isUsageLimitPauseReason(mind.pauseReason)) {
+    cancelUsageLimitProbe();
+    usageLimitProbeAttempt = 0;
+    return { recovered: false, ignored: true };
+  }
+  if (supervisorStopping || !isDaemonRunning() || !mind.enabled || !mind.started) {
+    return { recovered: false, ignored: false, reason: 'supervisor-inactive' };
+  }
+
+  const probe = await probePinnedProviderAfterUsageLimit();
+  if (!probe.ok) {
+    scheduleUsageLimitProbe(usageLimitProbeAttempt + 1);
+    return { recovered: false, ignored: false, reason: probe.reason || 'still-limited' };
+  }
+
+  const result = await mutateMindState((current) => {
+    if (current.status !== 'paused' || !isUsageLimitPauseReason(current.pauseReason)) {
+      return { mind: current, value: { recovered: false } };
+    }
+    return {
+      mind: {
+        ...current,
+        status: 'waiting',
+        pauseReason: null,
+        lastError: null,
+        nextEligibleWakeAt: null,
+        selfWake: current.queuedMessages.length > 0 || current.selfWake
+          ? current.selfWake
+          : initialSelfWake('usage-limit-recovered'),
+      },
+      value: { recovered: true, mindId: current.mindId },
+    };
+  });
+
+  if (!result.value?.recovered) {
+    cancelUsageLimitProbe();
+    usageLimitProbeAttempt = 0;
+    return { recovered: false, ignored: true };
+  }
+
+  cancelUsageLimitProbe();
+  usageLimitProbeAttempt = 0;
+  armWatchdog();
+  await scheduleNextWake();
+  // Match resumePersistentMind: status emit + log only (no new trajectory kind).
+  emitMindStatus(result.state);
+  emitLog('info', 'Persistent mind auto-resumed after provider usage limit cleared', {
+    providerId: probe.providerId || null,
+  });
+  return { recovered: true, ignored: false };
+}
+
 function initialSelfWake(reason) {
   const createdAt = nowIso();
   return {
@@ -614,7 +726,8 @@ async function parkActiveTurn(turnId, reason, status = 'waiting', { retryAt = nu
       ? holdPersistentMindWake(mind, mind.activeTurn.wake)
       : requeuePersistentMindWake(mind, mind.activeTurn.wake);
     // A hard usage-limit autopause mirrors pausePersistentMind: no backoff gate
-    // and no failureCount climb, so resume stays an explicit human decision.
+    // and no failureCount climb. Auto-recovery probes (not ordinary wakes) clear
+    // only this pause reason when the pinned provider is usable again.
     const failureCount = paused ? next.failureCount : next.failureCount + 1;
     return {
       mind: {
@@ -1149,9 +1262,9 @@ async function runOnePersistentMindTurn() {
           : errorMessage(error);
         // Persistent Mind has no automatic provider fallback pool. A hard
         // usage-limit / quota exhaustion would otherwise climb failureCount and
-        // keep burning scheduled wakes; autopause until a human resumes or
-        // changes the provider. Transient rate-limits / network blips stay on
-        // the interrupted + backoff path below.
+        // keep burning scheduled wakes; autopause, then probe for recovery.
+        // Transient rate-limits / network blips stay on the interrupted +
+        // backoff path below.
         const usageLimit = !denied && !controller.signal.aborted && isHardProviderUsageLimitError(error);
         // A refusal already named its own cause and the status it belongs
         // under; only a revoked temporary route retires the wake, exactly as
@@ -1165,6 +1278,16 @@ async function runOnePersistentMindTurn() {
             retireWake: denied && error.requiresResubmission === true,
           },
         );
+        if (usageLimit) {
+          const providerId = (await loadState()).config?.persistentMindProfile?.providerId
+            || null;
+          if (typeof providerId === 'string' && providerId) {
+            await markProviderUsageLimit(providerId, { message }).catch((markError) => {
+              console.error(`❌ Failed to mark provider usage limit for mind probe: ${markError.message}`);
+            });
+          }
+          scheduleUsageLimitProbe(0);
+        }
         emitLog(
           'warn',
           usageLimit
@@ -1259,6 +1382,8 @@ export async function setPersistentMindEnabled(enabled) {
     activeAbortController?.abort('Persistent mind disabled');
     cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
     cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
+    cancelUsageLimitProbe();
+    usageLimitProbeAttempt = 0;
   }
   const result = await mutateMindState((mind) => {
     const changedToDisabled = !enabled && (mind.enabled || Boolean(mind.activeTurn));
@@ -1326,6 +1451,9 @@ export async function pausePersistentMind(reason = 'Paused by user') {
     });
   }
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
+  // Explicit / non-usage pauses must never auto-resume via the usage-limit probe.
+  cancelUsageLimitProbe();
+  usageLimitProbeAttempt = 0;
   return { success: true, state };
 }
 
@@ -1346,6 +1474,8 @@ export async function resumePersistentMind() {
     };
   });
   if (result.value.success) {
+    cancelUsageLimitProbe();
+    usageLimitProbeAttempt = 0;
     armWatchdog();
     await scheduleNextWake();
   }
@@ -1358,6 +1488,8 @@ export async function stopPersistentMind({ waitForTurn = false } = {}) {
   activeAbortController?.abort('Persistent mind stopped');
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
+  cancelUsageLimitProbe();
+  usageLimitProbeAttempt = 0;
   const result = await mutateMindState((mind) => {
     const wasStarted = mind.started;
     const interruptedTurnId = mind.activeTurn?.id || null;
@@ -1720,6 +1852,9 @@ export async function initializePersistentMindSupervisor() {
   if (recovered.state.enabled && recovered.state.started) {
     armWatchdog();
     await scheduleNextWake();
+    if (recovered.state.status === 'paused' && isUsageLimitPauseReason(recovered.state.pauseReason)) {
+      scheduleUsageLimitProbe(0);
+    }
   }
   emitMindStatus(recovered.state);
   return recovered.state;
@@ -1744,6 +1879,8 @@ export async function shutdownPersistentMindSupervisor() {
   activeAbortController?.abort('Chief of Staff daemon stopped');
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
+  cancelUsageLimitProbe();
+  usageLimitProbeAttempt = 0;
   const state = await getPersistentMindState();
   if (!state.activeTurn) return state;
   return (await interruptActiveTurn('Chief of Staff daemon stopped', 'interrupted', { retry: true })).state;
@@ -1755,6 +1892,8 @@ export function __resetPersistentMindSupervisorForTests() {
   activeAbortController = null;
   runtimeGeneration = 0;
   supervisorStopping = false;
+  usageLimitProbeAttempt = 0;
   cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   cancel(PERSISTENT_MIND_WATCHDOG_EVENT_ID);
+  cancel(PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
 }

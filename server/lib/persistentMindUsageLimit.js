@@ -7,6 +7,8 @@
  * burns wakes and climbs failureCount. Soft rate-limits and network blips
  * must keep the existing interrupted + backoff path.
  *
+ * After an autopause, the supervisor periodically probes whether the pinned
+ * provider is usable again and auto-resumes only for this pause reason.
  * If a future adapter ever exposes alternate usage options, call sites should
  * attempt those first and only autopause when none remain.
  */
@@ -16,6 +18,14 @@ import { analyzeError, ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
 /** Clear pauseReason so the Mind UI / Helm watch stay quiet and actionable. */
 export const PROVIDER_USAGE_LIMIT_PAUSE_REASON =
   'Provider usage limit — paused to avoid retries';
+
+/**
+ * Probe cadence after a usage-limit autopause.
+ * First check is short so a brief quota window can clear without a human;
+ * later probes back off so we do not spam readiness checks.
+ */
+export const USAGE_LIMIT_PROBE_BASE_MS = 60_000;
+export const USAGE_LIMIT_PROBE_MAX_MS = 30 * 60_000;
 
 const HARD_USAGE_LIMIT_CATEGORIES = new Set([
   ERROR_CATEGORIES.USAGE_LIMIT,
@@ -99,4 +109,19 @@ export function classifyPersistentMindProviderError(errorOrMessage) {
 
 export function isHardProviderUsageLimitError(errorOrMessage) {
   return classifyPersistentMindProviderError(errorOrMessage).hardUsageLimit === true;
+}
+
+/** True only for the dedicated usage-limit autopause string — never other pauses. */
+export function isUsageLimitPauseReason(reason) {
+  return reason === PROVIDER_USAGE_LIMIT_PAUSE_REASON;
+}
+
+/**
+ * Delay until the next readiness probe after a usage-limit autopause.
+ * @param {number} attempt — zero-based probe attempt count
+ */
+export function usageLimitProbeDelayMs(attempt = 0) {
+  const n = Number.isFinite(attempt) && attempt > 0 ? Math.floor(attempt) : 0;
+  const delay = USAGE_LIMIT_PROBE_BASE_MS * (2 ** Math.min(n, 8));
+  return Math.min(USAGE_LIMIT_PROBE_MAX_MS, delay);
 }

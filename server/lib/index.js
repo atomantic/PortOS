@@ -299,6 +299,7 @@ export * from './persistentMindPrompt.js';
 export * from './persistentMindPublic.js';
 export * from './persistentMindThinkingPresets.js';
 export * from './persistentMindChosenName.js';
+export * from './persistentMindUsageLimit.js';
 export * from './agentScratchPaths.js';
 export * from './agentSentinel.js';
 export * from './bareUrl.js';

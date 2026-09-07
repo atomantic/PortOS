@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
 import {
   PROVIDER_USAGE_LIMIT_PAUSE_REASON,
+  USAGE_LIMIT_PROBE_BASE_MS,
+  USAGE_LIMIT_PROBE_MAX_MS,
   classifyPersistentMindProviderError,
   isHardProviderUsageLimitError,
+  isUsageLimitPauseReason,
+  usageLimitProbeDelayMs,
 } from './persistentMindUsageLimit.js';
 
 describe('persistentMindUsageLimit', () => {
@@ -93,5 +97,20 @@ describe('persistentMindUsageLimit', () => {
     // appear it is still a hard quota signal. Ensure a non-matching ordinary
     // message stays soft.
     expect(isHardProviderUsageLimitError('The draft failed markdown validation')).toBe(false);
+  });
+
+  it('recognizes only the dedicated usage-limit pause reason for auto-recovery', () => {
+    expect(isUsageLimitPauseReason(PROVIDER_USAGE_LIMIT_PAUSE_REASON)).toBe(true);
+    expect(isUsageLimitPauseReason('Paused by user')).toBe(false);
+    expect(isUsageLimitPauseReason('Pinned provider unavailable')).toBe(false);
+    expect(isUsageLimitPauseReason(null)).toBe(false);
+  });
+
+  it('backs off usage-limit probe delays without exceeding the cap', () => {
+    expect(usageLimitProbeDelayMs(0)).toBe(USAGE_LIMIT_PROBE_BASE_MS);
+    expect(usageLimitProbeDelayMs(1)).toBe(USAGE_LIMIT_PROBE_BASE_MS * 2);
+    expect(usageLimitProbeDelayMs(2)).toBe(USAGE_LIMIT_PROBE_BASE_MS * 4);
+    expect(usageLimitProbeDelayMs(99)).toBe(USAGE_LIMIT_PROBE_MAX_MS);
+    expect(usageLimitProbeDelayMs(-1)).toBe(USAGE_LIMIT_PROBE_BASE_MS);
   });
 });

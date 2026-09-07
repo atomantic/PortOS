@@ -79,6 +79,10 @@ vi.mock('./providers.js', () => ({ getProviderById: vi.fn(async () => mock.provi
 vi.mock('./providerStatus.js', () => ({
   isProviderAvailable: () => mock.providerAvailable,
   getProviderStatus: () => ({ message: 'Endpoint is temporarily unavailable' }),
+  markProviderUsageLimit: vi.fn(async () => {
+    mock.providerAvailable = false;
+    return { available: false, reason: 'usage-limit' };
+  }),
 }));
 vi.mock('./persistentMindImageCapability.js', () => ({
   resolvePersistentMindImageCapability: vi.fn(async () => mock.imageCapability),
@@ -1296,9 +1300,12 @@ describe('persistent mind supervisor', () => {
         nextEligibleWakeAt: null,
         activeTurn: null,
       });
-      // Queued work is requeued, not burned; wakes stay cancelled until resume.
+      // Queued work is requeued, not burned; ordinary wakes stay cancelled while
+      // a usage-limit readiness probe is armed for auto-recovery.
       expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['message-quota']);
       expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(false);
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID)).toBe(true);
+      expect(mock.providerAvailable).toBe(false);
       expect(mock.appendMindEvent.mock.calls.map(([event]) => event.kind)).toEqual(
         expect.arrayContaining(['mind.paused']),
       );
@@ -1349,6 +1356,96 @@ describe('persistent mind supervisor', () => {
 
       expect(mock.root.persistentMind.status).toBe('interrupted');
       expect(mock.root.persistentMind.pauseReason).not.toBe(PROVIDER_USAGE_LIMIT_PAUSE_REASON);
+    });
+
+    it('stays paused while the usage-limit probe still reports the provider limited', async () => {
+      const run = vi.fn(async () => {
+        throw new Error("You've hit your usage limit Get Cursor Pro to keep going.");
+      });
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
+        run,
+      });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-still-limited', text: 'Think.' });
+      await supervisor.drainPersistentMind();
+
+      expect(mock.root.persistentMind.status).toBe('paused');
+      expect(mock.providerAvailable).toBe(false);
+
+      const probe = mock.scheduled.get(supervisor.PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
+      expect(probe).toBeTruthy();
+      await probe.handler();
+
+      expect(mock.root.persistentMind).toMatchObject({
+        status: 'paused',
+        pauseReason: PROVIDER_USAGE_LIMIT_PAUSE_REASON,
+      });
+      // Still limited → next probe armed with backoff; no ordinary wake.
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID)).toBe(true);
+      expect(mock.scheduled.get(supervisor.PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID).metadata.attempt).toBe(1);
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(false);
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('auto-resumes when the usage-limit probe says the pinned provider is usable again', async () => {
+      const run = vi.fn(async () => {
+        throw new Error("You've hit your usage limit Get Cursor Pro to keep going.");
+      });
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
+        run,
+      });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-recover', text: 'Think.' });
+      await supervisor.drainPersistentMind();
+
+      expect(mock.root.persistentMind.status).toBe('paused');
+      mock.providerAvailable = true;
+      mock.profile = {
+        ok: true,
+        provider: { id: 'example-cloud', type: 'api' },
+        model: 'example-model',
+        effort: 'high',
+        thinkingInterface: 'text',
+      };
+
+      const probe = mock.scheduled.get(supervisor.PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID);
+      expect(probe).toBeTruthy();
+      const result = await supervisor.checkPersistentMindUsageLimitRecovery();
+      expect(result).toMatchObject({ recovered: true, ignored: false });
+
+      expect(mock.root.persistentMind).toMatchObject({
+        status: 'waiting',
+        pauseReason: null,
+        lastError: null,
+      });
+      expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['message-recover']);
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID)).toBe(false);
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(true);
+    });
+
+    it('does not auto-resume pauses that are not usage-limit autopauses', async () => {
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.pausePersistentMind('Paused by user');
+
+      expect(mock.root.persistentMind).toMatchObject({
+        status: 'paused',
+        pauseReason: 'Paused by user',
+      });
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_USAGE_LIMIT_PROBE_EVENT_ID)).toBe(false);
+
+      mock.providerAvailable = true;
+      const result = await supervisor.checkPersistentMindUsageLimitRecovery();
+      expect(result).toMatchObject({ recovered: false, ignored: true });
+      expect(mock.root.persistentMind).toMatchObject({
+        status: 'paused',
+        pauseReason: 'Paused by user',
+      });
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(false);
     });
   });
 });
