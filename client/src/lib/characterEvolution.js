@@ -81,3 +81,92 @@ export const EVOLUTION_OUTCOME_HINTS = Object.freeze({
   'flat-testing': 'the belief is tested and deliberately holds — they change the world instead',
   'partial-open': 'only part of the change is earned, or the ending leaves it open',
 });
+
+// Every anchor field either host can author, derived from the shared per-host
+// table rather than restated, so a sixth anchor lands here for free.
+const ALL_EVIDENCE_FIELDS = Object.freeze([
+  ...new Set(Object.values(EVOLUTION_EVIDENCE_FIELDS).flat()),
+]);
+// `atIssue` is the one numeric anchor; the rest are strings.
+const TEXT_EVIDENCE_FIELDS = ALL_EVIDENCE_FIELDS.filter((field) => field !== 'atIssue');
+
+const asText = (value) => (typeof value === 'string' ? value : '');
+
+/** The authored stage for `stageId`, or `null` — the lens stores stages sparsely. */
+export const evolutionStage = (evolution, stageId) => (
+  (Array.isArray(evolution?.stages) ? evolution.stages : [])
+    .find((stage) => stage?.stageId === stageId) || null
+);
+
+// Mirror of the server's "authored?" rules (`sanitizeEvolutionEvidence` /
+// `sanitizeEvolutionStage` / `sanitizeCharacterEvolution`) so an editor's draft
+// collapses to the same shape the sanitizer would produce. That is what makes a
+// present-but-empty field a REAL clear instead of an empty husk the server then
+// drops on the next save, and what keeps an untouched lens byte-stable across a
+// round trip. Text is kept verbatim (not clause-trimmed) — the caps live on the
+// inputs, and trimming mid-type would fight the author.
+const cleanEvidence = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const evidence = { atIssue: Number.isFinite(raw.atIssue) ? raw.atIssue : null };
+  for (const field of TEXT_EVIDENCE_FIELDS) evidence[field] = asText(raw[field]).trim();
+  const authored = evidence.atIssue !== null
+    || TEXT_EVIDENCE_FIELDS.some((field) => evidence[field]);
+  return authored ? evidence : null;
+};
+
+const cleanStage = (raw) => {
+  if (!EVOLUTION_STAGES.includes(raw?.stageId)) return null;
+  const stage = { stageId: raw.stageId };
+  let authored = false;
+  for (const field of EVOLUTION_STAGE_TEXT_FIELDS) {
+    stage[field] = asText(raw[field]);
+    if (stage[field].trim()) authored = true;
+  }
+  stage.evidence = cleanEvidence(raw.evidence);
+  return authored || stage.evidence ? stage : null;
+};
+
+// A lens with no declared outcome, no note and no stage is nothing at all —
+// returning null (rather than an empty husk) is what lets a host omit the key
+// and keep a never-authored record byte-identical.
+const finishEvolution = (evolution) => (
+  evolution.outcome || evolution.outcomeNote.trim() || evolution.stages.length ? evolution : null
+);
+
+const asEvolution = (raw) => ({
+  outcome: EVOLUTION_OUTCOMES.includes(raw?.outcome) ? raw.outcome : null,
+  outcomeNote: asText(raw?.outcomeNote),
+  stages: (Array.isArray(raw?.stages) ? raw.stages : []).map(cleanStage).filter(Boolean),
+});
+
+/**
+ * Apply a lens-level patch (`outcome` / `outcomeNote`). Returns the next lens,
+ * or `null` once nothing is authored — callers store that `null` verbatim so a
+ * full clear persists as a clear.
+ */
+export const patchEvolution = (evolution, patch) => (
+  finishEvolution(asEvolution({ ...asEvolution(evolution), ...patch }))
+);
+
+/**
+ * Apply a patch to ONE stage, upserting it into canonical stage order and
+ * dropping it again once its prose and anchor are both blank.
+ */
+export function patchEvolutionStage(evolution, stageId, patch) {
+  const base = asEvolution(evolution);
+  const merged = cleanStage({ ...(evolutionStage(base, stageId) || {}), ...patch, stageId });
+  const byStage = new Map(base.stages.map((stage) => [stage.stageId, stage]));
+  if (merged) byStage.set(stageId, merged);
+  else byStage.delete(stageId);
+  return finishEvolution({
+    ...base,
+    stages: EVOLUTION_STAGES.map((id) => byStage.get(id)).filter(Boolean),
+  });
+}
+
+/** Apply a patch to one stage's evidence anchor, merging over what it already holds. */
+export const patchEvolutionEvidence = (evolution, stageId, patch) => patchEvolutionStage(
+  evolution,
+  stageId,
+  { evidence: { ...(evolutionStage(evolution, stageId)?.evidence || {}), ...patch } },
+);

@@ -29,11 +29,14 @@ import { fieldClass, labelClass } from './fieldStyles';
 import LoomAiRunStatus from './LoomAiRunStatus';
 import LoomEditorialAutomation from './LoomEditorialAutomation';
 import { fableLoomPlotPointKind } from '../../../../server/lib/fableLoomOutline.js';
+import CharacterEvolutionLens from '../character/CharacterEvolutionLens';
+import { EVOLUTION_STAGES, isDeclaredEvolution } from '../../lib/characterEvolution.js';
 
 const PLAN_SECTIONS = [
   { id: 'arc', label: 'Story arc' },
   { id: 'challenges', label: 'Plot & challenges' },
   { id: 'quests', label: 'Side quests' },
+  { id: 'cast', label: 'Cast evolution' },
   { id: 'episodes', label: 'Episode outlines' },
   { id: 'editorial', label: 'AI editor' },
   { id: 'handoffs', label: 'Viewer handoffs' },
@@ -57,7 +60,24 @@ const normalizePlan = (plan) => ({
   interEpisodeVoicemails: Array.isArray(plan?.interEpisodeVoicemails)
     ? plan.interEpisodeVoicemails : [],
   nextSeasonTeaser: plan?.nextSeasonTeaser || null,
+  // The OPTIONAL five-stage lens per cast member (#6440). Normalized to an
+  // array so the draft round-trips it through the single seriesPlan save; the
+  // save payload drops it again when empty (see planSavePayload).
+  characterEvolutions: Array.isArray(plan?.characterEvolutions) ? plan.characterEvolutions : [],
 });
+
+/**
+ * The plan body the save PATCH actually sends.
+ *
+ * `characterEvolutions` is OMITTED when nothing is authored, so a plan that
+ * never opted into the lens produces a request body byte-identical to the
+ * pre-lens one (the server sanitizer omits the key on exactly that rule). An
+ * absent key on this WHOLESALE-`seriesPlan` PATCH is itself the clear, so
+ * removing the last lens still persists as a clear rather than a no-op.
+ */
+const planSavePayload = ({ characterEvolutions, ...rest }) => (
+  characterEvolutions?.length ? { ...rest, characterEvolutions } : rest
+);
 
 const episodeBoundaryKey = (fromEpisodeId, toEpisodeId) => `${fromEpisodeId}::${toEpisodeId}`;
 
@@ -77,7 +97,7 @@ const withVoicemailDrafts = (plan, episodes) => {
   });
 };
 
-export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
+export default function LoomSeriesPlan({ loom, universe, onLoomUpdate }) {
   const [requestedSection, setSection] = useDrawerTab('section', 'arc', PLAN_SECTIONS.map(({ id }) => id));
   const contentRef = useRef(null);
   const [plan, setPlan] = useState(() => normalizePlan(loom.seriesPlan));
@@ -136,7 +156,7 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
 
   const [save, saving] = useAsyncAction(async () => {
     const submittedRevision = revisionRef.current;
-    const updated = await updateLoom(loom.id, { seriesPlan: plan }, { silent: true });
+    const updated = await updateLoom(loom.id, { seriesPlan: planSavePayload(plan) }, { silent: true });
     savedRevisionRef.current = submittedRevision;
     onLoomUpdate(updated);
     setDirty(revisionRef.current > submittedRevision);
@@ -234,6 +254,15 @@ export default function LoomSeriesPlan({ loom, onLoomUpdate }) {
           />
 
           </div>
+          <div hidden={requestedSection !== 'cast'} role="tabpanel" aria-labelledby="tab-cast" id="series-section-cast" tabIndex={-1} className="focus:outline-none">
+            <CastEvolutionPlan
+              loom={loom}
+              universe={universe}
+              entries={plan.characterEvolutions}
+              onChange={(characterEvolutions) => changePlan((current) => ({ ...current, characterEvolutions }))}
+            />
+          </div>
+
           <div hidden={requestedSection !== 'episodes'} role="tabpanel" aria-labelledby="tab-episodes" id="series-section-episodes">
             <EpisodeBeatReadiness loom={loom} />
           </div>
@@ -700,6 +729,146 @@ function SeriesDeliveryPlan({ plan, episodes, onChange }) {
         </div>
       )}
     </section>
+  );
+}
+
+// Stable per-entry key. The canon `chr-` pointer is the identity the lens is
+// stored under; a name-only entry (a peer that authored one before linking the
+// cast) falls back to its name, and the index keeps two blanks distinct.
+const castEntryKey = (entry, index) => entry.characterId || `name:${entry.characterName || index}`;
+
+/**
+ * "Cast evolution" — one OPTIONAL five-stage lens per cast member, stored in
+ * `seriesPlan.characterEvolutions[]` and saved through the same single
+ * `updateLoom({ seriesPlan })` request as every other plan section, so a lens
+ * edit rides the existing dirty/unsaved-changes affordance instead of racing
+ * its own PATCH.
+ *
+ * Cast members are PICKED from the linked universe, never invented here — the
+ * lens links by canon `chr-` id and denormalizes the name only for display, so
+ * a rename in the universe never orphans the lens. The universe-level
+ * psychology profile rides along as read-only baseline context.
+ */
+function CastEvolutionPlan({ loom, universe, entries, onChange }) {
+  const cast = Array.isArray(universe?.characters) ? universe.characters : [];
+  // Open a just-added card so the lens is ready to author, the same affordance
+  // PlanCollection gives a new plot point.
+  const collectionRef = useRef(null);
+  const previousKeys = useRef(new Set(entries.map(castEntryKey)));
+  useEffect(() => {
+    const keys = entries.map(castEntryKey);
+    const added = keys.find((key) => !previousKeys.current.has(key));
+    previousKeys.current = new Set(keys);
+    if (!added) return;
+    const row = Array.from(collectionRef.current?.querySelectorAll('[data-cast-entry]') || [])
+      .find((element) => element.dataset.castEntry === added);
+    if (row) row.open = true;
+    row?.scrollIntoView?.({ block: 'nearest' });
+  }, [entries]);
+  const episodes = loom.episodes.map((episode) => ({
+    id: episode.id,
+    label: `${episode.number}. ${episode.title || 'Untitled'}`,
+  }));
+  // Outline scene keys resolve loom-wide (matching fableLoomEvolutionEvidenceRefs
+  // on the server), so a key reused across two episodes is ONE anchor — dedupe
+  // it rather than rendering two options that mean the same thing.
+  const scenes = [];
+  const seenSceneKeys = new Set();
+  for (const episode of loom.episodes) {
+    for (const scene of episode.storyOutline?.scenes || []) {
+      if (!scene?.key || seenSceneKeys.has(scene.key)) continue;
+      seenSceneKeys.add(scene.key);
+      scenes.push({ id: scene.key, label: `${episode.number}. ${scene.key}`, episodeId: episode.id });
+    }
+  }
+  const claimed = new Set(entries.map((entry) => entry.characterId).filter(Boolean));
+  const available = cast.filter((character) => !claimed.has(character.id));
+
+  const addCharacter = (characterId) => {
+    const character = cast.find((candidate) => candidate.id === characterId);
+    if (!character) return;
+    onChange([...entries, { characterId: character.id, characterName: character.name || '', evolution: null }]);
+  };
+  const patchEntry = (index, evolution) => onChange(entries
+    .map((entry, i) => (i === index ? { ...entry, evolution } : entry)));
+  const removeEntry = (index) => onChange(entries.filter((_, i) => i !== index));
+  const moveEntry = (index, direction) => {
+    const next = [...entries];
+    const target = index + direction;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  };
+
+  return (
+    <div ref={collectionRef} className="rounded-lg border border-port-border bg-port-card p-4 space-y-4">
+      <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">Cast evolution</h3>
+          <p className="text-xs text-port-text-muted mt-1">
+            The belief each cast member has under test, the pressure on it, and what their choices cause.
+            Optional per character — an unset lens changes nothing about the plan.
+          </p>
+        </div>
+        {available.length ? (
+          <FormField label="Add cast member" labelClassName={labelClass} className="w-full sm:w-64 shrink-0">
+            <select
+              id="series-cast-add"
+              className={fieldClass}
+              value=""
+              onChange={(event) => addCharacter(event.target.value)}
+            >
+              <option value="">Pick a character…</option>
+              {available.map((character) => (
+                <option key={character.id} value={character.id}>{character.name || character.id}</option>
+              ))}
+            </select>
+          </FormField>
+        ) : null}
+      </div>
+
+      {!cast.length ? (
+        <p className="text-xs text-port-text-muted">
+          {universe
+            ? 'The linked universe has no cast yet. Add characters there to author their evolution here.'
+            : 'Link a universe to this loom to pick the cast whose evolution you want to plan.'}
+        </p>
+      ) : null}
+
+      {!entries.length ? (
+        <p className="text-xs text-port-text-muted">No character evolution authored yet.</p>
+      ) : entries.map((entry, index) => {
+        const character = cast.find((candidate) => candidate.id === entry.characterId);
+        const name = character?.name || entry.characterName || entry.characterId || 'Unnamed character';
+        const authoredStages = entry.evolution?.stages?.length || 0;
+        return (
+          <details key={castEntryKey(entry, index)} data-cast-entry={castEntryKey(entry, index)} className="rounded border border-port-border p-3">
+            <summary className="min-h-[44px] cursor-pointer text-sm leading-6">
+              <span className="font-medium">{name}</span>
+              <span className="ml-2 text-xs text-port-text-muted">
+                {isDeclaredEvolution(entry.evolution) ? entry.evolution.outcome : 'outcome not declared'}
+                {' · '}{authoredStages}/{EVOLUTION_STAGES.length} stages
+              </span>
+            </summary>
+            <div className="space-y-3 pt-3">
+              <div className="flex justify-end gap-1.5">
+                <button type="button" aria-label={`Move ${name} up`} disabled={index === 0} onClick={() => moveEntry(index, -1)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-text-muted hover:text-port-text disabled:opacity-30"><ChevronUp size={15} /></button>
+                <button type="button" aria-label={`Move ${name} down`} disabled={index === entries.length - 1} onClick={() => moveEntry(index, 1)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-text-muted hover:text-port-text disabled:opacity-30"><ChevronDown size={15} /></button>
+                <button type="button" aria-label={`Remove ${name} evolution lens`} onClick={() => removeEntry(index)} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-port-text-muted hover:text-port-error"><Trash2 size={15} /></button>
+              </div>
+              <CharacterEvolutionLens
+                idPrefix={`series-cast-${entry.characterId || index}`}
+                host="fableLoom"
+                evolution={entry.evolution}
+                anchors={{ episodes, scenes }}
+                psychology={character?.psychology}
+                onChange={(evolution) => patchEntry(index, evolution)}
+              />
+            </div>
+          </details>
+        );
+      })}
+    </div>
   );
 }
 

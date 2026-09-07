@@ -292,3 +292,197 @@ describe('LoomSeriesPlan', () => {
     ));
   });
 });
+
+// The OPTIONAL five-stage character evolution lens (#6441). Its own fixture so
+// the outline-scene keys and linked cast this section needs stay out of the
+// plan fixture every other test shares.
+const castLoom = (plan = {}) => ({
+  id: 'loom-1',
+  name: 'Example Loom',
+  episodes: [
+    { id: 'ep-1', number: 1, title: 'Pilot', storyOutline: { scenes: [{ key: 'the-blockade' }] } },
+    { id: 'ep-2', number: 2, title: 'Finale', storyOutline: { scenes: [{ key: 'the-cost' }] } },
+  ],
+  seriesPlan: { storyArc: 'An old arc.', plotPoints: [], sideQuests: [], ...plan },
+});
+
+const castUniverse = {
+  id: 'uni-1',
+  characters: [
+    {
+      id: 'chr-1111',
+      name: 'Vale',
+      psychology: { theoryOfControl: 'If I stay useful, nobody leaves.' },
+    },
+    { id: 'chr-2222', name: 'Roan' },
+  ],
+};
+
+const renderCastPlan = (props, entry = '/?section=cast') => render(<RouterProvider router={createMemoryRouter([
+  { path: '/', element: <LoomSeriesPlan universe={castUniverse} onLoomUpdate={vi.fn()} {...props} /> },
+], { initialEntries: [entry] })} />);
+
+const savedPlan = () => api.updateLoom.mock.calls.at(-1)[1].seriesPlan;
+
+describe('LoomSeriesPlan — cast evolution lens', () => {
+  it('deep-links straight to the cast section and offers the linked universe cast', () => {
+    renderCastPlan({ loom: castLoom() });
+
+    expect(screen.getByRole('heading', { name: 'Cast evolution' })).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Add cast member' })).toBeVisible();
+    expect(screen.getByText('No character evolution authored yet.')).toBeVisible();
+  });
+
+  it('sends a plan with no lens as a body byte-identical to the pre-lens one', async () => {
+    api.updateLoom.mockResolvedValue(castLoom());
+    renderCastPlan({ loom: castLoom() });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Story arc' }));
+    fireEvent.change(screen.getByRole('textbox', { name: /story arc/i }), { target: { value: 'A stronger arc.' } });
+    fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
+
+    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    expect(Object.keys(savedPlan())).toEqual([
+      'storyArc', 'plotPoints', 'sideQuests', 'deliveryOptions', 'interEpisodeVoicemails', 'nextSeasonTeaser',
+    ]);
+  });
+
+  it('authors a full five-stage lens against episode and scene evidence', async () => {
+    const user = userEvent.setup();
+    api.updateLoom.mockResolvedValue(castLoom());
+    renderCastPlan({ loom: castLoom() });
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Add cast member' }), 'chr-1111');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Declared outcome' }), 'full-change');
+    for (const stage of ['control strategy failing', 'pressure forces exploration', 'commitment to change', 'cost tested', 'final proof']) {
+      fireEvent.change(screen.getByRole('textbox', { name: `${stage} — Belief under test` }), {
+        target: { value: `${stage}: usefulness buys safety` },
+      });
+    }
+    await user.selectOptions(screen.getByRole('combobox', { name: 'final proof — Evidence episode' }), 'ep-2');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'final proof — Evidence scene' }), 'the-cost');
+    fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
+
+    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    const [lens] = savedPlan().characterEvolutions;
+    expect(lens).toMatchObject({ characterId: 'chr-1111', characterName: 'Vale' });
+    expect(lens.evolution.outcome).toBe('full-change');
+    expect(lens.evolution.stages.map((s) => s.stageId)).toEqual([
+      'control-strategy-failing', 'pressure-forces-exploration', 'commitment-to-change', 'cost-tested', 'final-proof',
+    ]);
+    expect(lens.evolution.stages.at(-1).evidence).toMatchObject({ episodeId: 'ep-2', sceneKey: 'the-cost' });
+  });
+
+  it('keeps a sparse lens sparse and treats a declared flat arc as complete, not a defect', async () => {
+    const user = userEvent.setup();
+    api.updateLoom.mockResolvedValue(castLoom());
+    renderCastPlan({ loom: castLoom() });
+
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Add cast member' }), 'chr-2222');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Declared outcome' }), 'flat-testing');
+    fireEvent.change(screen.getByRole('textbox', { name: 'control strategy failing — External pressure' }), {
+      target: { value: 'The town votes to abandon the relay.' },
+    });
+    fireEvent.change(screen.getByRole('textbox', { name: 'commitment to change — Character choice' }), {
+      target: { value: 'Stays, and changes the vote instead.' },
+    });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save plan/i })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
+
+    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    const [lens] = savedPlan().characterEvolutions;
+    expect(lens.evolution.outcome).toBe('flat-testing');
+    expect(lens.evolution.stages.map((s) => s.stageId))
+      .toEqual(['control-strategy-failing', 'commitment-to-change']);
+  });
+
+  it('marks an unresolvable evidence anchor stale and re-picks it in one click', async () => {
+    const user = userEvent.setup();
+    api.updateLoom.mockResolvedValue(castLoom());
+    renderCastPlan({
+      loom: castLoom({
+        characterEvolutions: [{
+          characterId: 'chr-1111',
+          characterName: 'Vale',
+          evolution: {
+            outcome: 'partial-open',
+            outcomeNote: '',
+            stages: [{
+              stageId: 'cost-tested',
+              testedBelief: 'Usefulness buys safety.',
+              externalPressure: '',
+              characterChoice: '',
+              causalConsequence: '',
+              evidence: { atIssue: null, atSceneAnchor: '', transitionId: '', episodeId: 'ep-deleted', sceneKey: '' },
+            }],
+          },
+        }],
+      }),
+    });
+
+    await user.click(screen.getByText('Vale'));
+    expect(screen.getByText('Stale anchor')).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'cost tested — Evidence episode' }))
+      .toHaveValue('ep-deleted');
+    await user.click(screen.getByRole('button', { name: 'Re-pick cost tested anchor' }));
+
+    expect(screen.queryByText('Stale anchor')).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'cost tested — Evidence episode' }), 'ep-1');
+    fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
+
+    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    expect(savedPlan().characterEvolutions[0].evolution.stages[0].evidence)
+      .toMatchObject({ episodeId: 'ep-1' });
+  });
+
+  it('persists a fully cleared lens as a clear rather than a no-op', async () => {
+    const user = userEvent.setup();
+    api.updateLoom.mockResolvedValue(castLoom());
+    renderCastPlan({
+      loom: castLoom({
+        characterEvolutions: [{
+          characterId: 'chr-1111',
+          characterName: 'Vale',
+          evolution: {
+            outcome: 'tragic-refusal',
+            outcomeNote: 'He never lets go.',
+            stages: [{
+              stageId: 'final-proof',
+              testedBelief: 'Usefulness buys safety.',
+              externalPressure: '',
+              characterChoice: '',
+              causalConsequence: '',
+              evidence: null,
+            }],
+          },
+        }],
+      }),
+    });
+
+    await user.click(screen.getByText('Vale'));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Declared outcome' }), '');
+    fireEvent.change(screen.getByRole('textbox', { name: 'Outcome note' }), { target: { value: '' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'final proof — Belief under test' }), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: /save plan/i }));
+
+    await waitFor(() => expect(api.updateLoom).toHaveBeenCalled());
+    expect(savedPlan().characterEvolutions[0].evolution).toBeNull();
+  });
+
+  it('shows the universe psychology profile as read-only baseline context', async () => {
+    const user = userEvent.setup();
+    renderCastPlan({
+      loom: castLoom({
+        characterEvolutions: [{ characterId: 'chr-1111', characterName: 'Vale', evolution: null }],
+      }),
+    });
+
+    await user.click(screen.getByText('Vale'));
+    await user.click(screen.getByText('Universe baseline (read-only)'));
+    expect(screen.getByText('Universe baseline (read-only)')).toBeVisible();
+    expect(screen.getByText('If I stay useful, nobody leaves.')).toBeVisible();
+    expect(screen.queryByRole('textbox', { name: /theory of control/i })).not.toBeInTheDocument();
+  });
+});
