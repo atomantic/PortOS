@@ -42,6 +42,10 @@ describe('isWithinAllowedRoots', () => {
     expect(isWithinAllowedRoots(join(homedir(), 'projects', 'foo'))).toBe(true);
   });
 
+  it.runIf(!IS_WINDOWS)('accepts a path under /workspace (Docker/devcontainer/agent layouts)', () => {
+    expect(isWithinAllowedRoots('/workspace/PortOS')).toBe(true);
+  });
+
   it('rejects a path outside every allowed root', () => {
     // /etc is not in DEFAULT_WORKSPACE_ROOTS and (in tests) PORTOS_WORKSPACE_ROOTS is unset.
     expect(isWithinAllowedRoots('/etc/shadow')).toBe(false);
@@ -108,8 +112,9 @@ describe('outsideAllowedRootsMessage', () => {
 });
 
 // Windows repos routinely live off the system drive (D:\code, E:\projects), and
-// the POSIX defaults (/tmp, /Users, /Volumes, /opt) resolve to nothing useful
-// there — so a non-system lettered drive is allowed, the way /Volumes is on macOS.
+// the POSIX defaults (/tmp, /Users, /Volumes, /opt, /workspace) resolve to nothing
+// useful there — so a non-system lettered drive is allowed, the way /Volumes is on
+// macOS.
 describe('Windows non-system drives', () => {
   const otherDrive = SYSTEM_DRIVE === 'Z:' ? 'Y:\\' : 'Z:\\';
 
@@ -128,6 +133,7 @@ describe('Windows non-system drives', () => {
   it.runIf(!IS_WINDOWS)('mounted-volume roots cover the Linux mount points', () => {
     expect(isWithinAllowedRoots('/mnt/data/code')).toBe(true);
     expect(isWithinAllowedRoots('/media/usb/repo')).toBe(true);
+    expect(isWithinAllowedRoots('/workspace/PortOS')).toBe(true);
   });
 });
 
