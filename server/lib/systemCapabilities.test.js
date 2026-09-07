@@ -161,6 +161,30 @@ describe('systemCapabilities', () => {
     expect(hardwareRequirementsForProviderModel({ endpoint: 'https://api.example.com/v1' }, 'gemma4-31b')).toEqual({});
   });
 
+  // #6466 — the shipped `mtplx` record is a plain API provider (`type: 'api'`)
+  // with no `mtplxBacked` marker; only `localRuntimeKind`'s id-based fallback
+  // names it, so this pins that the Apple-Silicon requirement and the local
+  // hardware gate both still apply to it once collapsed onto that one call.
+  it('resolves the mtplx requirement via localRuntimeKind for the marked wrapper and the bare API record alike', () => {
+    const expected = { platforms: ['darwin'], requiresAppleSilicon: true };
+    expect(hardwareRequirementsForProvider({ id: 'opencode-mtplx', mtplxBacked: true })).toMatchObject(expected);
+    expect(hardwareRequirementsForProvider({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toMatchObject(expected);
+    // An unrelated local API on the same generic port must not inherit it.
+    expect(hardwareRequirementsForProvider({ id: 'some-local-api', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toEqual({});
+  });
+
+  // `localProvider` (internal) gates the per-model local hardware floors —
+  // this exercises it through the bare mtplx API record via the same public
+  // entry point the marker-backed case above uses.
+  it('gates per-model local hardware floors for the bare mtplx API record too', () => {
+    const provider = { id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' };
+    expect(hardwareRequirementsForProviderModel(provider, 'qwen3.8-27b-mlx')).toMatchObject({
+      platforms: ['darwin'],
+      requiresAppleSilicon: true,
+      minMemoryGb: 32,
+    });
+  });
+
   it('decorates provider and model compatibility in one response projection', () => {
     const provider = withProviderHardwareCompatibility({
       id: 'vllm',

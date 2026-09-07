@@ -300,6 +300,18 @@ export function localRuntimeKind(provider) {
   if (namespace) return namespace;
   if (provider?.id === 'slotstream' || /slotstream/i.test(provider?.name || '')) return 'slotstream';
   if (Number(localEndpointPort(provider?.endpoint)) === PORTS.SLOTSTREAM) return 'slotstream';
+  // The shipped `mtplx` record is a plain OpenAI-compatible API provider with no
+  // marker of its own — `mtplxBacked` only ever rides the OpenCode/Claude CLI
+  // wrappers, never this record (#6466). `id` is the one signal it carries.
+  // Deliberately NO port arm here, unlike slotstream two lines up: slotstream's
+  // port is a PortOS-dedicated constant, while MTPLX's is user-configurable and
+  // its default (`:8000`) is a generic port — keying on it would claim an
+  // unrelated local API as MTPLX. `isMtplxProvider` in `mtplxServerManager.js`
+  // layers a narrower port check on top of this for an unmarked/unnamed
+  // provider aimed at wherever the managed daemon is actually listening right
+  // now; that check needs live process state this side-effect-free module
+  // cannot import without a cycle.
+  if (provider?.id === 'mtplx') return 'mtplx';
   return localBackendForProvider(provider);
 }
 
@@ -318,6 +330,13 @@ export function localRuntimeKind(provider) {
  *     a model that is installed and serving — that is how a pr-reviewer stage
  *     pinned to a freshly pulled Ollama model got "not offered by provider" on
  *     every dispatch.
+ *
+ * The shipped `mtplx` API record falls into the second bucket now that
+ * `localRuntimeKind` names it (#6466): it lists one static id, but `mtplx serve`
+ * names its process after whatever checkpoint is actually loaded, so the
+ * record's `models` array is exactly the same kind of stale snapshot Ollama's
+ * is — pass-through is correct here for the same reason, not a side effect of
+ * the collapse.
  *
  * Anything else enumerates its own catalog, and a pin outside it reaches the
  * CLI as a model it cannot serve.

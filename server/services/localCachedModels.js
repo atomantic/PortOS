@@ -63,17 +63,17 @@ const CACHED_MODEL_PROBES = {
  * a provider aimed there must never be answered with THIS host's cache. It also
  * keeps the ~one refresh per non-local provider from loading either manager.
  *
- * `provider.id` backs up `localRuntimeKind` because the shipped `mtplx` record
- * is a plain OpenAI-compatible endpoint carrying no vendor marker for
- * `localRuntimeKind` to read. Each probe re-checks identity itself, so a key
- * match is routing, not a verdict.
+ * `localRuntimeKind` resolves the shipped `mtplx` record by id (#6466) same as
+ * it resolves a marker-backed wrapper, so one lookup routes both. Each probe
+ * re-checks identity itself regardless, so a key match here is routing, not a
+ * verdict.
  *
  * @param {{id?: string, type?: string, endpoint?: string}|null|undefined} provider
  * @returns {Promise<string[]|null>}
  */
 export async function localCachedModelIds(provider) {
   if (!isLocalInstanceEndpoint(provider?.endpoint)) return null;
-  const load = CACHED_MODEL_PROBES[localRuntimeKind(provider) || provider?.id];
+  const load = CACHED_MODEL_PROBES[localRuntimeKind(provider)];
   if (!load) return null;
   const probe = await load();
   return probe(provider);

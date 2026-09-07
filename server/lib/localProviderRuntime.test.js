@@ -5,6 +5,7 @@ import {
   localBackendForProvider,
   localRuntimeForProvider,
   localRuntimeKind,
+  modelPinIsOffered,
   normalizeOpenAiBaseUrl,
 } from './localProviderRuntime.js';
 import { opencodeLocalBaseUrl } from './opencodeConfig.js';
@@ -100,6 +101,18 @@ describe('localRuntimeKind', () => {
     expect(localRuntimeKind({ name: 'Slotstream (local)' })).toBe('slotstream');
     expect(localRuntimeKind({ endpoint: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1` })).toBe('slotstream');
     expect(localRuntimeKind({ endpoint: 'http://127.0.0.1:11434/v1' })).toBe('ollama');
+  });
+
+  // #6466 — the shipped `mtplx` API record (`type: 'api'`, no `mtplxBacked`
+  // marker) is the one shape none of the earlier fallbacks reach, so it needs
+  // its own id-based arm rather than a generic port check.
+  it('recognizes the shipped mtplx API record by id, with no port arm', () => {
+    expect(localRuntimeKind({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toBe('mtplx');
+    // :8000 is a generic port a user's own local API could equally be bound
+    // to — MTPLX's is user-configurable, so an unrelated `id` on that same
+    // port must never resolve as MTPLX the way slotstream's DEDICATED port
+    // resolves above.
+    expect(localRuntimeKind({ id: 'some-local-api', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toBeNull();
   });
 });
 
@@ -218,6 +231,68 @@ describe('localRuntimeForProvider', () => {
       envVars: { OPENCODE_CONFIG_CONTENT: opencodeConfig('ollama', 'http://localhost:11600/v1') },
     });
     expect(runtime.endpoint).toBe('http://localhost:11600/v1');
+  });
+
+  // #6466 — before the id-based fallback, `localRuntimeKind` had no answer for
+  // the bare API record, so this returned null and the shipped provider got no
+  // readiness checklist at all.
+  it('resolves the shipped mtplx API record — no command, no marker', () => {
+    const runtime = localRuntimeForProvider({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' });
+    expect(runtime.kind).toBe('mtplx');
+    expect(runtime.label).toBe('MTPLX');
+    expect(runtime.endpoint).toBe('http://127.0.0.1:8000/v1');
+  });
+});
+
+describe('modelPinIsOffered', () => {
+  it('passes through when the provider lists no models of its own', () => {
+    expect(modelPinIsOffered({ id: 'custom-api', models: [] }, 'anything')).toBe(true);
+    expect(modelPinIsOffered({ id: 'custom-api' }, 'anything')).toBe(true);
+  });
+
+  it('validates a pin against the listed catalog for a non-local provider', () => {
+    const provider = { id: 'openai', models: ['gpt-x', 'gpt-y'] };
+    expect(modelPinIsOffered(provider, 'gpt-x')).toBe(true);
+    expect(modelPinIsOffered(provider, 'gpt-z')).toBe(false);
+  });
+
+  it('passes through for a local-daemon provider, whatever the pin', () => {
+    // Ollama/LM Studio's `models` array is a cached snapshot; the daemon on
+    // this machine is the authority, so a pin outside the stale list must
+    // still be considered offered.
+    const provider = { command: 'opencode', ollamaBacked: true, models: ['stale-model'] };
+    expect(modelPinIsOffered(provider, 'freshly-pulled-model')).toBe(true);
+  });
+
+  // #6466 — decision: the shipped mtplx API record is a pass-through too, once
+  // `localRuntimeKind` names it. `mtplx serve` names its process after whatever
+  // checkpoint is actually loaded, so the record's static `models` entry is the
+  // same kind of stale snapshot Ollama's is — judging a pin against it would
+  // reject a checkpoint that is installed and serving.
+  it('passes through for the shipped mtplx API record, whatever the pin', () => {
+    const provider = {
+      id: 'mtplx',
+      type: 'api',
+      endpoint: 'http://127.0.0.1:8000/v1',
+      models: ['mtplx-qwen38-27b-optimized-speed'],
+    };
+    expect(modelPinIsOffered(provider, 'a-different-checkpoint-the-daemon-now-serves')).toBe(true);
+  });
+
+  it('is id-based, not locality-gated, matching the existing ollama/slotstream id checks', () => {
+    // `localRuntimeKind`'s id-based arms (ollama, slotstream, and now mtplx)
+    // do not themselves check the endpoint's locality — the callers that need
+    // that distinction (`isMtplxProvider`, `localRuntimeForProvider`) apply it
+    // on top. `modelPinIsOffered` calls `localRuntimeKind` raw, so an `id:
+    // 'mtplx'` record pointed at another machine passes through here exactly
+    // as an `id: 'ollama'` one already does — not a new gap this issue opens.
+    const provider = {
+      id: 'mtplx',
+      type: 'api',
+      endpoint: 'http://192.0.2.10:8000/v1',
+      models: ['mtplx-qwen38-27b-optimized-speed'],
+    };
+    expect(modelPinIsOffered(provider, 'a-different-checkpoint')).toBe(true);
   });
 });
 

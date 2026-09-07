@@ -320,6 +320,22 @@ describe('getProviderReadiness', () => {
     expect(checkById(readiness, 'server').fixHint).toMatch(/Install & start MTPLX/);
   });
 
+  // #6466 — before `localRuntimeKind` learned the bare API record's id, this
+  // returned null (no card at all) for the shipped `mtplx` provider: only the
+  // `mtplxBacked` OpenCode/Claude wrapper got a readiness checklist. That was
+  // an accidental gap, not a decision — MTPLX's direct-API provider needs the
+  // exact same install/start/model checklist a wrapper pointed at it gets.
+  it('offers the same MTPLX checklist for the bare API record, not only the marked wrapper', async () => {
+    const restore = pinPlatform('darwin');
+    const readiness = await getProviderReadiness(
+      { id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1', defaultModel: 'mtplx-qwen38-27b-optimized-speed' },
+      { findCommand: () => null, probe: unreachable() },
+    );
+    restore();
+    expect(readiness).not.toBeNull();
+    expect(readiness.setup).toMatchObject({ runtime: 'mtplx', action: 'install-start', blockedReason: null });
+  });
+
   it('names the empty model cache on the checklist, and offers the download instead of a start', async () => {
     // The catch-22 as reported: "MTPLX installed ✓ / server not responding —
     // use Start MTPLX, PortOS does this for you", and Start answered "no model
