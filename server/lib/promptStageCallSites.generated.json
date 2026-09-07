@@ -437,7 +437,7 @@
     "server/services/universeCastIntegrity.js"
   ],
   "universe-character-augment": [
-    "server/services/universeCastIntegrity.js"
+    "server/services/characterAugmentation.js"
   ],
   "universe-character-expand": [
     "server/services/universeCharacterExpand.js"

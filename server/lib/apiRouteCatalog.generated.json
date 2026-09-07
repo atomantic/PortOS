@@ -17602,6 +17602,22 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/api/writers-room/works/:id/characters/:characterId/augment",
+      "mountPath": "/api/writers-room",
+      "sources": [
+        "server/routes/writersRoom.js"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/writers-room/works/:id/characters/:characterId/augment/apply",
+      "mountPath": "/api/writers-room",
+      "sources": [
+        "server/routes/writersRoom.js"
+      ]
+    },
+    {
       "method": "PUT",
       "path": "/api/writers-room/works/:id/draft",
       "mountPath": "/api/writers-room",
@@ -17988,8 +18004,8 @@
   ],
   "stats": {
     "mounts": 150,
-    "operations": 2228,
-    "declarations": 2236,
+    "operations": 2230,
+    "declarations": 2238,
     "sourceFiles": 233
   }
 }

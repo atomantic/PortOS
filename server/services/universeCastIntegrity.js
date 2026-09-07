@@ -15,7 +15,9 @@
  *   3. `proposeCharacterAugmentation` / `applyCharacterAugmentation` — the
  *      augment-POPULATED-fields action the existing expand deliberately can't
  *      do. Propose writes NOTHING and returns before/after per field; apply
- *      takes back only the paths the user selected.
+ *      takes back only the paths the user selected. Both are thin wrappers over
+ *      `characterAugmentation.js`, which Writers Room shares (#6417) — this
+ *      module contributes only the universe read/write.
  *
  * Reports are derived, never stored, so "invalidate stale reports on relevant
  * edits" is a fingerprint comparison rather than a cache: `applyCharacterAugmentation`
@@ -27,22 +29,24 @@ import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { runPromptRefineRaw } from './pipeline/refineHelpers.js';
 import { resolveStageContext } from './stageRunner.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { sanitizeBibleField } from '../lib/storyBible.js';
 import { shortId } from '../lib/fileUtils.js';
+import {
+  acceptedAugmentFields,
+  applyAugmentationToCharacter,
+  augmentationIsStale,
+  characterForReview,
+  noAugmentSelectionError,
+  proposeAugmentation,
+  staleAugmentError,
+} from './characterAugmentation.js';
 import {
   INTEGRITY_DIMENSIONS,
   buildCastIntegrityReport,
   characterFingerprint,
-  characterIntegrityDepth,
-  characterIntegrityDimensions,
-  isAugmentableFieldPath,
   mergeSemanticFindings,
-  readIntegrityField,
-  withIntegrityField,
 } from '../lib/characterIntegrity.js';
 
 const REVIEW_STAGE = 'universe-cast-integrity-review';
-const AUGMENT_STAGE = 'universe-character-augment';
 
 /**
  * How many characters one semantic review call covers. A cast larger than this
@@ -57,31 +61,6 @@ const notFound = (entryId) => new ServerError(`Character ${entryId} not found in
 });
 
 const castOf = (universe) => (Array.isArray(universe?.characters) ? universe.characters.filter((c) => c?.id) : []);
-
-/** The character record the review prompt sees — framework + the fields the dimensions judge against. */
-const characterForReview = (entry) => ({
-  id: entry.id,
-  name: entry.name || '',
-  role: entry.role || '',
-  arcType: entry.arcType || null,
-  depth: characterIntegrityDepth(entry),
-  dimensions: characterIntegrityDimensions(entry),
-  motivations: entry.motivations || '',
-  ghost: entry.ghost || '',
-  wound: entry.wound || '',
-  lie: entry.lie || '',
-  want: entry.want || '',
-  need: entry.need || '',
-  personality: entry.personality || '',
-  background: entry.background || '',
-  secrets: Array.isArray(entry.secrets) ? entry.secrets : [],
-  psychology: entry.psychology || null,
-  relationshipLinks: (Array.isArray(entry.relationshipLinks) ? entry.relationshipLinks : []).map((l) => ({
-    targetCharacterId: l?.targetCharacterId || '',
-    type: l?.type || 'custom',
-    description: l?.description || '',
-  })),
-});
 
 /**
  * Ids the caller asked about, narrowed to ids that actually exist. `null` (the
@@ -182,16 +161,10 @@ export async function reviewUniverseCast(universeId, { characterIds = null, prov
   };
 }
 
-/** Field paths the caller may ask to augment, narrowed to string-valued integrity paths. */
-const resolveAugmentPaths = (fields) => {
-  const requested = Array.isArray(fields) ? fields : [];
-  return [...new Set(requested.filter((f) => typeof f === 'string' && isAugmentableFieldPath(f)))];
-};
-
 /**
- * Propose sharper values for POPULATED fields. Writes nothing — the whole point
- * is that the author sees before/after and applies only what they accept ("AI
- * proposals are not automatically verified canon").
+ * Propose sharper values for POPULATED fields of one universe character.
+ * Storage is all this layer adds — the call, the field filtering and the
+ * fingerprint live in `characterAugmentation.js`, shared with Writers Room.
  */
 export async function proposeCharacterAugmentation(universeId, entryId, {
   fields, providerId, model,
@@ -200,66 +173,13 @@ export async function proposeCharacterAugmentation(universeId, entryId, {
   const cast = castOf(universe);
   const target = cast.find((c) => c.id === entryId);
   if (!target) throw notFound(entryId);
-  if (target.locked === true) return { locked: true, entry: target, proposals: [] };
-
-  const paths = resolveAugmentPaths(fields);
-  if (paths.length === 0) {
-    throw new ServerError('No augmentable fields requested', {
-      status: 400, code: 'UNIVERSE_CHARACTER_AUGMENT_NO_FIELDS',
-    });
-  }
-
-  const { content, rationale, runId, providerId: usedProvider, model: usedModel } = await runPromptRefineRaw({
-    templateName: AUGMENT_STAGE,
-    variables: {
-      characterJson: JSON.stringify(characterForReview(target), null, 2),
-      fieldsJson: JSON.stringify(paths.map((path) => ({ field: path, current: readIntegrityField(target, path) })), null, 2),
-      peersJson: JSON.stringify(
-        cast.filter((c) => c.id !== entryId).map((c) => ({ id: c.id, name: c.name, role: c.role || '' })),
-      ),
-    },
-    options: { providerId, model },
-    source: AUGMENT_STAGE,
-    logTag: null,
-    emptyError: {
-      code: 'UNIVERSE_CHARACTER_AUGMENT_EMPTY',
-      message: 'LLM returned an empty augmentation',
-    },
-  });
-
-  const requested = new Set(paths);
-  const seen = new Set();
-  const proposals = [];
-  for (const raw of Array.isArray(content.proposals) ? content.proposals : []) {
-    const field = typeof raw?.field === 'string' ? raw.field.trim() : '';
-    // Only fields the user asked about, once each — a model that volunteers a
-    // rewrite of an unrequested field would otherwise smuggle it into a preview
-    // the author is about to bulk-accept.
-    if (!requested.has(field) || seen.has(field)) continue;
-    const after = typeof raw.value === 'string' ? raw.value.trim() : '';
-    const before = readIntegrityField(target, field);
-    if (!after || after === before) continue;
-    seen.add(field);
-    proposals.push({
-      field,
-      before,
-      after,
-      rationale: typeof raw.rationale === 'string' ? raw.rationale.trim() : '',
-    });
-  }
-
-  return {
+  return proposeAugmentation({
     entry: target,
-    proposals,
-    // The author reviews against THIS version of the character; apply refuses
-    // if it moved on. Returned rather than stored, so there is no proposal
-    // record to garbage-collect.
-    fingerprint: characterFingerprint(target),
-    rationale,
-    runId,
-    providerId: usedProvider || null,
-    model: usedModel || null,
-  };
+    peers: cast.filter((c) => c.id !== entryId),
+    fields,
+    providerId,
+    model,
+  });
 }
 
 /**
@@ -271,13 +191,8 @@ export async function proposeCharacterAugmentation(universeId, entryId, {
  * expand runner re-derives its merge there.
  */
 export async function applyCharacterAugmentation(universeId, entryId, { fields = [], fingerprint } = {}) {
-  const accepted = (Array.isArray(fields) ? fields : [])
-    .filter((f) => typeof f?.field === 'string' && isAugmentableFieldPath(f.field) && typeof f.value === 'string' && f.value.trim());
-  if (accepted.length === 0) {
-    throw new ServerError('No fields selected to apply', {
-      status: 400, code: 'UNIVERSE_CHARACTER_AUGMENT_NO_SELECTION',
-    });
-  }
+  const accepted = acceptedAugmentFields(fields);
+  if (accepted.length === 0) throw noAugmentSelectionError();
 
   let outcome = { locked: false, stale: false, missing: false, appliedFields: [] };
   const updated = await updateUniverse(universeId, (latest) => {
@@ -292,34 +207,17 @@ export async function applyCharacterAugmentation(universeId, entryId, { fields =
       outcome = { ...outcome, locked: true };
       return null;
     }
-    if (fingerprint && characterFingerprint(current) !== fingerprint) {
+    if (augmentationIsStale(current, fingerprint)) {
       outcome = { ...outcome, stale: true };
       return null;
     }
-    let next = current;
-    const appliedFields = [];
-    for (const { field, value } of accepted) {
-      next = withIntegrityField(next, field, value.trim());
-      appliedFields.push(field);
-    }
-    // Re-sanitize the touched containers so caps/enums are enforced on values
-    // that came back from a model and then round-tripped through the client.
-    const psychology = sanitizeBibleField('character', current, 'psychology', next.psychology);
-    next = psychology ? { ...next, psychology } : next;
-    for (const field of new Set(appliedFields.filter((f) => !f.includes('.')))) {
-      next = { ...next, [field]: sanitizeBibleField('character', current, field, next[field]) };
-    }
+    const { next, appliedFields } = applyAugmentationToCharacter(current, accepted);
     outcome = { ...outcome, appliedFields };
     return { characters: list.map((c, i) => (i === idx ? next : c)) };
   });
 
   if (outcome.missing) throw notFound(entryId);
-  if (outcome.stale) {
-    throw new ServerError(
-      'This character changed since the proposal was generated — re-run the review and try again.',
-      { status: 409, code: 'UNIVERSE_CHARACTER_AUGMENT_STALE' },
-    );
-  }
+  if (outcome.stale) throw staleAugmentError();
   const universe = updated || await getUniverse(universeId);
   const entry = castOf(universe).find((c) => c.id === entryId) || null;
   if (outcome.locked) return { locked: true, entry, universe, appliedFields: [] };

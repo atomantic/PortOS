@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, Clapperboard, FileText, Image as ImageIcon, Link2, Loader2, RefreshCw, Users, X,
+  AlertTriangle, Clapperboard, FileText, Image as ImageIcon, Link2, Loader2, RefreshCw, Sparkles, Users, X,
 } from 'lucide-react';
-import { getWritersRoomSyncedReview } from '../../services/apiWritersRoom';
+import {
+  getWritersRoomSyncedReview,
+  proposeWritersRoomCharacterAugmentation,
+  applyWritersRoomCharacterAugmentation,
+} from '../../services/apiWritersRoom';
 import { timeAgo } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
+import useCharacterAugmentation from '../../hooks/useCharacterAugmentation';
+import AugmentPreview from '../castIntegrity/AugmentPreview';
 import {
   DEPTH_META,
   FINDING_KIND_META,
   REVIEW_STATUS_META,
+  findingIsRepairable,
   humanizeIntegrityField,
 } from '../../lib/characterIntegrity';
 
@@ -172,6 +179,23 @@ export default function SyncedReview({ work }) {
     return map;
   }, [cast]);
   const castGapCount = cast.coverage.filter((row) => row.findingCount > 0).length;
+
+  // Selective augmentation over the per-work bible (#6417). Same contract the
+  // Universe cast panel uses — the pane only supplies the work-scoped requests.
+  // `refresh` after an apply rather than patching the cast block in place: the
+  // findings, the depth ruling and the staging join are all DERIVED from the
+  // record that just changed, so a local patch would leave three of them stale.
+  const augment = useCharacterAugmentation({
+    propose: useCallback(
+      (characterId, fields) => proposeWritersRoomCharacterAugmentation(work.id, characterId, { fields }, { silent: true }),
+      [work.id],
+    ),
+    apply: useCallback(
+      (characterId, body) => applyWritersRoomCharacterAugmentation(work.id, characterId, body, { silent: true }),
+      [work.id],
+    ),
+    onApplied: refresh,
+  });
 
   // Resolve prose segment ids → headings for provenance labels.
   const segHeading = useMemo(() => {
@@ -389,6 +413,7 @@ export default function SyncedReview({ work }) {
               selectedId={selectedIdFor(selection, 'cast')}
               hasSelection={hasSelection}
               onSelect={(id) => select('cast', id)}
+              augment={augment}
             />
           )}
         </div>
@@ -555,8 +580,9 @@ function MediaPane({ containerRef, className, items, mediaSceneIds, selectedId, 
 const BADGE_CLASS = 'inline-flex items-center px-1 py-0.5 rounded border text-[9px] uppercase tracking-wider';
 const KIND_TONE = { amber: 'text-amber-300 border-amber-500/40', rose: 'text-rose-300 border-rose-500/40' };
 
-function CastPane({ containerRef, className, cast, findingsByCharacter, castIds, selectedId, hasSelection, onSelect }) {
+function CastPane({ containerRef, className, cast, findingsByCharacter, castIds, selectedId, hasSelection, onSelect, augment }) {
   const { staging } = cast;
+  const { preview, accepted, applying, proposing, toggleField, discard, runPropose, runApply } = augment;
   return (
     <ScrollPane containerRef={containerRef} className={className} paneKey="cast" icon={Users} label="Cast" count={cast.castCount}>
       {!cast.available ? (
@@ -570,59 +596,87 @@ function CastPane({ containerRef, className, cast, findingsByCharacter, castIds,
             const depth = DEPTH_META[row.depth] || DEPTH_META.full;
             const status = REVIEW_STATUS_META[row.status] || REVIEW_STATUS_META['not-reviewed'];
             const findings = findingsByCharacter.get(row.characterId) || [];
+            // Only `missing` / `underspecified` can be machine-repaired: a
+            // `contradictory` finding needs the author, because nothing here can
+            // know which of two disagreeing fields is the wrong one.
+            const repairable = findings.filter(findingIsRepairable);
             return (
-              <button
-                key={row.characterId}
-                data-sync-id={row.characterId}
-                aria-pressed={state === 'selected'}
-                onClick={() => onSelect(row.characterId)}
-                className={`w-full text-left rounded border px-3 py-2 transition-all ${CARD_CLASS[state]}`}
-              >
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <span className="text-[11px] font-medium text-gray-200 truncate">{row.characterName || row.characterId}</span>
-                  <span className="flex items-center gap-1 shrink-0">
-                    <span className={`${BADGE_CLASS} text-gray-400 border-port-border`} title={depth.hint}>{depth.label}</span>
-                    <span
-                      className={`${BADGE_CLASS} ${row.findingCount ? KIND_TONE.amber : 'text-gray-400 border-port-border'}`}
-                      title={row.findingCount ? `${row.findingCount} unauthored field(s)` : 'Nothing unauthored at this depth.'}
-                    >
-                      {status.label}
+              <div key={row.characterId} className="space-y-1">
+                <button
+                  data-sync-id={row.characterId}
+                  aria-pressed={state === 'selected'}
+                  onClick={() => onSelect(row.characterId)}
+                  className={`w-full text-left rounded border px-3 py-2 transition-all ${CARD_CLASS[state]}`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-[11px] font-medium text-gray-200 truncate">{row.characterName || row.characterId}</span>
+                    <span className="flex items-center gap-1 shrink-0">
+                      <span className={`${BADGE_CLASS} text-gray-400 border-port-border`} title={depth.hint}>{depth.label}</span>
+                      <span
+                        className={`${BADGE_CLASS} ${row.findingCount ? KIND_TONE.amber : 'text-gray-400 border-port-border'}`}
+                        title={row.findingCount ? `${row.findingCount} unauthored field(s)` : 'Nothing unauthored at this depth.'}
+                      >
+                        {status.label}
+                      </span>
                     </span>
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-1.5 flex-wrap mb-1">
-                  {row.staged ? (
-                    <span className="flex items-center gap-0.5 text-[9px] text-gray-400 bg-port-card border border-port-border rounded px-1 py-0.5">
-                      <Clapperboard size={8} /> staged in {row.scriptSceneIds.length}
-                    </span>
-                  ) : (
-                    <span className="text-[9px] text-gray-600 italic" title={staging.available
-                      ? 'No extracted scene names this character. Offstage is a choice, not a defect.'
-                      : 'No script yet — run “Adapt” before reading anything into this.'}>
-                      {staging.available ? 'not staged in the script' : 'staging unknown'}
-                    </span>
+                  </div>
+  
+                  <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                    {row.staged ? (
+                      <span className="flex items-center gap-0.5 text-[9px] text-gray-400 bg-port-card border border-port-border rounded px-1 py-0.5">
+                        <Clapperboard size={8} /> staged in {row.scriptSceneIds.length}
+                      </span>
+                    ) : (
+                      <span className="text-[9px] text-gray-600 italic" title={staging.available
+                        ? 'No extracted scene names this character. Offstage is a choice, not a defect.'
+                        : 'No script yet — run “Adapt” before reading anything into this.'}>
+                        {staging.available ? 'not staged in the script' : 'staging unknown'}
+                      </span>
+                    )}
+                  </div>
+  
+                  {findings.length > 0 && (
+                    <ul className="space-y-1">
+                      {findings.map((f) => {
+                        const meta = FINDING_KIND_META[f.kind];
+                        return (
+                          <li key={f.id} className="text-[10px] text-gray-400 leading-snug">
+                            <span className={`${BADGE_CLASS} mr-1 ${KIND_TONE[meta?.tone] || 'text-gray-400 border-port-border'}`} title={meta?.hint}>
+                              {meta?.label || f.kind}
+                            </span>
+                            <span className="font-mono text-gray-300">{humanizeIntegrityField(f.field)}</span>
+                            {f.evidence && <span className="text-gray-500"> — {f.evidence}</span>}
+                            {f.suggestion && <span className="text-gray-500 italic"> {f.suggestion}</span>}
+                          </li>
+                        );
+                      })}
+                    </ul>
                   )}
-                </div>
-
-                {findings.length > 0 && (
-                  <ul className="space-y-1">
-                    {findings.map((f) => {
-                      const meta = FINDING_KIND_META[f.kind];
-                      return (
-                        <li key={f.id} className="text-[10px] text-gray-400 leading-snug">
-                          <span className={`${BADGE_CLASS} mr-1 ${KIND_TONE[meta?.tone] || 'text-gray-400 border-port-border'}`} title={meta?.hint}>
-                            {meta?.label || f.kind}
-                          </span>
-                          <span className="font-mono text-gray-300">{humanizeIntegrityField(f.field)}</span>
-                          {f.evidence && <span className="text-gray-500"> — {f.evidence}</span>}
-                          {f.suggestion && <span className="text-gray-500 italic"> {f.suggestion}</span>}
-                        </li>
-                      );
-                    })}
-                  </ul>
+                </button>
+                {repairable.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => runPropose(row.characterId, row.characterName, repairable.map((f) => f.field))}
+                    disabled={proposing}
+                    title="Ask the configured model for a sharper version of these fields. Writes nothing — you tick what to keep."
+                    className="inline-flex items-center gap-1 rounded border border-port-accent/40 bg-port-accent/10 px-2 py-1 text-[10px] text-port-accent hover:bg-port-accent/20 disabled:opacity-40"
+                  >
+                    {proposing ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
+                    Sharpen {repairable.length} field{repairable.length === 1 ? '' : 's'}
+                  </button>
                 )}
-              </button>
+                {preview?.characterId === row.characterId && (
+                  <AugmentPreview
+                    preview={preview}
+                    accepted={accepted}
+                    applying={applying}
+                    onToggleField={toggleField}
+                    onDiscard={discard}
+                    onApply={runApply}
+                    idPrefix="wr-augment"
+                  />
+                )}
+              </div>
             );
           })}
 
