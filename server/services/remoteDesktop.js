@@ -6,6 +6,10 @@ import { isPortReachable } from '../lib/connectivity.js';
 
 const LOOPBACK_HOST = '127.0.0.1';
 const DEFAULT_VNC_PORT = 5900;
+// Long enough to cross a loopback connect on a busy machine without making a
+// dead VNC port feel hung. Deliberately looser than the eidoverse bridge's
+// 300ms conflict probe — these two are not interchangeable.
+const PROBE_TIMEOUT_MS = 750;
 const SESSION_TTL_MS = 5 * 60 * 1000;
 const CONNECTED_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const TOKEN_BYTES = 32;
@@ -21,6 +25,12 @@ export const createRemoteDesktopBroker = ({
   host = LOOPBACK_HOST,
   port = parseVncPort(process.env.PORTOS_VNC_PORT),
   now = () => Date.now(),
+  // Two separate seams: `connect` opens the VNC data socket the bridge pipes
+  // through, `probeFn` only asks whether anything is listening. They were one
+  // option while the probe hand-rolled its own socket; isPortReachable owns that
+  // lifecycle now, so the reachability check no longer borrows the data-path
+  // constructor.
+  connect = createConnection,
   probeFn = isPortReachable,
   connectedSessionTtlMs = CONNECTED_SESSION_TTL_MS,
 } = {}) => {
@@ -34,7 +44,7 @@ export const createRemoteDesktopBroker = ({
     }
   };
 
-  const probe = () => probeFn({ host, port, timeoutMs: 750 });
+  const probe = () => probeFn({ host, port, timeoutMs: PROBE_TIMEOUT_MS });
 
   const status = async () => ({
     supported: true,
