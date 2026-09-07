@@ -5,13 +5,14 @@
  * into Video Gen.
  */
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Combine, Image as ImageIcon, Film, Search, X } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
+import VideoUpscaleDrawer from '../components/media/VideoUpscaleDrawer';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
@@ -21,7 +22,6 @@ import usePreviewRoute from '../hooks/usePreviewRoute';
 import { buildMediaHaystack, tokenizeQuery, matchHaystack } from '../lib/mediaSearch';
 import {
   listVideoHistory, deleteVideoHistoryItem, stitchVideos,
-  upscaleVideo,
   listImageGallery, deleteImage,
 } from '../services/api';
 
@@ -165,20 +165,14 @@ export default function MediaHistory() {
     onCleanComplete: handleCleanComplete,
   });
 
-  const upscalingRef = useRef(false);
-  const handleUpscale = useCallback(async (item) => {
-    if (upscalingRef.current) return;
-    upscalingRef.current = true;
-    toast.loading('Upscaling 2× — typically 10-30s…');
-    const result = await upscaleVideo(item.id, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Upscale failed');
-      return null;
-    });
-    upscalingRef.current = false;
-    if (result?.video) {
-      setItems((all) => [normalizeVideo(result.video), ...all]);
-      toast.success('Upscaled 2×');
-    }
+  // The card button opens a method-picker drawer (#6510) instead of upscaling
+  // directly — the drawer owns the plan fetch, disclosure, and submit.
+  const [upscaleItem, setUpscaleItem] = useState(null);
+  const handleUpscale = useCallback((item) => {
+    setUpscaleItem(item);
+  }, []);
+  const handleUpscaled = useCallback((video) => {
+    setItems((all) => [normalizeVideo(video), ...all]);
   }, []);
   const handleAnnotate = useCallback((item) => {
     navigate(`/media/annotate/${encodeURIComponent(item.key)}`);
@@ -327,6 +321,12 @@ export default function MediaHistory() {
         onContinue={handleContinue}
         onClean={(item) => handleClean(item?.raw)}
         onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}
+      />
+
+      <VideoUpscaleDrawer
+        item={upscaleItem}
+        onClose={() => setUpscaleItem(null)}
+        onUpscaled={handleUpscaled}
       />
     </div>
   );

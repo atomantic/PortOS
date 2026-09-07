@@ -254,7 +254,31 @@ export const updateVideoPrompt = (id, prompt, options = {}) => request(`/video-g
   method: 'PATCH', body: JSON.stringify({ prompt }), ...options,
 });
 export const extractLastFrame = (id, options = {}) => request(`/video-gen/last-frame/${encodeURIComponent(id)}`, { method: 'POST', ...options });
-export const upscaleVideo = (id, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}`, { method: 'POST', ...options });
+// `method` selects the upscale pass (#6509/#6510): 'lanczos' (the historical
+// ffmpeg-only default, and what every pre-#6510 caller gets by omitting it) or
+// 'ltx' for the generative adapter. Destructured out of `options` before the
+// spread so it can never collide with the HTTP `method: 'POST'` fetch config
+// below — an omitted `method` sends exactly the bare-POST request this
+// endpoint has always received, so existing mocks/tests keep matching.
+export const upscaleVideo = (id, { method, ...options } = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}`, {
+  method: 'POST',
+  ...(method != null ? { body: JSON.stringify({ method }) } : {}),
+  ...options,
+});
+// Read-only pre-submit disclosure (#6509): source geometry, target dimensions,
+// required padding, and runtime/adapter readiness for `method`. Never queues a
+// job or triggers a download. `silent` by default — the picker owns its own
+// inline error state rather than a toast.
+export const getUpscalePlan = (id, method, options = {}) => request(
+  `/video-gen/upscale/${encodeURIComponent(id)}/plan?method=${encodeURIComponent(method)}`,
+  { silent: true, ...options },
+);
+// Live-progress URL for the generative upscale adapter's HF pull, for a small
+// inline "Download adapter" control in the upscale picker. `key` is
+// `plan.adapter.key` from getUpscalePlan — the same key the server's generic
+// `/ic-loras/:key/download` route (issue #3100) already resolves for every
+// registered IC-LoRA weight, remix mode or not.
+export const upscaleAdapterDownloadUrl = (key) => (key ? `${API_BASE}/video-gen/ic-loras/${encodeURIComponent(key)}/download` : null);
 export const stitchVideos = (videoIds, options = {}) => request('/video-gen/stitch', {
   method: 'POST',
   body: JSON.stringify({ videoIds }),
