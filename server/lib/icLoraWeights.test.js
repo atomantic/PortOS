@@ -5,18 +5,23 @@ import { join } from 'node:path';
 // cache and existsSync probes the pinned weight file. Mock them so these tests
 // cover the registry + resolution logic rather than the user's ~/.cache layout
 // (hfCache.test.js already covers the cache walk).
-const { mockFindCachedRepoFile } = vi.hoisted(() => ({ mockFindCachedRepoFile: vi.fn() }));
+const { mockFindCachedRepoFile, mockReadSafetensorsHeader } = vi.hoisted(() => ({
+  mockFindCachedRepoFile: vi.fn(), mockReadSafetensorsHeader: vi.fn(),
+}));
 vi.mock('./hfCache.js', () => ({ findCachedRepoFile: mockFindCachedRepoFile }));
+vi.mock('./safetensors.js', () => ({ readSafetensorsHeader: mockReadSafetensorsHeader }));
 
 const {
   IC_LORA_MODES, IC_LORA_MODE_VALUES, IC_LORA_WEIGHT_KEYS, IC_LORA_REMIX_BASE_MODEL,
   isIcLoraMode, icLoraSpecForMode, icLoraSpecByKey, icLoraWeightKey, icLoraProbesExactFile,
   icLoraRepos, listIcLoraWeights, listIcLoraRemixModes, icLoraWeightCandidates,
   findCachedIcLoraWeight, resolveIcLoraWeight, resolveIcLoraWeightByKey, icResolutionIssue,
+  readIcLoraReferenceDownscaleFactor,
 } = await import('./icLoraWeights.js');
 
 beforeEach(() => {
   mockFindCachedRepoFile.mockReset();
+  mockReadSafetensorsHeader.mockReset();
 });
 
 describe('IC-LoRA registry', () => {
@@ -403,5 +408,55 @@ describe('the LTX-2.5 Pixel Spatial Upscaler weight (#6502)', () => {
     expect(await resolveIcLoraWeight('ic-pixel-upscale')).toBeNull();
     expect(await resolveIcLoraWeight('pixel-upscale')).toBeNull();
     expect(mockFindCachedRepoFile).not.toHaveBeenCalled();
+  });
+});
+
+// #6512. The Pixel Spatial Upscaler entry holds `referenceDownscaleFactor: null`
+// because its file is gated and nobody in this repo can read it — so the value
+// is MEASURED off the weight an install downloaded rather than transcribed from
+// a card. `measured` is what keeps "the weight declares 1" apart from "nobody
+// has read it yet": both impose no rule, but only one is a fact.
+describe('readIcLoraReferenceDownscaleFactor', () => {
+  const upscaler = () => icLoraSpecByKey('pixel-upscale');
+
+  it('falls back to the registry value when nothing is cached, without reading a file', async () => {
+    mockFindCachedRepoFile.mockResolvedValue(null);
+    expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
+      .toEqual({ factor: null, measured: false });
+    expect(mockReadSafetensorsHeader).not.toHaveBeenCalled();
+  });
+
+  it('reads the declared factor off the downloaded weight', async () => {
+    mockFindCachedRepoFile.mockResolvedValue('/cache/upscaler.safetensors');
+    mockReadSafetensorsHeader.mockResolvedValue({ __metadata__: { reference_downscale_factor: '2' } });
+    expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
+      .toEqual({ factor: 2, measured: true });
+    expect(mockReadSafetensorsHeader).toHaveBeenCalledWith('/cache/upscaler.safetensors');
+  });
+
+  // An ABSENT key is a real measurement — the pipeline reads it as 1, and a
+  // weight that imposes no rule is exactly what that looks like on disk.
+  it('treats an absent metadata key on a real file as a measured 1', async () => {
+    mockFindCachedRepoFile.mockResolvedValue('/cache/upscaler.safetensors');
+    mockReadSafetensorsHeader.mockResolvedValue({ 'transformer_blocks.0.attn1.to_q.weight': {} });
+    expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
+      .toEqual({ factor: 1, measured: true });
+  });
+
+  // An UNREADABLE header is not a measurement of anything. Collapsing it into a
+  // measured 1 would assert a rule off a file we failed to open.
+  it('does not claim a measurement when the header cannot be read', async () => {
+    mockFindCachedRepoFile.mockResolvedValue('/cache/truncated.safetensors');
+    mockReadSafetensorsHeader.mockResolvedValue(null);
+    expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
+      .toEqual({ factor: null, measured: false });
+  });
+
+  // A 2.3 weight already carries a verified number, so a cached read must agree
+  // with it rather than quietly overriding the registry with junk.
+  it('reports a declared 2.3 factor as declared until the file is read', async () => {
+    mockFindCachedRepoFile.mockResolvedValue(null);
+    expect(await readIcLoraReferenceDownscaleFactor(IC_LORA_MODES.control))
+      .toEqual({ factor: 2, measured: false });
   });
 });

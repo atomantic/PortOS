@@ -11,11 +11,16 @@ import {
 } from '../../lib/ffmpeg.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
 import { omitRenderTiming, renderTimingFields } from '../../lib/renderTiming.js';
-import { resolveIcLoraWeightByKey, icLoraSpecByKey, icLoraWeightKey } from '../../lib/icLoraWeights.js';
+import {
+  resolveIcLoraWeightByKey, icLoraSpecByKey, icLoraWeightKey, readIcLoraReferenceDownscaleFactor,
+} from '../../lib/icLoraWeights.js';
+import { getVideoModels } from '../../lib/mediaModels.js';
+import { inspectModelCache } from '../../lib/hfCache.js';
 import { BYOV_RUNTIME_INFO, isByovRuntimeInstalled } from './runtimes.js';
 import {
   UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD, UPSCALE_SCALE, LANCZOS_RUNTIME_ID,
-  LTX_UPSCALE_WEIGHT_KEY, ltxUpscaleRuntimeId, planLtxAlignment, planTargetDimensions,
+  LTX_UPSCALE_WEIGHT_KEY, ltxUpscaleRuntimeId, ltxUpscaleBaseModelId,
+  planLtxAlignment, planTargetDimensions,
 } from './upscalePlan.js';
 
 export * from './upscalePlan.js';
@@ -87,6 +92,12 @@ const describeLtxRuntime = () => {
 const describeLtxAdapter = async () => {
   const spec = icLoraSpecByKey(LTX_UPSCALE_WEIGHT_KEY);
   const resolved = await resolveIcLoraWeightByKey(LTX_UPSCALE_WEIGHT_KEY);
+  // Read off the downloaded file when there is one, so the registry's honest
+  // `null` for this gated weight resolves to the real number on the installs
+  // that actually hold it (#6512). `measured` keeps "the weight declares 1"
+  // apart from "nobody has read it yet" — both impose no rule, but only one is
+  // a fact.
+  const { factor, measured } = await readIcLoraReferenceDownscaleFactor(spec);
   return {
     key: icLoraWeightKey(spec),
     label: spec?.label ?? null,
@@ -95,6 +106,39 @@ const describeLtxAdapter = async () => {
     sizeBytes: spec?.sizeBytes ?? null,
     gated: spec?.gated === true,
     cached: resolved?.cached === true,
+    referenceDownscaleFactor: factor,
+    referenceDownscaleMeasured: measured,
+  };
+};
+
+// The pinned base checkpoint the backend renders against (#6512). It is a
+// THIRD readiness axis alongside the runtime and the adapter: a host can have
+// the venv and the 327 MB adapter and still be missing the ~68 GB pack, and
+// without this the drawer would show a ready button for a job that dies minutes
+// later. Cache-only by construction — `inspectModelCache` reads the local HF
+// cache and never fetches, which is what keeps the plan endpoint read-only.
+const describeLtxBaseModel = async (runtimeId) => {
+  const id = ltxUpscaleBaseModelId(runtimeId);
+  const model = id ? getVideoModels().find((m) => m.id === id) || null : null;
+  if (!model) {
+    return {
+      id, name: null, repo: null, revision: null, path: null, cached: false,
+      reason: `No base LTX-2.5 checkpoint is registered for the ${runtimeId || 'unknown'} backend.`,
+    };
+  }
+  const cache = await inspectModelCache(model.repo, { revision: model.revision || undefined });
+  const cached = !!(cache.cached && cache.snapshotPath);
+  return {
+    id: model.id,
+    name: model.name,
+    repo: model.repo,
+    revision: model.revision ?? null,
+    // The resolved snapshot directory the runner is handed as `--model`. Null
+    // until it is cached, so a caller cannot mistake "not downloaded" for a
+    // path that happens to be missing on disk.
+    path: cached ? cache.snapshotPath : null,
+    cached,
+    reason: cached ? null : `${model.name} is not downloaded — download or repair it in Video Gen.`,
   };
 };
 
@@ -136,7 +180,9 @@ export async function planUpscaleHistoryItem(historyId, options = {}) {
   const runtime = method === 'ltx'
     ? describeLtxRuntime()
     : { id: LANCZOS_RUNTIME_ID, label: 'ffmpeg (Lanczos)', supported: true, installed: true, reason: null };
-  const adapter = method === 'ltx' ? await describeLtxAdapter() : null;
+  const [adapter, baseModel] = method === 'ltx'
+    ? await Promise.all([describeLtxAdapter(), describeLtxBaseModel(runtime.id)])
+    : [null, null];
 
   return {
     id: item.id,
@@ -148,6 +194,7 @@ export async function planUpscaleHistoryItem(historyId, options = {}) {
     alignment,
     runtime,
     adapter,
+    baseModel,
   };
 }
 

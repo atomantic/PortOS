@@ -66,9 +66,9 @@ const upscaledPrompt = (prompt) => (prompt ? `${prompt} (2×)` : '(upscaled 2×)
 /**
  * Validate an upscale request and queue it. Everything that can be known
  * before a GPU is committed is checked HERE — an unsupported/uninstalled
- * runtime, a missing adapter, and a source the model grid cannot take without
- * losing duration — so a refusal is an immediate 4xx/501 rather than a job that
- * fails minutes later.
+ * runtime, a missing adapter, a missing base checkpoint, and a source the model
+ * grid cannot take without losing duration — so a refusal is an immediate
+ * 4xx/501 rather than a job that fails minutes later.
  */
 export async function enqueueLtxUpscale(historyId) {
   const plan = await planUpscaleHistoryItem(historyId, { method: 'ltx' });
@@ -89,6 +89,16 @@ export async function enqueueLtxUpscale(historyId) {
     throw new ServerError(
       `${plan.adapter.label} is not downloaded — download it from the model panel before upscaling.`,
       { status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' },
+    );
+  }
+  // The runner is never allowed to resolve its own checkpoint: every LTX loader
+  // falls back to `snapshot_download` for a path it cannot stat, which for this
+  // pack is an unannounced ~68 GB pull inside a render. Resolved here, cache-only,
+  // so a missing pack is a refusal before the GPU is committed.
+  if (!plan.baseModel?.cached || !plan.baseModel.path) {
+    throw new ServerError(
+      plan.baseModel?.reason || 'The LTX-2.5 model pack for this backend is not downloaded.',
+      { status: 400, code: 'UPSCALE_BASE_MODEL_UNRESOLVED' },
     );
   }
   const blocker = ltxAlignmentBlocker(plan.alignment);
@@ -121,6 +131,8 @@ export async function enqueueLtxUpscale(historyId) {
       runtime: plan.runtime.id,
       adapterKey: plan.adapter.key,
       adapterPath: adapter.path,
+      // The resolved snapshot directory, not the repo id — see the refusal above.
+      baseModelPath: plan.baseModel.path,
       // Explicit, from the weight registry — the Python helper is never allowed
       // to carry its own copy of these bounds (see buildLtxUpscaleArgs).
       icMinReferences: adapter.spec.minReferences,
@@ -244,7 +256,7 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
  * distinguish them on the wire.
  */
 export async function runVideoUpscale({
-  jobId, historyId, sourceFilename, runtime, adapterPath, adapterKey,
+  jobId, historyId, sourceFilename, runtime, adapterPath, adapterKey, baseModelPath,
   icMinReferences, icMaxReferences, seed, source, alignment, target,
 }) {
   const entry = { canceled: false, proc: null, abort: new AbortController() };
@@ -315,6 +327,7 @@ export async function runVideoUpscale({
       upscale: {
         runtime,
         sourceVideoPath: referencePath,
+        baseModelPath,
         icLoraWeightPath: adapterPath,
         icMinReferences,
         icMaxReferences,

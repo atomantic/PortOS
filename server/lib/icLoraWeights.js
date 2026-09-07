@@ -29,6 +29,7 @@
 // without an HF token.
 
 import { findCachedRepoFile } from './hfCache.js';
+import { readSafetensorsHeader } from './safetensors.js';
 
 // The base model the MLX `ICLoraPipeline` remix path is pinned to. A weight
 // whose `baseModel` is anything else is registered here for PROVISIONING only —
@@ -169,13 +170,19 @@ export const IC_LORA_MODES = Object.freeze({
     revision: '5863fdef3eaa8b2d69fa22e259a1d75fede215dd',
     // Exact, from the repo's blob listing — not an estimate. Do not round it.
     sizeBytes: 327_322_640,
-    // UNKNOWN, deliberately. Every other entry's factor was read from the
-    // weight's safetensors `__metadata__`, and this weight's file is gated —
-    // so there is nothing to read yet. `null` means "no constraint asserted",
-    // which icResolutionIssue treats as "impose no rule" rather than guessing
-    // a factor and either rejecting valid resolutions or green-lighting bad
-    // ones. Fill it in from the real metadata once an install with accepted
-    // terms can read the header (#6512).
+    // UNKNOWN, deliberately, and it STAYS unknown here. Every other entry's
+    // factor was read from the weight's safetensors `__metadata__`; this
+    // weight's file is gated, so there is nothing for the repo to read. `null`
+    // means "no constraint asserted", which icResolutionIssue treats as "impose
+    // no rule" rather than guessing a factor and either rejecting valid
+    // resolutions or green-lighting bad ones.
+    //
+    // #6512 resolved this by MEASURING instead of transcribing: an install that
+    // has accepted the terms and downloaded the weight reads the real value out
+    // of the file it holds (`readIcLoraReferenceDownscaleFactor` below, and
+    // `reference_downscale_factor` in `scripts/upscale_ltx25.py`, which enforces
+    // it). Hardcoding a number here would put a value nobody in this repo can
+    // verify ahead of the one every user can — so leave it null.
     referenceDownscaleFactor: null,
     // The clip being upscaled is the single reference.
     minReferences: 1,
@@ -320,6 +327,38 @@ export const icResolutionIssue = (spec, width, height) => {
   if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 1) return null;
   if (Number(width) % scale === 0 && Number(height) % scale === 0) return null;
   return `${spec.label} mode needs a resolution divisible by ${scale} (its reference encoder downscales by ${scale}); got ${width}×${height}.`;
+};
+
+/**
+ * The reference downscale factor a spec's DOWNLOADED weight actually declares.
+ *
+ * `referenceDownscaleFactor` on the registry entry is what this repo could
+ * verify when the entry was written; for a gated weight that is `null`. This
+ * reads the truth off the file an install holds — the same
+ * `__metadata__.reference_downscale_factor` the MLX pipeline itself reads
+ * (`iclora_utils.read_lora_reference_downscale_factor`) — so the resolution
+ * rule can be stated before a render commits to it.
+ *
+ * Returns `{ factor, measured }`: `measured` is true only when the value came
+ * off a real local file. When nothing is cached (or the header is unreadable)
+ * it falls back to the registry value, which may itself be `null` — absent and
+ * "declared 1" must stay distinguishable, so this never coerces one into the
+ * other.
+ */
+export const readIcLoraReferenceDownscaleFactor = async (spec) => {
+  const declared = typeof spec?.referenceDownscaleFactor === 'number' ? spec.referenceDownscaleFactor : null;
+  const cached = spec ? await findCachedIcLoraWeight(spec) : null;
+  if (!cached) return { factor: declared, measured: false };
+  const header = await readSafetensorsHeader(cached.path);
+  const raw = header?.__metadata__?.reference_downscale_factor;
+  const factor = Number.parseInt(raw, 10);
+  // The key is absent on a weight that imposes no rule, which the pipeline
+  // reads as 1 — so an absent key is a real measurement of "no rule", while an
+  // unreadable header is not a measurement at all.
+  if (!header) return { factor: declared, measured: false };
+  return Number.isInteger(factor) && factor >= 1
+    ? { factor, measured: true }
+    : { factor: 1, measured: true };
 };
 
 // Locate a spec's weight in the local HF cache. Walks every candidate (official

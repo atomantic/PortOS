@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
+import { pinPlatform } from '../../lib/testHelper.js';
 
 // The Lanczos path really copies a file, so PATHS.data must point at a temp
 // tree — the install's data/ is the developer's live gallery.
@@ -21,6 +22,10 @@ const state = vi.hoisted(() => ({
   hasAudio: false,
   runtimeInstalled: true,
   adapterCached: true,
+  baseModelCached: true,
+  // What the adapter's own safetensors metadata says. `null` is the registry's
+  // honest "nobody has opened this gated weight"; a number is a real read.
+  referenceDownscale: { factor: 2, measured: true },
 }));
 
 const mutated = vi.hoisted(() => ({ calls: 0 }));
@@ -54,6 +59,17 @@ vi.mock('../../lib/icLoraWeights.js', () => ({
   })),
   icLoraWeightKey: vi.fn((spec) => spec?.id ?? null),
   resolveIcLoraWeightByKey: vi.fn(async () => ({ path: state.adapterCached ? '/cache/weight.safetensors' : null, cached: state.adapterCached })),
+  readIcLoraReferenceDownscaleFactor: vi.fn(async () => state.referenceDownscale),
+}));
+
+// The base checkpoint is the third readiness axis (#6512). Mocked at the cache
+// layer rather than the registry so the plan still resolves the real
+// `ltx25_mlx_q8` entry — a wrong id here would otherwise pass silently.
+vi.mock('../../lib/hfCache.js', () => ({
+  inspectModelCache: vi.fn(async () => (state.baseModelCached
+    ? { cached: true, snapshotPath: '/cache/ltx25-pack' }
+    : { cached: false, snapshotPath: null })),
+  findCachedRepoFile: vi.fn(async () => null),
 }));
 
 const { upscaleHistoryItem, planUpscaleHistoryItem } = await import('./upscaleVideo.js');
@@ -80,6 +96,8 @@ beforeEach(() => {
   state.hasAudio = false;
   state.runtimeInstalled = true;
   state.adapterCached = true;
+  state.baseModelCached = true;
+  state.referenceDownscale = { factor: 2, measured: true };
   mutated.calls = 0;
   vi.clearAllMocks();
 });
@@ -205,10 +223,14 @@ describe('planUpscaleHistoryItem', () => {
     expect(plan.source.hasAudio).toBe(true);
   });
 
-  it('reports runtime and adapter readiness for the generative method', async () => {
+  it('reports runtime, adapter and base-model readiness for the generative method', async () => {
     const ready = await planUpscaleHistoryItem(SOURCE_ID, { method: 'ltx' });
     expect(ready.runtime).toMatchObject({ supported: true, installed: true, reason: null });
     expect(ready.adapter).toMatchObject({ key: 'pixel-upscale', cached: true, gated: true });
+    // Three INDEPENDENT axes: the venv, the 327 MB adapter and the ~68 GB pack
+    // are separate downloads, so a plan that only reported two would show a
+    // ready button for a job the dispatch refuses (#6512).
+    expect(ready.baseModel).toMatchObject({ cached: true, path: '/cache/ltx25-pack', reason: null });
 
     state.runtimeInstalled = false;
     state.adapterCached = false;
@@ -216,6 +238,47 @@ describe('planUpscaleHistoryItem', () => {
     expect(unready.runtime.installed).toBe(false);
     expect(unready.runtime.reason).toMatch(/not installed/i);
     expect(unready.adapter.cached).toBe(false);
+  });
+
+  // `ltxUpscaleRuntimeId()` routes by platform, so WHICH checkpoint the plan
+  // names is a per-backend fact. Asserting the host's own answer would make this
+  // pass everywhere while proving nothing — and it did: the first version
+  // hardcoded the macOS id and went red on Linux CI.
+  it.each([
+    ['macOS', 'darwin', 'ltx25_mlx_q8'],
+    ['Windows', 'win32', 'ltx25_cuda_distilled'],
+    ['Linux', 'linux', 'ltx25_cuda_distilled'],
+  ])('names the %s backend\'s own pinned checkpoint', async (_label, platform, expected) => {
+    const restore = pinPlatform(platform);
+    try {
+      const plan = await planUpscaleHistoryItem(SOURCE_ID, { method: 'ltx' });
+      expect(plan.baseModel.id).toBe(expected);
+    } finally {
+      restore();
+    }
+  });
+
+  it('reports a missing base checkpoint as its own unready axis, with a path of null', async () => {
+    state.baseModelCached = false;
+    const plan = await planUpscaleHistoryItem(SOURCE_ID, { method: 'ltx' });
+    // Runtime + adapter both ready — only the pack is missing, which is exactly
+    // the state a two-axis readiness check would have called ready.
+    expect(plan.runtime.installed).toBe(true);
+    expect(plan.adapter.cached).toBe(true);
+    expect(plan.baseModel).toMatchObject({ cached: false, path: null });
+    expect(plan.baseModel.reason).toMatch(/not downloaded/i);
+  });
+
+  // The registry holds `null` for this gated weight on purpose. An install that
+  // HAS the file knows better than the repo does, so the plan reports the read
+  // value and flags it as measured rather than transcribed (#6512).
+  it('reports the adapter factor read off the downloaded weight, flagged as measured', async () => {
+    const measured = await planUpscaleHistoryItem(SOURCE_ID, { method: 'ltx' });
+    expect(measured.adapter).toMatchObject({ referenceDownscaleFactor: 2, referenceDownscaleMeasured: true });
+
+    state.referenceDownscale = { factor: null, measured: false };
+    const unread = await planUpscaleHistoryItem(SOURCE_ID, { method: 'ltx' });
+    expect(unread.adapter).toMatchObject({ referenceDownscaleFactor: null, referenceDownscaleMeasured: false });
   });
 
   it('queues no job, runs no ffmpeg pass and writes no history row', async () => {

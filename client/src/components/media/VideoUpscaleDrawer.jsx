@@ -61,7 +61,13 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
 
   const runtimeReady = plan?.runtime?.installed === true;
   const adapterReady = plan?.adapter?.cached === true;
-  const generativeReady = runtimeReady && adapterReady;
+  // The base checkpoint is a third readiness axis (#6512): the venv and the
+  // 327 MB adapter can both be present while the ~68 GB LTX-2.5 pack is not,
+  // and the runner is handed a resolved snapshot path rather than resolving
+  // (and silently downloading) one itself. Without this the button would read
+  // ready for a job the dispatch refuses.
+  const baseModelReady = plan?.baseModel?.cached === true;
+  const generativeReady = runtimeReady && adapterReady && baseModelReady;
   const adapterMissing = !!plan && runtimeReady && !adapterReady;
   const generativeDisabledReason = !plan
     ? null
@@ -69,7 +75,9 @@ export default function VideoUpscaleDrawer({ item, onClose, onUpscaled }) {
       ? plan.runtime.reason
       : !adapterReady
         ? `The ${plan.adapter?.label || 'generative upscale'} adapter is not downloaded yet.`
-        : null;
+        : !baseModelReady
+          ? plan.baseModel?.reason || 'The LTX-2.5 model pack for this backend is not downloaded yet.'
+          : null;
 
   // Inline adapter download (#6510 item 4) — the same provisioning surface
   // every IC-LoRA weight rides (#3100), just triggered from here instead of a
