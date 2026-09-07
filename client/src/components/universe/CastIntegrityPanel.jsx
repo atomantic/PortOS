@@ -20,10 +20,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, ShieldCheck, Sparkles, X, Check } from 'lucide-react';
+import { Loader2, ShieldCheck, Sparkles, X } from 'lucide-react';
 import Modal from '../ui/Modal';
 import toast from '../ui/Toast';
 import useMounted from '../../hooks/useMounted';
+import useCharacterAugmentation from '../../hooks/useCharacterAugmentation';
+import AugmentPreview from '../castIntegrity/AugmentPreview';
 import {
   getUniverseCastIntegrity,
   reviewUniverseCastIntegrity,
@@ -64,11 +66,36 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
   const [reviewing, setReviewing] = useState(false);
   // Findings the user ticked, by finding id — the augment batch.
   const [selected, setSelected] = useState(() => new Set());
-  // `{ characterId, entryName, fingerprint, proposals: [] }` awaiting review.
-  const [preview, setPreview] = useState(null);
-  const [proposing, setProposing] = useState(false);
-  const [accepted, setAccepted] = useState(() => new Set());
-  const [applying, setApplying] = useState(false);
+
+  // The propose → tick → apply loop itself is shared with Writers Room; this
+  // panel supplies only the two universe-scoped requests and what to do after.
+  const {
+    preview, accepted, proposing, applying, toggleField, discard: discardAugment, runPropose, runApply,
+  } = useCharacterAugmentation({
+    propose: useCallback(
+      (characterId, fields) => proposeCharacterAugmentation(universeId, characterId, { fields }, { silent: true }),
+      [universeId],
+    ),
+    apply: useCallback(
+      (characterId, body) => applyCharacterAugmentation(universeId, characterId, body, { silent: true }),
+      [universeId],
+    ),
+    onApplied: useCallback((result, applied) => {
+      if (result.universe) onUniverseChange?.(result.universe);
+      setSelected(new Set());
+      // This character just changed, so every finding the open report holds
+      // about it was measured against a version that no longer exists. Mark the
+      // row STALE rather than re-deriving the whole report: a re-derive would
+      // run the deterministic pass again and silently discard the semantic
+      // review the user just paid for.
+      setReport((prev) => (prev ? {
+        ...prev,
+        coverage: prev.coverage.map((c) => (
+          c.characterId === applied.characterId ? { ...c, status: 'stale', semanticReviewed: false } : c
+        )),
+      } : prev));
+    }, [onUniverseChange]),
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -79,9 +106,9 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
     if (result) {
       setReport(result);
       setSelected(new Set());
-      setPreview(null);
+      discardAugment();
     }
-  }, [universeId, mountedRef]);
+  }, [universeId, mountedRef, discardAugment]);
 
   useEffect(() => {
     if (!open || !universeId) return;
@@ -123,70 +150,12 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
       : `Reviewed the cast — ${n} finding${n === 1 ? '' : 's'}`);
   };
 
-  const handlePropose = async () => {
-    if (proposing || selectedCharacterIds.length !== 1) return;
+  const handlePropose = () => {
+    if (selectedCharacterIds.length !== 1) return;
     const characterId = selectedCharacterIds[0];
+    const name = report?.coverage?.find((c) => c.characterId === characterId)?.characterName;
     const fields = repairable.filter((f) => selected.has(f.id) && f.characterId === characterId).map((f) => f.field);
-    setProposing(true);
-    const result = await proposeCharacterAugmentation(universeId, characterId, { fields }, { silent: true })
-      .catch((err) => { toast.error(err.message || 'Augment failed'); return null; });
-    if (mountedRef.current) setProposing(false);
-    if (!result || !mountedRef.current) return;
-    if (result.locked) {
-      toast.error(`${result.entry?.name || 'Character'} is locked — unlock before augmenting`);
-      return;
-    }
-    if (!result.proposals?.length) {
-      toast.success('Nothing to sharpen — the model had no improvement to offer');
-      return;
-    }
-    setPreview({
-      characterId,
-      entryName: result.entry?.name || 'Character',
-      fingerprint: result.fingerprint,
-      proposals: result.proposals,
-    });
-    // Opt-IN: nothing is accepted until the author ticks it.
-    setAccepted(new Set());
-  };
-
-  const handleApply = async () => {
-    if (applying || !preview) return;
-    const fields = preview.proposals
-      .filter((p) => accepted.has(p.field))
-      .map((p) => ({ field: p.field, value: p.after }));
-    if (fields.length === 0) return;
-    setApplying(true);
-    const result = await applyCharacterAugmentation(
-      universeId,
-      preview.characterId,
-      { fields, fingerprint: preview.fingerprint },
-      { silent: true },
-    ).catch((err) => {
-      toast.error(err.message || 'Apply failed');
-      return null;
-    });
-    if (mountedRef.current) setApplying(false);
-    if (!result || !mountedRef.current) return;
-    if (result.locked) {
-      toast.error(`${preview.entryName} is locked — unlock before applying`);
-      return;
-    }
-    if (result.universe) onUniverseChange?.(result.universe);
-    toast.success(`Applied ${result.appliedFields?.length || 0} field${result.appliedFields?.length === 1 ? '' : 's'} to ${preview.entryName}`);
-    setPreview(null);
-    setSelected(new Set());
-    // This character just changed, so every finding the open report holds about
-    // it was measured against a version that no longer exists. Mark the row
-    // STALE rather than re-deriving the whole report: a re-derive would run the
-    // deterministic pass again and silently discard the semantic review the
-    // user just paid for.
-    setReport((prev) => (prev ? {
-      ...prev,
-      coverage: prev.coverage.map((c) => (
-        c.characterId === preview.characterId ? { ...c, status: 'stale', semanticReviewed: false } : c
-      )),
-    } : prev));
+    runPropose(characterId, name, fields);
   };
 
   const reviewLabel = scope?.providerId
@@ -327,55 +296,14 @@ export default function CastIntegrityPanel({ open, universeId, onClose, onUniver
                 </div>
               ) : null}
 
-              {preview ? (
-                <div className="rounded border border-port-accent/40 bg-port-bg p-3 space-y-3">
-                  <h3 className="text-xs uppercase tracking-wider text-gray-400">
-                    Proposed for {preview.entryName} — tick what to keep
-                  </h3>
-                  {preview.proposals.map((p) => {
-                    const id = `augment-${p.field.replace(/[^a-zA-Z0-9]/g, '-')}`;
-                    return (
-                      <div key={p.field} className="space-y-1">
-                        <label htmlFor={id} className="flex items-center gap-2 text-xs text-gray-200">
-                          <input
-                            type="checkbox"
-                            id={id}
-                            checked={accepted.has(p.field)}
-                            onChange={() => setAccepted((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(p.field)) next.delete(p.field); else next.add(p.field);
-                              return next;
-                            })}
-                            className="accent-port-accent"
-                          />
-                          <span className="font-mono text-[11px]">{humanizeIntegrityField(p.field)}</span>
-                        </label>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <p className="text-[11px] text-gray-500 border border-port-border rounded p-2 whitespace-pre-wrap">
-                            {p.before || <span className="italic">(empty)</span>}
-                          </p>
-                          <p className="text-[11px] text-gray-200 border border-port-accent/40 rounded p-2 whitespace-pre-wrap">{p.after}</p>
-                        </div>
-                        {p.rationale ? <p className="text-[11px] text-gray-500 italic">{p.rationale}</p> : null}
-                      </div>
-                    );
-                  })}
-                  <div className="flex items-center justify-end gap-2">
-                    <button type="button" onClick={() => setPreview(null)} className="px-2 py-1 text-xs text-gray-400 hover:text-white">
-                      Discard
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleApply}
-                      disabled={applying || accepted.size === 0}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-port-accent text-white text-xs disabled:opacity-40"
-                    >
-                      {applying ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                      Apply {accepted.size || ''}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
+              <AugmentPreview
+                preview={preview}
+                accepted={accepted}
+                applying={applying}
+                onToggleField={toggleField}
+                onDiscard={discardAugment}
+                onApply={runApply}
+              />
             </>
           ) : null}
         </div>

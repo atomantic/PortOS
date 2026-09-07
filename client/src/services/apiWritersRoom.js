@@ -177,6 +177,25 @@ export const deleteWritersRoomCharacter = (workId, characterId, options = {}) =>
     ...options,
   });
 
+// Selective cast augmentation (#6417) — the write half of the synced review's
+// Cast pane. Propose sharpens POPULATED framework fields and writes NOTHING,
+// returning `{ proposals: [{ field, before, after, rationale }], fingerprint }`;
+// apply takes back only the fields the author ticked. The `fingerprint` is the
+// character state the preview was reviewed against — a mismatch is a 409 rather
+// than an overwrite of an edit that landed while the model was thinking.
+export const proposeWritersRoomCharacterAugmentation = (workId, characterId, { fields, providerId, model } = {}, options = {}) =>
+  request(`/writers-room/works/${enc(workId)}/characters/${enc(characterId)}/augment`, {
+    method: 'POST',
+    body: JSON.stringify({ fields, providerId, model }),
+    ...options,
+  });
+export const applyWritersRoomCharacterAugmentation = (workId, characterId, { fields, fingerprint } = {}, options = {}) =>
+  request(`/writers-room/works/${enc(workId)}/characters/${enc(characterId)}/augment/apply`, {
+    method: 'POST',
+    body: JSON.stringify({ fields, fingerprint }),
+    ...options,
+  });
+
 // Places / world bible (editable, persists across analysis runs, drives
 // scene image gen via slugline match in SceneCard)
 export const listWritersRoomPlaces = (workId) =>

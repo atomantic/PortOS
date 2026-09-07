@@ -3,9 +3,15 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // Mock the API so the component renders a deterministic synced-review payload.
 const getWritersRoomSyncedReview = vi.fn();
+const proposeAugment = vi.fn();
+const applyAugment = vi.fn();
 vi.mock('../../services/apiWritersRoom', () => ({
   getWritersRoomSyncedReview: (...args) => getWritersRoomSyncedReview(...args),
+  proposeWritersRoomCharacterAugmentation: (...args) => proposeAugment(...args),
+  applyWritersRoomCharacterAugmentation: (...args) => applyAugment(...args),
 }));
+const toastMock = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+vi.mock('../ui/Toast', () => ({ default: toastMock }));
 
 import SyncedReview from './SyncedReview';
 
@@ -36,6 +42,10 @@ function payload(overrides = {}) {
 
 beforeEach(() => {
   getWritersRoomSyncedReview.mockReset();
+  proposeAugment.mockReset();
+  applyAugment.mockReset();
+  toastMock.error.mockReset();
+  toastMock.success.mockReset();
 });
 
 const work = { id: 'wr-work-1', title: 'Test' };
@@ -287,6 +297,66 @@ describe('SyncedReview — cast pane', () => {
     // Selecting the prose segment highlights the character it stages.
     fireEvent.click(card('prose', 'seg-001'));
     await waitFor(() => expect(card('cast', 'wr-char-hero').className).toMatch(/border-port-accent\/50/));
+  });
+
+  // ---- selective augmentation (#6417) ----
+
+  it('sharpens only the ticked field, and only from an explicit click', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload());
+    proposeAugment.mockResolvedValue({
+      entry: { id: 'wr-char-hero', name: 'Hero' },
+      fingerprint: 'fp-1',
+      proposals: [
+        { field: 'psychology.drives.status.fear', before: '', after: 'Being thanked instead of hired.', rationale: 'names the moment' },
+        { field: 'lie', before: 'A generic belief.', after: 'A sharper belief.', rationale: '' },
+      ],
+    });
+    applyAugment.mockResolvedValue({ entry: { id: 'wr-char-hero' }, appliedFields: ['lie'], fingerprint: 'fp-2' });
+
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    // Opening the pane spends nothing.
+    expect(proposeAugment).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByText(/Sharpen 1 field/));
+    await waitFor(() => expect(screen.getByText(/tick what to keep/)).toBeTruthy());
+    expect(proposeAugment).toHaveBeenCalledWith(
+      'wr-work-1', 'wr-char-hero', { fields: ['psychology.drives.status.fear'] }, { silent: true },
+    );
+
+    // Nothing is accepted until the author ticks it.
+    const applyButton = screen.getByRole('button', { name: /Apply/ });
+    expect(applyButton.disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/Lie/));
+    fireEvent.click(screen.getByRole('button', { name: /Apply/ }));
+
+    await waitFor(() => expect(applyAugment).toHaveBeenCalledWith(
+      'wr-work-1', 'wr-char-hero',
+      { fields: [{ field: 'lie', value: 'A sharper belief.' }], fingerprint: 'fp-1' },
+      { silent: true },
+    ));
+    // The findings, the depth ruling and the staging join are all derived from
+    // the record that just changed, so the pane re-reads rather than patching.
+    await waitFor(() => expect(getWritersRoomSyncedReview).toHaveBeenCalledTimes(2));
+  });
+
+  it('offers no repair for a contradictory finding — only the author can settle it', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload({
+      findings: [{
+        id: 'wr-char-hero::contradictory::lie', characterId: 'wr-char-hero', characterName: 'Hero',
+        kind: 'contradictory', field: 'lie', dimension: 'control-predicts-behavior',
+        evidence: 'The belief and the described behavior disagree.', suggestion: '',
+      }],
+      coverage: [{
+        characterId: 'wr-char-hero', characterName: 'Hero', depth: 'full', status: 'findings',
+        findingCount: 1, semanticReviewed: true, staged: true,
+        scriptSceneIds: ['scene-01'], proseSegmentIds: ['seg-001'],
+      }],
+    }));
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    expect(await screen.findByText('Hero')).toBeTruthy();
+    expect(screen.queryByText(/Sharpen/)).toBeNull();
   });
 
   it('says staging is unknown rather than absent when no script has run', async () => {

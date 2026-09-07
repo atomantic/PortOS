@@ -57,6 +57,7 @@ export { default as useMusicVideoRenderJob } from './useMusicVideoRenderJob.js';
 export { default as useMusicVideoSceneMedia } from './useMusicVideoSceneMedia.js';
 export { default as useMusicVideoYoutubeImport } from './useMusicVideoYoutubeImport.js';
 export { default as useMoltworldWs } from './useMoltworldWs.js';
+export { default as useCharacterAugmentation } from './useCharacterAugmentation.js';
 export { default as useMounted } from './useMounted.js';
 export { default as usePendingListRows } from './usePendingListRows.js';
 export { default as usePopoverPosition } from './usePopoverPosition.js';

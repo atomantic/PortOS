@@ -52,6 +52,12 @@ import {
   listCharacters, createCharacter, updateCharacter, deleteCharacter,
 } from '../services/writersRoom/characters.js';
 import {
+  proposeWorkCharacterAugmentation, applyWorkCharacterAugmentation,
+} from '../services/writersRoom/castAugment.js';
+import {
+  characterAugmentProposeSchema, characterAugmentApplySchema,
+} from '../lib/characterAugmentValidation.js';
+import {
   listPlaces, createPlace, updatePlace, deletePlace,
 } from '../services/writersRoom/places.js';
 import {
@@ -323,6 +329,25 @@ router.patch('/works/:id/characters/:characterId', asyncHandler(async (req, res)
 
 router.delete('/works/:id/characters/:characterId', asyncHandler(async (req, res) => {
   res.json(await deleteCharacter(req.params.id, req.params.characterId));
+}));
+
+// ---------- cast augmentation (#6417) ----------
+//
+// The write half of the Cast pane's integrity report: sharpen a framework field
+// that is populated but too generic to predict behavior. Same contract as the
+// Universe cast editor (services/characterAugmentation.js) — propose writes
+// nothing and returns before/after per field; apply takes back only the paths
+// the author ticked, and refuses (409) when the character moved underneath the
+// proposal. Both are explicit user actions; nothing here runs on a page load.
+
+router.post('/works/:id/characters/:characterId/augment', asyncHandler(async (req, res) => {
+  const data = validateRequest(characterAugmentProposeSchema, req.body || {});
+  res.json(await proposeWorkCharacterAugmentation(req.params.id, req.params.characterId, data));
+}));
+
+router.post('/works/:id/characters/:characterId/augment/apply', asyncHandler(async (req, res) => {
+  const data = validateRequest(characterAugmentApplySchema, req.body || {});
+  res.json(await applyWorkCharacterAugmentation(req.params.id, req.params.characterId, data));
 }));
 
 // ---------- places (locations / universe bible) ----------

@@ -19,7 +19,7 @@ import {
   proposeCharacterAugmentation,
   applyCharacterAugmentation,
 } from '../../services/universeCastIntegrity.js';
-import { AUGMENTABLE_FIELD_PATHS } from '../../lib/characterIntegrity.js';
+import { characterAugmentProposeSchema, characterAugmentApplySchema } from '../../lib/characterAugmentValidation.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../../services/canonUsage.js';
 import { mapServiceError, lockParamsSchema } from './shared.js';
 
@@ -98,13 +98,8 @@ router.post('/:id/characters/integrity/review', asyncHandler(async (req, res) =>
 
 // Propose sharper values for POPULATED fields. Writes NOTHING — returns
 // before/after per field for the author to accept individually.
-const augmentProposeSchema = z.object({
-  fields: z.array(z.enum(AUGMENTABLE_FIELD_PATHS)).min(1).max(AUGMENTABLE_FIELD_PATHS.length),
-  providerId: z.string().trim().max(64).optional(),
-  model: z.string().trim().max(128).optional(),
-});
 router.post('/:id/characters/:entryId/augment', asyncHandler(async (req, res) => {
-  const body = validateRequest(augmentProposeSchema, req.body ?? {});
+  const body = validateRequest(characterAugmentProposeSchema, req.body ?? {});
   const result = await proposeCharacterAugmentation(req.params.id, req.params.entryId, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
@@ -113,15 +108,8 @@ router.post('/:id/characters/:entryId/augment', asyncHandler(async (req, res) =>
 // Apply only the proposals the author accepted. `fingerprint` is the character
 // state the preview was reviewed against — a mismatch is a 409, not a silent
 // overwrite of whatever was edited in the meantime.
-const augmentApplySchema = z.object({
-  fields: z.array(z.object({
-    field: z.enum(AUGMENTABLE_FIELD_PATHS),
-    value: z.string().trim().min(1).max(4000),
-  })).min(1).max(AUGMENTABLE_FIELD_PATHS.length),
-  fingerprint: z.string().max(20000).optional(),
-});
 router.post('/:id/characters/:entryId/augment/apply', asyncHandler(async (req, res) => {
-  const body = validateRequest(augmentApplySchema, req.body ?? {});
+  const body = validateRequest(characterAugmentApplySchema, req.body ?? {});
   const result = await applyCharacterAugmentation(req.params.id, req.params.entryId, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
