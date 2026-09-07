@@ -182,7 +182,17 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // OLDER peer must be rejected outright). Bump makes the older peer reject the
   // ahead-version series transfer instead. Per-category gate → only series sync
   // pauses with old peers.
-  pipelineSeries: 12,
+  // v13 = `series.characterArcs[].evolution` added (#6440) — the optional
+  // five-stage character evolution lens (belief under test → pressure → choice
+  // → consequence, with a declared outcome). Same additive field INSIDE an
+  // already-federated sub-object as voiceExemplars (v11) inside styleGuide: a
+  // ≤v12 peer that re-sanitizes a series through its evolution-unaware
+  // `sanitizeCharacterArc` would silently strip the lens and last-writer-wins
+  // the loss back onto the newer peer (`preserveAbsentAdditiveFields` restores
+  // a wholly-absent `characterArcs`, not a present-but-sub-field-stripped
+  // one). Bump makes the older peer reject the ahead-version series transfer
+  // instead. Per-category gate → only series sync pauses with old peers.
+  pipelineSeries: 13,
   // NOT bumped for the manuscript-review sibling doc now bundled on series
   // pushes/exports (`data/pipeline-series/{id}/manuscript-review.json`).
   // Unlike `readerMap` (v2), the review is NOT a field inside the series
@@ -386,7 +396,16 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // effort preferences. A v5 peer would preserve the format but strip these
   // additive preferences during an unrelated whole-record update.
   // v7 = shot duration and dramatic-scene grouping survive whole-record sync.
-  fableLoom: 7,
+  // v8 = `seriesPlan.characterEvolutions[]` — the optional five-stage character
+  // evolution lens per character (#6440). `sanitizeSeriesPlan` omits the key
+  // entirely when no lens is authored, so a ≤v7 peer that re-sanitizes a loom
+  // through its evolution-unaware sanitizer drops every authored lens and
+  // last-writer-wins the loss back onto the newer peer. Bump makes the older
+  // peer reject the ahead-version loom transfer; the receiver additionally
+  // restores local lenses from a <v8 sender that omits the key
+  // (`preserveLegacyCharacterEvolutions`), the same belt-and-braces the
+  // delivery plan got at v4.
+  fableLoom: 8,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).

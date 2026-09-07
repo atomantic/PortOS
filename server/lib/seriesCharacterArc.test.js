@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  characterArcEvidenceRefs,
   sanitizeTransition,
   sanitizeCharacterArc,
   sanitizeCharacterArcList,
@@ -7,6 +8,7 @@ import {
   CHARACTER_ARC_LIMITS,
   TRANSITION_KINDS,
 } from './seriesCharacterArc.js';
+import { evolutionEvidenceStatus } from './characterEvolution.js';
 
 describe('sanitizeTransition', () => {
   it('keeps a well-formed transition and mints an id', () => {
@@ -181,5 +183,41 @@ describe('renderCharacterArcsForPrompt', () => {
     expect(block).toContain('wants: revenge');
     expect(block).toContain('needs: to forgive');
     expect(block).toContain('realization (issue 3): sees the cost');
+  });
+});
+
+describe('optional five-stage evolution lens (#6440)', () => {
+  it('leaves an arc that never opted in byte-identical', () => {
+    // The lens must add no key at all to a legacy arc — an `evolution: null`
+    // stamp would rewrite every stored characterArcs entry on its next save.
+    const arc = sanitizeCharacterArc({
+      characterId: 'chr-1', characterName: 'Mara', want: 'revenge', need: 'to forgive',
+    });
+    expect(Object.prototype.hasOwnProperty.call(arc, 'evolution')).toBe(false);
+    expect(JSON.stringify(sanitizeCharacterArc(arc))).toBe(JSON.stringify(arc));
+  });
+
+  it('keeps a lens-only arc and resolves its stages against the arc\'s own beats', () => {
+    const arc = sanitizeCharacterArc({
+      // No want/need/startState — a writer may plan the evolution first, and the
+      // lens alone is enough to keep the arc.
+      characterName: 'Mara',
+      transitions: [{ id: 'trn-live', kind: 'decision', label: 'walks out' }],
+      evolution: {
+        outcome: 'full-change',
+        stages: [
+          { stageId: 'final-proof', characterChoice: 'stays', evidence: { transitionId: 'trn-live' } },
+          { stageId: 'cost-tested', characterChoice: 'pays', evidence: { transitionId: 'trn-deleted' } },
+        ],
+      },
+    });
+    expect(JSON.stringify(sanitizeCharacterArc(arc))).toBe(JSON.stringify(arc));
+    // Only the beat this arc still owns counts as proof; the pointer to the
+    // deleted one survives as authored intent and reads stale.
+    const refs = characterArcEvidenceRefs(arc);
+    expect(Object.fromEntries(arc.evolution.stages
+      .map((st) => [st.stageId, evolutionEvidenceStatus(st.evidence, refs)])))
+      .toEqual({ 'cost-tested': 'stale', 'final-proof': 'anchored' });
+    expect(arc.evolution.stages[0].evidence.transitionId).toBe('trn-deleted');
   });
 });

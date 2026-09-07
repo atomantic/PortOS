@@ -36,6 +36,82 @@ export const trimTo = (value, max) => (
   typeof value === 'string' ? value.trim().slice(0, max) : ''
 );
 
+// Smallest share of the budget a sentence-boundary cut may keep. A cut that
+// lands above this wins over a mid-sentence clip; below it, gutting the record
+// costs more than the ragged edge does.
+//
+// This was 0.6, which rejected a valid sentence break at 53% of a field's budget
+// and fell through to a nearly-at-cap whole-word fragment. The next verification
+// round then flagged the sanitizer-authored incomplete sentence, and every
+// over-cap replacement reproduced it. A single-sentence field (logline, ending
+// hook) is the common case: its first terminator is often its ONLY one, so a
+// floor near the top of the budget rejects the clean cut it was meant to prefer.
+const SENTENCE_CUT_FLOOR = 0.3;
+
+// A sentence terminator that actually ENDS a sentence: `.`/`!`/`?` plus any
+// closing quote or bracket, and then either whitespace or the end of the window.
+// Requiring that lookahead is what keeps "Dr. Vey" and "3.5" from reading as
+// breaks; allowing `$` is what lets a terminator sitting flush against the
+// budget edge count, which `lastIndexOf('. ')` missed because it demanded a
+// trailing space that the slice had already cut off.
+const SENTENCE_END_RE = /[.!?]["'’”)\]]*(?=\s|$)/g;
+const COMMON_ABBREVIATION_RE = /\b(?:dr|etc|jr|mr|mrs|ms|prof|sr|st|vs)\.$/i;
+
+// A clause boundary — the weaker cut used when a short field holds no sentence
+// terminator at all. Short caps (a 200-char transition label) routinely hold one
+// long clause-chained sentence, where the whole-word fallback leaves a dangling
+// half-clause ("...escrows the proceeds with no repayment lien, no") that reads
+// as an authoring gap to the next verify round. Because it is weaker than a
+// sentence break, it has to keep more of the field to be worth taking.
+const CLAUSE_END_RE = /[,;:—–]/g;
+const CLAUSE_CUT_FLOOR = 0.6;
+
+/**
+ * Boundary-aware cap for PROSE fields (loglines, synopses, ending hooks). A hard
+ * `slice(0, max)` clips mid-word ("...tracing the brand and"), which downstream
+ * verify passes flag as "truncated mid-sentence" — and because a resolver then
+ * regenerates an over-cap value that gets re-clipped the same way, the
+ * verify→resolve loop never converges. When the text fits, it's returned
+ * untouched. When it must be clipped, back off to the last sentence terminator
+ * (. ! ?) within the budget, provided that cut keeps at least
+ * SENTENCE_CUT_FLOOR of it; failing that, to the last clause boundary (, ; : —)
+ * keeping at least CLAUSE_CUT_FLOOR; and failing that (a single clause running
+ * past the cap, or a break so early that honoring it would gut the field) to the
+ * last whitespace boundary so the result still ends on a whole word. Never
+ * returns more than `max` chars.
+ *
+ * Lives here rather than in `storyBible.js` (which re-exports it, so every
+ * existing caller is unchanged) because `storyBible.js` pulls `crypto` +
+ * `fileUtils`: the pure story-model leaves the browser bundle shares —
+ * `characterFramework.js`, `characterEvolution.js` — need the boundary-aware
+ * cap without dragging Node built-ins into the client build.
+ */
+export function trimToClause(v, max) {
+  if (typeof v !== 'string') return '';
+  const s = v.trim();
+  if (s.length <= max) return s;
+  const window = s.slice(0, max);
+  // Prefer the last real sentence terminator in the window. `end` is the cut
+  // point (exclusive) so trailing quotes/brackets ride along with the period.
+  let end = -1;
+  SENTENCE_END_RE.lastIndex = 0;
+  for (let m = SENTENCE_END_RE.exec(window); m; m = SENTENCE_END_RE.exec(window)) {
+    if (m[0][0] === '.' && COMMON_ABBREVIATION_RE.test(window.slice(0, m.index + 1))) continue;
+    end = m.index + m[0].length;
+  }
+  if (end >= Math.floor(max * SENTENCE_CUT_FLOOR)) return window.slice(0, end).trim();
+  // No usable sentence break — back off to the last clause boundary instead, so
+  // the result ends on a complete clause rather than mid-thought. The mark itself
+  // is dropped (cut is exclusive) so the value never ends on a hanging comma.
+  let clause = -1;
+  CLAUSE_END_RE.lastIndex = 0;
+  for (let m = CLAUSE_END_RE.exec(window); m; m = CLAUSE_END_RE.exec(window)) clause = m.index;
+  if (clause >= Math.floor(max * CLAUSE_CUT_FLOOR)) return window.slice(0, clause).trim();
+  // Not even a usable clause break — clip on the last whole word instead of mid-word.
+  const space = window.lastIndexOf(' ');
+  return (space > 0 ? window.slice(0, space) : window).trim();
+}
+
 /**
  * Bound a string to a hard character cap, cutting on a natural boundary.
  *

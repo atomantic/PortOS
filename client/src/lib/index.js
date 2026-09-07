@@ -25,6 +25,7 @@ export * from './autopilotMilestones.js';
 export * from './beatColors.js';
 export * from './beatGrid.js';
 export * from './bibleLimits.js';
+export * from './characterEvolution.js';
 export * from './characterFramework.js';
 export * from './characterIntegrity.js';
 export * from './catalogTypes.js';
