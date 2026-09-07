@@ -286,6 +286,14 @@ const planProject = (steps, over = {}) => ({
 });
 
 describe('advanceAfterPlanStepSettled — executor', () => {
+  it('never plans or dispatches an inert Video production through background advancement', async () => {
+    makeStore({ ...planProject([step('a', { toolName: 'pipeline_createSeries' })]), workspace: 'video' });
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(mockDispatch).not.toHaveBeenCalled();
+    expect(mockEnqueuePlanTask).not.toHaveBeenCalled();
+    expect(mockUpdateProject).not.toHaveBeenCalled();
+  });
+
   it('is a no-op for a legacy project (no directive)', async () => {
     makeStore({ id: 'cd-1', status: 'rendering', directive: null, plan: null, runs: [] });
     await advanceAfterPlanStepSettled('cd-1');

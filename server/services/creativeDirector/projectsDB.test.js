@@ -73,6 +73,25 @@ describe.skipIf(!runDb)('projectsDB round-trip', () => {
     await close();
   });
 
+  it('persists Video draft preferences and prevents removing the workspace barrier', async () => {
+    const p = await db.createProject({
+      name: 'Example short', workspace: 'video', modelId: '', aspectRatio: '16:9',
+      quality: 'draft', targetDurationSeconds: 60,
+    });
+    created.push(p.id);
+    expect(p.videoDraft.checkpoints).toEqual(['script-shot-plan', 'references', 'rough-cut', 'final-cut']);
+    const videoDraft = {
+      ...p.videoDraft, durationRange: { min: 60, max: 180 },
+      sources: [{ kind: 'universe', id: 'example-universe', revision: 'r1' }],
+      audio: { providerId: 'example-audio', model: 'example-model' },
+    };
+    await db.updateProject(p.id, { userStory: 'Example brief', videoDraft });
+    expect(await db.getProject(p.id)).toMatchObject({
+      id: p.id, workspace: 'video', status: 'draft', userStory: 'Example brief', videoDraft,
+    });
+    await expect(db.updateProject(p.id, { workspace: undefined })).rejects.toThrow('workspace cannot be changed');
+  });
+
   it('round-trips and clears cognitive effort through create and patch', async () => {
     const pin = { providerId: 'example-agent', model: 'example-model', effort: 'high' };
     const p = await db.createProject({ ...CREATE_INPUT, modelOverrides: { plan: pin } });

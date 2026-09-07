@@ -445,7 +445,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // transfer (per-category 409) until it upgrades, so it never mis-executes a
   // syntax it can't resolve. No record rewrite needed — reference-free projects
   // are unchanged; the bump only gates cross-version CD-project sync.
-  creativeDirectorProjects: 3,
+  // v4: Video drafts must stay inert. Older peers ignore workspace and could
+  // start them through the legacy planner; reject transfers until they upgrade.
+  // Existing records remain unchanged and need no data rewrite.
+  creativeDirectorProjects: 4,
   // v1 = Mood boards (PostgreSQL `mood_boards`) federated via the per-record
   // peer-sync push pipeline (record kind `moodBoard`, sync category `moodBoards`,
   // #1564). Same posture as `creativeDirectorProjects` above: a brand-NEW synced

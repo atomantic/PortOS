@@ -38,7 +38,7 @@ export default function MediaGen() {
       <TabPills
         tabs={TABS}
         activeTab={activeTab}
-        onChange={(id) => navigate(`/media/${id}`)}
+        onChange={(id) => navigate(id === 'video' ? '/video/generate' : `/media/${id}`)}
         ariaLabel="Media Gen sections"
         mobileDropdown
         mobileSelectId="media-gen-section-select"

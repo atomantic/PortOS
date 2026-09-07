@@ -264,7 +264,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
   // fresh defer on a stale/stalled duplicate seed job (which would loop).
   const skipSeedDeferSceneId = opts.skipSeedDeferSceneId || null;
   const project = await getProject(projectId);
-  if (!project) return;
+  if (!project || project.workspace === 'video') return;
   if (project.status === 'paused' || project.status === 'failed') return;
 
   // No treatment yet → enqueue treatment task.
@@ -609,6 +609,7 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
  */
 export async function startCreativeDirectorProject(projectId) {
   const project = await getProject(projectId).catch(() => null);
+  if (project?.workspace === 'video') return;
   if (project?.directive) return advanceAfterPlanStepSettled(projectId);
   return advanceAfterSceneSettled(projectId);
 }

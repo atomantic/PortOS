@@ -79,6 +79,51 @@ describe('creativeDirector routes', () => {
     vi.clearAllMocks();
   });
 
+  describe('Video drafts', () => {
+    const draft = {
+      name: 'Example short', workspace: 'video', modelId: '',
+      aspectRatio: '16:9', quality: 'draft', targetDurationSeconds: 60,
+      videoDraft: { durationRange: { min: 60, max: 180 } },
+    };
+
+    it('creates and saves a brief without starting provider work, and rejects malformed ranges', async () => {
+      cdService.createProject.mockResolvedValueOnce({ ...draft, id: 'cd-video', status: 'draft' });
+      expect((await request(app).post('/api/creative-director').send(draft)).status).toBe(201);
+      expect(cdService.createProject).toHaveBeenCalledWith(expect.objectContaining({
+        videoDraft: expect.objectContaining({ reviewPolicy: 'review', checkpoints: ['script-shot-plan', 'references', 'rough-cut', 'final-cut'] }),
+      }));
+      cdService.getProject.mockResolvedValueOnce({ ...draft, id: 'cd-video', status: 'draft' });
+      expect((await request(app).patch('/api/creative-director/cd-video').send({
+        userStory: 'A quiet journey', videoDraft: draft.videoDraft,
+      })).status).toBe(200);
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+      expect(firstPass.enqueueFirstPassPortraits).not.toHaveBeenCalled();
+      expect(firstPassMusicBed.enqueueFirstPassMusicBed).not.toHaveBeenCalled();
+      expect((await request(app).post('/api/creative-director').send({
+        ...draft, videoDraft: { durationRange: { min: 180, max: 60 } },
+      })).status).toBe(400);
+      expect((await request(app).post('/api/creative-director').send({
+        ...draft, workspace: undefined, videoDraft: undefined,
+      })).status).toBe(400);
+    });
+
+    it('refuses legacy execution entry points before they mutate or enqueue a Video draft', async () => {
+      cdService.getProject.mockResolvedValue({ ...draft, id: 'cd-video', status: 'draft' });
+      for (const [action, body] of [
+        ['start', {}], ['resume', {}], ['replan', {}],
+        ['directive', { goal: 'Example goal' }],
+        ['auto-cast', { compose: true, generateFirstPass: true }],
+        ['plan/step/example', { action: 'retry' }],
+      ]) {
+        expect((await request(app).post('/api/creative-director/cd-video/' + action).send(body)).status).toBe(409);
+      }
+      expect(cdService.updateProject).not.toHaveBeenCalled();
+      expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+      cdService.getProject.mockReset();
+    });
+  });
+
   describe('stop', () => {
     it('POST /:id/stop tears down the in-flight work and reports the counts', async () => {
       cdService.getProject.mockResolvedValueOnce({ id: 'cd-1', status: 'planning' });

@@ -126,3 +126,7 @@ export function presetToRenderParams({ aspectRatio, quality, durationSeconds }) 
     numFrames,
   };
 }
+
+// Shared by the Video draft form and wire defaults; saved policy is inert until
+// revision-specific dispatch support is available.
+export const VIDEO_REVIEW_CHECKPOINTS = Object.freeze(['script-shot-plan', 'references', 'rough-cut', 'final-cut']);
