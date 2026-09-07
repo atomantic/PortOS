@@ -393,7 +393,7 @@ describe('finalizeAgent — a PR-shaped run with no PR is not a success (#3358)'
     expect(resolveFailedTaskUpdateMock).not.toHaveBeenCalled();
   });
 
-  it('proves a marked no-op audit even when cleanup owns PR creation', async () => {
+  it.each(['autonomousJob', 'isInvestigation'])('proves a marked no-op %s even when cleanup owns PR creation', async (marker) => {
     onBranch('cos/sys-1/agent-1');
     git.ahead = 0;
     findPullRequestForBranchMock.mockResolvedValue({ status: 'none', number: null, url: null, detail: null });
@@ -401,7 +401,7 @@ describe('finalizeAgent — a PR-shaped run with no PR is not a success (#3358)'
       prExpected: false,
       task: {
         ...prTask(),
-        metadata: { ...prTask().metadata, autonomousJob: true, noChangeSuccess: true }
+        metadata: { ...prTask().metadata, [marker]: true, noChangeSuccess: true }
       }
     });
 

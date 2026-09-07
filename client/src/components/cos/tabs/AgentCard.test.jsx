@@ -9,6 +9,7 @@ vi.mock('../../../services/api', () => ({
   sendCosAgentBtw: vi.fn(),
   getCosAgent: vi.fn(),
   getCosAgentPrompt: vi.fn(),
+  addCosTask: vi.fn(),
 }));
 
 vi.mock('../../ui/Toast', () => ({
@@ -485,6 +486,35 @@ describe('AgentCard missing shell explanation', () => {
 // for, which no quality reviewer can answer because none of them see the request.
 describe('AgentCard goal fidelity', () => {
   const withReview = (goalFidelity) => ({ ...agent, result: { ...agent.result, goalFidelity } });
+
+  it('queues an isolated investigation with the original prompt and app, then links to the task', async () => {
+    api.getCosAgentPrompt.mockResolvedValue({ prompt: 'Resolve issue #123 acceptance criteria' });
+    api.addCosTask.mockResolvedValue({ id: 'task-investigation', approvalRequired: false });
+    render(<MemoryRouter><AgentCard agent={{ ...withReview({ verdict: 'rethink', missing: ['Example gap'] }),
+      metadata: { ...agent.metadata, taskApp: 'example-app' } }} completed /></MemoryRouter>);
+    await userEvent.click(screen.getByRole('button', { name: 'Investigate findings' }));
+    await waitFor(() => expect(api.addCosTask).toHaveBeenCalledWith(expect.objectContaining({
+      app: 'example-app', type: 'user', isInvestigation: true,
+      prompt: expect.stringContaining('Resolve issue #123 acceptance criteria'),
+    }), { silent: true }));
+    expect(api.addCosTask.mock.calls[0][0].prompt).toContain('Example gap');
+    expect(await screen.findByRole('link', { name: 'View queued investigation' })).toHaveAttribute('href', '/cos/tasks?task=task-investigation&source=user');
+    expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
+  });
+
+  it('keeps prompt retrieval failures visible and permits retry without queuing incomplete context', async () => {
+    api.getCosAgentPrompt.mockRejectedValue(new Error('Prompt unavailable'));
+    render(<MemoryRouter><AgentCard agent={withReview({ verdict: 'fix-first' })} completed /></MemoryRouter>);
+    await userEvent.click(screen.getByRole('button', { name: 'Investigate findings' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Prompt unavailable');
+    expect(api.addCosTask).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Investigate findings' })).toBeEnabled();
+  });
+
+  it('does not dispatch remote findings into the local repository', () => {
+    render(<MemoryRouter><AgentCard agent={withReview({ verdict: 'rethink' })} completed remote /></MemoryRouter>);
+    expect(screen.queryByRole('button', { name: 'Investigate findings' })).not.toBeInTheDocument();
+  });
 
   it('names the missing and unrequested work behind a rethink verdict', () => {
     render(
