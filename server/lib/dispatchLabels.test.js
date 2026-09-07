@@ -8,6 +8,7 @@ import {
   DISPATCH_HINT_FANOUT_GUIDANCE,
   DISPATCH_HINT_READING_GUIDANCE,
   MANDATORY_DISPATCH_HINT_GUIDANCE,
+  MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE,
   JIRA_DISPATCH_HINT_GUIDANCE,
   PORTOS_AREA_LABELS,
   PORTOS_AREA_LABEL_GUIDANCE,
@@ -327,6 +328,14 @@ describe('shared guidance', () => {
     // Contributor labels stay optional in BOTH forms — requiring them would
     // advertise unattended-agent work to humans who never asked for it.
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('stay OPTIONAL');
+  });
+
+  it('keeps Jira complete-label guidance mandatory without changing optional Jira callers', () => {
+    expect(MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE).toContain('REQUIRED on every issue you file');
+    expect(MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE).toContain('model-light|model-medium|model-heavy');
+    expect(MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE).toContain('effort-low|effort-medium|effort-high|effort-xhigh|effort-max');
+    expect(MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE).not.toContain('Omit an axis rather than guessing');
+    expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('Omit an axis rather than guessing');
   });
 
   it('keeps the PortOS area vocabulary and repo-study complete-label contract explicit', () => {

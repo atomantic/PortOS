@@ -387,13 +387,14 @@ it, name the path that actually reaches the failure, and decide the fix (files,
 tests, and the rejected alternative) before filing. The cap stays at 5 issues
 with two or three as the target — depth over volume.
 
-Filing carries a **required** label contract: exactly one `model:` and exactly
-one `effort:` label on every issue, chosen as independent axes from the code the
-agent just read (`MANDATORY_DISPATCH_HINT_GUIDANCE` in `server/lib/dispatchLabels.js`).
-Contributor labels (`good first issue`, `help wanted`) stay optional, missing
-labels are created lazily, category labels (`plan`, `ux`, `bug`, `tests`,
-`area:*`, …) are preserved, and the agent reads each new issue's labels back to
-repair any that did not stick.
+Filing carries a **required** label contract for quota-burn audits,
+`reference-watch`, and `repo-study`: exactly one `model:` and exactly one
+`effort:` label on every issue, chosen as independent axes from the code the
+agent just read (`MANDATORY_DISPATCH_HINT_GUIDANCE` in
+`server/lib/dispatchLabels.js`). Contributor labels (`good first issue`, `help
+wanted`) stay optional, missing labels are created lazily, category labels
+(`plan`, `ux`, `bug`, `tests`, `area:*`, …) are preserved, and the agent reads
+each new issue's labels back to repair any that did not stick.
 
 ### The "lands no code" postures
 
