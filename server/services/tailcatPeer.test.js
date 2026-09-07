@@ -10,6 +10,7 @@ import {
   manualInstallHint,
   allocateLocalPort,
   startForwardProcess,
+  classifyTailcatRuntimeError,
   addPeerViaTailcat,
   listTailcatForwards,
   retryTailcatForward,
@@ -318,6 +319,52 @@ describe('tailcatPeer helpers', () => {
     expect(failure.message).not.toContain('tcEXAMPLE');
   });
 
+  it('reports a post-startup delivery failure instead of a bound-but-dead "running"', async () => {
+    const child = fakeChild();
+    const errors = [];
+    const logSpy = vi.spyOn(console, 'error').mockImplementation((line) => errors.push(line));
+    const spawnFn = vi.fn(() => {
+      queueMicrotask(() => child.stderr.emit('data', 'forwarding 127.0.0.1:15555 -> remote localhost:5555\n'));
+      return child;
+    });
+    await startForwardProcess({
+      bin: 'tailcat', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+      spawnFn, readyMs: 200, probeMs: 5, isListening: async () => false,
+    });
+    // Healthy relay churn is not a verdict; only a failed delivery is.
+    child.stderr.emit('data', 'derp-301: [v1] backoff: 114 msec\n');
+    expect(child.tailcatRuntimeError).toBeNull();
+
+    // Split across chunks, exactly as a real pipe delivers it.
+    child.stderr.emit('data', 'dial remote port 5555: context');
+    child.stderr.emit('data', ' deadline exceeded\n');
+    expect(child.tailcatRuntimeError.message).toContain('dial remote port 5555');
+    expect(errors.join(' ')).toContain('cannot reach the remote');
+    logSpy.mockRestore();
+  });
+
+  it('never leaks the capability through a post-startup diagnostic', async () => {
+    const child = fakeChild();
+    const spawnFn = vi.fn(() => {
+      queueMicrotask(() => child.stderr.emit('data', 'forwarding 127.0.0.1:15555 -> remote localhost:5555\n'));
+      return child;
+    });
+    await startForwardProcess({
+      bin: 'tailcat', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+      spawnFn, readyMs: 200, probeMs: 5, isListening: async () => false,
+    });
+    child.stderr.emit('data', `dial remote target ${EXAMPLE_TC}: refused\n`);
+    expect(child.tailcatRuntimeError.message).not.toContain('tcEXAMPLE');
+  });
+
+  it('classifyTailcatRuntimeError ignores relay churn and picks the delivery failure', () => {
+    expect(classifyTailcatRuntimeError('netcheck: UDP is blocked, trying HTTPS')).toBeNull();
+    expect(classifyTailcatRuntimeError('derp-301: [v1] backoff: 5 msec')).toBeNull();
+    expect(classifyTailcatRuntimeError(
+      'derp-301: [v1] backoff: 5 msec\ndial remote port 5555: context deadline exceeded'
+    )).toContain('dial remote port 5555: context deadline exceeded');
+  });
+
   it('addPeerViaTailcat installs, forwards, and registers loopback peer', async () => {
     const child = fakeChild();
     const addPeerFn = vi.fn(async (data) => ({ id: 'peer-1', ...data }));
@@ -513,6 +560,44 @@ describe('saved tailcat forwards', () => {
     expect(JSON.stringify(row)).not.toContain(EXAMPLE_TC);
     // The stored Basic credential is a secret too — presence only, never a value.
     expect(JSON.stringify(row)).not.toContain('password');
+  });
+
+  it('separates a bound listener from a tunnel that cannot carry a request', async () => {
+    const child = fakeChild();
+    const saved = [];
+    await addPeerViaTailcat({
+      tcAddress: EXAMPLE_TC,
+      name: 'sandbox',
+      ensureInstalled: async () => ({ bin: '/example/bin/tailcat' }),
+      primeDerpMap: async () => null,
+      allocatePort: async () => 15555,
+      startForward: async () => child,
+      addPeerFn: async (data) => ({ id: 'peer-1', ...data }),
+      persistForwardEntry: async (entry) => { saved.push(entry); },
+      patchForwardEntry: async (id, patch) => ({ ...saved[0], ...patch, id }),
+    });
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      ...saved[0], peerId: 'peer-1', localPort: 15555, status: 'active',
+    }] });
+
+    // Bound and tracked: the row reads exactly as the operator's did — green.
+    const [healthy] = await listTailcatForwards();
+    expect(healthy).toMatchObject({ live: true, status: 'active', tunnelError: null });
+
+    const at = new Date().toISOString();
+    child.tailcatRuntimeError = { message: 'dial remote port 5555: context deadline exceeded', at };
+    const [broken] = await listTailcatForwards();
+    expect(broken).toMatchObject({
+      live: true, status: 'active', tunnelErrorAt: at,
+      tunnelError: 'dial remote port 5555: context deadline exceeded',
+    });
+
+    // A forward that started working again goes quiet, so the failure ages out
+    // rather than latching "no route" on a tunnel that now delivers.
+    child.tailcatRuntimeError = { message: 'dial remote port 5555: context deadline exceeded',
+      at: new Date(Date.now() - 6 * 60 * 1000).toISOString() };
+    const [recovered] = await listTailcatForwards();
+    expect(recovered).toMatchObject({ live: true, tunnelError: null, tunnelErrorAt: null });
   });
 
   it('retries from the stored address without the operator supplying it again', async () => {

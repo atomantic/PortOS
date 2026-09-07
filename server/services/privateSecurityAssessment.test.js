@@ -9,6 +9,11 @@ let repo;
 beforeEach(async () => {
   repo = await mkdtemp(join(tmpdir(), 'portos-assessment-test-'));
   await execGit(['init'], repo);
+  // The fixture deliberately commits paths a developer's own global gitignore
+  // commonly lists (`data/`, `.env`), and `git add` honours core.excludesFile
+  // from ~/.gitconfig. Without this the omitted-coverage count silently drops
+  // on that machine only — same reason the commits below pin core.hooksPath.
+  await execGit(['config', 'core.excludesFile', '/dev/null'], repo);
 });
 afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
 const commit = () => execGit(['-c', 'user.name=Example', '-c', 'user.email=example@example.com', '-c', 'core.hooksPath=/dev/null', 'commit', '-m', 'Synthetic fixture'], repo);

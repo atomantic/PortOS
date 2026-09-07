@@ -53,6 +53,25 @@ describe('TailcatForwardsPanel', () => {
     expect(screen.getByText(/no port yet/)).toBeInTheDocument();
   });
 
+  it('does not report a forward as running when its tunnel cannot deliver', async () => {
+    // Exactly the shape of the operator symptom: the listener is bound and
+    // tracked, so status/live both read healthy, but every request is reset.
+    getTailcatForwards.mockResolvedValue({ forwards: [{
+      ...failedForward,
+      status: 'active',
+      localPort: 15555,
+      live: true,
+      lastError: null,
+      lastErrorAt: null,
+      tunnelError: 'dial remote port 5555: context deadline exceeded',
+      tunnelErrorAt: '2026-01-02T00:00:00.000Z',
+    }] });
+    render(<TailcatForwardsPanel />);
+    expect(await screen.findByText('no route')).toBeInTheDocument();
+    expect(screen.queryByText('running')).not.toBeInTheDocument();
+    expect(screen.getByText(/dial remote port 5555/)).toBeInTheDocument();
+  });
+
   it('retries from the stored address and re-reads the server-derived status', async () => {
     retryTailcatForward.mockResolvedValue({ id: 'peer-9', port: 15555 });
     getTailcatForwards.mockResolvedValueOnce({ forwards: [failedForward] })

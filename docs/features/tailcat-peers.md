@@ -73,7 +73,7 @@ even retry.
 
 | Surface | What it does |
 | --- | --- |
-| `GET /api/instances/peers/tailcat/forwards` | Every saved forward: status (`pending`/`active`/`failed`), whether it is running, the local↔remote ports, and the last **redacted** startup error. `tcAddress` is the redacted form; the credential is reported as `hasAuth` only. |
+| `GET /api/instances/peers/tailcat/forwards` | Every saved forward: status (`pending`/`active`/`failed`), whether it is running, the local↔remote ports, the last **redacted** startup error, and `tunnelError`/`tunnelErrorAt` when a running forward cannot actually deliver. `tcAddress` is the redacted form; the credential is reported as `hasAuth` only. |
 | `POST …/forwards/:id/retry` | Restarts from the stored capability, registering the peer if the original add never got that far, and repointing an existing peer when a retry has to bind a different local port. |
 | `DELETE …/forwards/:id` | Stops the forward, deletes the stored capability, and removes its peer. |
 
@@ -103,6 +103,53 @@ tokens scrubbed, last few lines only. An opaque "startup timed out" with the rea
 reason discarded is what made this take three passes to diagnose.
 
 A failed metadata write rolls back the new peer.
+
+### A bound listener is not a working tunnel
+
+`tailcat forward` binds its loopback port **eagerly** and only brings the
+WireGuard/DERP tunnel up when a connection arrives. So on a host where the relay
+is unreachable, the forward still binds, still passes both readiness signals,
+and still reports `active` / `running` — while every request through it is reset
+once tailcat's dial deadline expires:
+
+```
+$ curl http://127.0.0.1:15555/api/system/health/details
+curl: (56) Recv failure: Connection reset by peer      # after ~10s, every time
+```
+
+The only place tailcat says why is its post-startup stderr
+(`dial remote port 5555: context deadline exceeded`), which PortOS used to
+drain and discard. It now **reads** that stream for the lifetime of the child:
+a delivery failure is redacted, logged once per distinct reason, and reported on
+the forward as `tunnelError` / `tunnelErrorAt`. The Instances row for such a
+forward reads **no route** with the reason beneath it, instead of a green
+`running` on a tunnel that cannot carry a byte.
+
+The classifier is deliberately narrow — relay reconnects, backoff lines, and
+netcheck chatter are normal on a healthy tunnel; a failed dial is not. The
+values are in-memory only: they describe the child running right now, and a
+per-connection failure repeating every few seconds would thrash the metadata
+file. They also age out after five minutes: tailcat re-emits the line on every
+failed request, so a forward that is still broken keeps refreshing it, while one
+that started working again goes quiet — a latched "no route" would be the same
+lie as a permanently green "running", pointing the other way.
+
+**When you see `no route`,** the tunnel — not PortOS — is what to look at. The
+usual cause on macOS is a local network filter (Little Snitch and friends)
+denying the `tailcat` binary itself: `tailcat forward --verbose` then logs a
+relay connect that dies the instant it is established, while `curl` to the same
+relay from the same machine succeeds.
+
+```
+netcheck: [v1] report: udp=false v4=false icmpv4=false v6=false derp=0
+magicsock: derp.Recv(derp-301): ... connect to region 301 (nyc):
+  read tcp4 <local>:<port>-><relay>:443: read: socket is not connected
+dial remote port 5555: context deadline exceeded
+```
+
+UDP blocked *and* the relay refused leaves no path at all, so nothing ever
+reaches the remote — which is also why the far side shows no activity. Allow
+the `tailcat` binary outbound in the filter, then Retry the forward.
 
 ### The DERP map has to be reachable — by Go
 
