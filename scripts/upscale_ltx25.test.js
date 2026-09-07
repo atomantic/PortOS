@@ -311,17 +311,17 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — transformer header (#6512)', () =>
   // schedule on an un-distilled model is not a fallback, it is a wrong render.
   it('resolves the dev + distilled-LoRA layout, preferring a pre-fused distilled file', () => {
     const pack = mkdtempSync(join(tmpdir(), 'portos-ltx25-layout-'));
-    const layout = (dir) => call(`[p and p.name for p in runner.resolve_transformer_layout(__import__("pathlib").Path(${JSON.stringify(dir)}))]`);
-    expect(layout(pack)).toBe('[None, None]');
+    const layout = (dir) => call(`(lambda t, loras: [t.name, [(__import__("pathlib").Path(p).name, s) for p, s in loras]])(*runner.resolve_transformer_layout(__import__("pathlib").Path(${JSON.stringify(dir)})))`);
+    expect(layout(pack)).toMatch(/^REJECTED:.*no transformer weight file/);
 
     writeFileSync(join(pack, 'transformer-dev.safetensors'), '');
-    expect(layout(pack)).toBe("['transformer-dev.safetensors', None]");
+    expect(layout(pack)).toMatch(/^REJECTED:.*carries only transformer-dev\.safetensors/);
 
     writeFileSync(join(pack, 'ltx-2.5-22b-distilled-lora-450.safetensors'), '');
-    expect(layout(pack)).toBe("['transformer-dev.safetensors', 'ltx-2.5-22b-distilled-lora-450.safetensors']");
+    expect(layout(pack)).toBe("['transformer-dev.safetensors', [('ltx-2.5-22b-distilled-lora-450.safetensors', 1.0)]]");
 
     writeFileSync(join(pack, 'transformer-distilled.safetensors'), '');
-    expect(layout(pack)).toBe("['transformer-distilled.safetensors', None]");
+    expect(layout(pack)).toBe("['transformer-distilled.safetensors', []]");
   }, PY_TEST_TIMEOUT_MS);
 
   // `ICLoraPipeline.load()` resolves the transformer only while `dit` is None,
@@ -332,7 +332,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — transformer header (#6512)', () =>
     const source = [
       'class FakeBase:',
       '    def __init__(self, model_dir, lora_paths=None):',
-      '        self.model_dir = model_dir; self.lora_paths = lora_paths; self.dit = None; self._loaded = False; self.calls = []',
+      '        self.model_dir = model_dir; self.lora_paths = lora_paths; self.dit = None; self.upsampler = None; self._loaded = False; self.calls = []',
       '    def _load_transformer_with_optional_streaming(self, path):',
       '        self.calls.append(path.name); return "dit"',
       '    def load(self):',
@@ -340,9 +340,11 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — transformer header (#6512)', () =>
       'from pathlib import Path',
       'pipe = runner.make_pipeline(FakeBase, Path("/pack"), Path("/pack/transformer-dev.safetensors"), [("adapter", 1.0), ("distilled", 1.0)])',
       'pipe.load(); pipe.load()',
-      'print(pipe.calls, pipe.lora_paths, pipe.model_dir)',
+      // The latent upsampler slot is pre-seeded so the base load() skips the
+      // ~1 GB stage-2 weight a skip_stage_2 render never touches.
+      'print(pipe.calls, pipe.lora_paths, pipe.model_dir, pipe.upsampler is not None)',
     ].join('\n');
     expect(trimmed(runPython(`${importRunner}\n${source}`)))
-      .toBe("['transformer-dev.safetensors', 'base-load:dit', 'base-load:dit'] [('adapter', 1.0), ('distilled', 1.0)] /pack");
+      .toBe("['transformer-dev.safetensors', 'base-load:dit', 'base-load:dit'] [('adapter', 1.0), ('distilled', 1.0)] /pack True");
   }, PY_TEST_TIMEOUT_MS);
 });

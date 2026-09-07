@@ -38,6 +38,7 @@ import { resolveIcLoraWeightByKey } from '../../lib/icLoraWeights.js';
 import { hfChildEnv } from '../hfToken.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { videoGenEvents } from './events.js';
+import { RUNTIME_LINE_PREFIX, parseRuntimeFingerprintLine, formatRuntimeFingerprint } from './generateVideoHelpers.js';
 import { getHistoryItem, loadHistory, mutateVideoHistory } from './history.js';
 import { buildArgs } from './renderArgs.js';
 import { runtimeIsCacheOnly, runtimeNeedsProcessGroupKill } from './runtimes.js';
@@ -51,12 +52,11 @@ import {
 const MAX_SEED = 2 ** 32 - 1;
 const STAGE_RE = /^STAGE:\s*(\S+)\s*(.*)$/;
 // Both runners emit these once, before the pipeline loads: the runtime
-// fingerprint (`scripts/_runner_common.py emit_runtime_fingerprint`) and the
+// fingerprint (parsed by the same helper the render path uses) and the
 // adapter's `reference_downscale_factor` read off the weight. They are
 // provenance, so they are captured here and written onto the history row —
 // a render can then be tied to the exact ltx/mlx/torch + chip stack and the
 // factor it enforced, the way a plain render's row carries `runtime`.
-const RUNTIME_PREFIX = 'RUNTIME:';
 const REFERENCE_DOWNSCALE_RE = /^UPSCALE_REFERENCE_DOWNSCALE:\s*(\d+)\s*$/;
 const STDERR_TAIL_LINES = 20;
 
@@ -229,10 +229,13 @@ const runUpscaleChild = async ({ jobId, bin, args, runtime, entry }) => {
       if (stderrTail.length > STDERR_TAIL_LINES) stderrTail.shift();
     }
     videoGenEvents.emit('activity', { generationId: jobId });
-    if (text.startsWith(RUNTIME_PREFIX)) {
+    if (text.startsWith(RUNTIME_LINE_PREFIX)) {
       // A malformed payload stays in the stderr tail rather than becoming a
       // half-parsed fingerprint on the row.
-      try { provenance.runtime = JSON.parse(text.slice(RUNTIME_PREFIX.length)); } catch { /* keep null */ }
+      const fp = parseRuntimeFingerprintLine(text);
+      if (!fp) return;
+      provenance.runtime = fp;
+      console.log(`🏷️ runtime [${jobId.slice(0, 8)}] ${formatRuntimeFingerprint(fp) || '?'}`);
       return;
     }
     const downscale = REFERENCE_DOWNSCALE_RE.exec(text);
@@ -414,11 +417,11 @@ export async function runVideoUpscale({
       upscaleMethod: 'ltx',
       upscaleRuntime: runtime,
       upscaleAdapter: adapterKey,
-      // Measured by the runner off the weight it fused, and the rule it
-      // enforced — null when the runner did not report one.
-      upscaleReferenceDownscale: rendered.referenceDownscale ?? null,
-      // Same shape a plain render's row carries: the exact ltx/mlx/torch +
-      // chip + OS stack this clip rendered on. Absent when not reported.
+      // Measured by the runner off the weight it fused (the rule it enforced),
+      // and — in the same shape a plain render's row carries — the exact
+      // ltx/mlx/torch + chip + OS stack this clip rendered on. Both are absent
+      // sentinels when the runner did not report them, never a guessed value.
+      ...(rendered.referenceDownscale !== null ? { upscaleReferenceDownscale: rendered.referenceDownscale } : {}),
       ...(rendered.runtime ? { runtime: rendered.runtime } : {}),
       // What the grid actually required of this source, kept beside the result
       // so a reader can tell a padded render from a conforming one.

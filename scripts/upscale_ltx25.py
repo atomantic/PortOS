@@ -22,15 +22,10 @@ gated model card:
     it and otherwise falls back to the remote 2.3 Gemma 3 id — a wrong encoder
     AND an unannounced multi-GB download — so `validate_model_dir` refuses a
     pack that lacks it instead of letting that fallback happen.
-  - The recipe is the standard single-stage IC-LoRA video-to-video pass
-    (Lightricks' IC-LoRA guide and their ComfyUI reference workflow: distilled
-    schedule at the set resolution, the low-resolution clip as the reference at
-    half of it). `ICLoraPipeline.generate` renders its IC-conditioned stage 1
-    at HALF the dims it is handed and offers a latent-upsample stage 2 for the
-    other half, so this runner requests twice the output and skips stage 2 —
-    stage 1 then renders at the output size, conditioned on the source at its
-    native resolution, and its decode is the deliverable
-    (`_upscale_contract.conditioned_stage_request`).
+  - The recipe is the standard single-stage IC-LoRA video-to-video pass at the
+    output size with the source as the reference at half of it — see
+    `PIPELINE_REQUEST_MULTIPLIER` in `_upscale_contract.py` for why that means
+    requesting twice the output and skipping stage 2.
   - The schedule is the fixed distilled one: `DISTILLED_SIGMAS` is 8 steps.
     Passing no step count selects exactly that, which is why this runner
     exposes no steps flag.
@@ -57,7 +52,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _runner_common import emit_runtime_fingerprint, heartbeat  # noqa: E402
+from _runner_common import (  # noqa: E402
+    LTX25_DEV_TRANSFORMER_FILENAME,
+    LTX25_DISTILLED_LORA_FILENAME,
+    emit_runtime_fingerprint,
+    heartbeat,
+)
 # The argv, grid and adapter contract this runner shares with the CUDA one
 # (#6513). Re-exported names stay module attributes, so a caller — or a test —
 # still reaches them as `upscale_ltx25.validate_args` / `.lora_target_keys`.
@@ -76,16 +76,6 @@ from _upscale_contract import (  # noqa: E402
 # than a fallback — see the module docstring.
 TEXT_ENCODER_DIRNAME = "text_encoder"
 
-# The two layouts the pinned q8 pack documents for the distilled model. The
-# pre-fused `transformer-distilled.safetensors` is what `ICLoraPipeline.load()`
-# resolves on its own; a pack that carries only the dev transformer holds the
-# SAME model as dev weights plus the 450-step distilled LoRA, which the pack
-# README names as the equivalent non-streaming arrangement and the runtime's
-# own two-stage pipelines fuse for their distilled stage. The distilled
-# schedule this runner drives is only valid on the distilled model, so dev
-# WITHOUT that LoRA is a refusal, never a fallback.
-DEV_TRANSFORMER_FILENAME = "transformer-dev.safetensors"
-DISTILLED_LORA_FILENAME = "ltx-2.5-22b-distilled-lora-450.safetensors"
 # Full strength turns the dev weights INTO the distilled model — the pack's
 # README states the pre-fused file is this LoRA at the default strength of 1.0.
 DISTILLED_LORA_STRENGTH = 1.0
@@ -161,23 +151,35 @@ def resolve_transformer_path(model_dir: Path) -> "Path | None":
     return fallback if fallback.is_file() else None
 
 
-def resolve_transformer_layout(model_dir: Path) -> "tuple[Path | None, Path | None]":
-    """`(transformer, distilled_lora)` for the pack — see the layout constants.
+def resolve_transformer_layout(model_dir: Path) -> "tuple[Path, list[tuple[str, float]]]":
+    """The DiT file to fuse into, plus any LoRA the pack needs to make it the distilled model.
 
-    The pre-fused distilled transformer wins whenever present (`distilled_lora`
-    is then None). Otherwise the dev transformer is returned WITH the distilled
-    LoRA that turns it into the distilled model, and `(None, None)` when the
-    pack has neither the distilled file nor a dev file. A dev file whose LoRA is
-    missing is reported as `(dev, None)` so the caller can refuse it by name.
+    The pinned q8 pack documents two layouts for the distilled model. The
+    pre-fused `transformer-distilled.safetensors` is what `ICLoraPipeline.load()`
+    resolves on its own and wins whenever present (no extra LoRA). A pack that
+    carries only the dev transformer holds the SAME model as dev weights plus
+    the 450-step distilled LoRA — the layout the pack README names as the
+    equivalent non-streaming arrangement and the runtime's own pipelines fuse
+    for their distilled stage — so that LoRA is returned beside it. The
+    distilled schedule this runner drives is only valid on the distilled model,
+    so dev WITHOUT that LoRA is a refusal, never a fallback.
     """
     distilled = resolve_transformer_path(model_dir)
     if distilled is not None:
-        return distilled, None
-    dev = model_dir / DEV_TRANSFORMER_FILENAME
+        return distilled, []
+    dev = model_dir / LTX25_DEV_TRANSFORMER_FILENAME
     if not dev.is_file():
-        return None, None
-    lora = model_dir / DISTILLED_LORA_FILENAME
-    return dev, (lora if lora.is_file() else None)
+        raise SystemExit(
+            f"The LTX-2.5 pack at {model_dir} has no transformer weight file. Repair the model in Video Gen."
+        )
+    lora = model_dir / LTX25_DISTILLED_LORA_FILENAME
+    if not lora.is_file():
+        raise SystemExit(
+            f"The LTX-2.5 pack at {model_dir} carries only {LTX25_DEV_TRANSFORMER_FILENAME} and not the "
+            f"{LTX25_DISTILLED_LORA_FILENAME} that makes it the distilled model the upscale schedule needs. "
+            "Repair the model in Video Gen."
+        )
+    return dev, [(str(lora), DISTILLED_LORA_STRENGTH)]
 
 
 def make_pipeline(pipeline_cls, model_dir: Path, transformer_path: Path, lora_paths):
@@ -191,14 +193,24 @@ def make_pipeline(pipeline_cls, model_dir: Path, transformer_path: Path, lora_pa
     the DiT resident through prompt encoding. `lora_paths` is every adapter
     `_fuse_loras` will add to the DiT in ONE pass — the IC adapter, and on a dev
     layout the distilled LoRA beside it.
+
+    `load()` also builds the latent upsampler for a stage 2 this runner never
+    runs (`skip_stage_2`), reading a ~1 GB weight into memory that then sits
+    beside the DiT for the whole render. Pre-seeding the slot makes `load()`
+    skip it; nothing under `skip_stage_2` dereferences the upsampler.
     """
     class PackLayoutPipeline(pipeline_cls):
         def load(self):
             if self.dit is None and not self._loaded:
                 self.dit = self._load_transformer_with_optional_streaming(transformer_path)
+            if self.upsampler is None:
+                self.upsampler = _UNUSED_UPSAMPLER
             super().load()
 
     return PackLayoutPipeline(model_dir=str(model_dir), lora_paths=list(lora_paths))
+
+
+_UNUSED_UPSAMPLER = object()
 
 
 def transformer_weight_keys(transformer_path: Path) -> "set[str]":
@@ -266,9 +278,8 @@ def main() -> None:
     header = read_safetensors_header(args.ic_lora_path)
     scale = reference_downscale_factor(header)
     assert_reference_scale_fits(scale, args.width, args.height)
-    # Recorded rather than guessed: `icLoraWeights.js` holds `null` for this
-    # gated weight precisely because nobody had opened it, and this line is the
-    # measurement (#6508's registry note points here).
+    # The per-install measurement the queue records beside the registry's
+    # declared value — a re-pinned weight is measured, not trusted.
     log(f"UPSCALE_REFERENCE_DOWNSCALE:{scale}")
 
     log("STAGE:verify-adapter")
@@ -282,18 +293,8 @@ def main() -> None:
     # move this behind a `pipe.load()`: `generate()` deliberately loads the text
     # encoder, encodes, frees it, and only THEN loads the transformer, so
     # pre-loading would hold a multi-GB DiT resident through prompt encoding.
-    transformer_path, distilled_lora = resolve_transformer_layout(model_dir)
-    if transformer_path is None:
-        raise SystemExit(
-            f"The LTX-2.5 pack at {model_dir} has no transformer weight file. Repair the model in Video Gen."
-        )
-    if transformer_path.name == DEV_TRANSFORMER_FILENAME and distilled_lora is None:
-        raise SystemExit(
-            f"The LTX-2.5 pack at {model_dir} carries only {DEV_TRANSFORMER_FILENAME} and not the "
-            f"{DISTILLED_LORA_FILENAME} that makes it the distilled model the upscale schedule needs. "
-            "Repair the model in Video Gen."
-        )
-    layout = transformer_path.name + (f" + {distilled_lora.name}" if distilled_lora else "")
+    transformer_path, pack_loras = resolve_transformer_layout(model_dir)
+    layout = " + ".join([transformer_path.name, *(Path(path).name for path, _ in pack_loras)])
     log(f"STATUS:Transformer layout: {layout}")
     fused = assert_adapter_fuses(
         args.ic_lora_path,
@@ -304,21 +305,17 @@ def main() -> None:
 
     log("STAGE:load-pipeline")
     log(f"STATUS:Loading LTX-2.5 MLX upscale pipeline ({args.width}x{args.height}, {args.num_frames} frames)")
-    lora_paths = [(args.ic_lora_path, 1.0)]
-    if distilled_lora is not None:
-        lora_paths.append((str(distilled_lora), DISTILLED_LORA_STRENGTH))
-    pipe = make_pipeline(ICLoraPipeline, model_dir, transformer_path, lora_paths)
+    pipe = make_pipeline(ICLoraPipeline, model_dir, transformer_path, [(args.ic_lora_path, 1.0), *pack_loras])
 
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     request_width, request_height = conditioned_stage_request(args.width, args.height)
     log("STAGE:inference")
     with heartbeat("ltx25-upscale-inference"):
-        # Stage 1 renders at half the requested dims — i.e. AT the output — with
-        # the source as its native-resolution reference, and `skip_stage_2`
-        # makes that stage's decode the deliverable (see the module docstring).
-        # No stage-1 step count: `DISTILLED_SIGMAS` IS the distilled schedule
-        # (8 steps), and passing a count would truncate it.
+        # Twice the output + `skip_stage_2` = one conditioned stage AT the
+        # output (see `conditioned_stage_request`). No stage-1 step count:
+        # `DISTILLED_SIGMAS` IS the distilled schedule (8 steps), and passing a
+        # count would truncate it.
         pipe.generate_and_save(
             prompt=args.prompt,
             output_path=str(output),

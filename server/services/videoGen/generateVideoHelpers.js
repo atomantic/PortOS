@@ -145,17 +145,14 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
     // job so finalizeGeneratedVideo can persist it on the history record, and
     // log a single self-documenting line so a render that produced garbled
     // output can be tied to a specific ltx/mlx/torch + chip + OS stack.
-    if (line.startsWith('RUNTIME:')) {
-      try {
-        const fp = JSON.parse(line.slice('RUNTIME:'.length));
-        job.runtime = fp;
-        console.log(`🏷️ runtime [${jobId.slice(0, 8)}] ${formatRuntimeFingerprint(fp) || '?'}`);
-        return true;
-      } catch {
-        // Malformed fingerprint line — fall through to raw-logging so the
-        // broken payload is visible rather than silently swallowed.
-        return false;
-      }
+    if (line.startsWith(RUNTIME_LINE_PREFIX)) {
+      const fp = parseRuntimeFingerprintLine(line);
+      // Malformed fingerprint line — fall through to raw-logging so the
+      // broken payload is visible rather than silently swallowed.
+      if (!fp) return false;
+      job.runtime = fp;
+      console.log(`🏷️ runtime [${jobId.slice(0, 8)}] ${formatRuntimeFingerprint(fp) || '?'}`);
+      return true;
     }
     // What the runner ACTUALLY applied of a requested speed profile
     // (SPEEDPROFILE:<json> — see scripts/generate_ltx2.py). PortOS asks for a
@@ -355,6 +352,29 @@ export function describeRenderConditioning({
   if (audioFilePath) kinds.push('audio');
   if (Array.isArray(icReferencePaths) && icReferencePaths.length > 0) kinds.push('icReference');
   return kinds.sort();
+}
+
+// The one-line protocol every helper script announces its stack on at startup
+// (`scripts/_runner_common.py emit_runtime_fingerprint`). Parsed here for the
+// render path and the upscale job alike, so a payload-shape change has one
+// consumer to update.
+export const RUNTIME_LINE_PREFIX = 'RUNTIME:';
+
+/**
+ * The fingerprint object carried by a `RUNTIME:<json>` line, or null when the
+ * line is not one or its payload is malformed — the caller decides whether a
+ * broken payload is logged raw or dropped.
+ * @param {string} line - one trimmed child-output line
+ * @returns {object|null}
+ */
+export function parseRuntimeFingerprintLine(line) {
+  if (typeof line !== 'string' || !line.startsWith(RUNTIME_LINE_PREFIX)) return null;
+  try {
+    const fp = JSON.parse(line.slice(RUNTIME_LINE_PREFIX.length));
+    return fp && typeof fp === 'object' ? fp : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -348,7 +348,7 @@ describe('runVideoUpscale — success', () => {
     expect(entry.renderMs).toBeGreaterThanOrEqual(0);
     // Nothing reported by the runner → explicit absent sentinels, never a
     // guessed factor or a half-parsed fingerprint.
-    expect(entry.upscaleReferenceDownscale).toBeNull();
+    expect(entry.upscaleReferenceDownscale).toBeUndefined();
     expect(entry.runtime).toBeUndefined();
     // The source render's timing must not ride along on a row that only paid
     // for the upscale.

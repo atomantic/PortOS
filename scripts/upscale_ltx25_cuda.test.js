@@ -134,7 +134,7 @@ describe.skipIf(!pyBin)('upscale_ltx25_cuda.py — one argv for both backends (#
     ]);
   }, PY_TEST_TIMEOUT_MS);
 
-  // The distilled schedule is fixed at 8 + 3 sigmas on both runtimes, so there
+  // The distilled schedule is fixed at 8 sigmas on both runtimes, so there
   // is nothing for a steps flag to select; and the pass carries no prompt,
   // because the source clip is the whole conditioning signal.
   it('exposes no steps flag and defaults the prompt to empty', () => {
@@ -316,10 +316,11 @@ describe.skipIf(!pyBin)('upscale_ltx25_cuda.py — adapter fusion guard (#6513)'
   }, PY_TEST_TIMEOUT_MS);
 });
 
-// The adapter's declared factor applies to the STAGE-1 dims, which are half the
-// output — so a factor of 2 really demands an output divisible by 4. Shared with
-// the MLX runner, exercised here because this runner is the one that would
-// commit a CUDA render to it.
+// The adapter's declared factor applies to the output the conditioned stage
+// renders at, and the reference must land on the VAE's 32-pixel grid at the
+// source's own size — so a factor of N demands an output divisible by N × 32.
+// Shared with the MLX runner, exercised here because this runner is the one
+// that would commit a CUDA render to it.
 describe.skipIf(!pyBin)('upscale_ltx25_cuda.py — reference downscale factor (#6513)', () => {
   it('reads the factor off the weight and enforces it against the output the conditioned stage renders at', () => {
     expect(call(`runner.reference_downscale_factor(runner.read_safetensors_header(${JSON.stringify(ADAPTER)}))`))

@@ -313,11 +313,10 @@ export const assertIcReferenceCount = (spec, count, fail) => {
 // requires the OUTPUT dimensions to divide evenly by it. Returns a human message
 // when they don't, else null. Mirrored client-side (icResolutionIssue in
 // client/src/lib/videoGenParams.js) so the form can warn before submit.
-// A `null`/absent factor is UNKNOWN, not 1 — the weight's metadata hasn't been
-// read yet (a gated file nobody with accepted terms has opened). Both resolve
-// to "assert no rule", but they must stay distinguishable: guessing a factor
-// here would either reject valid resolutions or green-light ones the pipeline
-// will refuse deep inside a render.
+// A `null`/absent factor is UNKNOWN, not 1 — a weight whose metadata has not
+// been read. Both resolve to "assert no rule", but they must stay
+// distinguishable: guessing a factor here would either reject valid
+// resolutions or green-light ones the pipeline will refuse deep inside a render.
 export const icResolutionIssue = (spec, width, height) => {
   const scale = spec?.referenceDownscaleFactor;
   if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 1) return null;
@@ -328,9 +327,9 @@ export const icResolutionIssue = (spec, width, height) => {
 /**
  * The reference downscale factor a spec's DOWNLOADED weight actually declares.
  *
- * `referenceDownscaleFactor` on the registry entry is what this repo could
- * verify when the entry was written; for a gated weight that is `null`. This
- * reads the truth off the file an install holds — the same
+ * `referenceDownscaleFactor` on the registry entry is what was verified when
+ * the entry was written (`null` for a weight nobody has opened). This reads
+ * the truth off the file an install holds — the same
  * `__metadata__.reference_downscale_factor` the MLX pipeline itself reads
  * (`iclora_utils.read_lora_reference_downscale_factor`) — so the resolution
  * rule can be stated before a render commits to it.

@@ -18,14 +18,11 @@ installs), not inferred from the gated model card:
     that `generate_ltx25_cuda.py` already drives `DistilledPipeline` with, so
     the FP8 cast policy and disk streaming that make a 22B model fit a consumer
     card carry over unchanged. It fuses the adapter into STAGE 1 only
-    (`stage_2` is built with `loras=()`), and stage 1 renders at HALF the
+    (`stage_2` is built with `loras=()`) and renders that stage at HALF the
     `height`/`width` it is handed — so, exactly like the MLX runner, this one
-    requests twice the output and passes `skip_stage_2=True`: the conditioned
-    stage renders at the output size with the source as a native-resolution
-    reference and its decode is the deliverable
-    (`_upscale_contract.conditioned_stage_request`). That is the standard
-    single-stage IC-LoRA video-to-video recipe Lightricks documents for the
-    upscaler; the latent-upsample stage 2 never runs.
+    requests twice the output and passes `skip_stage_2=True` (see
+    `PIPELINE_REQUEST_MULTIPLIER` in `_upscale_contract.py`); the
+    latent-upsample stage 2 never runs.
   - The LoRA is a `LoraPathStrengthAndSDOps(path, strength, sd_ops)` and the
     `sd_ops` is the runtime's own `LTXV_LORA_COMFY_RENAMING_MAP`. Both come
     from `ltx_core.loader`; naming the map here rather than reimplementing it
@@ -252,9 +249,8 @@ def main() -> None:
     header = read_safetensors_header(args.ic_lora_path)
     scale = reference_downscale_factor(header)
     assert_reference_scale_fits(scale, args.width, args.height)
-    # Recorded rather than guessed: `icLoraWeights.js` holds `null` for this
-    # gated weight precisely because nobody had opened it, and this line is the
-    # measurement (#6508's registry note points here).
+    # The per-install measurement the queue records beside the registry's
+    # declared value — a re-pinned weight is measured, not trusted.
     log(f"UPSCALE_REFERENCE_DOWNSCALE:{scale}")
 
     log("STAGE:verify-adapter")
@@ -320,8 +316,8 @@ def main() -> None:
     request_width, request_height = conditioned_stage_request(args.width, args.height)
     log("STAGE:inference")
     with heartbeat("ltx25-cuda-upscale-inference"):
-        # Stage 1 renders at half the requested dims — i.e. AT the output — and
-        # `skip_stage_2` makes its decode the deliverable (module docstring).
+        # Twice the output + `skip_stage_2` = one conditioned stage AT the
+        # output (see `conditioned_stage_request`).
         # No sigma override: `DISTILLED_SIGMAS` IS the distilled schedule (8)
         # and is this call's stage-1 default. `images=[]` because the
         # reference is the clip, not a still.

@@ -33,15 +33,18 @@ from pathlib import Path
 # runners make (`conditioned_stage_request` below). Temporal compression is 8
 # and the reference encoder needs a (1 + 8k)-frame input, so `frames % 8 == 1`
 # with a floor of 9.
-SPATIAL_MULTIPLE = 64
-FRAME_MODULUS = 8
-FRAME_REMAINDER = 1
-MIN_FRAMES = 9
-
 # The VAE's spatial compression: the reference clip is resized onto this grid
 # before it is encoded, so a reference that is not a multiple of it gets
 # resampled — which for an upscaler means conditioning on a blurred source.
 VAE_SPATIAL_COMPRESSION = 32
+# The shipped adapter's declared `reference_downscale_factor` (measured, and
+# declared by `icLoraWeights.js`); `assert_reference_scale_fits` re-derives the
+# same rule from the factor read off the file actually fused.
+SHIPPED_REFERENCE_DOWNSCALE = 2
+SPATIAL_MULTIPLE = SHIPPED_REFERENCE_DOWNSCALE * VAE_SPATIAL_COMPRESSION
+FRAME_MODULUS = 8
+FRAME_REMAINDER = 1
+MIN_FRAMES = 9
 
 # How both `ICLoraPipeline`s interpret the `height`/`width` they are handed:
 # as the dims of the OPTIONAL latent-upsample stage 2, with the IC-conditioned
@@ -116,7 +119,7 @@ def validate_args(args: argparse.Namespace) -> None:
     """
     if args.width % SPATIAL_MULTIPLE or args.height % SPATIAL_MULTIPLE:
         raise SystemExit(
-            f"The two-stage LTX-2.5 pipeline requires width and height divisible by {SPATIAL_MULTIPLE}; "
+            f"The LTX-2.5 upscale requires width and height divisible by {SPATIAL_MULTIPLE}; "
             f"got {args.width}x{args.height}."
         )
     if args.num_frames < MIN_FRAMES or args.num_frames % FRAME_MODULUS != FRAME_REMAINDER:

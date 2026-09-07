@@ -113,14 +113,10 @@ the in-context reference at half of it (the adapter's
 is the whole conditioning signal — and the distilled 8-sigma schedule is used
 as-is.
 
-Both runtimes' `ICLoraPipeline` interpret the size they are handed as the dims
-of an optional latent-upsample second stage, rendering the conditioned stage
-at half of it. The runners therefore request **twice** the output and skip
-that second stage, so the conditioned stage renders at the output size with
-the source as a native-resolution reference. Requesting the output size itself
-would condition on the source downscaled by another 2× and hand the second
-doubling to the latent upsampler — a pixel-faithful refinement the adapter is
-not.
+Both runtimes' `ICLoraPipeline` render their conditioned stage at half the size
+they are handed, so the runners request **twice** the output and skip the
+latent-upsample second stage (`PIPELINE_REQUEST_MULTIPLIER` in
+`scripts/_upscale_contract.py` records why).
 
 On macOS the MLX q8 pack may hold the distilled model either pre-fused
 (`transformer-distilled.safetensors`) or as the dev transformer plus the
