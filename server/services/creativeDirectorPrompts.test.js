@@ -250,3 +250,35 @@ describe('buildEvaluatePrompt — imageStrength surfacing', () => {
     expect(out).toContain('Image strength: default');
   });
 });
+
+describe('standalone Video treatment planning', () => {
+  it('requires an exact timed script and preserves revision context without authorizing renders', async () => {
+    const project = {
+      ...baseProject, workspace: 'video', targetDurationSeconds: 120,
+      renderBackend: { video: { mode: 'reactor' } },
+      videoDraft: { durationRange: { min: 60, max: 180 }, sources: [{ kind: 'universe', id: 'example-universe', revision: 'rev-2' }] },
+      treatment: { script: 'A visitor returns.', scenes: [{ sceneId: 'scene-retained', order: 0 }], artifact: { scriptId: 'script-example', revision: 2 } },
+    };
+    const out = await buildTreatmentPrompt(project);
+    expect(out).toContain('exactly 120 seconds');
+    expect(out).toContain('"script": "<complete production script>"');
+    expect(out).toContain('"minSeconds":5.167');
+    expect(out).toContain('"maxPromptCharacters":800');
+    expect(out).toContain('"sceneId":"scene-retained"');
+    expect(out).toContain('"scriptId":"script-example"');
+    expect(out).toContain('"revision":"rev-2"');
+    expect(out).toContain('Do not start production');
+    expect(out).not.toContain('produce fewer scenes');
+    expect(out).not.toContain('automatically begin rendering');
+    expect(out).not.toMatch(/{{[#/^]?[a-zA-Z]/);
+  });
+
+  it('distinguishes pinned Grok durations from unresolved inherited capabilities', async () => {
+    const project = { ...baseProject, workspace: 'video' };
+    const grok = await buildTreatmentPrompt({ ...project, renderBackend: { video: { mode: 'grok' } } });
+    expect(grok).toContain('"durationSeconds":[6,10]');
+    const inherited = await buildTreatmentPrompt(project);
+    expect(inherited).toContain('"backendCompatibility":"unresolved"');
+    expect(inherited).toContain('source record IDs are not image filenames');
+  });
+});
