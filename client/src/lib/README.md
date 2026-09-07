@@ -14,7 +14,8 @@ direction: nothing under `server/` may import from `client/`, because a client-o
 dependency added to such a file breaks the server CI job. A server module the client
 imports must reach no Node built-in and nothing outside `server/lib`; when the natural
 home does (`storyBible.js` pulls `crypto`), split the pure part into its own leaf — or,
-when the only impurity is an id, mint it through `uuid.js`, which reads the global WebCrypto.
+when the only impurity is an id the browser never mints, take it from `uuid.js`, which reads
+the global WebCrypto and so keeps the leaf importable (browser code mints through `client/src/lib/uuid.js`).
 `scripts/client-server-import-purity.test.js` and `scripts/server-imports-no-client.test.js`
 enforce both halves.
 

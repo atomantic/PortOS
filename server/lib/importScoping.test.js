@@ -245,9 +245,12 @@ describe('deferred imports stay deferred (#6156)', () => {
 // browser bundle reads: `lib/characterIntegrityVocabulary.js`
 // (split out of `characterIntegrity.js`, which reaches `crypto`) and
 // `lib/creativeBriefLimits.js` (the caps both creative validation modules
-// enforce). Measured 95,414 (+168): each leaf is reached by every suite that
-// crosses its parent or the lib barrel, with nothing behind it to defer — the
-// tolerated leaf shape, not an eager edge. Restore the ~1.5k allowance.
+// enforce). Measured 95,470 (+223 over main's 95,247): `creativeBriefLimits.js`
+// +206 (every suite that reaches `creativeCommissionValidation.js` through
+// `validation.js`'s flat re-export), `uuid.js` +56 (newly reached through
+// `seriesCharacterArc.js`), the vocabulary leaf +24, less the five deleted
+// mirror suites — leaves with nothing behind them to defer, the tolerated shape,
+// not an eager edge. Restore the ~1.5k allowance.
 const MAX_STATIC_INSTANTIATIONS = 96900;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
