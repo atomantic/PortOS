@@ -203,11 +203,9 @@ Lanczos is unaffected by any of this.
 
 ### What the verification matrix covers
 
-The matrix drives the real route, queue, runner and gallery row of a
-worktree server on a spare port (`NODE_ENV=test`, so the worktree's own `data/`
-is the data root and no Postgres write can reach the install), against the
-pinned MLX q8 pack and the gated adapter, with short clips so each render is
-minutes. Recorded for macOS on an Apple Silicon host:
+The matrix drives the real route, queue, runner and gallery row (a spare-port
+worktree server, short clips so each render is minutes) against the pinned MLX
+q8 pack and the gated adapter. Recorded for macOS on an Apple Silicon host:
 
 | Case | Source | Result |
 | --- | --- | --- |
@@ -215,19 +213,12 @@ minutes. Recorded for macOS on an Apple Silicon host:
 | needs frame padding, with audio | 576×1024, 23 f (padded to 25 for the render) | 1152×2048, **23 f** back, 0.96 s; audio intact; 345 s |
 | needs spatial padding, no audio | 560×1000, 25 f (padded to 576×1024) | **1120×2000**, 25 f, silent — padding cropped back off; 342 s |
 | cancellation mid-render | conforming source | job `canceled`; no history row, no partial file, no scratch left in the temp dir; source file and row byte-identical |
-| legacy Lanczos, no method / explicit `lanczos` | any | inline `{ video }` response, `upscaleMethod: 'lanczos'`, `upscaleRuntime: 'ffmpeg'`, unchanged before and after the generative runs |
-| invalid id · unknown id · missing asset · already-upscaled source | — | `400 VALIDATION_ERROR` · `404 NOT_FOUND` · `404 NOT_FOUND` · `400 ALREADY_UPSCALED` (both methods), and the plan endpoint refuses the missing asset the same way |
-| provenance | every render | row `width`/`height`/`fps`/`numFrames`/`duration` equal the file's; `seed`, `upscaleRuntime`, `upscaleAdapter`, `upscaleReferenceDownscale: 2`, the runtime fingerprint, and `renderMs` present |
 
-A source that "needs a trim" cannot be produced: the plan pads and never trims
-(see the model grid above), so that row of the matrix is a refusal by
-construction rather than a case to render.
-
-The matrix found and fixed one defect before this table was recorded: the
-finalize mux passed `-shortest` to ffmpeg, so a source whose AAC track ran a
-few milliseconds short of its video (25 frames / 1.024 s of audio) came back
-with 23 frames. The video is bounded to the source's frame count and nothing
-else now.
+Legacy Lanczos calls (no method, and explicit `lanczos`), the error codes in
+the API table, the provenance fields, and the pre-submit plan's padding
+disclosure all behaved exactly as the sections above describe, before and after
+the generative runs. A source that "needs a trim" is a refusal by construction
+(the plan never trims), not a case to render.
 
 ## Where the code lives
 
