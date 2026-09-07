@@ -539,6 +539,21 @@ export const searchCivitaiLoras = ({ runner, query = '', cursor = null, limit, s
   return request(`/loras/search?${params.toString()}`, { silent });
 };
 
+// Live keyword/author/repository search across all of HuggingFace for video
+// LoRAs (LTX-Video / MiniMax H3) — the video-panel counterpart to
+// searchCivitaiLoras above. `family` omitted/'all' searches both families;
+// `cursor` is the previous page's `nextCursor`, passed back opaquely to page
+// forward. `silent` defaults true — the search box owns its own error state.
+export const searchVideoLoras = ({ family = 'all', query = '', author = '', cursor = null, limit, silent = true } = {}) => {
+  const params = new URLSearchParams();
+  if (family && family !== 'all') params.set('family', family);
+  if (query) params.set('query', query);
+  if (author) params.set('author', author);
+  if (cursor) params.set('cursor', cursor);
+  if (limit) params.set('limit', String(limit));
+  return request(`/loras/search/video?${params.toString()}`, { silent });
+};
+
 // Civitai auth — read/save/clear the API key. The key never round-trips back
 // to the client; the GET only returns `{ hasKey, source }`.
 export const getCivitaiAuth = () => request('/loras/auth/civitai');

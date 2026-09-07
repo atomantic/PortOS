@@ -24,10 +24,10 @@ import {
 } from '../services/loras.js';
 import { probeLoraEffect } from '../services/loraEffectProbe.js';
 import { getSuggestions, searchLorasInFamily } from '../services/civitaiSuggestions.js';
-import { getVideoSuggestions } from '../services/videoLoraSuggestions.js';
+import { getVideoSuggestions, searchVideoLoras } from '../services/videoLoraSuggestions.js';
 import { findLorasByCharacter } from '../services/characterLoraResolver.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
-import { RUNNER_FAMILIES } from '../lib/runners.js';
+import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES } from '../lib/runners.js';
 import { HF_LORA_FAMILIES } from '../lib/huggingfaceLora.js';
 import { openSseStream } from '../lib/sseDownload.js';
 
@@ -80,6 +80,33 @@ router.get('/search', asyncHandler(async (req, res) => {
   res.json(await searchLorasInFamily({
     runnerFamily: runner,
     query: query || '',
+    cursor: cursor || null,
+    limit: limit || 12,
+  }));
+}));
+
+// Live keyword/author/repository search across all of HuggingFace for video
+// LoRAs (LTX-Video / MiniMax H3) — backs the video search box + family filter
+// + "Load more" pagination on /models/loras (#6500). Short-cached server-side
+// per (family, query, author, cursor) since each page fans out one metadata
+// fetch per candidate repo. `family` omitted/'all' searches both families.
+// `cursor` is opaque — always the previous page's `nextCursor`, never built
+// by the client.
+const videoSearchQuerySchema = z.object({
+  family: z.enum([...Object.values(VIDEO_LORA_FAMILIES), 'all']).optional(),
+  query: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
+  author: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
+  // HF's opaque Link-header cursor is a base64-ish query blob — longer than a
+  // Civitai cursor, so it gets its own generous-but-bounded cap.
+  cursor: z.preprocess(emptyToUndefined, z.string().max(2048).optional()),
+  limit: z.coerce.number().int().min(1).max(24).optional(),
+});
+router.get('/search/video', asyncHandler(async (req, res) => {
+  const { family, query, author, cursor, limit } = validateRequest(videoSearchQuerySchema, req.query);
+  res.json(await searchVideoLoras({
+    family: family && family !== 'all' ? family : null,
+    query: query || '',
+    author: author || '',
     cursor: cursor || null,
     limit: limit || 12,
   }));

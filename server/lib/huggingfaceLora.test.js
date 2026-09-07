@@ -10,6 +10,7 @@ import {
   flux2VariantFromBlob,
   buildHfLoraSidecar,
   fetchHuggingfaceModel,
+  searchHuggingfaceLoraModels,
 } from './huggingfaceLora.js';
 import { RUNNER_FAMILIES, VIDEO_LORA_FAMILIES } from './runners.js';
 
@@ -295,5 +296,57 @@ describe('fetchHuggingfaceModel', () => {
     await fetchHuggingfaceModel('fal/x', { fetchImpl, signal: controller.signal });
 
     expect(fetchImpl).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ signal: controller.signal }));
+  });
+});
+
+describe('searchHuggingfaceLoraModels', () => {
+  const listResponse = (items, { link = null } = {}) => ({
+    ok: true,
+    text: async () => JSON.stringify(items),
+    headers: { get: (name) => (name.toLowerCase() === 'link' ? link : null) },
+  });
+
+  it('builds a search+author+filter query and reads the Link "next" header', async () => {
+    let calledUrl;
+    const fetchImpl = vi.fn(async (url) => {
+      calledUrl = url;
+      return listResponse(
+        [{ id: 'someorg/some-ltx-lora', tags: ['ltx-video'] }],
+        { link: '<https://huggingface.co/api/models?search=vhs&cursor=ABC>; rel="next"' },
+      );
+    });
+    const out = await searchHuggingfaceLoraModels({ query: 'vhs', author: 'someorg', limit: 5, fetchImpl });
+    const parsed = new URL(calledUrl);
+    expect(parsed.searchParams.get('search')).toBe('vhs');
+    expect(parsed.searchParams.get('author')).toBe('someorg');
+    expect(parsed.searchParams.get('filter')).toBe('lora');
+    expect(parsed.searchParams.get('limit')).toBe('5');
+    expect(out.items).toHaveLength(1);
+    expect(out.nextCursor).toBe('https://huggingface.co/api/models?search=vhs&cursor=ABC');
+  });
+
+  it('returns a null nextCursor when the response carries no Link header', async () => {
+    const fetchImpl = async () => listResponse([]);
+    const out = await searchHuggingfaceLoraModels({ query: 'x', fetchImpl });
+    expect(out.nextCursor).toBeNull();
+  });
+
+  it('fetches the cursor URL directly instead of rebuilding params', async () => {
+    let calledUrl;
+    const fetchImpl = vi.fn(async (url) => { calledUrl = url; return listResponse([]); });
+    await searchHuggingfaceLoraModels({ query: 'ignored', cursor: 'https://huggingface.co/api/models?search=vhs&cursor=ABC', fetchImpl });
+    expect(calledUrl).toBe('https://huggingface.co/api/models?search=vhs&cursor=ABC');
+  });
+
+  it('rejects a cursor pointing at a non-HuggingFace host', async () => {
+    const fetchImpl = vi.fn();
+    await expect(searchHuggingfaceLoraModels({ cursor: 'https://evil.example/api/models', fetchImpl }))
+      .rejects.toMatchObject({ code: 'HF_BAD_CURSOR' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a non-OK response as HF_SEARCH_FAILED', async () => {
+    const fetchImpl = async () => ({ ok: false, status: 503 });
+    await expect(searchHuggingfaceLoraModels({ query: 'x', fetchImpl })).rejects.toMatchObject({ code: 'HF_SEARCH_FAILED' });
   });
 });
