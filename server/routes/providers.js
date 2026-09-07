@@ -41,6 +41,8 @@ import {
   getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
 } from '../services/providerRuntimeInstaller.js';
+import { refreshHarnessModels, usesHarnessCatalog } from '../services/harnesses.js';
+import { providerRuntimeKey } from '../lib/providerPrerequisites.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { getProviderReadinessMap, resetProviderReadinessCache, servedModelId } from '../services/providerReadiness.js';
 import { getLlamaServerEndpoint, relaunchLlamaServerWithAlias } from '../services/llamaServerManager.js';
@@ -139,6 +141,11 @@ const withTuiLaunchCommand = (provider) => {
   return launch ? { ...provider, tuiCommandLine: launch.commandLine } : provider;
 };
 
+// Reuse the harness catalog only for wrappers the managed OpenCode refresh
+// can update; custom binaries and declared backends keep their own catalogs.
+const refreshesOpenCodeCatalog = (provider) =>
+  providerRuntimeKey(provider) === 'opencode' && usesHarnessCatalog(provider);
+
 /**
  * The shape a provider takes on its way OUT to the client: secrets stripped,
  * plus the derived `canRefreshModels` flag the AI Providers page reads to
@@ -173,6 +180,7 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   const publicReviewPostures = publicReviewPosturesForProvider(provider);
   return sanitizeProvider({
     ...decorated,
+    canRefreshModels: decorated.canRefreshModels || refreshesOpenCodeCatalog(provider),
     publicReviewPostures,
     publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),
     publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
@@ -888,7 +896,18 @@ export function createPortOSProviderRoutes(aiToolkit) {
   // provider record receives the same secret redaction as every other provider
   // response. The toolkit returns its raw persisted record here.
   router.post('/:id/refresh-models', asyncHandler(async (req, res) => {
-    const provider = await providerService.refreshProviderModels(req.params.id);
+    const stored = await providerService.getProviderById(req.params.id);
+    if (!stored) throw new ServerError('Provider not found', { status: 404 });
+    let provider;
+    if (refreshesOpenCodeCatalog(stored)) {
+      const result = await refreshHarnessModels('opencode');
+      if (!result.ok || !result.updated.includes(stored.id)) {
+        throw new ServerError(result.reason || 'No models matched this provider’s namespace; its catalog was preserved.', { status: 502 });
+      }
+      provider = await providerService.getProviderById(stored.id);
+    } else {
+      provider = await providerService.refreshProviderModels(req.params.id);
+    }
     if (!provider) throw new ServerError('Provider not found', { status: 404 });
     res.json(presentProvider(provider, await detectSystemCapabilities()));
   }));
