@@ -74,14 +74,22 @@ describe('VideoUpscaleDrawer', () => {
     await waitFor(() => expect(onUpscaled).toHaveBeenCalledWith({ id: 'video-2', upscaledFrom: 'video-1' }));
   });
 
-  it('choosing the generative method submits method: "ltx"', async () => {
-    render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+  it('choosing the generative method submits method: "ltx" and closes on the queued job', async () => {
+    // The generative pass answers with a QUEUED JOB, not a finished row (#6511),
+    // so the drawer must close on `job` instead of waiting for a `video` that
+    // only arrives minutes later, in history.
+    upscaleVideo.mockResolvedValue({ ok: true, job: { jobId: 'job-1', position: 1, status: 'queued' } });
+    const onClose = vi.fn();
+    const onUpscaled = vi.fn();
+    render(<VideoUpscaleDrawer item={ITEM} onClose={onClose} onUpscaled={onUpscaled} />);
     await waitFor(() => expect(getUpscalePlan).toHaveBeenCalled());
 
     fireEvent.click(screen.getByLabelText(/LTX-2\.5 generative/i));
     fireEvent.click(screen.getByRole('button', { name: /upscale 2×/i }));
 
     await waitFor(() => expect(upscaleVideo).toHaveBeenCalledWith('video-1', { method: 'ltx', silent: true }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onUpscaled).not.toHaveBeenCalled();
   });
 
   it('renders target dimensions and the synthesized-detail warning once generative is picked', async () => {
