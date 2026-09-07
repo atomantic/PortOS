@@ -13,6 +13,7 @@ import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import * as tailcatPeer from '../services/tailcatPeer.js';
+import * as tailcatServe from '../services/tailcatServe.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { federatedMediaPeerSettingsSchema, validateRequest } from '../lib/validation.js';
 
@@ -293,6 +294,35 @@ router.post('/peers/tailcat/forwards/:id/retry', asyncHandler(async (req, res) =
 router.delete('/peers/tailcat/forwards/:id', asyncHandler(async (req, res) => {
   res.json(await tailcatPeer.forgetTailcatForward(req.params.id));
 }));
+
+
+// GET /api/instances/peers/tailcat/serve — this node's managed tailcat serve status.
+// Returns the full tc address when known so the operator can Copy it out of band
+// (our own serve capability — unlike peer forwards, which stay redacted).
+router.get('/peers/tailcat/serve', asyncHandler(async (_req, res) => {
+  res.json(await tailcatServe.getTailcatServeStatus());
+}));
+
+// POST /api/instances/peers/tailcat/serve — ensure serve is running for PORTS.API.
+router.post('/peers/tailcat/serve', asyncHandler(async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const status = await tailcatServe.ensureTailcatServe({
+    localPort: Number.isInteger(body.localPort) ? body.localPort : undefined,
+    keyName: typeof body.keyName === 'string' ? body.keyName : undefined,
+  });
+  res.status(200).json(status);
+}));
+
+// POST /api/instances/peers/tailcat/serve/retry — restart from saved config.
+router.post('/peers/tailcat/serve/retry', asyncHandler(async (_req, res) => {
+  res.json(await tailcatServe.retryTailcatServe());
+}));
+
+// DELETE /api/instances/peers/tailcat/serve — stop serve and disable restore-on-boot.
+router.delete('/peers/tailcat/serve', asyncHandler(async (_req, res) => {
+  res.json(await tailcatServe.stopTailcatServe({ disable: true }));
+}));
+
 
 // POST /api/instances/peers — add a peer
 router.post('/peers', asyncHandler(async (req, res) => {

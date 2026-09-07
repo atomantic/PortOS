@@ -843,6 +843,9 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
         void import('./tailcatPeer.js')
           .then(({ restoreForwards }) => restoreForwards())
           .catch((err) => console.log(`⚠️ tailcat forward restore failed: ${err.message}`));
+        void import('./tailcatServe.js')
+          .then(({ restoreServe }) => restoreServe())
+          .catch((err) => console.log(`⚠️ tailcat serve restore failed: ${err.message}`));
       },
       initSyncOrchestrator
     }))
@@ -904,6 +907,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     markHostShuttingDown();
     await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
       .catch(() => console.error('❌ Tailcat forward shutdown failed'));
+    await import('./tailcatServe.js').then(({ stopServeProcess }) => stopServeProcess())
+      .catch(() => console.error('❌ Tailcat serve shutdown failed'));
     // Disarm the idle reaper before anything awaits: a sweep that fires mid
     // -shutdown would `pm2 stop` a model server the user never asked to lose,
     // and PortOS is about to stop being the thing that could restart it.

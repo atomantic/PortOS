@@ -19,14 +19,39 @@ free loopback port and registers the peer at that local port instead.
 
 No `tailcat serve all`, no exit-node mode, and no Tailscale daemon are used.
 
+## Dial direction (who initiates)
+
+Two polarities, one transport. You do **not** need both directions for v1.
+
+| Choice | This node does | Other node does | When to use |
+| --- | --- | --- | --- |
+| **Dial them** | Paste their `tc…`, run `tailcat forward`, register peer at `127.0.0.1:<local>` | Runs `tailcat serve` (PortOS-managed or CLI) for `:5555` | This node can dial out freely (common for a sandbox / VPS). |
+| **They dial us** | PortOS starts **serve** for `:5555`, you **Copy** our `tc…` | Pastes our address as **Dial them** on their Instances UI | This node is a poor dialer (client firewall / Little Snitch often blocks home `tailcat forward`) but a good *listener*; the other side is a better outbound initiator. |
+
+Hypothesis (non-binding): reverse polarity helps when the current node is a better
+outbound initiator than the peer that should dial it — use the product option;
+do not hardcode any particular host.
+
+### Fleet sketch (replace cloud Tailscale with per-node tailcat)
+
+1. Every PortOS enables **Tailcat serve (this node)** (stable key `portos-api`).
+2. Each peer that should reach another uses **Dial them** with that node's
+   copied `<tcADDR>` (machine-local forward → `127.0.0.1:15555`).
+3. No Tailscale account, daemon, `serve all`, or exit-node.
+4. If dials fail with `context deadline exceeded` / `tunnel_dial` while the
+   far side self-dials fine via DERP, flip polarity: serve on the blocked
+   dialer, dial from the good initiator.
+
 ## Operator flow (Instances UI)
 
-1. Open **Instances → Add Peer → Tailcat address**.
-2. Paste the peer's `tc…` address (received out of band).
-3. PortOS ensures `tailcat` is installed, starts the forward, and calls the
-   normal peer registration against `127.0.0.1:<localPort>`. Select **Remote
-   PortOS uses HTTPS** if the remote install has enabled TLS.
-4. Classic **Host / port** add remains unchanged (still rejects loopback).
+1. Open **Instances → Add Peer → Tailcat**.
+2. Choose **Dial them** or **They dial us**.
+3. **Dial them:** paste the peer's `tc…` address (received out of band). PortOS
+   ensures `tailcat` is installed, starts the forward, and registers a peer at
+   `127.0.0.1:<localPort>`. Select **Remote PortOS uses HTTPS** if needed.
+4. **They dial us:** start serve (or use the **Tailcat serve** panel), **Copy**
+   our address, and paste it into the *other* PortOS as Dial them.
+5. Classic **Host / port** add remains unchanged (still rejects loopback).
 
 ### How `tailcat` gets installed
 
@@ -57,11 +82,25 @@ announcements cannot replace the managed local host or forwarding port.
 
 Forwards are persisted in machine-local `data/tailcat-forwards.json` so PortOS
 can restart them on boot **and retry one that failed to start**. Graceful
-shutdown stops forwards while retaining their restart metadata. The full `tc…`
-string is a bearer capability — it is **never** logged in full, never placed on
-the peer record returned to the UI or to other peers, never returned by an API
-response, and must never appear in commits, PR bodies, docs, or tests. Use
+shutdown stops forwards while retaining their restart metadata.
+
+**Serve** is persisted separately in machine-local `data/tailcat-serve.json`
+(enabled flag, status, local port, key name, last error, and the listen
+address). PortOS runs `tailcat serve --full-address --json --key=portos-api 5555`
+(not `serve all`, not exit-node), restores serve on boot when enabled, and stops
+the child on shutdown. The serve status API returns the full `tc…` address so
+the Instances UI can offer **Copy** — that is *this node's* capability to share
+out of band. Forward listings still return only the redacted form of a *peer's*
+pasted address. Logs always redact. Never place a serve or forward capability on
+a peer record, never federate these files, and never commit real `tc…` values —
 placeholders such as `<tcADDR>` or `tcEXAMPLE…` only.
+
+| Serve surface | What it does |
+| --- | --- |
+| `GET /api/instances/peers/tailcat/serve` | Status: live/enabled/ports/key, copyable `tcAddress` when known, redacted preview, last error. |
+| `POST …/serve` | Ensure serve is running for `PORTS.API` (5555). |
+| `POST …/serve/retry` | Restart from the saved config. |
+| `DELETE …/serve` | Stop serve and disable restore-on-boot. |
 
 ### The saved address is what makes a failed add recoverable
 
@@ -179,7 +218,9 @@ dial remote port 5555: context deadline exceeded
 
 UDP blocked *and* the relay refused leaves no path at all, so nothing ever
 reaches the remote — which is also why the far side shows no activity. Allow
-the `tailcat` binary outbound in the filter, then Retry the forward.
+the `tailcat` binary outbound in the filter, then Retry the forward. If outbound
+allow-listing is impractical on this host, switch to **They dial us**: serve
+here and have the sandbox (or other good initiator) Dial them toward this node.
 
 ### The DERP map has to be reachable — by Go
 
@@ -260,9 +301,9 @@ tailcat forward <tcADDR> 15555:5555
 ### Checklist for agents
 
 - [ ] PortOS up on sandbox `:5555`
-- [ ] `tailcat serve --key=… 5555` (not `serve all`, not exit-node)
-- [ ] Hand operator `<tcADDR>` out of band only
-- [ ] Operator uses UI Tailcat add (local **15555 → 5555**)
+- [ ] Prefer **Instances → Tailcat serve** (or CLI `tailcat serve --key=… 5555`) — not `serve all`, not exit-node
+- [ ] Hand operator `<tcADDR>` out of band only (Copy from UI)
+- [ ] Operator uses **Dial them** (local **15555 → 5555**), *or* if home dials time out, home uses **They dial us** and the sandbox Dials them
 - [ ] Never write real `tc…` values into git, PR text, or federated logs
 
 ## Related
