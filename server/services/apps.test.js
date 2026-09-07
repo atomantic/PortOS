@@ -37,7 +37,7 @@ vi.mock('./pm2.js', () => ({
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { listProcessesStrict } from './pm2.js';
 import { resetExecutionHistory } from './taskSchedule.js';
-import { annotateExpectedExit, createApp, deleteApp, getAppStatuses, getAppStatusSummary, getDesktopProcessNames, getReservedPorts, invalidateCache, PORTOS_APP_ID, resolvePm2HomeForProcess, updateApp, updateAppTaskTypeOverride } from './apps.js';
+import { annotateExpectedExit, createApp, deleteApp, getAllApps, getAppStatuses, getAppStatusSummary, getDesktopProcessNames, getReservedPorts, invalidateCache, PORTOS_APP_ID, resolvePm2HomeForProcess, updateApp, updateAppTaskTypeOverride } from './apps.js';
 
 describe('pr-watcher cooldown reset', () => {
   beforeEach(() => {
@@ -780,5 +780,82 @@ describe('getAppStatuses', () => {
     const portos = statuses.find(s => s.id === PORTOS_APP_ID);
     expect(portos.overallStatus).toBe('not_started');
     expect(portos.degraded).toBeUndefined();
+  });
+});
+
+describe('__PORTOS_ROOT__ placeholder expansion on load', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+  });
+
+  it('expands and persists placeholder repoPath and appIconPath', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: {
+          name: 'PortOS',
+          repoPath: '__PORTOS_ROOT__',
+          appIconPath: '__PORTOS_ROOT__/client/public/portos-logo.png',
+          type: 'express',
+          pm2ProcessNames: ['portos-server'],
+        },
+      },
+    });
+
+    const apps = await getAllApps();
+    const portos = apps.find((app) => app.id === PORTOS_APP_ID);
+    expect(portos.repoPath).toBe('/mock/root');
+    expect(portos.appIconPath).toBe('/mock/root/client/public/portos-logo.png');
+
+    expect(atomicWrite).toHaveBeenCalled();
+    const persisted = atomicWrite.mock.calls.at(-1)[1];
+    expect(persisted.apps[PORTOS_APP_ID].repoPath).toBe('/mock/root');
+    expect(persisted.apps[PORTOS_APP_ID].appIconPath).toBe('/mock/root/client/public/portos-logo.png');
+    expect(JSON.stringify(persisted)).not.toContain('__PORTOS_ROOT__');
+  });
+
+  it('preserves a concrete user-overridden repoPath', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: {
+          name: 'PortOS',
+          repoPath: '/custom/portos/checkout',
+          type: 'express',
+          pm2ProcessNames: ['portos-server'],
+        },
+      },
+    });
+
+    const apps = await getAllApps();
+    const portos = apps.find((app) => app.id === PORTOS_APP_ID);
+    expect(portos.repoPath).toBe('/custom/portos/checkout');
+  });
+
+  it('expands placeholders on non-PortOS app records too', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: {
+          name: 'PortOS',
+          repoPath: '/mock/root',
+          type: 'express',
+          pm2ProcessNames: ['portos-server'],
+        },
+        'other-app': {
+          name: 'Other',
+          repoPath: '__PORTOS_ROOT__/../sibling',
+          appIconPath: '__PORTOS_ROOT__/icon.png',
+          type: 'node',
+        },
+      },
+    });
+
+    const apps = await getAllApps();
+    const other = apps.find((app) => app.id === 'other-app');
+    expect(other.repoPath).toBe('/mock/root/../sibling');
+    expect(other.appIconPath).toBe('/mock/root/icon.png');
+
+    const persisted = atomicWrite.mock.calls.at(-1)[1];
+    expect(persisted.apps['other-app'].repoPath).toBe('/mock/root/../sibling');
+    expect(persisted.apps['other-app'].appIconPath).toBe('/mock/root/icon.png');
   });
 });

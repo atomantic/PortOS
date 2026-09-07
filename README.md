@@ -389,7 +389,7 @@ npm run pm2:save                               # Save the process list for start
 ### Apps (`data/apps.json`)
 Each registered app includes:
 - **name** — Display name in the dashboard
-- **repoPath** — Absolute path to project directory
+- **repoPath** — Absolute path; seed token __PORTOS_ROOT__ expanded by setup:data / load
 - **uiPort / apiPort** — Port numbers for quick access links
 - **startCommands** — Commands to start the app (used by PM2)
 - **pm2ProcessNames** — PM2 process identifiers for status tracking

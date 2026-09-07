@@ -2,6 +2,10 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import {
+  containsPortosRootToken,
+  expandPortosRootInApp,
+} from '../lib/portosRootPlaceholder.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { NON_PM2_TYPES, usesPm2, isDesktopType } from './streamingDetect.js';
 import { listProcessesStrict } from './pm2.js';
@@ -102,6 +106,18 @@ async function loadApps() {
     data.apps = {};
   }
 
+  // Safety net: expand leftover `__PORTOS_ROOT__` tokens from a partial
+  // data.reference copy (setup-data only rewrote them on first create historically).
+  // Persist so Apps → Git stops looking for `__PORTOS_ROOT__/.git`.
+  let placeholderDirty = false;
+  for (const [id, app] of Object.entries(data.apps)) {
+    const { app: expanded, changed } = expandPortosRootInApp(app, PATHS.root);
+    if (changed) {
+      data.apps[id] = expanded;
+      placeholderDirty = true;
+    }
+  }
+
   // Ensure PortOS baseline app is always present and up-to-date
   const baseline = buildPortosApp();
   if (!data.apps[PORTOS_APP_ID]) {
@@ -110,7 +126,7 @@ async function loadApps() {
     console.log('📦 Seeded baseline PortOS app into apps registry');
   } else {
     // Reconcile: merge new baseline fields into existing entry (preserves user overrides)
-    let dirty = false;
+    let dirty = placeholderDirty;
     for (const [key, value] of Object.entries(baseline)) {
       if (!(key in data.apps[PORTOS_APP_ID])) {
         data.apps[PORTOS_APP_ID][key] = value;
@@ -125,9 +141,17 @@ async function loadApps() {
         dirty = true;
       }
     }
+    // A literal `__PORTOS_ROOT__` is not a real user override — force repoPath
+    // to the live checkout. Concrete custom paths are preserved (expand left them).
+    if (containsPortosRootToken(data.apps[PORTOS_APP_ID].repoPath)) {
+      data.apps[PORTOS_APP_ID].repoPath = baseline.repoPath;
+      dirty = true;
+    }
     if (dirty) {
       await atomicWrite(APPS_FILE, data);
-      console.log('📦 Reconciled PortOS baseline app with latest fields');
+      console.log(placeholderDirty
+        ? '📦 Expanded __PORTOS_ROOT__ placeholders and reconciled PortOS baseline app'
+        : '📦 Reconciled PortOS baseline app with latest fields');
     }
   }
 
