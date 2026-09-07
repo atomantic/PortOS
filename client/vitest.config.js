@@ -15,6 +15,11 @@ export default defineConfig({
     // 10k assertions. Files that need no DOM at all still opt out entirely with a
     // `// @vitest-environment node` pragma — see docs/GITHUB_ACTIONS.md.
     environment: 'happy-dom',
+    // Vitest 5 clears mock call history before every test by default
+    // (`clearMocks`); see the longer note in server/vitest.config.js. Accepted
+    // rather than pinned back to the vitest 4 default — implementations set by
+    // a `vi.mock` factory survive, only `mock.calls` resets, and the suite is
+    // green under it.
     globals: true,
     setupFiles: ['./src/test/setup.js'],
     css: false,

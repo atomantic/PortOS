@@ -178,9 +178,24 @@ describe('ThreejsModelDetail request lifecycle', () => {
     const initial = deferred();
     const hungPoll = deferred();
     const secondPoll = deferred();
-    const replacementPoll = deferred();
-    const requests = [initial, hungPoll, secondPoll, replacementPoll];
-    getThreejsModel.mockImplementation(() => requests.shift().promise);
+    const requests = [initial, hungPoll, secondPoll];
+    // Polls issued after the two hung ones are captured rather than pre-seeded:
+    // a hung slot is released at `pollStart + POLL_TIMEOUT_MS`, which is always
+    // a multiple of the 2s interval, so the release and an interval tick are
+    // due in the SAME millisecond. Which of the two runs first is a fake-timer
+    // tie-break, not component behavior, and it decides whether the freed slot
+    // is refilled on that tick or the next one — i.e. whether one or two
+    // replacement polls go out. Pinning an exact call count here asserted that
+    // tie-break (and flipped when vitest 5 updated @sinonjs/fake-timers), so
+    // assert the contract the test is named for instead: nothing is issued
+    // while both slots are held, and polling resumes once they time out.
+    const replacements = [];
+    getThreejsModel.mockImplementation(() => {
+      if (requests.length > 0) return requests.shift().promise;
+      const replacement = deferred();
+      replacements.push(replacement);
+      return replacement.promise;
+    });
     renderLifecycleDetail(['/media/threejs/model-a']);
 
     await act(async () => { initial.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'generating' }); });
@@ -188,10 +203,17 @@ describe('ThreejsModelDetail request lifecycle', () => {
     await act(async () => { vi.advanceTimersByTime(4_000); });
     expect(getThreejsModel).toHaveBeenCalledTimes(3);
 
-    await act(async () => { vi.advanceTimersByTime(24_000); });
-    await act(async () => { vi.advanceTimersByTime(2_000); });
-    expect(getThreejsModel).toHaveBeenCalledTimes(4);
-    await act(async () => { replacementPoll.resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'ready' }); });
+    // Both slots are held by the hanging polls: the interval keeps ticking for
+    // another 20s (10 ticks) and issues nothing.
+    await act(async () => { vi.advanceTimersByTime(20_000); });
+    expect(getThreejsModel).toHaveBeenCalledTimes(3);
+    expect(replacements).toHaveLength(0);
+
+    // Past POLL_TIMEOUT_MS the hung slots are released and polling resumes.
+    await act(async () => { vi.advanceTimersByTime(6_000); });
+    expect(replacements.length).toBeGreaterThan(0);
+    await act(async () => { replacements[0].resolve({ ...baseRecord, id: 'model-a', name: 'Model A', status: 'ready' }); });
+    expect(screen.getByText('ready', { exact: true })).toBeInTheDocument();
   });
 
   it('keeps an older terminal poll result when a newer poll fails transiently', async () => {
