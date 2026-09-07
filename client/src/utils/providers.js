@@ -16,8 +16,9 @@
  *   providerAssignments.js    — which provider a RECORD resolves to; assignment options
  *
  * Every existing `import { … } from '../utils/providers'` keeps working through
- * this file. New code should import the declaring module — that is where the
- * server parity tests pin the mirrored declarations, and where a change belongs.
+ * this file. New code should import the declaring module — that is where a
+ * change belongs, and where each shared table is re-exported from its
+ * `server/lib` leaf rather than copied.
  */
 
 export * from './localModelHeuristics.js';

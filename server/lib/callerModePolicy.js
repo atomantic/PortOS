@@ -42,7 +42,9 @@
  * constants: this module is reached by the agent resolver, promptRunner and the
  * out-of-process autofixer, and a widely-reached module must not drag a subtree
  * it needs one three-string constant from (see "Import scoping" in
- * server/AGENTS.md). `callerModePolicy.parity.test.js` pins it to both mirrors.
+ * server/AGENTS.md). The browser derives its picker table from
+ * `CALLER_MODE_POLICIES` directly (client/src/utils/providerSelection.js), so
+ * there is no client copy to pin.
  */
 export const EXECUTION_MODES = Object.freeze(['cli', 'tui', 'api']);
 

@@ -7,42 +7,46 @@
  * and which generation controls (temperature / top-p / thinking) a provider
  * forwards at all.
  *
- * Browser MIRROR of `server/lib/providerModels.js` (sentinels, effort ladders,
- * `EFFORT_RANK`, the Antigravity split, `resolveCliEffort`) and of the
- * generation-control tables in `server/lib/opencodeConfig.js` /
- * `server/lib/aiToolkit/internal/generationOptions.js`.
- * `server/lib/providerModels.mirror.test.js` reads this file as TEXT and fails
- * when a mirrored declaration drifts. Helpers marked CLIENT-ONLY are rendering
- * concerns with no server twin.
+ * The sentinels, effort ladders and the Antigravity split are re-exported from
+ * the pure leaf `server/lib/providerModels.js`; `effortLevelsForProvider` /
+ * `resolveCliEffort` delegate to the server's and add the one rung the browser
+ * needs — the ladder the server publishes on a sanitized provider inventory.
+ * The generation-control tables still mirror `server/lib/opencodeConfig.js` /
+ * `server/lib/aiToolkit/internal/generationOptions.js`. Helpers marked
+ * CLIENT-ONLY are rendering concerns with no server twin.
  *
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
 import { isGatewayBackedProvider } from './providerGateways.js';
-import { commandBasename, isAntigravityProvider, isClaudeCommandProvider, isCodexProvider, isCodexSubscriptionProvider, isCursorProvider, isGrokProvider, isOllamaBackedProvider, isOpencodeLocalProvider } from './providerTypes.js';
+import { isAntigravityProvider, isClaudeCommandProvider, isCodexSubscriptionProvider, isOllamaBackedProvider } from './providerTypes.js';
+import {
+  antigravityBaseModels,
+  clampEffortToLadder,
+  effortLevelsForProvider as serverEffortLevelsForProvider,
+  filterSelectableModels,
+  isConfiguredDefaultModel,
+  splitAntigravityModel,
+} from '../../../server/lib/providerModels.js';
 
-/**
- * Sentinel value used by the Codex provider to indicate the model is configured
- * via ~/.codex/config.toml rather than PortOS. Filter this out of selectable
- * model lists so the UI shows the explanatory note instead of a token dropdown.
- */
-export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
-
-export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
-
-export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
-
-export const KIMI_CONFIGURED_DEFAULT = 'kimi-configured-default';
-
-const CONFIGURED_DEFAULT_SENTINELS = new Set([
+export {
   CODEX_CONFIGURED_DEFAULT,
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   GROK_CONFIGURED_DEFAULT,
   KIMI_CONFIGURED_DEFAULT,
-]);
-
-/** True for any provider "use CLI's own default" sentinel. Mirror of server `isConfiguredDefaultModel`. */
-export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
+  isConfiguredDefaultModel,
+  filterSelectableModels,
+  CLAUDE_EFFORT_LEVELS,
+  CODEX_EFFORT_LEVELS,
+  CODEX_ULTRA_EFFORT_LEVELS,
+  ANTIGRAVITY_EFFORT_LEVELS,
+  OPENCODE_LOCAL_EFFORT_LEVELS,
+  CURSOR_EFFORT_LEVELS,
+  GROK_EFFORT_LEVELS,
+  splitAntigravityModel,
+  antigravityBaseModels,
+  antigravityModelEffortLevels,
+} from '../../../server/lib/providerModels.js';
 
 /**
  * The configured-default sentinel carried in a provider's model list, or null.
@@ -61,138 +65,6 @@ export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.
 export const configuredDefaultIn = (models) =>
   (models || []).find(isConfiguredDefaultModel) || null;
 
-/**
- * Returns the provider's model list with internal sentinel values removed.
- * Use this anywhere a list of user-selectable models is needed.
- * @param {string[]} models
- * @returns {string[]}
- */
-export const filterSelectableModels = (models) =>
-  (models || []).filter(m => !isConfiguredDefaultModel(m));
-
-/**
- * Reasoning-effort levels per effort-capable CLI — MIRROR of
- * `CLAUDE_EFFORT_LEVELS` / `CODEX_EFFORT_LEVELS` / `ANTIGRAVITY_EFFORT_LEVELS` /
- * `effortLevelsForProvider` in server/lib/providerModels.js; keep in lockstep.
- * Claude Code and agy take `--effort <level>`, Codex takes
- * `-c model_reasoning_effort=<level>`.
- *
- * Codex's config enum includes `max` alongside
- * `none|minimal|low|medium|high|xhigh`. Sol and Terra additionally advertise
- * `ultra`, which adds automatic task delegation; older models and Luna top out
- * at `max`.
- */
-export const CLAUDE_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-
-export const CODEX_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
-
-export const CODEX_ULTRA_EFFORT_LEVELS = Object.freeze([...CODEX_EFFORT_LEVELS, 'ultra']);
-
-export const ANTIGRAVITY_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
-
-// OpenCode passes this through as `reasoningEffort` to its configured local
-// provider. The OpenAI-compatible local backends accept this narrow ladder for
-// thinking models; the broader vendor-CLI ladders are not portable here.
-export const OPENCODE_LOCAL_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high']);
-
-// Cursor Agent. MIRROR of `CURSOR_EFFORT_LEVELS`. Cursor takes NO `--effort`
-// flag — the server folds the level into the model id as Cursor's own variant
-// syntax (`gpt-5[effort=max]`) — but the level is still user-pickable, so this
-// ladder drives the same selects as every other CLI's.
-export const CURSOR_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
-
-// Grok Build CLI. MIRROR of `GROK_EFFORT_LEVELS` in server/lib/providerModels.js.
-// Grok's own ladder, read off its rejection message rather than guessed
-// (`use one of: xhigh, high, medium, low`) — no `max`/`minimal`, so a stored
-// `max` clamps to `xhigh` here exactly as it does on the server.
-export const GROK_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh']);
-
-const CODEX_ULTRA_MODELS = new Set(['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra']);
-
-// MIRROR of `CODEX_NO_MINIMAL_MODEL_RE` in server/lib/providerModels.js. The
-// gpt-6 family dropped the `minimal` rung and answers HTTP 400
-// `unsupported_value` when it is sent, so the picker must not offer it. Matched
-// as a family prefix so a new gpt-6/7 model doesn't reintroduce the 400.
-const CODEX_NO_MINIMAL_MODEL_RE = /^gpt-[6-9]([.-]|$)/;
-
-const withoutMinimal = (levels) => Object.freeze(levels.filter((l) => l !== 'minimal'));
-const CODEX_EFFORT_LEVELS_NO_MINIMAL = withoutMinimal(CODEX_EFFORT_LEVELS);
-const CODEX_ULTRA_EFFORT_LEVELS_NO_MINIMAL = withoutMinimal(CODEX_ULTRA_EFFORT_LEVELS);
-
-const codexEffortLevelsForModel = (model) => {
-  const id = String(model || '').trim().toLowerCase();
-  const ultra = CODEX_ULTRA_MODELS.has(id);
-  if (CODEX_NO_MINIMAL_MODEL_RE.test(id)) {
-    return ultra ? CODEX_ULTRA_EFFORT_LEVELS_NO_MINIMAL : CODEX_EFFORT_LEVELS_NO_MINIMAL;
-  }
-  return ultra ? CODEX_ULTRA_EFFORT_LEVELS : CODEX_EFFORT_LEVELS;
-};
-
-/**
- * Antigravity base-model ↔ effort-suffix split — MIRROR of
- * `splitAntigravityModel` / `antigravityBaseModels` / `antigravityModelEffortLevels`
- * in server/lib/providerModels.js; keep in lockstep.
- *
- * `agy models` enumerates the effort tiers as separate model ids
- * (`gemini-3.6-flash-low|-medium|-high`), which forces the effort choice into
- * the model dropdown. agy also accepts the BASE id with a separate `--effort`
- * flag, so PortOS lists base models and carries effort as its own control. agy
- * validates the PAIR, though (`gemini-3.1-pro` has no `medium`), so the tiers a
- * base model offers come from the provider's own catalog.
- */
-const ANTIGRAVITY_EFFORT_SUFFIX_RE = new RegExp(`-(${ANTIGRAVITY_EFFORT_LEVELS.join('|')})$`);
-
-/**
- * `gemini-3.6-flash-high` → `{ base: 'gemini-3.6-flash', effort: 'high' }`.
- * Unsuffixed ids, sentinels and non-strings → `{ base: <input>, effort: null }`.
- * @param {string|null|undefined} id
- * @returns {{base: string|null|undefined, effort: string|null}}
- */
-export const splitAntigravityModel = (id) => {
-  if (typeof id !== 'string' || id === '' || isConfiguredDefaultModel(id)) return { base: id, effort: null };
-  const match = ANTIGRAVITY_EFFORT_SUFFIX_RE.exec(id);
-  return match ? { base: id.slice(0, -match[0].length), effort: match[1] } : { base: id, effort: null };
-};
-
-/**
- * The user-selectable view of an Antigravity model list: effort suffixes
- * stripped, duplicates collapsed, order preserved. Sentinels and non-string
- * (`{ id, name }`) entries ride through untouched.
- * @param {unknown[]} models
- * @returns {unknown[]}
- */
-export const antigravityBaseModels = (models) => {
-  const out = [];
-  const seen = new Set();
-  for (const entry of Array.isArray(models) ? models : []) {
-    if (typeof entry !== 'string') { out.push(entry); continue; }
-    const { base } = splitAntigravityModel(entry);
-    if (seen.has(base)) continue;
-    seen.add(base);
-    out.push(base);
-  }
-  return out;
-};
-
-/**
- * The effort tiers an Antigravity base model offers per the provider's catalog:
- * the present suffixes, `[]` when the model has none, or `null` when the MODEL
- * is unknown — blank, the configured-default sentinel, or an empty catalog — so
- * the caller falls back to the full ladder. The sentinel case matters: it is the
- * shipped agy `defaultModel`, and reporting `[]` for it would hide the effort
- * control on every freshly-opened picker.
- * @param {string|null|undefined} model
- * @param {unknown[]} models
- * @returns {readonly string[]|null}
- */
-export const antigravityModelEffortLevels = (model, models) => {
-  const list = (Array.isArray(models) ? models : []).filter(m => typeof m === 'string');
-  if (list.length === 0) return null;
-  if (isConfiguredDefaultModel(model)) return null;
-  const { base } = splitAntigravityModel(model);
-  if (typeof base !== 'string' || base === '') return null;
-  return Object.freeze(ANTIGRAVITY_EFFORT_LEVELS.filter(level => list.includes(`${base}-${level}`)));
-};
 
 /**
  * The provider's selectable model list as the pickers should show it. Today that
@@ -383,35 +255,24 @@ export const seedModelEffort = (provider, model, effort) => {
 
 /**
  * The effort levels a provider's CLI accepts, or null when the provider has no
- * effort control (opencode, grok, kimi, HTTP API providers). Keyed on the launch
- * command basename plus the shipped provider ids, so path-configured or renamed
- * claude/codex/agy providers still qualify. Drives the "Effort (optional)"
- * select in task/schedule forms.
+ * effort control. The server's `effortLevelsForProvider` answers for every
+ * provider it can positively identify; a sanitized provider inventory — which
+ * omits command/path/env so a renamed custom CLI leaks no machine detail — is
+ * answered from the ladder the server published on it instead. Drives the
+ * "Effort (optional)" select in task/schedule forms.
  *
  * `model` narrows the Antigravity ladder to the tiers that base model actually
- * offers (see above). Omit it — or leave `provider.models` empty — for the full
- * low/medium/high ladder. MIRROR of the server helper; keep in lockstep.
+ * offers (see above). The server's null is FINAL for Antigravity: it means the
+ * catalog names no tier for this model, and the published provider-level ladder
+ * must not resurrect an effort agy would reject.
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null} [model]
  * @returns {readonly string[]|null}
  */
 export const effortLevelsForProvider = (provider, model = null) => {
   if (!provider) return null;
-  if (isOpencodeLocalProvider(provider)) return OPENCODE_LOCAL_EFFORT_LEVELS;
-  if (isCodexProvider(provider)) return codexEffortLevelsForModel(model);
-  if (isAntigravityProvider(provider)) {
-    const perModel = model ? antigravityModelEffortLevels(model, provider.models) : null;
-    if (perModel === null) return ANTIGRAVITY_EFFORT_LEVELS;
-    return perModel.length ? perModel : null;
-  }
-  if (isCursorProvider(provider)) return CURSOR_EFFORT_LEVELS;
-  if (commandBasename(provider.command) === 'pi') return ['low', 'medium', 'high', 'xhigh', 'max'];
-  if (isGrokProvider(provider)) return GROK_EFFORT_LEVELS;
-  const id = String(provider.id || '').toLowerCase();
-  if (id.startsWith('claude-code') || commandBasename(provider.command) === 'claude') return CLAUDE_EFFORT_LEVELS;
-  // Sanitized provider inventories intentionally omit command/path/env details.
-  // The server publishes the derived ladder so renamed custom CLIs still expose
-  // the same effort control without leaking machine-specific configuration.
+  const known = serverEffortLevelsForProvider(provider, model);
+  if (known || isAntigravityProvider(provider)) return known;
   const modelLevels = model ? provider.effortLevelsByModel?.[model] : null;
   if (Array.isArray(modelLevels)) return modelLevels.length ? modelLevels : null;
   if (Array.isArray(provider.effortLevels)) return provider.effortLevels.length ? provider.effortLevels : null;
@@ -443,14 +304,10 @@ export const effortLevelsForProvider = (provider, model = null) => {
 export const effortSurvivingModel = (provider, model, effort) =>
   (effortLevelsForProvider(provider, effectiveModelFor(provider, model)) ? (effort || '') : '');
 
-// Every effort value any CLI accepts, weakest→strongest. MIRROR of EFFORT_RANK
-// in server/lib/providerModels.js — keep in lockstep.
-const EFFORT_RANK = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
-
 /**
  * The level a stored effort will ACTUALLY run at on this provider, or null when
- * no flag is emitted. MIRROR of `resolveCliEffort` in
- * server/lib/providerModels.js — keep in lockstep.
+ * no flag is emitted: the server's clamp, over the ladder resolved here (which
+ * can come from the server-published fields).
  *
  * The UI needs this because the server clamps an out-of-ladder effort rather
  * than dropping it: a stage pinned to claude `max` and switched to Antigravity
@@ -462,18 +319,8 @@ const EFFORT_RANK = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 
  * @param {string|null} [model] - narrows the Antigravity ladder (see effortLevelsForProvider)
  * @returns {string|null}
  */
-export const resolveCliEffort = (effort, provider, model = null) => {
-  if (!effort) return null;
-  const levels = effortLevelsForProvider(provider, model);
-  if (!levels) return null;
-  if (levels.includes(effort)) return effort;
-  const requested = EFFORT_RANK.indexOf(effort);
-  if (requested === -1) return null;
-  const supported = levels.map(l => EFFORT_RANK.indexOf(l)).filter(i => i !== -1).sort((a, b) => a - b);
-  if (supported.length === 0) return null;
-  const below = supported.filter(i => i < requested);
-  return EFFORT_RANK[below.length ? below[below.length - 1] : supported[0]];
-};
+export const resolveCliEffort = (effort, provider, model = null) =>
+  clampEffortToLadder(effort, effortLevelsForProvider(provider, model));
 
 /**
  * Union of one or more model-id lists, de-duplicated, order-preserving, falsy

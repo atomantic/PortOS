@@ -1,6 +1,14 @@
 /**
  * Shared sentinel and helpers for provider model resolution.
- * Mirrored in client/src/utils/providerModels.js (sentinels, ladders) and client/src/utils/providerTypes.js (predicates) — keep in sync.
+ *
+ * Pure leaf (no Node built-ins, nothing outside server/lib), so the browser
+ * imports it: client/src/utils/providerModels.js re-exports the sentinels,
+ * effort ladders and the Antigravity split, and delegates its own ladder
+ * resolution to `effortLevelsForProvider` / `clampEffortToLadder`. The
+ * `isXProvider` predicates are still copied in client/src/utils/providerTypes.js
+ * — keep those in sync. One caveat the purity guard cannot see: the Bedrock /
+ * Claude-argv resolvers below default to `process.env`, so they are server-only
+ * — never call them from the browser (they tree-shake out unless something does).
  */
 
 import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js';
@@ -78,9 +86,10 @@ export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null
 // verified against claude CLI v2.1.x (`--help`), current Codex CLI config
 // values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, plus
 // model-gated `ultra`) and agy
-// (`--help`: "Reasoning effort for the current CLI session (low|medium|high)"). Mirrored in
-// client/src/utils/providerModels.js — keep in sync
-// (`providerModels.mirror.test.js` fails when the two copies drift).
+// (`--help`: "Reasoning effort for the current CLI session (low|medium|high)").
+// Re-exported by client/src/utils/providerModels.js, whose own
+// `effortLevelsForProvider` layers the server-published `effortLevels` /
+// `effortLevelsByModel` fields on top of these ladders.
 //
 // Codex Ultra adds automatic task delegation on the models that advertise it.
 // Keep it model-gated: older Codex models and Luna top out at `max`.
@@ -165,7 +174,7 @@ const codexEffortLevelsForModel = (model) => {
 // errors with `gemini-3.1-pro has no "medium" effort (available: low, high)`.
 // So the tiers a base model offers are derived from the provider's own model
 // catalog rather than assumed to be the full low/medium/high ladder.
-// Mirrored in client/src/utils/providerModels.js — keep in lockstep.
+// Re-exported by client/src/utils/providerModels.js.
 // ---------------------------------------------------------------------------
 
 const ANTIGRAVITY_EFFORT_SUFFIX_RE = new RegExp(`-(${ANTIGRAVITY_EFFORT_LEVELS.join('|')})$`);
@@ -438,9 +447,22 @@ const EFFORT_RANK = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 
  * @returns {string|null}
  */
 export function resolveCliEffort(effort, provider, model = null) {
-  if (!effort) return null;
-  const levels = effortLevelsForProvider(provider, model);
-  if (!levels) return null;
+  return clampEffortToLadder(effort, effortLevelsForProvider(provider, model));
+}
+
+/**
+ * The clamp behind `resolveCliEffort`, over an explicit ladder: the effort
+ * itself when `levels` has it, else the nearest supported level below it, else
+ * the ladder's weakest — or null when there is no effort, no ladder, or the
+ * value is not an effort at all. The client's `resolveCliEffort` clamps its own
+ * ladder (which can come from the server-published fields) through this, so
+ * the two ends can't rank the rungs differently.
+ * @param {string|null|undefined} effort
+ * @param {readonly string[]|null|undefined} levels
+ * @returns {string|null}
+ */
+export function clampEffortToLadder(effort, levels) {
+  if (!effort || !levels) return null;
   if (levels.includes(effort)) return effort;
   const requested = EFFORT_RANK.indexOf(effort);
   if (requested === -1) return null; // not an effort value at all

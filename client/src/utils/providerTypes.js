@@ -17,8 +17,9 @@
 
 import { isGatewayBackedProvider } from './providerGateways.js';
 
-// Inline mirror of server/lib/providerModels.js#commandBasename — the client can't
-// import server-side modules. Strip the directory + a Windows `.exe` suffix so a
+// Copy of server/lib/providerModels.js#commandBasename (the predicates in this
+// file are the one provider table still copied rather than re-exported — see
+// the header). Strip the directory + a Windows `.exe` suffix so a
 // path-configured command (/opt/homebrew/bin/grok) matches the bare vendor name.
 // Keep in lockstep with the server helper (only `.exe` is stripped, not `.cmd`).
 export const commandBasename = (command) =>

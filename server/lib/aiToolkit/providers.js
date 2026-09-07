@@ -143,8 +143,7 @@ const execFileAsync = (file, args, options) =>
 
 // Tool-use (function-calling) capable model families. Inlined here because the
 // aiToolkit is self-contained (no imports out to server/lib). MIRROR of
-// TOOL_USE_RE in server/lib/localModelHeuristics.js and isToolUseModel in
-// client/src/utils/localModelHeuristics.js — keep all three in lockstep
+// TOOL_USE_RE in server/lib/localModelHeuristics.js — keep the two in lockstep
 // (server/lib/localModelHeuristics.mirror.test.js fails when they drift).
 const TOOL_USE_RE = new RegExp([
   'qwen',
