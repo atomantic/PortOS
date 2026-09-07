@@ -30,6 +30,7 @@ import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_M
 import { EFFORT_LEVELS } from './providerModels.js';
 import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkInfra/taxonomy.js';
 import { SHOT_TYPES, SCREEN_DIRECTIONS } from './shotGrammar.js';
+import { characterEvolutionSchema } from './characterEvolutionValidation.js';
 
 // =============================================================================
 // WRITERS ROOM SCHEMAS
@@ -533,6 +534,14 @@ const wrCharFrameworkFields = Object.freeze({
     .max(BIBLE_LIMITS.SECRETS_PER_CHARACTER_MAX).optional(),
   psychology: wrPsychologyField.nullable().optional(),
   sliders: wrSlidersField.nullable().optional(),
+  // The optional five-stage evolution lens (#6445), reusing the SAME schema the
+  // Pipeline series arc and the FableLoom plan validate against — a second
+  // definition here would drift the stage vocabulary the moment one moved.
+  // `null` (or an all-blank lens) is a real clear: `sanitizeCharacterEvolution`
+  // collapses it to absent so the character reads as un-authored again.
+  // Anything this object accepts must also appear in `editableFields` in
+  // services/writersRoom/characters.js or the write is validated and dropped.
+  evolution: characterEvolutionSchema.nullable().optional(),
 });
 // Shared between create and update — the two differ only in whether `name` is
 // required, and drifting them apart is how `relationshipLinks` ended up

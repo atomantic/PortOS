@@ -65,6 +65,7 @@ export default function StoryboardBibleTab({
   readingTheme,
   hotRefId = null,
   dirty = false,
+  segments = null,
 }) {
   const meta = BIBLE_KINDS[kind];
   const Bible = meta.Component;
@@ -74,6 +75,9 @@ export default function StoryboardBibleTab({
     [meta.changeProp]: onItemsChange,
     readingTheme,
     hotRefId,
+    // Only the character bible anchors anything to the manuscript (the
+    // evolution lens, #6445); places and objects ignore it.
+    ...(kind === 'characters' ? { segments } : {}),
   };
   return (
     <div className="px-3 py-3 space-y-3">

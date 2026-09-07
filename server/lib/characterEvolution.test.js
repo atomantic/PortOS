@@ -170,3 +170,72 @@ describe('client mirror re-exports rather than copies', () => {
     }
   });
 });
+
+describe('quoted segment anchors (#6445)', () => {
+  const quoted = (segmentId, anchorQuote) => ({ segmentId, anchorQuote });
+  // A Map ref set carries the passage each pointer names; a Set carries only
+  // its existence.
+  const passages = new Map([
+    ['seg-001', 'She balanced the books before she balanced anything else.'],
+    ['seg-002', 'She let the boat go without counting what it cost her.'],
+  ]);
+
+  it('keeps a well-shaped segment pointer and drops a junk one', () => {
+    const lens = sanitizeCharacterEvolution({
+      outcome: 'full-change',
+      stages: [
+        stage('cost-tested', { evidence: quoted('seg-004', '  a  quoted   line ') }),
+        stage('final-proof', { evidence: quoted('../../etc/passwd', 'x') }),
+      ],
+    });
+    expect(lens.stages[0].evidence).toMatchObject({ segmentId: 'seg-004', anchorQuote: 'a  quoted   line' });
+    // The pointer is junk, but the quote alone is still authored evidence.
+    expect(lens.stages[1].evidence).toMatchObject({ segmentId: '', anchorQuote: 'x' });
+  });
+
+  it('reports anchored only when the pointer resolves AND still holds its quote', () => {
+    expect(evolutionEvidenceStatus(quoted('seg-002', 'let the boat go'), { segmentIds: passages }))
+      .toBe('anchored');
+    // Same live pointer, quote that has moved off it — the renumbering case.
+    expect(evolutionEvidenceStatus(quoted('seg-001', 'let the boat go'), { segmentIds: passages }))
+      .toBe('stale');
+    // Pointer gone entirely.
+    expect(evolutionEvidenceStatus(quoted('seg-009', 'let the boat go'), { segmentIds: passages }))
+      .toBe('stale');
+  });
+
+  it('folds whitespace and case before comparing, so a rewrap is not a drift', () => {
+    expect(evolutionEvidenceStatus(quoted('seg-002', 'Let   The\nBoat  Go'), { segmentIds: passages }))
+      .toBe('anchored');
+  });
+
+  it('never reports anchored when the host supplied no passage text to check', () => {
+    // A Set proves the id exists and nothing more, so a QUOTED anchor stays
+    // unverified rather than being credited on existence alone.
+    const ids = new Set(['seg-001', 'seg-002']);
+    expect(evolutionEvidenceStatus(quoted('seg-002', 'let the boat go'), { segmentIds: ids }))
+      .toBe('unverified');
+    // …but a dead pointer is still dead.
+    expect(evolutionEvidenceStatus(quoted('seg-009', 'let the boat go'), { segmentIds: ids }))
+      .toBe('stale');
+    // An unquoted pointer is judged on existence, exactly like the other hosts.
+    expect(evolutionEvidenceStatus({ segmentId: 'seg-002' }, { segmentIds: ids })).toBe('anchored');
+  });
+
+  it('treats a quote with no pointer as an unresolvable locator, never as unanchored', () => {
+    expect(evolutionEvidenceStatus({ anchorQuote: 'let the boat go' }, { segmentIds: passages }))
+      .toBe('unverified');
+    expect(evolutionEvidenceStatus({}, { segmentIds: passages })).toBe('unanchored');
+  });
+
+  it('renders the segment and its quote, annotated with the derived status', () => {
+    const lens = sanitizeCharacterEvolution({
+      outcome: 'full-change',
+      stages: [stage('final-proof', { evidence: quoted('seg-002', 'let the boat go') })],
+    });
+    const block = renderCharacterEvolutionForPrompt(lens, { segmentIds: passages });
+    expect(block).toContain('segment seg-002');
+    expect(block).toContain('quote "let the boat go"');
+    expect(block).toContain('[anchored]');
+  });
+});

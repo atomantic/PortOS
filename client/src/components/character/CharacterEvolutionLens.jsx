@@ -1,13 +1,14 @@
 /**
  * The OPTIONAL five-stage character evolution lens, as an editor (#6441).
  *
- * ONE component for both authoring surfaces — the FableLoom series plan's
- * "Cast evolution" section and the Pipeline series character-arc cards —
- * because the lens shape is shared and a second hand-written copy would drift
- * the moment a stage field or an anchor vocabulary moved. What differs between
- * the hosts is only which evidence anchors they own, and that already has a
- * single source of truth in `EVOLUTION_EVIDENCE_FIELDS`; the `host` prop
- * selects which anchor row to render.
+ * ONE component for every authoring surface — the FableLoom series plan's
+ * "Cast evolution" section, the Pipeline series character-arc cards, and the
+ * Writers Room cast bible (#6445) — because the lens shape is shared and a
+ * second hand-written copy would drift the moment a stage field or an anchor
+ * vocabulary moved. What differs between the hosts is only which evidence
+ * anchors they own, and that already has a single source of truth in
+ * `EVOLUTION_EVIDENCE_FIELDS`; the `host` prop selects which anchor row to
+ * render.
  *
  * Three rules this surface must never break, carried from epic #6418:
  *   - The lens is OPTIONAL and never a gate. Nothing here blocks a save, marks
@@ -50,9 +51,16 @@ const ids = (list) => new Set((list || []).map((item) => item?.id).filter(Boolea
 // `characterArcEvidenceRefs` / `fableLoomEvolutionEvidenceRefs` on the server,
 // derived from the option lists the host already hands this editor so the two
 // cannot disagree about what exists.
-const evidenceRefsFor = (host, anchors) => (host === 'fableLoom'
-  ? { episodeIds: ids(anchors?.episodes), sceneKeys: ids(anchors?.scenes) }
-  : { transitionIds: ids(anchors?.transitions) });
+const evidenceRefsFor = (host, anchors) => {
+  if (host === 'fableLoom') return { episodeIds: ids(anchors?.episodes), sceneKeys: ids(anchors?.scenes) };
+  // Writers Room resolves ids only. The server additionally checks each stage's
+  // `anchorQuote` against the passage its segment still holds (it has the draft
+  // body; this editor has the outline). Staler than the server, never laxer —
+  // an anchor this surface calls live can still come back `[stale]` from the
+  // evaluate pass, which is the safe direction.
+  if (host === 'writersRoom') return { segmentIds: ids(anchors?.segments) };
+  return { transitionIds: ids(anchors?.transitions) };
+};
 
 /**
  * The anchor fields of one stage that no longer resolve, as a clearing patch.
@@ -123,6 +131,36 @@ function UniverseBaseline({ psychology }) {
 // dismantling the stage.
 function StageEvidence({ host, anchors, idPrefix, stageId, stageLabel, evidence, onPatch }) {
   const named = (label) => `${stageLabel} — ${label}`;
+  if (host === 'writersRoom') {
+    return (
+      <div className="grid gap-2 sm:grid-cols-2">
+        <AnchorSelect
+          id={`${idPrefix}-${stageId}-segment`}
+          label="Evidence segment"
+          ariaLabel={named('Evidence segment')}
+          value={evidence?.segmentId || ''}
+          options={anchors?.segments || []}
+          emptyLabel="No segment anchor"
+          onChange={(segmentId) => onPatch({ segmentId })}
+        />
+        <FormField
+          label="Anchor quote"
+          hint="Segment numbers are rebuilt every save — a short verbatim quote is what keeps this stage pinned to the right passage."
+          labelClassName={labelClass}
+        >
+          <input
+            id={`${idPrefix}-${stageId}-quote`}
+            aria-label={named('Anchor quote')}
+            className={inputClass}
+            value={evidence?.anchorQuote || ''}
+            maxLength={CHARACTER_EVOLUTION_LIMITS.anchorQuote}
+            placeholder="A few words from the passage"
+            onChange={(event) => onPatch({ anchorQuote: event.target.value })}
+          />
+        </FormField>
+      </div>
+    );
+  }
   if (host === 'fableLoom') {
     const episodes = anchors?.episodes || [];
     const scenes = (anchors?.scenes || [])

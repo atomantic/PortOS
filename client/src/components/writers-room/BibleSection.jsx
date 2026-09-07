@@ -54,7 +54,14 @@ export function BibleAiBadge() {
   );
 }
 
-export default function BibleSection({ workId, items: itemsProp, onItemsChange, readingTheme = 'dark', hotRefId = null, config }) {
+export default function BibleSection({
+  workId, items: itemsProp, onItemsChange, readingTheme = 'dark', hotRefId = null, config,
+  // Extra props spread onto every `kind: 'custom'` field component. The shared
+  // shell knows nothing about them — it is how a wrapper hands a structured
+  // editor host context it cannot fetch for itself (the Writers Room evolution
+  // lens needs the active draft's segment index to offer real anchors).
+  customProps = null,
+}) {
   const [internalItems, setInternalItems] = useState(itemsProp || []);
   const items = itemsProp ?? internalItems;
   const [editingId, setEditingId] = useState(null);
@@ -120,6 +127,7 @@ export default function BibleSection({ workId, items: itemsProp, onItemsChange, 
           item={null}
           items={items}
           config={config}
+          customProps={customProps}
           onSaved={(record) => { upsert(record); setCreating(false); }}
           onCancel={() => setCreating(false)}
         />
@@ -136,6 +144,7 @@ export default function BibleSection({ workId, items: itemsProp, onItemsChange, 
                   item={item}
                   items={items}
                   config={config}
+                  customProps={customProps}
                   onSaved={(updated) => { upsert(updated); setEditingId(null); }}
                   onDeleted={() => { removeOne(item.id); setEditingId(null); }}
                   onCancel={() => setEditingId(null)}
@@ -216,7 +225,7 @@ function BibleRow({ item, config, onEdit, readingTheme }) {
   );
 }
 
-function BibleEditor({ workId, item, items = [], config, onSaved, onDeleted, onCancel }) {
+function BibleEditor({ workId, item, items = [], config, customProps = null, onSaved, onDeleted, onCancel }) {
   const isCreate = !item;
   const { primary, fields } = config;
   const [draft, setDraft] = useState(() => {
@@ -318,6 +327,7 @@ function BibleEditor({ workId, item, items = [], config, onSaved, onDeleted, onC
               siblings={items.filter((it) => it.id && it.id !== item?.id)}
               idPrefix={`bible-field-${f.key}`}
               inputCls={inputCls}
+              {...customProps}
             />
           ) : (
             <label htmlFor={`bible-field-${f.key}`} className="block">

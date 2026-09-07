@@ -31,10 +31,11 @@
  * record per stage per lens), which needs no id generator and keeps a
  * round trip byte-stable.
  *
- * Embedded by `seriesCharacterArc.js` (`series.characterArcs[].evolution`) and
- * `services/fableLoom/records.js` (`loom.seriesPlan.characterEvolutions[]`),
- * both of which sanitize on load/save/sync; later slices of #6418 add the
- * character-arc editorial checks and the FableLoom plan review on top.
+ * Embedded by `seriesCharacterArc.js` (`series.characterArcs[].evolution`),
+ * `services/fableLoom/records.js` (`loom.seriesPlan.characterEvolutions[]`) and
+ * `lib/storyBible.js`'s `sanitizeCharacter` (`characters[].evolution`, which is
+ * how a Writers Room work carries the lens per work WITHOUT being promoted to a
+ * Pipeline series — #6445), all of which sanitize on load/save/sync.
  */
 
 import { BIBLE_LIMITS } from './bibleLimits.js';
@@ -84,6 +85,10 @@ export const CHARACTER_EVOLUTION_LIMITS = Object.freeze({
   outcomeNote: BIBLE_LIMITS.EVOLUTION_OUTCOME_NOTE_MAX,
   characterName: BIBLE_LIMITS.NAME_MAX,
   atSceneAnchor: BIBLE_LIMITS.EVOLUTION_EVIDENCE_ANCHOR_MAX,
+  // The verbatim manuscript snippet a Writers Room stage quotes. Same cap as
+  // the free-text scene anchor it plays the same role as: an authored locator,
+  // not an identifier.
+  anchorQuote: BIBLE_LIMITS.EVOLUTION_EVIDENCE_ANCHOR_MAX,
   evidenceRef: BIBLE_LIMITS.EVOLUTION_EVIDENCE_REF_MAX,
   atIssue: BIBLE_LIMITS.STORY_ISSUE_NUMBER_MAX,
   STAGES_PER_LENS_MAX: EVOLUTION_STAGES.length,
@@ -116,6 +121,11 @@ export const EVOLUTION_EVIDENCE_STATUSES = Object.freeze([
 const CHARACTER_ID_RE = /^chr-[a-zA-Z0-9-]+$/;
 const TRANSITION_ID_RE = /^trn-[a-zA-Z0-9-]+$/;
 const EPISODE_ID_RE = /^ep-[a-zA-Z0-9-]+$/;
+// A Writers Room manuscript segment (`buildSegmentIndex`). POSITIONAL, unlike
+// every other pointer here: `seg-003` is the third heading of the draft as it
+// stands, and the whole index is recomputed on every draft save. That is why
+// the Writers Room host pairs it with `anchorQuote` below.
+const SEGMENT_ID_RE = /^seg-\d+$/;
 
 const isStr = (v) => typeof v === 'string';
 
@@ -153,8 +163,11 @@ const shapedRef = (raw, re) => {
   return re.test(value) ? value.slice(0, CHARACTER_EVOLUTION_LIMITS.evidenceRef) : '';
 };
 
+// A host reference set. A Map passes through unchanged (it answers `.has` like
+// a Set and additionally carries the passage text a QUOTED_ANCHORS check
+// needs), so a host can hand richer refs in without a second parameter.
 const asSet = (value) => {
-  if (value instanceof Set) return value;
+  if (value instanceof Set || value instanceof Map) return value;
   if (Array.isArray(value)) return new Set(value);
   return null;
 };
@@ -165,6 +178,11 @@ const asSet = (value) => {
 export const EVOLUTION_EVIDENCE_FIELDS = Object.freeze({
   pipelineSeries: Object.freeze(['atIssue', 'atSceneAnchor', 'transitionId']),
   fableLoom: Object.freeze(['episodeId', 'sceneKey']),
+  // Writers Room maps the lens RETROSPECTIVELY onto a manuscript it never
+  // promotes to a Pipeline series, so its only anchor primitive is the segment
+  // index. `anchorQuote` is not a second pointer — it is what makes the first
+  // one checkable across an edit.
+  writersRoom: Object.freeze(['segmentId', 'anchorQuote']),
 });
 
 // Pointer fields that resolve against a host reference set, paired with the
@@ -174,7 +192,22 @@ const RESOLVABLE_ANCHORS = Object.freeze([
   ['transitionId', 'transitionIds'],
   ['episodeId', 'episodeIds'],
   ['sceneKey', 'sceneKeys'],
+  ['segmentId', 'segmentIds'],
 ]);
+
+// Pointer fields that carry a companion QUOTE: `[pointer, refsKey, quoteField]`.
+// When the host hands the matching ref set in as a Map of pointer -> passage
+// text, the quote must still appear in that passage. Without it a positional
+// pointer proves only that SOMETHING still occupies that slot — and a Writers
+// Room `seg-003` is renumbered by any edit that adds a heading above it, so
+// "the id resolves" is exactly the false pass #6418 forbids. A host that hands
+// in a plain Set (or no set) is unchanged: the quote is then unverifiable, not
+// wrong.
+const QUOTED_ANCHORS = Object.freeze([['segmentId', 'segmentIds', 'anchorQuote']]);
+
+// Quotes are compared whitespace-collapsed and case-folded: a manuscript edit
+// that rewraps a paragraph or re-cases a heading has not moved the passage.
+const normalizeQuote = (raw) => (isStr(raw) ? raw.replace(/\s+/g, ' ').trim().toLowerCase() : '');
 
 /**
  * Sanitize one stage's evidence anchor. Returns `null` when nothing is
@@ -187,6 +220,11 @@ const RESOLVABLE_ANCHORS = Object.freeze([
  *     `trn-` beat that proves the stage.
  *   - FableLoom: `episodeId` (`ep-<uuid>`) plus `sceneKey` (a
  *     `storyOutline.scenes[].key`).
+ *   - Writers Room: `segmentId` (a `seg-NNN` from `buildSegmentIndex`) plus
+ *     `anchorQuote`, a verbatim snippet of the passage it names. The segment id
+ *     is positional and is rebuilt on every draft save, so the quote is what
+ *     lets `evolutionEvidenceStatus` tell "still the same passage" from "that
+ *     slot now holds a different chapter".
  * A field the host does not use simply stays empty.
  */
 export function sanitizeEvolutionEvidence(raw) {
@@ -200,12 +238,19 @@ export function sanitizeEvolutionEvidence(raw) {
     // they are length-bounded rather than shape-matched; resolution against the
     // episode's real keys is what separates a live anchor from a stale one.
     sceneKey: trimTo(raw.sceneKey, CHARACTER_EVOLUTION_LIMITS.evidenceRef),
+    segmentId: shapedRef(raw.segmentId, SEGMENT_ID_RE),
+    // Free text, deliberately not shape-matched: it is a verbatim snippet of
+    // the author's own prose, and it is PRESERVED when its segment pointer goes
+    // stale so it can drive the re-anchor.
+    anchorQuote: trimTo(raw.anchorQuote, CHARACTER_EVOLUTION_LIMITS.anchorQuote),
   };
   const authored = evidence.atIssue !== null
     || evidence.atSceneAnchor
     || evidence.transitionId
     || evidence.episodeId
-    || evidence.sceneKey;
+    || evidence.sceneKey
+    || evidence.segmentId
+    || evidence.anchorQuote;
   return authored ? evidence : null;
 }
 
@@ -228,13 +273,28 @@ export function evolutionEvidenceStatus(evidence, refs = {}) {
   // machine-verified, so on its own it stays `unverified`. Checked before the
   // ref sets are materialized so the common no-pointer case allocates nothing.
   if (authored.length === 0) {
-    return evidence.atIssue != null || evidence.atSceneAnchor ? 'unverified' : 'unanchored';
+    return evidence.atIssue != null || evidence.atSceneAnchor || evidence.anchorQuote
+      ? 'unverified'
+      : 'unanchored';
   }
   let unchecked = false;
   for (const [field, refsKey] of authored) {
     const known = asSet(refs[refsKey]);
     if (!known) unchecked = true;
     else if (!known.has(evidence[field])) return 'stale';
+  }
+  // A quoted pointer that resolved still has to still SAY what it said. The
+  // check runs only when the host supplied the passage text; otherwise the
+  // anchor is merely unchecked, which is `unverified` below, never `anchored`.
+  for (const [field, refsKey, quoteField] of QUOTED_ANCHORS) {
+    const quote = normalizeQuote(evidence[quoteField]);
+    if (!evidence[field] || !quote) continue;
+    const known = refs[refsKey];
+    if (!(known instanceof Map)) {
+      unchecked = true;
+      continue;
+    }
+    if (!normalizeQuote(known.get(evidence[field])).includes(quote)) return 'stale';
   }
   return unchecked ? 'unverified' : 'anchored';
 }
@@ -373,9 +433,10 @@ const describeEvidence = (evidence) => {
   const bits = [];
   if (evidence.atIssue != null) bits.push(`issue ${evidence.atIssue}`);
   if (evidence.atSceneAnchor) bits.push(evidence.atSceneAnchor);
-  for (const [field, label] of [['transitionId', 'transition'], ['episodeId', 'episode'], ['sceneKey', 'scene']]) {
+  for (const [field, label] of [['transitionId', 'transition'], ['episodeId', 'episode'], ['sceneKey', 'scene'], ['segmentId', 'segment']]) {
     if (evidence[field]) bits.push(`${label} ${evidence[field]}`);
   }
+  if (evidence.anchorQuote) bits.push(`quote "${evidence.anchorQuote}"`);
   return bits.join(', ') || 'none';
 };
 

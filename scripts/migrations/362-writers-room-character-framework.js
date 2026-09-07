@@ -22,7 +22,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 export const NEW_SHIPPED_MD5 = {
   "writers-room-characters.md": "4b19f6538ff3a602007ef8e32c8e5047",
-  "writers-room-evaluate.md": "286e9498966187ed74126680da4a6a54"
+  "writers-room-evaluate.md": "995cfd92061b55730b0e081998e96f84"
 };
 const { applyMigration, up } = makePromptReplaceMigration({
   accepted: ACCEPTED_OLD_MD5, current: NEW_SHIPPED_MD5,

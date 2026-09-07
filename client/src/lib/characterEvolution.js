@@ -108,9 +108,13 @@ export const evolutionStage = (evolution, stageId) => (
 const cleanEvidence = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   const evidence = { atIssue: Number.isFinite(raw.atIssue) ? raw.atIssue : null };
-  for (const field of TEXT_EVIDENCE_FIELDS) evidence[field] = asText(raw[field]).trim();
+  // Verbatim, exactly like the stage prose above: an anchor field can be prose
+  // (`anchorQuote`, `atSceneAnchor`), and trimming on every keystroke eats the
+  // space the author just typed, so a multi-word quote can never be entered.
+  // The server sanitizer trims on save; whitespace alone is still not authored.
+  for (const field of TEXT_EVIDENCE_FIELDS) evidence[field] = asText(raw[field]);
   const authored = evidence.atIssue !== null
-    || TEXT_EVIDENCE_FIELDS.some((field) => evidence[field]);
+    || TEXT_EVIDENCE_FIELDS.some((field) => evidence[field].trim());
   return authored ? evidence : null;
 };
 

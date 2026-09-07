@@ -23,6 +23,7 @@ import {
   PSYCHOLOGY_DRIVE_AXES,
   RELATIONSHIP_LINK_TYPES,
 } from './characterFramework.js';
+import { sanitizeCharacterEvolution } from './characterEvolution.js';
 
 // Re-export so callers (writers-room domain files) can import a single
 // canonical normalizer when they need to match places by slugline.
@@ -946,6 +947,7 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
   const voiceCanon = sanitizeVoiceCanon(raw.voiceCanon);
   const identityPack = sanitizeIdentityPack(raw.identityPack, imageRefs);
   const psychology = sanitizeCharacterPsychology(raw.psychology);
+  const evolution = sanitizeCharacterEvolution(raw.evolution);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -993,6 +995,15 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     // on every record that has not been assessed, so legacy characters stay
     // valid and visibly unfilled rather than silently inheriting a profile.
     ...(psychology ? { psychology } : {}),
+    // Optional five-stage evolution lens (#6440), STORY-SCOPED (#6445). What
+    // ONE story does to the baseline above: the belief it puts under test, the
+    // pressure, the choice, and what that choice causes. Absent (no key) until
+    // a writer authors it, so every pre-lens character round-trips unchanged.
+    // Reached today by the per-work Writers Room cast bible, whose records live
+    // under data/writers-room/works/<workId>/ and are therefore already scoped
+    // to one manuscript — the universe cast has no editor for it, which is what
+    // keeps a story's realized change from overwriting world-level identity.
+    ...(evolution ? { evolution } : {}),
     // Declared arc type — null (unset) unless it's one of the three known
     // values, so a legacy record with no arc type stays absent.
     arcType: trimEnum(raw.arcType, CHARACTER_ARC_TYPE_SET),
