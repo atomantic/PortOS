@@ -7,6 +7,11 @@ import { resolve } from 'path';
 
 import { resolveBundleNodeEnv } from './vite.buildEnv.js';
 import { CHUNK_GROUPS } from './vite.chunkGroups.js';
+import {
+  EIDOVERSE_HOST_PATH_PREFIX,
+  EIDOVERSE_ROOT_EXACT_PATHS,
+  EIDOVERSE_ROOT_PREFIX_PATHS,
+} from '../server/lib/eidoverseProxyRoutes.js';
 
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
@@ -88,6 +93,43 @@ function buildStamp() {
 const CERT_PATH = resolve(CONFIG_DIR, '..', 'data', 'certs', 'cert.pem');
 const API_SCHEME = existsSync(CERT_PATH) ? 'https' : 'http';
 
+// Dev proxies for the same-origin Eidoverse iframe. Root routes only forward
+// while the API host is active; `/node_modules/` + `/shared/` keep a Referer
+// bypass so Vite's own dependency graph is not stolen.
+function eidoverseDevProxies(target) {
+  const entries = {
+    [`^${EIDOVERSE_HOST_PATH_PREFIX}(?:/|$)`]: {
+      target,
+      changeOrigin: true,
+      ws: true,
+      secure: false,
+    },
+  };
+  for (const exact of EIDOVERSE_ROOT_EXACT_PATHS) {
+    entries[`^${exact}$`] = {
+      target,
+      changeOrigin: true,
+      ws: exact === '/ws',
+      secure: false,
+    };
+  }
+  for (const prefix of EIDOVERSE_ROOT_PREFIX_PATHS) {
+    entries[`^${prefix}`] = {
+      target,
+      changeOrigin: true,
+      secure: false,
+      bypass(req) {
+        if (prefix !== '/node_modules/' && prefix !== '/shared/') return undefined;
+        const referer = String(req.headers.referer || '');
+        if (!referer.includes(EIDOVERSE_HOST_PATH_PREFIX)) return req.url;
+        return undefined;
+      },
+    };
+  }
+  return entries;
+}
+
+
 export default defineConfig(({ command, mode }) => {
   // Pin the build's NODE_ENV before Vite reads it. resolveConfig() only defaults
   // it to 'production' when it is UNSET, and PortOS reaches this build from
@@ -161,7 +203,8 @@ export default defineConfig(({ command, mode }) => {
           changeOrigin: true,
           ws: true,
           secure: false
-        }
+        },
+        ...eidoverseDevProxies(API_TARGET),
       }
     },
     build: {

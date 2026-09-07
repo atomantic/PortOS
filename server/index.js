@@ -167,6 +167,7 @@ import remoteDesktopRoutes from './routes/remoteDesktop.js';
 import remoteDesktopViewerRoutes from './routes/remoteDesktopViewer.js';
 import { initSocket } from './services/socket.js';
 import { remoteDesktopBroker } from './services/remoteDesktop.js';
+import { mountEidoverseOnServer } from './services/eidoverseHost.js';
 import { bootstrapServices, runBootSequence, registerShutdownHandlers } from './services/bootstrap.js';
 import { errorMiddleware } from './lib/errorHandler.js';
 import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
@@ -205,6 +206,9 @@ const io = new Server(httpServer, {
 // request input. Mount the HTTPS server and its optional loopback HTTP mirror.
 remoteDesktopBroker.mountWebSocket(httpServer);
 remoteDesktopBroker.mountWebSocket(localHttpServer);
+// Eidoverse same-origin path + root allowlist (active only after the on-demand
+// host starts). Upgrade for `/ws` and `/eidoverse-host/**` on both listeners.
+mountEidoverseOnServer(null, [httpServer, localHttpServer]);
 
 // Auth gate for Socket.IO — when settings.secrets.auth.enabled is true the
 // handshake must carry a valid token cookie or Authorization: Bearer header
@@ -428,6 +432,12 @@ app.use('/api/midi-runtime', midiRuntimeRoutes);
 app.use('/api/harnesses', harnessRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/ask', askRoutes);
+
+// Eidoverse same-origin reverse-proxy (`/eidoverse-host` + root allowlist while
+// the host is active). Must sit above mountAssetRoutes so the `/eidoverse-host`
+// SERVER_OWNED terminator cannot 404 proxied paths, and above the SPA fallback
+// so `/version` / `/ws` are not answered with PortOS index.html.
+mountEidoverseOnServer(app);
 
 // Asset static mounts, then a terminating 404 for every server-owned prefix so
 // an extensionless `/data/…` or a mistyped `/api/…` can no longer fall through

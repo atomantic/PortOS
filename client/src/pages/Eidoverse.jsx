@@ -48,21 +48,25 @@ const FRESH_WORLD_VISIBLE_CHECKPOINTS = new Set([
 const failedStart = (result) => Object.values(result?.results || {})
   .find((entry) => entry?.success === false);
 
-// Prefer the PortOS-owned bridge whenever its scheme matches this page's. The
-// bridge answers the renderer's `/embed-config` with this page's origin, which
-// is the only thing that arms the frame bridge — a direct `:uiPort` load leaves
-// the renderer with no trusted parent and it never replies to the handshake.
-// An HTTP page in front of an HTTPS-only bridge is the one case that still goes
-// direct: the shared certificate covers the MagicDNS name, so an iframe pointed
-// at `https://localhost:5563` would fail on the certificate instead. There the
-// scene renders and the handshake stays dormant, as the contract intends.
+// Prefer the same-origin `/eidoverse-host/` path on the PortOS UI host+port.
+// A single-port tailcat forward (e.g. 127.0.0.1:15555 → remote :5555) only
+// tunnels :5555, so a dedicated :5563 iframe URL is unreachable from the
+// laptop; absolute `/ws` and `/version` fetches from the iframe also need to
+// hit that same origin (the main server reverse-proxies them while the host
+// is active). The path mount answers `/embed-config` with this page's full
+// origin (including a non-5555 forward port), which arms the frame handshake.
+//
+// Escape hatch: an HTTP page in front of an HTTPS-only host certificate still
+// cannot load `https://…/eidoverse-host/` when the cert does not cover the
+// hostname in use (loopback mirror / some Vite setups). There we keep the
+// direct `:uiPort` load — scene renders, handshake stays dormant.
 export const hostUrlFor = (host, setup, location = window.location, identity = null) => {
   if (location.protocol === 'https:' && host.protocol !== 'https') {
     throw new Error('PortOS is using HTTPS, but the Eidoverse host could not load the shared certificate.');
   }
-  const baseUrl = location.protocol === 'https:' || host.protocol === 'http'
-    ? `${host.protocol}://${location.hostname}:${host.port}/`
-    : `http://${location.hostname}:${setup.uiPort}/`;
+  const baseUrl = location.protocol === 'http:' && host.protocol === 'https'
+    ? `http://${location.hostname}:${setup.uiPort}/`
+    : `${location.protocol}//${location.host}/eidoverse-host/`;
   if (!identity) return baseUrl;
 
   const url = new URL(baseUrl);

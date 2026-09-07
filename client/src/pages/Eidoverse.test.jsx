@@ -149,7 +149,7 @@ describe('Eidoverse hosted page', () => {
     renderPage();
 
     const frame = await screen.findByTitle('Eidoverse Worlds');
-    expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:5563/?world=portos&name=example-portos-user`);
+    expect(frame).toHaveAttribute('src', `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos&name=example-portos-user`);
     expect(screen.getByRole('button', { name: 'Refresh world' }))
       .toHaveAttribute('aria-label', 'Refresh world');
     expect(screen.getByRole('button', { name: 'Refresh world' })).not.toHaveClass('port-media-overlay');
@@ -163,7 +163,7 @@ describe('Eidoverse hosted page', () => {
     expect(screen.queryByRole('region', { name: 'PortOS district legend' })).not.toBeInTheDocument();
     expect(screen.queryByText('12/48 live signals')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Eidoverse without PortOS controls' }))
-      .toHaveAttribute('href', `http://${window.location.hostname}:5563/?world=portos&name=example-portos-user`);
+      .toHaveAttribute('href', `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos&name=example-portos-user`);
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
     expect(screen.getByRole('link', { name: 'Manage Eidoverse app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
 
@@ -360,35 +360,38 @@ describe('Eidoverse hosted page', () => {
     expect(api.startApp).toHaveBeenCalledTimes(2);
   });
 
-  it('uses the PortOS TLS bridge for an HTTPS MagicDNS page', () => {
+  it('uses the same-origin /eidoverse-host path for an HTTPS MagicDNS page', () => {
     expect(hostUrlFor(
       { running: true, protocol: 'https', port: 5563 },
       setup,
-      { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net' },
-    )).toBe('https://host-alpha.example-tailnet.ts.net:5563/');
+      { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net', host: 'host-alpha.example-tailnet.ts.net' },
+    )).toBe('https://host-alpha.example-tailnet.ts.net/eidoverse-host/');
     expect(() => hostUrlFor(
       { running: true, protocol: 'http', port: 5563 },
       setup,
-      { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net' },
+      { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net', host: 'host-alpha.example-tailnet.ts.net' },
     )).toThrow(/shared certificate/);
   });
 
-  // Only the bridge answers the renderer's /embed-config with this page's
-  // origin, and without that answer the renderer never completes the frame
-  // handshake — so a plain-HTTP install has to go through it too. The one
-  // exception is an HTTP page in front of an HTTPS-only bridge (the loopback
-  // mirror, the dev server): the shared certificate does not cover those
-  // hostnames, so the iframe would fail on the certificate instead.
-  it('routes a plain-HTTP page through the bridge, and only falls back when the bridge is HTTPS', () => {
+  // Same-origin path keeps a single-port tailcat forward working (UI host+port
+  // only). The one escape is an HTTP page in front of an HTTPS-only host
+  // certificate that does not cover the hostname — loopback mirror / some Vite
+  // setups — where we still fall back to the direct :uiPort load.
+  it('routes through /eidoverse-host on the UI origin, with a direct-uiPort escape for HTTP+HTTPS-cert', () => {
     expect(hostUrlFor(
       { running: true, protocol: 'http', port: 5563 },
       setup,
-      { protocol: 'http:', hostname: 'host-alpha.example-tailnet.ts.net' },
-    )).toBe('http://host-alpha.example-tailnet.ts.net:5563/');
+      { protocol: 'http:', hostname: 'host-alpha.example-tailnet.ts.net', host: 'host-alpha.example-tailnet.ts.net:5555' },
+    )).toBe('http://host-alpha.example-tailnet.ts.net:5555/eidoverse-host/');
+    expect(hostUrlFor(
+      { running: true, protocol: 'http', port: 5563 },
+      setup,
+      { protocol: 'http:', hostname: '127.0.0.1', host: '127.0.0.1:15555' },
+    )).toBe('http://127.0.0.1:15555/eidoverse-host/');
     expect(hostUrlFor(
       { running: true, protocol: 'https', port: 5563 },
       setup,
-      { protocol: 'http:', hostname: 'localhost' },
+      { protocol: 'http:', hostname: 'localhost', host: 'localhost:5553' },
     )).toBe(`http://localhost:${setup.uiPort}/`);
   });
 
@@ -441,7 +444,7 @@ describe('Eidoverse hosted page', () => {
 
     await waitFor(() => expect(screen.getByTitle('Eidoverse Worlds')).toHaveAttribute(
       'src',
-      `http://${window.location.hostname}:5563/?world=portos-two&name=example-portos-user`,
+      `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos-two&name=example-portos-user`,
     ));
   });
 

@@ -235,7 +235,11 @@ describe('deferred imports stay deferred (#6156)', () => {
 // not. services/pipeline/arcPlanner/context.test.js (78) and
 // lib/editorial/checks/characterArcEvolution.test.js (68) are boundary tests
 // over modules those trees already instantiate.
-const MAX_STATIC_INSTANTIATIONS = 95200;
+// #6532: same-origin Eidoverse proxy (`eidoverseProxy.js` + route allowlist)
+// loaded via the host mount at boot. Measured 95,246 on this branch (+46 over
+// the prior ceiling) — ordinary growth for an intentional main-server edge,
+// not an eager heavy subtree. Raise the ceiling to keep the ~1.5k allowance.
+const MAX_STATIC_INSTANTIATIONS = 95300;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {
