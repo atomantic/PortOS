@@ -13,7 +13,13 @@
  * (`components/providers/ProviderConnections.test.jsx`).
  */
 import { describe, expect, it } from 'vitest';
-import { bindingModelOffer, catalogSummary, groupGraphByConnection, staleSelectedModels } from './providerManagement.js';
+import {
+  bindingModelOffer,
+  catalogSummary,
+  groupGraphByConnection,
+  harnessOptionsFor,
+  staleSelectedModels,
+} from './providerManagement.js';
 
 const connection = (models, state = 'known') => ({
   id: 'conn-1', catalog: { state, models },
@@ -79,5 +85,35 @@ describe('groupGraphByConnection', () => {
     expect(groups[0].bindings[0].routes.map((route) => route.mode)).toEqual(['cli', 'tui', 'api']);
     // An unlabeled binding falls back to its harness's display name.
     expect(groups[0].bindings[0].label).toBe('Claude Code');
+  });
+});
+
+describe('harnessOptionsFor', () => {
+  const GRAPH = {
+    creatableHarnesses: [
+      { id: 'claude', label: 'Claude Code', protocol: 'anthropic', modes: ['cli', 'tui'], credentialRequired: true, credentialKey: 'ANTHROPIC_AUTH_TOKEN' },
+      { id: 'codex', label: 'Codex CLI', protocol: 'openai', modes: ['cli'], credentialRequired: false, credentialKey: null },
+    ],
+  };
+
+  it('offers the harnesses for EVERY protocol a cross-protocol backend declares', () => {
+    // One daemon reached on two ports is one backend, and the server mints a
+    // route for either protocol (#6460) — hiding one here would make the
+    // second harness link-only in a UI that can already create it.
+    const options = harnessOptionsFor(GRAPH, {
+      hasCredentials: true,
+      transports: { anthropic: { baseUrl: 'http://127.0.0.1:11434' }, openai: { baseUrl: 'http://127.0.0.1:11434/v1' } },
+    });
+    expect(options.map((option) => option.label)).toEqual(['Claude Code', 'Codex CLI', 'Direct API']);
+  });
+
+  it('still hides a harness no declared transport speaks', () => {
+    const options = harnessOptionsFor(GRAPH, { transports: { openai: { baseUrl: 'http://127.0.0.1:11434/v1' } } });
+    expect(options.map((option) => option.label)).toEqual(['Codex CLI', 'Direct API']);
+  });
+
+  it('names the credential a keyless backend still needs rather than hiding the choice', () => {
+    const [claude] = harnessOptionsFor(GRAPH, { transports: { anthropic: { baseUrl: 'http://127.0.0.1:11434' } } });
+    expect(claude).toMatchObject({ harnessId: 'claude', needsCredential: 'ANTHROPIC_AUTH_TOKEN' });
   });
 });

@@ -223,8 +223,18 @@ export function routeModelAliasRows(route) {
 // which harnesses carry a command recipe, and which backend kinds a minted
 // route can honestly describe, are server decisions.
 
-/** The one transport protocol a connection declares, or `null`. */
-export const connectionProtocol = (connection) => Object.keys(connection?.transports || {})[0] || null;
+/**
+ * Every transport protocol a connection declares.
+ *
+ * More than one is normal on a backend a human linked across protocols — one
+ * Ollama daemon reached by Claude on its Anthropic port and by Codex on `/v1`
+ * is ONE backend, and the server accepts a harness for any protocol the row
+ * declares (#6460).
+ */
+export const connectionProtocols = (connection) => Object.keys(connection?.transports || {});
+
+/** The FIRST transport protocol a connection declares, or `null` — for copy that names one. */
+export const connectionProtocol = (connection) => connectionProtocols(connection)[0] || null;
 
 /**
  * Transport protocols a new backend may declare, each with the programs that
@@ -249,25 +259,28 @@ export function transportProtocolOptions(graph) {
 /**
  * The harnesses that can be added to THIS backend, plus the direct API option.
  *
- * Filtered by the backend's declared protocol rather than offered and then
- * refused: the server rejects a harness that does not speak it, and an option
- * whose only outcome is a 409 is not an option. `needsCredential` is why an
- * otherwise-valid choice will still be refused, so the row can say so before
- * the click rather than after it.
+ * Filtered by the protocols the backend DECLARES rather than offered and then
+ * refused: the server rejects a harness that speaks none of them, and an option
+ * whose only outcome is a 409 is not an option. A row declaring two protocols
+ * offers the harnesses for both — that is the whole point of a cross-protocol
+ * link, and the server mints a route for either one (#6460).
+ *
+ * `needsCredential` is why an otherwise-valid choice will still be refused, so
+ * the row can say so before the click rather than after it.
  *
  * @returns {{harnessId:string|null, label:string, modes:string[], needsCredential:string|null}[]}
  */
 export function harnessOptionsFor(graph, connection) {
-  const protocol = connectionProtocol(connection);
+  const protocols = connectionProtocols(connection);
   const harnesses = (Array.isArray(graph?.creatableHarnesses) ? graph.creatableHarnesses : [])
-    .filter((harness) => harness.protocol === protocol)
+    .filter((harness) => protocols.includes(harness.protocol))
     .map((harness) => ({
       harnessId: harness.id,
       label: harness.label,
       modes: harness.modes,
       needsCredential: harness.credentialRequired && !connection?.hasCredentials ? harness.credentialKey : null,
     }));
-  return protocol === 'openai'
+  return protocols.includes('openai')
     ? [...harnesses, { harnessId: null, label: 'Direct API', modes: ['api'], needsCredential: null }]
     : harnesses;
 }
