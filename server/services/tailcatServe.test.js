@@ -127,6 +127,32 @@ describe('tailcatServe helpers', () => {
     expect(saved?.serve?.tcAddress).toBe(EXAMPLE_TC);
   });
 
+  it('records an unexpected exit without overwriting a later retry or stop', async () => {
+    let saved = { version: 1, serve: null };
+    readJSONFile.mockImplementation(async () => saved);
+    atomicWrite.mockImplementation(async (_path, data) => { saved = data; });
+    const child = fakeChild();
+    const deps = {
+      ensureInstalled: async () => ({ bin: '/example/tailcat' }),
+      primeDerpMap: async () => ({}),
+      ensureKey: async () => ({}),
+      startServe: async () => ({ child, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: DEFAULT_KEY_NAME }),
+    };
+    await ensureTailcatServe(deps);
+    child.emit('exit', 1, null);
+    await vi.waitFor(() => expect(saved.serve.status).toBe('failed'));
+    expect(await getTailcatServeStatus()).toMatchObject({ live: false, status: 'failed', enabled: true });
+    expect(saved.serve.lastError).toContain('code=1');
+
+    const replacement = fakeChild();
+    await retryTailcatServe({ ...deps, startServe: async () => ({ child: replacement, tcAddress: EXAMPLE_TC, localPort: DEFAULT_SERVE_PORT, keyName: DEFAULT_KEY_NAME }) });
+    child.emit('exit', 1, null);
+    expect(await getTailcatServeStatus()).toMatchObject({ live: true, status: 'active' });
+    await stopTailcatServe();
+    replacement.emit('exit', 0, 'SIGTERM');
+    expect(await getTailcatServeStatus()).toMatchObject({ live: false, status: 'stopped', enabled: false, lastError: null });
+  });
+
   it('stopTailcatServe disables restore-on-boot', async () => {
     const child = fakeChild();
     let saved = {

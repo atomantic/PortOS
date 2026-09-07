@@ -1,8 +1,10 @@
+import { TailcatServeProvider } from '../components/instances/TailcatServeProvider';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as renderUI, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import TailcatServePanel from '../components/instances/TailcatServePanel';
 import { AddPeerForm } from './Instances.jsx';
 import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_LOCAL_PORT } from '../lib/ports.js';
-import { addPeer, addTailcatPeer, startTailcatServe, getTailcatServe } from '../services/api';
+import { addPeer, addTailcatPeer, startTailcatServe, getTailcatServe, stopTailcatServe } from '../services/api';
 
 vi.mock('../services/api', () => ({
   getInstances: vi.fn(),
@@ -43,8 +45,9 @@ describe('AddPeerForm port default', () => {
   // Regression: the placeholder advertised :5554 (the Vite dev port) while the
   // field defaulted to the API port, so clearing the field suggested a port
   // PortOS never serves the API on.
-  it('advertises the same port in the placeholder as it defaults to', () => {
+  it('advertises the same port in the placeholder as it defaults to', async () => {
     render(<AddPeerForm onAdd={() => {}} />);
+    await act(async () => {});
     const portInput = screen.getByLabelText('Peer port');
     expect(portInput).toHaveValue(DEFAULT_PEER_PORT);
     expect(portInput.getAttribute('placeholder')).toBe(String(DEFAULT_PEER_PORT));
@@ -145,4 +148,21 @@ describe('AddPeerForm dial direction', () => {
     await waitFor(() => expect(startTailcatServe).toHaveBeenCalled());
     expect(addTailcatPeer).not.toHaveBeenCalled();
   });
+});
+
+function render(ui) { return renderUI(<TailcatServeProvider>{ui}</TailcatServeProvider>); }
+
+it('shares start and stop receipts between both serve controls', async () => {
+  getTailcatServe.mockResolvedValue({ live: false, enabled: false, status: 'stopped' });
+  startTailcatServe.mockResolvedValue({ live: true, enabled: true, status: 'active' });
+  stopTailcatServe.mockResolvedValue({ live: false, enabled: false, status: 'stopped' });
+  render(<><AddPeerForm onAdd={() => {}} /><TailcatServePanel /></>);
+  await act(async () => {});
+  fireEvent.click(screen.getByRole('button', { name: 'Tailcat' }));
+  fireEvent.click(screen.getByRole('button', { name: 'They dial us' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Start serve' })[0]);
+  expect(await screen.findByRole('button', { name: 'Serve running' })).toBeDisabled();
+  fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+  await waitFor(() => expect(screen.getAllByRole('button', { name: 'Start serve' })).toHaveLength(2));
+  expect(screen.queryByRole('button', { name: 'Serve running' })).not.toBeInTheDocument();
 });
