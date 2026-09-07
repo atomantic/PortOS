@@ -585,7 +585,8 @@ describe('stream error containment', () => {
     agentStateMocks.appendAgentOutputLines.mockResolvedValue(undefined);
     (await import('./agentRunTracking.js')).completeAgentRun.mockResolvedValue(undefined);
     (await import('./agentFinalization.js')).finalizeAgent.mockResolvedValue(undefined);
-    minimalArgs.cleanupWorktreeFn.mockResolvedValue(undefined);
+    // Completion waits must observe this test, not a previous cleanup call.
+    minimalArgs.cleanupWorktreeFn.mockClear().mockResolvedValue(undefined);
     vi.mocked(existsSync).mockReturnValue(false);
     vi.mocked(isOllamaBackedProvider).mockReturnValue(false);
     vi.mocked(ensureOllamaAgentContext).mockResolvedValue({ skipped: true });
@@ -730,7 +731,7 @@ describe('stream error containment', () => {
     });
 
     await expect(spawnDirectly(minimalArgs)).resolves.toBe('agent-test');
-    await new Promise((r) => setTimeout(r, 30));
+    await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
 
     expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
       agentId: 'agent-test',
@@ -864,7 +865,7 @@ describe('stream error containment', () => {
 
     fakeProcess.emit('close', 0);
     await spawnPromise;
-    await new Promise((r) => setTimeout(r, 20));
+    await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
 
     expect(agentStateMocks.appendAgentOutputLines).toHaveBeenCalledWith('agent-test', [
       '⚠️ Example context warning',
@@ -1267,9 +1268,8 @@ describe('stream error containment', () => {
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));
     fakeProcess.emit('close', 0);
-    // The close handler is fire-and-forget (spawnDirectly returns agentId
-    // synchronously) — wait for the async handler's finally block to run.
-    await new Promise((r) => setTimeout(r, 80));
+    // spawnDirectly returns before the close handler's async cleanup finishes.
+    await vi.waitFor(() => expect(cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
 
     expect(cleanupWorktreeFn).toHaveBeenCalledTimes(1);
     const opts = cleanupWorktreeFn.mock.calls[0][2];
@@ -1291,7 +1291,7 @@ describe('stream error containment', () => {
     spawnDirectly({ ...minimalArgs, task, cleanupWorktreeFn, isTruthyMetaFn: (v) => v === true });
     await new Promise((r) => setTimeout(r, 10));
     fakeProcess.emit('close', 1);
-    await new Promise((r) => setTimeout(r, 80));
+    await vi.waitFor(() => expect(releaseRetryHold).toHaveBeenCalled(), { interval: 5 });
 
     expect(releaseRetryHold).toHaveBeenCalledWith({
       agentId: minimalArgs.agentId, task, success: false,
@@ -1312,7 +1312,7 @@ describe('stream error containment', () => {
     fakeProcess.stdout.emit('data', Buffer.from('{"type":"result","result":"ok"}\n'));
     await new Promise((r) => setTimeout(r, 50));
     fakeProcess.emit('close', 0);
-    await new Promise((r) => setTimeout(r, 80));
+    await vi.waitFor(() => expect(releaseRetryHold).toHaveBeenCalled(), { interval: 5 });
 
     expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
@@ -1340,7 +1340,7 @@ describe('stream error containment', () => {
       await new Promise((r) => setTimeout(r, 10));
       fakeProcess.emit('close', 0);
       await spawnPromise.catch(() => {});
-      await new Promise((r) => setTimeout(r, 30));
+      await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
 
       expect(handlePipelineProgression).toHaveBeenCalledWith(task, 'agent-test', true);
       expect(order).toEqual(['pipeline', 'worktree']);
@@ -1353,7 +1353,7 @@ describe('stream error containment', () => {
       await new Promise((r) => setTimeout(r, 10));
       fakeProcess.emit('close', 0);
       await spawnPromise.catch(() => {});
-      await new Promise((r) => setTimeout(r, 30));
+      await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
       expect(handlePipelineProgression).not.toHaveBeenCalled();
     });
   });
@@ -1374,7 +1374,6 @@ describe('stream error containment', () => {
       await new Promise((r) => setTimeout(r, 10));
       markHostShuttingDown();
       fakeProcess.emit('close', code);
-      await new Promise((r) => setTimeout(r, 80));
     };
 
     it('abandons without finalizing or cleaning up the worktree', async () => {
@@ -1382,6 +1381,10 @@ describe('stream error containment', () => {
       const { finalizeAgent } = await import('./agentFinalization.js');
 
       await runToClose({ ...minimalArgs, cleanupWorktreeFn });
+      await vi.waitFor(() => expect(agentStateMocks.updateAgent).toHaveBeenCalledWith(
+        minimalArgs.agentId,
+        { metadata: { phase: 'interrupted', interruptedBy: 'host-shutdown' } },
+      ), { interval: 5 });
 
       expect(finalizeAgent).not.toHaveBeenCalled();
       expect(cleanupWorktreeFn).not.toHaveBeenCalled();
@@ -1398,6 +1401,7 @@ describe('stream error containment', () => {
       userTerminatedAgents.add(minimalArgs.agentId);
 
       await runToClose({ ...minimalArgs });
+      await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
 
       expect(finalizeAgent).toHaveBeenCalledWith(
         expect.objectContaining({ terminatedByUser: true, success: false }),
@@ -1413,6 +1417,7 @@ describe('stream error containment', () => {
         path === join(minimalArgs.workspacePath, '.agent-done-agent-test'));
 
       await runToClose({ ...minimalArgs }, null);
+      await vi.waitFor(() => expect(minimalArgs.cleanupWorktreeFn).toHaveBeenCalled(), { interval: 5 });
 
       expect(finalizeAgent).toHaveBeenCalledWith(
         expect.objectContaining({
