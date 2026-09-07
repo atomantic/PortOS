@@ -373,7 +373,7 @@ PostgreSQL itself is not PM2-managed — it runs as the system service (`:5432`)
 
 ### Adding CoS Task Types
 1. Add the task type to `SELF_IMPROVEMENT_TASK_TYPES` and `DEFAULT_TASK_INTERVALS` in `server/services/taskSchedule.js`.
-2. Add its prompt template to `DEFAULT_TASK_PROMPTS` in `server/services/taskPromptDefaults/prompts.js` (bump `PROMPT_VERSIONS` + append the outgoing default to `PREVIOUS_DEFAULT_PROMPTS` if you are changing an existing default).
+2. Add its prompt template to `DEFAULT_TASK_PROMPTS` in `server/services/taskPromptDefaults/prompts.js` (if you are changing an existing default: bump `PROMPT_VERSIONS`, then run `node scripts/regen-prompt-integrity-snapshot.js` to retire the outgoing default's hash into `integrity.snapshot.json`).
 3. If it is an audit that should be configurable to **file issues** or **do the work**, add it to `AUDIT_DEFINITIONS` in `server/lib/auditCatalog.js` (and map any matching legacy quota-burn preset via `quotaBurnId`, so an un-migrated plan converts onto it). Quota Burn picks the new type up for free — its plan references scheduled tasks rather than carrying prompts of its own ([QUOTA-BURN.md](./QUOTA-BURN.md)).
 4. If it ALWAYS files findings/plans into the app's work tracker (never implements), add a wording preset to `TRACKER_FILING_PRESETS` in `server/lib/workTracker.js` and reference `{trackerInstructions}` in its prompt template — membership is what makes `resolveTrackerFilingBlock` file on every dispatch.
 5. Give it a home in `WORKFLOW_STAGES` (`server/services/workflow.js`) so the Workflow tab doesn't render it under Ambient.

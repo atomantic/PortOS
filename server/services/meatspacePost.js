@@ -121,8 +121,8 @@ export const POST_BENCHMARK_PROTOCOL = Object.freeze({
 // so an in-flight benchmark run started under the old formula (client
 // fetched the old protocol before a server upgrade landed mid-session) can
 // still be saved after the upgrade (issue #4442 codex review; mirrors the
-// PROMPT_VERSIONS/PREVIOUS_DEFAULT_PROMPTS cross-version pattern in
-// taskSchedule.js). Task/config shape is unchanged across scorer versions —
+// PROMPT_VERSIONS/integrity-snapshot cross-version pattern in
+// taskPromptDefaults.js). Task/config shape is unchanged across scorer versions —
 // only the scoring formula moved — so accepting it costs nothing: the
 // submission is scored under the CURRENT rules regardless (submitPostSession
 // only branches on `sessionData.benchmark` truthiness, not on which scorer

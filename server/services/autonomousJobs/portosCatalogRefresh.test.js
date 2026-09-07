@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js'
-import { DEFAULT_TASK_PROMPTS, PREVIOUS_DEFAULT_PROMPTS } from '../taskPromptDefaults.js'
+import { DEFAULT_TASK_PROMPTS } from '../taskPromptDefaults.js'
 import { SELF_IMPROVEMENT_TASK_TYPES, DEFAULT_TASK_INTERVALS } from '../taskScheduleRegistry.js'
 import { DEFAULT_JOBS, mergeWithDefaults } from './defaults.js'
 import {
@@ -105,10 +105,13 @@ describe('PortOS local-LLM catalog refresh custom task', () => {
     })
   })
 
-  it('upgrades a stored shipped prompt while preserving a genuinely customized prompt', () => {
-    const previous = PREVIOUS_DEFAULT_PROMPTS['refresh-local-llm-catalog'].at(-1)
+  // Whether a stored RETIRED body is recognized as shipped is the predicate's own
+  // contract (taskPromptDefaults.test.js); this pins what the migration does with
+  // the verdict — a shipped body becomes the custom job's current default, a
+  // customized one is carried over verbatim.
+  it('carries a stored shipped prompt onto the current default while preserving a genuinely customized prompt', () => {
     const migrated = buildMigratedCatalogRefreshJob({
-      task: { enabled: true, type: 'weekly', prompt: previous },
+      task: { enabled: true, type: 'weekly', prompt: DEFAULT_TASK_PROMPTS['refresh-local-llm-catalog'] },
       appOverride: { enabled: true }
     })
 

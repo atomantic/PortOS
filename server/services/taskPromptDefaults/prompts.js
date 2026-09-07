@@ -3,10 +3,10 @@
  *
  * Extracted from taskPromptDefaults.js (which re-exports this) so the prompt
  * prose lives apart from the version/upgrade machinery in ./versions.js and
- * ./previousDefaults.js. Do NOT change a prompt here without bumping its
- * PROMPT_VERSIONS entry and preserving the prior default in
- * PREVIOUS_DEFAULT_PROMPTS — see the barrel's header and AGENTS.md
- * "Distribution model".
+ * ./shippedPrompts.js. Do NOT change a prompt here without bumping its
+ * PROMPT_VERSIONS entry and then running
+ * `node scripts/regen-prompt-integrity-snapshot.js`, which retires the outgoing
+ * default's hash — see the barrel's header and AGENTS.md "Distribution model".
  */
 
 // PORTOS_API_URL is interpolated into the jira-status-report default prompt below.
@@ -1175,7 +1175,7 @@ _(Phase 3b is defined above, right after Phase 3 — see the "alternative exit f
   // plan-task-claim: the manual /do:next PLAN claim owns the complete claim
   // lifecycle (local review + verified merge), unlike the scheduled plan-task
   // default above, which intentionally omits the review loop. Kept as its own
-  // key -- not read off the PREVIOUS_DEFAULT_PROMPTS['plan-task'] history tail --
+  // key -- not read off the retired plan-task history --
   // so it can be revised without editing a preserved historical body the
   // integrity snapshot pins (issue #6479). Never persisted to a schedule; see
   // UNPERSISTED_PROMPT_KEYS in taskPromptDefaults.test.js.

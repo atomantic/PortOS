@@ -66,21 +66,16 @@ const PATTERNS = [
   ['glab mr list --state argv', ARGV_MR_LIST_STATE],
 ];
 
-// `previousDefaults.js` is frozen history: those strings must keep matching what
-// older installs actually stored, byte for byte, or the auto-upgrade path stops
-// recognizing a stored prompt as non-customized and pins the stale body on that
-// install forever. It is the one file that must keep spelling the traps.
-//
-// `prompts.js` used to sit here too — a stored prompt default cannot be corrected
-// by editing the string alone, since each edit needs a PROMPT_VERSIONS bump plus
-// the outgoing body preserved in PREVIOUS_DEFAULT_PROMPTS (AGENTS.md
-// "Distribution model"). Issue #4685 did that migration, so the current defaults
-// are now held to the same standard as every other server source. Prose in a
-// prompt body that merely EXPLAINS a trap still reads as an instance of it —
-// name the flag without re-spelling the subcommand ahead of it on the same line.
-const EXEMPT = new Map([
-  ['services/taskPromptDefaults/previousDefaults.js', 'frozen historical snapshots — must match what older installs stored'],
-]);
+// Nothing is exempt. `taskPromptDefaults/previousDefaults.js` used to be — the
+// retired prompt bodies it held were frozen history that had to keep spelling
+// the traps byte for byte — until #6480 replaced those bodies with their hashes
+// in integrity.snapshot.json, so no file in the tree needs to spell them any
+// more. `prompts.js` left the list earlier: a stored prompt default cannot be
+// corrected by editing the string alone (each edit needs a PROMPT_VERSIONS bump
+// so the outgoing body stays recognized), and issue #4685 did that migration.
+// Prose in a prompt body that merely EXPLAINS a trap still reads as an instance
+// of it — name the flag without re-spelling the subcommand ahead of it on the
+// same line.
 
 const offendingPatterns = (src) => {
   const code = stripCommentary(src);
@@ -88,9 +83,8 @@ const offendingPatterns = (src) => {
 };
 
 describe('glab flag traps are gone tree-wide', () => {
-  it('no server source outside the deferred prompt defaults spells either trap', () => {
+  it('no server source spells either trap', () => {
     const offenders = collectServerSources()
-      .filter((rel) => !EXEMPT.has(rel))
       .map((rel) => [rel, offendingPatterns(readServerSource(rel))])
       .filter(([, hits]) => hits.length > 0);
 
@@ -98,18 +92,6 @@ describe('glab flag traps are gone tree-wide', () => {
       offenders,
       'ask glab for JSON with withGlabJson()/execGlabJson (lib/glabArgs.js), and select MR state with --merged/--closed/--all',
     ).toEqual([]);
-  });
-
-  it('still matches the exempt files (guard is not vacuous)', () => {
-    // If the patterns stop matching even the known-offending prompt bodies, the
-    // scan broke — a rename, a reformat, a changed quote style — and the
-    // assertion above would pass for the wrong reason.
-    for (const [rel, why] of EXEMPT) {
-      expect(
-        offendingPatterns(readServerSource(rel)).length,
-        `${rel} (${why}) no longer matches any pattern — the scan broke, or #4685 landed and this entry should be deleted`,
-      ).toBeGreaterThan(0);
-    }
   });
 
   it('sees a trap embedded in prompt-template prose (guard is not vacuous)', () => {
