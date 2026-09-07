@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { fileURLToPath } from 'url';
 
 // The generative-upscale runtimes are BYO-venv checkouts that do not exist on
 // CI (and are the capability gate that keeps #6511 off until #6512/#6513 land),
@@ -16,10 +17,11 @@ vi.mock('./runtimes.js', async (importOriginal) => ({
 const { buildArgs, buildLtxUpscaleArgs } = await import('./renderArgs.js');
 const runtimes = await import('./runtimes.js');
 
-// An existing file the builder can stat as the IC reference. `import.meta.url`
-// resolves to this test itself, so nothing about the developer's install leaks
-// into the fixture.
-const REFERENCE = new URL(import.meta.url).pathname;
+// An existing file the builder can stat as the IC reference: this test itself,
+// so nothing about the developer's install leaks into the fixture.
+// fileURLToPath, NOT `new URL(...).pathname` — the latter yields `/D:/a/...` on
+// Windows, which existsSync rejects.
+const REFERENCE = fileURLToPath(import.meta.url);
 
 const upscale = (extra = {}) => ({
   runtime: 'ltx25',
