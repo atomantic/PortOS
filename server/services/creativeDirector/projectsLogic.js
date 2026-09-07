@@ -20,6 +20,8 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { pickLlmRoutePinLayer } from '../../lib/llmRoutePin.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
+import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
+import { REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS, REACTOR_MAX_PROMPT_LENGTH, REACTOR_ASPECTS } from '../../lib/reactorVideoClip.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
@@ -362,6 +364,27 @@ export function applyProjectPatch(project, patch) {
   return next;
 }
 
+function validateVideoShot(project, scene, isFirst) {
+  const backend = project.renderBackend?.video?.mode;
+  const unsupported = [];
+  if (isFirst && scene.useContinuationFromPrior) unsupported.push('continuation without a prior shot');
+  if (backend === 'grok' && !GROK_VIDEO_DURATIONS.includes(scene.durationSeconds)) {
+    unsupported.push(`duration (choose ${GROK_VIDEO_DURATIONS.join(' or ')} seconds)`);
+  }
+  if (backend === 'reactor') {
+    if (scene.durationSeconds < REACTOR_MIN_CLIP_SECONDS || scene.durationSeconds > REACTOR_MAX_CLIP_SECONDS) {
+      unsupported.push(`duration (choose ${REACTOR_MIN_CLIP_SECONDS}–${REACTOR_MAX_CLIP_SECONDS} seconds)`);
+    }
+    if (scene.prompt.length > REACTOR_MAX_PROMPT_LENGTH) unsupported.push(`prompt (maximum ${REACTOR_MAX_PROMPT_LENGTH} characters)`);
+    if (!REACTOR_ASPECTS.includes(project.aspectRatio)) unsupported.push('aspect ratio');
+  }
+  if (unsupported.length) {
+    throw new ServerError(`Video shot ${scene.sceneId} has incompatible ${unsupported.join(', ')}. Revise the shot or choose a compatible backend.`, {
+      status: 400, code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED',
+    });
+  }
+}
+
 /** Compile the existing treatment into a persisted Video artifact, without dispatch. */
 function compileVideoArtifact(project, treatment) {
   const scenes = [...treatment.scenes].sort((a, b) => a.order - b.order);
@@ -369,6 +392,7 @@ function compileVideoArtifact(project, treatment) {
   const orders = new Set();
   let elapsed = 0;
   const shots = scenes.map((scene) => {
+    validateVideoShot(project, scene, elapsed === 0);
     if (ids.has(scene.sceneId) || orders.has(scene.order)) {
       throw new ServerError('Video scenes must have unique sceneId and order values', { status: 400, code: 'VALIDATION_ERROR' });
     }
@@ -532,6 +556,7 @@ export function applySceneUpdate(project, sceneId, patch) {
   const treatment = { ...project.treatment, scenes };
   if (project.workspace === 'video' && treatment.artifact
       && ['prompt', 'imageStrength'].some((key) => key in patch && patch[key] !== project.treatment.scenes[sceneIdx][key])) {
+    validateVideoShot(project, updated, sceneId === [...scenes].sort((a, b) => a.order - b.order)[0].sceneId);
     // A shot edit changes the reviewed content, but cannot refresh stale source context.
     treatment.artifact = { ...treatment.artifact, revision: treatment.artifact.revision + 1 };
   }
