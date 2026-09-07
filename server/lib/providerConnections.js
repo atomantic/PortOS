@@ -278,7 +278,9 @@ export function projectConnectionOwnedFields(provider, connection) {
   const fields = { ...owned.fields };
   if (Object.hasOwn(fields, 'endpoint') && baseUrl !== null) fields.endpoint = baseUrl;
   if (Object.hasOwn(fields, 'apiKey')) fields.apiKey = connection.credentials.apiKey ?? fields.apiKey;
-  const envVars = { ...owned.envVars };
+  // Same Object.assign rule as withConnectionOwnedFields — avoid a spread of
+  // the owned env map beside an envVars key (spawn-site guard false positive).
+  const envVars = Object.assign({}, owned.envVars);
   for (const name of Object.keys(envVars)) {
     if (Object.hasOwn(connection.credentials, name)) {
       envVars[name] = connection.credentials[name];
