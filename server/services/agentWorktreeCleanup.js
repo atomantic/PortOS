@@ -22,6 +22,7 @@ import * as git from './git.js';
 import { removeWorktree, classifyWorktreeDirt } from './worktreeManager.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { execGit } from '../lib/execGit.js';
 import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
@@ -470,6 +471,14 @@ async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREAT
   });
   warnings.push(...(result?.warnings || []));
 
+  // The branch just landed by local merge. If the agent pushed it anyway — an
+  // older prompt said `/do:push` under this posture, and the repo's own
+  // "commit and push" convention still reaches every agent — origin holds a
+  // copy nothing will ever read, which the post-completion audit reports as a
+  // leaked remote branch and hands to a recovery agent. Finish the job here,
+  // deterministically, instead of paying a model to run one `git push --delete`.
+  if (result?.merged) await deleteMergedRemoteCopy(agentId, sourceWorkspace, worktreeBranch);
+
   // The branch is released now, so the follow-up can check it out.
   if (strandedPrUrl) {
     await spawnReviewLoopFollowUp({
@@ -488,6 +497,46 @@ async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREAT
     });
   }
   return warnings;
+}
+
+/**
+ * Delete origin's copy of a worktree branch that cleanup just merged locally.
+ *
+ * Cheap on the common path, narrow on the rare one:
+ *   - A push from the worktree updates the shared clone's remote-tracking ref,
+ *     so `refs/remotes/origin/<branch>` answers "did this agent push?" with one
+ *     local rev-parse and no network. Absent ⇒ nothing to do. (A push from some
+ *     other clone is invisible here; the repo-state audit still reports it.)
+ *   - Merged-ness is `git.isBranchMergedInto` — the definition the branch-
+ *     reconcile reaper and `removeWorktree` already use — so a copy the agent
+ *     amended or rebased after pushing (patch-equivalent, not an ancestor) still
+ *     counts as landed, and an unresolvable object fails closed.
+ *   - The delete is lease-protected against the SHA this clone last pushed: one
+ *     round trip that asserts and deletes atomically, refused as "stale info" if
+ *     origin has since moved. Nothing is deleted on stale knowledge.
+ * Never adds a warning: a warning is what spawns cleanup's own merge-recovery
+ * task, and a copy that could not be deleted is exactly what the audit exists
+ * to catch on its own.
+ */
+async function deleteMergedRemoteCopy(agentId, sourceWorkspace, branchName) {
+  const remoteRef = `refs/heads/${branchName}`;
+  const tracked = await execGit(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branchName}`], sourceWorkspace, { ignoreExitCode: true })
+    .catch(() => null);
+  const pushedSha = tracked?.exitCode === 0 ? tracked.stdout.trim() : '';
+  if (!pushedSha) return;
+  const landed = await git.isBranchMergedInto(sourceWorkspace, pushedSha, 'HEAD').catch(() => false);
+  if (!landed) {
+    emitLog('warn', `🌳 origin/${branchName} (${pushedSha.slice(0, 7)}) is not merged into the checkout that received the branch — left in place for the repo-state audit`, { agentId, branchName });
+    return;
+  }
+  const pushed = await execGit(['push', `--force-with-lease=${remoteRef}:${pushedSha}`, 'origin', `:${remoteRef}`], sourceWorkspace, { ignoreExitCode: true })
+    .catch(err => ({ exitCode: 1, stderr: err.message }));
+  if (pushed.exitCode === 0) {
+    emitLog('info', `🌳 ${agentId} pushed ${branchName} but cleanup merged it locally — deleted the remote copy`, { agentId, branchName });
+    return;
+  }
+  const why = String(pushed.stderr || '').trim().split('\n').pop() || `exit ${pushed.exitCode}`;
+  emitLog('warn', `🌳 Could not delete origin/${branchName} after merging it locally (${why}) — left for the repo-state audit`, { agentId, branchName });
 }
 
 /**

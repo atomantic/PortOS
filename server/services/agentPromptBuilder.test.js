@@ -112,6 +112,7 @@ vi.mock('./codeReview.js', () => ({
 }));
 
 import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection, getAppWorkspace, getAgentInstructionsContext, detectSkillTemplates, loadSkillTemplates, UI_AUDIT_RUNTIME_RULE, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
+import { portosMergesBranchOnExit } from './promptSections/completion.js';
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { isTruthyMeta } from './agentState.js';
 import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
@@ -963,7 +964,9 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/review your changed code for reuse, quality, and efficiency/i);
     });
 
-    it('renders the Completion Workflow with /do:push when openPR is false', () => {
+    it('renders the Completion Workflow with /do:push when openPR is false and there is no worktree', () => {
+      // No worktree: the agent stands on the branch it should push, and PortOS
+      // merges nothing on exit — so /do:push is the right completion step.
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { simplify: true, openPR: false } }),
         '/r', null, isTruthyMeta, { isTui: true });
@@ -971,6 +974,28 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/`\/do:pr`/);
       // /do:push doesn't open a PR — no merge step should be emitted.
       expect(prompt).not.toMatch(/gh pr merge/);
+    });
+
+    it('renders a commit-only Completion Workflow for a worktree with openPR false — PortOS merges it back', () => {
+      // Worktree + no PR is the auto-merge posture: cleanup merges the branch
+      // into the source checkout and deletes it. A push has no consumer there,
+      // and the remote copy `/do:push` left behind is what the repo-state audit
+      // reported as "never deleted" and filed recovery agents for (every
+      // module-hygiene audit of 2026-09-06/07).
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { simplify: true, openPR: false } }),
+        '/r',
+        { branchName: 'cos/task-1/agent-a', worktreePath: '/tmp/wt', baseBranch: 'main' },
+        isTruthyMeta, { isTui: true });
+      expect(prompt).toMatch(/## Completion Workflow/);
+      expect(prompt).toMatch(/^1\. `\/simplify`/m);
+      expect(prompt).toMatch(/^2\. Stage only the files you changed \(never `git add -A` \/ `git add \.`\) and commit with a conventional message/m);
+      expect(prompt).toMatch(/Do NOT push and do NOT open a PR: PortOS merges this branch into `main` in the source checkout after you exit and deletes it/);
+      expect(prompt).not.toMatch(/^\s*\d+\.\s+`\/do:push/m);
+      expect(prompt).not.toMatch(/`\/do:pr`/);
+      expect(prompt).not.toMatch(/gh pr merge/);
+      // The sentinel still names the branch PortOS is about to merge.
+      expect(prompt).toMatch(/## Branch/);
     });
 
     it('runs slashdo-free local reviewers before GitHub PR creation, then keeps PR-side review after it', () => {
@@ -1658,17 +1683,20 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
     });
 
-    it('uses /do:push (not /do:pr) for Claude Code CLI when openPR is false', () => {
+    it('tells Claude Code CLI to commit only (no /do:push) when PortOS merges the worktree branch back', () => {
+      // Same auto-merge posture as the TUI case above, on the CLI path.
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: false, simplify: true } }),
         '/r',
-        { branchName: 'b', worktreePath: '/tmp/wt' },
+        { branchName: 'b', worktreePath: '/tmp/wt', baseBranch: 'main' },
         isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
-      expect(prompt).toMatch(/`\/do:push`/);
+      expect(prompt).toMatch(/^\s*\d+\.\s+Stage only the files you changed \(never `git add -A` \/ `git add \.`\) and commit with a conventional message/m);
+      expect(prompt).toMatch(/Do NOT push and do NOT open a PR: PortOS merges this branch into `main` in the source checkout after you exit and deletes it/);
+      expect(prompt).not.toMatch(/^\s*\d+\.\s+`\/do:push/m);
       expect(prompt).not.toMatch(/`\/do:pr`/);
-      // /do:push doesn't open a PR — no merge step should be emitted.
       expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).not.toMatch(/git push/);
     });
 
     it('suppresses the PR completion workflow but still writes a sentinel when readOnly + TUI', () => {
@@ -2294,11 +2322,9 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/## Resuming Unfinished Work/);
     });
 
-    it('worktreeCommitGuidance: hasSlashdo + !willOpenPR emits the push-only Completion wording', () => {
-      // Claude Code CLI with a worktree but no PR (e.g. a managed-app task
-      // whose flow is "push the branch, no PR"). The agent owns its own
-      // /simplify + /do:push, so the worktree guidance points at the
-      // Completion section's push (not the PR variant).
+    it('worktreeCommitGuidance: hasSlashdo + !willOpenPR says commit only — PortOS merges the branch back', () => {
+      // Claude Code CLI with a worktree but no PR is the auto-merge posture: the
+      // worktree guidance must not point the agent at a push nothing consumes.
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: false, simplify: true } }),
         '/r',
@@ -2306,9 +2332,8 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta,
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/## Git Worktree/);
-      // Push-only Completion wording — NOT the "push and PR" variant.
-      expect(prompt).toMatch(/the \*\*Completion\*\* section below drives the push\./);
-      expect(prompt).not.toMatch(/drives the push and PR/);
+      expect(prompt).toMatch(/Commit your changes here — do NOT push\. PortOS merges this branch back after you exit/);
+      expect(prompt).not.toMatch(/drives the push/);
       // And NOT the post-exit handoff message (that's the codex/antigravity path).
       expect(prompt).not.toMatch(/The system will push and open a PR after you exit/);
     });
@@ -2525,21 +2550,29 @@ describe('buildAgentPrompt — provider type routing', () => {
     });
 
     it('without leanMode a claude TUI still gets the slashdo workflow', async () => {
+      // A worktree with no PR is commit-only on every path (PortOS merges it
+      // back), so the slashdo marker is `/simplify` — only a slashdo-capable
+      // session is told to run it.
+      const task = splitTask();
       const prompt = await buildAgentPrompt(
-        splitTask(), {}, '/r', wt, isTruthyMeta,
+        { ...task, metadata: { ...task.metadata, simplify: true } }, {}, '/r', wt, isTruthyMeta,
         { providerType: 'tui', providerId: 'claude-code-tui', providerCommand: 'claude' });
-      expect(prompt).toMatch(/\/do:push/);
+      expect(prompt).toMatch(/^1\. `\/simplify`/m);
+      expect(prompt).not.toMatch(/does NOT have slashdo/);
+      expect(prompt).not.toMatch(/^\s*\d+\.\s+`\/do:push/m);
     });
 
     it('splits a STANDARD (non-lean) claude TUI too, keeping slashdo in the system prompt', async () => {
+      const task = splitTask();
       const parts = await buildAgentPrompt(
-        splitTask(), {}, '/r', wt, isTruthyMeta,
+        { ...task, metadata: { ...task.metadata, simplify: true } }, {}, '/r', wt, isTruthyMeta,
         { providerType: 'tui', providerId: 'claude-code-tui', providerCommand: 'claude', split: true });
       // Task in the user prompt, contract (with slashdo — NOT slashdo-free) in system.
       expect(parts.userPrompt).toMatch(/Add a button to the dashboard/);
       expect(parts.userPrompt).not.toMatch(/## Completion Workflow/);
       expect(parts.systemPrompt).toMatch(/## Completion Workflow/);
-      expect(parts.systemPrompt).toMatch(/\/do:push/);
+      expect(parts.systemPrompt).toMatch(/^1\. `\/simplify`/m);
+      expect(parts.systemPrompt).not.toMatch(/does NOT have slashdo/);
     });
 
     it('split parts carry exactly the combined prompt for a standard claude CLI (no drift)', async () => {
@@ -4034,5 +4067,57 @@ describe('planner attribution', () => {
     );
     expect(prompt).not.toMatch(/## Planner Attribution/);
     expect(prompt).not.toMatch(/planner:/);
+  });
+});
+
+describe('auto-merge posture (worktree, no PR) is commit-only on every path', () => {
+  // `portosMergesBranchOnExit` is the one decision the completion, hygiene and
+  // worktree sections all key on. Pinned as a table because a wrong answer here
+  // re-arms the `/do:push` that filed a recovery agent after every
+  // module-hygiene audit on 2026-09-06/07.
+  it('answers true only for a worktree run with no PR', () => {
+    const worktreeInfo = { branchName: 'b', worktreePath: '/tmp/wt' };
+    expect(portosMergesBranchOnExit({ worktreeInfo, willOpenPR: false })).toBe(true);
+    expect(portosMergesBranchOnExit({ worktreeInfo, willOpenPR: true })).toBe(false);
+    expect(portosMergesBranchOnExit({ worktreeInfo: null, willOpenPR: false })).toBe(false);
+  });
+
+  it('api path: the simplify step, instructions and Git Hygiene all say commit only, never /do:push', async () => {
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: { openPR: false, simplify: true } }),
+      {}, '/r',
+      { branchName: 'cos/task-1/agent-a', worktreePath: '/tmp/wt', baseBranch: 'main' },
+      isTruthyMeta, { providerType: 'api' });
+    expect(prompt).toMatch(/Fix any issues found, then commit your changes \(do NOT push — PortOS merges this branch back into the source checkout after you exit/);
+    expect(prompt).toMatch(/Commit your changes \(see Git Hygiene below\) — do NOT push, PortOS merges this branch back on exit/);
+    expect(prompt).toMatch(/\*\*Commit only — do NOT push\.\*\* Stage specific files \(no `git add -A`\), use `feat:`\/`fix:`\/`breaking:` prefix in the commit message, no Co-Authored-By annotations\. PortOS merges this branch back into the source checkout after you exit and deletes it, so do NOT run `git push` or `\/do:push` yourself/);
+    expect(prompt).not.toMatch(/Commit and push using `\/do:push`/);
+    expect(prompt).not.toMatch(/Commit and push your changes/);
+    // The Guidelines bullet already described the merge-back; it still does.
+    expect(prompt).toMatch(/Your worktree branch will be automatically merged back to the source branch/);
+  });
+
+  it('api path: the same task WITHOUT a worktree keeps commit-and-push', async () => {
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: { openPR: false, simplify: true } }),
+      {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+    expect(prompt).toMatch(/commit and push using `\/do:push`/);
+    expect(prompt).toMatch(/Commit and push using `\/do:push`/);
+    expect(prompt).not.toMatch(/PortOS merges this branch back/);
+  });
+
+  it('buildCompletionGuidelineBullet renders the commit-only TUI wording when there is no completion command', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: true, tuiCompletionCommand: null,
+      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: false,
+    });
+    expect(bullet).toMatch(/commit only — no push; PortOS merges your branch back after you exit/);
+    expect(bullet).not.toMatch(/`\/do:push`/);
+    // The command form is untouched when one exists.
+    const withCommand = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: true, tuiCompletionCommand: '/do:push',
+      worktreeInfo: null, willOpenPR: false,
+    });
+    expect(withCommand).toMatch(/`\/do:push`/);
   });
 });
