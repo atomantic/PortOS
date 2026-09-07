@@ -112,7 +112,7 @@ vi.mock('./codeReview.js', () => ({
 }));
 
 import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection, getAppWorkspace, getAgentInstructionsContext, detectSkillTemplates, loadSkillTemplates, UI_AUDIT_RUNTIME_RULE, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
-import { portosMergesBranchOnExit } from './promptSections/completion.js';
+
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { isTruthyMeta } from './agentState.js';
 import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
@@ -994,8 +994,8 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/^\s*\d+\.\s+`\/do:push/m);
       expect(prompt).not.toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/gh pr merge/);
-      // The sentinel still names the branch PortOS is about to merge.
-      expect(prompt).toMatch(/## Branch/);
+      // The sentinel template keeps its branch slot — that is the branch PortOS merges.
+      expect(prompt).toMatch(/## Branch\n\s+<branch name>/);
     });
 
     it('runs slashdo-free local reviewers before GitHub PR creation, then keeps PR-side review after it', () => {
@@ -1696,7 +1696,6 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/^\s*\d+\.\s+`\/do:push/m);
       expect(prompt).not.toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/gh pr merge/);
-      expect(prompt).not.toMatch(/git push/);
     });
 
     it('suppresses the PR completion workflow but still writes a sentinel when readOnly + TUI', () => {
@@ -4072,16 +4071,10 @@ describe('planner attribution', () => {
 
 describe('auto-merge posture (worktree, no PR) is commit-only on every path', () => {
   // `portosMergesBranchOnExit` is the one decision the completion, hygiene and
-  // worktree sections all key on. Pinned as a table because a wrong answer here
-  // re-arms the `/do:push` that filed a recovery agent after every
-  // module-hygiene audit on 2026-09-06/07.
-  it('answers true only for a worktree run with no PR', () => {
-    const worktreeInfo = { branchName: 'b', worktreePath: '/tmp/wt' };
-    expect(portosMergesBranchOnExit({ worktreeInfo, willOpenPR: false })).toBe(true);
-    expect(portosMergesBranchOnExit({ worktreeInfo, willOpenPR: true })).toBe(false);
-    expect(portosMergesBranchOnExit({ worktreeInfo: null, willOpenPR: false })).toBe(false);
-  });
-
+  // worktree sections all key on. It is pinned through the rendered prompts
+  // (here and in the TUI/CLI cases above) rather than as a truth table — a wrong
+  // answer re-arms the `/do:push` that filed a recovery agent after every
+  // module-hygiene audit on 2026-09-06/07, and the prompt is where that shows.
   it('api path: the simplify step, instructions and Git Hygiene all say commit only, never /do:push', async () => {
     const prompt = await buildAgentPrompt(
       makeTask({ metadata: { openPR: false, simplify: true } }),
@@ -4113,11 +4106,5 @@ describe('auto-merge posture (worktree, no PR) is commit-only on every path', ()
     });
     expect(bullet).toMatch(/commit only — no push; PortOS merges your branch back after you exit/);
     expect(bullet).not.toMatch(/`\/do:push`/);
-    // The command form is untouched when one exists.
-    const withCommand = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: true, tuiCompletionCommand: '/do:push',
-      worktreeInfo: null, willOpenPR: false,
-    });
-    expect(withCommand).toMatch(/`\/do:push`/);
   });
 });

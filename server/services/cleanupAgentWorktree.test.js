@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // --- Mock every dependency agentWorktreeCleanup.js pulls in transitively ---
 
@@ -2129,8 +2129,13 @@ describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => 
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` drains calls, not once-queues — reset both mocks so a test
+    // that stops early can never hand its leftover answers to the next one.
+    execGitMock.mockReset().mockResolvedValue({ exitCode: 128, stdout: '', stderr: '' });
+    git.isBranchMergedInto.mockReset().mockResolvedValue(false);
     getAgent.mockResolvedValue(mockWorktreeAgent());
   });
+  afterEach(() => removeWorktree.mockResolvedValue(undefined));
 
   it('deletes origin\'s copy, lease-protected, when the pushed tip is already merged', async () => {
     mergedLocally();
@@ -2169,13 +2174,27 @@ describe('cleanupAgentWorktree - remote copy of a locally merged branch', () => 
     expect(execGitMock).not.toHaveBeenCalled();
   });
 
-  it('a refused or failed delete is logged, not warned — the repo-state audit reports what is left', async () => {
+  it('a refused delete is not a cleanup warning — the repo-state audit reports what is left', async () => {
     mergedLocally();
     execGitMock
       .mockResolvedValueOnce(tracking(SHA))
       .mockResolvedValueOnce({ exitCode: 1, stdout: '', stderr: ` ! [rejected] ${BRANCH} (stale info)` });
     git.isBranchMergedInto.mockResolvedValueOnce(true);
     const warnings = await cleanupAgentWorktree('agent-1', true, {});
+    // The delete was attempted and refused — the silence is deliberate, not a skip.
+    expect(execGitMock).toHaveBeenCalledTimes(2);
+    expect(execGitMock.mock.calls[1][0][0]).toBe('push');
     expect(warnings).toEqual([]);
+  });
+
+  it('a git call that throws is swallowed — cleanup still returns its warnings and finishes', async () => {
+    // Every await in the helper carries its own catch; drop one and a spawn
+    // failure rejects the whole cleanup, losing its warnings and the follow-up.
+    mergedLocally();
+    execGitMock
+      .mockResolvedValueOnce(tracking(SHA))
+      .mockRejectedValueOnce(new Error('spawn git ENOENT'));
+    git.isBranchMergedInto.mockResolvedValueOnce(true);
+    await expect(cleanupAgentWorktree('agent-1', true, {})).resolves.toEqual([]);
   });
 });
