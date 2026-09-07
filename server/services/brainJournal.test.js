@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
-import { mkdirSync, rmSync } from 'fs';
+import { mkdirSync, rmSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -131,6 +131,19 @@ describe('brainJournal', () => {
         obsidianFolder: 'Journal',
         autoSync: true,
       });
+    });
+
+    // Strict-read regression (#4115): the journal was one of four settings
+    // stores the original audit missed — a corrupt journal-settings.json read
+    // as DEFAULT_SETTINGS and the next PATCH wrote those defaults over the
+    // user's vault/folder choice. The store now rejects and leaves the file.
+    it('refuses to overwrite an unreadable settings file with the defaults', async () => {
+      const file = join(TEMP_ROOT, 'journal-settings.json');
+      const corrupt = '{"obsidianVaultId": "vault-1",';
+      writeFileSync(file, corrupt);
+      await expect(journal.getSettings()).rejects.toThrow(/Unreadable JSON file/);
+      await expect(journal.updateSettings({ obsidianFolder: 'Journal' })).rejects.toThrow(/Unreadable JSON file/);
+      expect(readFileSync(file, 'utf8')).toBe(corrupt);
     });
   });
 

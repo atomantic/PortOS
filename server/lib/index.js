@@ -255,6 +255,7 @@ export * from './forgeIssueState.js';
 export * from './portosEnv.js';
 export * from './homePath.js';
 export * from './jsonIo.js';
+export * from './settingsStore.js';
 export * from './mimeTypes.js';
 export * from './pathContainment.js';
 export * from './paths.js';

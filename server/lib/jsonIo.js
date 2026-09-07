@@ -1,5 +1,4 @@
 /** JSON, JSONL, and cached-store file IO helpers. */
-import { existsSync } from 'fs';
 import { open, readFile, readdir, stat } from 'fs/promises';
 import { basename, dirname } from 'path';
 import { appendFileGuarded, atomicWrite, ensureDir, sleep } from './fileCore.js';
@@ -531,6 +530,14 @@ export async function writeJSONLines(filePath, values) {
  * @param {string} [options.context=''] - Context label for error logging
  * @returns {{ load, save, mutate, invalidateCache }}
  *
+ * `load()` is STRICT (#4115): a present-but-unreadable or corrupt file rejects
+ * with `Unreadable JSON file: <path>` instead of reading as `defaultValue`,
+ * because `mutate` persists whatever `load` returned — a swallowed default
+ * would be written over the real file on the next mutation. Only a genuinely
+ * absent file (ENOENT) yields the default. For a flat settings document with
+ * shipped defaults and a PATCH surface, use `createSettingsStore`
+ * (`settingsStore.js`) instead.
+ *
  * Writes are serialized through a single-tail `createFileWriteQueue` so two
  * concurrent `save()` calls can't interleave their `atomicWrite` + cache
  * assignment. For read-modify-write, use `mutate(fn)` — it runs the whole
@@ -552,13 +559,15 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
     const now = Date.now();
     if (cache && (now - cacheTimestamp) < ttl) return cache;
     await ensureDir(dir);
-    if (!existsSync(filePath)) {
-      cache = cloneDefault();
-      cacheTimestamp = now;
-      return cache;
+    // Strict (#4115): `mutate` is load → fn → persist over this value, so a
+    // present-but-unreadable file must reject here rather than read as the
+    // default and be overwritten by the very next write. ENOENT is the one
+    // errno that proves absence and still yields the default.
+    const { ok, value } = await readJSONFileStrict(filePath, null, { logError: true });
+    if (!ok) {
+      throw new Error(`Unreadable JSON file: ${filePath}${context ? ` (${context})` : ''}`);
     }
-    const content = await readFile(filePath, 'utf-8');
-    cache = safeJSONParse(content, cloneDefault(), { context });
+    cache = value === null ? cloneDefault() : value;
     cacheTimestamp = now;
     return cache;
   };
