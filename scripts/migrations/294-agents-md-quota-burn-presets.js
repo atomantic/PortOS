@@ -4,7 +4,7 @@
  * Picking a preset COPIES its text into the job's own `params.prompt`, and that
  * snapshot carries no version marker — so unlike the scheduled-task prompts
  * there is no auto-upgrade-on-read path to lean on. This migration supplies the
- * missing safe-upgrade step under the same rule PREVIOUS_DEFAULT_PROMPTS uses:
+ * missing safe-upgrade step under the same rule promptMatchesShippedDefault uses:
  * a stored prompt is rewritten ONLY when it is byte-for-byte the prior
  * unmodified render of a shipped preset. Anything the user edited — even by one
  * character — is left exactly as it is.

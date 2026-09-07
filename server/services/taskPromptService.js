@@ -23,7 +23,7 @@
  * the lazy hack is gone.
  *
  * This module re-exports the data constants (DEFAULT_TASK_PROMPTS,
- * PROMPT_VERSIONS, PREVIOUS_DEFAULT_PROMPTS, REFERENCE_WATCH_AUDITED_VERSION)
+ * PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION)
  * so existing importers of taskPromptService are unaffected by the leaf split.
  */
 
@@ -34,7 +34,6 @@ import {
   DEFAULT_TASK_PROMPTS,
   PROMPT_VERSIONS,
   REFERENCE_WATCH_AUDITED_VERSION,
-  PREVIOUS_DEFAULT_PROMPTS,
   promptMatchesShippedDefault
 } from './taskPromptDefaults.js';
 
@@ -43,17 +42,17 @@ import {
 export {
   DEFAULT_TASK_PROMPTS,
   PROMPT_VERSIONS,
-  REFERENCE_WATCH_AUDITED_VERSION,
-  PREVIOUS_DEFAULT_PROMPTS
+  REFERENCE_WATCH_AUDITED_VERSION
 };
 
 // The scheduled plan-task default intentionally omits the review loop, but the
 // manual /do:next PLAN claim still owns the complete claim lifecycle. Keep that
 // path on its own DEFAULT_TASK_PROMPTS['plan-task-claim'] key rather than
-// reading the tail of PREVIOUS_DEFAULT_PROMPTS['plan-task'] — that history is
-// frozen by the integrity snapshot, so the manual-claim body could never be
-// revised, and every future plan-task version bump would silently reposition
-// which retired body the manual claim resolved to (issue #6479).
+// reading the tail of the retired plan-task history — that history is
+// frozen by the integrity snapshot (as hashes, since #6480), so the
+// manual-claim body could never be revised, and every future plan-task
+// version bump would silently reposition which retired body the manual claim
+// resolved to (issue #6479).
 const CLAIM_FLOW_DEFAULT_PROMPTS = Object.freeze({
   'plan-task': DEFAULT_TASK_PROMPTS['plan-task-claim']
 });

@@ -290,7 +290,7 @@ async function readSchedule() {
       // Self-heal a mis-flagged customization: a prompt marked promptCustomized
       // that nonetheless matches a shipped default was never user-edited — it
       // was flagged by an earlier legacy migration that ran before this task
-      // carried a PREVIOUS_DEFAULT_PROMPTS entry (the basic self-improvement
+      // carried a retired-default history entry (the basic self-improvement
       // prompts that hardcoded the app name as "PortOS", and both
       // pre-unification generations — `[Self-Improvement] …` and
       // `[App Improvement: …]` — that the schedule unification replaced without

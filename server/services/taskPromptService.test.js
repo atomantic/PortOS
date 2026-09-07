@@ -142,7 +142,7 @@ describe('claim-flow prompt variants', () => {
 // A pipeline STAGE body (pr-reviewer-security, code-reviewer-review, …) is read
 // straight out of the catalog by its promptKey — it is never persisted and never
 // versioned, which is why editing one takes no PROMPT_VERSIONS bump and no
-// PREVIOUS_DEFAULT_PROMPTS entry (see taskPromptDefaults.test.js). That decision
+// retired-hash history entry (see taskPromptDefaults.test.js). That decision
 // is only safe while stage resolution ignores stored schedule state, so pin the
 // behavior rather than restating the absent constant: hand getStagePrompt an
 // interval carrying a STALE persisted prompt and assert the current catalog body

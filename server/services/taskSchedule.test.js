@@ -175,7 +175,8 @@ import {
   getTaskPrompt
 } from './taskPromptService.js'
 
-import { DEFAULT_TASK_PROMPTS, PREVIOUS_DEFAULT_PROMPTS } from './taskPromptDefaults.js'
+import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js'
+import { RETIRED_CONSOLE_ERRORS_PROMPT } from './taskPromptDefaults/retiredPromptFixtures.js'
 
 // The source of truth for "this type's deliverable is a side effect, not a commit"
 // — the posture guard below iterates it so the two can't drift apart.
@@ -620,10 +621,11 @@ describe('taskSchedule', () => {
     // hardcoded "PortOS" as the target app. These tasks were never versioned, so
     // they never auto-upgraded — and worse, an install that upgraded past the
     // promptVersion introduction got the old PortOS default mis-flagged
-    // promptCustomized:true. The fix: version the basic tasks, list the old
-    // defaults in PREVIOUS_DEFAULT_PROMPTS, and self-heal the mis-flag in
-    // loadSchedule so every install converges on the generic {appName} body.
-    const portosDocPrompt = PREVIOUS_DEFAULT_PROMPTS['documentation'].find((p) => p.includes('PortOS'))
+    // promptCustomized:true. The fix: version the basic tasks, keep the retired
+    // defaults recognizable (by hash, in integrity.snapshot.json), and self-heal
+    // the mis-flag in loadSchedule so every install converges on the generic
+    // {appName} body. RETIRED_CONSOLE_ERRORS_PROMPT is one such retired default
+    // — see taskPromptDefaults/retiredPromptFixtures.js.
 
     it('versions the basic self-improvement tasks so deployed installs can auto-upgrade', () => {
       for (const t of ['security', 'code-quality', 'test-coverage', 'performance', 'accessibility',
@@ -637,35 +639,34 @@ describe('taskSchedule', () => {
       expect(DEFAULT_TASK_PROMPTS['documentation']).toContain('{appName}')
     })
 
-    it('upgrades a stale, non-customized PortOS default (promptVersion: 1) to the generic body', async () => {
+    it('upgrades a stale, non-customized retired default (promptVersion: 1) to the current body', async () => {
       mockSchedule({
-        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, prompt: portosDocPrompt, promptVersion: 1 } }
+        tasks: { 'console-errors': { type: 'once', enabled: false, providerId: null, model: null, prompt: RETIRED_CONSOLE_ERRORS_PROMPT, promptVersion: 1 } }
       })
       const schedule = await loadSchedule()
-      const doc = schedule.tasks['documentation']
-      expect(doc.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
-      expect(doc.prompt).not.toContain('PortOS')
-      expect(doc.promptVersion).toBe(PROMPT_VERSIONS['documentation'])
+      const task = schedule.tasks['console-errors']
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
+      expect(task.promptVersion).toBe(PROMPT_VERSIONS['console-errors'])
     })
 
-    it('upgrades a pre-versioning PortOS default (promptVersion undefined) via the legacy-migration path', async () => {
+    it('upgrades a pre-versioning retired default (promptVersion undefined) via the legacy-migration path', async () => {
       mockSchedule({
-        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, prompt: portosDocPrompt } }
+        tasks: { 'console-errors': { type: 'once', enabled: false, providerId: null, model: null, prompt: RETIRED_CONSOLE_ERRORS_PROMPT } }
       })
       const schedule = await loadSchedule()
-      expect(schedule.tasks['documentation'].prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
-      expect(schedule.tasks['documentation'].prompt).not.toContain('PortOS')
+      expect(schedule.tasks['console-errors'].prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
+      expect(schedule.tasks['console-errors'].promptCustomized).not.toBe(true)
     })
 
-    it('self-heals a mis-flagged promptCustomized that actually matches a known previous default, then upgrades', async () => {
+    it('self-heals a mis-flagged promptCustomized that actually matches a retired default, then upgrades', async () => {
       mockSchedule({
-        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, prompt: portosDocPrompt, promptVersion: 1, promptCustomized: true } }
+        tasks: { 'console-errors': { type: 'once', enabled: false, providerId: null, model: null, prompt: RETIRED_CONSOLE_ERRORS_PROMPT, promptVersion: 1, promptCustomized: true } }
       })
       const schedule = await loadSchedule()
-      const doc = schedule.tasks['documentation']
-      expect(doc.promptCustomized).toBe(false)
-      expect(doc.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
-      expect(doc.promptVersion).toBe(PROMPT_VERSIONS['documentation'])
+      const task = schedule.tasks['console-errors']
+      expect(task.promptCustomized).toBe(false)
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
+      expect(task.promptVersion).toBe(PROMPT_VERSIONS['console-errors'])
     })
 
     it('preserves a genuine user customization even when it mentions PortOS', async () => {
@@ -681,102 +682,100 @@ describe('taskSchedule', () => {
 
   describe('promptSource provenance (issue #5432)', () => {
     // The self-heal above clears promptCustomized whenever the stored prompt
-    // byte-matches ANY shipped default (current or retired). That is right for a
+    // matches ANY shipped default (current or retired). That is right for a
     // flag the legacy migration guessed at, but it cannot tell that apart from a
     // user who deliberately pasted an older SHIPPED body into Settings →
     // Scheduled Tasks — that pin was cleared on the next load and the next
     // PROMPT_VERSIONS bump silently overwrote their chosen text. promptSource
     // records which of the two wrote the flag.
-    const portosDocPrompt = PREVIOUS_DEFAULT_PROMPTS['documentation'].find((p) => p.includes('PortOS'))
-
-    const loadDocumentation = async (config) => {
+    const loadStored = async (config) => {
       mockSchedule({
-        tasks: { 'documentation': { type: 'once', enabled: false, providerId: null, model: null, ...config } }
+        tasks: { 'console-errors': { type: 'once', enabled: false, providerId: null, model: null, ...config } }
       })
-      return (await loadSchedule()).tasks['documentation']
+      return (await loadSchedule()).tasks['console-errors']
     }
 
     it('keeps a user-pinned retired default pinned instead of self-healing it', async () => {
-      const task = await loadDocumentation({
-        prompt: portosDocPrompt,
+      const task = await loadStored({
+        prompt: RETIRED_CONSOLE_ERRORS_PROMPT,
         promptVersion: 1,
         promptCustomized: true,
         promptSource: 'user'
       })
       expect(task.promptCustomized).toBe(true)
-      expect(task.prompt).toBe(portosDocPrompt)
+      expect(task.prompt).toBe(RETIRED_CONSOLE_ERRORS_PROMPT)
     })
 
     it('still self-heals a legacy-inferred flag on a retired default', async () => {
-      const task = await loadDocumentation({
-        prompt: portosDocPrompt,
+      const task = await loadStored({
+        prompt: RETIRED_CONSOLE_ERRORS_PROMPT,
         promptVersion: 1,
         promptCustomized: true,
         promptSource: 'legacy-inferred'
       })
       expect(task.promptCustomized).toBe(false)
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
     })
 
     // Every install that upgrades into this field carries no promptSource at all.
     // Absent must keep behaving exactly as it does today, or the upgrade itself
     // would freeze thousands of mis-flagged prompts on their retired bodies.
     it('treats an absent promptSource as legacy-inferred (self-heals, as today)', async () => {
-      const task = await loadDocumentation({
-        prompt: portosDocPrompt,
+      const task = await loadStored({
+        prompt: RETIRED_CONSOLE_ERRORS_PROMPT,
         promptVersion: 1,
         promptCustomized: true
       })
       expect(task.promptSource).toBeUndefined()
       expect(task.promptCustomized).toBe(false)
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
     })
 
     it('stamps legacy-inferred when the legacy migration flags an unrecognized body', async () => {
-      const custom = 'A documentation prompt that matches no shipped default at all.'
+      const custom = 'A console-errors prompt that matches no shipped default at all.'
       // No promptVersion → the legacy-migration branch runs.
-      const task = await loadDocumentation({ prompt: custom })
+      const task = await loadStored({ prompt: custom })
       expect(task.promptCustomized).toBe(true)
       expect(task.promptSource).toBe('legacy-inferred')
     })
 
     it('drops a stale promptSource when the config has no prompt to pin', async () => {
-      const task = await loadDocumentation({ prompt: null, promptSource: 'user' })
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+      const task = await loadStored({ prompt: null, promptSource: 'user' })
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
       expect(task.promptSource).toBeNull()
     })
 
     it('survives a PROMPT_VERSIONS bump when the pin is user-sourced', async () => {
-      const original = PROMPT_VERSIONS['documentation']
-      PROMPT_VERSIONS['documentation'] = original + 1
+      const original = PROMPT_VERSIONS['console-errors']
+      PROMPT_VERSIONS['console-errors'] = original + 1
       try {
-        const task = await loadDocumentation({
-          prompt: portosDocPrompt,
+        const task = await loadStored({
+          prompt: RETIRED_CONSOLE_ERRORS_PROMPT,
           promptVersion: original,
           promptCustomized: true,
           promptSource: 'user'
         })
-        expect(task.prompt).toBe(portosDocPrompt)
+        expect(task.prompt).toBe(RETIRED_CONSOLE_ERRORS_PROMPT)
         expect(task.promptVersion).toBe(original)
       } finally {
-        PROMPT_VERSIONS['documentation'] = original
+        PROMPT_VERSIONS['console-errors'] = original
       }
     })
 
     it('upgrades the same body across a bump when the pin is legacy-inferred', async () => {
-      const original = PROMPT_VERSIONS['documentation']
-      PROMPT_VERSIONS['documentation'] = original + 1
+      const original = PROMPT_VERSIONS['console-errors']
+      PROMPT_VERSIONS['console-errors'] = original + 1
       try {
-        const task = await loadDocumentation({
-          prompt: portosDocPrompt,
+        const task = await loadStored({
+          prompt: RETIRED_CONSOLE_ERRORS_PROMPT,
           promptVersion: original,
           promptCustomized: true,
           promptSource: 'legacy-inferred'
         })
-        expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['documentation'])
+        expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
         expect(task.promptVersion).toBe(original + 1)
       } finally {
-        PROMPT_VERSIONS['documentation'] = original
+        PROMPT_VERSIONS['console-errors'] = original
       }
     })
   })
@@ -789,9 +788,8 @@ describe('taskSchedule', () => {
     // install carrying either generation stopped matching any shipped default,
     // was stamped promptCustomized by the legacy migration, and has been frozen
     // out of every prompt upgrade since — nine task types on a real install.
-    const fromEra = (taskType, header) =>
-      PREVIOUS_DEFAULT_PROMPTS[taskType].find((p) => p.startsWith(header))
-
+    // Their hashes are in the snapshot's history now; the fixture is the
+    // `[Self-Improvement]` console-errors body.
     const loadOne = async (taskType, prompt, promptVersion) => {
       mockSchedule({
         tasks: { [taskType]: { type: 'once', enabled: false, providerId: null, model: null, prompt, promptVersion, promptCustomized: true } }
@@ -799,33 +797,20 @@ describe('taskSchedule', () => {
       return (await loadSchedule()).tasks[taskType]
     }
 
-    // One case per shape the freeze took: header-only drift, a body that also
-    // changed, a type whose ONLY revision was the split (so it had no
-    // PROMPT_VERSIONS entry at all), and the older self-improvement generation.
-    //
-    // Each runs under BOTH version stamps a frozen install can carry. The
-    // legacy migration wrote `promptVersion = PROMPT_VERSIONS[taskType]`
-    // alongside the customized flag, so an install flagged after its type was
-    // versioned holds the CURRENT version with a RETIRED body — and clearing
-    // the flag alone leaves `storedVersion < current` false, so the upgrade
-    // never fires. Testing only the version-1 stamp misses that entirely.
-    const ERAS = [
-      ['console-errors', '[App Improvement: '],
-      ['security', '[App Improvement: '],
-      ['typing', '[App Improvement: '],
-      ['console-errors', '[Self-Improvement] '],
-      ['feature-ideas', '[Self-Improvement] '],
-    ]
-    it.each(ERAS.flatMap(([taskType, header]) => [
-      [taskType, header, 'pre-versioning', 1],
-      [taskType, header, 'current-version', PROMPT_VERSIONS[taskType]],
-    ]))('self-heals and upgrades a stored %s prompt from the %s generation (%s stamp)', async (taskType, header, _label, storedVersion) => {
-      const prompt = fromEra(taskType, header)
-      expect(prompt, `no ${header} body registered for ${taskType}`).toBeDefined()
-      const task = await loadOne(taskType, prompt, storedVersion)
+    // Runs under BOTH version stamps a frozen install can carry. The legacy
+    // migration wrote `promptVersion = PROMPT_VERSIONS[taskType]` alongside the
+    // customized flag, so an install flagged after its type was versioned holds
+    // the CURRENT version with a RETIRED body — and clearing the flag alone
+    // leaves `storedVersion < current` false, so the upgrade never fires.
+    // Testing only the version-1 stamp misses that entirely.
+    it.each([
+      ['pre-versioning', 1],
+      ['current-version', PROMPT_VERSIONS['console-errors']],
+    ])('self-heals and upgrades a stored pre-unification prompt (%s stamp)', async (_label, storedVersion) => {
+      const task = await loadOne('console-errors', RETIRED_CONSOLE_ERRORS_PROMPT, storedVersion)
       expect(task.promptCustomized).toBe(false)
-      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS[taskType])
-      expect(task.promptVersion).toBe(PROMPT_VERSIONS[taskType])
+      expect(task.prompt).toBe(DEFAULT_TASK_PROMPTS['console-errors'])
+      expect(task.promptVersion).toBe(PROMPT_VERSIONS['console-errors'])
     })
 
     it('preserves a genuine user customization that merely mimics a retired header', async () => {
@@ -834,54 +819,22 @@ describe('taskSchedule', () => {
       expect(task.prompt).toBe(custom)
       expect(task.promptCustomized).toBe(true)
     })
-
-    // Pins the provenance of the frozen feature-ideas body: it is the one that
-    // sent every run to `data/COS-GOALS.md`, a file the same unification folded
-    // into the root GOALS.md. The upgrade itself is covered above.
-    it('pins the frozen feature-ideas body as the COS-GOALS.md-era default', () => {
-      expect(fromEra('feature-ideas', '[Self-Improvement] ')).toContain('data/COS-GOALS.md')
-      expect(DEFAULT_TASK_PROMPTS['feature-ideas']).not.toContain('COS-GOALS.md')
-    })
   })
 
-  describe('changelog-fragment prompt revision (issue #3998)', () => {
-    // Pins that each task type touched by this revision actually participates in
-    // the auto-upgrade path: it is in PROMPT_VERSIONS, loadSchedule walks it, and
-    // a stored body listed in PREVIOUS_DEFAULT_PROMPTS resolves to the current
-    // default rather than being stamped promptCustomized (which would pin the
-    // stale body on that install forever).
-    //
-    // NOT a byte-copy check: the fixture is read from the same array the
-    // recognition set is read from, so a mis-copied body would agree with itself.
-    // Copy fidelity is verified against the COMMITTED integrity snapshot — the
-    // pre-change DEFAULT_TASK_PROMPTS hash for each key must reappear in the
-    // post-change PREVIOUS_DEFAULT_PROMPTS hashes, which is visible in the diff.
-    //
+  describe('router-reached prompt types ride the same auto-upgrade walk (issue #3998)', () => {
     // Router-reached prompts (claim-issue-gitlab, claim-issue-jira) have no
     // DEFAULT_TASK_INTERVALS entry, but loadSchedule still walks them once an
     // install has STORED one: the merge loop preserves task types absent from the
-    // defaults, and the upgrade loop iterates every stored key. So they belong in
-    // this walk too — which is where a migration is pinned behaviorally rather
-    // than by restating the constants.
+    // defaults, and the upgrade loop iterates every stored key. Whether a stored
+    // RETIRED body of theirs is recognized is the predicate's own contract
+    // (taskPromptDefaults.test.js) — the bodies are no longer in the tree — so
+    // this pins only that the walk reaches a stored-only key.
     it.each([
-      'do-replan',
-      'documentation',
-      'plan-task',
-      'claim-issue',
-      'release-check',
-      'refresh-local-llm-catalog',
-      // glab-flag revision (issue #4685): dependency-updates v3 → v4 and
-      // claim-issue-gitlab v15 → v16. Same contract, so they ride the same walk
-      // rather than a parallel describe.
-      'dependency-updates',
       'claim-issue-gitlab',
-    ])('%s: an install on the outgoing default auto-upgrades instead of being flagged customized', async (taskType) => {
-      const previous = PREVIOUS_DEFAULT_PROMPTS[taskType]
-      const outgoing = previous[previous.length - 1]
-      // A stored prompt with NO promptVersion takes the legacy-migration path,
-      // which is where an unrecognized body gets stamped promptCustomized.
+      'claim-issue-jira',
+    ])('%s: a stored, behind-version default is walked and upgraded', async (taskType) => {
       mockSchedule({
-        tasks: { [taskType]: { type: 'once', enabled: false, providerId: null, model: null, prompt: outgoing } }
+        tasks: { [taskType]: { type: 'once', enabled: false, providerId: null, model: null, prompt: DEFAULT_TASK_PROMPTS[taskType], promptVersion: 1 } }
       })
       const task = (await loadSchedule()).tasks[taskType]
       expect(task.promptCustomized).not.toBe(true)
@@ -992,8 +945,7 @@ describe('taskSchedule', () => {
 
     // A RETIRED shipped body IS a deliberate choice — the #5432 case.
     it('should pin a retired shipped default written by the user', async () => {
-      const retired = PREVIOUS_DEFAULT_PROMPTS['security'][0]
-      const result = await updateTaskInterval('security', { prompt: retired })
+      const result = await updateTaskInterval('console-errors', { prompt: RETIRED_CONSOLE_ERRORS_PROMPT })
       expect(result.promptCustomized).toBe(true)
       expect(result.promptSource).toBe('user')
     })

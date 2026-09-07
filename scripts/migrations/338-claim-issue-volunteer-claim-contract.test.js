@@ -4,11 +4,12 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import migration from './338-claim-issue-volunteer-claim-contract.js';
-import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS, PREVIOUS_DEFAULT_PROMPTS } from '../../server/services/taskPromptDefaults.js';
+import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS } from '../../server/services/taskPromptDefaults.js';
 
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
-const oldPrompt = PREVIOUS_DEFAULT_PROMPTS['claim-issue'].at(-1);
+// The migration keys on promptVersion + promptCustomized alone, never the body.
+const oldPrompt = '[stored claim-issue v24 default]';
 
 describe('migration 338 — reconcile the claim-issue volunteer-claim contract', () => {
   let rootDir;
@@ -22,12 +23,9 @@ describe('migration 338 — reconcile the claim-issue volunteer-claim contract',
     rmSync(rootDir, { recursive: true, force: true });
   });
 
-  // The outgoing default is the exact body an un-customized install is holding,
-  // so this also pins that PREVIOUS_DEFAULT_PROMPTS carries the v24 text.
   it('upgrades the stored v24 default in both supported schedule locations', async () => {
     const cosPath = join(rootDir, 'data', 'cos', 'task-schedule.json');
     const legacyPath = join(rootDir, 'data', 'task-schedule.json');
-    expect(oldPrompt).toContain('leave contributor-invitation labels intact');
     writeJson(cosPath, {
       tasks: {
         'claim-issue': { promptVersion: 24, promptCustomized: false, prompt: oldPrompt },

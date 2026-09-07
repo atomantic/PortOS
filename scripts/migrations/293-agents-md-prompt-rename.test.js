@@ -4,14 +4,14 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import migration from './293-agents-md-prompt-rename.js';
-import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS, PREVIOUS_DEFAULT_PROMPTS } from '../../server/services/taskPromptDefaults.js';
+import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS } from '../../server/services/taskPromptDefaults.js';
 
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
 
-// The outgoing default is the last entry appended for each key — the body an
-// install that never customized the prompt is holding right now.
-const outgoing = (key) => PREVIOUS_DEFAULT_PROMPTS[key].at(-1);
+// The migration keys on promptVersion + promptCustomized alone — it never reads
+// the stored body — so any stand-in serves as the outgoing default here.
+const outgoing = (key) => `[stored ${key} default from before #4852]`;
 
 describe('migration 293 — AGENTS.md prompt rename', () => {
   let rootDir;
