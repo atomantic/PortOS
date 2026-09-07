@@ -1180,14 +1180,11 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
   res.json(await extractLastFrame(parsed.data));
 }));
 
-// An absent body is exactly Lanczos, so every pre-#6509 client keeps its
+// The method choice, shared by the action's body and the plan endpoint's query
+// so the two can never disagree on what is accepted or what an omission means.
+// An absent method is exactly Lanczos, so every pre-#6509 client keeps its
 // current behavior without sending anything new.
-const upscaleBodySchema = z.object({
-  method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
-});
-
-// Query form of the same choice, for the read-only plan endpoint.
-const upscalePlanQuerySchema = z.object({
+const upscaleMethodSchema = z.object({
   method: z.enum(UPSCALE_METHODS).default(DEFAULT_UPSCALE_METHOD),
 });
 
@@ -1198,7 +1195,7 @@ const upscalePlanQuerySchema = z.object({
 router.get('/upscale/:id/plan', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
-  const query = upscalePlanQuerySchema.safeParse(req.query ?? {});
+  const query = upscaleMethodSchema.safeParse(req.query ?? {});
   if (!query.success) failValidation(query);
   res.json({ ok: true, plan: await planUpscaleHistoryItem(parsed.data, query.data) });
 }));
@@ -1206,7 +1203,7 @@ router.get('/upscale/:id/plan', asyncHandler(async (req, res) => {
 router.post('/upscale/:id', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
-  const body = upscaleBodySchema.safeParse(req.body ?? {});
+  const body = upscaleMethodSchema.safeParse(req.body ?? {});
   if (!body.success) failValidation(body);
   const entry = await upscaleHistoryItem(parsed.data, body.data);
   res.json({ ok: true, video: entry });
