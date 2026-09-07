@@ -50,7 +50,7 @@ is an immediate 4xx/501 rather than a job that dies minutes later:
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `ALREADY_UPSCALED` | 400 | the source is itself an upscale output |
-| `UNSUPPORTED_RUNTIME` | 501 | no generative backend on this host, or its venv is not installed |
+| `UNSUPPORTED_RUNTIME` | 501 | this host cannot carry the generative method: no backend for the platform, its venv is not installed, or the machine is below what the backend's pack declares it needs |
 | `IC_LORA_WEIGHT_UNRESOLVED` | 400 | the upscaler adapter is not downloaded |
 | `UPSCALE_BASE_MODEL_UNRESOLVED` | 400 | the backend's LTX-2.5 pack is not downloaded |
 | `UPSCALE_SOURCE_UNALIGNABLE` | 400 | the source cannot be measured, or aligning it would lose duration |
@@ -89,6 +89,11 @@ decided by platform, not by the user:
 | macOS (Apple Silicon) | `ltx25` | `INSTALL_LTX25=1 ./scripts/setup-image-video.sh` | `ltx25_mlx_q8` |
 | Windows / Linux + NVIDIA | `ltx25_cuda` | `INSTALL_LTX25_CUDA=1 ./scripts/setup-image-video.sh` | `ltx25_cuda_distilled` |
 | Anything else | — | — | no generative backend; the plan says so rather than failing at render time |
+
+Platform is necessary but not sufficient: each pack also declares what it needs
+of the machine, and the CUDA pack asks for **64 GB of system memory** on top of
+the NVIDIA card. A host below that is refused up front — see
+[Readiness](#readiness).
 
 The base checkpoint is **not** part of the request. The adapter was trained
 against one LTX-2.5 checkpoint, so letting a user pick another would condition
@@ -188,16 +193,87 @@ explicitly adding the kind to one of them. See the privacy rules in
 
 ## Readiness
 
-The generative method is offered only on a host that already has the runtime,
-the adapter and the base pack; everywhere else the drawer shows it disabled
-with the reason. That gate is per host and permanent — it is how a machine
-without a GPU runtime learns it has no generative backend — and it is distinct
-from whether a backend has been **verified**:
+The generative method is offered only on a host that has the runtime, the
+adapter, the base pack, **and the hardware that pack declares it needs**;
+everywhere else the drawer shows it disabled with the reason. That gate is per
+host and permanent — it is how a machine without a GPU runtime learns it has no
+generative backend — and it is distinct from whether a backend has been
+**verified**:
 
 | Backend | Status |
 | --- | --- |
 | macOS MLX (`ltx25`) | **Verified** end to end on real renders (2026-09-07, [#6514](https://github.com/atomantic/PortOS/issues/6514)); supported. |
-| Windows / Linux CUDA (`ltx25_cuda`) | Code complete with the same recipe and contract ([#6513](https://github.com/atomantic/PortOS/issues/6513)); **awaiting a render on an NVIDIA host**, tracked in [#6537](https://github.com/atomantic/PortOS/issues/6537). Treat it as unverified until that evidence is recorded. |
+| Windows / Linux CUDA (`ltx25_cuda`) | Code complete with the same recipe and contract ([#6513](https://github.com/atomantic/PortOS/issues/6513)); **still unverified**. A first attempt on a real NVIDIA host (2026-09-07, [#6537](https://github.com/atomantic/PortOS/issues/6537)) did not produce a render — see below. Verification needs a host that meets the pack's declared 64 GB system-memory floor. |
+
+### The four readiness axes
+
+The runtime venv, the 327 MB adapter and the ~68 GB pack are three independent
+downloads. The **host itself** is the fourth, and it is the one a download
+cannot fix: `ltx25_cuda_distilled` declares `minMemoryGb: 64`, so a machine with
+less cannot run it however complete its cache is. `generateVideo.js` has always
+refused a plain render on such a host; the upscale path now refuses there too,
+with the same helper on the same verdict so the two gates cannot drift. An
+upscale renders at **twice** the source's linear dimensions, strictly above a
+plain render's peak — so anything a plain render is refused for, an upscale must
+be refused for as well.
+
+The plan reports the server's `baseModel.hardwareCompatibility` annotation — the
+same object every other model payload carries — rather than a flattened boolean,
+so the dispatch and the drawer share one predicate (`isHardwareCompatible`)
+instead of each re-deriving the rule. It stays independent of `cached`: a pack
+can be fully downloaded onto a host that cannot run it, and calling that "not
+downloaded" would send someone to re-fetch 72 GB that is already on disk. Where
+both apply, consumers state the host problem first — advising a 72 GB download
+onto a machine that cannot use it is worse than saying nothing. A requirement
+the host cannot *measure* stays allowed: only an explicit `unavailable` verdict
+refuses, so an unreadable probe never becomes a refusal invented from a missing
+number, and a plan from an older server (no annotation at all) queues exactly
+what it queues today.
+
+The refusal is `UNSUPPORTED_RUNTIME` (501) rather than the
+`MODEL_HARDWARE_UNAVAILABLE` (400) the plain-render sites raise, and the
+difference is deliberate: there the user *chose* an incompatible model, so the
+request is at fault. The upscale's checkpoint is pinned and not part of the
+request, so nothing the caller sent is wrong — the host simply cannot carry the
+method, which is what `UNSUPPORTED_RUNTIME` already means here.
+
+### What the NVIDIA attempt established (2026-09-07)
+
+The run that produced this section was made on a Windows RTX 3090 host with
+**32 GB of system memory** — half the pack's declared floor. Everything short of
+the render worked, and is recorded here because it is real evidence about the
+CUDA path:
+
+- The gated adapter downloaded through the model surface at exactly its pinned
+  `sizeBytes` (327,322,640), and its `reference_downscale_factor` read back as
+  **2, measured off the file** rather than taken from the registry.
+- The pre-submit plan was correct for all three source shapes: a conforming
+  320×576/25f source reported no padding; a 23-frame source reported
+  `padFrames: 2`; a 312×568 source reported `padWidth`/`padHeight` of 8 with the
+  padded source at 320×576. Audio presence was reported correctly in each case.
+- The runner's own guards passed on real weights: the pack resolved cache-only,
+  and `assert_adapter_fuses` verified the adapter fuses into **480** transformer
+  weights — so the adapter and the pinned checkpoint genuinely match, and the
+  "fuses into nothing" failure #6513 guards against does not occur here.
+- The render itself did **not** run. Both `upscale_ltx25_cuda.py` and
+  `generate_ltx25_cuda.py` fail identically ~18 s in, inside `ltx_core`'s own
+  loader (`sft_loader.py`), while loading the 26 GB Gemma text encoder:
+  `RuntimeError: Attempted to access the data pointer on an invalid python
+  storage`. It reduces to a six-line repro with no PortOS code involved — hold
+  one `safetensors.safe_open` handle on a pack file and open a second one on the
+  same file with `device="cuda"`; files up to ~1.5 GB are fine, the 26 GB text
+  encoder and the 42 GB transformer are not. `ltx_core`'s disk-streaming path
+  does exactly that (`DiskTensorReader` holds a CPU handle while
+  `_load_non_block_weights` opens a CUDA one), and a subsequent read of the same
+  file segfaults the process.
+
+So the failure is **not** upscale-specific and not a defect in the shared
+contract: it is the whole `ltx25_cuda` runtime on a host below the pack's memory
+floor. What the attempt did surface is the missing fourth axis above — PortOS
+offered the upscale as ready and queued a GPU job that died seconds later, on a
+host where it already refused the equivalent plain render. Recording a verified
+CUDA render still requires a licensed NVIDIA machine with ≥64 GB of system
+memory.
 
 Lanczos is unaffected by any of this.
 

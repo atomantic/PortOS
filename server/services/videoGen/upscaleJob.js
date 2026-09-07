@@ -35,6 +35,7 @@ import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { omitRenderTiming, renderTimingFields } from '../../lib/renderTiming.js';
 import { resolveIcLoraWeightByKey } from '../../lib/icLoraWeights.js';
+import { isHardwareCompatible, hardwareUnavailableReason } from '../../lib/systemCapabilities.js';
 import { hfChildEnv } from '../hfToken.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { videoGenEvents } from './events.js';
@@ -86,6 +87,28 @@ export async function enqueueLtxUpscale(historyId) {
   if (!plan.runtime.supported || !plan.runtime.installed) {
     throw new ServerError(
       `Generative upscale is not available on this install: ${plan.runtime.reason}`,
+      { status: 501, code: 'UNSUPPORTED_RUNTIME' },
+    );
+  }
+  // The host gate (#6537), BEFORE the cache checks below: a machine that cannot
+  // run the pack must not be told to download 72 GB of it. `generateVideo.js`
+  // already refuses a plain render here; an upscale renders ABOVE a plain
+  // render's peak, so anything it refuses this must refuse too — same helper on
+  // the same annotation, so the two gates cannot drift. `isHardwareCompatible`
+  // refuses only an explicit `unavailable` verdict, so a requirement this host
+  // could not MEASURE stays allowed rather than becoming a refusal invented from
+  // a missing number, and a plan from an older server (no annotation at all)
+  // queues exactly what it queues today.
+  //
+  // Deliberately NOT the `MODEL_HARDWARE_UNAVAILABLE`/400 those render sites
+  // raise: there, the user CHOSE an incompatible model, so the request is at
+  // fault. The upscale's checkpoint is pinned and not part of the request
+  // (#6511), so nothing the caller sent is wrong — the host simply cannot carry
+  // the method, which is what `UNSUPPORTED_RUNTIME`/501 already means here.
+  if (!isHardwareCompatible(plan.baseModel?.hardwareCompatibility)) {
+    throw new ServerError(
+      `Generative upscale is not available on this install: ${
+        hardwareUnavailableReason(plan.baseModel?.name || 'The LTX-2.5 pack', plan.baseModel?.hardwareCompatibility)}`,
       { status: 501, code: 'UNSUPPORTED_RUNTIME' },
     );
   }

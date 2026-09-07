@@ -113,7 +113,17 @@ const conformingPlan = () => ({
     id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', repo: 'MrMofer/ltx-2.5-mlx-q8',
     revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
     path: '/cache/ltx25-mlx-q8', cached: true, reason: null,
+    hardwareCompatibility: { state: 'available', reasons: [], requirements: {} },
   },
+});
+
+// The shape the plan reports for a host below the pack's declared floor — the
+// server's own annotation, not a pre-rendered string, so these tests exercise
+// the same predicate production reads.
+const INCOMPATIBLE_HOST = Object.freeze({
+  state: 'unavailable',
+  reasons: ['Requires at least 64 GB of system memory'],
+  requirements: { minMemoryGb: 64 },
 });
 
 const sourceRow = (extra = {}) => ({
@@ -266,11 +276,55 @@ describe('enqueueLtxUpscale', () => {
     state.plan.baseModel = {
       id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', repo: 'MrMofer/ltx-2.5-mlx-q8',
       revision: 'f1b56e7dc89f71a9af2cddac787b89ed22a8b7fc',
-      path: null, cached: false, reason: 'LTX-2.5 MLX Q8 is not downloaded — download or repair it in Video Gen.',
+      path: null, cached: false,
+      hardwareCompatibility: { state: 'available', reasons: [], requirements: {} },
+      reason: 'LTX-2.5 MLX Q8 is not downloaded — download or repair it in Video Gen.',
     };
     await expect(enqueueLtxUpscale(SOURCE_ID))
       .rejects.toMatchObject({ status: 400, code: 'UPSCALE_BASE_MODEL_UNRESOLVED' });
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  // #6537: the FOURTH readiness axis. A host can hold the venv, the adapter and
+  // the whole pack and still sit below what the pack declares it needs — the
+  // CUDA pack asks for 64 GB of system memory, and on a 32 GB host both LTX-2.5
+  // CUDA runners die inside the runtime's own loader seconds into the render.
+  // `generateVideo.js` already refuses a plain render on such a host; an upscale
+  // renders at twice the source's linear dimensions, strictly above a plain
+  // render's peak, so it must refuse wherever that one does.
+  it('refuses when the host does not meet the base pack\'s declared hardware requirements', async () => {
+    state.plan.baseModel.hardwareCompatibility = INCOMPATIBLE_HOST;
+    // The message must carry the host's real reason. Asserting only the code
+    // would still pass if the gate were re-pointed at a field nothing sets.
+    await expect(enqueueLtxUpscale(SOURCE_ID)).rejects.toMatchObject({
+      status: 501,
+      code: 'UNSUPPORTED_RUNTIME',
+      message: expect.stringContaining('Requires at least 64 GB of system memory'),
+    });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  // Ordering is load-bearing: an incompatible host that is ALSO missing the pack
+  // must be told it cannot run the model, not told to download 72 GB of it.
+  it('reports the host refusal ahead of the download advice when both apply', async () => {
+    Object.assign(state.plan.baseModel, {
+      cached: false, path: null, hardwareCompatibility: INCOMPATIBLE_HOST,
+    });
+    await expect(enqueueLtxUpscale(SOURCE_ID)).rejects.toMatchObject({
+      status: 501,
+      code: 'UNSUPPORTED_RUNTIME',
+      message: expect.not.stringContaining('not downloaded'),
+    });
+    expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  // Forward-compat: a plan produced by an older server carries no annotation at
+  // all. Absent is not "incompatible" — that install keeps queueing exactly what
+  // it queues today rather than being newly refused by a field it never sends.
+  it('still queues when the plan carries no hardware annotation at all', async () => {
+    delete state.plan.baseModel.hardwareCompatibility;
+    await expect(enqueueLtxUpscale(SOURCE_ID)).resolves.toMatchObject({ status: 'queued' });
+    expect(enqueueJob).toHaveBeenCalled();
   });
 
   it('keeps the already-upscaled guard, matching the inline path', async () => {

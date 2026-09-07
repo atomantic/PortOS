@@ -328,6 +328,20 @@ export function evaluateHardwareRequirements(requirements, capabilities = captur
 
 export const isHardwareCompatible = (compatibility) => compatibility?.state !== 'unavailable';
 
+/**
+ * The one sentence explaining WHY a host was refused, so callers stop
+ * hand-rolling it. This module already owns the verdict; owning its wording —
+ * and the fallback for an `unavailable` state that carries no reasons — is what
+ * keeps every refusal reading the same. `subject` is what the message is about
+ * (a model id, a pack name).
+ *
+ * Mirrored in `client/src/utils/systemCapabilities.js`, like `isHardwareCompatible`.
+ */
+export const hardwareUnavailableReason = (subject, compatibility) => (
+  `${subject} is unavailable on this machine: ${
+    (compatibility?.reasons || []).join(' · ') || 'this host does not meet its hardware requirements'}`
+);
+
 /** Resolve the derived requirements for an image or video registry entry. */
 export function hardwareRequirementsForMediaModel(model, { kind = 'image', bucket } = {}) {
   const runtimeRequirements = {};

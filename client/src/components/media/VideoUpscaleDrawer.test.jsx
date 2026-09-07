@@ -39,6 +39,7 @@ const READY_PLAN = {
   baseModel: {
     id: 'ltx25_mlx_q8', name: 'LTX-2.5 MLX Q8', repo: 'Example/ltx25-mlx-q8', revision: 'abc1234',
     path: '/cache/ltx25-mlx-q8', cached: true, reason: null,
+    hardwareCompatibility: { state: 'available', reasons: [], requirements: {} },
   },
 };
 
@@ -150,5 +151,46 @@ describe('VideoUpscaleDrawer', () => {
 
     expect(screen.getByLabelText(/LTX-2\.5 generative/i).disabled).toBe(true);
     expect(screen.getByText(/is not downloaded/i)).toBeTruthy();
+  });
+
+  // #6537: the host is a fourth axis. Every download can be present on a machine
+  // that still cannot run the pack — the CUDA pack asks for 64 GB of system
+  // memory, and on a 32 GB host the render dies inside the runtime's own loader
+  // seconds in. The dispatch refuses that host, so the button must not offer it.
+  it('disables the generative method when the host cannot run the pack, even with everything downloaded', async () => {
+    getUpscalePlan.mockResolvedValue({
+      plan: {
+        ...READY_PLAN,
+        baseModel: {
+          ...READY_PLAN.baseModel,
+          name: 'LTX-2.5 CUDA Distilled',
+          hardwareCompatibility: {
+            state: 'unavailable',
+            reasons: ['Requires at least 64 GB of system memory'],
+            requirements: { minMemoryGb: 64 },
+          },
+        },
+      },
+    });
+    render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    await waitFor(() => expect(getUpscalePlan).toHaveBeenCalled());
+
+    expect(screen.getByLabelText(/LTX-2\.5 generative/i).disabled).toBe(true);
+    expect(screen.getByText(/unavailable on this machine/i)).toBeTruthy();
+    // The adapter IS cached here, so the inline download button would be a
+    // pointless offer — a 327 MB pull that changes nothing about the refusal.
+    expect(screen.queryByText(/Download adapter/i)).toBeNull();
+  });
+
+  // Forward-compat: a plan from an older server carries no annotation. Absent must
+  // not read as incompatible, or updating the client alone would disable a
+  // button that install has always been able to press.
+  it('stays enabled when an older plan carries no host annotation', async () => {
+    const { hardwareCompatibility, ...baseModel } = READY_PLAN.baseModel;
+    getUpscalePlan.mockResolvedValue({ plan: { ...READY_PLAN, baseModel } });
+    render(<VideoUpscaleDrawer item={ITEM} onClose={vi.fn()} onUpscaled={vi.fn()} />);
+    await waitFor(() => expect(getUpscalePlan).toHaveBeenCalled());
+
+    expect(screen.getByLabelText(/LTX-2\.5 generative/i).disabled).toBe(false);
   });
 });

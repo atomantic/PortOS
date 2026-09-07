@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'fs';
+import os from 'os';
 import { join } from 'path';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
-import { pinPlatform } from '../../lib/testHelper.js';
+import { pinPlatform, pinArch } from '../../lib/testHelper.js';
 
 // The Lanczos path really copies a file, so PATHS.data must point at a temp
 // tree — the install's data/ is the developer's live gallery.
@@ -267,6 +268,65 @@ describe('planUpscaleHistoryItem', () => {
     expect(plan.adapter.cached).toBe(true);
     expect(plan.baseModel).toMatchObject({ cached: false, path: null });
     expect(plan.baseModel.reason).toMatch(/not downloaded/i);
+  });
+
+  // #6537: readiness has a FOURTH axis — the host itself. Driven through the
+  // REAL registry (only `os.totalmem` is pinned) so it proves the pack's own
+  // declared `minMemoryGb: 64` is what decides, not a verdict the test invented.
+  // A 32 GB Windows host is where this was found: every download is present and
+  // both LTX-2.5 CUDA runners still die inside the runtime's loader.
+  describe('host hardware readiness (#6537)', () => {
+    // Only the host's memory and platform are pinned — the registry entry, its
+    // declared `minMemoryGb`, and the compatibility evaluation are all real, so
+    // this proves the PACK's own floor is what decides rather than a verdict the
+    // test handed in.
+    const withHost = async ({ memoryGb, platform = 'win32', arch }) => {
+      const restorePlatform = pinPlatform(platform);
+      const restoreArch = arch ? pinArch(arch) : null;
+      const totalmem = vi.spyOn(os, 'totalmem').mockReturnValue(memoryGb * 1024 ** 3);
+      try {
+        return await planUpscaleHistoryItem(SOURCE_ID, { method: 'ltx' });
+      } finally {
+        totalmem.mockRestore();
+        restoreArch?.();
+        restorePlatform();
+      }
+    };
+
+    it('refuses the pack on a host below its declared memory floor, with the cache untouched', async () => {
+      const plan = await withHost({ memoryGb: 32 });
+      expect(plan.baseModel.id).toBe('ltx25_cuda_distilled');
+      expect(plan.baseModel.hardwareCompatibility.state).toBe('unavailable');
+      expect(plan.baseModel.hardwareCompatibility.reasons.join(' ')).toMatch(/64 GB/);
+      // `cached` and `reason` stay the honest CACHE answer. The axes are
+      // independent: a pack can be fully downloaded onto a host that cannot run
+      // it, and reporting that as "not downloaded" would send the user to
+      // re-download 72 GB that is already on disk.
+      expect(plan.baseModel.cached).toBe(true);
+      expect(plan.baseModel.reason).toBeNull();
+    });
+
+    it('reports a compatible verdict on a host that meets the floor', async () => {
+      const plan = await withHost({ memoryGb: 128 });
+      expect(plan.baseModel.hardwareCompatibility.state).not.toBe('unavailable');
+    });
+
+    it('keeps the two axes separate when the host is short AND the pack is missing', async () => {
+      state.baseModelCached = false;
+      const plan = await withHost({ memoryGb: 32 });
+      expect(plan.baseModel.hardwareCompatibility.state).toBe('unavailable');
+      expect(plan.baseModel.cached).toBe(false);
+      expect(plan.baseModel.reason).toMatch(/not downloaded/i);
+    });
+
+    // The MLX pack declares no memory floor, so this axis must not invent one
+    // for it — the backend verified on real renders (#6514) stays exactly as
+    // ready on the Apple Silicon host it is verified on.
+    it('leaves the MLX backend, which declares no memory floor, compatible', async () => {
+      const plan = await withHost({ memoryGb: 32, platform: 'darwin', arch: 'arm64' });
+      expect(plan.baseModel.id).toBe('ltx25_mlx_q8');
+      expect(plan.baseModel.hardwareCompatibility.state).not.toBe('unavailable');
+    });
   });
 
   // The registry holds `null` for this gated weight on purpose. An install that
