@@ -143,7 +143,7 @@ export async function setTreatment(id, treatmentInput) {
   // than in one route handler (#1938) so every setTreatment path (the agent
   // `/:id/treatment` PATCH, episodeVideo, liveDirector) honors the opt-in
   // instead of the flag silently no-op'ing for treatments that land another way.
-  if (next?.generateFirstPass) {
+  if (next?.generateFirstPass && next.workspace !== 'video') {
     enqueueFirstPassSceneFrames(next)
       .catch((e) => console.log(`⚠️ CD first-pass scene frames failed: ${e.message}`));
   }

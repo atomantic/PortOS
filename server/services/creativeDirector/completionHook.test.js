@@ -219,3 +219,13 @@ describe('advanceAfterSceneSettled — bounded treatment gate', () => {
     expect(mockEnqueueTreatmentTask).toHaveBeenCalledTimes(1);
   });
 });
+
+it('keeps Video drafts inert through both direct starts and background scene advancement', async () => {
+  mockGetProject.mockResolvedValue({ id: 'cd-video', workspace: 'video', status: 'planning', runs: [], directive: { goal: 'Example' } });
+  await startCreativeDirectorProject('cd-video');
+  await advanceAfterSceneSettled('cd-video');
+  expect(mockAdvancePlan).not.toHaveBeenCalled();
+  expect(mockEnqueueTreatmentTask).not.toHaveBeenCalled();
+  expect(mockRunSceneRender).not.toHaveBeenCalled();
+  expect(mockUpdateProject).not.toHaveBeenCalled();
+});

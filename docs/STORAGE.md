@@ -259,3 +259,22 @@ successful API fetch and subsequent syncs can omit it. Downgrades to versions be
 this store require re-entering keys through the older settings UI or environment.
 Other credentials (provider connections, account-specific logins, and auth) retain
 their existing dedicated stores and management flows.
+
+### Video workspace drafts
+
+Video reuses `creative_director_projects` and its existing project IDs, collection
+links, PostgreSQL JSONB record, and test-only file adapter. New records opt in
+with `workspace: 'video'`; missing workspace means the existing Creative Director
+behavior. The additive `videoDraft` stores a bounded duration range, source IDs
+and optional revisions, audio choices, review policy, and four review checkpoints.
+Brief/style/quality and cognitive/media pins use the existing project fields.
+No new table, file store, seed, or record-rewriting migration is needed: legacy
+records must retain their prior behavior. Both adapters share record construction
+and patch validation. Draft creation and save perform no provider work.
+
+Schema category `creativeDirectorProjects` advances to v4 because an older peer
+would ignore the Video dispatch barrier. Video production stays unavailable at
+both HTTP start/resume and background advancement until revision-specific approval
+support ships. Selecting autonomous policy only saves intent; it cannot authorize
+dispatch while that barrier is present. Source references do not copy or mutate
+the referenced creative-suite records.

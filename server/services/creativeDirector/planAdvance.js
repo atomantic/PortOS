@@ -312,7 +312,7 @@ async function enqueuePlannerOnce(project) {
  */
 export async function advanceAfterPlanStepSettled(projectId) {
   const project = await getProject(projectId).catch(() => null);
-  if (!project) return;
+  if (!project || project.workspace === 'video') return;
   if (project.status === 'paused' || project.status === 'failed') return;
   // Legacy video project — the scene loop owns it; never plan-advance it.
   if (!project.directive) return;

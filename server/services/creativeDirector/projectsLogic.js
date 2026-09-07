@@ -13,6 +13,7 @@
 import { randomUUID } from 'crypto';
 import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { creativeDirectorVideoDraftSchema } from '../../lib/creativeDirectorValidation.js';
 import { creativeDirectorTreatmentSchema, creativeDirectorPlanSchema } from '../../lib/validation.js';
 import { PROJECT_STATUSES, PLAN_STEP_TERMINAL_SUCCESS } from '../../lib/creativeDirectorPresets.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
@@ -184,6 +185,12 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
   return {
     id,
     name,
+    ...(input.workspace === 'video' ? {
+      workspace: 'video',
+      videoDraft: creativeDirectorVideoDraftSchema.parse(input.videoDraft || {
+        durationRange: { min: targetDurationSeconds, max: targetDurationSeconds },
+      }),
+    } : {}),
     status: 'draft',
     createdAt: now,
     updatedAt: now,
@@ -328,7 +335,15 @@ export function applyProjectPatch(project, patch) {
   if (patch.status && !PROJECT_STATUSES.includes(patch.status)) {
     throw new ServerError(`Invalid status: ${patch.status}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
+  if ('videoDraft' in patch && (project.workspace !== 'video' || project.status !== 'draft')) {
+    throw new ServerError('Production settings can only be edited on a Video draft', { status: 409, code: 'INVALID_STATE' });
+  }
+  if ('workspace' in patch && patch.workspace !== project.workspace) {
+    throw new ServerError('The project workspace cannot be changed', { status: 409, code: 'INVALID_STATE' });
+  }
   const next = { ...project, ...patch, updatedAt: new Date().toISOString() };
+  if ('videoDraft' in patch) next.videoDraft = creativeDirectorVideoDraftSchema.parse(patch.videoDraft);
+  if ('renderBackend' in patch) next.renderBackend = normalizeRenderBackend(patch.renderBackend);
   // Normalize the whole override object on write so stored records never carry
   // empty/model-only stage stubs; the client sends the full object each save.
   if ('modelOverrides' in patch) next.modelOverrides = normalizeModelOverrides(patch.modelOverrides);

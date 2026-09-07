@@ -67,6 +67,24 @@ const project = (id, extra = {}) => ({
 const journalEntries = () => cj.conflictJournalStore().loadAll();
 
 describe('projectsFile federation merge', () => {
+  it('persists Video draft preferences and prevents removing the workspace barrier', async () => {
+    const p = await file.createProject({
+      name: 'Example short', workspace: 'video', modelId: '', aspectRatio: '16:9',
+      quality: 'draft', targetDurationSeconds: 60,
+    });
+    expect(p.videoDraft.checkpoints).toEqual(['script-shot-plan', 'references', 'rough-cut', 'final-cut']);
+    const videoDraft = {
+      ...p.videoDraft, durationRange: { min: 60, max: 180 },
+      sources: [{ kind: 'universe', id: 'example-universe', revision: 'r1' }],
+      audio: { providerId: 'example-audio', model: 'example-model' },
+    };
+    await file.updateProject(p.id, { userStory: 'Example brief', videoDraft });
+    expect(await file.getProject(p.id)).toMatchObject({
+      id: p.id, workspace: 'video', status: 'draft', userStory: 'Example brief', videoDraft,
+    });
+    await expect(file.updateProject(p.id, { workspace: undefined })).rejects.toThrow('workspace cannot be changed');
+  });
+
   it('round-trips and clears cognitive effort through create and patch', async () => {
     const pin = { providerId: 'example-agent', model: 'example-model', effort: 'high' };
     const p = await file.createProject({ name: 'Example', modelId: 'example', aspectRatio: '1:1', quality: 'draft', targetDurationSeconds: 9, modelOverrides: { plan: pin } });

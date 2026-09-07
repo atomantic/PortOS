@@ -146,8 +146,8 @@ const PageLoader = () => (
 // /image-gen?settings=1 chain depends on ?settings=1 reaching the new path, and
 // legacy universe bookmarks may carry a hash (e.g. `#canon`) we must not drop.
 function RedirectWithSearch({ to }) {
-  const { search, hash } = useLocation();
-  return <Navigate to={`${to}${search}${hash}`} replace />;
+  const { search, hash, state } = useLocation();
+  return <Navigate to={`${to}${search}${hash}`} state={state} replace />;
 }
 
 // Canon page was folded into Universe Builder; redirect the old sub-route to
@@ -204,8 +204,8 @@ const ANNOTATE_PREFIX = /^\/annotate/;
 // drop them; building the relative target from useLocation keeps deep-link
 // state intact (the relative pathname still resolves the :id segment).
 function CreativeDirectorOverviewRedirect() {
-  const { search, hash } = useLocation();
-  return <Navigate to={`overview${search}${hash}`} replace />;
+  const { search, hash, state } = useLocation();
+  return <Navigate to={`overview${search}${hash}`} state={state} replace />;
 }
 
 // Force full reload on HMR — partial hot-replacement of the route tree
@@ -423,7 +423,7 @@ export default function App() {
           <Route path="media" element={<MediaGen />}>
             <Route index element={<Navigate to="/media/image" replace />} />
             <Route path="image" element={<ImageGen />} />
-            <Route path="video" element={<VideoGen />} />
+            <Route path="video" element={<RedirectWithSearch to="/video/generate" />} />
             <Route path="history" element={<MediaHistory />} />
             <Route path="annotate" element={<MediaAnnotate />} />
             <Route path="annotate/:mediaKey" element={<MediaAnnotate />} />
@@ -435,6 +435,7 @@ export default function App() {
                 /media/creative-director bookmarks + in-app deep-links working. */}
             <Route path="creative-director" element={<RedirectWithSearch to="/creative-director" />} />
             <Route path="creative-director/:id" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
+            <Route path="creative-director/:id/:tab/:sceneId" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
             <Route path="creative-director/:id/:tab" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
             {/* Music Video moved to the top-level /music-video route (Create
                 sidebar link). These redirects keep legacy /media/music-video
@@ -479,8 +480,14 @@ export default function App() {
               carrying any query string + hash (relative Navigate preserves the
               :id in the path) so a deep-link like /creative-director/abc?x#y
               lands on /creative-director/abc/overview?x#y intact. */}
+          <Route path="video" element={<CreativeDirector basePath="/video" workspace="video" />} />
+          <Route path="video/generate" element={<VideoGen />} />
+          <Route path="video/:id" element={<CreativeDirectorOverviewRedirect />} />
+          <Route path="video/:id/:tab/:sceneId" element={<CreativeDirectorDetail basePath="/video" />} />
+          <Route path="video/:id/:tab" element={<CreativeDirectorDetail basePath="/video" />} />
           <Route path="creative-director" element={<CreativeDirector />} />
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
+          <Route path="creative-director/:id/:tab/:sceneId" element={<CreativeDirectorDetail />} />
           <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
           {/* Music Video — a top-level Create page (moved out of the Media Gen
               tabs). The project id is the URL, per the ID-based deep-linking
@@ -502,7 +509,7 @@ export default function App() {
           <Route path="game" element={<Game />} />
           <Route path="game/:id" element={<Game />} />
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
-          <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
+          <Route path="video-gen" element={<RedirectWithSearch to="/video/generate" />} />
           <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />
           <Route path="media-models" element={<RedirectWithSearch to="/models/media" />} />
           <Route path="wiki" element={<RedirectWithSearch to="/wiki/overview" />} />

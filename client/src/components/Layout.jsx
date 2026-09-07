@@ -229,6 +229,7 @@ export const NAV_PRESENTATION = {
   '/catalog': { icon: Sparkles },
   '/creative-commission': { icon: CalendarClock },
   '/creative-director': { icon: Clapperboard },
+  '/video': { icon: Clapperboard },
   '/pipeline/editorial-checks': { icon: ListChecks },
   '/fableloom': { icon: Waypoints },
   '/game': { icon: Gamepad2 },
@@ -586,6 +587,7 @@ const FULL_WIDTH_PATH_PREFIXES = [
   // so they need the bare full-width main — same as when they lived
   // under the /media tabs.
   '/creative-director',
+  '/video',
   '/brain',
   '/digital-twin',
   '/feature-agents',

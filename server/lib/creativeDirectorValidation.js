@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
-import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES, PLAN_STEP_STATUSES } from './creativeDirectorPresets.js';
+import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES, PLAN_STEP_STATUSES, VIDEO_REVIEW_CHECKPOINTS } from './creativeDirectorPresets.js';
 import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
 import { BIBLE_LIMITS } from './storyBible.js';
 import { emptyToUndefined } from './zodCompat.js';
@@ -20,9 +20,9 @@ import { CREATIVE_DIRECTOR_GOAL_MAX } from './creativeBriefLimits.js';
 export const creativeDirectorAspectRatioSchema = z.enum(ASPECT_RATIOS);
 export const creativeDirectorQualitySchema = z.enum(QUALITIES);
 
-// Top-level project create. modelId is required because each LTX variant
-// has a different speed/VRAM/quality profile and the project locks it at
-// creation. targetDurationSeconds is capped at 600 (10 min) per the v1 plan
+// Legacy projects require a model at creation. Inert Video drafts may leave
+// it unset and edit production settings before dispatch is supported.
+// targetDurationSeconds is capped at 600 (10 min) per the v1 plan
 // — much beyond that and the agent's treatment quality drifts hard.
 // Strict basename: rejects path separators and the exact `.`/`..` segments.
 // Used for both startingImageFile (project create) and sourceImageFile
@@ -124,11 +124,33 @@ export const creativeDirectorRenderBackendSchema = z.object({
   video: creativeDirectorRenderPinSchema.optional(),
 }).strict();
 
+// Additive workspace metadata. Absence keeps pre-Video execution semantics.
+export const creativeDirectorVideoDraftSchema = z.object({
+  durationRange: z.object({
+    min: z.number().int().min(5).max(600),
+    max: z.number().int().min(5).max(600),
+  }).strict().refine(({ min, max }) => min <= max, 'Minimum duration must not exceed maximum'),
+  sources: z.array(z.object({
+    kind: z.enum(['universe', 'series', 'catalog', 'music', 'voice']),
+    id: z.string().trim().min(1).max(120),
+    revision: z.string().max(120).optional(),
+  }).strict()).max(50).default([]),
+  audio: z.object({
+    providerId: z.string().max(120).optional(),
+    model: z.string().max(200).optional(),
+  }).strict().default({}),
+  reviewPolicy: z.enum(['review', 'autonomous']).default('review'),
+  checkpoints: z.array(z.enum(VIDEO_REVIEW_CHECKPOINTS))
+    .max(VIDEO_REVIEW_CHECKPOINTS.length).default([...VIDEO_REVIEW_CHECKPOINTS]),
+}).strict();
+
 export const creativeDirectorProjectCreateSchema = z.object({
+  workspace: z.literal('video').optional(),
+  videoDraft: creativeDirectorVideoDraftSchema.optional(),
   name: z.string().min(1).max(200),
   aspectRatio: creativeDirectorAspectRatioSchema,
   quality: creativeDirectorQualitySchema,
-  modelId: z.string().min(1).max(64),
+  modelId: z.string().max(64),
   targetDurationSeconds: z.number().int().min(5).max(600),
   styleSpec: z.string().max(5000).default(''),
   startingImageFile: safeBasename.nullable().optional(),
@@ -161,6 +183,10 @@ export const creativeDirectorProjectCreateSchema = z.object({
   // Optional per-project image/video RENDER-backend pin (#3135). Absent → each
   // enqueued media job resolves the install-wide default.
   renderBackend: creativeDirectorRenderBackendSchema.nullable().optional(),
+}).refine((v) => v.workspace === 'video' || v.modelId.length > 0, {
+  message: 'Model is required', path: ['modelId'],
+}).refine((v) => !v.videoDraft || v.workspace === 'video', {
+  message: 'Video draft requires the Video workspace', path: ['videoDraft'],
 });
 
 // Autonomous auto-cast (#1810). `types` narrows the catalog search to a set of
@@ -209,6 +235,12 @@ export const creativeDirectorAutoCastApplySchema = z.object({
 // point a CD project at an unrelated user timeline project, which the
 // next stitch would silently overwrite via updateTimelineProject.
 export const creativeDirectorProjectUpdateSchema = z.object({
+  videoDraft: creativeDirectorVideoDraftSchema.optional(),
+  aspectRatio: creativeDirectorAspectRatioSchema.optional(),
+  quality: creativeDirectorQualitySchema.optional(),
+  modelId: z.string().max(64).optional(),
+  targetDurationSeconds: z.number().int().min(5).max(600).optional(),
+  renderBackend: creativeDirectorRenderBackendSchema.nullable().optional(),
   name: z.string().min(1).max(200).optional(),
   styleSpec: z.string().max(5000).optional(),
   userStory: z.string().max(10000).nullable().optional(),
