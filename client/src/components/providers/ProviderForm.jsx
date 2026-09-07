@@ -1,3 +1,4 @@
+import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -400,7 +401,7 @@ export default function ProviderForm({ provider, onClose, onSave, onEditProvider
           {provider?.hardwareCompatibility?.state === 'unavailable' && (
             <Banner tone="warning" icon={AlertTriangle}>
               <p>
-                This provider is unavailable on this machine: {provider.hardwareCompatibility.reasons?.join(' · ') || 'hardware requirements are not met'}.
+                {hardwareUnavailableReason('This provider', provider.hardwareCompatibility)}.
                 Its models are hidden from selection until the host matches those requirements.
               </p>
             </Banner>
