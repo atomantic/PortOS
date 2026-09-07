@@ -11,6 +11,7 @@ import {
   allocateLocalPort,
   startForwardProcess,
   classifyTailcatRuntimeError,
+  verifyTunnelReachable,
   addPeerViaTailcat,
   listTailcatForwards,
   retryTailcatForward,
@@ -473,6 +474,37 @@ describe('tailcat lifecycle failure contracts', () => {
     expect(child.killed).toBe(true);
   });
 
+  it('refuses to register a peer the tunnel cannot actually reach', async () => {
+    const child = fakeChild();
+    child.tailcatRuntimeError = { message: 'dial remote port 5555: context deadline exceeded', at: 'now' };
+    const addPeerFn = vi.fn();
+    const saved = [];
+    // tailcat's own line is the cause; ours would only say the request failed.
+    await expect(addPeerViaTailcat(addOptions(child, {
+      addPeerFn,
+      patchForwardEntry: async (_id, patch) => { saved.push(patch); return {}; },
+      verifyTunnel: async () => 'fetch failed',
+    }))).rejects.toMatchObject({
+      code: 'TAILCAT_TUNNEL_UNREACHABLE',
+      status: 502,
+      message: expect.stringContaining('dial remote port 5555: context deadline exceeded'),
+    });
+    // A forward whose tunnel is dead must not leave a peer behind that will
+    // never answer — and the entry stays retryable without re-pasting the tc address.
+    expect(addPeerFn).not.toHaveBeenCalled();
+    expect(child.killed).toBe(true);
+    expect(_liveForwardCountForTests()).toBe(0);
+    expect(saved.at(-1)).toMatchObject({ status: 'failed' });
+  });
+
+  it('passes the verification through when the tunnel answers', async () => {
+    const child = fakeChild();
+    const verifyTunnel = vi.fn(async () => null);
+    const peer = await addPeerViaTailcat(addOptions(child, { verifyTunnel, protocol: 'https' }));
+    expect(peer.id).toBe('peer-example');
+    expect(verifyTunnel).toHaveBeenCalledWith({ localPort: 15555, protocol: 'https', auth: null });
+  });
+
   it('stops children on shutdown while preserving their restart metadata', async () => {
     const child = fakeChild();
     await addPeerViaTailcat(addOptions(child));
@@ -811,5 +843,30 @@ describe('tailcat startup diagnostics and DERP map priming', () => {
   it('never reaches the network from a suite that forgot to inject a fetch', async () => {
     await expect(primeDerpMapCache({ cachePath: '/example/cache/derpmap.json', statFn: async () => { throw new Error('ENOENT'); } }))
       .resolves.toEqual({ primed: false, reason: 'no-fetch' });
+  });
+});
+
+describe('verifyTunnelReachable', () => {
+  const url = 'http://127.0.0.1:15555/api/system/health';
+
+  it('treats any HTTP response as proof the tunnel carried the request', async () => {
+    // 401 from an auth-gating proxy still means bytes crossed — this probes the
+    // transport, not the API.
+    const fetchFn = vi.fn(async () => ({ status: 401 }));
+    await expect(verifyTunnelReachable({ localPort: 15555, fetchFn })).resolves.toBeNull();
+    expect(fetchFn.mock.calls[0][0]).toBe(url);
+  });
+
+  it('returns the failure detail when nothing answers, and honors https + auth', async () => {
+    const fetchFn = vi.fn(async () => { throw new Error('fetch failed'); });
+    const auth = { username: 'u', password: 'p' };
+    await expect(verifyTunnelReachable({ localPort: 15556, protocol: 'https', auth, fetchFn }))
+      .resolves.toBe('fetch failed');
+    expect(fetchFn.mock.calls[0][0]).toBe('https://127.0.0.1:15556/api/system/health');
+    expect(fetchFn.mock.calls[0][2]).toEqual({ auth });
+  });
+
+  it('skips verification rather than reaching the network when no fetch is available', async () => {
+    await expect(verifyTunnelReachable({ localPort: 15555, fetchFn: null })).resolves.toBeNull();
   });
 });

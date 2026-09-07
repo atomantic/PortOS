@@ -3,8 +3,9 @@
  * [tailcat](https://github.com/tailscale/tailcat) without a Tailscale account.
  *
  * Flow: ensure the `tailcat` CLI is installed → pre-warm the DERP map cache →
- * start `tailcat forward <tcADDR> LOCAL:5555` (preferred LOCAL=15555) → register
- * a normal peer at `127.0.0.1:LOCAL` over HTTP or explicitly selected HTTPS.
+ * start `tailcat forward <tcADDR> LOCAL:5555` (preferred LOCAL=15555) → prove the
+ * tunnel actually carries a request → register a normal peer at
+ * `127.0.0.1:LOCAL` over HTTP or explicitly selected HTTPS.
  *
  * The tc address is a bearer capability. Persist it only in the machine-local
  * forwards file for restart and retry; never log the full value, never put it on
@@ -23,6 +24,8 @@ import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
 import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPortReachable } from '../lib/connectivity.js';
+import { peerFetch } from '../lib/peerHttpClient.js';
+import { peerBaseUrl } from '../lib/peerUrl.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 import { findCommandOnPath, safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import {
@@ -50,6 +53,9 @@ const DERP_MAP_FETCH_TIMEOUT_MS = 15_000;
 const DIAGNOSTIC_TAIL_CHARS = 4096;
 const DIAGNOSTIC_MAX_CHARS = 320;
 const PORT_SCAN_LIMIT = 32;
+// Long enough to outlast tailcat's own per-connection dial deadline, so a
+// blocked tunnel fails with tailcat's explanation rather than ours.
+const TUNNEL_VERIFY_TIMEOUT_MS = 20_000;
 // How long a delivery failure keeps describing the tunnel. tailcat re-emits the
 // line on every failed request, so a still-broken forward keeps refreshing it,
 // while one that started working again simply goes quiet and ages out. Without
@@ -619,6 +625,33 @@ export async function startForwardProcess({
   return child;
 }
 
+/**
+ * Prove the tunnel can carry a request, resolving to null when it did or to a
+ * short failure detail when it did not. See "A bound listener is not a working
+ * tunnel" in docs/features/tailcat-peers.md for why an add cannot stop at the
+ * listener, and why ANY HTTP response counts as proof.
+ *
+ * Deliberately not `probePeer`: that one needs a registered peer record, writes
+ * probe status into the store, and budgets a tailnet hop rather than tailcat's
+ * own dial deadline. The URL is still built through `peerBaseUrl`, so the probe
+ * cannot address the forward differently from the peer it gates.
+ *
+ * `fetchFn` defaults to null under the test runner so a suite can never reach
+ * the network by forgetting to inject it.
+ */
+export async function verifyTunnelReachable({
+  localPort,
+  protocol = 'http',
+  auth = null,
+  fetchFn = isTestRunner() ? null : peerFetch,
+  timeoutMs = TUNNEL_VERIFY_TIMEOUT_MS,
+} = {}) {
+  if (!fetchFn) return null;
+  const base = peerBaseUrl({ transport: 'tailcat', protocol, address: '127.0.0.1', port: localPort });
+  return fetchFn(`${base}/api/system/health`, { signal: AbortSignal.timeout(timeoutMs) }, auth ? { auth } : null)
+    .then(() => null, (err) => String(err?.message || 'no response'));
+}
+
 export function stopForwardForPeer(peerId) {
   return withLifecycle(async () => {
     const entries = await readForwards();
@@ -688,6 +721,7 @@ async function addTailcatPeer({
   persistForwardEntry = upsertForward,
   patchForwardEntry = patchForward,
   removePeerFn = removeInstancePeer,
+  verifyTunnel,
 } = {}) {
   const trimmed = String(tcAddress || '').trim();
   if (!isValidTcAddress(trimmed)) {
@@ -724,7 +758,7 @@ async function addTailcatPeer({
 
   const peer = await startAndRegister({
     entry, ensureInstalled, primeDerpMap, allocatePort, startForward, addPeerFn,
-    patchForwardEntry, removePeerFn,
+    patchForwardEntry, removePeerFn, verifyTunnel,
   }).catch(async (err) => {
     await markForwardFailed(entry.id, err, patchForwardEntry);
     throw err;
@@ -747,6 +781,7 @@ async function startAndRegister({
   patchForwardEntry,
   removePeerFn,
   setPeerPortFn = setTailcatPeerPort,
+  verifyTunnel = verifyTunnelReachable,
 }) {
   const { bin } = await ensureInstalled();
   // Best-effort, and deliberately before the spawn: on a host whose filter
@@ -769,6 +804,24 @@ async function startAndRegister({
   }
 
   ownedChildren.add(child);
+
+  // The listener being bound is not the tunnel being usable — see
+  // verifyTunnelReachable. Fail the add here, while the operator is watching,
+  // instead of registering a peer that can never answer.
+  const unreachable = await verifyTunnel({ localPort, protocol: entry.protocol, auth: entry.auth });
+  if (unreachable) {
+    try { child.kill('SIGTERM'); } catch { /* best-effort */ }
+    ownedChildren.delete(child);
+    // tailcat's own line names the cause; ours only says the request failed.
+    const detail = child.tailcatRuntimeError?.message || unreachable;
+    throw new ServerError(
+      `tailcat is forwarding 127.0.0.1:${localPort} but the tunnel could not reach the remote — ${detail}. `
+      + 'Check that the remote is still serving its tailcat address, and that a local firewall is not '
+      + 'blocking the `tailcat` binary itself.',
+      { status: 502, code: 'TAILCAT_TUNNEL_UNREACHABLE' }
+    );
+  }
+
   let peer = existingPeer;
   try {
     if (shuttingDown) throw new Error('PortOS is shutting down');
