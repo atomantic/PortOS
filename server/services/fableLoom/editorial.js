@@ -26,6 +26,7 @@ import {
 import { computeTopologicalNodeOrder } from '../../lib/fableLoomProduction.js';
 import { CHARS_PER_TOKEN, usableInputTokens } from '../../lib/contextBudget.js';
 import { buildCastIntegrityReport } from '../../lib/characterIntegrity.js';
+import { analyzeCharacterEvolutionCoverage } from '../../lib/characterEvolutionCoverage.js';
 import { renderCastIntegrity } from '../../lib/castIntegrityPrompt.js';
 import {
   isFableLoomPlaybackMode,
@@ -435,6 +436,14 @@ export async function collectFableLoomEditorialDiagnostics(
   // the continuity pass reads — so a depth ruling the editor is told is binding
   // always names a character the canon digest actually describes.
   const castIntegrity = loomCastIntegrityReport(loom, universe);
+  // Branch coverage for the OPTIONAL evolution lens (#6444). `null` when the
+  // plan never opted in, and every key it contributes is then omitted — so a
+  // loom without a lens produces byte-identical diagnostics to a pre-#6444
+  // install, and the lens never becomes a gate on a legacy story. Reuses the
+  // playthrough report already computed above; it adds no enumeration.
+  const evolutionCoverage = analyzeCharacterEvolutionCoverage(loom, {
+    playthroughReport: playthrough,
+  });
   const stats = {
     outlineErrors: outline.stats.errorCount,
     outlineWarnings: outline.stats.warningCount,
@@ -450,6 +459,11 @@ export async function collectFableLoomEditorialDiagnostics(
     transitionCount: playthrough.stats.transitionCount,
     castCharacterCount: castIntegrity.castCount,
     castIntegrityFindings: castIntegrity.findings.length,
+    ...(evolutionCoverage ? {
+      evolutionCoverageStatus: evolutionCoverage.status,
+      evolutionCoverageFindings: evolutionCoverage.stats.findingCount,
+      unreviewedEvolutionLenses: evolutionCoverage.stats.unreviewedLensCount,
+    } : {}),
   };
   return {
     passed: outline.stats.ready
@@ -464,6 +478,10 @@ export async function collectFableLoomEditorialDiagnostics(
     // autopilot run the way a broken graph does. The editor is told about it;
     // the pass/fail contract is unchanged.
     castIntegrity,
+    // Reported, never gating — for the same reason cast integrity is not: an
+    // unproven branch is a craft note, not a broken graph, and `passed` stays
+    // exactly the contract it was before the lens existed.
+    ...(evolutionCoverage ? { evolutionCoverage } : {}),
     stats,
   };
 }
@@ -489,6 +507,13 @@ const diagnosticLines = (diagnostics) => {
       lines.push(`- [playthrough/${issue.severity}] episode=${episode.episodeId} path=${issue.pathId || '-'} node=${issue.nodeId || '-'} code=${issue.code}: ${issue.message}`);
     });
   });
+  if (diagnostics.evolutionCoverage) {
+    const coverage = diagnostics.evolutionCoverage;
+    lines.push(`Character evolution coverage: ${coverage.status}; ${coverage.stats.declaredLensCount}/${coverage.stats.lensCount} lens(es) declared, ${coverage.stats.unreviewedLensCount} unreviewed.`);
+    coverage.findings.forEach((finding) => {
+      lines.push(`- [evolution/${finding.severity}] episode=${finding.episodeId || '-'} node=${finding.nodeId || '-'} stage=${finding.stageId || '-'} code=${finding.code}: ${finding.message} Fix: ${finding.remediation}`);
+    });
+  }
   return lines.join('\n');
 };
 
@@ -528,6 +553,18 @@ const compactEditorialDiagnostics = (diagnostics) => {
         problem: finding.message,
         suggestion: finding.remediation || 'Repair the continuity break.',
       }))),
+    // Branch coverage for the evolution lens lands in the shared shape as
+    // `character`, so the editor reads it beside every other finding. Absent
+    // entirely when no lens is authored.
+    ...asArray(diagnostics.evolutionCoverage?.findings).map((finding) => ({
+      severity: finding.severity === 'error' ? 'high' : 'medium',
+      category: 'character',
+      episodeId: finding.episodeId || null,
+      nodeId: finding.nodeId || null,
+      pathId: finding.pathId || null,
+      problem: finding.message,
+      suggestion: finding.remediation,
+    })),
   ];
   return {
     passed: diagnostics.passed,

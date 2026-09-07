@@ -116,6 +116,7 @@ export * from './taskDataInputCatalog.js';
 export * from './bibleLimits.js';
 // The optional five-stage character evolution lens, as a pure leaf.
 export * from './characterEvolution.js';
+export * from './characterEvolutionCoverage.js';
 // The narrative-character framework field list, as a pure leaf — storyBible.js
 // re-exports CHARACTER_ARC_TYPES from here, so keep this flat export ahead of
 // the namespaced storyBible below.
