@@ -257,8 +257,17 @@ export default function AIProviders() {
     };
   }, [activeRun]);
 
+  // `setLoading(true)` swaps the entire list for the page skeleton, which
+  // unmounts the scroll container and drops the user back at the top. That is
+  // right for the first load and wrong for every reload that follows a click on
+  // a card — after enabling, deleting, or saving a provider several screens
+  // down, the card you just acted on scrolled out from under you. So the
+  // skeleton is shown only while there is nothing to keep on screen; a reload
+  // over an already-rendered list refreshes in place and holds the scroll
+  // position. The `loadError` path still swaps in the error state, because there
+  // genuinely is nothing left to show.
   const loadData = async () => {
-    setLoading(true);
+    setLoading(providers.length === 0);
     setLoadError(false);
     let providersFailed = false;
     const [providersData, appsData, statusData, orchestrationProfilesData] = await Promise.all([
@@ -463,13 +472,36 @@ export default function AIProviders() {
     loadReadiness();
   };
 
+  // Applied to the clicked card in place. `loadData()` here instead flipped
+  // `loading` back on, swapping the whole page for the skeleton and dropping the
+  // user at the top of the list — a card several screens down was unreachable
+  // after refreshing it.
+  //
+  // Only the two fields a refresh writes are taken from the response: the record
+  // it returns is a bare `presentProvider`, so replacing the whole entry would
+  // drop the fields only the LIST endpoint adds (`executionModes`,
+  // `prerequisitesMet`, the codex account) and un-group a unified card. Those
+  // two fields fan out to every mode in the group server-side
+  // (`sharedModeUpdates`), so they are applied to the siblings here too rather
+  // than leaving them showing the pre-refresh catalog until the next poll.
+  // `modelContextWindows` is copied even when absent — a refresh that pruned it
+  // must not leave the stale map behind.
   const handleRefreshModels = async (id) => {
     setRefreshing(prev => ({ ...prev, [id]: true }));
     try {
       const result = await api.refreshProviderModels(id, { silent: true });
       if (result) {
         toast.success(`Models refreshed for ${result.name}`);
-        loadData();
+        setProviders(current => {
+          const refreshed = current.find(p => p.id === result.id);
+          const group = new Set([result.id, ...(refreshed?.executionModes || []).map(mode => mode.id)]);
+          return current.map(p => (group.has(p.id)
+            ? { ...p, models: result.models, modelContextWindows: result.modelContextWindows }
+            : p));
+        });
+        // The catalog a card just learned is graded by the readiness checklist,
+        // which the server computes from the stored record.
+        loadReadiness();
       } else {
         toast.error('Failed to refresh models - provider may not support this feature');
       }

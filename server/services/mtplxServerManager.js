@@ -30,7 +30,7 @@ import { sleep } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { launchArgs, normalizeTuning, tuningSpecsFor } from '../lib/localModelTuning.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
-import { listMtplxCachedModels, pickMtplxCachedModel } from '../lib/mtplxModels.js';
+import { listMtplxCachedModels, pickMtplxCachedModel, servableMtplxCachedModels } from '../lib/mtplxModels.js';
 import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { createDaemonWatcher, pm2ArgValue, idleWindowMs, markDaemonUsed, registerIdleDaemon, MTPLX_APP } from '../lib/managedDaemon.js';
@@ -1003,6 +1003,57 @@ export function isMtplxProvider(provider) {
   // server on it would lazily start MTPLX for someone else's API.
   const managedPort = currentConfig?.port;
   return Boolean(managedPort) && localEndpointPort(provider.endpoint) === managedPort;
+}
+
+/**
+ * The checkpoints THIS machine can serve, for an MTPLX provider's model refresh.
+ *
+ * `mtplx serve` loads one checkpoint and reports only that one through
+ * `/v1/models`, under the slug its launch line minted — so the refresh a user
+ * clicks after pulling a second checkpoint returned the same lone id it
+ * returned before, and the new weights never appeared in the provider's model
+ * list. The cache is the real catalog of what is servable here, so it is merged
+ * in (`aiToolkit`'s `cachedModelIds` hook).
+ *
+ * Only entries MTPLX itself calls complete are listed (`servableMtplxCachedModels`
+ * — the same rule a start is picked with): an interrupted pull leaves a directory
+ * that lists but cannot load, and offering it as a selectable model just moves
+ * the failure into an agent run.
+ *
+ * `null` for anything that is not an MTPLX provider AND for a cache that could
+ * not be read (no binary, a cold Homebrew wrapper, a failed listing) —
+ * deliberately not `[]`, which the caller must be free to read as "read, and
+ * genuinely empty". Both answers leave the endpoint probe's result untouched.
+ *
+ * Gated on `describeMtplxRuntime().ready` for the reason `lib/mtplxModels.js`
+ * spells out: on a host whose Homebrew wrapper has not bootstrapped its venv,
+ * invoking `mtplx` IS a several-hundred-megabyte download. A refresh click is
+ * explicit, but it is not consent to that — and it would time out anyway.
+ *
+ * @param {{type?: string, endpoint?: string, mtplxBacked?: boolean}|null} provider
+ * @returns {Promise<string[]|null>}
+ */
+export async function mtplxCachedModelIds(provider) {
+  // LOCAL first, and on its own line: the `mtplxBacked` marker rides the record
+  // across a user's federated machines, so a provider pointed at a peer's MTPLX
+  // carries every signal below while its checkpoints are on the OTHER machine.
+  // Answering there would offer this host's cache as that provider's catalog.
+  if (!isLocalInstanceEndpoint(provider?.endpoint)) return null;
+  // Two signals, because the shipped records carry two (#6466 collapses these
+  // into `localRuntimeKind`): `localRuntimeKind` reads
+  // the `mtplxBacked` marker on the OpenCode CLI/TUI wrappers, and `id` names the
+  // API record — a plain OpenAI-compatible endpoint with no marker to read, the
+  // same shortcut `hardwareRequirementsForProvider` takes for it. A bare `:8000`
+  // is deliberately NOT a third: that port is generic, and this must not offer
+  // MTPLX's checkpoints as the catalog of someone else's local API.
+  const ours = localRuntimeKind(provider) === 'mtplx' || provider?.id === 'mtplx';
+  if (!ours) return null;
+  const binaryPath = resolveMtplxBinary();
+  if (!binaryPath) return null;
+  if (!(await describeMtplxRuntime(binaryPath)).ready) return null;
+  const { models } = await listMtplxCachedModels();
+  if (!Array.isArray(models)) return null;
+  return servableMtplxCachedModels(models).map((row) => row.repo_id);
 }
 
 /**

@@ -20,6 +20,7 @@ const api = vi.hoisted(() => ({
   getSampleProviders: vi.fn(),
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
+  refreshProviderModels: vi.fn(),
   setActiveProvider: vi.fn().mockResolvedValue({}),
   getOrchestrationProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createRun: vi.fn().mockResolvedValue({ runId: 'run-1' }),
@@ -1865,5 +1866,100 @@ describe('AIProviders orchestration profiles', () => {
         expect.anything()
       );
     });
+  });
+});
+
+// A refresh used to end in `loadData()`, which flips the page's `loading` flag
+// back on — the whole list is replaced by the skeleton and the browser lands at
+// the top, so the card the user clicked (often several screens down) scrolls out
+// from under them. The card has to update in place instead.
+describe('AIProviders model refresh', () => {
+  const executionModes = [{ id: 'opencode-mtplx', type: 'cli' }, { id: 'opencode-mtplx-tui', type: 'tui' }];
+
+  const mtplxProviders = () => ({
+    activeProvider: null,
+    providers: [
+      {
+        id: 'opencode-mtplx', name: 'OpenCode MTPLX', type: 'cli', command: 'opencode', enabled: true,
+        models: ['mtplx-served'], canRefreshModels: true, executionModes,
+      },
+      {
+        id: 'opencode-mtplx-tui', name: 'OpenCode MTPLX TUI', type: 'tui', command: 'opencode', enabled: true,
+        models: ['mtplx-served'], canRefreshModels: true, executionModes,
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getCodexAccount.mockImplementation(() => new Promise(() => {}));
+    api.getProviders.mockResolvedValue(mtplxProviders());
+    localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: null } };
+  });
+
+  it('applies the refreshed catalog to the clicked card without reloading the page', async () => {
+    api.refreshProviderModels.mockResolvedValue({
+      id: 'opencode-mtplx', name: 'OpenCode MTPLX', type: 'cli', command: 'opencode', enabled: true,
+      models: ['mtplx-served', 'wang-yang/Ornith-1.0-35B-MTPLX'], canRefreshModels: true,
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Models refreshed for OpenCode MTPLX'));
+    expect(await screen.findByText(/Models: mtplx-served, wang-yang\/Ornith-1\.0-35B-MTPLX/)).toBeInTheDocument();
+    // One load, from the initial mount — the refresh must not re-fetch the whole
+    // page, which is what unmounted the list and reset the scroll position.
+    expect(api.getProviders).toHaveBeenCalledTimes(1);
+    // The unified card keeps its grouping: replacing the entry wholesale with
+    // the bare record the refresh route returns would drop `executionModes` and
+    // split one card into two.
+    expect(screen.getAllByRole('button', { name: 'Refresh Models' })).toHaveLength(1);
+  });
+
+  it('keeps the stored catalog when the refresh is unsupported', async () => {
+    api.refreshProviderModels.mockResolvedValue(null);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(screen.getByText(/Models: mtplx-served$/)).toBeInTheDocument();
+  });
+
+  // The root cause under the refresh button, which the other four reload paths
+  // on this page share: `loadData` flipped `loading` on unconditionally, so ANY
+  // reload after a click swapped the whole list for the page skeleton and
+  // returned the user to the top. The skeleton belongs to the first load only.
+  it('reloads after enabling a provider without swapping the list for the skeleton', async () => {
+    api.updateProvider.mockResolvedValue({});
+    // The reload is held OPEN so the assertions run while it is in flight — that
+    // window is the whole bug, and after it resolves the skeleton is gone again
+    // whether or not it ever appeared.
+    let releaseReload;
+    api.getProviders
+      .mockResolvedValueOnce(mtplxProviders())
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseReload = resolve; }));
+
+    renderPage();
+    // The first load DOES show the skeleton — there is nothing else to show, and
+    // this is what keeps the assertion below from passing vacuously.
+    expect(screen.getByLabelText('Loading providers')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable' }));
+
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
+    expect(screen.queryByLabelText('Loading providers')).toBeNull();
+    // ...and the card the user just clicked is still the thing on screen.
+    expect(screen.getByRole('heading', { name: 'OpenCode MTPLX' })).toBeInTheDocument();
+
+    releaseReload({
+      ...mtplxProviders(),
+      providers: mtplxProviders().providers.map(p => ({ ...p, enabled: false })),
+    });
+    expect(await screen.findByRole('button', { name: 'Enable' })).toBeInTheDocument();
   });
 });

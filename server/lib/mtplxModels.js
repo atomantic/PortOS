@@ -75,23 +75,41 @@ export async function listMtplxCachedModels({ command = 'mtplx' } = {}) {
 }
 
 /**
+ * The cache rows MTPLX itself calls complete, in listing order.
+ *
+ * `validation.ok` is false for a directory missing required files or an MTP
+ * sidecar, which is what an interrupted `mtplx pull` leaves behind. That rule
+ * decides both what PortOS may START a server on and what it may OFFER as a
+ * selectable model, so it lives here once rather than being spelled at each —
+ * the shape it reads is upstream's `models --json`, and a second copy would go
+ * stale the first time that payload grows a new incompleteness marker.
+ *
+ * `[]` for a non-array input: callers that must distinguish "could not read the
+ * cache" check `listMtplxCachedModels`' own `models: null` before calling.
+ *
+ * @param {object[]|null|undefined} models - rows from `listMtplxCachedModels`
+ * @returns {object[]}
+ */
+export function servableMtplxCachedModels(models) {
+  if (!Array.isArray(models)) return [];
+  return models.filter((row) => typeof row?.repo_id === 'string' && row.repo_id !== '' && row?.validation?.ok !== false);
+}
+
+/**
  * The cached repo id PortOS should hand `mtplx serve --model`, or null when the
  * cache holds nothing servable.
  *
- * Only entries MTPLX itself calls complete are eligible: `validation.ok` is
- * false for a directory missing required files or an MTP sidecar, which is what
- * an interrupted `mtplx pull` leaves behind — starting the server on one of
- * those trades an honest "nothing is cached" for a load failure minutes later.
- * Among complete entries, one carrying `mtplx_runtime.json` wins: that is the
- * recorded exactness contract, and the runtime warns on stats from artifacts
- * without it.
+ * Only entries MTPLX itself calls complete are eligible (see
+ * `servableMtplxCachedModels`) — starting the server on a partial pack trades an
+ * honest "nothing is cached" for a load failure minutes later. Among complete
+ * entries, one carrying `mtplx_runtime.json` wins: that is the recorded
+ * exactness contract, and the runtime warns on stats from artifacts without it.
  *
  * @param {object[]|null|undefined} models - rows from `listMtplxCachedModels`
  * @returns {string|null}
  */
 export function pickMtplxCachedModel(models) {
-  if (!Array.isArray(models)) return null;
-  const usable = models.filter((row) => typeof row?.repo_id === 'string' && row.repo_id !== '' && row?.validation?.ok !== false);
+  const usable = servableMtplxCachedModels(models);
   const verified = usable.find((row) => row.has_runtime_contract === true);
   return (verified || usable[0])?.repo_id ?? null;
 }

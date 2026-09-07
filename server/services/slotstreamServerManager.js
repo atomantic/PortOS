@@ -540,6 +540,32 @@ export function isSlotstreamProvider(provider) {
   return Boolean(managedPort) && Number(localEndpointPort(provider.endpoint)) === managedPort;
 }
 
+/**
+ * The checkpoints THIS machine can serve, for a Slotstream provider's model
+ * refresh — the Slotstream half of `services/localCachedModels.js`.
+ *
+ * Same shape of bug as MTPLX, and worse in one way: `slotstream serve` loads one
+ * checkpoint and answers only under that id, while the shipped `slotstream`
+ * record lists THREE. So a refresh did not merely fail to add a newly downloaded
+ * checkpoint — it pruned the record's other two shipped ids down to whatever the
+ * daemon happened to have loaded, including the `defaultModel` pin whenever that
+ * was not the loaded one.
+ *
+ * `null` for a provider that is not this daemon's and for a cache that could not
+ * be READ — deliberately not `[]`, which the caller must be free to read as
+ * "read, and genuinely empty". Unlike MTPLX this costs no subprocess and needs
+ * no runtime gate: the listing is a directory read (`lib/slotstreamModels.js`).
+ *
+ * @param {{type?: string, endpoint?: string}|null} provider
+ * @returns {Promise<string[]|null>}
+ */
+export async function slotstreamCachedModelIds(provider) {
+  if (!isSlotstreamProvider(provider)) return null;
+  const { models } = await listSlotstreamCachedModels();
+  if (!Array.isArray(models)) return null;
+  return models.map((row) => row?.id).filter((id) => typeof id === 'string' && id !== '');
+}
+
 export async function ensureSlotstreamProviderReady(provider) {
   if (!isSlotstreamProvider(provider)) return { success: true };
   const { ready, reason } = await ensureSlotstreamRunning();

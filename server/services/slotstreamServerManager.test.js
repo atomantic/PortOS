@@ -24,6 +24,7 @@ import {
   _resetSlotstreamServerStateForTests,
   ensureSlotstreamRunning,
   isSlotstreamProvider,
+  slotstreamCachedModelIds,
   SLOTSTREAM_APP,
 } from './slotstreamServerManager.js';
 import * as processEnv from '../lib/processEnv.js';
@@ -307,6 +308,36 @@ describe('slotstreamServerManager', () => {
         endpoint: `http://192.0.2.10:${PORTS.SLOTSTREAM}/v1`,
         id: 'slotstream',
       })).toBe(false);
+    });
+  });
+
+  /**
+   * The catalog a Slotstream provider's "Refresh Models" merges in. The daemon
+   * serves ONE checkpoint and answers only under that id, while the shipped
+   * record lists three — so before this, a refresh pruned the other two shipped
+   * ids (and the `defaultModel` pin whenever it was not the loaded one) down to
+   * whatever happened to be loaded.
+   */
+  describe('slotstreamCachedModelIds', () => {
+    const local = { type: 'api', id: 'slotstream', endpoint: `http://127.0.0.1:${PORTS.SLOTSTREAM}/v1` };
+
+    it('lists every cached checkpoint, not just the loaded one', async () => {
+      vi.spyOn(slotstreamModels, 'listSlotstreamCachedModels').mockResolvedValue({
+        models: [cachedModel('qwen-moe'), cachedModel('gpt-oss-120b-mxfp4')],
+        error: null,
+      });
+      expect(await slotstreamCachedModelIds(local)).toEqual(['qwen-moe', 'gpt-oss-120b-mxfp4']);
+    });
+
+    it('answers null for a provider that is not this daemon’s', async () => {
+      expect(await slotstreamCachedModelIds({ ...local, endpoint: `http://192.0.2.10:${PORTS.SLOTSTREAM}/v1` })).toBeNull();
+    });
+
+    // `null`, never `[]`: a cache PortOS could not read must not read as "this
+    // machine has no checkpoints" and blank a provider's model list.
+    it('answers null when the cache could not be read', async () => {
+      vi.spyOn(slotstreamModels, 'listSlotstreamCachedModels').mockResolvedValue({ models: null, error: 'EACCES' });
+      expect(await slotstreamCachedModelIds(local)).toBeNull();
     });
   });
 });
