@@ -101,6 +101,12 @@ vi.mock('../lib/pythonSetup.js', () => ({
   detectVenvBasePythonSync: vi.fn(() => null),
 }));
 
+// The generative upscale is queued, not run inline (#6511), so it lives in
+// its own service module and the route reaches it directly.
+vi.mock('../services/videoGen/upscaleJob.js', () => ({
+  enqueueLtxUpscale: vi.fn(),
+}));
+
 vi.mock('../services/videoGen/local.js', () => ({
   // The route checks `runtime` on the default model when validating a2v —
   // include it so the a2v happy-path tests don't trip the runtime capability
@@ -284,6 +290,7 @@ vi.mock('fs/promises', () => ({
 
 import { copyFile, unlink } from 'fs/promises';
 import * as videoGenService from '../services/videoGen/local.js';
+import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
@@ -2857,11 +2864,16 @@ describe('videoGen routes', () => {
       expect(explicit).toEqual(noBody);
     });
 
-    it('forwards the generative method to the service', async () => {
-      videoGenService.upscaleHistoryItem.mockResolvedValue({ id: otherValidId });
+    // The generative method answers with a QUEUED JOB, not a finished row: it
+    // is a multi-minute GPU render, so running it inline would hold the request
+    // open and skip cancellation/watchdog/partial-output cleanup (#6511).
+    it('queues the generative method instead of running it inline', async () => {
+      upscaleJobService.enqueueLtxUpscale.mockResolvedValue({ jobId: 'job-1', position: 2, status: 'queued' });
       const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'ltx' });
       expect(r.status).toBe(200);
-      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'ltx' });
+      expect(r.body).toEqual({ ok: true, job: { jobId: 'job-1', position: 2, status: 'queued' } });
+      expect(upscaleJobService.enqueueLtxUpscale).toHaveBeenCalledWith(validHistoryId);
+      expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
     });
 
     it('rejects an unknown method with a 400 and never reaches the service', async () => {
@@ -2871,7 +2883,7 @@ describe('videoGen routes', () => {
     });
 
     it('surfaces the 501 capability error the service raises for an unavailable runtime', async () => {
-      videoGenService.upscaleHistoryItem.mockRejectedValue(
+      upscaleJobService.enqueueLtxUpscale.mockRejectedValue(
         Object.assign(new Error('needs LTX-2.5 MLX (ltx25)'), { status: 501, code: 'UNSUPPORTED_RUNTIME' }),
       );
       const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'ltx' });

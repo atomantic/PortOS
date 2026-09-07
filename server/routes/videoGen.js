@@ -51,6 +51,7 @@ import {
 // provider surface would make every suite that mocks local.js responsible for
 // re-declaring it just so this file's route schemas can be built.
 import { UPSCALE_METHODS, DEFAULT_UPSCALE_METHOD } from '../services/videoGen/upscalePlan.js';
+import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/reactor.js';
@@ -1200,11 +1201,21 @@ router.get('/upscale/:id/plan', asyncHandler(async (req, res) => {
   res.json({ ok: true, plan: await planUpscaleHistoryItem(parsed.data, query.data) });
 }));
 
+// The two methods answer with materially different things, so they answer with
+// different KEYS rather than one overloaded field. Lanczos is an inline ffmpeg
+// pass that returns the finished row; the generative method is a multi-minute
+// GPU render, so it returns the queued job to watch and the row appears in
+// history when it lands (#6511). Every pre-#6511 client omits `method`, gets
+// Lanczos, and still reads `video` exactly as before.
 router.post('/upscale/:id', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
   const body = upscaleMethodSchema.safeParse(req.body ?? {});
   if (!body.success) failValidation(body);
+  if (body.data.method === 'ltx') {
+    res.json({ ok: true, job: await enqueueLtxUpscale(parsed.data) });
+    return;
+  }
   const entry = await upscaleHistoryItem(parsed.data, body.data);
   res.json({ ok: true, video: entry });
 }));

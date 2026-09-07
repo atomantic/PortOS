@@ -186,3 +186,47 @@ export const LANCZOS_PROVENANCE_FIELDS = Object.freeze([
 // runtime, and naming it explicitly keeps `upscaleRuntime` non-null on every
 // upscaled row.
 export const LANCZOS_RUNTIME_ID = 'ffmpeg';
+
+// The media-job kind the generative pass is dispatched as (#6511). It is its
+// OWN kind rather than a `video` mode so the local-only rule is structural: the
+// federation layer's kind maps (`REMOTE_MEDIA_MODULES`, `ROUTABLE_MEDIA_KINDS`,
+// `KNOWN_MEDIA_KINDS`) are closed lists that do not contain it, so a source clip
+// can never be offered to a peer without someone adding it to one of them.
+export const LTX_UPSCALE_JOB_KIND = 'video-upscale';
+
+/**
+ * Why this source cannot be aligned to the model grid, or `null` when it can.
+ *
+ * #6502 forbids silent cropping and silent duration loss, so an alignment plan
+ * is only usable when every axis was measurable and the plan pads rather than
+ * trims. Both refusals are stated as a reason the caller can show, and both
+ * happen BEFORE the job is queued — a multi-minute GPU render that ends in a
+ * shorter clip than the user submitted is exactly what this prevents.
+ */
+export const ltxAlignmentBlocker = (alignment) => {
+  if (!alignment) return 'The source could not be measured, so the model grid alignment is unknown.';
+  const unmeasured = ['padWidth', 'padHeight', 'padFrames'].filter((key) => alignment[key] === null);
+  if (unmeasured.length > 0) {
+    const axes = unmeasured.map((key) => key.replace('pad', '').toLowerCase()).join(', ');
+    return `The source ${axes} could not be measured, so it cannot be aligned to the model grid without guessing.`;
+  }
+  if (alignment.trimFrames > 0) {
+    return `Aligning this source to the model grid would trim ${alignment.trimFrames} frame(s) off the end, losing duration.`;
+  }
+  return null;
+};
+
+// Whether the aligned source differs from the source at all. `false` means the
+// render can read the ORIGINAL clip as its IC reference — no padded temp copy,
+// and nothing to crop back off the output.
+export const ltxAlignmentIsNoop = (alignment) => (
+  ltxAlignmentBlocker(alignment) === null
+  && alignment.padWidth === 0 && alignment.padHeight === 0 && alignment.padFrames === 0
+);
+
+// The provenance the generative pass writes ITSELF. Unlike Lanczos — which
+// inherits fps/numFrames/duration/seed from the source row it spreads — a
+// generative render measures its own output and rolls its own seed, so it owns
+// the whole contract. Asserted against a real ltx entry so dropping one fails a
+// test rather than shipping a row a reader cannot tell apart from a legacy one.
+export const LTX_PROVENANCE_FIELDS = UPSCALE_PROVENANCE_FIELDS;

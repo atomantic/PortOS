@@ -10,8 +10,8 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 // The method contract (#6509): an absent options bag is exactly the historical
-// Lanczos pass, `ltx` is accepted by the contract but has no dispatch path
-// until #6511, and the plan endpoint is read-only.
+// Lanczos pass, `ltx` belongs to the queued dispatch path (#6511) and is
+// refused by the inline entry point, and the plan endpoint is read-only.
 
 const state = vi.hoisted(() => ({
   history: [],
@@ -124,18 +124,18 @@ describe('upscaleHistoryItem — method selection', () => {
     expect(loadHistory).not.toHaveBeenCalled();
   });
 
-  it('fails the generative method with a capability error naming the runtime', async () => {
+  it('refuses to run the generative method inline — it belongs to the queue (#6511)', async () => {
     await expect(upscaleHistoryItem(SOURCE_ID, { method: 'ltx' }))
-      .rejects.toMatchObject({ status: 501, code: 'UNSUPPORTED_RUNTIME' });
+      .rejects.toMatchObject({ status: 400, code: 'UPSCALE_METHOD_NOT_INLINE' });
   });
 
-  it('queues nothing and writes nothing when the generative method is refused', async () => {
+  it('runs nothing and writes nothing when the generative method is refused inline', async () => {
     await upscaleHistoryItem(SOURCE_ID, { method: 'ltx' }).catch(() => {});
     expect(ffmpeg.upscaleVideo2x).not.toHaveBeenCalled();
     expect(mutateVideoHistory).not.toHaveBeenCalled();
   });
 
-  it('keeps the already-upscaled guard ahead of the capability error', async () => {
+  it('keeps the already-upscaled guard ahead of the method-dispatch error', async () => {
     // Otherwise adding a method would change the status code an existing client
     // sees for a source it must not re-upscale.
     state.history = [sourceRow({ upscaledFrom: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa1' })];

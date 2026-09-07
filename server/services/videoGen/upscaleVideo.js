@@ -158,9 +158,8 @@ export async function planUpscaleHistoryItem(historyId, options = {}) {
 //
 // `options.method` selects the pass: `'lanczos'` (the default, and what every
 // pre-#6509 caller gets by omitting the bag) runs the historical ffmpeg filter
-// inline. `'ltx'` is accepted by the contract but has no dispatch path until
-// #6511 lands, so it fails fast with a capability error naming the runtime it
-// would need rather than silently falling back to Lanczos.
+// inline. `'ltx'` belongs to the queued dispatch path (upscaleJob.js, #6511)
+// and is refused here rather than silently falling back to Lanczos.
 //
 // Returns the new history entry on success; throws ServerError on any
 // missing-input / ffmpeg / file-system failure so the route can map it to
@@ -172,11 +171,15 @@ export async function upscaleHistoryItem(historyId, options = {}) {
     throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
   }
   if (method === 'ltx') {
-    const runtime = describeLtxRuntime();
-    const named = runtime.id ? `${runtime.label} (${runtime.id})` : `no runtime for ${process.platform}`;
+    // This is the INLINE pass. A generative upscale is a multi-minute GPU
+    // render and must go through the media job queue (#6511), so running it
+    // here would block the request and bypass cancellation, the watchdog and
+    // the partial-output cleanup. Callers use enqueueLtxUpscale instead; the
+    // route already dispatches on the method, so reaching this is a bug, not a
+    // capability gap.
     throw new ServerError(
-      `Generative upscale is not available on this install: it needs ${named}, which has no upscale dispatch path yet.`,
-      { status: 501, code: 'UNSUPPORTED_RUNTIME' },
+      'Generative upscale runs through the media job queue — submit it with enqueueLtxUpscale, not the inline pass.',
+      { status: 400, code: 'UPSCALE_METHOD_NOT_INLINE' },
     );
   }
   const sourcePath = resolveSourcePath(item);

@@ -41,6 +41,14 @@ export const LTX25_EXPECTED_REVISION = '57952288076766abe27dda3a774b2c24f7346977
 // would read as untracked in that pin verification.
 export const LTX25_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'ltx25-encoder-shims');
 
+// Generative video upscale (#6511). A spatial-upscale pass fuses the LTX-2.5
+// Pixel Spatial Upscaler IC-LoRA over a source clip, which is a different
+// entry point from a text/image render — so it gets its own helper script per
+// runtime rather than another mode flag on the generation script. Both scripts
+// land with the Python backends (#6512 MLX / #6513 CUDA); until then the
+// runtime's venv is absent, which is what gates the feature off.
+export const LTX25_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'upscale_ltx25.py');
+
 // Wan 2.2 MLX runtime — pinned MLX-Gen checkout provisioned on demand.
 export const WAN22_VENV_PYTHON = join(homedir(), '.portos', 'mlx-gen', '.venv', 'bin', 'python3');
 export const WAN22_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_wan22.py');
@@ -127,6 +135,7 @@ export const LTX25_CUDA_VENV_PYTHON = process.platform === 'win32'
   ? join(LTX25_CUDA_REPO_DIR, '.venv', 'Scripts', 'python.exe')
   : join(LTX25_CUDA_REPO_DIR, '.venv', 'bin', 'python3');
 export const LTX25_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx25_cuda.py');
+export const LTX25_CUDA_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'upscale_ltx25_cuda.py');
 
 // Wan 2.2 TI2V 5B on CUDA — official Diffusers checkpoint.
 export const WAN22_CUDA_REPO_DIR = join(homedir(), '.portos', 'wan2.2-cuda');
