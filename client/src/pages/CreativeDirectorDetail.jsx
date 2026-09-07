@@ -17,6 +17,7 @@ import {
 import VideoDraftDrawer from '../components/creative-director/VideoDraftDrawer.jsx';
 import OverviewTab from '../components/creative-director/OverviewTab.jsx';
 import TreatmentTab from '../components/creative-director/TreatmentTab.jsx';
+import VideoArtifactsTab from '../components/creative-director/VideoArtifactsTab.jsx';
 import SegmentsTab from '../components/creative-director/SegmentsTab.jsx';
 import PlanTab from '../components/creative-director/PlanTab.jsx';
 import RunsTab from '../components/creative-director/RunsTab.jsx';
@@ -29,7 +30,7 @@ import useMediaJobProgress from '../hooks/useMediaJobProgress';
 
 const TERMINAL_PROJECT_STATUSES = new Set(['complete', 'failed', 'paused', 'draft']);
 
-const VIDEO_DRAFT_TABS = [{ id: 'overview', label: 'Overview' }, { id: 'segments', label: 'Shots' }, { id: 'runs', label: 'Runs' }];
+const VIDEO_DRAFT_TABS = [{ id: 'overview', label: 'Overview' }, { id: 'artifacts', label: 'Artifacts' }, { id: 'segments', label: 'Shots' }, { id: 'runs', label: 'Runs' }];
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -347,6 +348,7 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
           />
         )}
         {project.workspace !== 'video' && activeTab === 'treatment' && <TreatmentTab project={project} />}
+        {project.workspace === 'video' && activeTab === 'artifacts' && <VideoArtifactsTab project={project} basePath={basePath} />}
         {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} basePath={basePath} />}
         {activeTab === 'runs' && <RunsTab project={project} />}
       </div>
