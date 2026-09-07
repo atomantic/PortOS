@@ -160,6 +160,58 @@ export const fetchHuggingfaceModel = async (repo, { token, revision, fetchImpl =
   return readResponseJson(res);
 };
 
+// Host allowlist for a `cursor` continuation URL — see searchHuggingfaceLoraModels.
+const HF_SEARCH_HOST = 'huggingface.co';
+
+/**
+ * Public HF `/api/models` list-search endpoint — lightweight per-entry shape
+ * (id, tags, downloads, likes; no siblings/cardData). Backs the video-LoRA
+ * search catalog: candidates found here still need a full
+ * `fetchHuggingfaceModel()` per repo before they can be classified/installed.
+ *
+ * `cursor`, when passed, is used AS THE ENTIRE REQUEST URL rather than folded
+ * into new params — it's the opaque continuation link HF returned in the
+ * previous page's `Link: rel="next"` response header, which already encodes
+ * its own search/offset state. Only a `huggingface.co` URL is accepted (the
+ * caller's own prior response is the only legitimate source of this value,
+ * but it still crossed a third-party HTTP response once, so re-validate
+ * rather than trust it blindly).
+ *
+ * Returns `{ items, nextCursor }` — `nextCursor` is the next page's Link URL
+ * (string) or null when exhausted. fetchImpl is injectable for tests.
+ */
+export const searchHuggingfaceLoraModels = async ({ query, author, tag = 'lora', limit = 12, cursor = null, token, fetchImpl = fetch, signal } = {}) => {
+  let url;
+  if (cursor) {
+    if (!URL.canParse(cursor) || new URL(cursor).hostname.toLowerCase() !== HF_SEARCH_HOST) {
+      throw new ServerError('Invalid HuggingFace search cursor', { status: 400, code: 'HF_BAD_CURSOR' });
+    }
+    url = cursor;
+  } else {
+    const params = new URLSearchParams();
+    const trimmedQuery = typeof query === 'string' ? query.trim() : '';
+    const trimmedAuthor = typeof author === 'string' ? author.trim() : '';
+    if (trimmedQuery) params.set('search', trimmedQuery);
+    if (trimmedAuthor) params.set('author', trimmedAuthor);
+    if (tag) params.set('filter', tag);
+    params.set('limit', String(Math.max(1, Math.min(50, limit))));
+    params.set('sort', 'downloads');
+    params.set('direction', '-1');
+    url = `${HF_API}?${params.toString()}`;
+  }
+  const res = await fetchImpl(url, { headers: { Accept: 'application/json', ...buildHfAuthHeaders(token) }, signal });
+  if (!res.ok) {
+    throw new ServerError(`HuggingFace search failed: ${res.status}`, { status: 502, code: 'HF_SEARCH_FAILED' });
+  }
+  const items = await readResponseJson(res, { fallback: [] });
+  const linkHeader = typeof res.headers?.get === 'function' ? res.headers.get('link') : null;
+  const nextMatch = typeof linkHeader === 'string' ? linkHeader.match(/<([^>]+)>;\s*rel="next"/) : null;
+  return {
+    items: Array.isArray(items) ? items : [],
+    nextCursor: nextMatch ? nextMatch[1] : null,
+  };
+};
+
 // All sibling rfilenames of an HF model response (any extension). Shared by the
 // LoRA picker and the base-model classifier (huggingfaceModel.js).
 export const modelSiblingFilenames = (model) => {

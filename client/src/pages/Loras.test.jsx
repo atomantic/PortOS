@@ -4,13 +4,13 @@
  * confirm pair — one stray tap can never reach deleteLoraFull.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { clickStartDownload } from '../test/downloadPreflightConfirm.js';
 import Loras from './Loras';
 import {
   listLorasFull, deleteLoraFull, installLoraFromHuggingfaceStream, probeLoraEffect,
-  previewLoraInstall, getCivitaiSuggestions, installLoraFromCivitai,
+  previewLoraInstall, getCivitaiSuggestions, installLoraFromCivitai, searchVideoLoras,
 } from '../services/api';
 
 vi.mock('../services/api', () => ({
@@ -26,6 +26,7 @@ vi.mock('../services/api', () => ({
   clearCivitaiAuth: vi.fn(),
   getCivitaiSuggestions: vi.fn(async () => ({ runners: {}, video: [], fetchedAt: null })),
   searchCivitaiLoras: vi.fn(),
+  searchVideoLoras: vi.fn(),
   probeLoraEffect: vi.fn(),
 }));
 
@@ -252,6 +253,89 @@ describe('Loras video suggestion quick-install preflight', () => {
     await waitFor(() => expect(installLoraFromHuggingfaceStream).toHaveBeenCalledWith(
       expect.objectContaining({ url: VIDEO_CARD.installUrl, family: VIDEO_CARD.runnerFamily, file: VIDEO_CARD.file }),
     ));
+  });
+});
+
+// #6500 — searching HuggingFace directly (rather than the curated list) and
+// installing a hit. Also the "several installable files" case: the search
+// result offers two `.safetensors` siblings, so picking the non-default one
+// must be what actually installs.
+describe('Loras video LoRA search-to-install', () => {
+  const SEARCH_CARD = {
+    source: 'huggingface',
+    repo: 'someorg/some-ltx-lora',
+    revision: 'main',
+    file: 'pytorch_lora_weights.safetensors',
+    files: [
+      { file: 'variant-a.safetensors', recommended: false },
+      { file: 'pytorch_lora_weights.safetensors', recommended: true },
+    ],
+    name: 'some-ltx-lora',
+    description: 'A searchable LTX LoRA.',
+    runnerFamily: 'ltx-video',
+    downloads: 12,
+    previewImageUrl: null,
+    previewVideoUrl: null,
+    previewType: null,
+    hfUrl: 'https://huggingface.co/someorg/some-ltx-lora',
+    installUrl: 'https://huggingface.co/someorg/some-ltx-lora',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listLorasFull.mockResolvedValue([]);
+    getCivitaiSuggestions.mockResolvedValue({ runners: {}, video: [], fetchedAt: null });
+    searchVideoLoras.mockResolvedValue({ family: 'all', query: 'vhs', author: '', items: [SEARCH_CARD], nextCursor: null });
+    previewLoraInstall.mockResolvedValue({
+      kind: 'huggingface', destPath: 'lora-someorg-ltx-hf.safetensors', expectedBytes: 2048,
+      freeBytes: 1e12, requiredBytes: 2048, headroomBytes: 0, verdict: 'ok',
+    });
+    installLoraFromHuggingfaceStream.mockResolvedValue({ name: 'lora-someorg-ltx-hf.safetensors' });
+  });
+
+  it('searches HuggingFace, lets the user pick a non-default file, and installs that exact file', async () => {
+    renderPage();
+
+    const searchInput = await screen.findByLabelText('Search HuggingFace video LoRAs by name or repository');
+    const searchForm = searchInput.closest('form');
+    fireEvent.change(searchInput, { target: { value: 'vhs' } });
+    fireEvent.click(within(searchForm).getByRole('button', { name: 'Search' }));
+
+    expect(await screen.findByText('some-ltx-lora')).toBeInTheDocument();
+    expect(searchVideoLoras).toHaveBeenCalledWith(expect.objectContaining({ family: 'all', query: 'vhs', author: '' }));
+
+    // Pick the non-recommended file before installing.
+    fireEvent.change(screen.getByLabelText('File'), { target: { value: 'variant-a.safetensors' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Quick install' }));
+    expect(await screen.findByRole('button', { name: 'Start download' })).toBeInTheDocument();
+    expect(previewLoraInstall).toHaveBeenCalledWith(expect.objectContaining({
+      url: SEARCH_CARD.installUrl,
+      source: 'huggingface',
+      family: 'ltx-video',
+      file: 'variant-a.safetensors',
+    }));
+
+    await clickStartDownload();
+    await waitFor(() => expect(installLoraFromHuggingfaceStream).toHaveBeenCalledWith(
+      expect.objectContaining({ url: SEARCH_CARD.installUrl, family: 'ltx-video', file: 'variant-a.safetensors' }),
+    ));
+  });
+
+  it('shows a retryable error banner when the search request fails', async () => {
+    searchVideoLoras.mockRejectedValueOnce(new Error('HuggingFace search failed: 503'));
+    renderPage();
+
+    const searchInput = await screen.findByLabelText('Search HuggingFace video LoRAs by name or repository');
+    const searchForm = searchInput.closest('form');
+    fireEvent.change(searchInput, { target: { value: 'vhs' } });
+    fireEvent.click(within(searchForm).getByRole('button', { name: 'Search' }));
+
+    expect(await screen.findByText('HuggingFace search failed: 503')).toBeInTheDocument();
+
+    searchVideoLoras.mockResolvedValueOnce({ family: 'all', query: 'vhs', author: '', items: [SEARCH_CARD], nextCursor: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('some-ltx-lora')).toBeInTheDocument();
   });
 });
 

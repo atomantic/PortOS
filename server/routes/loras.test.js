@@ -43,6 +43,14 @@ vi.mock('../services/videoLoraSuggestions.js', () => ({
   getVideoSuggestions: vi.fn(async () => ([
     { source: 'huggingface', repo: 'fal/ltx2.3-audio-reactive-lora', name: 'LTX', runnerFamily: 'ltx-video' },
   ])),
+  searchVideoLoras: vi.fn(async ({ family, query, author, cursor, limit }) => ({
+    family: family || 'all',
+    query: query || '',
+    author: author || '',
+    items: [{ source: 'huggingface', repo: 'someorg/some-ltx-lora', file: 'lora.safetensors', runnerFamily: 'ltx-video' }],
+    nextCursor: 'NEXT',
+    _echo: { cursor, limit },
+  })),
 }));
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
@@ -51,6 +59,7 @@ vi.mock('../services/settings.js', () => ({
 
 const { default: lorasRoutes } = await import('./loras.js');
 const { searchLorasInFamily } = await import('../services/civitaiSuggestions.js');
+const { searchVideoLoras } = await import('../services/videoLoraSuggestions.js');
 const { installFromHuggingface, listLoras } = await import('../services/loras.js');
 const { probeLoraEffect } = await import('../services/loraEffectProbe.js');
 
@@ -197,6 +206,57 @@ describe('GET /api/loras/search', () => {
   it('rejects an out-of-range limit (> 50) with 400', async () => {
     const res = await request(makeApp())
       .get('/api/loras/search?runner=qwen&limit=999');
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/loras/search/video', () => {
+  it('dispatches a family + keyword + author + cursor to the service', async () => {
+    const res = await request(makeApp())
+      .get('/api/loras/search/video?family=ltx-video&query=vhs&author=someorg&cursor=CUR&limit=20');
+    expect(res.status).toBe(200);
+    expect(res.body.items.length).toBe(1);
+    expect(res.body.nextCursor).toBe('NEXT');
+    expect(searchVideoLoras).toHaveBeenCalledWith({
+      family: 'ltx-video',
+      query: 'vhs',
+      author: 'someorg',
+      cursor: 'CUR',
+      limit: 20,
+    });
+  });
+
+  it('treats an omitted family as "all" (search both video families)', async () => {
+    const res = await request(makeApp()).get('/api/loras/search/video?query=vhs');
+    expect(res.status).toBe(200);
+    expect(searchVideoLoras).toHaveBeenCalledWith({
+      family: null,
+      query: 'vhs',
+      author: '',
+      cursor: null,
+      limit: 12,
+    });
+  });
+
+  it('treats an explicit family=all the same as omitting it', async () => {
+    await request(makeApp()).get('/api/loras/search/video?family=all');
+    expect(searchVideoLoras).toHaveBeenCalledWith(expect.objectContaining({ family: null }));
+  });
+
+  it('rejects an unknown family with 400', async () => {
+    const res = await request(makeApp()).get('/api/loras/search/video?family=sdxl');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('rejects an over-long keyword with 400', async () => {
+    const res = await request(makeApp())
+      .get(`/api/loras/search/video?query=${'x'.repeat(121)}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an out-of-range limit (> 24) with 400', async () => {
+    const res = await request(makeApp()).get('/api/loras/search/video?limit=999');
     expect(res.status).toBe(400);
   });
 });
