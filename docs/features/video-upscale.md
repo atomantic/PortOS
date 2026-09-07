@@ -197,7 +197,7 @@ from whether a backend has been **verified**:
 | Backend | Status |
 | --- | --- |
 | macOS MLX (`ltx25`) | **Verified** end to end on real renders (2026-09-07, [#6514](https://github.com/atomantic/PortOS/issues/6514)); supported. |
-| Windows / Linux CUDA (`ltx25_cuda`) | Code complete with the same recipe and contract; **awaiting a render on an NVIDIA host** ([#6513](https://github.com/atomantic/PortOS/issues/6513)). Treat it as unverified until that evidence is recorded. |
+| Windows / Linux CUDA (`ltx25_cuda`) | Code complete with the same recipe and contract ([#6513](https://github.com/atomantic/PortOS/issues/6513)); **awaiting a render on an NVIDIA host**, tracked in [#6537](https://github.com/atomantic/PortOS/issues/6537). Treat it as unverified until that evidence is recorded. |
 
 Lanczos is unaffected by any of this.
 
