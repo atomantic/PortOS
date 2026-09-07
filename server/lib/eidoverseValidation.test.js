@@ -57,6 +57,10 @@ describe('eidoverseWorldAugmentSchema', () => {
 });
 
 describe('eidoverseWorldConfigPatchSchema', () => {
+  it('accepts a CoS join id used as the embodied chat sender', () => {
+    expect(eidoverseWorldConfigPatchSchema.parse({ cosId: 'Helm' })).toEqual({ cosId: 'Helm' });
+  });
+
   it('accepts a partial patch and rejects an unknown key', () => {
     expect(eidoverseWorldConfigPatchSchema.parse({ cosEnabled: false }))
       .toEqual({ cosEnabled: false });

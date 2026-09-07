@@ -45,6 +45,7 @@ import {
   projectedJiraTickets,
   projectedStorage,
 } from './eidoverseWorldSources.js';
+import { resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
 
 export { buildProjectionPlan, DEFAULT_EIDOVERSE_PROJECTION_RECIPE, projectedJiraTickets, projectedStorage };
 
@@ -498,7 +499,11 @@ export async function updateEidoverseWorldConfig(patch) {
         state.human.source = patch.humanName ? 'configured' : fallback.source;
       }
       if (Object.hasOwn(patch, 'humanAvatar')) state.human.avatar = patch.humanAvatar || DEFAULT_HUMAN_AVATAR;
-      if (patch.cosId !== undefined) state.cos.id = validIdentity(patch.cosId, DEFAULT_COS_ID);
+      if (Object.hasOwn(patch, 'cosId')) {
+        state.cos.id = patch.cosId
+          ? validIdentity(patch.cosId, DEFAULT_COS_ID)
+          : DEFAULT_COS_ID;
+      }
       if (Object.hasOwn(patch, 'cosAvatar')) state.cos.avatar = patch.cosAvatar || DEFAULT_COS_AVATAR;
       if (patch.cosEnabled !== undefined) state.cos.enabled = patch.cosEnabled;
       if (fullReset) {
@@ -1978,9 +1983,24 @@ export async function sayInEidoverseWorld(text, { signal } = {}) {
   });
 }
 
+
+async function resolveSuggestedCosId(currentCosId) {
+  try {
+    const { readPersistentMindMemories } = await import('./persistentMindContext.js');
+    const name = resolvePersistentMindChosenName(await readPersistentMindMemories());
+    if (!name) return null;
+    const clean = validIdentity(name, '');
+    if (!clean || clean === currentCosId) return null;
+    return clean;
+  } catch {
+    return null;
+  }
+}
+
 export async function getEidoverseWorldStatus({ compact = false } = {}) {
   const [setup, self] = await Promise.all([getEidoverseStatus(), getSelf()]);
   const config = await readEidoverseWorldConfig(self);
+  const suggestedCosId = await resolveSuggestedCosId(config.cos.id);
   // Semantic callers have a 4KB result budget. The full design/recipe can
   // consume that before setup and presence are reached, hiding how to act.
   if (compact) {
@@ -1992,8 +2012,9 @@ export async function getEidoverseWorldStatus({ compact = false } = {}) {
     }
     return {
       setup: { installed: setup.installed, runtimeStatus: setup.runtimeStatus, worldDataReady: setup.worldDataReady },
-      cos: { enabled: config.cos.enabled, connected: config.cos.connected, role: config.cos.role,
+      cos: { id: config.cos.id, enabled: config.cos.enabled, connected: config.cos.connected, role: config.cos.role,
         chat: cosPresence?.connection?.chatSummary() ?? { cursor: -1, retained: 0 } },
+      suggestedCosId,
       design: { selectedVersion: config.design.selectedVersion, lastAppliedVersion: config.design.lastAppliedVersion, pendingVersion: config.design.pendingVersion },
       assets,
       assetsTruncated: Object.keys(assets).length < availableAssets.length,
@@ -2002,6 +2023,7 @@ export async function getEidoverseWorldStatus({ compact = false } = {}) {
   return {
     ...config,
     identity: config.human,
+    suggestedCosId,
     presence: presenceSummary(),
     setup: {
       installed: setup.installed,
