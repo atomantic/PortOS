@@ -1,20 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { CALLER_MODE_POLICIES } from '../../../server/lib/callerModePolicy.js';
-import { CALLER_MODE_POLICY_MODES, callerModeList, providerModeSelectionPolicy } from './providerSelection.js';
+import { callerModeList, providerModeSelectionPolicy } from './providerSelection.js';
 
 /**
- * The browser mirror only decides what a PICKER offers; the server decides what
- * actually runs. They must agree, or a user saves a route the server refuses at
- * spawn time (or, worse, the picker hides a route the server would happily run).
+ * The picker-side policy only decides what a PICKER offers; the server decides
+ * what actually runs. The mode table is derived from the server's
+ * `CALLER_MODE_POLICIES` directly, so what remains to pin is the picker's own
+ * behaviour on top of it: an unknown policy fails closed, and a known one offers
+ * exactly its modes.
  */
-describe('caller execution-mode policy — client/server parity', () => {
-  it('mirrors every server policy, name for name and mode for mode', () => {
-    expect(Object.keys(CALLER_MODE_POLICY_MODES).sort()).toEqual(Object.keys(CALLER_MODE_POLICIES).sort());
-    for (const [id, { allowedModes }] of Object.entries(CALLER_MODE_POLICIES)) {
-      expect(CALLER_MODE_POLICY_MODES[id]).toEqual([...allowedModes]);
-    }
-  });
-
+describe('caller execution-mode policy — picker selection', () => {
   it('permits nothing for an unknown policy name rather than everything', () => {
     // Fail-closed in the same direction as the server, which throws: a typo has
     // to be visible, never a silently permissive picker.

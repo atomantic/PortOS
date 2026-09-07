@@ -1,8 +1,9 @@
 // Exercised THROUGH the `providers.js` facade on purpose: the helpers under test
 // are declared across the nine `provider*` / `localModelHeuristics` modules it
 // re-exports, so a helper that drops out of the facade fails here before any of
-// the 69 `utils/providers` importers notices. The server-mirror parity suites
-// (`server/lib/*.mirror.test.js`) pin the declaring modules directly.
+// the 69 `utils/providers` importers notices. The declaring modules re-export
+// their shared tables from `server/lib`, so what is pinned here is the
+// client-side behaviour built on top of them.
 import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
@@ -103,15 +104,13 @@ import {
   effortLevelsForProvider as serverEffortLevelsForProvider,
   isAntigravityProvider as serverIsAntigravityProvider,
   resolveCliEffort as serverResolveCliEffort,
-  splitAntigravityModel as serverSplitAntigravityModel,
-  antigravityBaseModels as serverAntigravityBaseModels,
-  antigravityModelEffortLevels as serverAntigravityModelEffortLevels,
 } from '../../../server/lib/providerModels.js';
 
-// The client copy drives what EffortSelect DISPLAYS; the server copy decides
-// what the CLI actually receives. Any drift means the UI names a level the run
-// won't use, so every case is asserted against both implementations.
-describe('resolveCliEffort (server mirror)', () => {
+// The client resolves its own ladder and clamps through the server's
+// clampEffortToLadder; the server's resolveCliEffort decides what the CLI
+// actually receives. On a full provider record the two must agree, or the UI
+// names a level the run won't use — so every case is asserted against both.
+describe('resolveCliEffort', () => {
   const AGY = { id: 'antigravity-cli', command: 'agy' };
   const CLAUDE = { id: 'claude-code', command: 'claude' };
   const CODEX = { id: 'codex', command: 'codex' };
@@ -155,9 +154,9 @@ describe('resolveCliEffort (server mirror)', () => {
 });
 
 // These drive the Effort/model pickers in the CoS task + schedule forms. The
-// client copy is a hand-mirror of server/lib/providerModels.js (the client can't
-// import server modules at runtime), so pin both sides together here.
-describe('effortLevelsForProvider (server mirror)', () => {
+// client helper delegates to server/lib/providerModels.js and adds the
+// published-field fallback, so pin both sides together here.
+describe('effortLevelsForProvider', () => {
   const CASES = [
     ['antigravity CLI', { id: 'antigravity-cli', command: 'agy' }, ANTIGRAVITY_EFFORT_LEVELS],
     ['antigravity TUI', { id: 'antigravity-tui' }, ANTIGRAVITY_EFFORT_LEVELS],
@@ -248,11 +247,38 @@ describe('generationControlsFor', () => {
   });
 });
 
+describe('effortLevelsForProvider on a sanitized inventory', () => {
+  // The safe settings payload (server/services/aiAssignments.js) omits command/
+  // path/env and publishes the derived ladder instead. The server's own answer
+  // for such a record is null, so the published fields are the only rung —
+  // except for Antigravity, whose server null is final: the catalog names no
+  // tier for that model, and the provider-level ladder must not resurrect one.
+  const CATALOG = ['gemini-3.6-flash-high', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-low', 'claude-sonnet-4-6'];
+
+  it('reads the published ladder, but never lets it resurrect an Antigravity tier', () => {
+    const agy = {
+      id: 'antigravity-cli',
+      models: CATALOG,
+      effortLevels: ['low', 'medium', 'high'],
+      effortLevelsByModel: { 'gemini-3.6-flash': ['low', 'medium', 'high'] },
+    };
+    expect(effortLevelsForProvider(agy, 'gemini-3.6-flash')).toEqual(['low', 'medium', 'high']);
+    expect(effortLevelsForProvider(agy, 'claude-sonnet-4-6')).toBeNull();
+    expect(effortLevelsForProvider(agy, 'not-in-catalog')).toBeNull();
+
+    const custom = { id: 'custom-agent', effortLevels: ['low', 'medium', 'high'], effortLevelsByModel: { m: ['low', 'high'] } };
+    expect(effortLevelsForProvider(custom, 'm')).toEqual(['low', 'high']);
+    expect(effortLevelsForProvider(custom)).toEqual(['low', 'medium', 'high']);
+    expect(resolveCliEffort('max', custom)).toBe('high');
+  });
+});
+
 // Antigravity lists one model id per effort tier (`gemini-3.6-flash-high`), but
 // agy also takes the BASE id with a separate `--effort` flag — so the pickers
-// show base models and carry effort as its own control. Both sides must agree on
-// the split, or a client-side base id won't match what the server rebuilds.
-describe('Antigravity base-model split (server mirror)', () => {
+// show base models and carry effort as its own control. The split is the
+// server's (re-exported), so a client-side base id always matches what the
+// server rebuilds.
+describe('Antigravity base-model split', () => {
   // The catalog `agy models` prints — the shipped provider list mirrors it.
   const CATALOG = [
     ANTIGRAVITY_CONFIGURED_DEFAULT,
@@ -274,12 +300,10 @@ describe('Antigravity base-model split (server mirror)', () => {
     ['', { base: '', effort: null }],
   ])('splitAntigravityModel(%s)', (id, expected) => {
     expect(splitAntigravityModel(id)).toEqual(expected);
-    expect(serverSplitAntigravityModel(id)).toEqual(expected);
   });
 
-  it('strips + dedupes the catalog into base models on both sides', () => {
+  it('strips + dedupes the catalog into base models', () => {
     expect(antigravityBaseModels(CATALOG)).toEqual(BASES);
-    expect(serverAntigravityBaseModels(CATALOG)).toEqual(BASES);
   });
 
   it.each([
@@ -293,7 +317,6 @@ describe('Antigravity base-model split (server mirror)', () => {
     [ANTIGRAVITY_CONFIGURED_DEFAULT, null],
   ])('antigravityModelEffortLevels(%s)', (model, expected) => {
     expect(antigravityModelEffortLevels(model, CATALOG)).toEqual(expected);
-    expect(serverAntigravityModelEffortLevels(model, CATALOG)).toEqual(expected);
   });
 
   it('narrows the picker ladder per selected model, and hides it for a tier-less model', () => {
@@ -846,7 +869,7 @@ describe('isEmbeddingModel / filterGenerationModels', () => {
   });
 });
 
-describe('isVisionModel (mirror of server localModelHeuristics)', () => {
+describe('isVisionModel', () => {
   it('flags known vision model ids', () => {
     for (const id of [
       'qwen2.5-vl:7b', 'qwen2.5vl', 'qwen2.5vl:32b', 'llava:latest', 'moondream:latest', 'minicpm-v:8b',
@@ -879,7 +902,7 @@ describe('isVisionCapableCliProvider', () => {
   });
 });
 
-describe('isToolUseModel (mirror of server localModelHeuristics)', () => {
+describe('isToolUseModel', () => {
   it('flags known tool-use-capable model ids', () => {
     for (const id of [
       'qwen2.5:7b', 'qwen3:32b', 'llama3.1:8b', 'llama3.3:70b',
@@ -1135,7 +1158,7 @@ describe('modelCapabilityInfo', () => {
   });
 });
 
-describe('knownProviderContextWindow (mirror of server stageRunner)', () => {
+describe('knownProviderContextWindow', () => {
   it('resolves vendor windows for bare commands', () => {
     expect(knownProviderContextWindow({ id: 'codex-tui', type: 'tui', command: 'codex' })).toBe(CODEX_CONTEXT_WINDOW);
     expect(knownProviderContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' })).toBe(GEMINI_CONTEXT_WINDOW);
@@ -1261,10 +1284,6 @@ describe('cursor providers', () => {
     expect(effortLevelsForProvider({ id: 'custom', command: 'cursor' })).toBeNull();
   });
 
-  it('keeps the cursor ladder in lockstep with the server', () => {
-    expect(CURSOR_EFFORT_LEVELS).toEqual(serverEffortLevelsForProvider({ id: 'cursor-cli', command: 'cursor-agent' }));
-  });
-
   it('is not mistaken for a claude/codex/antigravity provider by its model ids', () => {
     const cursor = { id: 'cursor-cli', command: 'cursor-agent', models: ['claude-opus-5-thinking-high'] };
     expect(isCodexProvider(cursor)).toBe(false);
@@ -1303,9 +1322,9 @@ describe('effectiveModelContextWindow', () => {
   });
 
   it('prefers the window the provider catalog reported for that model', () => {
-    // Mirrors the server ladder in stageRunner.js: catalog beats the regex
-    // table, and both beat the blanket 128K assumption that made a 1M-context
-    // model look capped.
+    // The same rungs as the server's effectiveContextWindow: catalog beats the
+    // regex table, and both beat the blanket 128K assumption that made a
+    // 1M-context model look capped.
     const wrapper = { id: 'opencode-openrouter-tui', type: 'tui', command: 'opencode', modelContextWindows: { 'stealth/ox-alpha': 1_000_000 } };
     expect(effectiveModelContextWindow(wrapper, 'stealth/ox-alpha')).toBe(1_000_000);
     expect(effectiveModelContextWindow(wrapper, 'openrouter/auto')).toBe(128_000);

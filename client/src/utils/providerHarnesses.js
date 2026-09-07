@@ -1,30 +1,16 @@
 /**
  * The agent programs PortOS drives, as the browser needs to name them.
  *
- * Browser MIRROR of `PROVIDER_HARNESSES` in `server/lib/providerHarnesses.js`
- * — the browser cannot import server code, so the id→label table is duplicated
- * and `server/lib/providerHarnesses.parity.test.js` reads this file as TEXT to
- * pin the two together.
- *
- * Only `id → label` is mirrored, and deliberately so. The server registry's
- * other columns are all decided server-side and arrive on the wire already
- * resolved: `matches` classifies a provider RECORD (the browser is handed a
- * `harnessId`), `modes` is already reflected by the routes a binding actually
- * owns, and `protocol` is a transport decision no picker makes. Mirroring them
- * would create three more things to drift for no rendered difference.
+ * Read straight off `PROVIDER_HARNESSES` in `server/lib/providerHarnesses.js`
+ * through `harnessById`, so a harness added to the registry is named here
+ * without a second edit. Only the label is read: the registry's other columns
+ * are decided server-side and arrive on the wire already resolved — `matches`
+ * classifies a provider RECORD (the browser is handed a `harnessId`), `modes`
+ * is already reflected by the routes a binding actually owns, and `protocol`
+ * is a transport decision no picker makes.
  */
 
-/** id → display label. MIRROR of the server registry; keep in lockstep. */
-export const PROVIDER_HARNESS_LABELS = Object.freeze({
-  claude: 'Claude Code',
-  opencode: 'OpenCode',
-  codex: 'Codex',
-  antigravity: 'Antigravity',
-  cursor: 'Cursor Agent',
-  grok: 'Grok',
-  kimi: 'Kimi Code',
-  pi: 'Pi',
-});
+import { harnessById } from '../../../server/lib/providerHarnesses.js';
 
 /**
  * What to call a binding's harness.
@@ -36,5 +22,5 @@ export const PROVIDER_HARNESS_LABELS = Object.freeze({
  */
 export const harnessLabel = (harnessId) => {
   if (harnessId === null || harnessId === undefined) return 'Direct API';
-  return PROVIDER_HARNESS_LABELS[harnessId] || harnessId;
+  return harnessById(harnessId)?.label || harnessId;
 };

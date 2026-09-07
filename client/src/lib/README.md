@@ -14,8 +14,8 @@ direction: nothing under `server/` may import from `client/`, because a client-o
 dependency added to such a file breaks the server CI job. A server module the client
 imports must reach no Node built-in and nothing outside `server/lib`; when the natural
 home does (`storyBible.js` pulls `crypto`), split the pure part into its own leaf.
-`server/lib/importGraphPurity.test.js` and `server/serverImportsNoClient.test.js` enforce
-both halves.
+`scripts/client-server-import-purity.test.js` and `scripts/server-imports-no-client.test.js`
+enforce both halves.
 
 ## Discovery rule
 

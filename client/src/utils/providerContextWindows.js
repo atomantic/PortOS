@@ -3,61 +3,38 @@
  * number came from (a user override, a reported window, or a ladder guess the
  * card must label as assumed) — plus the "(32K ctx)" option label built on it.
  *
- * Browser MIRROR of the context-window ladder in `server/services/stageRunner.js`
- * (`KNOWN_MODEL_CONTEXT_WINDOWS`, the vendor constants, `catalogModelContextWindow`,
- * `effectiveContextWindow`) — the two must resolve identically or the card
- * promises a budget the budgeter won't use. `server/services/stageRunner.mirror.test.js`
- * reads this file as TEXT and fails when they drift.
+ * The rungs — the vendor constants, the known-model table, the per-provider
+ * fallback and the catalog read — are re-exported from the pure leaf
+ * `server/lib/providerContextWindows.js`, the same ones the server's
+ * `effectiveContextWindow` budgets with. `resolveModelContextWindow` is the
+ * client's own walk over them, because the UI also needs to know WHERE the
+ * number came from; it and `isLikelyLargeContextProvider` are what can still
+ * drift from the server (the walk order, and the client's own local-endpoint
+ * test), so keep both beside their server twins in `stageRunner.js`.
  *
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
 import { formatContextLength } from './formatters.js';
 import { isLocalEndpoint } from './providerEndpoints.js';
-import { commandBasename, isApiProvider, isCodexProvider, isProcessProvider } from './providerTypes.js';
+import { isApiProvider, isProcessProvider } from './providerTypes.js';
+import {
+  DEFAULT_LARGE_CONTEXT_WINDOW,
+  catalogModelContextWindow,
+  knownModelContextWindow,
+  knownProviderContextWindow,
+} from '../../../server/lib/providerContextWindows.js';
 
-export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
-
-export const CODEX_CONTEXT_WINDOW = 1_000_000;
-
-export const GEMINI_CONTEXT_WINDOW = 1_048_576;
-
-export const GROK_CONTEXT_WINDOW = 256_000;
-
-export const KIMI_CONTEXT_WINDOW = 256_000;
-
-// Keep in sync with server/services/stageRunner.js.
-const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
-  [/gpt[-_.:/]?5\.5(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
-  [/gpt[-_.:/]?5\.4[-_.:/]?mini(?:[-_.:/]|\b)/i, 400_000],
-  [/gpt[-_.:/]?5\.4(?![-_.:/]?(?:mini|nano))(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
-  [/claude[-_.:/]?fable[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?mythos[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?opus[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?opus[-_.:/]?4[-_.:/]?8/i, 1_000_000],
-  [/claude[-_.:/]?sonnet[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?sonnet[-_.:/]?4[-_.:/]?6(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?sonnet[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
-  [/claude[-_.:/]?haiku[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
-  [/gemini[-_.:/]?2\.5[-_.:/]?pro(?:[-_.:/]|\b)/i, GEMINI_CONTEXT_WINDOW],
-]);
-
-export const knownModelContextWindow = (model) => {
-  if (typeof model !== 'string' || !model.trim()) return null;
-  const found = KNOWN_MODEL_CONTEXT_WINDOWS.find(([pattern]) => pattern.test(model));
-  return found ? found[1] : null;
-};
-
-export const knownProviderContextWindow = (provider) => {
-  if (!isProcessProvider(provider)) return null;
-  const id = String(provider?.id || '').toLowerCase();
-  const command = commandBasename(provider?.command);
-  if (isCodexProvider(provider)) return CODEX_CONTEXT_WINDOW;
-  if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
-  if (id === 'grok-cli' || id === 'grok-tui' || command === 'grok') return GROK_CONTEXT_WINDOW;
-  if (id === 'kimi-cli' || id === 'kimi-tui' || command === 'kimi') return KIMI_CONTEXT_WINDOW;
-  return null;
-};
+export {
+  DEFAULT_LARGE_CONTEXT_WINDOW,
+  CODEX_CONTEXT_WINDOW,
+  GEMINI_CONTEXT_WINDOW,
+  GROK_CONTEXT_WINDOW,
+  KIMI_CONTEXT_WINDOW,
+  knownModelContextWindow,
+  knownProviderContextWindow,
+  catalogModelContextWindow,
+} from '../../../server/lib/providerContextWindows.js';
 
 export const isLikelyLargeContextProvider = (provider) => {
   if (isProcessProvider(provider)) return true;
@@ -84,23 +61,11 @@ export const CONTEXT_WINDOW_SOURCE = Object.freeze({
 });
 
 /**
- * The window this provider's own `/models` catalog reported for this model, or
- * `null` when it never mentioned it. Recorded by model refresh — the serving
- * side's own declaration, so it outranks the hand-maintained regex table.
- * Mirror of `catalogModelContextWindow` in server/services/stageRunner.js.
- */
-export function catalogModelContextWindow(provider, model) {
-  const windows = provider?.modelContextWindows;
-  if (!windows || typeof windows !== 'object') return null;
-  if (typeof model !== 'string' || !model) return null;
-  const tokens = Number(windows[model]);
-  return Number.isFinite(tokens) && tokens > 0 ? tokens : null;
-}
-
-/**
  * The planning context window for a provider/model AND where it came from.
- * Mirror of `effectiveContextWindow` in server/services/stageRunner.js — the two
- * must resolve identically, or the card promises a budget the budgeter won't use.
+ * Walks the same rungs, in the same order, as `effectiveContextWindow` in
+ * server/services/stageRunner.js — the rungs are shared, so the order and the
+ * local-endpoint test are what could drift, and the card would then promise a
+ * budget the budgeter won't use.
  *
  * `{ tokens: null, source: null }` means nothing is known (an unrecognized model
  * on a local backend); the budgeter applies its own conservative floor there.

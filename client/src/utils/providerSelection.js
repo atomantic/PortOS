@@ -17,6 +17,7 @@
 import { isLocalInstanceProvider, localBackendForProvider } from './providerEndpoints.js';
 import { AGENT_HARNESS_PROVIDER_TYPES, isApiProvider } from './providerTypes.js';
 import { isHardwareCompatible } from './systemCapabilities.js';
+import { CALLER_MODE_POLICIES } from '../../../server/lib/callerModePolicy.js';
 
 // Direct local HTTP providers are the only provider class that can be made
 // tool-free by construction. CLI/TUI providers may be pointed at a local model,
@@ -185,27 +186,22 @@ export const filterHardwareCompatibleProviderModels = (models, provider) =>
   });
 
 /**
- * Caller EXECUTION-MODE policies, mirrored from
- * `server/lib/callerModePolicy.js#CALLER_MODE_POLICIES`.
+ * The allowed execution modes for a caller policy name, or the array itself
+ * when given one — read off the server's `CALLER_MODE_POLICIES` (the pure leaf
+ * `server/lib/callerModePolicy.js`), so the picker can never offer a mode the
+ * server refuses, nor hide one it would run. An unknown name yields `[]`
+ * (permits nothing) where the server's own `allowedModesFor` throws.
  *
  * The server is the authority — it enforces the same policy on the explicit
  * pin, on `activeProvider` inheritance and on every fallback candidate. This
- * mirror exists only so a picker can SHOW the rule rather than let a user save
- * a route the server will refuse at run time. `providerModeSelectionPolicy`
+ * exists only so a picker can SHOW the rule rather than let a user save a
+ * route the server will refuse at run time. `providerModeSelectionPolicy`
  * feeds `ProviderModelSelector`'s `selectionPolicy`, which keeps an ineligible
  * saved value visible-but-disabled with a reason instead of hiding or silently
- * replacing it. Pinned by `providerModePolicy.parity.test.js`.
+ * replacing it.
  */
-export const CALLER_MODE_POLICY_MODES = Object.freeze({
-  'agent-harness': Object.freeze(['cli', 'tui']),
-  'cli-harness': Object.freeze(['cli']),
-  'direct-api': Object.freeze(['api']),
-  'any-text': Object.freeze(['cli', 'tui', 'api']),
-});
-
-/** The allowed-mode list for a policy name, or the array itself when given one. */
 export const callerModeList = (policy) =>
-  (Array.isArray(policy) ? policy : CALLER_MODE_POLICY_MODES[policy]) || [];
+  (Array.isArray(policy) ? policy : CALLER_MODE_POLICIES[policy]?.allowedModes) || [];
 
 /**
  * A `selectionPolicy` restricting the provider select to one caller's allowed
