@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
+import { pinPlatform } from '../../lib/testHelper.js';
 
 // The Lanczos path really copies a file, so PATHS.data must point at a temp
 // tree — the install's data/ is the developer's live gallery.
@@ -66,7 +67,7 @@ vi.mock('../../lib/icLoraWeights.js', () => ({
 // `ltx25_mlx_q8` entry — a wrong id here would otherwise pass silently.
 vi.mock('../../lib/hfCache.js', () => ({
   inspectModelCache: vi.fn(async () => (state.baseModelCached
-    ? { cached: true, snapshotPath: '/cache/ltx25-mlx-q8' }
+    ? { cached: true, snapshotPath: '/cache/ltx25-pack' }
     : { cached: false, snapshotPath: null })),
   findCachedRepoFile: vi.fn(async () => null),
 }));
@@ -229,7 +230,7 @@ describe('planUpscaleHistoryItem', () => {
     // Three INDEPENDENT axes: the venv, the 327 MB adapter and the ~68 GB pack
     // are separate downloads, so a plan that only reported two would show a
     // ready button for a job the dispatch refuses (#6512).
-    expect(ready.baseModel).toMatchObject({ id: 'ltx25_mlx_q8', cached: true, path: '/cache/ltx25-mlx-q8', reason: null });
+    expect(ready.baseModel).toMatchObject({ cached: true, path: '/cache/ltx25-pack', reason: null });
 
     state.runtimeInstalled = false;
     state.adapterCached = false;
@@ -237,6 +238,24 @@ describe('planUpscaleHistoryItem', () => {
     expect(unready.runtime.installed).toBe(false);
     expect(unready.runtime.reason).toMatch(/not installed/i);
     expect(unready.adapter.cached).toBe(false);
+  });
+
+  // `ltxUpscaleRuntimeId()` routes by platform, so WHICH checkpoint the plan
+  // names is a per-backend fact. Asserting the host's own answer would make this
+  // pass everywhere while proving nothing — and it did: the first version
+  // hardcoded the macOS id and went red on Linux CI.
+  it.each([
+    ['macOS', 'darwin', 'ltx25_mlx_q8'],
+    ['Windows', 'win32', 'ltx25_cuda_distilled'],
+    ['Linux', 'linux', 'ltx25_cuda_distilled'],
+  ])('names the %s backend\'s own pinned checkpoint', async (_label, platform, expected) => {
+    const restore = pinPlatform(platform);
+    try {
+      const plan = await planUpscaleHistoryItem(SOURCE_ID, { method: 'ltx' });
+      expect(plan.baseModel.id).toBe(expected);
+    } finally {
+      restore();
+    }
   });
 
   it('reports a missing base checkpoint as its own unready axis, with a path of null', async () => {

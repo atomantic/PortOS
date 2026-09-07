@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveTestPython } from '../server/lib/testHelper.js';
+import { resolveTestPython, PY_TEST_TIMEOUT_MS, PY_SUBPROCESS_TIMEOUT_MS } from '../server/lib/testHelper.js';
 
 const script = join(dirname(fileURLToPath(import.meta.url)), 'upscale_ltx25.py');
 
@@ -15,7 +15,12 @@ const script = join(dirname(fileURLToPath(import.meta.url)), 'upscale_ltx25.py')
 // #6512's contract is that the argument and capability gates are testable on a
 // machine with no MLX wheel, no 68 GB model pack, and no gated adapter.
 const pyBin = resolveTestPython();
-const runPython = (source) => execFileSync(pyBin, ['-c', source, script], { encoding: 'utf8' });
+const runPython = (source) => execFileSync(pyBin, ['-c', source, script], {
+  encoding: 'utf8',
+  // Below the per-test budget on purpose, so a hung interpreter fails with the
+  // spawn's own ETIMEDOUT naming the command rather than a bare vitest timeout.
+  timeout: PY_SUBPROCESS_TIMEOUT_MS,
+});
 
 const importRunner = [
   'import importlib.util, sys',
@@ -88,7 +93,7 @@ const call = (expression) => trimmed(runPython(`${importRunner}\n${[
 describe.skipIf(!pyBin)('upscale_ltx25.py — argument contract (#6512)', () => {
   it('accepts the argv renderArgs.buildLtxUpscaleArgs emits', () => {
     expect(validate()).toBe('OK');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   // The grid is `LTX_GRID` in upscalePlan.js, and it was read off the pinned
   // runtime rather than the gated card: Stage 1 renders at half the output and
@@ -99,18 +104,18 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — argument contract (#6512)', () => 
     ['a height off the 64 grid', { height: 1000 }],
   ])('refuses %s', (_label, overrides) => {
     expect(validate(overrides)).toMatch(/^REJECTED:.*divisible by 64/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it.each([
     ['a frame count off the 8n+1 grid', { num_frames: 120 }],
     ['a frame count under the floor', { num_frames: 5 }],
   ])('refuses %s', (_label, overrides) => {
     expect(validate(overrides)).toMatch(/^REJECTED:.*frames % 8 == 1/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('refuses an unmeasured frame rate rather than defaulting one', () => {
     expect(validate({ fps: 0 })).toMatch(/^REJECTED:.*--fps must be positive/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   // The bounds are the weight registry's contract, carried across languages as
   // flags. A wrong reference count renders plausible-looking garbage rather
@@ -118,16 +123,16 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — argument contract (#6512)', () => 
   it('refuses a reference count outside the weight registry bounds', () => {
     expect(validate({ ic_reference: [] })).toMatch(/^REJECTED:.*exactly 1 --ic-reference/);
     expect(validate({ ic_reference: [REFERENCE, REFERENCE] })).toMatch(/^REJECTED:.*exactly 1 --ic-reference/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('refuses inverted or sub-1 bounds instead of silently clamping them', () => {
     expect(validate({ ic_min_references: 2 })).toMatch(/^REJECTED:.*1 <= min <= max/);
     expect(validate({ ic_min_references: 0, ic_max_references: 0 })).toMatch(/^REJECTED:.*1 <= min <= max/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('refuses a reference clip that is not on disk', () => {
     expect(validate({ ic_reference: [join(scratch, 'missing.mp4')] })).toMatch(/^REJECTED:.*does not exist/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   // The pipeline's own `_resolve_lora_path` turns anything it cannot stat into a
   // `snapshot_download` — for this gated adapter a 401 deep inside a render, and
@@ -135,7 +140,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — argument contract (#6512)', () => 
   it('refuses a repo id in place of a downloaded adapter file', () => {
     expect(validate({ ic_lora_path: 'Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler' }))
       .toMatch(/^REJECTED:.*download it from the Video Gen model panel/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 });
 
 describe.skipIf(!pyBin)('upscale_ltx25.py — capability gate (#6512)', () => {
@@ -149,11 +154,11 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — capability gate (#6512)', () => {
   ])('refuses %s with an actionable message', (_label, system, machine) => {
     expect(call(`runner.validate_host(${JSON.stringify(system)}, ${JSON.stringify(machine)}) or "OK"`))
       .toMatch(/^REJECTED:.*Apple Silicon/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('accepts Apple Silicon', () => {
     expect(call('runner.validate_host("Darwin", "arm64") or "OK"')).toBe('OK');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   // Without `text_encoder/` the pipeline silently falls back to the remote
   // LTX-2.3 Gemma 3 id — the wrong conditioner for these weights AND an
@@ -162,12 +167,12 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — capability gate (#6512)', () => {
     const pack = mkdtempSync(join(tmpdir(), 'portos-ltx25-pack-'));
     expect(call(`runner.validate_model_dir(${JSON.stringify(pack)})`))
       .toMatch(/^REJECTED:.*text_encoder\/config\.json/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('refuses a model directory that does not exist', () => {
     expect(call(`runner.validate_model_dir(${JSON.stringify(join(scratch, 'no-such-pack'))})`))
       .toMatch(/^REJECTED:.*not cached/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 });
 
 describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
@@ -182,12 +187,12 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
     // An unreadable header is not a measurement of 1 either — but the caller
     // refuses on the None, so the factor helper stays total.
     expect(call('runner.reference_downscale_factor(None)')).toBe('1');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('returns None for a file that is not safetensors rather than raising', () => {
     expect(call(`repr(runner.read_safetensors_header(${JSON.stringify(REFERENCE)}))`)).toBe('None');
     expect(call(`repr(runner.read_safetensors_header(${JSON.stringify(join(scratch, 'nope.safetensors'))}))`)).toBe('None');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   // The rule the pipeline enforces applies to the STAGE-1 dims, which are half
   // the output — so a factor of 2 really demands an output divisible by 4. The
@@ -197,7 +202,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
     expect(call('runner.assert_reference_scale_fits(1, 100, 100) or "OK"')).toBe('OK');
     expect(call('runner.assert_reference_scale_fits(4, 1028, 1024) or "OK"'))
       .toMatch(/^REJECTED:.*divisible by 8/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   // `apply_loras` pairs lora_A with lora_B per weight and skips a prefix missing
   // either half — so a half-pair contributes nothing and must not be counted as
@@ -211,7 +216,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
     expect(call(`sorted(runner.lora_target_keys(${names}))`))
       .toBe("['transformer_blocks.0.attn1.to_q.weight']");
     expect(call('sorted(runner.lora_target_keys([]))')).toBe('[]');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   // The failure #6512 names: an adapter whose keys address nothing fuses no
   // deltas, raises nothing, and renders the plain base model dressed as an
@@ -234,7 +239,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
       'transformer_blocks.0.attn1.to_q.lora_B.weight': {},
     });
     expect(call(`runner.assert_adapter_fuses(${JSON.stringify(matching)}, ${modelKeys}, lambda name: name)`)).toBe('1');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   // An unreadable transformer means the guard cannot answer its own question.
   // Reporting "fuses into nothing" would blame the adapter; reporting success
@@ -243,7 +248,7 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — adapter metadata (#6512)', () => {
     const matching = join(scratch, 'matching.safetensors');
     expect(call(`runner.assert_adapter_fuses(${JSON.stringify(matching)}, set(), lambda name: name)`))
       .toMatch(/^REJECTED:.*Could not read the LTX-2\.5 transformer/);
-  });
+  }, PY_TEST_TIMEOUT_MS);
 });
 
 // The guard reads the model's parameter names off the DiT header rather than
@@ -264,12 +269,12 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — transformer header (#6512)', () =>
     });
     expect(call(`sorted(runner.transformer_weight_keys(__import__("pathlib").Path(${JSON.stringify(dit)})))`))
       .toBe("['transformer_blocks.0.attn1.to_q.weight']");
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   it('returns an empty set for an unreadable file rather than raising', () => {
     expect(call(`runner.transformer_weight_keys(__import__("pathlib").Path(${JSON.stringify(REFERENCE)}))`))
       .toBe('set()');
-  });
+  }, PY_TEST_TIMEOUT_MS);
 
   // Mirrors BasePipeline._resolve_safetensors: plain name wins, else the
   // lexicographically last versioned file, else None so the caller can say so.
@@ -284,5 +289,5 @@ describe.skipIf(!pyBin)('upscale_ltx25.py — transformer header (#6512)', () =>
 
     writeFileSync(join(pack, 'transformer.safetensors'), '');
     expect(resolve(pack)).toBe("'transformer.safetensors'");
-  });
+  }, PY_TEST_TIMEOUT_MS);
 });
