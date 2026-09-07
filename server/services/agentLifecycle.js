@@ -87,11 +87,7 @@ import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { cloudSwarmThreadCapacity, localEndpointOfProvider, providerBaseUrl } from './cosLocalEndpointSlots.js';
 import { describeLocalPromptBudget, planLocalPromptBudget } from '../lib/localPromptBudget.js';
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
-// `releaseRetryHold` is imported STATICALLY here (the TUI/direct-CLI spawners
-// reach for it via `await import()` only because they sit BELOW this module and
-// a top-level import there would race the cycle) — this module already imports
-// `cleanupAgentWorktree` from the same file, so there is no new edge.
-import { cleanupAgentWorktree, releaseRetryHold } from './agentWorktreeCleanup.js';
+import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { runAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { dispatchRecoveredTaskOutputHook, finalizeAgent, releaseAgentLane, stampLiExecutionVerdict } from './agentFinalization.js';
 import { extractFinalSummary } from './agentSummaryExtraction.js';
@@ -1039,7 +1035,6 @@ async function runAgentSpawn(task) {
         agentDir,
         executionId: toolExecution.id,
         laneName,
-        cleanupWorktreeFn: cleanupAgentWorktree,
         isTruthyMetaFn: isTruthyMeta,
         leanMode,
         useDurableRunner: dispatchUseRunner,
@@ -1062,7 +1057,6 @@ async function runAgentSpawn(task) {
       agentDir,
       executionId: toolExecution.id,
       laneName,
-      cleanupWorktreeFn: cleanupAgentWorktree,
       isTruthyMetaFn: isTruthyMeta,
       safetyProfile,
     });

@@ -757,8 +757,9 @@ export async function recordTaskResumePointer({ task, agentId, agentMetadata }) 
  * agent that began the shipped work over.
  *
  * Call this AFTER `cleanupAgentWorktree` so it reflects what actually survived, and
- * from all three spawn sites — `spawnDirectly` (agentCliSpawning.js), the TUI
- * `finish()` (agentTuiSpawning.js), and `handleAgentCompletion`
+ * from all three completion paths — the two in-process spawners (`spawnDirectly` in
+ * agentCliSpawning.js and the TUI `finish()` in agentTuiSpawning.js, both through
+ * `runSpawnerCompletionCleanup`) and `handleAgentCompletion`
  * (agentCompletionCleanup.js, runner mode). Only the runner path used to do it, so a
  * failed direct-CLI/TUI run left a branch full of commits nothing would ever point a
  * retry at.

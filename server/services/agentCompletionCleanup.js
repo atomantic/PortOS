@@ -1,19 +1,31 @@
 /**
  * Agent Completion Cleanup
  *
- * The post-finalize orchestration that runs after `finalizeAgent` inside
- * `handleAgentCompletion`: JIRA branch push + PR + ticket comment, the
- * plan-question notification marker, pipeline-stage progression, the Creative
- * Director chain hook, and worktree cleanup (with cleanup-warning
- * notifications + merge-recovery task). Extracted from agentLifecycle.js to
- * keep `handleAgentCompletion`'s try/finally guard small and obvious.
+ * The post-finalize orchestration that runs after `finalizeAgent`, for every
+ * path a CoS run can complete on:
  *
- * `handlePipelineProgression` lives here too — it's only invoked from this
- * cleanup flow (agentLifecycle.js re-exports it for subAgentSpawner).
+ *   - `runAgentCompletionCleanup` — the runner-event path (`handleAgentCompletion`
+ *     in agentLifecycle.js): JIRA branch push + PR + ticket comment, the
+ *     plan-question notification marker, pipeline-stage progression, the
+ *     Creative Director chain hook, and worktree cleanup (with cleanup-warning
+ *     notifications + merge-recovery task). Extracted from agentLifecycle.js to
+ *     keep `handleAgentCompletion`'s try/finally guard small and obvious.
+ *   - `runSpawnerCompletionCleanup` — the two in-process spawners, whose child
+ *     process (or PTY relay) this server owns: the TUI `finish()` handler
+ *     (agentTuiSpawning.js) and the direct-CLI `close` handler
+ *     (agentCliSpawning.js). Pipeline progression, worktree cleanup with the PR
+ *     disposition, and the retry-hold release.
+ *
+ * Both hand `cleanupAgentWorktree` the options `resolveWorktreeCleanupOptions`
+ * builds, so the PR-disposition shape has one owner. `handlePipelineProgression`
+ * lives here too — it's only invoked from these cleanup flows (agentLifecycle.js
+ * re-exports it for subAgentSpawner).
  *
  * This module imports the worktree-cleanup leaf (agentWorktreeCleanup.js)
  * directly; it must NOT import from agentLifecycle.js, which imports this
- * module — that would form a cycle.
+ * module — that would form a cycle. Nothing in this module's static closure
+ * reaches agentLifecycle.js or either spawner, which is what lets the spawners
+ * import it at top level.
  */
 
 import { join, relative, resolve, sep } from 'path';
@@ -28,7 +40,7 @@ import * as git from './git.js';
 import { isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
-import { resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
+import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolveOwnsPrWorkflow } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
 
@@ -202,6 +214,61 @@ export async function handlePipelineProgression(task, agentId, success) {
 }
 
 /**
+ * The options `cleanupAgentWorktree` decides a completing run's PR on — who
+ * opens it (`prCreation`), how it lands (`prCompletion`), which reviewers gate
+ * it, and whether the worktree branch may auto-merge — resolved from the task
+ * and the caller's PR-ownership verdict. ONE owner for the shape, shared by the
+ * runner-event path (`runCompletionCleanupSteps`) and both in-process spawners
+ * (`runSpawnerCompletionCleanup`). It used to be three inline copies, and the
+ * reviewer-resolve hardening below reached only one of them.
+ *
+ * `taskOpenPR` / `agentOwnsPR` are the CALLER's: the spawners read them off the
+ * live provider descriptor (`resolvePrOwnership`), the runner path off the
+ * persisted agent record (`resolveOwnsPrWorkflow`) — see #3358 for why the two
+ * sources exist. `prClaimVerified` likewise carries whether finalize's check
+ * ACTUALLY produced a forge answer for this run, which is a different question
+ * from whether one was expected.
+ *
+ * Only the two `prCreation` modes that can still open a PR (and thus spawn a
+ * follow-up that needs reviewer options) pay for the reviewer resolve. `never`
+ * — the dominant path, a harness that opened and landed its own PR — discards
+ * them, and a resolve that throws degrades to the follow-up's defaults rather
+ * than skipping the worktree cleanup this runs inside of.
+ *
+ * @returns {Promise<Object>} the third argument to `cleanupAgentWorktree`
+ */
+async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, taskOpenPR, agentOwnsPR, prClaimVerified = false, noChangesToShip = false }) {
+  // `if-missing` for an agent-owned PR that finalize did NOT verify: cleanup
+  // asks the forge once and only stands down when a PR actually exists, so a
+  // harness that skipped its completion workflow can't strand the branch.
+  const prCreation = resolvePrCreation({ taskOpenPR, agentOwnsPr: agentOwnsPR, prClaimVerified, noChangesToShip });
+  // Merge per-task reviewer metadata with the user's Code Review Defaults
+  // (Settings → Code Reviewers page). Settings I/O is cached inside the
+  // resolver, so this is effectively free even when invoked from a tight CoS
+  // sweep.
+  const reviewOptions = prCreation !== PR_CREATION.NEVER
+    ? await resolveReviewLoopOptions(task?.metadata, { normalize: normalizeReviewers })
+      .catch(err => {
+        emitLog('warn', `Review options unavailable for ${agentId}: ${err.message}`, { agentId, taskId: task?.id });
+        return {};
+      })
+    : {};
+  return {
+    prCreation,
+    prCompletion: resolvePrCompletion(task?.metadata),
+    ...reviewOptions,
+    // Review-loop follow-up agents already merged via `gh pr merge` in the agent
+    // body — re-merging the worktree branch into the source workspace would
+    // duplicate the squashed commits — and a harness that owns its PR workflow
+    // lands its own PR; suppress the auto-merge fallback for both.
+    skipMerge: isTruthyMeta(task?.metadata?.reviewLoopFollowUp) || agentOwnsPR,
+    description: task?.description,
+    agentOutput: outputBuffer,
+    originalTask: task,
+  };
+}
+
+/**
  * Run the post-finalize cleanup for a completed agent: JIRA push/PR/comment,
  * the plan-question notification marker, pipeline progression, the Creative
  * Director completion hook, and worktree cleanup (+ cleanup-warning
@@ -359,11 +426,6 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
   // Clean up worktree if agent was using one (skip merge when JIRA branch — PR handles merge)
   if (!jiraBranch) {
     const taskOpenPR = isTruthyMeta(task?.metadata?.openPR);
-    const taskPrCompletion = resolvePrCompletion(task?.metadata);
-    // Review-loop follow-up agents already merged via `gh pr merge` in the agent
-    // body — re-merging the worktree branch into the source workspace would
-    // duplicate the squashed commits, so suppress the auto-merge fallback.
-    const taskReviewLoopFollowUp = isTruthyMeta(task?.metadata?.reviewLoopFollowUp);
     // Who opens the PR, and whether finalize already checked that they did.
     // These two must match what the prompt actually told the agent or PortOS
     // double-fires `gh pr create` ("a pull request already exists" would then
@@ -387,23 +449,15 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
     // `canTypeSlashCommands` would answer a different question ("was one
     // expected?") off a different expression than the one finalize used, and the
     // two silently disagree the moment a run's check throws or its finalize does.
-    // Merge per-task reviewer metadata with the user's Code Review Defaults
-    // (Settings → Code Reviewers page). Settings I/O is cached
-    // inside the resolver, so this is effectively free even when invoked
-    // from a tight CoS sweep.
-    const reviewOptions = await resolveReviewLoopOptions(task?.metadata, { normalize: normalizeReviewers, isTruthyMeta });
-    const cleanupWarnings = await cleanupAgentWorktree(agentId, effectiveSuccess, {
-      // `if-missing` for an agent-owned PR that finalize did NOT verify: cleanup
-      // asks the forge once and only stands down when a PR actually exists, so a
-      // harness that skipped its completion workflow can't strand the branch.
-      prCreation: resolvePrCreation({ taskOpenPR, agentOwnsPr: agentOwnsPR, prClaimVerified, noChangesToShip }),
-      prCompletion: taskPrCompletion,
-      ...reviewOptions,
-      skipMerge: taskReviewLoopFollowUp || agentOwnsPR,
-      description: task?.description,
-      agentOutput: outputBuffer,
-      originalTask: task
-    });
+    const cleanupWarnings = await cleanupAgentWorktree(agentId, effectiveSuccess, await resolveWorktreeCleanupOptions({
+      agentId,
+      task,
+      outputBuffer,
+      taskOpenPR,
+      agentOwnsPR,
+      prClaimVerified,
+      noChangesToShip,
+    }));
 
     if (cleanupWarnings?.length > 0) {
       const { getAgent: getAgentForResult } = await import('./cos.js');
@@ -427,5 +481,58 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
         emitLog('warn', `Failed to spawn merge recovery task: ${err.message}`, { agentId, taskId: task?.id });
       });
     }
+  }
+}
+
+/**
+ * The post-finalize dispatch for a run whose child process this server itself
+ * owns — the TUI `finish()` handler (agentTuiSpawning.js) and the direct-CLI
+ * `close` handler (agentCliSpawning.js) — and the counterpart of
+ * `runAgentCompletionCleanup` above, which serves the runner-event path.
+ *
+ * Runs from the spawner's `finally`, after `finalizeAgent` has settled or
+ * thrown. In order:
+ *   1. advance a staged pipeline (`handlePipelineProgression`) BEFORE the
+ *      worktree goes, since a stage precondition may read it;
+ *   2. worktree cleanup with the PR disposition (`resolveWorktreeCleanupOptions`);
+ *   3. release the retry hold — in a `finally`, as `runAgentCompletionCleanup`
+ *      does, so no throw above can skip it. A failed task is left held by
+ *      `finalizeAgent` so nothing can dequeue its retry before the resume
+ *      pointer is written; the release flips it back to `pending` pointing at
+ *      whatever cleanup preserved — the branch (or whole worktree) kept because
+ *      the run failed with commits on it (#3368, #3373).
+ * A failed step is logged and does not block the next one.
+ *
+ * Both spawners used to inline this sequence and mirror each other by hand, and
+ * the mirror drifted in both directions: pipeline progression reached the CLI
+ * copy (cd1d21211) but never the TUI one — so an attachable pipeline stage run
+ * as a TUI (#6062) completed without advancing, or closing, its pipeline —
+ * while the reviewer-resolve hardening reached the TUI copy (708c5e473) but not
+ * the CLI one.
+ *
+ * `prOwnership` is `resolvePrOwnership`'s answer for this run;
+ * `prClaimVerified` / `noChangesToShip` are read off finalize's return.
+ * `success` is the verdict finalize actually persisted — a PR-claim downgrade
+ * must reach cleanup, or a run that opened no PR is cleaned up as a success and
+ * loses its retry state (#3358).
+ */
+export async function runSpawnerCompletionCleanup({ agentId, task, success, prOwnership, prClaimVerified = false, noChangesToShip = false, outputBuffer }) {
+  try {
+    await handlePipelineProgression(task, agentId, success)
+      .catch(err => emitLog('warn', `Pipeline progression failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id }));
+    const cleanupOptions = await resolveWorktreeCleanupOptions({
+      agentId,
+      task,
+      outputBuffer,
+      taskOpenPR: prOwnership.taskOpenPR,
+      agentOwnsPR: prOwnership.agentOwnsPR,
+      prClaimVerified,
+      noChangesToShip,
+    });
+    await cleanupAgentWorktree(agentId, success, cleanupOptions)
+      .catch(err => emitLog('warn', `Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id }));
+  } finally {
+    await releaseRetryHold({ agentId, task, success })
+      .catch(err => emitLog('warn', `Retry-hold release failed for ${agentId}: ${err.message}`, { agentId, taskId: task?.id }));
   }
 }
