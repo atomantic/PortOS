@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 
 // The generative-upscale runtimes are BYO-venv checkouts that do not exist on
@@ -109,6 +110,17 @@ describe('buildLtxUpscaleArgs (#6511)', () => {
     });
     expect(() => buildLtxUpscaleArgs({ ...upscale(), outputPath: '/fixture/out.mp4' }))
       .toThrow(expect.objectContaining({ code: 'LTX25_VENV_MISSING' }));
+  });
+});
+
+// A renamed or missing helper is invisible to every argv test above — they all
+// run against fixture paths — and would ship an argv whose interpreter cannot
+// open the script. Asserted against the REAL constants, unmocked.
+describe('generative-upscale helper scripts', () => {
+  it('names a runner that exists on disk for every supported runtime', async () => {
+    const actual = await vi.importActual('./runtimes.js');
+    expect(existsSync(actual.LTX25_UPSCALE_HELPER_SCRIPT)).toBe(true);
+    expect(existsSync(actual.LTX25_CUDA_UPSCALE_HELPER_SCRIPT)).toBe(true);
   });
 });
 
