@@ -175,7 +175,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getTaskOutputHook.mockResolvedValue(null);
   isProgrammaticIoTaskType.mockReturnValue(false);
-  resolveTaskHookType.mockReturnValue(null);
+  resolveTaskHookType.mockImplementation(task => task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null);
   resolveFailedTaskUpdate.mockImplementation(async (_task, analysis) => ({
     status: 'pending',
     metadata: { lastErrorCategory: analysis?.category || null },
@@ -193,6 +193,27 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     expect(args.objective).not.toContain('done');
     expect(args.diff).toBe('diff --git a/a.js b/a.js');
     expect(args.backend).toBe('ollama');
+  });
+
+  it.each([
+    { swarmCount: 3, analysisType: 'claim-issue' },
+    { swarmCount: '3', analysisType: 'claim-issue-gitlab' },
+    { analysisType: 'branch-reconcile' },
+  ])('skips coordinator review before reading a diff or calling a model: %j', async metadata => {
+    runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink' }));
+    await finalize({ task: { id: 'task-1', taskType: 'internal', description: 'Complete the batch', metadata } });
+    expect(completion()).toMatchObject({ success: true });
+    expect(completion().goalFidelity).toBeUndefined();
+    expect(runWindowDiffMock).not.toHaveBeenCalled();
+    expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+    expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
+    expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
+  });
+
+  it.each([0, 1, undefined])('still judges single-issue claims with swarmCount %s', async swarmCount => {
+    await finalize({ task: { id: 'task-1', description: 'Fix the uploader', metadata: { analysisType: 'claim-issue', swarmCount } } });
+    expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledOnce();
+    expect(completion().goalFidelity).toMatchObject({ verdict: 'ship' });
   });
 
   it('records a passing verdict without disturbing the run — absence is what means "never judged"', async () => {

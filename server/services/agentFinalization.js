@@ -520,6 +520,12 @@ function prVerificationAnalysis(verdict) {
 async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   const none = (error = null) => ({ verdict: null, review: null, error });
   if (!workspacePath || !task?.id) return none();
+  // A coordinator's run-window diff cannot represent work delegated across
+  // worker branches. Judge individual tasks, not the aggregate swarm objective.
+  // Stored Markdown metadata may carry numeric values as strings.
+  const workers = Number(task.metadata?.swarmCount);
+  if ((Number.isSafeInteger(workers) && workers > 1)
+      || resolveTaskHookType(task) === 'branch-reconcile') return none();
   const objective = taskObjective(task);
   if (!objective) return none();
   const config = await getGoalFidelityConfig().catch(() => null);
