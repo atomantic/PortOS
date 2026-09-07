@@ -20,7 +20,8 @@
  */
 
 import { join } from 'path';
-import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { createSettingsStore } from '../lib/settingsStore.js';
 import { buildMarkers } from '../lib/markedSection.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getDaySummary } from './humanActivity.js';
@@ -56,24 +57,20 @@ const CLIENT_SETTABLE = ['enabled', 'provider', 'model', 'runTime', 'catchUpDays
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
-export async function getSettings() {
-  await ensureDir(PATHS.brain);
-  const loaded = await readJSONFile(SETTINGS_FILE, null);
-  return loaded ? { ...DEFAULT_SETTINGS, ...loaded } : { ...DEFAULT_SETTINGS };
-}
+// Strict read + serialized PATCH live in the store (#4115): a corrupt file
+// rejects instead of reading as DEFAULT_SETTINGS and being overwritten.
+const settingsStore = createSettingsStore(SETTINGS_FILE, DEFAULT_SETTINGS);
+
+export const getSettings = settingsStore.get;
 
 // Persist a partial update. Only client-settable keys are honored from
 // `partial`; `internal` carries server-managed fields (lastRunDate/lastRunAt).
 export async function updateSettings(partial = {}, internal = {}) {
-  const current = await getSettings();
-  const next = { ...current };
-  for (const key of CLIENT_SETTABLE) {
-    if (partial[key] !== undefined) next[key] = partial[key];
-  }
-  if (internal.lastRunDate !== undefined) next.lastRunDate = internal.lastRunDate;
-  if (internal.lastRunAt !== undefined) next.lastRunAt = internal.lastRunAt;
-  await atomicWrite(SETTINGS_FILE, next);
-  return next;
+  return settingsStore.update({
+    ...Object.fromEntries(CLIENT_SETTABLE.map((key) => [key, partial[key]])),
+    lastRunDate: internal.lastRunDate,
+    lastRunAt: internal.lastRunAt,
+  });
 }
 
 // ─── Pure helpers (exported for unit tests — no I/O) ─────────────────────────

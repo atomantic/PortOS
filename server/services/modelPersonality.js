@@ -20,6 +20,7 @@ import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createSettingsStore } from '../lib/settingsStore.js';
 import { resolveProviderAndModel, runPromptThroughProvider, assertProvider } from './promptRunner.js';
 import {
   PERSONALITY_TAXONOMY_VERSION,
@@ -44,23 +45,22 @@ export const ALIGNMENT_SKIPPED_NO_TRAITS =
 const resultsFile = () => join(PATHS.data, 'model-personality', 'results.json');
 const settingsFile = () => join(PATHS.data, 'model-personality', 'settings.json');
 
-export async function getSettings() {
-  const stored = await readJSONFile(settingsFile(), {});
-  const merged = { ...DEFAULT_SETTINGS, ...(stored && typeof stored === 'object' ? stored : {}) };
+// Strict read + serialized PATCH live in the store (#4115): a corrupt file
+// rejects instead of reading as DEFAULT_SETTINGS and being overwritten.
+const settingsStore = createSettingsStore(settingsFile, DEFAULT_SETTINGS, {
   // Guard hand-edited settings: a malformed historyCap would flow into
   // `list.slice(0, historyCap)` and silently wipe the whole history
   // (`slice(0, 'abc')` → `[]`). Same rule as backup.js's settings guards.
-  if (!Number.isInteger(merged.historyCap) || merged.historyCap < 1 || merged.historyCap > 1000) {
-    merged.historyCap = DEFAULT_SETTINGS.historyCap;
-  }
-  return merged;
-}
+  normalize: (merged) => {
+    if (!Number.isInteger(merged.historyCap) || merged.historyCap < 1 || merged.historyCap > 1000) {
+      merged.historyCap = DEFAULT_SETTINGS.historyCap;
+    }
+    return merged;
+  },
+});
 
-export async function updateSettings(patch = {}) {
-  const next = { ...(await getSettings()), ...patch };
-  await atomicWrite(settingsFile(), JSON.stringify(next, null, 2));
-  return next;
-}
+export const getSettings = settingsStore.get;
+export const updateSettings = settingsStore.update;
 
 export async function getHistory(limit) {
   const stored = await readJSONFile(resultsFile(), []);

@@ -1627,6 +1627,39 @@ describe('createCachedStore', () => {
     store.invalidateCache();
     expect((await store.load()).n).toBe(42);
   });
+
+  // Strict-read regression (#4115). Every consumer (accounts, feeds, schedules,
+  // personalities) mutates through `mutate`, which persists whatever `load`
+  // returned — so a corrupt file that read as the default was rewritten as the
+  // default on the next mutation, deleting every record it held. Corrupt JSON is
+  // the portable "present but unreadable" (same `ok: false` branch as EACCES).
+  describe('strict reads (#4115)', () => {
+    const CORRUPT = '{"accounts": {"a": 1},';
+
+    it('load rejects on a corrupt file instead of fabricating the default', async () => {
+      const file = join(dir, 'x.json');
+      await writeFile(file, CORRUPT);
+      const store = createCachedStore(file, { accounts: {} }, { context: 'accounts' });
+      await expect(store.load()).rejects.toThrow(/Unreadable JSON file/);
+    });
+
+    it('mutate leaves a corrupt file byte-for-byte intact', async () => {
+      const file = join(dir, 'x.json');
+      await writeFile(file, CORRUPT);
+      const store = createCachedStore(file, { accounts: {} });
+      await expect(store.mutate((data) => { data.accounts.b = 2; })).rejects.toThrow(/Unreadable JSON file/);
+      expect(await readFile(file, 'utf-8'), 'the default must never be written over the file we could not read').toBe(CORRUPT);
+    });
+
+    it('recovers once the file is repaired', async () => {
+      const file = join(dir, 'x.json');
+      await writeFile(file, CORRUPT);
+      const store = createCachedStore(file, { accounts: {} });
+      await expect(store.load()).rejects.toThrow(/Unreadable JSON file/);
+      await writeFile(file, JSON.stringify({ accounts: { a: 1 } }));
+      expect((await store.mutate((data) => { data.accounts.b = 2; })).accounts).toEqual({ a: 1, b: 2 });
+    });
+  });
 });
 
 describe('watchForFile', () => {

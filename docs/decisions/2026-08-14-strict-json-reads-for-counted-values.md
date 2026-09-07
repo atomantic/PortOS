@@ -191,3 +191,33 @@ every later load. Deep-clone a default that callers mutate (the neighbouring
 - The remaining ~200 swallowing call sites are documented above by category
   rather than individually, so a future reader can classify a *new* call site
   without re-deriving the rule.
+
+## Addendum (2026-09-07): the shared primitives, and the copies the grep missed
+
+The audit above was driven by grepping `readJSONFile` / `tryReadFile` call
+sites. Two members of the class sat outside that grep:
+
+- **`createCachedStore` (`server/lib/jsonIo.js`)** read with a bare
+  `readFile` + `safeJSONParse(content, default)`, and every one of its five
+  consumers (`platformAccounts`, `socialAccounts`, `agentPersonalities`,
+  `automationScheduler`, `feeds`) mutates through `mutate`, which persists
+  whatever `load` returned. A corrupt accounts or schedules file therefore
+  became the empty default on the next mutation. `load()` is now strict
+  (`readJSONFileStrict`, rejecting with `Unreadable JSON file: <path>`); its
+  boot-time consumer already runs under a `.catch` in `bootstrap.js`, and the
+  scheduled ones inside `eventScheduler`'s handler guard.
+- **Four `getSettings`/`updateSettings` pairs** (`brainJournal`,
+  `youtubeIngest`, `activityDigest`, `modelPersonality`) copied
+  `goalScorecard`'s pre-fix shape and were never converted, because "config /
+  settings reads" were classified as safe without checking the write-back.
+  Rule 2 above already said the base of a write back is in the class; the
+  category note was read as an exemption. All five settings documents now go
+  through one owner, `createSettingsStore` (`server/lib/settingsStore.js`),
+  whose strict read and serialized `update` cannot drift copy by copy.
+
+Placement rule going forward: a flat settings document with shipped defaults
+and a PATCH surface is a `createSettingsStore`; a mutable document edited in
+place is a `createCachedStore`; a per-record collection is a
+`createCollectionStore`. A new hand-rolled `readJSONFile(...)` +
+`atomicWrite(...)` pair on the same path is the signal to reach for one of
+those instead.

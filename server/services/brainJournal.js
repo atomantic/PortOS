@@ -25,7 +25,7 @@
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
-import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createSettingsStore } from '../lib/settingsStore.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { replaceMarkedSection } from '../lib/markedSection.js';
 import * as brainStorage from './brainStorage.js';
@@ -52,24 +52,14 @@ const DEFAULT_SETTINGS = {
   autoSync: true,
 };
 
-const queueSettingsWrite = createFileWriteQueue();
-
 // ─── Settings ──────────────────────────────────────────────────────────────
 
-export async function getSettings() {
-  await ensureDir(PATHS.brain);
-  const loaded = await readJSONFile(SETTINGS_FILE, null);
-  return loaded ? { ...DEFAULT_SETTINGS, ...loaded } : { ...DEFAULT_SETTINGS };
-}
+// Strict read + serialized PATCH live in the store (#4115): a corrupt file
+// rejects instead of reading as DEFAULT_SETTINGS and being overwritten.
+const settingsStore = createSettingsStore(SETTINGS_FILE, DEFAULT_SETTINGS);
 
-export async function updateSettings(partial) {
-  return queueSettingsWrite(async () => {
-    const current = await getSettings();
-    const next = { ...current, ...partial };
-    await atomicWrite(SETTINGS_FILE, next);
-    return next;
-  });
-}
+export const getSettings = settingsStore.get;
+export const updateSettings = settingsStore.update;
 
 // ─── Store ─────────────────────────────────────────────────────────────────
 
