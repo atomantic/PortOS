@@ -18,6 +18,14 @@ export function isEidoverseFrameMessage(event, { source, origin, nonce }) {
     && data.version === EIDOVERSE_FRAME_VERSION && data.nonce === nonce);
 }
 
+export function eidoverseIdentityRenameName(data) {
+  if (data?.type !== 'eidoverse:identity-rename' || typeof data.name !== 'string') return null;
+  const name = data.name.trim();
+  const hasControlCharacter = [...name]
+    .some((character) => character.charCodeAt(0) <= 31 || character.charCodeAt(0) === 127);
+  return name.length > 0 && name.length <= 64 && !hasControlCharacter ? name : null;
+}
+
 export function eidoverseNavigationTarget(data, objects) {
   if (typeof data.entityId !== 'string' || !ROUTES.has(data.route)) return null;
   return objects.some((object) => object.id === data.entityId && object.route === data.route)

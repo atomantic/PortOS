@@ -167,6 +167,9 @@ export default function EidoverseWorldDrawer({
           placeholder="Leave blank for a private generated name"
         />
       </label>
+      <p className="text-xs leading-5 text-gray-400">
+        In the embedded world, <code>/name &lt;new name&gt;</code> stages this field. Save and project leaves the current session and re-enters under the new name.
+      </p>
       <label className="block text-sm text-gray-300" htmlFor="eidoverse-cos-name">
         CoS / Persistent Mind name
         <input

@@ -464,7 +464,7 @@ pretend it supports the updated runtime.
 After each iframe load, PortOS posts to its **exact hosted origin**:
 
 ```json
-{"type":"portos:connect","version":1,"nonce":"fresh-opaque-session","capabilities":{"portosNavigation":1,"labelPreferences":1},"labelVisibility":"nearby"}
+{"type":"portos:connect","version":1,"nonce":"fresh-opaque-session","capabilities":{"portosNavigation":1,"labelPreferences":1,"identityRenameRequest":1},"labelVisibility":"nearby"}
 ```
 
 The renderer validates `event.source === parent` and the embedding PortOS origin,
@@ -496,6 +496,19 @@ and exact equality between the requested route and that object's known PortOS
 section route. Only the fixed source-section routes (plus `/eidoverse`) are
 allowed. URLs, query strings, encoded/relative paths, record payloads, and
 unknown entities cannot navigate. No URL proxy is exposed.
+
+When both sides advertise `identityRenameRequest: 1`, `/name <new name>` and
+`/rename <new name>` in the home-world renderer send
+`{type:'eidoverse:identity-rename', version:1, nonce, name}`. PortOS accepts the
+request only from the current iframe window, exact hosted origin, and current
+nonce, and only for a trimmed 1–64 character name without control characters.
+The request stages the existing World Design human-name field and opens its
+Experience tab; it cannot write configuration, change an actor id, or rename a
+live session. **Save and project** uses the normal validated configuration path,
+reconciles presence, and re-enters the world with the saved URL identity. Older
+renderers keep the manual World Design flow. Standalone, authenticated, and
+guest sessions retain their authoritative identity and receive guidance instead
+of sending a host configuration request.
 
 The Eidoverse framework leaves object labels off by default. PortOS explicitly enables
 them through its trusted frame session only after the user enables Labels. Each
