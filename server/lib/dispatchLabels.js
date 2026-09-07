@@ -628,6 +628,17 @@ export const JIRA_DISPATCH_HINT_GUIDANCE = [
   ISSUE_QUALITY_GUIDANCE,
 ].join('\n');
 
+/** Jira form of the complete-label contract used by evidence-rich planners. */
+export const MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE = JIRA_DISPATCH_HINT_GUIDANCE
+  .replace(
+    'Dispatch hints are optional, independent Jira labels',
+    'Dispatch labels are REQUIRED on every issue you file: exactly one `model-*` and exactly one `effort-*` independent Jira label',
+  )
+  .replace(
+    'Choose each axis only when the work you just inspected justifies it. Omit an axis rather than guessing. ',
+    'Choose each axis only when the work you just inspected justifies it; never omit either required axis. ',
+  );
+
 /**
  * Current PortOS scope-label vocabulary. The forge remains the source of truth
  * at filing time (`gh label list --search area:` / `glab label list`), while this
@@ -669,10 +680,30 @@ export const PORTOS_AREA_LABEL_GUIDANCE = [
 export const REPO_STUDY_LABEL_CONTRACT = Object.freeze({
   forgeFlags: '--label area:<area> --label model:<tier> --label effort:<level>',
   jiraFlags: '`area:<area>` + `model-<tier>` + `effort-<level>`',
+  dispatchGuidance: MANDATORY_DISPATCH_HINT_GUIDANCE,
+  jiraDispatchGuidance: MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE,
   instructions: [
     '**Repo-study complete-label contract (mandatory):** every NEW proposal must carry `repo-study`, `plan`, at least one relevant `area:*`, exactly one justified model label (`model:*` on GitHub/GitLab, `model-*` on JIRA), and exactly one justified effort label (`effort:*` on GitHub/GitLab, `effort-*` on JIRA). The dispatch axes are independent: choose them from the inspected PortOS files and proposed implementation, never by stamping `medium` on both.',
     PORTOS_AREA_LABEL_GUIDANCE,
     'If a proposal cannot be classified defensibly on all three axes, do not file that proposal; filing an incomplete issue is not a valid fallback. After each NEW issue, read its labels back and repair any missing required label before continuing; never relabel a duplicate you skipped. Contributor labels remain optional and must follow the shared guidance.',
+  ].join('\n'),
+});
+
+/**
+ * Reference-watch proposals are based on a traced upstream diff, so they have
+ * the same evidence needed to choose both dispatch axes as repo studies do.
+ * Keep this contract separate from the general optional guidance: a prompt
+ * that says "omit an axis" immediately before a reference-watch create command
+ * is how otherwise well-researched issues land without routing labels.
+ */
+export const REFERENCE_WATCH_LABEL_CONTRACT = Object.freeze({
+  forgeFlags: '--label model:<tier> --label effort:<level>',
+  jiraFlags: '`model-<tier>` + `effort-<level>`',
+  dispatchGuidance: MANDATORY_DISPATCH_HINT_GUIDANCE,
+  jiraDispatchGuidance: MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE,
+  instructions: [
+    '**Reference-watch complete-label contract (mandatory):** every NEW proposal must carry `reference-watch`, `plan`, exactly one justified model label (`model:*` on GitHub/GitLab, `model-*` on JIRA), and exactly one justified effort label (`effort:*` on GitHub/GitLab, `effort-*` on JIRA). The dispatch axes are independent: choose them from the inspected reference diff and proposed implementation, never by stamping `medium` on both.',
+    'If a proposal cannot be classified defensibly on both axes, do not file it; filing an incomplete issue is not a valid fallback. After each NEW issue, read its labels back and repair any missing required label before continuing; never relabel a duplicate you skipped.',
   ].join('\n'),
 });
 
