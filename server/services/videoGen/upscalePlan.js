@@ -55,7 +55,7 @@ const roundUpTo = (value, multiple) => Math.ceil(value / multiple) * multiple;
 // The smallest frame count >= `frames` that satisfies the grid. `frames % 8 == 1`
 // has a solution every 8 frames, so this never overshoots by more than 7.
 export const alignFrameCount = (frames, grid = LTX_GRID) => {
-  const floor = Math.max(grid.minFrames, Math.max(1, Math.ceil(frames)));
+  const floor = Math.max(grid.minFrames, Math.ceil(frames));
   const remainder = ((floor % grid.frameModulus) + grid.frameModulus) % grid.frameModulus;
   const delta = (grid.frameRemainder - remainder + grid.frameModulus) % grid.frameModulus;
   return floor + delta;
