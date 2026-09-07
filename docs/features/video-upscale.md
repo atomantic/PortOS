@@ -188,14 +188,46 @@ explicitly adding the kind to one of them. See the privacy rules in
 
 ## Readiness
 
-The generative method is a **capability-gated preview**. It is offered only on a
-host that already has the runtime, the adapter and the base pack; everywhere
-else the drawer shows it disabled with the reason.
+The generative method is offered only on a host that already has the runtime,
+the adapter and the base pack; everywhere else the drawer shows it disabled
+with the reason. That gate is per host and permanent — it is how a machine
+without a GPU runtime learns it has no generative backend — and it is distinct
+from whether a backend has been **verified**:
 
-It stays a preview until the end-to-end verification matrix has been run with
-recorded render evidence on **both** supported backends — see
-[#6514](https://github.com/atomantic/PortOS/issues/6514), which tracks that
-matrix and the readiness flip. Lanczos is unaffected and is not a preview.
+| Backend | Status |
+| --- | --- |
+| macOS MLX (`ltx25`) | **Verified** end to end on real renders (2026-09-07, [#6514](https://github.com/atomantic/PortOS/issues/6514)); supported. |
+| Windows / Linux CUDA (`ltx25_cuda`) | Code complete with the same recipe and contract; **awaiting a render on an NVIDIA host** ([#6513](https://github.com/atomantic/PortOS/issues/6513)). Treat it as unverified until that evidence is recorded. |
+
+Lanczos is unaffected by any of this.
+
+### What the verification matrix covers
+
+The matrix drives the real route, queue, runner and gallery row of a
+worktree server on a spare port (`NODE_ENV=test`, so the worktree's own `data/`
+is the data root and no Postgres write can reach the install), against the
+pinned MLX q8 pack and the gated adapter, with short clips so each render is
+minutes. Recorded for macOS on an Apple Silicon host:
+
+| Case | Source | Result |
+| --- | --- | --- |
+| conforming source, with audio | 576×1024, 25 f, 24 fps, 1.04 s | 1152×2048, 25 f, 1.04 s; source AAC track re-muxed intact; 258 s |
+| needs frame padding, with audio | 576×1024, 23 f (padded to 25 for the render) | 1152×2048, **23 f** back, 0.96 s; audio intact; 345 s |
+| needs spatial padding, no audio | 560×1000, 25 f (padded to 576×1024) | **1120×2000**, 25 f, silent — padding cropped back off; 342 s |
+| cancellation mid-render | conforming source | job `canceled`; no history row, no partial file, no scratch left in the temp dir; source file and row byte-identical |
+| legacy Lanczos, no method / explicit `lanczos` | any | inline `{ video }` response, `upscaleMethod: 'lanczos'`, `upscaleRuntime: 'ffmpeg'`, unchanged before and after the generative runs |
+| invalid id · unknown id · missing asset · already-upscaled source | — | `400 VALIDATION_ERROR` · `404 NOT_FOUND` · `404 NOT_FOUND` · `400 ALREADY_UPSCALED` (both methods), and the plan endpoint refuses the missing asset the same way |
+| provenance | every render | row `width`/`height`/`fps`/`numFrames`/`duration` equal the file's; `seed`, `upscaleRuntime`, `upscaleAdapter`, `upscaleReferenceDownscale: 2`, the runtime fingerprint, and `renderMs` present |
+
+A source that "needs a trim" cannot be produced: the plan pads and never trims
+(see the model grid above), so that row of the matrix is a refusal by
+construction rather than a case to render.
+
+The matrix found and fixed one defect before this table was recorded: the
+finalize mux passed `-shortest` to ffmpeg, so a source whose AAC track ran a
+few milliseconds short of its video (25 frames / 1.024 s of audio) came back
+with 23 frames. The video is bounded to the source's frame count and nothing
+else now.
 
 ## Where the code lives
 

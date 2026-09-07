@@ -46,8 +46,11 @@ export const LTX25_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'ltx25-encoder-
 // entry point from a text/image render — so it gets its own helper script per
 // runtime rather than another mode flag on the generation script. Both runners
 // have landed (#6512 MLX / #6513 CUDA) and share one argv contract
-// (`scripts/_upscale_contract.py`); an install with neither runtime's venv
-// present still has no generative upscale, which is what gates the feature off.
+// (`scripts/_upscale_contract.py`). The MLX runner is verified end to end on
+// real renders (#6514, `docs/features/video-upscale.md` "Readiness"); the
+// CUDA runner carries the same recipe but awaits NVIDIA render evidence
+// (#6513). An install with neither runtime's venv present still has no
+// generative upscale, which is what gates the feature off per host.
 export const LTX25_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'upscale_ltx25.py');
 
 // Wan 2.2 MLX runtime — pinned MLX-Gen checkout provisioned on demand.
