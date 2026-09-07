@@ -35,7 +35,24 @@
  *      profile (slower start) and is stuck on the older engine.
  *   5. `COMSPEC` / `cmd.exe` — only if no PowerShell exists at all.
  *
- * On POSIX the choice was never broken: PORTOS_SHELL, else `SHELL`, else zsh.
+ * Resolution order (POSIX):
+ *   1. PORTOS_SHELL override — same escape hatch as Windows (absolute path must
+ *      exist; bare names pass through for PATH).
+ *   2. `SHELL` when set — absolute path only if it exists; bare name unchecked.
+ *   3. Common absolute candidates that exist on the host, in order:
+ *      `/bin/bash`, `/usr/bin/bash`, `/bin/sh`, `/usr/bin/sh`, then zsh if
+ *      present (`/bin/zsh`, `/usr/bin/zsh`). Bash/sh first because container and
+ *      PM2 hosts often lack zsh; a login-shell `SHELL` already won in step 2 on
+ *      macOS where zsh is the default.
+ *   4. Bare `bash` / `sh` via `findCommandOnPath` (same PATH helper as Windows).
+ *   5. Bare `sh` as the absolute last resort — never a hard-coded `/bin/zsh`
+ *      that does not exist (node-pty `execvp`s the missing binary and the Shell
+ *      page shows only `execvp(3) failed.: No such file or directory`).
+ *
+ * Why step 3–5 matter: under PM2 (and many containers) `process.env.SHELL` is
+ * unset — the daemon never inherited a login shell — and minimal images ship
+ * bash/sh but not zsh. The previous fallback of `/bin/zsh` was therefore a
+ * guaranteed spawn failure on those hosts.
  */
 
 import { existsSync, readdirSync } from 'fs';
@@ -50,6 +67,19 @@ import { findCommandOnPath } from './processEnv.js';
 // injectable `platform` exists to allow. Same reasoning as `win32.basename` in
 // shellCd.js.
 const { join } = win32;
+
+/**
+ * Absolute POSIX shells probed when neither PORTOS_SHELL nor an existing SHELL
+ * answered. Bash/sh before zsh: containers and daemonized Node often lack zsh.
+ */
+const POSIX_SHELL_CANDIDATES = Object.freeze([
+  '/bin/bash',
+  '/usr/bin/bash',
+  '/bin/sh',
+  '/usr/bin/sh',
+  '/bin/zsh',
+  '/usr/bin/zsh',
+]);
 
 /**
  * `%ProgramFiles%\PowerShell\<major>\pwsh.exe` for every installed major
@@ -102,6 +132,42 @@ function resolveWindowsShell(env, exists, readdir, findOnPath) {
 }
 
 /**
+ * Accept a configured shell path/name the same way PORTOS_SHELL is accepted:
+ * bare names pass through for PATH; absolute/relative paths must exist.
+ * Returns null when the value is blank or a missing path.
+ */
+function acceptConfiguredShell(value, exists) {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return null;
+  if (!/[\\/]/.test(trimmed) || exists(trimmed)) return trimmed;
+  return null;
+}
+
+function resolvePosixShell(env, exists, findOnPath) {
+  // Prefer the user's login shell when the process inherited one that still
+  // exists. A stale SHELL pointing at a removed binary must not strand the
+  // session the way a hard-coded missing zsh used to.
+  const fromEnv = acceptConfiguredShell(env.SHELL, exists);
+  if (fromEnv) return fromEnv;
+
+  const absolute = POSIX_SHELL_CANDIDATES.find(exists);
+  if (absolute) return absolute;
+
+  for (const name of ['bash', 'sh', 'zsh']) {
+    const onPath = findOnPath(name, { env });
+    if (onPath) return onPath;
+  }
+
+  // Bare name last: node-pty will search PATH. Prefer this over inventing an
+  // absolute path that does not exist (the previous `/bin/zsh` default).
+  console.warn(
+    '🐚 No interactive shell binary found on disk or PATH — falling back to bare `sh`. '
+    + 'Install bash/zsh or set PORTOS_SHELL to an existing shell.',
+  );
+  return 'sh';
+}
+
+/**
  * Resolve the shell without consulting (or populating) the memo. Exported for
  * tests, which need to drive the Windows branch from a POSIX host.
  *
@@ -132,7 +198,7 @@ export function resolveInteractiveShellWith({
     console.warn(`🐚 PORTOS_SHELL='${override}' does not exist — auto-detecting instead`);
   }
 
-  if (platform !== 'win32') return env.SHELL || '/bin/zsh';
+  if (platform !== 'win32') return resolvePosixShell(env, exists, findOnPath);
   return resolveWindowsShell(env, exists, readdir, findOnPath);
 }
 
@@ -144,9 +210,25 @@ let cached;
  * the filesystem. Which binary a session actually got is logged by
  * `createShellSession`, per session.
  *
+ * The memo captures whatever the first call resolved under the process env and
+ * filesystem at that moment. Tests that change those must call
+ * `_resetInteractiveShellCache()` (or use `resolveInteractiveShellWith`, which
+ * never touches the memo). After this fix ships, the first resolve on a host
+ * without zsh / without SHELL picks bash/sh instead of the old missing
+ * `/bin/zsh` — restart the server (or reset the cache) so a process that
+ * memoized the old answer before upgrade is not stuck on it.
+ *
  * @returns {string} shell binary path (or bare name, on POSIX)
  */
 export function resolveInteractiveShell() {
   if (cached === undefined) cached = resolveInteractiveShellWith();
   return cached;
+}
+
+/**
+ * Reset the memoized resolution. Test-only (and post-upgrade recovery if a
+ * long-lived process somehow reloads this module without restarting).
+ */
+export function _resetInteractiveShellCache() {
+  cached = undefined;
 }
