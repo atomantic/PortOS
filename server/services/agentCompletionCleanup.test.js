@@ -437,14 +437,32 @@ describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', (
     expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task, success: true });
   });
 
-  it('threads the resolved reviewer options through to the worktree cleanup', async () => {
+  it('threads the resolved reviewer options and the task\'s PR completion through to the worktree cleanup', async () => {
     resolveReviewLoopOptions.mockResolvedValueOnce({ reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean', reviewerApplies: false });
+    const task = { id: 't', taskType: 'user', description: 'do it', metadata: { openPR: true, prCompletion: 'review-then-merge' } };
 
-    await runSpawnerCompletionCleanup(spawnerArgs());
+    await runSpawnerCompletionCleanup(spawnerArgs({ task }));
 
     expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({
-      prCreation: 'always', reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean', reviewerApplies: false,
+      prCreation: 'always',
+      prCompletion: 'review-then-merge',
+      reviewers: ['codex', 'antigravity'],
+      reviewStopMode: 'on-clean',
+      reviewerApplies: false,
     }));
+    // No pipeline on this task: progression is a no-op, not a stray task write.
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  // A non-owning run whose no-change audit finalize verified: there is nothing
+  // to ship, so no PR is opened for an empty branch and no reviewer defaults
+  // are read for a follow-up that will never spawn.
+  it('never opens a PR when finalize proved there was nothing to ship', async () => {
+    await runSpawnerCompletionCleanup(spawnerArgs({ noChangesToShip: true }));
+
+    expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({ prCreation: 'never' }));
+    expect(resolveReviewLoopOptions).not.toHaveBeenCalled();
   });
 
   // The hardening the TUI copy had and the CLI copy lacked: a reviewer-defaults

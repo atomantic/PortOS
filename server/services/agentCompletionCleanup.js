@@ -18,8 +18,8 @@
  *
  * Both hand `cleanupAgentWorktree` the options `resolveWorktreeCleanupOptions`
  * builds, so the PR-disposition shape has one owner. `handlePipelineProgression`
- * lives here too — it's only invoked from these cleanup flows (agentLifecycle.js
- * re-exports it for subAgentSpawner).
+ * lives here too — it's only invoked from these cleanup flows (exported for its
+ * unit tests).
  *
  * This module imports the worktree-cleanup leaf (agentWorktreeCleanup.js)
  * directly; it must NOT import from agentLifecycle.js, which imports this

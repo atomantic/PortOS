@@ -968,6 +968,9 @@ describe('spawnTuiAgent runtime', () => {
       prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: false },
       prClaimVerified: false,
     }));
+    // …and finalize was told not to verify a claim this session cannot make —
+    // failing it there would pre-empt the backstop cleanup is about to run.
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ prExpected: false }));
   });
 
   it('a lean --bare TUI still hands its PR to PortOS outright', async () => {
@@ -1036,6 +1039,7 @@ describe('spawnTuiAgent runtime', () => {
       prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: true },
       prClaimVerified: true,
     }));
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ prExpected: true }));
   });
 
   // The dispatch releases the retry hold with this verdict (#3368 — its ordering

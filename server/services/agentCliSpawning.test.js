@@ -1252,6 +1252,8 @@ describe('stream error containment', () => {
   });
 
   it('hands a slashdo-capable harness to the dispatch as owning its PR, with the claim expected', async () => {
+    const { finalizeAgent } = await import('./agentFinalization.js');
+    finalizeAgent.mockClear();
     const task = {
       id: 'task-rv',
       description: 'do stuff',
@@ -1277,6 +1279,8 @@ describe('stream error containment', () => {
       prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: true },
       prClaimVerified: false,
     }));
+    // The claim predicate, not the ownership one, is what finalize verifies (#3358).
+    expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ prExpected: true }));
   });
 
   // The dispatch releases the retry hold with this verdict (#3368 — its ordering

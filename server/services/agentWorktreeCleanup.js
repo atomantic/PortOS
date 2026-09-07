@@ -6,12 +6,9 @@
  * recovery tasks when a merge or PR creation fails. Extracted from
  * agentLifecycle.js as a self-contained leaf so the completion-cleanup
  * orchestrator (agentCompletionCleanup.js) can import it without a circular
- * dependency back into agentLifecycle.js.
- *
- * agentLifecycle.js re-exports these three functions for backward
- * compatibility (agentManagement.js and subAgentSpawner.js import
- * `cleanupAgentWorktree` / `spawnMergeRecoveryTask` / `spawnReviewLoopFollowUp`
- * from there).
+ * dependency back into agentLifecycle.js. Consumers import these functions from
+ * here directly — the agentLifecycle.js pass-through re-exports were retired
+ * with the subAgentSpawner barrel (#3450).
  */
 
 import { existsSync } from 'fs';

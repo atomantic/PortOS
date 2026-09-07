@@ -260,6 +260,16 @@ describe('codeReview helpers', () => {
   })
 
   describe('resolveReviewLoopOptions', () => {
+    // Reviewers inspecting public PR content are advisory only — the follow-up
+    // must never hand an untrusted diff to a second process with write authority.
+    // Pinned on the resolver itself because this is the one place the rule lives:
+    // a task pin and a saved default that both ask for it are still refused.
+    it('forces reviewerApplies off no matter what the task or the defaults ask for', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['codex'], reviewerApplies: true } }
+      const out = await resolveReviewLoopOptions({ reviewerApplies: true }, testDeps)
+      expect(out.reviewerApplies).toBe(false)
+    })
+
     it('assembles a reviewer-keyed model map from the per-CLI-reviewer scalars', async () => {
       mockedSettings.current = {
         codeReview: {
