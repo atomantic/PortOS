@@ -972,73 +972,9 @@ describe('mtplxServerManager', () => {
    * checkpoint per process and reports only that one, so without this a refresh
    * after pulling a second checkpoint answered with the same lone id.
    */
-  describe('mtplxCachedModelIds', () => {
-    const CACHED = [cachedModel('Example/Qwen-MTP'), cachedModel('Other/Ornith-MTP')];
-
-    beforeEach(() => {
-      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
-      vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({ models: CACHED, error: null });
-    });
-
-    // The three shipped records carry three different signals: the marker on the
-    // OpenCode wrappers, the bare id on the API record, and the served port for
-    // a provider a user built themselves.
-    it.each([
-      ['an mtplxBacked CLI wrapper', { id: 'opencode-mtplx', type: 'cli', command: 'opencode', mtplxBacked: true, endpoint: 'http://127.0.0.1:8000/v1' }],
-      ['an mtplxBacked TUI wrapper', { id: 'opencode-mtplx-tui', type: 'tui', command: 'opencode', mtplxBacked: true, endpoint: 'http://127.0.0.1:8000/v1' }],
-      ['the unmarked API record', { id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' }],
-    ])('lists the servable checkpoints for %s', async (_label, provider) => {
-      expect(await mtplxCachedModelIds(provider)).toEqual(['Example/Qwen-MTP', 'Other/Ornith-MTP']);
-    });
-
-    // :8000 is a generic port. Claiming any local server on it would offer MTPLX
-    // checkpoints as the model list of someone else's API.
-    it.each([
-      ['another local API on the same port', { id: 'some-local-api', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' }],
-      ['a remote provider', { id: 'openai', type: 'api', endpoint: 'https://api.example.com/v1' }],
-      ['an MTPLX on another machine', { id: 'peer-mtplx', type: 'api', mtplxBacked: true, endpoint: 'http://100.64.0.5:8000/v1' }],
-    ])('answers null for %s', async (_label, provider) => {
-      expect(await mtplxCachedModelIds(provider)).toBeNull();
-    });
-
-    // An interrupted `mtplx pull` leaves a directory that lists but cannot load.
-    // Offering it as a selectable model just moves the failure into an agent run.
-    it('drops a checkpoint MTPLX itself calls incomplete', async () => {
-      vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({
-        models: [cachedModel('Example/Qwen-MTP'), { repo_id: 'Half/Pulled-MTP', validation: { ok: false } }],
-        error: null,
-      });
-      expect(await mtplxCachedModelIds({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' }))
-        .toEqual(['Example/Qwen-MTP']);
-    });
-
-    // `null`, never `[]`: a cache PortOS could not read must not read as "this
-    // machine has no checkpoints" and blank a provider's model list.
-    it('answers null when the cache could not be read', async () => {
-      vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({ models: null, error: '`mtplx models` timed out' });
-      expect(await mtplxCachedModelIds({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toBeNull();
-    });
-
-    it('answers null without invoking mtplx when the binary is not on PATH', async () => {
-      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(null);
-      expect(await mtplxCachedModelIds({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toBeNull();
-      expect(mtplxModels.listMtplxCachedModels).not.toHaveBeenCalled();
-    });
-
-    // On a host whose Homebrew wrapper has not bootstrapped its venv, invoking
-    // `mtplx` IS a several-hundred-megabyte download. A refresh click is not
-    // consent to that — and it would outrun the cache-query budget anyway.
-    it('does not invoke mtplx while its Python runtime is still un-bootstrapped', async () => {
-      // The probe honours $MTPLX_BREW_VENV exactly as the wrapper does, so a
-      // value in the developer's own environment would decide this test.
-      vi.stubEnv('MTPLX_BREW_VENV', '');
-      const wrapper = await writeMtplxWrapper(testLogDir, join(testLogDir, 'venv-2.10.1'));
-      vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(wrapper);
-
-      expect(await mtplxCachedModelIds({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toBeNull();
-      expect(mtplxModels.listMtplxCachedModels).not.toHaveBeenCalled();
-      vi.unstubAllEnvs();
-    });
+  it('keeps the cached-model export compatible with the discovery owner', async () => {
+    const discovery = await import('./localCachedModels.js');
+    expect(mtplxCachedModelIds).toBe(discovery.mtplxCachedModelIds);
   });
 
   describe('ensureMtplxProviderReady', () => {
