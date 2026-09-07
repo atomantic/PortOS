@@ -1069,6 +1069,22 @@ describe('createInputReadyTracker', () => {
     expect(codex.trustSelectionKey).toBe('');
   });
 
+  it('waits for Cursor workspace trust to paint across chunks and uses its accelerator', () => {
+    const tracker = createInputReadyTracker();
+    tracker.observe(PASTE_OFF, 'Do you trust the contents of this directory?\n/workspace/example\n');
+    tracker.observe(PASTE_ON, '▶ [a] Trust this work');
+    expect(tracker.needsTrust).toBe(true);
+    expect(tracker.trustChoiceReady).toBe(false);
+    expect(tracker.ready).toBe(false);
+    tracker.observe('', 'space\n[q] Quit\nUse arrow keys to navigate, Enter to select, or press the key shown');
+    expect(tracker.trustChoiceReady).toBe(true);
+    expect(tracker.trustSelectionKey).toBe('a');
+    expect(tracker.ready).toBe(false);
+    tracker.ackTrustChoice();
+    tracker.observe(PASTE_ON, '');
+    expect(tracker.ready).toBe(true);
+  });
+
   it('detects when Claude highlights the decline choice before trust acceptance', () => {
     const tracker = createInputReadyTracker({ directLaunch: true });
     tracker.observe('', 'Quick safety check: Is this a project you created or one you trust?\n'

@@ -1290,6 +1290,22 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteCount()).toBe(1);
   });
 
+  it('Cursor workspace trust: selects the keyed choice before delivering the task', async () => {
+    runSpawn({ tuiConfig: { command: 'cursor-agent', args: ['--force'], commandLine: 'cursor-agent --force', promptDelayMs: 100 } });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from(`${PASTE_OFF}Do you trust the contents of this directory?\n/workspace/example\n▶ [a] Trust this workspace\n[q] Quit\n`));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(700);
+    await flushMicrotasks();
+    expect(vi.mocked(shellService.writeToSession).mock.calls.map(([, data]) => data)).toContain('a\r');
+    expect(pasteCount()).toBe(0);
+    await capturedOnData(Buffer.from(PASTE_ON));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
   it('claude trust gate: moves from a highlighted No choice before confirming', async () => {
     runSpawn({ tuiConfig: claudeTuiConfig, useDurableRunner: true });
     await flushMicrotasks();

@@ -295,7 +295,7 @@ export const TUI_TRUST_PROMPT_PATTERN =
 // wait until the choices themselves have painted, then move off a highlighted
 // decline choice instead of assuming a bare Enter always accepts the folder.
 // These patterns run against createInputReadyTracker's whitespace-free tail.
-const TUI_TRUST_ACCEPT_OPTION_PATTERN = /(?:yes,?itrustthisfolder|yes,?continue)/i;
+const TUI_TRUST_ACCEPT_OPTION_PATTERN = /(?:yes,?itrustthisfolder|yes,?continue|\[a\]trustthisworkspace)/i;
 const TUI_TRUST_DECLINE_OPTION_PATTERN = /no,?(?:exit|quit)/i;
 const TUI_HIGHLIGHT_PATTERN_PREFIX = String.raw`(?:❯|›|>)\d*\.?`;
 const TUI_TRUST_HIGHLIGHTED_ACCEPT_PATTERN = new RegExp(
@@ -466,7 +466,11 @@ export function createInputReadyTracker({ readyTextPattern = null, directLaunch 
           const declineMatch = TUI_TRUST_DECLINE_OPTION_PATTERN.exec(tail);
           if (acceptMatch) {
             trustChoiceReady = true;
-            if (TUI_TRUST_HIGHLIGHTED_DECLINE_PATTERN.test(tail)) {
+            if (acceptMatch[0].toLowerCase() === '[a]trustthisworkspace') {
+              // Cursor exposes a direct accelerator, independent of highlight
+              // position (including Linux terminals using the ▶ cursor glyph).
+              trustSelectionKey = 'a';
+            } else if (TUI_TRUST_HIGHLIGHTED_DECLINE_PATTERN.test(tail)) {
               trustSelectionKey = declineMatch && declineMatch.index < acceptMatch.index ? '\x1b[B' : '\x1b[A';
             } else if (TUI_TRUST_HIGHLIGHTED_ACCEPT_PATTERN.test(tail)) {
               trustSelectionKey = '';
