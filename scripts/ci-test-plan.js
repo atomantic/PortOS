@@ -200,6 +200,7 @@ export const ALWAYS_RUN_TESTS = [
   'scripts/client-server-import-purity.test.js',
   'scripts/direct-invocation-drift.test.js',
   'scripts/ensure-deps.test.js',
+  'scripts/migrations/promptBumpMigrations.guard.test.js',
   'scripts/node-version-drift.test.js',
   'scripts/repo-scan-guards.test.js',
   // Whole-tree scanner: any server file can add an import of client source.
