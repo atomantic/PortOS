@@ -253,6 +253,7 @@ export function toForm(c) {
     assignment: {
       providerId: c.assignment?.providerId || '',
       model: c.assignment?.model || '',
+      effort: c.assignment?.effort || '',
     },
     // How many recent reactions steer the next run (0 disables conditioning).
     feedbackWindow: Number.isInteger(c.feedbackWindow) ? c.feedbackWindow : 5,
@@ -301,6 +302,7 @@ export function toPayload(form) {
     assignment: {
       providerId: form.assignment.providerId || null,
       model: form.assignment.providerId ? (form.assignment.model || null) : null,
+      ...(form.assignment.providerId && form.assignment.effort ? { effort: form.assignment.effort } : {}),
     },
     feedbackWindow: Number(form.feedbackWindow),
   };

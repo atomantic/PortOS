@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { EFFORT_LEVELS } from './providerModels.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES, PLAN_STEP_STATUSES } from './creativeDirectorPresets.js';
 import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
 import { BIBLE_LIMITS } from './storyBible.js';
@@ -90,6 +91,7 @@ export const creativeDirectorDirectiveSchema = z.object({
 export const creativeDirectorStagePinSchema = z.object({
   providerId: z.string().max(120).nullable().optional(),
   model: z.string().max(200).nullable().optional(),
+  effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).nullable().optional()),
 }).strict();
 
 export const creativeDirectorModelOverridesSchema = z.object({

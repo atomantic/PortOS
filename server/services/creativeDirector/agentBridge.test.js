@@ -267,3 +267,23 @@ describe('deliverable baseline stamped on the run row (#4146)', () => {
     expect(mocks.recordRun.mock.calls[0][1]).not.toHaveProperty('deliverableMark');
   });
 });
+
+
+describe('cognitive effort dispatch', () => {
+  it('takes the entire project, live commission, or global pin, including effort', async () => {
+    mocks.getSettings.mockResolvedValue({ creativeDirector: { plan: { providerId: 'global', model: 'global-model', effort: 'low' } } });
+    mocks.commissionStagePin.mockResolvedValue({ providerId: 'commission', model: 'commission-model', effort: 'high' });
+    const owned = { ...project, commissionId: 'commission-1' };
+    const first = await enqueuePlanTask({ ...owned, modelOverrides: { plan: { providerId: 'project', model: 'project-model', effort: 'max' } } });
+    expect(first.metadata).toMatchObject({ providerId: 'project', model: 'project-model', effort: 'max' });
+    const providerOnly = await enqueuePlanTask({ ...owned, modelOverrides: { plan: { providerId: 'project' } } });
+    expect(providerOnly.metadata).not.toHaveProperty('effort');
+    expect(providerOnly.metadata).not.toHaveProperty('model');
+    expect((await enqueuePlanTask(owned)).metadata).toMatchObject({ providerId: 'commission', effort: 'high' });
+    mocks.commissionStagePin.mockResolvedValue(null);
+    expect((await enqueuePlanTask(owned)).metadata).toMatchObject({ providerId: 'global', effort: 'low' });
+    const evaluation = await enqueueEvaluateTask({ ...owned, modelOverrides: { evaluation: { providerId: 'vision', effort: 'high' } } }, { sceneId: 'scene-1', order: 0 });
+    expect(evaluation.metadata).not.toHaveProperty('effort');
+    expect(evaluation.metadata).not.toHaveProperty('providerId');
+  });
+});

@@ -382,7 +382,7 @@ describe('CreativeDirectorModelsDrawer', () => {
 
       await waitFor(() => expect(updateAiAssignment).toHaveBeenCalledTimes(1));
       expect(updateAiAssignment.mock.calls[0][0]).toBe('settings.creativeDirector.treatment');
-      expect(updateAiAssignment.mock.calls[0][1]).toEqual({ providerId: 'agent-a', model: 'a-default' });
+      expect(updateAiAssignment.mock.calls[0][1]).toEqual({ providerId: 'agent-a', model: 'a-default', effort: null });
       // Untouched stages are not PUT.
       expect(updateAiAssignment.mock.calls.map((c) => c[0])).not.toContain('settings.creativeDirector.plan');
     });
@@ -425,4 +425,23 @@ describe('CreativeDirectorModelsDrawer', () => {
       expect(updateCreativeDirectorProject).not.toHaveBeenCalled();
     });
   });
+});
+
+
+it('loads, changes, clears and resets project effort without exposing vision effort', async () => {
+  getAiAssignments.mockResolvedValue({ ...ASSIGNMENTS, providers: ASSIGNMENTS.providers.map(p => p.id === 'agent-a' ? { ...p, effortLevels: ['low', 'high', 'max'] } : p) });
+  updateCreativeDirectorProject.mockImplementation(async (_id, patch) => patch);
+  renderDrawer({ id: 'cd-1', name: 'Example', modelOverrides: { plan: { providerId: 'agent-a', model: 'a-default', effort: 'high' } } });
+  await waitFor(() => expect(screen.getByLabelText('Production plan effort')).toHaveValue('high'));
+  expect(screen.queryByLabelText('Scene evaluation effort')).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Production plan effort'), { target: { value: 'max' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(updateCreativeDirectorProject).toHaveBeenLastCalledWith('cd-1', { modelOverrides: { plan: { providerId: 'agent-a', model: 'a-default', effort: 'max' } } }, { silent: true }));
+  fireEvent.change(screen.getByLabelText('Production plan effort'), { target: { value: '' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(updateCreativeDirectorProject).toHaveBeenLastCalledWith('cd-1', { modelOverrides: { plan: { providerId: 'agent-a', model: 'a-default' } } }, { silent: true }));
+  fireEvent.change(screen.getByLabelText('Production plan effort'), { target: { value: 'high' } });
+  fireEvent.change(screen.getByLabelText('Production plan provider'), { target: { value: '' } });
+  fireEvent.change(screen.getByLabelText('Production plan provider'), { target: { value: 'agent-a' } });
+  expect(screen.getByLabelText('Production plan effort')).toHaveValue('');
 });

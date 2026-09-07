@@ -163,6 +163,7 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
         <AssignmentPicker
           assignment={form.assignment}
           onChange={(next) => patchForm(['assignment'], next)}
+          onEffortChange={(effort) => patchForm(['assignment', 'effort'], effort)}
         />
       </section>
 
@@ -501,7 +502,7 @@ function RenderBackendSection({ ability, generation, patchForm }) {
 // so naming the registry's active provider here would misreport the processor on
 // installs that assign the CD stages separately. Label it neutrally; the section
 // helper text points the user at their Creative Director assignment.
-function AssignmentPicker({ assignment, onChange }) {
+function AssignmentPicker({ assignment, onChange, onEffortChange }) {
   const [providers, setProviders] = useState([]);
 
   useEffect(() => {
@@ -520,8 +521,10 @@ function AssignmentPicker({ assignment, onChange }) {
       providers={providers}
       selectedProviderId={assignment.providerId || ''}
       selectedModel={assignment.model || ''}
+      effort={assignment.effort || ''}
+      onEffortChange={onEffortChange}
       availableModels={availableModels}
-      onProviderChange={(id) => onChange({ providerId: id || '', model: '' })}
+      onProviderChange={(id) => onChange({ providerId: id || '', model: '', effort: '' })}
       onModelChange={(model) => onChange({ ...assignment, model: model || '' })}
       label="Provider"
       modelDisabled={availableModels.length === 0}

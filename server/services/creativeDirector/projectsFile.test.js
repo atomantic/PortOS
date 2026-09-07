@@ -67,6 +67,17 @@ const project = (id, extra = {}) => ({
 const journalEntries = () => cj.conflictJournalStore().loadAll();
 
 describe('projectsFile federation merge', () => {
+  it('round-trips and clears cognitive effort through create and patch', async () => {
+    const pin = { providerId: 'example-agent', model: 'example-model', effort: 'high' };
+    const p = await file.createProject({ name: 'Example', modelId: 'example', aspectRatio: '1:1', quality: 'draft', targetDurationSeconds: 9, modelOverrides: { plan: pin } });
+
+    expect((await file.getProject(p.id)).modelOverrides.plan).toEqual(pin);
+    await file.updateProject(p.id, { modelOverrides: { plan: { ...pin, effort: null } } });
+    expect((await file.getProject(p.id)).modelOverrides.plan).toEqual({ providerId: pin.providerId, model: pin.model });
+    await file.updateProject(p.id, { modelOverrides: {} });
+    expect((await file.getProject(p.id)).modelOverrides).toEqual({});
+  });
+
   it('inserts a remote project and seeds its base hash', async () => {
     const res = await file.mergeProjectsFromSync([project('cd-1')]);
     expect(res).toEqual({ applied: true, count: 1 });

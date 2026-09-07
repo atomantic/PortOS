@@ -76,6 +76,7 @@ async function getStageAssignment(kind, project) {
   return {
     ...(assignment.providerId ? { provider: assignment.providerId, providerId: assignment.providerId } : {}),
     ...(assignment.model ? { model: assignment.model } : {}),
+    ...(assignment.effort ? { effort: assignment.effort } : {}),
   };
 }
 

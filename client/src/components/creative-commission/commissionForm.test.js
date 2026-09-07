@@ -21,7 +21,7 @@ describe('commissionForm helpers', () => {
         quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10, durationMode: 'auto',
         videoMode: 'auto', videoModelId: null,
       });
-      expect(f.assignment).toEqual({ providerId: '', model: '' });
+      expect(f.assignment).toEqual({ providerId: '', model: '', effort: '' });
       expect(f.musicTaste).toEqual({
         enabled: false, source: 'digital-twin', window: 'month', anchorCount: 3,
         explorationPercent: 20, musicEngineId: '', musicModelId: '',
@@ -303,3 +303,12 @@ describe('commissionForm helpers', () => {
   });
 });
 // @vitest-environment node
+
+
+it('round-trips commission effort and drops it when the provider is cleared', () => {
+  const assignment = { providerId: 'example-agent', model: 'example-model', effort: 'high' };
+  const form = toForm({ assignment });
+  expect(toPayload(form).assignment).toEqual(assignment);
+  form.assignment.providerId = '';
+  expect(toPayload(form).assignment).toEqual({ providerId: null, model: null });
+});

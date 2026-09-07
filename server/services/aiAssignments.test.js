@@ -225,8 +225,8 @@ describe('updateAiAssignment routing', () => {
   });
 
   it.each(['treatment', 'plan'])('settings.creativeDirector.%s writes that agent stage provider/model', async (stage) => {
-    await updateAiAssignment(`settings.creativeDirector.${stage}`, { providerId: 'claude', model: 'sonnet' });
-    expect(mocks.updateSettings).toHaveBeenCalledWith({ creativeDirector: { [stage]: { providerId: 'claude', model: 'sonnet' } } });
+    await updateAiAssignment(`settings.creativeDirector.${stage}`, { providerId: 'claude', model: 'sonnet', effort: 'high' });
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ creativeDirector: { [stage]: { providerId: 'claude', model: 'sonnet', effort: 'high' } } });
   });
 
   it('settings.creativeDirector.<unknown> rejects with a 400 instead of writing a bogus stage', async () => {

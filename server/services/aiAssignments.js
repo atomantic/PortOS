@@ -156,6 +156,8 @@ const addSettingsEntries = async (entries) => {
     source: 'settings.creativeDirector.treatment',
     providerId: settings.creativeDirector?.treatment?.providerId || null,
     model: settings.creativeDirector?.treatment?.model || null,
+    effort: settings.creativeDirector?.treatment?.effort || null,
+    effortEditable: true,
     ...agentEntry,
     notes: 'Agent model that turns a project brief into a treatment and scene plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
     link: '/creative-director',
@@ -169,6 +171,8 @@ const addSettingsEntries = async (entries) => {
     source: 'settings.creativeDirector.plan',
     providerId: settings.creativeDirector?.plan?.providerId || null,
     model: settings.creativeDirector?.plan?.model || null,
+    effort: settings.creativeDirector?.plan?.effort || null,
+    effortEditable: true,
     ...agentEntry,
     notes: 'Agent model that converts a production directive into an executable plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
     link: '/creative-director',
@@ -539,7 +543,7 @@ export async function updateAiAssignment(id, payload = {}) {
     if (!['treatment', 'plan', 'evaluation'].includes(stage)) {
       throw new ServerError(`Unknown Creative Director assignment: ${id}`, { status: 400, code: 'VALIDATION_ERROR' });
     }
-    await patchSettingsPath(`creativeDirector.${stage}`, { providerId: nextProviderId, model: nextModel });
+    await patchSettingsPath(`creativeDirector.${stage}`, { providerId: nextProviderId, model: nextModel, ...(stage !== 'evaluation' ? effortPatch : {}) });
     return getAiAssignments();
   }
 

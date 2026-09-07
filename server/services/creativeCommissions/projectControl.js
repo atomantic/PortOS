@@ -88,7 +88,7 @@ export async function commissionStagePin(commissionId) {
     console.warn(`⚠️ Creative commission ${commissionId} pins unusable provider '${providerId}' (${reason}) — falling back to the default CD assignment`);
     return null;
   }
-  return { providerId, ...(commission.assignment.model ? { model: commission.assignment.model } : {}) };
+  return { providerId, ...(commission.assignment.model ? { model: commission.assignment.model } : {}), ...(commission.assignment.effort ? { effort: commission.assignment.effort } : {}) };
 }
 
 /**
