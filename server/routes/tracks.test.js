@@ -63,6 +63,7 @@ vi.mock('../services/trackYoutubeImport.js', () => ({
 
 import * as musicLibrary from '../services/pipeline/musicLibrary.js';
 import * as albums from '../services/albums/index.js';
+import { TRACK_IDS_MAX } from '../services/albums/logic.js';
 import * as ytImport from '../services/trackYoutubeImport.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import tracksRoutes from './tracks.js';
@@ -198,6 +199,31 @@ describe('tracks routes', () => {
     expect(r.status).toBe(200);
     expect(albums.updateAlbum).toHaveBeenCalledWith('album-old', { trackIds: [] });
     expect(albums.updateAlbum).toHaveBeenCalledWith('album-new', { trackIds: ['track-1'] });
+  });
+
+  // The capacity/existence contract itself is covered at the service boundary
+  // (services/trackAlbumMembership.test.js). These two pin the ROUTE wiring:
+  // a regression that reinstates the old best-effort reconcile would persist
+  // the track and answer 2xx instead of surfacing the refusal.
+  it('POST / refuses a create into a full album without persisting the track', async () => {
+    albums.getAlbum.mockResolvedValueOnce({ id: 'album-full', trackIds: Array.from({ length: TRACK_IDS_MAX }, (_, i) => `track-${i}`) });
+    const r = await request(app).post('/api/tracks').send({ title: 'Intro', albumId: 'album-full' });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('ALBUM_FULL');
+    expect(tracks.createTrack).not.toHaveBeenCalled();
+    expect(albums.updateAlbum).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /:id refuses a move into an album that no longer exists', async () => {
+    tracks.getTrack.mockResolvedValueOnce({ id: 'track-1', title: 'Intro', albumId: 'album-old' });
+    // An earlier case left a mockImplementation on getAlbum; clearAllMocks keeps
+    // implementations, so state the missing destination explicitly.
+    albums.getAlbum.mockResolvedValueOnce(null);
+    const r = await request(app).patch('/api/tracks/track-1').send({ albumId: 'album-missing' });
+    expect(r.status).toBe(404);
+    expect(r.body.code).toBe('ALBUM_NOT_FOUND');
+    expect(tracks.updateTrack).not.toHaveBeenCalled();
+    expect(albums.updateAlbum).not.toHaveBeenCalled();
   });
 
   it('POST / rejects a missing title', async () => {

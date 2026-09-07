@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import * as api from '../services/api';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
+import useMounted from '../hooks/useMounted';
 
 import WikiOverviewTab from '../components/wiki/tabs/OverviewTab';
 import WikiBrowseTab from '../components/wiki/tabs/BrowseTab';
@@ -38,7 +39,9 @@ export default function Wiki() {
 
   const [vaults, setVaults] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [notes, setNotes] = useState([]);
+  const [noteSnapshot, setNoteSnapshot] = useState(null);
+  const mountedRef = useMounted();
+  const scanSequence = useRef(0);
 
   const loadVaults = useCallback(async () => {
     const data = await api.getNotesVaults().catch(() => []);
@@ -54,6 +57,12 @@ export default function Wiki() {
   );
   const selectedVaultId = selectedVault?.id || null;
   const vaultNotFound = !loading && vaults.length > 0 && !!vaultParam && !selectedVault;
+  // Each visit owns its data, including A -> B -> A while an old A scan is
+  // still running. Do not show the previous vault's list during the new scan.
+  const vaultScopeRef = useRef(null);
+  if (vaultScopeRef.current?.id !== selectedVaultId) vaultScopeRef.current = { id: selectedVaultId };
+  const vaultScope = vaultScopeRef.current;
+  const notes = useMemo(() => noteSnapshot?.scope === vaultScope ? noteSnapshot.notes : [], [noteSnapshot, vaultScope]);
 
   // Selection handler writes the id to the URL; the tab route param is untouched.
   const selectVault = useCallback((id) => {
@@ -73,12 +82,13 @@ export default function Wiki() {
   }, [setSearchParams]);
 
   const loadNotes = useCallback(async () => {
-    if (!selectedVaultId) return;
-    const data = await api.scanNotesVault(selectedVaultId, { limit: 1000 }).catch(() => null);
-    if (data) {
-      setNotes(data.notes);
+    if (!vaultScope.id || !mountedRef.current || vaultScopeRef.current !== vaultScope) return;
+    const sequence = ++scanSequence.current;
+    const data = await api.scanNotesVault(vaultScope.id, { limit: 1000 }).catch(() => null);
+    if (data && mountedRef.current && vaultScopeRef.current === vaultScope && scanSequence.current === sequence) {
+      setNoteSnapshot({ scope: vaultScope, notes: data.notes });
     }
-  }, [selectedVaultId]);
+  }, [vaultScope, mountedRef]);
 
   useEffect(() => {
     loadVaults();
@@ -164,7 +174,7 @@ export default function Wiki() {
       case 'overview':
         return <WikiOverviewTab vaultId={selectedVaultId} stats={stats} notes={wikiNotes} allNotes={notes} onRefresh={handleRefresh} />;
       case 'browse':
-        return <WikiBrowseTab vaultId={selectedVaultId} notes={wikiNotes} rawNotes={rawNotes} allNotes={notes} onRefresh={handleRefresh} />;
+        return <WikiBrowseTab key={selectedVaultId} vaultId={selectedVaultId} notes={wikiNotes} rawNotes={rawNotes} allNotes={notes} onRefresh={handleRefresh} />;
       case 'search':
         return <WikiSearchTab vaultId={selectedVaultId} onRefresh={handleRefresh} />;
       case 'graph':

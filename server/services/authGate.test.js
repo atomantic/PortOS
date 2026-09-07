@@ -1,8 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import express from 'express';
 import { readFileSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { bindSettingsFile } from '../lib/settingsTestUtil.js';
+import { request } from '../lib/testHelper.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-authgate-' });
 
@@ -396,6 +398,126 @@ describe('authGate per-API public registry (apiAccess)', () => {
     const { authGate } = await import('./authGate.js');
     const result = await runGate(authGate, { path: '/api/voice/public/synthesize', headers: {} });
     expect(result.called).toBe(true);
+  });
+});
+
+describe('authGate Express path matching', () => {
+  // Real HTTP requests through ordinary Express mounts reproduce the routing
+  // mismatch a direct middleware call cannot see. Auth uses this suite's temp
+  // storage; fixture handlers avoid booting services or touching application data.
+  const buildApp = async () => {
+    const { authGate } = await import('./authGate.js');
+    const { default: authRoutes } = await import('../routes/auth.js');
+    const app = express();
+    const mutations = [];
+    const recordMutation = (req, res) => {
+      mutations.push(req.body);
+      res.json({ auth: req.portosAuthContext });
+    };
+    app.use(authGate);
+    app.use(express.json());
+    app.use('/api/auth', authRoutes);
+
+    const api = express.Router();
+    api.get('/records/:id', (req, res) => res.json({ id: req.params.id, auth: req.portosAuthContext }));
+    api.post('/records', recordMutation);
+    app.use('/api/example', api);
+    app.use('/data/images', (req, res) => res.type('text/plain').send(req.path));
+
+    const sdapi = express.Router();
+    sdapi.get('/sd-models', (_req, res) => res.json([]));
+    sdapi.post('/txt2img', recordMutation);
+    app.use('/sdapi/v1', sdapi);
+
+    const voice = express.Router();
+    voice.post('/public/synthesize', recordMutation);
+    voice.put('/config', recordMutation);
+    voice.post('/publicity', recordMutation);
+    app.use('/api/voice', voice);
+    app.get('/api/system/health', (_req, res) => res.json({ status: 'ok' }));
+    app.get('/assets/App.js', (_req, res) => res.type('text/javascript').send('// Example bundle'));
+    return { app, mutations };
+  };
+
+  it('blocks protected reads and mutations regardless of prefix casing', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { app, mutations } = await buildApp();
+
+    for (const path of [
+      '/api/example/records/ExampleRecord', '/aPi/example/records/ExampleRecord',
+      '/data/images/ExampleAsset.txt', '/DaTa/images/ExampleAsset.txt',
+      '/sdapi/v1/sd-models', '/SdApI/v1/sd-models',
+    ]) {
+      const response = await request(app).get(path);
+      expect(response.status, path).toBe(401);
+      if (path.toLowerCase().startsWith('/data/')) expect(response.text).toBe('Unauthorized');
+      else expect(response.body.code).toBe('AUTH_REQUIRED');
+    }
+    for (const path of ['/API/example/records', '/SDAPI/v1/txt2img']) {
+      const response = await request(app).post(path).send({ name: 'Example Record' });
+      expect(response.status, path).toBe(401);
+    }
+    expect(mutations).toEqual([]);
+  });
+
+  it('authenticates mixed-case routes without changing record IDs or asset paths', async () => {
+    const auth = await import('./auth.js');
+    const { token } = await auth.setPassword({ newPassword: 'correct-horse' });
+    const { app, mutations } = await buildApp();
+    const record = await request(app).get('/API/example/records/CaseSensitiveID')
+      .set('Cookie', `portos_auth=${token}`);
+    expect(record.status).toBe(200);
+    expect(record.body).toEqual({ id: 'CaseSensitiveID', auth: { enabled: true, authenticated: true, method: 'session' } });
+
+    const asset = await request(app).get('/DaTa/images/ExampleAsset.txt')
+      .set('Authorization', `Bearer ${token}`);
+    expect(asset.status).toBe(200);
+    expect(asset.text).toBe('/ExampleAsset.txt');
+
+    const rendered = await request(app).post('/SDAPI/v1/txt2img')
+      .set('Authorization', `Basic ${Buffer.from(':correct-horse').toString('base64')}`)
+      .send({ prompt: 'Example scene' });
+    expect(rendered.status).toBe(200);
+    expect(rendered.body.auth).toEqual({ enabled: true, authenticated: true, method: 'basic' });
+    expect(mutations).toEqual([{ prompt: 'Example scene' }]);
+  });
+
+  it('preserves public auth routes and keeps opt-in API exemptions within their prefixes', async () => {
+    const auth = await import('./auth.js');
+    await auth.setPassword({ newPassword: 'correct-horse' });
+    const { app, mutations } = await buildApp();
+    const status = await request(app).get('/API/Auth/STATUS');
+    expect(status.status).toBe(200);
+    expect(status.body).toEqual({ enabled: true });
+    const login = await request(app).post('/API/Auth/LOGIN').send({ password: 'correct-horse' });
+    expect(login.status).toBe(200);
+    expect(login.headers['set-cookie']).toMatch(/portos_auth=/);
+    const health = await request(app).get('/API/SYSTEM/HEALTH');
+    expect(health.status).toBe(200);
+    expect(health.body).toEqual({ status: 'ok' });
+    expect((await request(app).get('/assets/App.js')).status).toBe(200);
+
+    await writeApiAccess({ voice: { exposed: true, requireAuth: false }, sdapi: { exposed: true, requireAuth: false } });
+    expect((await request(app).post('/API/VOICE/PUBLIC/synthesize').send({ text: 'Example speech' })).status).toBe(200);
+    expect((await request(app).post('/SDAPI/v1/txt2img').send({ prompt: 'Example scene' })).status).toBe(200);
+    expect((await request(app).put('/API/VOICE/config').send({ example: true })).status).toBe(401);
+    expect((await request(app).post('/API/VOICE/publicity').send({ example: true })).status).toBe(401);
+    expect(mutations).toEqual([{ text: 'Example speech' }, { prompt: 'Example scene' }]);
+
+    await writeApiAccess({ voice: { exposed: true, requireAuth: true }, sdapi: { exposed: false, requireAuth: false } });
+    expect((await request(app).post('/API/VOICE/PUBLIC/synthesize').send({ text: 'Example speech' })).status).toBe(401);
+    expect((await request(app).post('/SDAPI/v1/txt2img').send({ prompt: 'Example scene' })).status).toBe(401);
+    expect(mutations).toHaveLength(2);
+  });
+
+  it('keeps the default auth-off behavior on mixed-case routes', async () => {
+    await writeApiAccess({ voice: { exposed: false, requireAuth: true } });
+    const { app } = await buildApp();
+    const record = await request(app).get('/API/example/records/ExampleRecord');
+    expect(record.status).toBe(200);
+    expect(record.body.auth).toEqual({ enabled: false, authenticated: false, method: null });
+    expect((await request(app).post('/API/VOICE/PUBLIC/synthesize').send({ text: 'Example speech' })).status).toBe(200);
   });
 });
 

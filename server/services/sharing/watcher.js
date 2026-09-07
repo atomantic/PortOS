@@ -15,7 +15,7 @@
  */
 
 import { watch } from 'chokidar';
-import { join, basename } from 'path';
+import { join, basename, sep } from 'path';
 import { processManifest, processBacklog, handleUnshare, sharingEvents } from './importer.js';
 import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
 import { isManifestPruning, pruneBucketManifests } from './manifest.js';
@@ -40,14 +40,20 @@ function queueBacklog(bucketId) {
   if (!slot) {
     const running = runScan().finally(() => {
       const live = backlogQueues.get(bucketId);
-      if (live && live.running === running) backlogQueues.delete(bucketId);
+      if (live?.running === running && !live.queued) backlogQueues.delete(bucketId);
     });
     backlogQueues.set(bucketId, { running, queued: null });
     return running;
   }
-  const queued = slot.running.then(runScan).finally(() => {
+  const queued = slot.running.then(() => {
+    // Promote the follow-up before scanning. Events arriving during it need
+    // another trailing scan, since their manifest may already have been read.
+    slot.running = queued;
+    slot.queued = null;
+    return runScan();
+  }).finally(() => {
     const live = backlogQueues.get(bucketId);
-    if (live && live.queued === queued) backlogQueues.delete(bucketId);
+    if (live?.running === queued && !live.queued) backlogQueues.delete(bucketId);
   });
   slot.queued = queued;
   return queued;
@@ -74,7 +80,7 @@ export async function attachWatcher(bucketId) {
 
   // A path under assets/ or records/ is bundle-side sync we should retry on,
   // not a manifest to process. Manifests live in manifests/ (always *.json).
-  const isBundleSync = (p) => p.includes(`${assetsDir}/`) || p.includes(`${recordsDir}/`);
+  const isBundleSync = (p) => p.startsWith(`${assetsDir}${sep}`) || p.startsWith(`${recordsDir}${sep}`);
 
   // try/catch around async event handlers — see AGENTS.md "PTY/child-process
   // /setTimeout/setInterval callbacks" rule (chokidar events fire outside the
@@ -105,7 +111,7 @@ export async function attachWatcher(bucketId) {
   w.on('unlink', async (path) => {
     // Only manifest deletions are unshare signals. Record/asset unlinks are
     // expected during cloud-sync churn and not actionable here.
-    if (!path.includes(`${manifestsDir}/`)) return;
+    if (!path.startsWith(`${manifestsDir}${sep}`)) return;
     const file = basename(path);
     if (!file.endsWith('.json')) return;
     // Our own pruner moves stale manifests into `<bucket>/.archive/manifests/`;
@@ -167,10 +173,3 @@ export async function shutdownAllWatchers() {
 export function listAttachedWatchers() {
   return [...watchers.keys()];
 }
-
-/**
- * Exported for unit testing only — exposes the coalescing queue so the
- * flood-then-assert pattern can be tested without a real chokidar watcher.
- * @internal
- */
-export { queueBacklog as __queueBacklogForTests, backlogQueues as __backlogQueuesForTests };

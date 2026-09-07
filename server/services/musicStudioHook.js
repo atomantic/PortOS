@@ -6,7 +6,7 @@ import { renderFederatedMediaAudioPrompt } from '../lib/federatedMediaWire.js';
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
 import { updateJobResult } from './mediaJobQueue/index.js';
 import * as tracks from './tracks/index.js';
-import * as albums from './albums/index.js';
+import { createTrackWithAlbum } from './trackAlbumMembership.js';
 
 const hook = createMediaJobImageHook({
   label: 'Music Studio',
@@ -70,23 +70,18 @@ const hook = createMediaJobImageHook({
     // a standalone render has no prior record, so retain its authored lyrics.
     const shouldPersistLyrics = lyricsEnabled && lyricsProvided && (instrumentalOnly !== true || !trackId);
     if (shouldPersistLyrics) meta.lyrics = authoredLyrics;
-    const track = trackId
-      ? await tracks.updateTrack(trackId, meta)
-      : await tracks.createTrack({
+    const { track, albumAssignmentError } = trackId
+      ? { track: await tracks.updateTrack(trackId, meta) }
+      : await createTrackWithAlbum({
         title: title || authoredPrompt.slice(0, 60),
         artistId,
         artist,
         albumId,
         ...(shouldPersistLyrics ? { lyrics: authoredLyrics } : {}),
         ...meta,
-      });
-    if (!trackId && track?.albumId) {
-      const album = await albums.getAlbum(track.albumId).catch(() => null);
-      if (album && !(album.trackIds || []).includes(track.id)) {
-        await albums.updateAlbum(track.albumId, { trackIds: [...(album.trackIds || []), track.id] }).catch(() => {});
-      }
-    }
-    await updateJobResult(job.id, { trackId: track.id });
+      }, { preserveUnassigned: true });
+    await updateJobResult(job.id, { trackId: track.id, ...(albumAssignmentError ? { albumAssignmentError } : {}) });
+    if (albumAssignmentError) console.warn(`⚠️ Music Studio saved completed audio as a single: ${albumAssignmentError.message}`);
     return track;
   },
   onAttached: ({ trackId, filename }, track) => {
