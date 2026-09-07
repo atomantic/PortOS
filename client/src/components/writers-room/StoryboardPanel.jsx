@@ -332,6 +332,7 @@ function StoryboardPanel({
             dirty={dirty}
             readingTheme={readingTheme}
             hotRefId={hotRef?.kind === 'char' ? hotRef.refId : null}
+            segments={activeDraft?.segmentIndex || null}
           />
         )}
         {tab === TAB.WORLD && (

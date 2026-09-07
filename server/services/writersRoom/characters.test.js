@@ -354,3 +354,117 @@ describe('writers room — psychology, sliders and links (#6417)', () => {
     expect(emptied.relationshipLinks).toEqual([]);
   });
 });
+
+describe('writers room — story-scoped evolution lens (#6445)', () => {
+  const LENS = {
+    outcome: 'full-change',
+    outcomeNote: 'She stops keeping score.',
+    stages: [
+      {
+        stageId: 'control-strategy-failing',
+        testedBelief: 'If the ledger balances, nobody leaves.',
+        externalPressure: 'The harbor master calls in the note.',
+        evidence: { segmentId: 'seg-001', anchorQuote: 'balanced the books' },
+      },
+      {
+        stageId: 'final-proof',
+        characterChoice: 'She lets the boat go without counting.',
+        causalConsequence: 'The debt stays, and so does she.',
+        evidence: { segmentId: 'seg-002' },
+      },
+    ],
+  };
+
+  it('round-trips an authored lens through create, list and update', async () => {
+    const id = await newWork();
+    // The write has to survive BOTH gates: the route schema (pipelineValidation)
+    // and the store's `editableFields` allowlist. A field the schema accepts and
+    // the allowlist omits is validated and then silently dropped.
+    const created = await createCharacter(id, { name: 'Wren Calloway', evolution: LENS });
+    expect(created.evolution.outcome).toBe('full-change');
+    expect(created.evolution.stages).toHaveLength(2);
+
+    const [reloaded] = await listCharacters(id);
+    expect(reloaded.evolution).toEqual(created.evolution);
+    // Stages persist in canonical sequence order regardless of authoring order.
+    expect(reloaded.evolution.stages.map((s) => s.stageId))
+      .toEqual(['control-strategy-failing', 'final-proof']);
+    expect(reloaded.evolution.stages[0].evidence).toMatchObject({
+      segmentId: 'seg-001', anchorQuote: 'balanced the books',
+    });
+
+    const updated = await updateCharacter(id, created.id, {
+      evolution: { ...LENS, outcome: 'partial-open' },
+    });
+    expect(updated.evolution.outcome).toBe('partial-open');
+  });
+
+  it('treats an omitted key as "leave it alone" and an explicit null as a clear', async () => {
+    const id = await newWork();
+    const created = await createCharacter(id, { name: 'Wren Calloway', evolution: LENS });
+
+    // Absent → preserved (an unrelated edit must not delete authored planning).
+    const renamed = await updateCharacter(id, created.id, { role: 'protagonist' });
+    expect(renamed.evolution).toEqual(created.evolution);
+
+    // Present-but-empty → a real clear, back to absent rather than an empty husk.
+    const cleared = await updateCharacter(id, created.id, { evolution: null });
+    expect(cleared).not.toHaveProperty('evolution');
+  });
+
+  it('leaves a character with no lens byte-identical to a pre-#6445 record', async () => {
+    const id = await newWork();
+    const created = await createCharacter(id, { name: 'Wren Calloway', lie: 'I only matter while I am useful.' });
+    expect(created).not.toHaveProperty('evolution');
+    const [reloaded] = await listCharacters(id);
+    expect(reloaded).not.toHaveProperty('evolution');
+  });
+
+  it('rejects an unknown stage id and an unknown outcome instead of coercing them', async () => {
+    const id = await newWork();
+    const created = await createCharacter(id, {
+      name: 'Wren Calloway',
+      evolution: {
+        outcome: 'triumphant',
+        stages: [
+          { stageId: 'not-a-stage', testedBelief: 'invented' },
+          { stageId: 'cost-tested', characterChoice: 'She pays it.' },
+        ],
+      },
+    });
+    expect(created.evolution.outcome).toBeNull();
+    expect(created.evolution.stages.map((s) => s.stageId)).toEqual(['cost-tested']);
+  });
+
+  it('drops a junk segment pointer but keeps a well-shaped one that no longer exists', async () => {
+    const id = await newWork();
+    const created = await createCharacter(id, {
+      name: 'Wren Calloway',
+      evolution: {
+        outcome: 'full-change',
+        stages: [
+          { stageId: 'cost-tested', characterChoice: 'a', evidence: { segmentId: '../../etc/passwd' } },
+          { stageId: 'final-proof', characterChoice: 'b', evidence: { segmentId: 'seg-999', anchorQuote: 'gone' } },
+        ],
+      },
+    });
+    const [costTested, finalProof] = created.evolution.stages;
+    expect(costTested.evidence).toBeNull();
+    // A well-shaped pointer at a deleted segment is PRESERVED so the review can
+    // report it stale and the writer can re-anchor it.
+    expect(finalProof.evidence).toMatchObject({ segmentId: 'seg-999', anchorQuote: 'gone' });
+  });
+});
+
+describe('writers room — route schema and store allowlist agree', () => {
+  it('accepts nothing on the wire the store would silently drop', async () => {
+    const { writersRoomCharacterUpdateSchema } = await import('../../lib/pipelineValidation.js');
+    // `name` is a primaryField, handled ahead of the allowlist; everything else
+    // the schema accepts has to be writable, or the PATCH 200s and does nothing.
+    const wireFields = Object.keys(writersRoomCharacterUpdateSchema.shape).filter((f) => f !== 'name');
+    const writable = new Set(characters.CHARACTER_EDITABLE_FIELDS);
+    expect(wireFields.filter((f) => !writable.has(f))).toEqual([]);
+    // Regression pin for the field this slice added on both sides at once.
+    expect(wireFields).toContain('evolution');
+  });
+});

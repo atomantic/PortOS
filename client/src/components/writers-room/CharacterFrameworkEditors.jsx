@@ -1,7 +1,7 @@
 /**
  * Structured character-framework editors for the Writers Room cast bible
  * (#6417) — the psychology profile (#6414), the Three Sliders (#2175), and the
- * relationship-link rows (#1287).
+ * relationship-link rows (#1287), plus the five-stage evolution lens (#6445).
  *
  * These are `kind: 'custom'` fields on BibleSection's field config: BibleSection
  * seeds each from the stored record, hands the component a value + `onChange`,
@@ -32,6 +32,7 @@ import {
   RELATIONSHIP_LINK_TYPES,
 } from '../../lib/characterFramework';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
+import CharacterEvolutionLens from '../character/CharacterEvolutionLens';
 
 const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
 const subLabelCls = 'block text-[9px] uppercase tracking-wider text-gray-500';
@@ -280,5 +281,43 @@ export function RelationshipLinkRows({ value, onChange, siblings, idPrefix, inpu
         </button>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Five-stage evolution lens (#6445)
+// ---------------------------------------------------------------------------
+
+// Stored verbatim; `null` on a character nobody has authored a lens for, which
+// is the shape the server persists, so an untouched record round-trips.
+export const seedEvolution = (item) => item?.evolution ?? null;
+// `patchEvolution` already returns `null` once nothing is authored (its "clear"
+// path), so the editor sends what it has rather than re-deriving that rule.
+export const marshalEvolution = (value) => (value && typeof value === 'object' ? value : null);
+
+/**
+ * The shared `CharacterEvolutionLens`, hosted in the Writers Room cast bible.
+ *
+ * Reused rather than re-implemented: the outcome picker, the five stage cards,
+ * the stale-anchor badge and its one-click re-pick are identical to the Pipeline
+ * series and FableLoom plan surfaces — only the anchor row differs, and the
+ * `host` prop already owns that. `segments` is the work's live segment index
+ * (`{ id, kind, heading }`), mapped to the `{ id, label }` option shape the
+ * anchor picker takes; a mount without it (a standalone bible render) still
+ * edits the prose half and keeps an existing anchor visible as "(missing)".
+ */
+export function EvolutionFields({ value, onChange, idPrefix, segments }) {
+  const options = (Array.isArray(segments) ? segments : [])
+    .filter((segment) => segment?.id)
+    .map((segment) => ({ id: segment.id, label: `${segment.id} · ${segment.heading || segment.kind || ''}`.trim() }));
+  return (
+    <CharacterEvolutionLens
+      idPrefix={idPrefix}
+      evolution={value}
+      onChange={onChange}
+      host="writersRoom"
+      anchors={{ segments: options }}
+      psychology={null}
+    />
   );
 }

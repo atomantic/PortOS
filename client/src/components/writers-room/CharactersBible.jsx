@@ -6,12 +6,15 @@ import {
   CHARACTER_SECRETS_FIELD,
 } from '../../lib/characterFramework';
 import {
+  EvolutionFields,
   PsychologyFields,
   RelationshipLinkRows,
   SliderFields,
+  marshalEvolution,
   marshalPsychology,
   marshalRelationshipLinks,
   marshalSliders,
+  seedEvolution,
   seedPsychology,
   seedRelationshipLinks,
   seedSliders,
@@ -69,6 +72,18 @@ const FRAMEWORK_FIELDS = [
     seed: seedRelationshipLinks,
     marshal: marshalRelationshipLinks,
     Component: RelationshipLinkRows,
+  },
+  // The story-scoped five-stage lens (#6445) — what THIS manuscript does to the
+  // baseline above, anchored retrospectively to the draft's segment index. It
+  // stays inside FRAMEWORK_FIELDS so `blanksExcludeKeys` keeps it out of the
+  // row's "Missing: …" warning: the lens is optional and never a gate.
+  {
+    key: 'evolution',
+    kind: 'custom',
+    heading: 'Character evolution (five-stage lens)',
+    seed: seedEvolution,
+    marshal: marshalEvolution,
+    Component: EvolutionFields,
   },
 ];
 // The framework is optional by design — a character with no Ghost isn't
@@ -133,7 +148,9 @@ const CHARACTER_CONFIG = {
 // Controlled vs. uncontrolled: caller may pass `characters` to keep multiple
 // mounts in sync (e.g. drawer + storyboard chip count). When omitted we fetch
 // and own the list so this can stand alone.
-export default function CharactersBible({ workId, characters, onCharactersChange, readingTheme = 'dark', hotRefId = null }) {
+export default function CharactersBible({
+  workId, characters, onCharactersChange, readingTheme = 'dark', hotRefId = null, segments = null,
+}) {
   return (
     <BibleSection
       workId={workId}
@@ -142,6 +159,9 @@ export default function CharactersBible({ workId, characters, onCharactersChange
       readingTheme={readingTheme}
       hotRefId={hotRefId}
       config={CHARACTER_CONFIG}
+      // The active draft's segment index, so the evolution lens can anchor a
+      // stage to a real chapter/scene instead of asking for a raw `seg-NNN`.
+      customProps={{ segments }}
     />
   );
 }

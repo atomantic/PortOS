@@ -6,9 +6,10 @@
  * adding an eager edge there costs one module instantiation per suite for a
  * shape only two hosts validate (see the Import scoping section of
  * server/AGENTS.md). The two consumers are `routes/pipeline/series.js`
- * (`series.characterArcs[].evolution`) and `lib/fableLoomValidation.js`
- * (`loom.seriesPlan.characterEvolutions[]`); sharing one definition is what
- * keeps their caps and vocabularies from drifting.
+ * (`series.characterArcs[].evolution`), `lib/fableLoomValidation.js`
+ * (`loom.seriesPlan.characterEvolutions[]`) and `lib/pipelineValidation.js`'s
+ * Writers Room cast schemas (`characters[].evolution`, #6445); sharing one
+ * definition is what keeps their caps and vocabularies from drifting.
  */
 
 import { z } from 'zod';
@@ -43,6 +44,11 @@ export const characterEvolutionEvidenceSchema = z.object({
   transitionId: z.string().trim().max(CHARACTER_EVOLUTION_LIMITS.evidenceRef).optional(),
   episodeId: z.string().trim().max(CHARACTER_EVOLUTION_LIMITS.evidenceRef).optional(),
   sceneKey: z.string().trim().max(CHARACTER_EVOLUTION_LIMITS.evidenceRef).optional(),
+  // Writers Room manuscript anchors (#6445). `segmentId` is shape-checked by
+  // the sanitizer (a `seg-NNN`), not here, so a peer or an older client sending
+  // a junk pointer is cleaned rather than 400'd; `anchorQuote` is prose.
+  segmentId: z.string().trim().max(CHARACTER_EVOLUTION_LIMITS.evidenceRef).optional(),
+  anchorQuote: z.string().trim().max(CHARACTER_EVOLUTION_LIMITS.anchorQuote).optional(),
 });
 
 export const characterEvolutionStageSchema = z.object({

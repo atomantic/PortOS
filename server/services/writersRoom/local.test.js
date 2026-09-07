@@ -20,6 +20,7 @@ const {
   listExercises, createExercise, finishExercise, discardExercise, promoteExercise,
   resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, DEFAULT_LIVE_MODE,
   renderWorkVoiceGuide,
+  segmentEvidenceRefs, renderWorkCharacterEvolutions,
 } = local;
 
 beforeEach(() => {
@@ -515,5 +516,138 @@ describe('live mode (Phase 5)', () => {
     vi.setSystemTime(new Date('2026-06-04T00:05:00Z'));
     const r3 = await recordLiveModeRenderUsage(work.id);
     expect(r3.renderUsage).toEqual({ date: '2026-06-04', count: 1 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retrospective five-stage evolution lens anchored to manuscript segments
+// (#6445, epic #6418). Synthetic manuscripts only — never a real instance
+// record.
+// ---------------------------------------------------------------------------
+
+// A short two-chapter manuscript. `# Ledger` is seg-001, `# Harbor` is seg-002.
+const MANUSCRIPT = [
+  '# Ledger',
+  '',
+  'She balanced the books before she balanced anything else.',
+  '',
+  '# Harbor',
+  '',
+  'She let the boat go without counting what it cost her.',
+  '',
+].join('\n');
+
+const lensCharacter = (name, outcome, evidence, extra = {}) => ({
+  name,
+  evolution: {
+    outcome,
+    stages: [{
+      stageId: 'final-proof',
+      characterChoice: 'She lets the boat go.',
+      evidence,
+      ...extra,
+    }],
+  },
+});
+
+describe('retrospective evolution-lens anchors (#6445)', () => {
+  const segments = () => buildSegmentIndex(MANUSCRIPT);
+
+  it('maps every segment id to the prose it currently covers', () => {
+    const { segmentIds } = segmentEvidenceRefs(segments(), MANUSCRIPT);
+    expect([...segmentIds.keys()]).toEqual(['seg-001', 'seg-002']);
+    expect(segmentIds.get('seg-002')).toContain('let the boat go');
+    expect(segmentIds.get('seg-001')).not.toContain('let the boat go');
+  });
+
+  it('renders nothing at all when no character carries a lens', () => {
+    const cast = [{ name: 'Wren Calloway', lie: 'I only matter while I am useful.' }];
+    expect(renderWorkCharacterEvolutions(cast, { segmentIndex: segments(), text: MANUSCRIPT })).toBeNull();
+    expect(renderWorkCharacterEvolutions([], { segmentIndex: segments(), text: MANUSCRIPT })).toBeNull();
+  });
+
+  it('annotates a resolving, quote-matched anchor as anchored', () => {
+    const cast = [lensCharacter('Wren Calloway', 'full-change', {
+      segmentId: 'seg-002', anchorQuote: 'let the boat go',
+    })];
+    const block = renderWorkCharacterEvolutions(cast, { segmentIndex: segments(), text: MANUSCRIPT });
+    expect(block).toContain('declared outcome: full-change');
+    expect(block).toContain('segment seg-002');
+    expect(block).toContain('[anchored]');
+  });
+
+  it('marks an anchor stale — keeping the authored prose — once its segment is gone', () => {
+    const shortened = '# Ledger\n\nShe balanced the books before she balanced anything else.\n';
+    const cast = [lensCharacter('Wren Calloway', 'full-change', {
+      segmentId: 'seg-002', anchorQuote: 'let the boat go',
+    })];
+    const block = renderWorkCharacterEvolutions(cast, {
+      segmentIndex: buildSegmentIndex(shortened), text: shortened,
+    });
+    expect(block).toContain('[stale]');
+    expect(block).not.toContain('[anchored]');
+    // Preserved, never silently dropped: the prose and the re-anchoring quote
+    // both survive so the writer can re-point the stage.
+    expect(block).toContain('choice: She lets the boat go.');
+    expect(block).toContain('let the boat go');
+  });
+
+  it('marks an anchor stale when renumbering leaves the id on a different passage', () => {
+    // A new opening chapter renumbers everything below it: the old `seg-002`
+    // still EXISTS, and now covers prose the stage was never written for. The
+    // quote is what catches it — an existence check alone would read "anchored".
+    const expanded = `# Prologue\n\nThe harbor master kept his own ledger.\n\n${MANUSCRIPT}`;
+    const cast = [lensCharacter('Wren Calloway', 'full-change', {
+      segmentId: 'seg-002', anchorQuote: 'let the boat go',
+    })];
+    const block = renderWorkCharacterEvolutions(cast, {
+      segmentIndex: buildSegmentIndex(expanded), text: expanded,
+    });
+    expect(block).toContain('[stale]');
+    expect(block).not.toContain('[anchored]');
+  });
+
+  it('reports an unquoted anchor as resolved but never invents a quote check', () => {
+    const cast = [lensCharacter('Wren Calloway', 'partial-open', { segmentId: 'seg-001' })];
+    const block = renderWorkCharacterEvolutions(cast, { segmentIndex: segments(), text: MANUSCRIPT });
+    expect(block).toContain('[anchored]');
+    expect(block).not.toContain('quote');
+  });
+
+  it('reports a quote with no segment as unverified rather than proven', () => {
+    const cast = [lensCharacter('Wren Calloway', 'full-change', { anchorQuote: 'let the boat go' })];
+    const block = renderWorkCharacterEvolutions(cast, { segmentIndex: segments(), text: MANUSCRIPT });
+    expect(block).toContain('[unverified]');
+    expect(block).not.toContain('[anchored]');
+  });
+
+  it('carries all four declared outcomes verbatim, including the two that are endings', () => {
+    const cast = [
+      lensCharacter('Wren Calloway', 'full-change', { segmentId: 'seg-002', anchorQuote: 'let the boat go' }),
+      lensCharacter('Dov Marchetti', 'tragic-refusal', { segmentId: 'seg-001', anchorQuote: 'balanced the books' }),
+      lensCharacter('Ilsa Renn', 'flat-testing', { segmentId: 'seg-001', anchorQuote: 'balanced the books' }),
+      lensCharacter('Peto Vane', 'partial-open', { segmentId: 'seg-002', anchorQuote: 'let the boat go' }),
+    ];
+    const block = renderWorkCharacterEvolutions(cast, { segmentIndex: segments(), text: MANUSCRIPT });
+    for (const outcome of ['full-change', 'tragic-refusal', 'flat-testing', 'partial-open']) {
+      expect(block).toContain(`declared outcome: ${outcome}`);
+    }
+    // One block per character, each nested under its own name.
+    for (const name of ['Wren Calloway', 'Dov Marchetti', 'Ilsa Renn', 'Peto Vane']) {
+      expect(block).toContain(`- ${name}`);
+    }
+  });
+
+  it('renders an undeclared lens as undeclared rather than assuming an outcome', () => {
+    const cast = [lensCharacter('Wren Calloway', null, { segmentId: 'seg-002', anchorQuote: 'let the boat go' })];
+    const block = renderWorkCharacterEvolutions(cast, { segmentIndex: segments(), text: MANUSCRIPT });
+    expect(block).toContain('declared outcome: undeclared');
+  });
+
+  it('tolerates a work with no draft body at all', () => {
+    const cast = [lensCharacter('Wren Calloway', 'full-change', { segmentId: 'seg-001' })];
+    const block = renderWorkCharacterEvolutions(cast, {});
+    // Nothing to resolve against — unverified, never anchored.
+    expect(block).toContain('[unverified]');
   });
 });

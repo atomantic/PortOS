@@ -29,6 +29,43 @@ Only what the writer authored is included, so a field you do not see was left bl
 Use it only to judge delivery against intent: where the prose earns a declared beat, and where a declared Lie / Need / arc is asserted in the bible but never dramatized on the page. Do not restate the plan back as a strength, do not treat a field the writer left blank as a defect, and do not invent framework the writer has not declared. Character issues that reference the plan belong in `issues` with `category: "character"`, anchored to a real `excerpt` like every other issue.
 {{/castFrameworkJson}}
 
+{{#characterEvolution}}
+## Authored character evolution (five-stage lens)
+
+The writer has also recorded an OPTIONAL five-stage lens for the characters below. It states the causal chain this manuscript runs a character through:
+
+**tested control belief → external pressure → the choice → the cost paid → the final behavioral proof**
+
+- *control strategy failing* — the belief the character controls their world with, and the first sign it no longer works.
+- *pressure forces exploration* — the external pressure that makes the old strategy unusable and forces them to look for another way.
+- *commitment to change* — the choice they actually make.
+- *cost tested* — what that choice costs them, and whether they can bear it.
+- *final proof* — the closing BEHAVIOR that proves the change (or the refusal).
+
+The `declared outcome` is authored intent. It changes your verdict; it never suppresses this reading:
+
+- `full-change` — the change must endure and be proven by behavior. A payoff won only by defeating an external obstacle, with no behavioral proof on the page, IS an issue.
+- `tragic-refusal` — doubling down on the control belief is the INTENDED ending. Do not flag it as a flat or failed arc. The issue here is the opposite: a refusal that was never genuinely tested — no real pressure, no cost paid — so the character never had a change to refuse.
+- `flat-testing` — the belief is tested and deliberately HOLDS; the character changes the world around them instead of themselves. Constancy is the point: do not flag it as a flat arc.
+- `partial-open` — partial change, or an ending left genuinely open, is a legitimate literary ending. Incompleteness itself is NOT an issue; an UNEARNED CLAIM OF COMPLETION is — prose asserting the character is transformed when the stages were never paid off.
+- `undeclared` — the writer has not yet said how the arc lands. Treat the stages as provisional planning, not as intent to hold the prose to.
+
+Evidence points at a manuscript segment (`segment seg-003`) and may carry the quote that pins it. Segment numbering is rebuilt every time the draft is saved, so a stage annotated `[stale]` points at prose that has moved or gone and `[unverified]` could not be resolved at all. Neither is proof. Missing or unresolved evidence means NOT PROVEN — never read it as passing. When a stage is `[stale]`, say so in your `suggestion` and quote the passage that should now anchor it.
+
+Two failure modes need DIFFERENT repairs — never merge them into one issue:
+
+- **no authored intent** — the character has no lens stage for a change the prose shows or plainly needs. Begin `note` with `No authored intent:` and make the paired `suggestions` entry name the stage to author.
+- **authored intent not delivered** — a stage IS authored but the page never delivers it. Begin `note` with `Authored intent not delivered:` and make the paired `suggestions` entry name the concrete scene that would land that stage.
+
+Both go in `issues` with `category: "character"`, anchored to a real `excerpt` like every other issue.
+
+This is a craft lens over the authored beats — NOT a page count, a chapter count, or a percentage layout. Do not require five chapters, fixed positions, one stage per chapter, or a changed belief that is the literal opposite of the tested one. Not every character transforms, and a character with no lens is judged exactly as they were before.
+
+```
+{{characterEvolution}}
+```
+{{/characterEvolution}}
+
 ## Task
 
 Read the entire draft. Then produce one editorial pass that covers:
