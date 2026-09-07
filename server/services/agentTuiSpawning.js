@@ -26,7 +26,6 @@ import { prClaimWasVerified, leavesPrForHuman } from '../lib/prDisposition.js';
 import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
 import { mergeGateOwed, resolveMergeGateVerdict, buildMergeGateReprompt } from '../lib/mergeGateContract.js';
 import { probePrForBranch } from './prProbe.js';
-import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import * as git from './git.js';
 import { spawnTuiSessionViaRunner, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import { resolveInteractiveShell } from '../lib/interactiveShellResolver.js';
@@ -666,6 +665,7 @@ export async function spawnTuiAgent({
   executionId,
   laneName,
   isTruthyMetaFn,
+  ownsPrWorkflow,
   leanMode = false,
   useDurableRunner = false,
   // The public-content execution profile this run enforces (null for an
@@ -711,7 +711,7 @@ export async function spawnTuiAgent({
   const prOwnership = resolvePrOwnership({
     task,
     isTruthyMeta: isTruthyMetaFn,
-    providerType: PROVIDER_TYPES.TUI,
+    persisted: ownsPrWorkflow,
     providerId: provider?.id,
     providerCommand: provider?.command,
     leanMode,

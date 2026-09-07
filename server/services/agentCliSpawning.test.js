@@ -1283,6 +1283,18 @@ describe('stream error containment', () => {
     expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ prExpected: true }));
   });
 
+  it('hands a read-only CLI run to PortOS using the prompt ownership stamp', async () => {
+    const task = { id: 'task-read-only', description: 'analyze the code', metadata: { openPR: true, readOnly: true } };
+    const spawnPromise = spawnDirectly({ ...minimalArgs, task, ownsPrWorkflow: false, isTruthyMetaFn: (v) => v === true });
+    await vi.waitFor(() => expect(fakeProcess.listenerCount('close')).toBeGreaterThan(0));
+    fakeProcess.emit('close', 0);
+    await spawnPromise;
+    await vi.waitFor(() => expect(runSpawnerCompletionCleanup).toHaveBeenCalledTimes(1));
+    expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
+      prOwnership: { taskOpenPR: true, agentOwnsPR: false, prClaimExpected: true },
+    }));
+  });
+
   // The dispatch releases the retry hold with this verdict (#3368 — its ordering
   // after worktree cleanup is pinned in agentCompletionCleanup.test.js). What
   // this pins is that the close handler hands it the REAL verdict: a hardcoded

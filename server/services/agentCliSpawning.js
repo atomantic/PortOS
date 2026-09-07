@@ -347,6 +347,7 @@ export async function spawnDirectly({
   executionId,
   laneName,
   isTruthyMetaFn,
+  ownsPrWorkflow,
   safetyProfile = null,
 }) {
   const fullCommand = `${cliConfig.command} ${cliConfig.args.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
@@ -906,7 +907,7 @@ export async function spawnDirectly({
     const prOwnership = resolvePrOwnership({
       task,
       isTruthyMeta: isTruthyMetaFn,
-      providerType: PROVIDER_TYPES.CLI,
+      persisted: ownsPrWorkflow,
       providerId: provider?.id,
       providerCommand: provider?.command,
       leanMode: isOllamaClaudeProvider(provider),

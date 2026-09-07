@@ -657,6 +657,7 @@ describe('spawnTuiAgent runtime', () => {
       agentDir,
       executionId,
       laneName,
+      ownsPrWorkflow: overrides.ownsPrWorkflow ?? !overrides.leanMode,
       leanMode: overrides.leanMode ?? false,
       useDurableRunner: overrides.useDurableRunner ?? false,
       safetyProfile: overrides.safetyProfile ?? null,
@@ -2736,6 +2737,27 @@ describe('spawnTuiAgent runtime', () => {
     };
 
     beforeEach(() => { sentinelExists = false; });
+
+    it('leaves a read-only run with an open PR to PortOS without a merge re-prompt', async () => {
+      vi.mocked(probePrForBranch).mockResolvedValue({
+        prState: 'OPEN', prUrl: 'https://example.com/pr/1', prNumber: 1, cli: 'gh', readable: true,
+      });
+      withSentinel('## Summary\nFinished the analysis.');
+      const spawnPromise = runSpawn({
+        task: { ...openPrTask, metadata: { openPR: true, readOnly: true } },
+        ownsPrWorkflow: false,
+      });
+      await flushMicrotasks();
+      sentinelExists = true;
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await settle();
+      await spawnPromise;
+      expect(probePrForBranch).not.toHaveBeenCalled();
+      expect(shellService.pasteToSession).not.toHaveBeenCalled();
+      expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
+        prOwnership: expect.objectContaining({ taskOpenPR: true, agentOwnsPR: false }),
+      }));
+    });
 
     it('re-prompts exactly once when the PR is open and the summary names no blocker, then finalizes on the RE-ARMED watcher even if still open', async () => {
       vi.mocked(shellService.pasteToSession).mockReturnValue(999);
