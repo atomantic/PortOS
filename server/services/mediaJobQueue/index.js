@@ -148,7 +148,13 @@ async function safeUnlinkUpload(path) {
   await unlink(path).catch(() => {});
 }
 
-export const JOB_KINDS = Object.freeze(['video', 'image', 'training', 'audio']);
+// 'video-upscale' (#6511) is its OWN kind rather than a 'video' mode so the
+// generative upscale can never be offered to a peer: the federation layer's
+// kind maps (REMOTE_MEDIA_MODULES here, ROUTABLE_MEDIA_KINDS and
+// KNOWN_MEDIA_KINDS in federatedMedia/) are closed lists that do not name it,
+// so shipping a user's source video across the wire would take a deliberate
+// edit to one of them rather than a mode string slipping through.
+export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'image', 'training', 'audio']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 // Returns a Promise that resolves to the gen module for the given job's
@@ -161,6 +167,7 @@ function getGenModuleForJob(job) {
   // later local branch would happily claim it and render a second time on this
   // machine.
   if (isRemoteMediaJob(job)) return REMOTE_MEDIA_MODULES[job.kind]();
+  if (job.kind === 'video-upscale') return import('../videoGen/upscaleJob.js');
   if (job.kind === 'video' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../videoGen/grok.js');
   if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.FAL) return import('../videoGen/fal.js');
   if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.REACTOR) return import('../videoGen/reactor.js');
@@ -806,7 +813,7 @@ function recomputeQueuePositions() {
 // the queue, even though the underlying emitters don't supply one.
 function synthesizeMessage(e, kind) {
   if (typeof e.step === 'number' && typeof e.totalSteps === 'number' && e.totalSteps > 0) {
-    const verb = kind === 'video' ? 'Rendering' : kind === 'training' ? 'Training' : 'Generating';
+    const verb = kind === 'video' ? 'Rendering' : kind === 'video-upscale' ? 'Upscaling' : kind === 'training' ? 'Training' : 'Generating';
     return `${verb} step ${e.step}/${e.totalSteps}`;
   }
   return undefined;
@@ -1054,7 +1061,7 @@ async function runJob(job) {
 
   await resolveLiveParams(job, safeParams);
 
-  const emitter = job.kind === 'video' ? videoGenEvents
+  const emitter = job.kind === 'video' || job.kind === 'video-upscale' ? videoGenEvents
     : job.kind === 'training' ? trainingEvents
     : job.kind === 'audio' ? audioGenEvents
     : imageGenEvents;
@@ -1074,6 +1081,9 @@ async function runJob(job) {
     // the chunk-scaled local-video one (the provider emits 'activity' on
     // stdout so a long-but-active render never trips the idle cap).
     if (isCloudImageJob(job)) return WATCHDOG_CODEX_MS;
+    // An upscale is a single GPU render with no chunking, so it takes the
+    // video idle window flat rather than the chunk-scaled one.
+    if (job.kind === 'video-upscale') return WATCHDOG_VIDEO_MS;
     if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
     if (job.kind === 'training') return WATCHDOG_TRAINING_MS;
     if (job.kind === 'audio') return WATCHDOG_AUDIO_MS;
@@ -1150,6 +1160,8 @@ async function runJob(job) {
       await mod.generateChainedVideo({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'video') {
       await mod.generateVideo({ ...safeParams, jobId: job.id });
+    } else if (job.kind === 'video-upscale') {
+      await mod.runVideoUpscale({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'training') {
       await mod.runTraining({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'audio') {
