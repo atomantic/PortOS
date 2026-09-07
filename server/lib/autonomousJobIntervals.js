@@ -32,9 +32,8 @@ export const ON_DEMAND_INTERVAL = 'on-demand';
 
 /**
  * Available interval options for UI pickers. `ms: null` marks a cadence with no
- * recurrence. Mirrored (value/label only) by `JOB_INTERVAL_OPTIONS` in
- * `client/src/utils/cronHelpers.js`; the mirror describe in
- * `autonomousJobIntervals.test.js` fails when the two drift.
+ * recurrence. `JOB_INTERVAL_OPTIONS` in `client/src/utils/cronHelpers.js`
+ * imports this registry and projects its value/label fields for both pickers.
  */
 export const INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour', ms: HOUR },

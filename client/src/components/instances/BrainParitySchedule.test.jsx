@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { INTERVAL_OPTIONS } from '../../../../server/lib/autonomousJobIntervals.js';
 
 vi.mock('../../services/api', () => ({
   getCosJob: vi.fn(),
@@ -82,6 +83,9 @@ describe('BrainParitySchedule', () => {
     render(<BrainParitySchedule />);
 
     const select = await screen.findByLabelText('Parity sweep interval');
+    // Every server-supported picker cadence is visible with its canonical label.
+    expect(Array.from(select.options, ({ value, textContent }) => ({ value, label: textContent })))
+      .toEqual(INTERVAL_OPTIONS.map(({ value, label }) => ({ value, label })));
     await userEvent.selectOptions(select, 'daily');
 
     expect(updateCosJob).toHaveBeenCalledWith(PARITY_SWEEP_JOB_ID, { interval: 'daily' }, { silent: true });
