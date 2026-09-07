@@ -795,7 +795,7 @@ ${toolFreeReasoning
     ? `- **Follow the claim workflow prompt above.** It owns the claim worktree and the full PR/MR lifecycle; do not stop after committing or hand push/PR/merge/cleanup back to PortOS.`
   : isReviewLoopFollowUp
     ? `- **Push fixes straight to the PR branch you are on** (the follow-up section above is the procedure). Stage specific files, use a \`fix:\` prefix, no Co-Authored-By annotations. Do NOT open a new PR.`
-  : isTui && tuiSlashdoFree
+  : isTui && !canRunSlashCommands
     ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations, then write the completion sentinel. PortOS will handle the branch after it closes the session.`
     : portosMergesBranch
     ? `- **Commit only — do NOT push.** Stage specific files (no \`git add -A\`), use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations. PortOS merges this branch back into the source checkout after you exit and deletes it, so do NOT run \`git push\` or \`/do:push\` yourself — a pushed copy would only be left behind on origin.`
