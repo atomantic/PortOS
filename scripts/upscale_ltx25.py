@@ -43,52 +43,30 @@ rules it fork-specific, and the current pins take no such arguments.
 from __future__ import annotations
 
 import argparse
-import json
 import platform
-import struct
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _runner_common import emit_runtime_fingerprint, heartbeat  # noqa: E402
+# The argv, grid and adapter contract this runner shares with the CUDA one
+# (#6513). Re-exported names stay module attributes, so a caller — or a test —
+# still reaches them as `upscale_ltx25.validate_args` / `.lora_target_keys`.
+from _upscale_contract import (  # noqa: E402
+    REFERENCE_STRENGTH,
+    add_upscale_arguments,
+    assert_reference_scale_fits,
+    lora_target_keys,
+    read_safetensors_header,
+    reference_downscale_factor,
+    validate_args,
+)
 
 # The 2.5 pack's own prompt conditioner. Its absence is a hard refusal rather
 # than a fallback — see the module docstring.
 TEXT_ENCODER_DIRNAME = "text_encoder"
 
-# The LTX-2.5 two-stage grid, mirrored from `LTX_GRID` in
-# `server/services/videoGen/upscalePlan.js` and confirmed against the runtime:
-# Stage 1 renders at `height // 2` / `width // 2` and the video VAE's spatial
-# compression is 32 (`compute_video_latent_shape`), so the OUTPUT axis must be
-# divisible by 64. The temporal compression is 8 and the reference encoder
-# needs a (1 + 8k)-frame input, so `frames % 8 == 1` with a floor of 9.
-SPATIAL_MULTIPLE = 64
-FRAME_MODULUS = 8
-FRAME_REMAINDER = 1
-MIN_FRAMES = 9
-
-# Stage 1 renders at half the requested output, and it is those halved dims the
-# IC encoder divides by `reference_downscale_factor`.
-STAGE1_DIVISOR = 2
-
-# The upscale contract carries no prompt (#6511): the source clip is the whole
-# conditioning signal, and inventing text steering would push synthesized
-# detail toward content the user never asked for. The empty string is the
-# neutral choice — the distilled schedule runs no CFG, so the prompt is pure
-# conditioning rather than a guidance pole. `--prompt` exists so #6514's
-# verification matrix can probe the effect without changing the argv contract.
-DEFAULT_PROMPT = ""
-
-# Full reference conditioning: unlike a control/pose IC render, the reference
-# here is the picture itself, so there is nothing to attenuate.
-REFERENCE_STRENGTH = 1.0
-
 FINGERPRINT_PACKAGES = ["ltx_pipelines_mlx", "ltx_core_mlx", "mlx", "mlx_metal"]
-
-# A real safetensors header is a few KB to low-MB; anything past this is a
-# corrupt length we refuse to allocate for. Mirrors the same bound in
-# `server/lib/safetensors.js`.
-MAX_HEADER_BYTES = 100 * 1024 * 1024
 
 
 def log(message: str) -> None:
@@ -97,88 +75,11 @@ def log(message: str) -> None:
 
 def parse_args(argv: "list[str] | None" = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="LTX-2.5 MLX generative video upscale")
-    parser.add_argument("--model", required=True,
-                        help="local snapshot directory of the pinned LTX-2.5 MLX pack "
-                             "(resolved cache-only by PortOS; never a repo id)")
-    parser.add_argument("--ic-lora-path", required=True,
-                        help="local .safetensors of the Pixel Spatial Upscaler adapter")
-    parser.add_argument("--ic-reference", action="append", default=[],
-                        help="the clip being upscaled, already aligned to the model grid")
-    parser.add_argument("--ic-min-references", type=int, required=True)
-    parser.add_argument("--ic-max-references", type=int, required=True)
-    parser.add_argument("--width", type=int, required=True)
-    parser.add_argument("--height", type=int, required=True)
-    parser.add_argument("--num-frames", type=int, required=True)
-    parser.add_argument("--fps", type=float, required=True)
-    parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--prompt", default=DEFAULT_PROMPT)
-    parser.add_argument("--output", required=True)
+    add_upscale_arguments(parser, model_help=(
+        "local snapshot directory of the pinned LTX-2.5 MLX pack "
+        "(resolved cache-only by PortOS; never a repo id)"
+    ))
     return parser.parse_args(argv)
-
-
-def read_safetensors_header(path: str) -> "dict | None":
-    """Parse a safetensors JSON header with the stdlib alone.
-
-    Deliberately not `safetensors.safe_open`: this runs during validation, in a
-    bare interpreter, before any runtime import — which is what keeps the whole
-    argument contract testable without an MLX wheel. Returns None for a missing,
-    truncated, or non-safetensors file rather than raising, so the caller states
-    the refusal in its own words.
-    """
-    try:
-        with open(path, "rb") as handle:
-            raw_len = handle.read(8)
-            if len(raw_len) < 8:
-                return None
-            header_len = struct.unpack("<Q", raw_len)[0]
-            if header_len <= 0 or header_len > MAX_HEADER_BYTES:
-                return None
-            raw = handle.read(header_len)
-            if len(raw) < header_len:
-                return None
-            parsed = json.loads(raw.decode("utf-8"))
-            return parsed if isinstance(parsed, dict) else None
-    except (OSError, ValueError, struct.error):
-        return None
-
-
-def reference_downscale_factor(header: "dict | None") -> int:
-    """The adapter's declared `reference_downscale_factor`, defaulting to 1.
-
-    Matches `iclora_utils.read_lora_reference_downscale_factor`, which the
-    pipeline uses as the real value. Read here too so the resolution rule can be
-    stated BEFORE a multi-minute render commits to it — and so PortOS can record
-    the measured factor rather than the `null` its registry honestly holds for a
-    gated weight nobody has opened yet.
-    """
-    metadata = (header or {}).get("__metadata__")
-    if not isinstance(metadata, dict):
-        return 1
-    try:
-        scale = int(metadata.get("reference_downscale_factor", 1))
-    except (TypeError, ValueError):
-        return 1
-    return scale if scale >= 1 else 1
-
-
-def lora_target_keys(names) -> "set[str]":
-    """Base-weight keys an adapter can fuse into, from its ALREADY-RENAMED names.
-
-    `apply_loras` pairs `<prefix>.lora_A.weight` with `<prefix>.lora_B.weight`
-    and skips a prefix missing either half, so a half-pair contributes nothing
-    and must not count as coverage. Takes renamed names rather than raw ones on
-    purpose: the ComfyUI rename table belongs to the runtime
-    (`LTXV_LORA_COMFY_RENAMING_MAP`), and copying it here would be a second
-    table free to drift from the one that actually fuses.
-    """
-    prefixes = {"lora_A": set(), "lora_B": set()}
-    for name in names:
-        for half, bucket in prefixes.items():
-            suffix = f".{half}.weight"
-            if isinstance(name, str) and name.endswith(suffix):
-                bucket.add(name[: -len(suffix)])
-    return {f"{prefix}.weight" for prefix in prefixes["lora_A"] & prefixes["lora_B"]}
-
 
 def validate_host(system: str, machine: str) -> None:
     """Capability gate: this runner is Apple-Silicon-only.
@@ -191,55 +92,6 @@ def validate_host(system: str, machine: str) -> None:
         raise SystemExit(
             f"The LTX-2.5 MLX upscale runner needs Apple Silicon; this host reports {system}/{machine}. "
             "Use the CUDA backend on an NVIDIA machine instead."
-        )
-
-
-def validate_args(args: argparse.Namespace) -> None:
-    """Everything checkable before a GPU is committed.
-
-    Mirrors `validate_args` in `scripts/generate_ltx25_cuda.py` on the grid so
-    both backends refuse the same sources, and mirrors `run_ic_lora` on the
-    reference contract so a direct/script caller gets the same guard the queue
-    does. Every refusal is a `SystemExit` string the queue surfaces verbatim.
-    """
-    if args.width % SPATIAL_MULTIPLE or args.height % SPATIAL_MULTIPLE:
-        raise SystemExit(
-            f"The two-stage LTX-2.5 pipeline requires width and height divisible by {SPATIAL_MULTIPLE}; "
-            f"got {args.width}x{args.height}."
-        )
-    if args.num_frames < MIN_FRAMES or args.num_frames % FRAME_MODULUS != FRAME_REMAINDER:
-        raise SystemExit(
-            f"LTX-2.5 num-frames must be at least {MIN_FRAMES} and satisfy "
-            f"frames % {FRAME_MODULUS} == {FRAME_REMAINDER}; got {args.num_frames}."
-        )
-    if not args.fps > 0:
-        raise SystemExit(f"--fps must be positive; got {args.fps}.")
-    if args.seed < 0:
-        raise SystemExit(f"--seed must be non-negative; got {args.seed}.")
-
-    lo, hi = args.ic_min_references, args.ic_max_references
-    if lo < 1 or hi < lo:
-        raise SystemExit(
-            f"--ic-min-references/--ic-max-references must satisfy 1 <= min <= max; got {lo}/{hi}"
-        )
-    references = list(args.ic_reference or [])
-    if not (lo <= len(references) <= hi):
-        expected = f"exactly {lo}" if lo == hi else f"{lo}-{hi}"
-        raise SystemExit(
-            f"The upscale adapter needs {expected} --ic-reference clip(s); got {len(references)}"
-        )
-    for reference in references:
-        if not Path(reference).is_file():
-            raise SystemExit(f"--ic-reference does not exist: {reference}")
-
-    # A path, never a repo id. `ICLoraPipeline._resolve_lora_path` falls back to
-    # `snapshot_download` for anything that is not an existing file, which for
-    # this gated adapter is a 401 deep inside a render — and for any repo, a pull
-    # PortOS never announced. The download surface owns every fetch.
-    if not Path(args.ic_lora_path).is_file():
-        raise SystemExit(
-            f"The Pixel Spatial Upscaler adapter is not on disk at {args.ic_lora_path} — "
-            "download it from the Video Gen model panel before upscaling."
         )
 
 
@@ -265,26 +117,6 @@ def validate_model_dir(model_dir: str) -> Path:
             "Repair the model in Video Gen."
         )
     return root
-
-
-def assert_reference_scale_fits(scale: int, width: int, height: int) -> None:
-    """Enforce the adapter's own resolution rule on the STAGE-1 dimensions.
-
-    `append_ic_lora_reference_video_conditionings` divides the dims it is HANDED
-    by the factor, and `ICLoraPipeline.generate` hands it `height // 2` /
-    `width // 2`. Stating the rule in OUTPUT terms is what makes the message
-    actionable — the user picked an output size, not a stage size.
-    """
-    if scale <= 1:
-        return
-    stage_h, stage_w = height // STAGE1_DIVISOR, width // STAGE1_DIVISOR
-    if stage_h % scale == 0 and stage_w % scale == 0:
-        return
-    required = scale * STAGE1_DIVISOR
-    raise SystemExit(
-        f"This adapter downscales its reference by {scale}, so the output dimensions must be "
-        f"divisible by {required}; got {width}x{height}."
-    )
 
 
 def resolve_transformer_path(model_dir: Path) -> "Path | None":

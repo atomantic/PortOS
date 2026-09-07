@@ -44,9 +44,10 @@ export const LTX25_ENCODER_SHIM_DIR = join(homedir(), '.portos', 'ltx25-encoder-
 // Generative video upscale (#6511). A spatial-upscale pass fuses the LTX-2.5
 // Pixel Spatial Upscaler IC-LoRA over a source clip, which is a different
 // entry point from a text/image render — so it gets its own helper script per
-// runtime rather than another mode flag on the generation script. Both scripts
-// land with the Python backends (#6512 MLX / #6513 CUDA); until then the
-// runtime's venv is absent, which is what gates the feature off.
+// runtime rather than another mode flag on the generation script. Both runners
+// have landed (#6512 MLX / #6513 CUDA) and share one argv contract
+// (`scripts/_upscale_contract.py`); an install with neither runtime's venv
+// present still has no generative upscale, which is what gates the feature off.
 export const LTX25_UPSCALE_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'upscale_ltx25.py');
 
 // Wan 2.2 MLX runtime — pinned MLX-Gen checkout provisioned on demand.
