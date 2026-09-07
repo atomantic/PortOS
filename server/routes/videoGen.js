@@ -59,6 +59,7 @@ import {
 } from '../lib/icLoraWeights.js';
 import { publicTextEncoderOption } from '../lib/videoTextEncoders.js';
 import { DRAFT_DECODE_IDS } from '../lib/videoDraftDecoders.js';
+import { VIDEO_STREAMING_MODES } from '../lib/videoStreamingMode.js';
 import { repairModelCache, repairCachedFile, summarizeVerify } from '../lib/hfCache.js';
 import {
   modelDownloadTargets, textEncoderDownloadTarget, textEncoderDownloadTargets,
@@ -248,6 +249,15 @@ export const LOCAL_ONLY_VIDEO_PARAMS = Object.freeze({
   // either: an unsupported model, an old runner checkout, a missing download or
   // a delivery render all fall back to the full decoder with the reason logged.
   [VIDEO_GEN_LOCAL_ONLY_FIELDS.DRAFT_DECODE]: z.enum(DRAFT_DECODE_IDS).optional(),
+  // Block-streaming request for LTX-2/2.5 MLX renders (#6499). Unlike
+  // draftDecode/speedProfileId this is NOT a "degrade, never reject" knob:
+  // scripts/generate_ltx2.py#resolve_streaming_policy() refuses an explicit
+  // 'stream' request before loading weights when the mode's pinned pipeline
+  // has no streaming parameter (Extend), so this stays a validated pass-
+  // through rather than a route-level 400 — the bridge, which can inspect
+  // the live pin, owns accept/refuse. Absence and 'auto' are the same
+  // request (the bridge's own default).
+  [VIDEO_GEN_LOCAL_ONLY_FIELDS.STREAMING_MODE]: z.enum(VIDEO_STREAMING_MODES).optional(),
 });
 
 const generateBodySchema = z.object({
@@ -928,6 +938,10 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   // picked, so a reloading page restores the control instead of snapping back
   // to Full.
   'draftDecode',
+  // Block-streaming request (#6499) — a closed enum with no path, safe to
+  // echo so a reloading page restores the picker instead of snapping back to
+  // Auto.
+  'streamingMode',
   'audioStartSec',
   // Grok jobs (#2859 phase 2): the semantic t2v/i2v mode ('mode' holds the
   // 'grok' discriminator for them) and the clip duration — both plain

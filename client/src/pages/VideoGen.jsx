@@ -228,6 +228,7 @@ export default function VideoGen() {
 
     speedProfileId, setSpeedProfileId,
     draftDecode, setDraftDecode,
+    streamingMode, setStreamingMode,
     batchSize, setBatchSize,
     seed, setSeed, handleRandomSeed, tiling, setTiling,
     textEncoderId, setTextEncoderId, textEncoderOptions,
@@ -1782,6 +1783,7 @@ export default function VideoGen() {
               speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
               draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode}
               draftDecodeLocked={deliveryModelSelected}
+              streamingMode={streamingMode} onStreamingModeChange={setStreamingMode}
               imageStrength={imageStrength} onImageStrengthChange={setImageStrength}
               i2vReferenceMode={i2vReferenceMode} onI2vReferenceModeChange={setI2vReferenceMode}
               effectiveImageStrength={effectiveImageStrength}

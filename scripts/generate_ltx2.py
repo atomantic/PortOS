@@ -720,6 +720,14 @@ def parse_args() -> argparse.Namespace:
                         "reasserted before every render. Omit to derive a conservative "
                         "ceiling from physical memory. PORTOS_MLX_CACHE_LIMIT_MB sets the "
                         "same knob ambiently; this flag wins over it.")
+    p.add_argument("--streaming-mode", choices=STREAMING_MODE_CHOICES, default="auto",
+                   help="Block-streaming policy for the pipeline's transformer (#6499): "
+                        "'resident' always materializes it (pre-#6499 behavior), 'stream' "
+                        "always streams blocks from disk — and REFUSES before loading any "
+                        "weights on a mode whose pinned pipeline has no streaming parameter "
+                        "(Extend at this pin) — and 'auto' (default) streams on a machine at "
+                        "or below the auto-stream RAM ceiling and stays resident above it or "
+                        "when physical memory can't be read.")
     return p.parse_args()
 
 
@@ -1467,6 +1475,8 @@ def _gemma_kwargs(args: argparse.Namespace) -> dict:
 def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
     """T2V/I2V path that honors CFG via the dgrauet two-stage pipeline."""
     TwoStagePipeline = _resolve_pipeline("TI2VidTwoStagesPipeline", "TwoStagePipeline")
+    streaming_policy = configure_streaming_policy(args, TwoStagePipeline, "two-stage")
+    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
     emit_status(f"Loading two-stage pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = TwoStagePipeline(
@@ -1474,9 +1484,11 @@ def run_two_stage(args: argparse.Namespace, image: str | None = None) -> str:
         dev_transformer=args.dev_transformer or "transformer-dev.safetensors",
         distilled_lora=args.distilled_lora or DISTILLED_LORA_LEGACY,
         distilled_lora_strength=args.lora_strength,
+        **streaming_kwargs,
         **_gemma_kwargs(args),
     )
     _prefer_distilled_lora(pipe, args.distilled_lora, args.require_adapter)
+    _refuse_if_streaming_distilled_adapter_missing(pipe, streaming_policy["active"])
     _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
@@ -1507,9 +1519,11 @@ def run_text(args: argparse.Namespace) -> str:
     if args.cfg_scale is not None:
         return run_two_stage(args)
     OneStagePipeline = _resolve_pipeline("TI2VidOneStagePipeline", "TextToVideoPipeline")
+    streaming_policy = configure_streaming_policy(args, OneStagePipeline, "one-stage")
+    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
     emit_status(f"Loading T2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = OneStagePipeline(model_dir=args.model, **_gemma_kwargs(args))
+    pipe = OneStagePipeline(model_dir=args.model, **streaming_kwargs, **_gemma_kwargs(args))
     _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
@@ -1529,9 +1543,11 @@ def run_image(args: argparse.Namespace) -> str:
     if args.cfg_scale is not None:
         return run_two_stage(args, image=args.image)
     OneStagePipeline = _resolve_pipeline("TI2VidOneStagePipeline", "ImageToVideoPipeline")
+    streaming_policy = configure_streaming_policy(args, OneStagePipeline, "one-stage")
+    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
     emit_status(f"Loading I2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = OneStagePipeline(model_dir=args.model, **_gemma_kwargs(args))
+    pipe = OneStagePipeline(model_dir=args.model, **streaming_kwargs, **_gemma_kwargs(args))
     _apply_user_loras(pipe, args.user_lora_specs)
     bind_output_fps(pipe, args.fps)
     emit_stage(1, 1, 1, "Loaded")
@@ -1611,6 +1627,8 @@ def run_fflf(args: argparse.Namespace) -> str:
     # repo renames them.
     dev_transformer = args.dev_transformer or "transformer-dev.safetensors"
     distilled_lora = args.distilled_lora or DISTILLED_LORA_LEGACY
+    streaming_policy = configure_streaming_policy(args, KeyframeInterpolationPipeline, "keyframe-interpolation")
+    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
     emit_status(f"Loading Keyframe pipeline ({args.model}, dev+lora)…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = KeyframeInterpolationPipeline(
@@ -1618,9 +1636,11 @@ def run_fflf(args: argparse.Namespace) -> str:
         dev_transformer=dev_transformer,
         distilled_lora=distilled_lora,
         distilled_lora_strength=args.lora_strength,
+        **streaming_kwargs,
         **_gemma_kwargs(args),
     )
     _prefer_distilled_lora(pipe, args.distilled_lora)
+    _refuse_if_streaming_distilled_adapter_missing(pipe, streaming_policy["active"])
     _apply_user_loras(pipe, args.user_lora_specs)
     emit_stage(1, 1, 1, "Loaded")
     emit_status(f"Interpolating between {len(keyframe_images)} keyframes at indices {keyframe_indices}…")
@@ -1656,6 +1676,12 @@ def run_extend(args: argparse.Namespace) -> str:
     )
     if not args.extend_from_video:
         raise SystemExit("--extend-from-video is required for extend mode")
+    # RetakePipeline/ExtendPipeline has no streaming parameter at the pins this
+    # bridge targets. configure_streaming_policy() still runs — it emits an
+    # 'auto' resident explanation and, for an explicit --streaming-mode stream
+    # request, refuses HERE, before ExtendPipeline (or its weights) is
+    # constructed at all.
+    configure_streaming_policy(args, ExtendPipeline, "extend")
     emit_status(f"Loading Extend pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = ExtendPipeline(model_dir=args.model, **_gemma_kwargs(args))
@@ -1714,10 +1740,13 @@ def run_a2v(args: argparse.Namespace) -> str:
     AudioToVideoPipeline = _resolve_pipeline("A2VidPipelineTwoStage", "AudioToVideoPipeline")
     if not args.audio:
         raise SystemExit("--audio is required for a2v mode")
+    streaming_policy = configure_streaming_policy(args, AudioToVideoPipeline, "a2v")
+    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
     emit_status(f"Loading A2V pipeline ({args.model})…")
     emit_stage(1, 0, 1, "Loading model")
-    pipe = AudioToVideoPipeline(model_dir=args.model, **_gemma_kwargs(args))
+    pipe = AudioToVideoPipeline(model_dir=args.model, **streaming_kwargs, **_gemma_kwargs(args))
     _prefer_distilled_lora(pipe, args.distilled_lora)
+    _refuse_if_streaming_distilled_adapter_missing(pipe, streaming_policy["active"])
     _apply_user_loras(pipe, args.user_lora_specs)
     emit_stage(1, 1, 1, "Loaded")
     emit_status(f"Generating A2V from {Path(args.audio).name}…")
@@ -1810,6 +1839,8 @@ def run_ic_lora(args: argparse.Namespace) -> str:
     if args.ic_attention_strength is not None and not (0.0 <= args.ic_attention_strength <= 1.0):
         raise SystemExit("--ic-attention-strength must be between 0.0 and 1.0")
 
+    streaming_policy = configure_streaming_policy(args, ICLoraPipeline, "ic-lora")
+    streaming_kwargs = {"low_ram_streaming": streaming_policy["active"]} if streaming_policy["supports"] else {}
     emit_status(f"Loading IC-LoRA pipeline ({args.model}, {ic_mode})…")
     emit_stage(1, 0, 1, "Loading model")
     pipe = ICLoraPipeline(
@@ -1819,6 +1850,7 @@ def run_ic_lora(args: argparse.Namespace) -> str:
         # which weights the reference conditioning). Upstream's CLI defaults the
         # same way.
         lora_paths=[(args.ic_lora_path, 1.0)],
+        **streaming_kwargs,
         **_gemma_kwargs(args),
     )
     # User LoRAs go through _pending_loras (fused at DiT load), NOT lora_paths —
@@ -2029,7 +2061,16 @@ def reassert_mlx_cache_policy() -> bool:
     single largest allocation of that mode). What a pipeline does INSIDE one call
     — a stage-2 transformer reload — is out of this wrapper's reach; the cap
     simply resumes at the next boundary.
+
+    When block streaming (#6499) is active for this render, the pipeline's own
+    construction already zeroed the allocator cache (BasePipeline.__init__ sets
+    it before any module loads) — reasserting the physical-memory-derived
+    ceiling here would silently undo that zero-cache policy at the very next
+    boundary, defeating the reason streaming was requested. Keep it pinned at
+    zero for a streaming render instead of falling back to the resident ceiling.
     """
+    if _STREAMING_POLICY.get("active"):
+        return apply_mlx_cache_policy({"limitMb": 0, "source": "streaming"})
     return apply_mlx_cache_policy(_MLX_CACHE_POLICY)
 
 
@@ -2048,6 +2089,161 @@ def configure_mlx_cache(args: argparse.Namespace) -> dict:
     )
     apply_mlx_cache_policy(_MLX_CACHE_POLICY, announce=True)
     return _MLX_CACHE_POLICY
+
+
+# --------------------------------------------------------------------------
+# Block streaming (#6499) — mmaps the transformer's safetensors and streams
+# blocks in per-forward instead of materializing all 48 in unified memory
+# (ltx-2-mlx's `low_ram_streaming` pipeline constructor kwarg; adopted
+# clean-room from Phosphene commits 3f63e773 + e12fc6a1). Cuts transformer
+# peak RSS from ~10-12 GB (q8) / ~22 GB (bf16) to well under 1 GB, at the
+# cost of ~48 extra Metal sync points per forward.
+#
+# Whether a given render MODE's pinned pipeline constructor even exposes the
+# parameter is answered by _accepts_kwarg against the ACTUAL resolved class —
+# never assumed from the mode name — because RetakePipeline (extend mode) has
+# none at the pins this bridge targets while every other mode's pipeline does.
+# --------------------------------------------------------------------------
+
+STREAMING_MODE_CHOICES = ("auto", "resident", "stream")
+
+# 'auto' streams on a machine at or below this much physical RAM, and stays
+# resident above it (or when physical memory can't be read). Block streaming
+# adds real per-forward overhead, so it is only worth the cost automatically
+# on a box tight enough that a ~10-12x smaller transformer footprint matters.
+STREAMING_AUTO_RAM_CEILING_BYTES = 24 * 1024 ** 3  # 24 GiB
+
+_STREAMING_POLICY: dict = {}
+_STREAMING_PIPELINE_LABEL: str | None = None
+
+
+def resolve_streaming_policy(requested_mode: str, physical_bytes, pipeline_supports_streaming: bool) -> dict:
+    """Effective per-pipeline block-streaming policy. Pure — no MLX, no I/O.
+
+    Mirrors resolve_mlx_cache_policy's shape: an explicit request either wins
+    or is reported as refused, 'auto' derives from what THIS pipeline's
+    pinned constructor exposes and how much physical RAM this machine has.
+    Never raises — configure_streaming_policy decides whether an explicit
+    'stream' request this pipeline cannot honor should exit the process.
+
+    Returns ``{"requestedMode": str, "active": bool, "supports": bool,
+    "reason": str | None}``. `reason` explains every case where `active` is
+    not simply "the caller asked for it": the pipeline lacks the parameter,
+    physical memory could not be read, or this machine sits above the auto
+    ceiling.
+    """
+    if requested_mode == "resident":
+        return {"requestedMode": "resident", "active": False, "supports": pipeline_supports_streaming, "reason": None}
+    if not pipeline_supports_streaming:
+        return {
+            "requestedMode": requested_mode, "active": False, "supports": False,
+            "reason": "the selected pipeline's pinned constructor has no streaming parameter",
+        }
+    if requested_mode == "stream":
+        return {"requestedMode": "stream", "active": True, "supports": True, "reason": None}
+    # auto
+    if physical_bytes is None:
+        return {
+            "requestedMode": "auto", "active": False, "supports": True,
+            "reason": "physical memory unknown — remaining resident",
+        }
+    if physical_bytes <= STREAMING_AUTO_RAM_CEILING_BYTES:
+        return {"requestedMode": "auto", "active": True, "supports": True, "reason": None}
+    ceiling_gib = STREAMING_AUTO_RAM_CEILING_BYTES // (1024 ** 3)
+    return {
+        "requestedMode": "auto", "active": False, "supports": True,
+        "reason": f"physical memory is above the {ceiling_gib} GiB auto-stream ceiling",
+    }
+
+
+def configure_streaming_policy(args: argparse.Namespace, pipeline_cls, pipeline_label: str) -> dict:
+    """Resolve + install this render's streaming policy for `pipeline_cls`.
+
+    Called once per run_* right where the pipeline class was picked — support
+    depends on which class the mode routed to. Inspects the ACTUAL resolved
+    constructor via _accepts_kwarg rather than assuming from the mode name, so
+    an older pin that predates `low_ram_streaming` degrades the same way a
+    newer one without it would.
+
+    An explicit `--streaming-mode stream` the pipeline cannot honor exits
+    HERE, before any weights load — never silently downgrading to a resident
+    render and reporting a memory ceiling this run did not keep.
+    """
+    global _STREAMING_POLICY, _STREAMING_PIPELINE_LABEL
+    supports = _accepts_kwarg(pipeline_cls.__init__, "low_ram_streaming")
+    policy = resolve_streaming_policy(args.streaming_mode, physical_memory_bytes(), supports)
+    if args.streaming_mode == "stream" and not policy["active"]:
+        raise SystemExit(
+            f"--streaming-mode stream was requested but the {pipeline_label} pipeline "
+            f"cannot honor it at this pin ({policy['reason']}). Refusing before loading "
+            "weights rather than silently rendering resident and claiming a memory "
+            "ceiling this run did not keep."
+        )
+    _STREAMING_POLICY = policy
+    _STREAMING_PIPELINE_LABEL = pipeline_label
+    if policy["active"]:
+        emit_status("Block streaming enabled — transformer blocks stream from disk")
+    elif policy["reason"] and args.streaming_mode != "resident":
+        emit_status(f"Block streaming not used: {policy['reason']}")
+    return policy
+
+
+def _refuse_if_streaming_distilled_adapter_missing(pipe, active: bool) -> None:
+    """Preflight the streaming Stage 1 -> 2 distilled-adapter swap.
+
+    ``TI2VidTwoStagesPipeline._swap_to_distilled_streamer`` (the streaming
+    variant of the Stage 1 -> Stage 2 transition used by two-stage/fflf/a2v)
+    only discovers a missing file when it RUNS — after Stage 1 has already
+    denoised, the exact "costly render" this guard exists to avoid (#6499
+    acceptance: reject an unsupported LoRA-adapter combination before a
+    costly render). At the default LoRA strength it needs a pre-fused
+    ``transformer-distilled*.safetensors``; at any other strength it needs
+    the distilled LoRA safetensors itself. Callers pass the pipe AFTER
+    `_prefer_distilled_lora` has set `pipe._distilled_lora`, so this reads the
+    adapter this render will actually try to use.
+    """
+    if not active:
+        return
+    model_dir = Path(pipe.model_dir)
+    strength = getattr(pipe, "_distilled_lora_strength", 1.0)
+    if abs(strength - 1.0) <= 1e-6:
+        if not list(model_dir.glob("transformer-distilled*.safetensors")):
+            raise SystemExit(
+                f"Block streaming needs a pre-fused transformer-distilled*.safetensors in "
+                f"{model_dir} at the default LoRA strength, and none was found. Refusing "
+                "before Stage 1 renders rather than failing at the Stage 1→2 swap."
+            )
+        return
+    lora_path = model_dir / pipe._distilled_lora
+    if not lora_path.exists():
+        raise SystemExit(
+            f"Block streaming needs {lora_path} for the Stage 1→2 swap at LoRA strength "
+            f"{strength:g}, and it was not found. Refusing before Stage 1 renders."
+        )
+
+
+def report_streaming_policy() -> None:
+    """Emit the STREAMPOLICY: report PortOS persists onto the render record.
+
+    Called once after the render completes (main()). No-op for a process that
+    never reached configure_streaming_policy — nothing to report; a resident
+    render behaves exactly as it did before this setting existed. Includes
+    peak MLX memory when streaming was active: the number a smaller-hardware
+    claim should be backed by, not an assumption about what streaming saves
+    (#6499 acceptance: "a representative small-memory smoke render must
+    report peak memory and successful output before claiming expanded
+    hardware support").
+    """
+    if not _STREAMING_POLICY:
+        return
+    report = {"pipeline": _STREAMING_PIPELINE_LABEL, **_STREAMING_POLICY}
+    if _STREAMING_POLICY.get("active"):
+        try:
+            import mlx.core as mx
+            report["peakMb"] = round(mx.get_peak_memory() / (1024 * 1024))
+        except Exception:
+            pass
+    print(f"STREAMPOLICY:{json.dumps(report)}", file=sys.stderr, flush=True)
 
 
 def main() -> NoReturn:
@@ -2102,6 +2298,11 @@ def main() -> NoReturn:
     # left silently absent, which would read back as "the profile applied".
     speed_profile_begin(args)
     saved_path = runner(args)
+    # Block-streaming report (#6499) — after the render so a captured peak
+    # memory reading covers the whole render (denoise + decode), not just
+    # pipeline construction. No-op for a process whose mode never resolved a
+    # streaming policy.
+    report_streaming_policy()
     if args.teacache and not _SPEED_PROFILE_REPORT.get("teacache") \
             and "teacache" not in _SPEED_PROFILE_REPORT.get("degraded", []):
         speed_profile_degrade(
