@@ -71,6 +71,24 @@ describe('Pill', () => {
     expect(el.className).toContain('border-port-warning/30');
   });
 
+  // See OWN_DISPLAY in Pill.jsx — a caller's `hidden` must win.
+  it('yields its inline-flex to a caller-supplied display utility', () => {
+    render(<Pill className="hidden sm:inline-flex">x</Pill>);
+    const tokens = screen.getByText('x').className.split(/\s+/);
+    expect(tokens).toContain('hidden');
+    expect(tokens).not.toContain('inline-flex');
+    // The responsive variant is what restores the badge above the breakpoint.
+    expect(tokens).toContain('sm:inline-flex');
+    // Everything else the primitive owns survives the swap.
+    expect(tokens).toContain('items-center');
+    expect(tokens).toContain('rounded');
+  });
+
+  it('keeps inline-flex when the caller passes only a responsive display variant', () => {
+    render(<Pill className="sm:inline-flex">x</Pill>);
+    expect(screen.getByText('x').className.split(/\s+/)).toContain('inline-flex');
+  });
+
   it('passes through arbitrary props like title', () => {
     render(<Pill title="tooltip">x</Pill>);
     expect(screen.getByText('x')).toHaveAttribute('title', 'tooltip');
