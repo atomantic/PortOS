@@ -62,6 +62,7 @@ import {
 import {
   captureSystemCapabilities,
   detectSystemCapabilities,
+  hardwareUnavailableReason,
   isHardwareCompatible,
   withHardwareCompatibility,
 } from '../../lib/systemCapabilities.js';
@@ -95,7 +96,7 @@ export async function validateVideoRetryParams(params = {}) {
   }
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
-      `Video model "${modelId}" is unavailable on this machine: ${model.hardwareCompatibility.reasons.join(' · ')}`,
+      hardwareUnavailableReason(`Video model "${modelId}"`, model.hardwareCompatibility),
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }
@@ -330,7 +331,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   if (effectiveModel && !isHardwareCompatible(effectiveModel.hardwareCompatibility)) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(
-      `Video model "${effectiveModelId}" is unavailable on this machine: ${effectiveModel.hardwareCompatibility.reasons.join(' · ')}`,
+      hardwareUnavailableReason(`Video model "${effectiveModelId}"`, effectiveModel.hardwareCompatibility),
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }

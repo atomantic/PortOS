@@ -11,6 +11,7 @@
  * and which section the page filed the card under can never disagree.
  */
 
+import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { Link } from 'react-router';
 import { ExternalLink, Network, Terminal } from 'lucide-react';
 import {
@@ -242,7 +243,7 @@ export default function ProviderCard({
           {!isProviderHardwareCompatible(provider) && (
             <span
               className="text-xs px-2 py-0.5 rounded bg-port-warning/20 text-port-warning"
-              title={provider.hardwareCompatibility?.reasons?.join(' · ')}
+              title={hardwareUnavailableReason('This provider', provider.hardwareCompatibility)}
             >
               HARDWARE MISMATCH
             </span>
@@ -423,7 +424,7 @@ export default function ProviderCard({
 
         {!isProviderHardwareCompatible(provider) && (
           <div className="max-w-3xl text-xs rounded border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-port-warning">
-            Hidden from provider/model pickers on this machine: {provider.hardwareCompatibility?.reasons?.join(' · ') || 'hardware requirements are not met'}.
+            {hardwareUnavailableReason('This provider', provider.hardwareCompatibility)}. Hidden from provider/model pickers on this machine.
           </div>
         )}
 
