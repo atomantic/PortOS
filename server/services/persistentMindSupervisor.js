@@ -70,6 +70,10 @@ import {
   imageCapabilityAllowsAttempt,
   resolvePersistentMindImageCapability,
 } from './persistentMindImageCapability.js';
+import {
+  PROVIDER_USAGE_LIMIT_PAUSE_REASON,
+  isHardProviderUsageLimitError,
+} from '../lib/persistentMindUsageLimit.js';
 
 export const PERSISTENT_MIND_WAKE_EVENT_ID = 'cos-persistent-mind-wake';
 export const PERSISTENT_MIND_WATCHDOG_EVENT_ID = 'cos-persistent-mind-watchdog';
@@ -600,6 +604,7 @@ async function interruptActiveTurn(reason, status, { retry = false, expectedTurn
  * retired too: changing a preset back later must not resurrect refused work.
  */
 async function parkActiveTurn(turnId, reason, status = 'waiting', { retryAt = null, consumedAttempt = false, retireWake = false } = {}) {
+  const paused = status === 'paused';
   const result = await mutateMindState((mind) => {
     if (mind.activeTurn?.id !== turnId) return { mind, value: false };
     // Transport/slot waits may retry; a revoked route or uncertain inference
@@ -608,7 +613,9 @@ async function parkActiveTurn(turnId, reason, status = 'waiting', { retryAt = nu
     const next = held
       ? holdPersistentMindWake(mind, mind.activeTurn.wake)
       : requeuePersistentMindWake(mind, mind.activeTurn.wake);
-    const failureCount = next.failureCount + 1;
+    // A hard usage-limit autopause mirrors pausePersistentMind: no backoff gate
+    // and no failureCount climb, so resume stays an explicit human decision.
+    const failureCount = paused ? next.failureCount : next.failureCount + 1;
     return {
       mind: {
         ...next,
@@ -617,17 +624,20 @@ async function parkActiveTurn(turnId, reason, status = 'waiting', { retryAt = nu
         pauseReason: reason,
         failureCount,
         lastError: reason,
-        nextEligibleWakeAt: retryAt || new Date(Date.now() + persistentMindBackoffMs(failureCount)).toISOString(),
+        nextEligibleWakeAt: paused
+          ? null
+          : (retryAt || new Date(Date.now() + persistentMindBackoffMs(failureCount)).toISOString()),
       },
       value: held,
     };
   });
+  if (paused) cancel(PERSISTENT_MIND_WAKE_EVENT_ID);
   await appendMindEvent({
-    kind: 'mind.failed',
+    kind: paused ? 'mind.paused' : 'mind.failed',
     mindId: result.state.mindId,
     turnId,
-    eventId: `mind-failed:${turnId}:${status}`,
-    data: { status, error: reason, retryAt, consumedAttempt: consumedAttempt && result.value === true, requiresResubmission: result.value === true },
+    eventId: `mind-${paused ? 'paused' : 'failed'}:${turnId}:${status}`,
+    data: { status, error: reason, retryAt: paused ? null : retryAt, consumedAttempt: consumedAttempt && result.value === true, requiresResubmission: result.value === true },
   });
   emitMindStatus(result.state);
   return result.state;
@@ -1137,14 +1147,31 @@ async function runOnePersistentMindTurn() {
         const message = controller.signal.aborted
           ? String(controller.signal.reason || 'Persistent mind turn interrupted')
           : errorMessage(error);
+        // Persistent Mind has no automatic provider fallback pool. A hard
+        // usage-limit / quota exhaustion would otherwise climb failureCount and
+        // keep burning scheduled wakes; autopause until a human resumes or
+        // changes the provider. Transient rate-limits / network blips stay on
+        // the interrupted + backoff path below.
+        const usageLimit = !denied && !controller.signal.aborted && isHardProviderUsageLimitError(error);
         // A refusal already named its own cause and the status it belongs
         // under; only a revoked temporary route retires the wake, exactly as
         // the pre-turn resolution does.
-        await parkActiveTurn(turn.id, message, (denied && error.deniedStatus) || 'interrupted', {
-          consumedAttempt: runStartedAt != null,
-          retireWake: denied && error.requiresResubmission === true,
-        });
-        emitLog('warn', `Persistent mind turn ${denied ? 'refused a further provider call' : 'interrupted'}: ${message}`, { turnId: turn.id });
+        await parkActiveTurn(
+          turn.id,
+          usageLimit ? PROVIDER_USAGE_LIMIT_PAUSE_REASON : message,
+          usageLimit ? 'paused' : ((denied && error.deniedStatus) || 'interrupted'),
+          {
+            consumedAttempt: runStartedAt != null,
+            retireWake: denied && error.requiresResubmission === true,
+          },
+        );
+        emitLog(
+          'warn',
+          usageLimit
+            ? `Persistent mind autopaused on provider usage limit: ${message}`
+            : `Persistent mind turn ${denied ? 'refused a further provider call' : 'interrupted'}: ${message}`,
+          { turnId: turn.id },
+        );
       }
     } finally {
       release();

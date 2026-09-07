@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultPersistentMindState, normalizePersistentMindState, PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
+import { PROVIDER_USAGE_LIMIT_PAUSE_REASON } from '../lib/persistentMindUsageLimit.js';
 import {
   __resetCosAdmissionReservations,
   acquireCosActionReservation,
@@ -1262,6 +1263,92 @@ describe('persistent mind supervisor', () => {
       // A spent temporary session is never replayed automatically.
       expect(mock.root.persistentMind.queuedMessages).toEqual([]);
       expect(mock.root.persistentMind.recentMessageIds).toContain('message-revoked');
+    });
+  });
+
+  describe('provider usage-limit autopause', () => {
+    const echoProfileAdapter = () => vi.fn(async ({ profile }) => ({ ok: true, provider: profile.provider }));
+
+    it('autopauses on a hard Cursor usage-limit error instead of climbing failureCount', async () => {
+      const priorFailures = 2;
+      mock.root.persistentMind = {
+        ...createDefaultPersistentMindState(),
+        failureCount: priorFailures,
+      };
+      const run = vi.fn(async () => {
+        throw new Error("You've hit your usage limit Get Cursor Pro to keep going.");
+      });
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
+        run,
+      });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-quota', text: 'Think.' });
+      await supervisor.drainPersistentMind();
+
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(mock.root.persistentMind).toMatchObject({
+        status: 'paused',
+        pauseReason: PROVIDER_USAGE_LIMIT_PAUSE_REASON,
+        lastError: PROVIDER_USAGE_LIMIT_PAUSE_REASON,
+        failureCount: priorFailures,
+        nextEligibleWakeAt: null,
+        activeTurn: null,
+      });
+      // Queued work is requeued, not burned; wakes stay cancelled until resume.
+      expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['message-quota']);
+      expect(mock.scheduled.has(supervisor.PERSISTENT_MIND_WAKE_EVENT_ID)).toBe(false);
+      expect(mock.appendMindEvent.mock.calls.map(([event]) => event.kind)).toEqual(
+        expect.arrayContaining(['mind.paused']),
+      );
+      expect(mock.appendMindEvent.mock.calls.map(([event]) => event.kind)).not.toEqual(
+        expect.arrayContaining(['mind.failed']),
+      );
+
+      // A further drain must not claim another turn while paused.
+      await supervisor.drainPersistentMind();
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the interrupted + backoff path for transient rate limits', async () => {
+      const run = vi.fn(async () => {
+        throw Object.assign(new Error('API Error: 429 Too Many Requests'), {
+          category: 'rate-limit',
+        });
+      });
+      await supervisor.registerPersistentMindTurnAdapter({
+        prepare: vi.fn(async () => ({ ok: true, provider: { id: 'example-cloud' } })),
+        run,
+      });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-429', text: 'Retry me.' });
+      await supervisor.drainPersistentMind();
+
+      expect(mock.root.persistentMind.status).toBe('interrupted');
+      expect(mock.root.persistentMind.pauseReason).toBe('API Error: 429 Too Many Requests');
+      expect(mock.root.persistentMind.failureCount).toBeGreaterThan(0);
+      expect(mock.root.persistentMind.nextEligibleWakeAt).not.toBeNull();
+      expect(mock.root.persistentMind.queuedMessages.map((item) => item.id)).toEqual(['message-429']);
+    });
+
+    it('keeps the interrupted path for ordinary provider failures', async () => {
+      const run = vi.fn(async ({ callBoundary }) => callBoundary(
+        { purpose: 'turn', round: 0 },
+        async ({ reportRunId }) => {
+          reportRunId('run-0');
+          throw new Error('provider stream ended without a response');
+        },
+      ));
+      await supervisor.registerPersistentMindTurnAdapter({ prepare: echoProfileAdapter(), run });
+      await supervisor.setPersistentMindEnabled(true);
+      await supervisor.startPersistentMind();
+      await supervisor.enqueuePersistentMindMessage({ id: 'message-soft', text: 'Try this.' });
+      await supervisor.drainPersistentMind();
+
+      expect(mock.root.persistentMind.status).toBe('interrupted');
+      expect(mock.root.persistentMind.pauseReason).not.toBe(PROVIDER_USAGE_LIMIT_PAUSE_REASON);
     });
   });
 });
