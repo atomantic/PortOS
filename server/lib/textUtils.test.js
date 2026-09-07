@@ -56,16 +56,21 @@ describe('clampToCharLimit', () => {
     expect(clampToCharLimit('alpha bravo charlie delta', 14)).toEqual({ text: 'alpha bravo', truncated: true });
   });
 
-  it('does not cut mid-abbreviation when an abbreviation sits within the budget', () => {
-    // When an abbreviation like "Dr." appears early in the text but near enough
-    // to the cap, the abbreviation guard should prevent treating it as a sentence
-    // end. This test verifies the abbreviation protection works end-to-end through
-    // clampToCharLimit by ensuring we don't clip mid-abbreviation.
-    const input = 'The patient called Dr. Smith, a specialist, to discuss the diagnosis';
-    const { text, truncated } = clampToCharLimit(input, 50);
-    expect(truncated).toBe(true);
-    // Should not break in the middle of "Dr." or leave an incomplete abbreviation
-    expect(text).not.toMatch(/\bDr$/);
+  it('does not cut mid-abbreviation — the bare lastIndexOf(".") cap ended on "Dr."', () => {
+    // Regression for #6455: the old cap took the last "." in the window whenever it
+    // sat past 60% of the budget, so an abbreviation deep in the string became the
+    // cut point and the value ended on a hanging "Dr." — which a renderer reads as
+    // a truncated name. trimToClause's COMMON_ABBREVIATION_RE guard rejects that
+    // terminator and falls through to the whole-word boundary instead.
+    expect(clampToCharLimit('We met the visiting consultant Dr. Vey at the clinic yesterday', 40))
+      .toEqual({ text: 'We met the visiting consultant Dr. Vey', truncated: true });
+  });
+
+  it('does not cut mid-decimal', () => {
+    // Same defect, decimal flavour: the old cap cut at the "." inside "3.5", handing
+    // the renderer "…holds at 3." — a different number, not a shorter sentence.
+    expect(clampToCharLimit('The reactor holds at 3.5 megawatts under load and the crew waits', 30))
+      .toEqual({ text: 'The reactor holds at 3.5', truncated: true });
   });
 });
 
