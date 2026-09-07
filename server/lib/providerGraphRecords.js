@@ -286,9 +286,11 @@ const identityKey = ({ kind, transports, credentials }) => JSON.stringify([
  * `sameConnectionIdentity` stays strict on purpose: it answers "are these two
  * records the same backend?" at IMPORT time, where equality is what stops an
  * accidental merge. This is the looser question reconciliation asks about a
- * link a human already made.
+ * link a human already made — and the same question `createBinding` asks of a
+ * freshly minted record, so a create is accepted on exactly the terms the next
+ * reconciliation pass will judge it by.
  */
-function routeBelongsOnConnection(profile, connection) {
+export function routeBelongsOnConnection(profile, connection) {
   if (!connection || profile.kind !== connection.kind) return false;
   const declared = connection.transports || {};
   const transports = Object.entries(profile.transports || {});

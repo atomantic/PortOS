@@ -115,13 +115,18 @@ export function connectionBlocker({ kind, transports }) {
 /**
  * Why this connection cannot carry a route for this harness, or `null`.
  *
- * The transport rule is stricter than "declares the protocol": the connection
- * must declare that protocol and NOTHING else. It was written that way because
- * reconciliation demanded a route describe its connection EXACTLY, so a route
- * minted onto a two-protocol row was cloned straight back off it on the next
- * pass. #6452 replaced that with containment, so the strictness is now
- * conservatism rather than a guard against a silently undone create — relaxing
- * it to "declares the protocol" is tracked in #6460.
+ * The transport rule is CONTAINMENT: the connection must declare the harness's
+ * protocol, and may declare others beside it. It once demanded that protocol
+ * and nothing else, because reconciliation asked a route to describe its
+ * connection EXACTLY and so cloned a route minted onto a two-protocol row
+ * straight back off it on the next pass. #6452 replaced that equality test
+ * with containment (`routeBelongsOnConnection`), which is what lets a second
+ * harness be CREATED on one multi-protocol daemon rather than only linked onto
+ * it (#6460) — an Ollama daemon reached by Claude on its Anthropic port and by
+ * Codex on its `/v1` port is one backend, and both routes stay on it.
+ *
+ * A connection declaring NO transport is still refused: a row naming no
+ * endpoint cannot carry a route at all.
  *
  * @returns {{code:string, message:string}|null}
  */
@@ -143,10 +148,10 @@ export function bindingBlocker({ harnessId, modes, connection }) {
 
   const protocol = bindingProtocol(harnessId);
   const declared = Object.keys(connection.transports || {});
-  if (declared.length !== 1 || declared[0] !== protocol) {
+  if (!declared.includes(protocol)) {
     return {
       code: 'PROVIDER_GRAPH_TRANSPORT_MISMATCH',
-      message: `This backend declares ${declared.length > 0 ? declared.join(', ') : 'no'} transport(s); a ${harness?.label || 'direct API'} route needs a backend that declares ${protocol} and nothing else.`,
+      message: `This backend declares ${declared.length > 0 ? declared.join(', ') : 'no'} transport(s); a ${harness?.label || 'direct API'} route needs a backend that declares ${protocol}.`,
     };
   }
 
