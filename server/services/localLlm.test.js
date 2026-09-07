@@ -655,7 +655,7 @@ describe('localLlm', () => {
       try {
         expect(await svc[action]('ollama')).toMatchObject({ success: true, backend: 'ollama' });
         expect(cp.spawn.mock.calls[0][0]).toBe('bash');
-        expect(cp.spawn.mock.calls[0][1]).toEqual([expect.stringMatching(/scripts\/install-ollama\.sh$/)]);
+        expect(cp.spawn.mock.calls[0][1]).toEqual([expect.stringContaining(path.join('scripts', 'install-ollama.sh'))]);
       } finally {
         restorePlatform();
       }
