@@ -337,6 +337,16 @@ describe('creativeDirector routes', () => {
       expect(r.status).toBe(200);
       expect(cdService.setTreatment).toHaveBeenCalled();
     });
+    it('accepts a script but strips caller-supplied artifact metadata and rejects oversized scripts', async () => {
+      cdService.setTreatment.mockResolvedValue({ id: 'cd-1' });
+      const body = { ...treatmentBody, script: 'The cat enters.', artifact: { revision: 100 } };
+      expect((await request(app).patch('/api/creative-director/cd-1/treatment').send(body)).status).toBe(200);
+      expect(cdService.setTreatment.mock.lastCall[1].script).toBe(body.script);
+      expect(cdService.setTreatment.mock.lastCall[1]).not.toHaveProperty('artifact');
+      cdService.setTreatment.mockClear();
+      expect((await request(app).patch('/api/creative-director/cd-1/treatment').send({ ...body, script: 'x'.repeat(50001) })).status).toBe(400);
+      expect(cdService.setTreatment).not.toHaveBeenCalled();
+    });
     // First-pass scene-frame seeding now fires from `setTreatment` itself
     // (the domain write, #1938) rather than this route, so its behavior is
     // asserted in services/creativeDirector/local.test.js.

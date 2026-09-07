@@ -355,7 +355,54 @@ export function applyProjectPatch(project, patch) {
   // Normalize the whole override object on write so stored records never carry
   // empty/model-only stage stubs; the client sends the full object each save.
   if ('modelOverrides' in patch) next.modelOverrides = normalizeModelOverrides(patch.modelOverrides);
+  if (project.workspace === 'video' && project.treatment?.artifact
+      && ['videoDraft', 'targetDurationSeconds', 'aspectRatio', 'userStory', 'styleSpec', 'cast', 'startingImageFile', 'modelId', 'renderBackend', 'quality'].some((key) => key in patch && JSON.stringify(next[key]) !== JSON.stringify(project[key]))) {
+    next.treatment = { ...project.treatment, artifact: { ...project.treatment.artifact, stale: true } };
+  }
   return next;
+}
+
+/** Compile the existing treatment into a persisted Video artifact, without dispatch. */
+function compileVideoArtifact(project, treatment) {
+  const scenes = [...treatment.scenes].sort((a, b) => a.order - b.order);
+  const ids = new Set();
+  const orders = new Set();
+  let elapsed = 0;
+  const shots = scenes.map((scene) => {
+    if (ids.has(scene.sceneId) || orders.has(scene.order)) {
+      throw new ServerError('Video scenes must have unique sceneId and order values', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    ids.add(scene.sceneId);
+    orders.add(scene.order);
+    const startSeconds = elapsed;
+    elapsed = Math.round((elapsed + scene.durationSeconds) * 1000000) / 1000000;
+    return {
+      shotId: `shot-${scene.sceneId}`,
+      sceneId: scene.sceneId,
+      startSeconds,
+      endSeconds: elapsed,
+      durationSeconds: scene.durationSeconds,
+    };
+  });
+  if (Math.abs(elapsed - project.targetDurationSeconds) > 0.000001) {
+    throw new ServerError(`Video shots total ${elapsed}s; they must total the exact target of ${project.targetDurationSeconds}s`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const references = (project.videoDraft?.sources || []).map((source) => ({
+    ...source, referenceId: `${source.kind}:${source.id}`,
+  }));
+  if (new Set(references.map((ref) => ref.referenceId)).size !== references.length) {
+    throw new ServerError('Video source references must have unique kind and id values', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  return {
+    scriptId: project.treatment?.artifact?.scriptId || `script-${project.id}`,
+    revision: (project.treatment?.artifact?.revision || 0) + 1,
+    targetDurationSeconds: project.targetDurationSeconds,
+    aspectRatio: project.aspectRatio,
+    // Keep the selected IDs/revisions, never copy or mutate creative-suite records.
+    references,
+    shots,
+    stale: false,
+  };
 }
 
 /**
@@ -378,12 +425,14 @@ export function applyTreatment(project, treatmentInput) {
     renderedJobId: s.renderedJobId ?? null,
     evaluation: s.evaluation ?? null,
   }));
-  const nextStatus = (project.status === 'paused' || project.status === 'failed')
+  const treatment = { ...parsed.data, scenes };
+  if (project.workspace === 'video') treatment.artifact = compileVideoArtifact(project, treatment);
+  const nextStatus = (project.workspace === 'video' || project.status === 'paused' || project.status === 'failed')
     ? project.status
     : 'rendering';
   return {
     ...project,
-    treatment: { logline: parsed.data.logline, synopsis: parsed.data.synopsis, scenes },
+    treatment,
     status: nextStatus,
     updatedAt: new Date().toISOString(),
   };
@@ -480,9 +529,15 @@ export function applySceneUpdate(project, sceneId, patch) {
   const updated = { ...project.treatment.scenes[sceneIdx], ...patch };
   const scenes = project.treatment.scenes.slice();
   scenes[sceneIdx] = updated;
+  const treatment = { ...project.treatment, scenes };
+  if (project.workspace === 'video' && treatment.artifact
+      && ['prompt', 'imageStrength'].some((key) => key in patch && patch[key] !== project.treatment.scenes[sceneIdx][key])) {
+    // A shot edit changes the reviewed content, but cannot refresh stale source context.
+    treatment.artifact = { ...treatment.artifact, revision: treatment.artifact.revision + 1 };
+  }
   const next = {
     ...project,
-    treatment: { ...project.treatment, scenes },
+    treatment,
     updatedAt: new Date().toISOString(),
   };
   return { project: next, updated };

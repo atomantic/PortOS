@@ -278,3 +278,18 @@ both HTTP start/resume and background advancement until revision-specific approv
 support ships. Selecting autonomous policy only saves intent; it cannot authorize
 dispatch while that barrier is present. Source references do not copy or mutate
 the referenced creative-suite records.
+
+Video treatments optionally carry a bounded `script` plus server-owned `artifact`
+metadata inside that same project JSONB: stable project-scoped script/shot/reference
+IDs, monotonically increasing treatment revision, exact contiguous shot timing,
+and selected source IDs/revisions. Scene IDs and playback orders must be unique;
+shot durations must sum to the exact project target. Treatment writes keep Video
+projects in their current state and do not dispatch production. Creative shot
+edits increment the artifact revision; runtime status updates do not. Changes to
+brief, source selection or production settings mark the artifact stale until it
+is compiled again. Source snapshots remain references, not copied source records.
+This is additive optional metadata: legacy treatments are unchanged and existing
+records are not backfilled. Sync advances to `creativeDirectorProjects` v5 because
+a v4 peer can edit a shot without incrementing its artifact revision, or discard
+the artifact on treatment replacement. The Video dispatch barrier remains in
+force; this artifact does not certify backend compatibility or grant approval.
