@@ -224,6 +224,17 @@ describe('deferred imports stay deferred (#6156)', () => {
 // suites, not an eager sandbox/runtime subtree. Main already exceeded the
 // previous ceiling; restore the documented ~1.5k ordinary-growth allowance.
 // The DEFERRED row above prevents the avoidable sandbox edge from returning.
+//
+// #6442 adds 344 on top of that base (94,066), which fits inside the allowance
+// #6434 restored — so the ceiling stays put. All 344 is three NEW suites and
+// none of it a new eager edge; the production change adds no import its module
+// did not already reach. The largest,
+// services/pipeline/editorial/reviewStaleness.test.js (198), earns its reach:
+// only the real SOURCE_RESOLVERS table can prove the evolution lens has its own
+// fingerprint token, so a lens edit stales a review while a want/need edit does
+// not. services/pipeline/arcPlanner/context.test.js (78) and
+// lib/editorial/checks/characterArcEvolution.test.js (68) are boundary tests
+// over modules those trees already instantiate.
 const MAX_STATIC_INSTANTIATIONS = 95200;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

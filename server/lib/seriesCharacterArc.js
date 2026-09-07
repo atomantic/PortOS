@@ -39,6 +39,7 @@ import {
   isCanonCharacterId,
   isStoryBeatId,
   optIssueNumber,
+  renderCharacterEvolutionForPrompt,
   sanitizeCharacterEvolution,
 } from './characterEvolution.js';
 import { trimTo, trimToClause } from './textUtils.js';
@@ -229,4 +230,34 @@ export function renderCharacterArcsForPrompt(arcs) {
 export function characterArcEvidenceRefs(arc) {
   const transitions = Array.isArray(arc?.transitions) ? arc.transitions : [];
   return { transitionIds: new Set(transitions.map((t) => t?.id).filter(Boolean)) };
+}
+
+/**
+ * Render every authored five-stage evolution lens across the cast as one
+ * compact prompt block, or `null` when no arc carries a lens — the cast-level
+ * companion to `renderCharacterArcsForPrompt`, consumed by the character-arc
+ * editorial checks (#6442) and the arc planner's character-first constraint.
+ *
+ * Each lens resolves its evidence anchors against ITS OWN arc's transition
+ * beats (`characterArcEvidenceRefs`), so a stage pointing at a since-deleted
+ * `trn-` beat is annotated `stale` rather than presented to the model as proof.
+ * Returning `null` (not '') keeps the caller's `{{#characterEvolution}}`
+ * section empty when the lens is unset, which is what makes every consumer
+ * degrade to exactly its pre-lens behavior.
+ */
+export function renderCharacterEvolutionsForPrompt(arcs) {
+  if (!Array.isArray(arcs)) return null;
+  const blocks = [];
+  for (const arc of arcs) {
+    if (!arc || typeof arc !== 'object') continue;
+    const lens = renderCharacterEvolutionForPrompt(arc.evolution, characterArcEvidenceRefs(arc));
+    if (!lens) continue;
+    const name = arc.characterName || '(unnamed character)';
+    // Indent the lens body under its character so a multi-character block stays
+    // readable — the renderer already indents stage lines two spaces relative
+    // to the outcome line, and this preserves that nesting.
+    const body = lens.split('\n').map((line) => `    ${line}`).join('\n');
+    blocks.push(`- ${name}\n${body}`);
+  }
+  return blocks.length ? blocks.join('\n') : null;
 }

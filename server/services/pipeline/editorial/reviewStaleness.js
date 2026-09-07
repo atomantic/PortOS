@@ -15,6 +15,7 @@ import {
   proseStageIssues,
 } from '../../../lib/editorial/index.js';
 import { canonicalStringify } from '../../../lib/objects.js';
+import { renderCharacterEvolutionsForPrompt } from '../../../lib/seriesCharacterArc.js';
 import { getSettings } from '../../settings.js';
 import {
   buildCompletenessContext,
@@ -58,6 +59,13 @@ const SOURCE_RESOLVERS = {
   editorialArcs: ({ editorialArcs, editorialArcsComplete }) =>
     canonicalStringify({ arcs: editorialArcs ?? null, complete: editorialArcsComplete === true }),
   'series.characterArcs': ({ series }) => canonicalStringify(series?.characterArcs ?? null),
+  // Fingerprinted as the RENDERED lens block rather than a hand-written
+  // projection: it is EXACTLY the bytes the five character-arc checks put in
+  // front of the model (#6442), so a second projection could not drift out of
+  // step with what was analyzed — and a want/need edit, which never reaches
+  // this block, correctly leaves a lens-only finding fresh.
+  'series.characterArcs.evolution': ({ series }) =>
+    renderCharacterEvolutionsForPrompt(series?.characterArcs) || '',
   'storyboard.shots': ({ storyboardScenes }) =>
     canonicalStringify(projectStoryboardContinuity(storyboardScenes) ?? null),
   comicScript: ({ comicScripts }) => canonicalStringify(comicScripts ?? null),

@@ -5,6 +5,7 @@ import {
   sanitizeCharacterArc,
   sanitizeCharacterArcList,
   renderCharacterArcsForPrompt,
+  renderCharacterEvolutionsForPrompt,
   CHARACTER_ARC_LIMITS,
   TRANSITION_KINDS,
 } from './seriesCharacterArc.js';
@@ -219,5 +220,42 @@ describe('optional five-stage evolution lens (#6440)', () => {
       .map((st) => [st.stageId, evolutionEvidenceStatus(st.evidence, refs)])))
       .toEqual({ 'cost-tested': 'stale', 'final-proof': 'anchored' });
     expect(arc.evolution.stages[0].evidence.transitionId).toBe('trn-deleted');
+  });
+});
+
+describe('renderCharacterEvolutionsForPrompt', () => {
+  it('returns null until some arc actually carries a lens', () => {
+    // null (not '') is what keeps every consumer's `{{#characterEvolution}}`
+    // section empty, which is the whole "degrades to today's behavior" promise.
+    expect(renderCharacterEvolutionsForPrompt(undefined)).toBeNull();
+    expect(renderCharacterEvolutionsForPrompt([])).toBeNull();
+    expect(renderCharacterEvolutionsForPrompt([
+      sanitizeCharacterArc({ characterName: 'Mara', want: 'revenge' }),
+      null,
+      'not an arc',
+    ])).toBeNull();
+  });
+
+  it('resolves each lens against ITS OWN arc\'s beats, never the whole cast\'s', () => {
+    // Both stages point at `trn-burn`, but only Mara owns that beat. A shared
+    // ref set across the cast would report Joss's dangling pointer `anchored`
+    // and hand the model a fabricated proof.
+    const stage = { stageId: 'final-proof', characterChoice: 'stays', evidence: { transitionId: 'trn-burn' } };
+    const block = renderCharacterEvolutionsForPrompt([
+      sanitizeCharacterArc({
+        characterName: 'Mara',
+        transitions: [{ id: 'trn-burn', kind: 'decision', label: 'burns the bridge' }],
+        evolution: { outcome: 'full-change', stages: [stage] },
+      }),
+      sanitizeCharacterArc({
+        characterName: 'Joss',
+        evolution: { outcome: 'flat-testing', stages: [stage] },
+      }),
+    ]);
+    expect(block).toContain('- Mara');
+    expect(block).toContain('[anchored]');
+    expect(block).toContain('- Joss');
+    expect(block).toContain('[stale]');
+    expect(block.indexOf('[anchored]')).toBeLessThan(block.indexOf('- Joss'));
   });
 });

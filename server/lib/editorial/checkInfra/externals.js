@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import { estimateTokens } from '../../contextBudget.js';
 import { CREATIVE_LATITUDE_TOKENS } from '../../creativeLatitude.js';
-import { renderCharacterArcsForPrompt } from '../../seriesCharacterArc.js';
+import { renderCharacterArcsForPrompt, renderCharacterEvolutionsForPrompt } from '../../seriesCharacterArc.js';
 import { parseComicScript } from '../../comicScriptParser.js';
 import {
   analyzeComicLettering,
@@ -107,6 +107,7 @@ export {
   paragraphLengthUniformity,
   parseComicScript,
   renderCharacterArcsForPrompt,
+  renderCharacterEvolutionsForPrompt,
   splitScenes,
   summarizeStoryboardShots,
   transitionOpenerRatio,
