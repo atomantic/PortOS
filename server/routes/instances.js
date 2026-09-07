@@ -128,7 +128,12 @@ router.get('/', asyncHandler(async (req, res) => {
   ]);
   // Redact each peer's stored proxy password (keep username + hasPassword) —
   // the browser never needs the secret. Mirrors providers' hasApiKey pattern.
-  res.json({ self, peers: peers.map(instances.sanitizePeerForClient), syncStatus });
+  // Tailcat peers also carry their live forward summary so the peer card is the
+  // primary status surface (orphan forwards stay on the dedicated panel).
+  const sanitized = await tailcatPeer.attachTailcatForwardsToPeers(
+    peers.map(instances.sanitizePeerForClient),
+  );
+  res.json({ self, peers: sanitized, syncStatus });
 }));
 
 // GET /api/instances/assignable — id/name pairs a CoS task may be pinned to
@@ -367,7 +372,8 @@ router.post('/peers/:id/probe', asyncHandler(async (req, res) => {
   const peer = peers.find(p => p.id === req.params.id);
   if (!peer) throw new ServerError('Peer not found', { status: 404 });
   const result = await instances.probePeer(peer);
-  res.json(instances.sanitizePeerForClient(result));
+  const sanitized = instances.sanitizePeerForClient(result);
+  res.json(await tailcatPeer.attachTailcatForwardToPeer(sanitized));
 }));
 
 // POST /api/instances/peers/:id/sync — force an immediate sync with this peer.

@@ -14,6 +14,7 @@ import {
   verifyTunnelReachable,
   addPeerViaTailcat,
   listTailcatForwards,
+  attachTailcatForwardsToPeers,
   retryTailcatForward,
   forgetTailcatForward,
   redactTailcatDiagnostics,
@@ -592,6 +593,24 @@ describe('saved tailcat forwards', () => {
     expect(JSON.stringify(row)).not.toContain(EXAMPLE_TC);
     // The stored Basic credential is a secret too — presence only, never a value.
     expect(JSON.stringify(row)).not.toContain('password');
+  });
+
+  it('attaches the redacted forward onto a tailcat peer payload for the peer card', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+      name: 'sandbox', protocol: 'http', auth: null,
+      status: 'active', lastError: null, createdAt: '2026-01-01T00:00:00.000Z',
+    }] });
+    const peers = [
+      { id: 'peer-1', name: 'sandbox', transport: 'tailcat', address: '127.0.0.1', port: 15555 },
+      { id: 'peer-2', name: 'classic', address: '10.0.0.2', port: 5555 },
+    ];
+    const enriched = await attachTailcatForwardsToPeers(peers);
+    expect(enriched[0].tailcatForward).toMatchObject({
+      id: 'fwd_1', peerId: 'peer-1', localPort: 15555, status: 'active', live: false,
+    });
+    expect(JSON.stringify(enriched[0].tailcatForward)).not.toContain(EXAMPLE_TC);
+    expect(enriched[1].tailcatForward).toBeUndefined();
   });
 
   it('separates a bound listener from a tunnel that cannot carry a request', async () => {

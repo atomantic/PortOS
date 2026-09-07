@@ -77,9 +77,28 @@ even retry.
 | `POST …/forwards/:id/retry` | Restarts from the stored capability, registering the peer if the original add never got that far, and repointing an existing peer when a retry has to bind a different local port. |
 | `DELETE …/forwards/:id` | Stops the forward, deletes the stored capability, and removes its peer. |
 
-The Instances page renders these as **Tailcat forwards**, with Retry and Forget
-per row. A boot-time restore failure lands on the same row, so the one case
-nobody is watching still surfaces somewhere actionable.
+Linked forwards (`peerId` set) render on the **federated peer card** — mapping,
+live/running/no-route/failed, `tunnelError`, Retry, and Forget — so the card is
+the primary source of truth. The standalone **Tailcat forwards** panel only
+lists **orphans / pre-peer failures** (no peer yet, or peer gone), still with
+Retry and Forget. A boot-time restore failure lands there when it never
+registered a peer, so the one case nobody is watching still surfaces somewhere
+actionable.
+
+Each peer card also exposes a **Health check** control that forces
+`POST /api/instances/peers/:id/probe` and shows the last probe result
+(`lastProbe`: class, message, HTTP status, latency, timestamp) plus
+`nextProbeAt`. Probe classification distinguishes:
+
+| Class | Meaning |
+| --- | --- |
+| `local_refused` | Loopback connection refused — the forward is not listening |
+| `tunnel_dial` | Listener up but tunnel cannot dial (uses `tunnelError` when present) |
+| `probe_http` / `probe_timeout` / `auth_required` | Tunnel carried bytes (or timed out) but `/api/system/health/details` failed |
+
+`GET /api/instances` attaches `tailcatForward` onto `transport: 'tailcat'` peers
+(redacted listing fields only). Server logs include the structured class, e.g.
+`[local_refused] …`.
 
 ### Startup readiness has two independent signals
 

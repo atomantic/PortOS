@@ -46,7 +46,10 @@ vi.mock('./peerSocketRelay.js', () => ({
 }));
 
 vi.mock('./tailcatPeer.js', () => ({
-  stopForwardForPeer: vi.fn().mockResolvedValue(undefined)
+  stopForwardForPeer: vi.fn().mockResolvedValue(undefined),
+  listTailcatForwards: vi.fn().mockResolvedValue([]),
+  attachTailcatForwardsToPeers: async (peers) => peers,
+  attachTailcatForwardToPeer: async (peer) => peer,
 }));
 
 vi.mock('../lib/ports.js', () => ({
@@ -1344,7 +1347,44 @@ describe('instances.js', () => {
       expect(result.status).toBe('offline');
       expect(result.lastSeen).toBe('2024-01-01T00:00:00Z');
       expect(result.lastHealth).toEqual({ uptime: 100 });
+      expect(result.lastProbe).toMatchObject({ ok: false, class: expect.any(String) });
+      expect(result.lastProbe.message).toBeTruthy();
       expect(disconnectFromPeer).toHaveBeenCalledWith('peer-1');
+    });
+
+    it('classifies a tailcat loopback refuse as local_refused on lastProbe', async () => {
+      const peer = makePeer({
+        transport: 'tailcat',
+        address: '127.0.0.1',
+        port: 15555,
+      });
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      const refused = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:15555'), { code: 'ECONNREFUSED' });
+      fetch.mockRejectedValue(refused);
+
+      const result = await probePeer(peer);
+
+      expect(result.status).toBe('offline');
+      expect(result.lastProbe).toMatchObject({
+        ok: false,
+        class: 'local_refused',
+      });
+      expect(result.lastProbe.message).toMatch(/forward is not listening/i);
+    });
+
+    it('persists lastProbe ok + latency on a successful probe', async () => {
+      const peer = makePeer();
+      readJSONFile.mockResolvedValue({ self: null, peers: [peer] });
+      fetch
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ instanceId: 'r-id' }) })
+        .mockResolvedValueOnce({ ok: false })
+        .mockResolvedValueOnce({ ok: false });
+
+      const result = await probePeer(peer);
+
+      expect(result.status).toBe('online');
+      expect(result.lastProbe).toMatchObject({ ok: true, class: 'ok', httpStatus: 200 });
+      expect(typeof result.lastProbe.latencyMs).toBe('number');
     });
 
     it('should mark peer offline on non-ok health response', async () => {
