@@ -27,6 +27,7 @@ it('loads only visitor metadata and the remote renderer, without private PortOS 
   const iframe = await screen.findByTitle('Guest Eidoverse world');
   const url = new URL(iframe.src);
   expect(url.hostname).toBe(window.location.hostname);
+  expect(url.pathname).toBe('/eidoverse-host/');
   expect(url.searchParams.get('guest')).toBe('1');
   expect(url.searchParams.get('name')).toBe('guest-example');
   expect(url.searchParams.get('world')).toBe('example-world');

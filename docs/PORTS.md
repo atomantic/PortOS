@@ -35,7 +35,7 @@ Common port labels:
 | 5560 | portos-autofixer-ui | ui | Autofixer web UI |
 | 5561 | portos-db (Docker container) | - | Infrastructure dependency: PostgreSQL Docker container provisioned by `scripts/setup-db.js` / Docker Compose (not a PM2 process in `server/services/apps.js`; native mode uses system pg on 5432). |
 | 5562 | portos-whisper | whisper-server | Loopback whisper.cpp speech-to-text server. |
-| 5563 | portos-server | eidoverse-host | Optional HTTPS/WebSocket bridge for the embedded Eidoverse Worlds page. Starts on demand and forwards to the managed app on loopback `:8940`. |
+| 5563 | portos-server | eidoverse-host | Optional legacy HTTPS/WebSocket bridge for Eidoverse Worlds (on demand → loopback `:8940`). Prefer the same-origin path on `:5555` — `/eidoverse-host` plus root allowlist proxies — so a single-port tailcat forward (`:15555` → `:5555`) can embed the iframe. |
 | 5564 | portos-slotstream | - | Loopback SSD-streaming MoE runtime. Optional PM2 process, started/stopped from Models → LLMs. Never 11434 — that port is a PortOS-managed Ollama. |
 | 5568 | portos-llama-server | - | Loopback llama.cpp speculative-decoding server. Optional PM2 process, started/stopped from Models → LLMs. |
 | 8000 | portos-mtplx | - | Loopback MTPLX OpenAI-compatible API (upstream's own default, kept so the shipped provider presets match). Optional PM2 process, started/stopped from Models → LLMs. See [features/mtplx.md](./features/mtplx.md). |
@@ -68,6 +68,13 @@ Rules of thumb:
    - `scripts/dev-proxy-drift.test.js` fails if the proxy, the mounts, and the client's own routes drift apart. It reads both `NAV_COMMANDS` and `App.jsx`'s nested `<Route>` tree, so a new page under a server-owned prefix — which the terminator would otherwise 404 silently — fails the build even when only its `:id` detail route exists.
 
 Run `npm run setup:guide` to print the currently valid local URL, the exact trusted MagicDNS URL when available, and the next Tailscale/HTTPS prerequisite. The end-to-end walkthrough is in [SETUP.md](./SETUP.md).
+
+
+## Eidoverse on a single port (tailcat)
+
+A [tailcat](https://github.com/tailscale/tailcat) forward typically maps only `127.0.0.1:15555` → remote PortOS `:5555`. The Eidoverse iframe used to point at `:5563`, which is not tunneled, and the renderer issues absolute root requests (`/ws`, `/version`, …) that would miss a path-prefix-only iframe.
+
+PortOS now embeds via **`/eidoverse-host/`** on the same host+port as the UI. The API reverse-proxies that prefix to loopback `:8940` (prefix stripped) and, while the on-demand host is active, forwards an allowlist of Eidoverse root routes (including WebSocket `/ws`). `GET /embed-config` is terminated locally with a `parentOrigin` that preserves the browser `Host` (so `http://127.0.0.1:15555` works). The dedicated `:5563` bridge remains available as an optional/legacy listener.
 
 ## Defining Ports in ecosystem.config.cjs
 
