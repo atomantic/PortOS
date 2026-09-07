@@ -11,6 +11,9 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import PipelineSeries from './PipelineSeries';
+import {
+  CHARACTER_ARC_LIMITS, TRANSITION_KINDS, TRANSITION_KIND_LABELS,
+} from '../../../server/lib/seriesCharacterArc.js';
 
 const getPipelineSeries = vi.fn();
 const listPipelineIssues = vi.fn();
@@ -87,6 +90,31 @@ describe('Pipeline series — character-arc evolution lens', () => {
     vi.clearAllMocks();
     listPipelineIssues.mockResolvedValue([]);
     listUniverses.mockResolvedValue([universe]);
+  });
+
+  it('caps every arc input at the server limits the PATCH route enforces', async () => {
+    getPipelineSeries.mockResolvedValue(seriesWith());
+    renderPage();
+    await screen.findByRole('heading', { name: 'Example Series' });
+
+    // Save re-sends the whole arc list, so an input that loses its cap lets one
+    // over-long field reject every subsequent series save with nothing visible.
+    const cappedAt = {
+      'Character name': CHARACTER_ARC_LIMITS.CHARACTER_NAME_MAX,
+      Want: CHARACTER_ARC_LIMITS.WANT_MAX,
+      Need: CHARACTER_ARC_LIMITS.NEED_MAX,
+      'Start state': CHARACTER_ARC_LIMITS.START_STATE_MAX,
+      'End state': CHARACTER_ARC_LIMITS.END_STATE_MAX,
+      'Transition label': CHARACTER_ARC_LIMITS.TRANSITION_LABEL_MAX,
+    };
+    for (const [name, max] of Object.entries(cappedAt)) {
+      expect(screen.getByRole('textbox', { name }), name).toHaveAttribute('maxlength', String(max));
+    }
+    expect(screen.getByRole('spinbutton', { name: 'At issue' }))
+      .toHaveAttribute('max', String(CHARACTER_ARC_LIMITS.ISSUE_MAX));
+    const kindPicker = screen.getByRole('combobox', { name: 'Transition kind' });
+    expect([...kindPicker.options].map((o) => [o.value, o.text]))
+      .toEqual(TRANSITION_KINDS.map((kind) => [kind, TRANSITION_KIND_LABELS[kind]]));
   });
 
   it('authors a sparse lens and declares a flat arc without raising a blocking state', async () => {

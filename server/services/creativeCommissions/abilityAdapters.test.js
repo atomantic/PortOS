@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   ABILITY_ADAPTERS, getAbilityAdapter, buildCommissionDirective, buildRenderBackendPin,
 } from './abilityAdapters.js';
+import { CREATIVE_COMMISSION_ABILITIES, ABILITY_GENERATION_SPEC } from '../../lib/creativeCommissionValidation.js';
 import {
-  CREATIVE_COMMISSION_ABILITIES, ABILITY_GENERATION_SPEC,
   COMMISSION_INTENT_MAX, COMMISSION_STYLE_SPEC_MAX, COMMISSION_BRIEF_TAG_MAX,
-} from '../../lib/creativeCommissionValidation.js';
+} from '../../lib/creativeBriefLimits.js';
 import { MAX_DIRECTIVE_GOAL_LEN } from './directive.js';
 import { buildVideoPromptGuidance, isMiniMaxVideoModel } from './videoPromptGuidance.js';
 

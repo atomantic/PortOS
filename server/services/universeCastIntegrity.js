@@ -40,11 +40,11 @@ import {
   staleAugmentError,
 } from './characterAugmentation.js';
 import {
-  INTEGRITY_DIMENSIONS,
   buildCastIntegrityReport,
   characterFingerprint,
   mergeSemanticFindings,
 } from '../lib/characterIntegrity.js';
+import { INTEGRITY_DIMENSIONS } from '../lib/characterIntegrityVocabulary.js';
 
 const REVIEW_STAGE = 'universe-cast-integrity-review';
 

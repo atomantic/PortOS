@@ -4,6 +4,7 @@ import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
 import { BIBLE_LIMITS } from './storyBible.js';
 import { emptyToUndefined } from './zodCompat.js';
 import { csvIdsParam } from './sharedSchemas.js';
+import { CREATIVE_DIRECTOR_GOAL_MAX } from './creativeBriefLimits.js';
 
 // =============================================================================
 // CREATIVE DIRECTOR + CREATE-SUITE IMPORTER SCHEMAS
@@ -50,12 +51,6 @@ export const creativeDirectorCastMemberSchema = z.object({
   role: z.string().max(64).optional(),
   summary: z.string().max(500).optional(),
 });
-
-// Kept clear of the commission scheduler's MAX_DIRECTIVE_GOAL_LEN, so a goal it
-// composes from a maxed-out commission brief also validates on the HTTP path.
-// That ordering is asserted in services/creativeCommissions/directive.test.js —
-// this module can't import the service to derive it.
-export const CREATIVE_DIRECTOR_GOAL_MAX = 32000;
 
 // Production directive (CDO Phase 2, #2184) — the brief the planner agent turns
 // into a plan. `goal` is the free-text intent ("produce a 6-issue noir comic in

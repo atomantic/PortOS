@@ -239,7 +239,16 @@ describe('deferred imports stay deferred (#6156)', () => {
 // loaded via the host mount at boot. Measured 95,246 on this branch (+46 over
 // the prior ceiling) — ordinary growth for an intentional main-server edge,
 // not an eager heavy subtree. Raise the ceiling to keep the ~1.5k allowance.
-const MAX_STATIC_INSTANTIATIONS = 95300;
+//
+// Replacing five client hand-copies of server constants (the component and page
+// mirrors the earlier sweeps left) with imports added two pure leaves the
+// browser bundle reads: `lib/characterIntegrityVocabulary.js`
+// (split out of `characterIntegrity.js`, which reaches `crypto`) and
+// `lib/creativeBriefLimits.js` (the caps both creative validation modules
+// enforce). Measured 95,414 (+168): each leaf is reached by every suite that
+// crosses its parent or the lib barrel, with nothing behind it to defer — the
+// tolerated leaf shape, not an eager edge. Restore the ~1.5k allowance.
+const MAX_STATIC_INSTANTIATIONS = 96900;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {

@@ -25,7 +25,8 @@
  * exactly these cross-references.
  */
 
-import { buildCastIntegrityReport, castIntegrityPassed } from '../../lib/characterIntegrity.js';
+import { buildCastIntegrityReport } from '../../lib/characterIntegrity.js';
+import { castIntegrityPassed } from '../../lib/characterIntegrityVocabulary.js';
 import { normalizeBibleName } from '../../lib/storyBible.js';
 import { getWorkWithBody } from './local.js';
 import { getAnalysis } from './evaluator.js';

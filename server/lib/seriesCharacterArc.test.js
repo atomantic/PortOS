@@ -8,6 +8,7 @@ import {
   renderCharacterEvolutionsForPrompt,
   CHARACTER_ARC_LIMITS,
   TRANSITION_KINDS,
+  TRANSITION_KIND_LABELS,
 } from './seriesCharacterArc.js';
 import { evolutionEvidenceStatus } from './characterEvolution.js';
 
@@ -40,9 +41,10 @@ describe('sanitizeTransition', () => {
     expect(sanitizeTransition({ kind: 'decision', label: 'x', atIssue: 'foo' }).atIssue).toBeNull();
   });
 
-  it('exposes the full kind taxonomy', () => {
+  it('exposes the full kind taxonomy, each kind labelled for the editor picker', () => {
     expect(TRANSITION_KINDS).toContain('point-of-no-return');
     expect(TRANSITION_KINDS).toContain('sacrifice');
+    expect(Object.keys(TRANSITION_KIND_LABELS)).toEqual([...TRANSITION_KINDS]);
   });
 
   // The arc auto-resolve path writes through this sanitizer directly (the route

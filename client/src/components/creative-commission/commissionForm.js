@@ -9,16 +9,11 @@
 
 import { describeRecurrence } from '../../utils/cronHelpers.js';
 
-// Client mirror of the server's brief field caps
-// (server/lib/creativeCommissionValidation.js). The intent is roomy on purpose:
-// it reaches the planning LLM verbatim, so it holds a whole instruction set —
-// framework, rules, a sample prompt — not a one-line mood. Keep these in step
-// with the server: a client cap BELOW the schema's truncates the user's brief at
-// the textarea silently, with no error to explain where the tail went.
-export const COMMISSION_NAME_MAX = 200;
-export const COMMISSION_INTENT_MAX = 20000;
-export const COMMISSION_STYLE_SPEC_MAX = 5000;
-export const COMMISSION_BRIEF_TAG_MAX = 120;
+// The brief field caps are the server's own (server/lib/creativeBriefLimits.js),
+// used here as the inputs' `maxLength`.
+export {
+  COMMISSION_BRIEF_TAG_MAX, COMMISSION_INTENT_MAX, COMMISSION_NAME_MAX, COMMISSION_STYLE_SPEC_MAX,
+} from '../../../../server/lib/creativeBriefLimits.js';
 
 // Pause and Delete are real STOPS, not just "skip the next tick": the server also
 // tears down the Creative Director projects the commission already spawned
@@ -95,9 +90,11 @@ const VIDEO_BACKEND_FIELD = {
 
 // Per-ability generation field descriptors — the client mirror of the server's
 // GENERATION_KEY_DEFS / ABILITY_GENERATION_SPEC (server/lib/creativeCommissionValidation.js).
-// The config form renders exactly these fields for the selected type. There is no
-// cross-package import, so this must be kept in sync with the server spec BY HAND
-// when a key/bound/default changes; commissionForm.test.js asserts only the
+// The config form renders exactly these fields for the selected type. The server
+// module pulls `zod`, so the browser cannot import the spec until it moves to a
+// pure leaf (as the brief caps did, creativeBriefLimits.js); until then keep this
+// in sync with the server spec BY HAND when a key/bound/default changes;
+// commissionForm.test.js asserts only the
 // client-internal invariant (every field has a matching default), not server↔client
 // parity.
 export const GENERATION_FIELDS_BY_ABILITY = {

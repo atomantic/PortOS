@@ -8,7 +8,6 @@ import { describe, it, expect } from 'vitest';
 
 import {
   buildCastIntegrityReport,
-  castIntegrityPassed,
   characterCompletenessFindings,
   characterFingerprint,
   characterIntegrityDepth,
@@ -17,6 +16,7 @@ import {
   readIntegrityField,
   withIntegrityField,
 } from './characterIntegrity.js';
+import { castIntegrityPassed } from './characterIntegrityVocabulary.js';
 
 /** A fully authored lead — nothing for the deterministic pass to report. */
 const lead = () => ({
