@@ -2,11 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // --- Mock every dependency agentWorktreeCleanup.js pulls in transitively ---
 
+// Cleanup launches this audit without awaiting it. Its own suite covers the
+// probes; keep its daemon/provider graph out of these cleanup workflow tests.
+vi.mock('./agentRepoStateVerification.js', () => ({
+  verifyAgentRepoState: vi.fn().mockResolvedValue(undefined)
+}));
+
 vi.mock('../lib/childProcess.js', () => ({
   spawn: vi.fn(),
   execSync: vi.fn(),
-  // codeReview also reaches memoryStats through the local daemon managers.
-  exec: vi.fn(),
   // `execFile` is pulled in transitively by codeReview.js → lmStudioManager
   // (via `resolveReviewLoopOptions`'s dependency graph), even though this
   // test never exercises it directly.
