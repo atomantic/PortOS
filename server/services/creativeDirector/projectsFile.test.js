@@ -84,6 +84,30 @@ const createVideo = () => file.createProject({
 });
 
 describe('Video treatment artifacts', () => {
+  it('rejects backend-incompatible drafts and edits before replacing a saved artifact', async () => {
+    const p = await createVideo();
+    await file.updateProject(p.id, { renderBackend: { video: { mode: 'reactor' } } });
+    await file.setTreatment(p.id, videoTreatment());
+    const saved = await file.getProject(p.id);
+    const tooShort = videoTreatment();
+    tooShort.scenes[0].durationSeconds = 5;
+    const tooLong = videoTreatment();
+    tooLong.scenes[0].prompt = 'x'.repeat(801);
+    const missingPrior = videoTreatment();
+    missingPrior.scenes[0].useContinuationFromPrior = true;
+    await expect(file.setTreatment(p.id, tooShort)).rejects.toThrow('incompatible duration');
+    await expect(file.setTreatment(p.id, tooLong)).rejects.toThrow('maximum 800 characters');
+    await expect(file.setTreatment(p.id, missingPrior)).rejects.toThrow('without a prior shot');
+    await expect(file.updateScene(p.id, 'scene-0', { prompt: 'x'.repeat(801) })).rejects.toThrow('maximum 800 characters');
+    expect(await file.getProject(p.id)).toEqual(saved);
+    await file.updateProject(p.id, { renderBackend: { video: { mode: 'grok' } } });
+    const rounded = videoTreatment();
+    rounded.scenes = Array.from({ length: 15 }, (_, order) => ({ ...rounded.scenes[0], sceneId: `scene-${order}`, order, durationSeconds: 8 }));
+    await expect(file.setTreatment(p.id, rounded)).rejects.toThrow('choose 6 or 10 seconds');
+    await file.setTreatment(p.id, videoTreatment());
+    expect((await file.getProject(p.id)).treatment.artifact.targetDurationSeconds).toBe(120);
+  });
+
   it('persists a timed two-minute script and stable identities across revised drafts and reloads', async () => {
     const p = await createVideo();
     const treatment = videoTreatment();
