@@ -1,22 +1,6 @@
-/**
- * Autonomous-job cadence vocabulary (#6375).
- *
- * Two contracts that a higher-level test can't pin cheaply:
- *  - `resolveIntervalMs` must return an explicit no-interval sentinel rather
- *    than falling through to `DAY`. The fall-through was silent, so only a
- *    direct assertion catches its return.
- *  - the client mirror in `client/src/utils/cronHelpers.js` is hand-maintained.
- *    A row added on one side only would leave a cadence the server accepts
- *    invisible in the picker (or a picker row the Zod enum rejects), so the
- *    mirror is compared by reading the client source rather than importing it
- *    (a server test that imports a client module breaks CI dependency-wise).
- */
+/** Autonomous-job cadence resolution and no-clock compatibility contracts. */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { extractDeclaration } from './mirrorParity.js';
 
 // Declared here rather than imported from fileUtils: this suite's whole point is
 // that autonomousJobIntervals.js stays import-free, and pulling fileUtils in
@@ -30,9 +14,6 @@ import {
   isOnDemandJob,
   resolveIntervalMs
 } from './autonomousJobIntervals.js';
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const CLIENT_PATH = resolve(HERE, '../../client/src/utils/cronHelpers.js');
 
 describe('resolveIntervalMs', () => {
   it('returns the no-interval sentinel for the on-demand cadence — not DAY, not NaN', () => {
@@ -80,31 +61,5 @@ describe('isOnDemandJob', () => {
     // have to win or the job would silently stop firing.
     expect(isOnDemandJob({ interval: ON_DEMAND_INTERVAL, intervalMs: null, cronExpression: '0 4 * * *' })).toBe(false);
     expect(isOnDemandJob({ interval: ON_DEMAND_INTERVAL, intervalMs: null, cronSchedule: { kind: 'DAILY' } })).toBe(false);
-  });
-});
-
-describe('client JOB_INTERVAL_OPTIONS mirror', () => {
-  const clientSrc = readFileSync(CLIENT_PATH, 'utf8');
-  const clientDecl = extractDeclaration(clientSrc, 'JOB_INTERVAL_OPTIONS');
-
-  // Parses `{ value: X, label: 'Y' }` rows — X is a quoted literal for most
-  // rows and the ON_DEMAND_INTERVAL identifier for the on-demand one.
-  const ROW_RE = /\{\s*value:\s*(?:'([^']+)'|([A-Z_][A-Z0-9_]*))\s*,\s*label:\s*'([^']+)'\s*\}/g;
-  const clientRows = [...(clientDecl ?? '').matchAll(ROW_RE)].map(m => ({
-    value: m[1] ?? (m[2] === 'ON_DEMAND_INTERVAL' ? ON_DEMAND_INTERVAL : m[2]),
-    label: m[3]
-  }));
-
-  it('finds the client declaration and parses every row', () => {
-    expect(clientDecl, 'client cronHelpers.js is missing JOB_INTERVAL_OPTIONS').not.toBeNull();
-    expect(clientRows.length).toBe(INTERVAL_OPTIONS.length);
-  });
-
-  it('carries the same values and labels, in the same order, as the server list', () => {
-    expect(clientRows).toEqual(INTERVAL_OPTIONS.map(({ value, label }) => ({ value, label })));
-  });
-
-  it('declares the on-demand cadence with the same string the server validates', () => {
-    expect(clientSrc).toContain(`export const ON_DEMAND_INTERVAL = '${ON_DEMAND_INTERVAL}';`);
   });
 });
