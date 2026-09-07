@@ -229,7 +229,7 @@ describe('networkRow', () => {
       },
       cert: {},
     });
-    expect(r).toMatchObject({ status: WARN, setupRequired: true, setupComplete: false });
+    expect(r).toMatchObject({ status: WARN, setupRequired: false, setupComplete: false });
     expect(r.detail.nextStepId).toBe('magic-dns');
   });
 });

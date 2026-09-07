@@ -40,6 +40,10 @@ export function formatSetupGuide(guide, { localUrl, setupUrl } = {}) {
     '',
   ];
 
+  lines.push('Networking is optional: choose Tailscale, Tailcat, or Not desired on the Setup page.');
+  lines.push('For a Tailcat bridge, open Instances and choose Tailcat when adding a peer.');
+  lines.push('', 'Optional Tailscale / MagicDNS / HTTPS guide:');
+
   for (const step of guide.steps || []) {
     lines.push(`[${MARK[step.status] || '·'}] ${step.title}`);
     lines.push(`    ${step.detail}`);
@@ -70,7 +74,7 @@ export function formatSetupGuide(guide, { localUrl, setupUrl } = {}) {
 export function formatSetupSummary(guide) {
   if (guide.complete) return `Trusted Tailscale HTTPS ready at ${guide.trustedUrl}`;
   const next = guide.nextStep;
-  return next ? `${next.title} — ${next.detail}` : 'Tailscale HTTPS setup needs attention';
+  return next ? `Optional Tailscale setup: ${next.title} — ${next.detail}` : 'Optional Tailscale HTTPS setup is available';
 }
 
 async function probeHealthScheme(port) {
