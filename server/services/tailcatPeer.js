@@ -19,7 +19,15 @@ import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { delimiter, join, posix, win32 } from 'node:path';
 import { spawn } from '../lib/childProcess.js';
-import { commandExists } from '../lib/commandExists.js';
+import { commandOutput } from '../lib/commandExists.js';
+import {
+  MIN_TAILCAT_VERSION,
+  parseTailcatVersion,
+  isTailcatVersionAtLeast,
+  tailcatVersionTooOldMessage,
+} from '../lib/tailcatVersion.js';
+
+export { MIN_TAILCAT_VERSION };
 import { bufferedSpawn, spawnFailureDetail } from '../lib/bufferedSpawn.js';
 import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
@@ -327,15 +335,55 @@ export function listCandidateTailcatBins({ env = process.env, home = homedir() }
 }
 
 /**
- * Resolve an installed `tailcat` binary, or null when none is runnable.
+ * Read `tailcat version` and return a bare semver, or null when the binary
+ * cannot run / the banner cannot be parsed.
+ */
+export async function readTailcatBinaryVersion(
+  bin,
+  { readOutput = (b) => commandOutput(b, ['version'], { timeoutMs: 5_000 }) } = {},
+) {
+  if (!bin) return null;
+  const raw = await readOutput(bin);
+  return parseTailcatVersion(raw);
+}
+
+/**
+ * Resolve an installed `tailcat` binary that meets {@link MIN_TAILCAT_VERSION},
+ * or null when none is both runnable and new enough. Older binaries are
+ * skipped (not returned) so install/upgrade can still try to replace them —
+ * use {@link findTooOldTailcat} when the operator needs a version-gate error.
  * Injected deps keep unit tests off the real PATH / child_process.
  */
 export async function detectTailcat({
   candidates = listCandidateTailcatBins(),
-  probe = (bin) => commandExists(bin, ['version'], { timeoutMs: 5_000 }),
+  readOutput = (bin) => commandOutput(bin, ['version'], { timeoutMs: 5_000 }),
+  minimum = MIN_TAILCAT_VERSION,
 } = {}) {
   for (const bin of candidates) {
-    if (await probe(bin)) return bin;
+    const raw = await readOutput(bin);
+    if (raw === null) continue;
+    const version = parseTailcatVersion(raw);
+    if (isTailcatVersionAtLeast(version, minimum)) return bin;
+  }
+  return null;
+}
+
+/**
+ * First runnable candidate that is below the version floor (or unparseable).
+ * Used to turn a silent "no usable binary" into a clear upgrade error.
+ */
+export async function findTooOldTailcat({
+  candidates = listCandidateTailcatBins(),
+  readOutput = (bin) => commandOutput(bin, ['version'], { timeoutMs: 5_000 }),
+  minimum = MIN_TAILCAT_VERSION,
+} = {}) {
+  for (const bin of candidates) {
+    const raw = await readOutput(bin);
+    if (raw === null) continue;
+    const version = parseTailcatVersion(raw);
+    if (!isTailcatVersionAtLeast(version, minimum)) {
+      return { bin, version };
+    }
   }
   return null;
 }
@@ -347,9 +395,16 @@ export async function detectTailcat({
  */
 export function manualInstallHint(platform = process.platform) {
   if (platform === 'darwin') {
-    return `Install it with \`brew install ${BREW_FORMULA}\` (Tailcat ships no macOS release binary), then retry.`;
+    return (
+      `Install or upgrade to tailcat ${MIN_TAILCAT_VERSION}+ with `
+      + `\`brew upgrade ${BREW_FORMULA}\` / \`brew install ${BREW_FORMULA}\` `
+      + `(Tailcat ships no macOS release binary), then retry.`
+    );
   }
-  return `Install a release binary from ${RELEASES_URL}, then retry.`;
+  return (
+    `Install tailcat ${MIN_TAILCAT_VERSION}+ from ${RELEASES_URL} `
+    + `or \`go install ${GO_INSTALL_PKG}\`, then retry.`
+  );
 }
 
 /**
@@ -368,14 +423,22 @@ export function listTailcatInstallers({
 } = {}) {
   const installers = [];
   if (brewBin) {
-    installers.push({
-      label: `brew install ${BREW_FORMULA}`,
+    const brewEnv = {
       // Auto-update pulls the whole formula index before installing a ~10MB
       // bottle; the operator asked to add a peer, not to refresh Homebrew.
-      run: () => runInstall(brewBin, ['install', BREW_FORMULA], {
-        HOMEBREW_NO_AUTO_UPDATE: '1',
-        HOMEBREW_NO_INSTALL_CLEANUP: '1',
-      }),
+      HOMEBREW_NO_AUTO_UPDATE: '1',
+      HOMEBREW_NO_INSTALL_CLEANUP: '1',
+    };
+    installers.push({
+      label: `brew install/upgrade ${BREW_FORMULA}`,
+      // `install` is a no-op when an older bottle is already present; follow
+      // with `upgrade` so a 0.5.x Homebrew install can still reach the floor.
+      // An "already up-to-date" upgrade failure is fine — the post-install
+      // version gate decides whether we are done (and go install may still run).
+      run: async () => {
+        await runInstall(brewBin, ['install', BREW_FORMULA], brewEnv);
+        await runInstall(brewBin, ['upgrade', BREW_FORMULA], brewEnv).catch(() => undefined);
+      },
     });
   }
   if (goBin) {
@@ -395,17 +458,36 @@ export function listTailcatInstallers({
  */
 export async function ensureTailcatInstalled({
   detect = detectTailcat,
+  findTooOld = findTooOldTailcat,
   installers = listTailcatInstallers(),
   platform = process.platform,
 } = {}) {
   const existing = await detect();
   if (existing) return { bin: existing, installed: false };
 
-  if (installers.length === 0) {
+  const rejectTooOldOrMissing = async (failures = []) => {
+    const tooOld = await findTooOld();
+    if (tooOld) {
+      const detail = failures.length ? ` Install attempts: ${failures.join('; ')}.` : '';
+      throw new ServerError(
+        `${tailcatVersionTooOldMessage({ version: tooOld.version, platform })}${detail}`,
+        { status: 503, code: 'TAILCAT_VERSION_TOO_OLD' },
+      );
+    }
+    if (failures.length) {
+      throw new ServerError(
+        `Could not install tailcat — ${failures.join('; ')}. ${manualInstallHint(platform)}`,
+        { status: 503, code: 'TAILCAT_INSTALL_FAILED' },
+      );
+    }
     throw new ServerError(
       `tailcat is not installed, and neither Homebrew nor Go was found on PATH. ${manualInstallHint(platform)}`,
-      { status: 503, code: 'TAILCAT_MISSING' }
+      { status: 503, code: 'TAILCAT_MISSING' },
     );
+  };
+
+  if (installers.length === 0) {
+    await rejectTooOldOrMissing();
   }
 
   const failures = [];
@@ -420,13 +502,20 @@ export async function ensureTailcatInstalled({
     }
     const bin = await detect();
     if (bin) return { bin, installed: true };
-    failures.push(`${installer.label} finished but no tailcat binary was found`);
+    // Installer exited 0 but left only an old / unparseable binary — keep
+    // trying other strategies, then fail with the version gate (not "success").
+    const leftover = await findTooOld();
+    if (leftover) {
+      failures.push(
+        `${installer.label} finished but tailcat is still below ${MIN_TAILCAT_VERSION}`
+        + (leftover.version ? ` (found ${leftover.version})` : ' (version unknown)'),
+      );
+    } else {
+      failures.push(`${installer.label} finished but no tailcat binary was found`);
+    }
   }
 
-  throw new ServerError(
-    `Could not install tailcat — ${failures.join('; ')}. ${manualInstallHint(platform)}`,
-    { status: 503, code: 'TAILCAT_INSTALL_FAILED' }
-  );
+  await rejectTooOldOrMissing(failures);
 }
 
 /** One line of an installer's diagnostics, bounded so a toast stays readable. */

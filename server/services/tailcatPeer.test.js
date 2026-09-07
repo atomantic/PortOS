@@ -5,6 +5,8 @@ import {
   redactTcAddress,
   isValidTcAddress,
   ensureTailcatInstalled,
+  detectTailcat,
+  findTooOldTailcat,
   listTailcatInstallers,
   listCandidateTailcatBins,
   manualInstallHint,
@@ -20,6 +22,7 @@ import {
   redactTailcatDiagnostics,
   derpMapCachePath,
   primeDerpMapCache,
+  MIN_TAILCAT_VERSION,
   _resetLiveForwardsForTests,
   _liveForwardCountForTests,
   stopAllForwards,
@@ -128,6 +131,7 @@ describe('tailcatPeer helpers', () => {
   it('reports what every installer said when they all fail', async () => {
     const error = await ensureTailcatInstalled({
       detect: async () => null,
+      findTooOld: async () => null,
       platform: 'linux',
       installers: [
         { label: 'brew install tailcat', run: async () => { throw new Error('brew boom'); } },
@@ -161,6 +165,7 @@ describe('tailcatPeer helpers', () => {
   it('treats an installer that leaves no binary as a failure, not a success', async () => {
     await expect(ensureTailcatInstalled({
       detect: async () => null,
+      findTooOld: async () => null,
       installers: [{ label: 'go install', run: async () => {} }],
     })).rejects.toMatchObject({
       code: 'TAILCAT_INSTALL_FAILED',
@@ -171,20 +176,88 @@ describe('tailcatPeer helpers', () => {
   it('ensureTailcatInstalled fails clearly when no package manager is present', async () => {
     await expect(ensureTailcatInstalled({
       detect: async () => null,
+      findTooOld: async () => null,
       installers: [],
     })).rejects.toMatchObject({ code: 'TAILCAT_MISSING', status: 503 });
   });
 
+  it('detectTailcat skips binaries below the minimum version', async () => {
+    expect(MIN_TAILCAT_VERSION).toBe('0.6.0');
+    const readOutput = vi.fn(async (bin) => {
+      if (bin === '/old/tailcat') return 'v0.5.0';
+      if (bin === '/new/tailcat') return 'v0.6.0';
+      return null;
+    });
+    await expect(detectTailcat({
+      candidates: ['/old/tailcat', '/new/tailcat'],
+      readOutput,
+    })).resolves.toBe('/new/tailcat');
+    await expect(detectTailcat({
+      candidates: ['/old/tailcat'],
+      readOutput,
+    })).resolves.toBeNull();
+  });
+
+  it('findTooOldTailcat reports a runnable but outdated binary', async () => {
+    await expect(findTooOldTailcat({
+      candidates: ['/old/tailcat'],
+      readOutput: async () => 'v0.5.0',
+    })).resolves.toEqual({ bin: '/old/tailcat', version: '0.5.0' });
+  });
+
+  it('ensureTailcatInstalled refuses a leftover 0.5.x after brew claims success', async () => {
+    const run = vi.fn(async () => {});
+    const error = await ensureTailcatInstalled({
+      detect: async () => null,
+      findTooOld: async () => ({ bin: '/opt/homebrew/bin/tailcat', version: '0.5.0' }),
+      platform: 'darwin',
+      installers: [{ label: 'brew install/upgrade tailcat', run }],
+    }).catch((err) => err);
+    expect(run).toHaveBeenCalledOnce();
+    expect(error).toMatchObject({ code: 'TAILCAT_VERSION_TOO_OLD', status: 503 });
+    expect(error.message).toContain('0.6.0+');
+    expect(error.message).toContain('found 0.5.0');
+    expect(error.message).toContain('brew upgrade tailcat');
+    expect(error.message).toContain('Do not set --psk=false');
+  });
+
+  it('ensureTailcatInstalled upgrades via installers when only an old binary is present', async () => {
+    let detectCalls = 0;
+    const run = vi.fn(async () => {});
+    const result = await ensureTailcatInstalled({
+      detect: async () => {
+        detectCalls += 1;
+        return detectCalls === 1 ? null : '/example/go/bin/tailcat';
+      },
+      findTooOld: async () => ({ bin: '/opt/homebrew/bin/tailcat', version: '0.5.0' }),
+      installers: [{ label: 'go install', run }],
+    });
+    expect(run).toHaveBeenCalledOnce();
+    expect(result).toEqual({ bin: '/example/go/bin/tailcat', installed: true });
+  });
+
+  it('ensureTailcatInstalled reports VERSION_TOO_OLD when no package manager and only 0.5.x exists', async () => {
+    await expect(ensureTailcatInstalled({
+      detect: async () => null,
+      findTooOld: async () => ({ bin: '/usr/local/bin/tailcat', version: '0.5.0' }),
+      installers: [],
+      platform: 'linux',
+    })).rejects.toMatchObject({ code: 'TAILCAT_VERSION_TOO_OLD', status: 503 });
+  });
+
   it('points macOS at Homebrew, since tailcat ships no darwin release binary', () => {
+    expect(manualInstallHint('darwin')).toContain('brew upgrade tailcat');
     expect(manualInstallHint('darwin')).toContain('brew install tailcat');
+    expect(manualInstallHint('darwin')).toContain('0.6.0+');
     expect(manualInstallHint('darwin')).not.toContain('/releases');
     expect(manualInstallHint('linux')).toContain('https://github.com/tailscale/tailcat/releases');
+    expect(manualInstallHint('linux')).toContain('0.6.0+');
   });
 
   it('lists brew before go, and only for package managers that exist', () => {
     const runInstall = vi.fn(async () => {});
     expect(listTailcatInstallers({ brewBin: '/opt/homebrew/bin/brew', goBin: '/usr/bin/go', runInstall })
-      .map((i) => i.label)).toEqual(['brew install tailcat', 'go install']);
+      .map((i) => i.label)).toEqual(['brew install/upgrade tailcat', 'go install']);
     expect(listTailcatInstallers({ brewBin: null, goBin: '/usr/bin/go', runInstall })
       .map((i) => i.label)).toEqual(['go install']);
     expect(listTailcatInstallers({ brewBin: null, goBin: null, runInstall })).toEqual([]);
@@ -195,6 +268,8 @@ describe('tailcatPeer helpers', () => {
     const [brew] = listTailcatInstallers({ brewBin: '/opt/homebrew/bin/brew', goBin: null, runInstall });
     await brew.run();
     expect(runInstall).toHaveBeenCalledWith('/opt/homebrew/bin/brew', ['install', 'tailcat'],
+      expect.objectContaining({ HOMEBREW_NO_AUTO_UPDATE: '1' }));
+    expect(runInstall).toHaveBeenCalledWith('/opt/homebrew/bin/brew', ['upgrade', 'tailcat'],
       expect.objectContaining({ HOMEBREW_NO_AUTO_UPDATE: '1' }));
   });
 
@@ -214,10 +289,14 @@ describe('tailcatPeer helpers', () => {
   });
 
   it('treats a clean install-command exit as success', async () => {
-    bufferedSpawn.mockResolvedValueOnce({ success: true, code: 0, stdout: '', stderr: '', timedOut: false });
+    bufferedSpawn
+      .mockResolvedValueOnce({ success: true, code: 0, stdout: '', stderr: '', timedOut: false })
+      .mockResolvedValueOnce({ success: true, code: 0, stdout: '', stderr: '', timedOut: false });
     const [installer] = listTailcatInstallers({ brewBin: '/example/brew', goBin: null });
     await expect(installer.run()).resolves.toBeUndefined();
     expect(bufferedSpawn).toHaveBeenCalledWith('/example/brew', ['install', 'tailcat'],
+      expect.objectContaining({ env: expect.objectContaining({ HOMEBREW_NO_AUTO_UPDATE: '1' }) }));
+    expect(bufferedSpawn).toHaveBeenCalledWith('/example/brew', ['upgrade', 'tailcat'],
       expect.objectContaining({ env: expect.objectContaining({ HOMEBREW_NO_AUTO_UPDATE: '1' }) }));
   });
 

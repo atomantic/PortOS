@@ -353,6 +353,7 @@ export * from './sharingOrigin.js';
 export * from './syncIntegrity.js';
 export * from './syncWire.js';
 export * from './tailscale.js';
+export * from './tailcatVersion.js';
 
 // === Search & indexing ===
 export * from './bm25.js';

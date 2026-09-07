@@ -58,12 +58,18 @@ do not hardcode any particular host.
 `ensureTailcatInstalled` first looks for a runnable binary — PATH, then
 `$GOBIN`/`$GOPATH/bin`, then the Homebrew prefix, since a long-running server
 does not necessarily have a package manager's bin directory on its inherited
-PATH. When none is found it runs the package managers the operator already has,
-in order, and stops at the first that produces a working binary:
+PATH. A candidate only counts when `tailcat version` parses to
+**≥ `MIN_TAILCAT_VERSION` (`0.6.0`)**. Older binaries are treated as unusable
+(see [Minimum Tailcat version (PSK)](#minimum-tailcat-version-psk) below): PortOS
+tries to install/upgrade rather than proceeding into a TCP timeout.
+
+When no usable binary is found it runs the package managers the operator already
+has, in order, and stops at the first that produces a **≥0.6.0** binary. After
+every installer it re-checks the version before returning success.
 
 | Order | Command | Available when |
 | --- | --- | --- |
-| 1 | `brew install tailcat` (with `HOMEBREW_NO_AUTO_UPDATE=1`) | `brew` on PATH |
+| 1 | `brew install tailcat` then `brew upgrade tailcat` (with `HOMEBREW_NO_AUTO_UPDATE=1`) | `brew` on PATH |
 | 2 | `go install github.com/tailscale/tailcat/cmd/tailcat@latest` | `go` on PATH |
 
 Homebrew is tried first for two reasons. **Tailcat publishes release binaries
@@ -73,9 +79,33 @@ proxy through Go's own dialer, which a local network filter can break in a way
 that surfaces only as `dial tcp …:443: connect: bad file descriptor` — Homebrew
 downloads over plain HTTPS and is unaffected.
 
+Hypothesis (non-binding): Homebrew often leaves an older bottle (e.g. **0.5.0**)
+when the index is stale or `install` is a no-op for an already-present formula —
+that is why PortOS follows `install` with `upgrade`, then falls through to
+`go install @latest`, and **refuses to report success** if the binary is still
+below 0.6.0 (`TAILCAT_VERSION_TOO_OLD` with upgrade instructions).
+
 If every strategy fails, the error names each command and the first line of what
-it said, followed by platform-appropriate manual guidance (`brew install
-tailcat` on macOS, the releases page elsewhere).
+it said (or the leftover version), followed by platform-appropriate manual
+guidance (`brew upgrade tailcat` on macOS, the releases page / `go install`
+elsewhere). Dial-them, They-dial-us / managed serve, and Instances UI surfaces
+all share this gate via `ensureTailcatInstalled` — failures become API errors
+and `lastError` on forwards/serve, not a later silent timeout.
+
+### Minimum Tailcat version (PSK)
+
+PortOS requires **Tailcat ≥ 0.6.0** for managed install/detect.
+
+| Symptom | Cause |
+| --- | --- |
+| DERP discovery ping works (`--key=new` pong) but TCP `forward` / PortOS health probes time out (`context deadline exceeded`) | Client on **≤0.5.x** talking to a serve that defaults **`--psk` true** (documented since v0.6.0 `serve --help`; set `--psk=false` only for compatibility with clients v0.5.0 and earlier) |
+
+**Do not** “fix” this by auto-setting `--psk=false` on serve. Upgrade the
+client (Homebrew / `go install …@latest`) so both sides share modern PSK
+defaults. Confirmed in the wild: a home host on Homebrew **v0.5.0** against a
+sandbox serve on **v0.6.0** showed exactly the ping-ok / TCP-timeout split;
+upgrading the home client to 0.6.0 restored bidirectional HTTP health
+immediately — not a firewall or identity collision.
 
 HTTP is the default; HTTPS runs through the same loopback tunnel. Remote
 announcements cannot replace the managed local host or forwarding port.
@@ -302,6 +332,7 @@ tailcat forward <tcADDR> 15555:5555
 
 - [ ] PortOS up on sandbox `:5555`
 - [ ] Prefer **Instances → Tailcat serve** (or CLI `tailcat serve --key=… 5555`) — not `serve all`, not exit-node
+- [ ] Both sides on Tailcat **≥0.6.0** (`tailcat version`); upgrade if Dial-them / serve fails with `TAILCAT_VERSION_TOO_OLD` or ping-ok / TCP-timeout PSK mismatch
 - [ ] Hand operator `<tcADDR>` out of band only (Copy from UI)
 - [ ] Operator uses **Dial them** (local **15555 → 5555**), *or* if home dials time out, home uses **They dial us** and the sandbox Dials them
 - [ ] Never write real `tc…` values into git, PR text, or federated logs
