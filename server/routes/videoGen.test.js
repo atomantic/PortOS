@@ -119,6 +119,7 @@ vi.mock('../services/videoGen/local.js', () => ({
   extractLastFrame: vi.fn(),
   stitchVideos: vi.fn(),
   upscaleHistoryItem: vi.fn(),
+  planUpscaleHistoryItem: vi.fn(),
   // Mirrors the real export — keeps the route's keyframe-range check in
   // sync with whatever the service actually defaults to.
   DEFAULT_NUM_FRAMES: 121,
@@ -2824,7 +2825,7 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
       expect(r.body.video).toEqual(upscaled);
-      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId);
+      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'lanczos' });
     });
 
     it('forwards a shared-gallery upload id to upscaleHistoryItem', async () => {
@@ -2832,7 +2833,7 @@ describe('videoGen routes', () => {
       videoGenService.upscaleHistoryItem.mockResolvedValue({ id: otherValidId, filename: `${otherValidId}.mp4`, upscaledFrom: uploadId });
       const r = await request(app).post(`/api/video-gen/upscale/${uploadId}`).send({});
       expect(r.status).toBe(200);
-      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(uploadId);
+      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(uploadId, { method: 'lanczos' });
     });
 
     it('returns the ServerError status when the service rejects', async () => {
@@ -2842,6 +2843,78 @@ describe('videoGen routes', () => {
       const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({});
       expect(r.status).toBe(404);
       expect(r.body.error).toMatch(/not found/i);
+    });
+
+    // Method selection (#6509). The whole point of the default is that a client
+    // written before the option existed keeps its exact behavior, so the
+    // no-body request and the explicit Lanczos request must be indistinguishable
+    // at the service boundary.
+    it('sends an explicit lanczos request identically to a no-body request', async () => {
+      videoGenService.upscaleHistoryItem.mockResolvedValue({ id: otherValidId });
+      await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({});
+      await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'lanczos' });
+      const [noBody, explicit] = videoGenService.upscaleHistoryItem.mock.calls;
+      expect(explicit).toEqual(noBody);
+    });
+
+    it('forwards the generative method to the service', async () => {
+      videoGenService.upscaleHistoryItem.mockResolvedValue({ id: otherValidId });
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'ltx' });
+      expect(r.status).toBe(200);
+      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'ltx' });
+    });
+
+    it('rejects an unknown method with a 400 and never reaches the service', async () => {
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'realesrgan' });
+      expect(r.status).toBe(400);
+      expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the 501 capability error the service raises for an unavailable runtime', async () => {
+      videoGenService.upscaleHistoryItem.mockRejectedValue(
+        Object.assign(new Error('needs LTX-2.5 MLX (ltx25)'), { status: 501, code: 'UNSUPPORTED_RUNTIME' }),
+      );
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'ltx' });
+      expect(r.status).toBe(501);
+      expect(r.body.error).toMatch(/ltx25/);
+    });
+  });
+
+  describe('GET /upscale/:id/plan', () => {
+    const validHistoryId = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa1';
+
+    it('rejects history ids outside known render and upload shapes', async () => {
+      const r = await request(app).get('/api/video-gen/upscale/not-a-uuid/plan');
+      expect(r.status).toBe(400);
+      expect(videoGenService.planUpscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    it('defaults to lanczos and wraps the plan', async () => {
+      const plan = { id: validHistoryId, method: 'lanczos', scale: 2 };
+      videoGenService.planUpscaleHistoryItem.mockResolvedValue(plan);
+      const r = await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan`);
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, plan });
+      expect(videoGenService.planUpscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'lanczos' });
+    });
+
+    it('forwards the requested method', async () => {
+      videoGenService.planUpscaleHistoryItem.mockResolvedValue({ method: 'ltx' });
+      await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan?method=ltx`);
+      expect(videoGenService.planUpscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'ltx' });
+    });
+
+    it('rejects an unknown method with a 400', async () => {
+      const r = await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan?method=realesrgan`);
+      expect(r.status).toBe(400);
+      expect(videoGenService.planUpscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    // #6502: nothing may be queued or downloaded before the user submits.
+    it('never touches the upscale action', async () => {
+      videoGenService.planUpscaleHistoryItem.mockResolvedValue({ method: 'ltx' });
+      await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan?method=ltx`);
+      expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
     });
   });
 
