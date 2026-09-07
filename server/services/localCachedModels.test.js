@@ -1,91 +1,85 @@
-/**
- * The routing half of the cached-checkpoint refresh hook.
- *
- * The per-runtime probes are pinned in their own managers' suites; what this
- * file guards is the dispatch around them: which providers reach a probe at all,
- * and — the property with a real cost behind it — that a provider belonging to
- * neither runtime never loads either daemon manager. That import is the only
- * reason the hook is a module rather than a direct call, so a regression there
- * is silent and expensive rather than visible.
- */
-
+/** Provider-refresh cache discovery must not load MTPLX lifecycle policy. */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const mtplxProbe = vi.hoisted(() => vi.fn());
-const slotstreamProbe = vi.hoisted(() => vi.fn());
-const loaded = vi.hoisted(() => []);
+const mocks = vi.hoisted(() => ({
+  findCommand: vi.fn(),
+  runtime: vi.fn(),
+  cache: vi.fn(),
+  slotstream: vi.fn(),
+}));
 
+// Fail even on a dynamic import: static import-closure checks cannot see this
+// regression, and merely importing the manager registers its idle daemon.
 vi.mock('./mtplxServerManager.js', () => {
-  loaded.push('mtplx');
-  return { mtplxCachedModelIds: mtplxProbe };
+  throw new Error('MTPLX cache discovery must not import the process manager');
 });
-vi.mock('./slotstreamServerManager.js', () => {
-  loaded.push('slotstream');
-  return { slotstreamCachedModelIds: slotstreamProbe };
-});
+vi.mock('../lib/processEnv.js', () => ({ findCommandOnPath: mocks.findCommand }));
+vi.mock('../lib/mtplxRuntime.js', () => ({ describeMtplxRuntime: mocks.runtime }));
+vi.mock('../lib/mtplxModels.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  listMtplxCachedModels: mocks.cache,
+}));
+vi.mock('./slotstreamServerManager.js', () => ({ slotstreamCachedModelIds: mocks.slotstream }));
 
 import { localCachedModelIds } from './localCachedModels.js';
 
+const local = { id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' };
 beforeEach(() => {
-  loaded.length = 0;
-  mtplxProbe.mockResolvedValue(['Vendor/Example-MTPLX']);
-  slotstreamProbe.mockResolvedValue(['example-4bit']);
+  mocks.findCommand.mockReturnValue('/example/bin/mtplx');
+  mocks.runtime.mockResolvedValue({ ready: true });
+  mocks.cache.mockResolvedValue({ models: [
+    { repo_id: 'Vendor/Example-MTPLX', validation: { ok: true } },
+    { repo_id: 'Vendor/Older-MTPLX' },
+    { repo_id: 'Vendor/Partial-MTPLX', validation: { ok: false } },
+  ], error: null });
+  mocks.slotstream.mockResolvedValue(['example-4bit']);
 });
-
-afterEach(() => {
-  vi.clearAllMocks();
-});
+afterEach(() => vi.clearAllMocks());
 
 describe('localCachedModelIds', () => {
-  // FIRST in the file on purpose. A mock factory runs once per module, so
-  // `loaded` only ever records the very first import of each manager — after any
-  // routing case below has run, this assertion would read empty however the
-  // dispatcher behaved. Its positive control at the end is what proves the
-  // recorder works at all, and it is only available here.
-  it('loads neither daemon manager for a provider of no cached-catalog runtime', async () => {
-    expect(await localCachedModelIds({ id: 'claude-ollama', type: 'cli', ollamaBacked: true, endpoint: 'http://127.0.0.1:11434/v1' })).toBeNull();
-    expect(await localCachedModelIds({ id: 'openai', type: 'api', endpoint: 'https://api.example.com/v1' })).toBeNull();
-    // The whole reason this is a module of lazy loaders rather than a direct
-    // call: an install running neither daemon must not pull their PM2/daemon
-    // subtrees in on an unrelated provider's refresh.
-    expect(loaded).toEqual([]);
-
-    await localCachedModelIds({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' });
-    expect(loaded).toEqual(['mtplx']);
+  it.each([
+    ['the shipped API record', local],
+    ['a marked CLI wrapper', { ...local, id: 'opencode-mtplx', type: 'cli', mtplxBacked: true }],
+    ['a marked TUI wrapper', { ...local, id: 'opencode-mtplx-tui', type: 'tui', mtplxBacked: true }],
+  ])('lists complete checkpoints for %s without importing MTPLX lifecycle policy', async (_label, provider) => {
+    expect(await localCachedModelIds(provider)).toEqual(['Vendor/Example-MTPLX', 'Vendor/Older-MTPLX']);
+    expect(mocks.cache).toHaveBeenCalledOnce();
+    expect(mocks.slotstream).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['the marked OpenCode wrapper', { id: 'opencode-mtplx', type: 'cli', command: 'opencode', mtplxBacked: true, endpoint: 'http://127.0.0.1:8000/v1' }],
-    // The shipped record is a plain OpenAI-compatible endpoint with no vendor
-    // marker, so its id is the only thing left to route on.
-    ['the unmarked API record', { id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' }],
-  ])('routes %s to the MTPLX probe', async (_label, provider) => {
-    expect(await localCachedModelIds(provider)).toEqual(['Vendor/Example-MTPLX']);
-    expect(mtplxProbe).toHaveBeenCalledWith(provider);
-    expect(slotstreamProbe).not.toHaveBeenCalled();
+    ['an unrelated local API on the same port', { ...local, id: 'example-api' }],
+    ['a peer MTPLX', { ...local, endpoint: 'http://192.0.2.10:8000/v1' }],
+    ['a cloud API', { id: 'openai', type: 'api', endpoint: 'https://api.example.com/v1' }],
+  ])('does not inspect local caches for %s', async (_label, provider) => {
+    expect(await localCachedModelIds(provider)).toBeNull();
+    expect(mocks.findCommand).not.toHaveBeenCalled();
+    expect(mocks.cache).not.toHaveBeenCalled();
+    expect(mocks.slotstream).not.toHaveBeenCalled();
   });
 
-  it('routes a Slotstream provider to the Slotstream probe', async () => {
+  it('does not invoke a missing binary or bootstrap a cold runtime during refresh', async () => {
+    mocks.findCommand.mockReturnValueOnce(null);
+    expect(await localCachedModelIds(local)).toBeNull();
+    expect(mocks.runtime).not.toHaveBeenCalled();
+    mocks.runtime.mockResolvedValueOnce({ ready: false });
+    expect(await localCachedModelIds(local)).toBeNull();
+    expect(mocks.cache).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unreadable cache distinct from a successfully read empty cache', async () => {
+    mocks.cache.mockResolvedValueOnce({ models: null, error: 'listing failed' });
+    expect(await localCachedModelIds(local)).toBeNull();
+    mocks.cache.mockResolvedValueOnce({ models: [], error: null });
+    expect(await localCachedModelIds(local)).toEqual([]);
+  });
+
+  it('preserves the Slotstream manager adapter and its refusal result', async () => {
     const provider = { id: 'slotstream', type: 'api', endpoint: 'http://127.0.0.1:5564/v1' };
     expect(await localCachedModelIds(provider)).toEqual(['example-4bit']);
-    expect(mtplxProbe).not.toHaveBeenCalled();
-  });
-
-  // A daemon on a tailnet peer is someone else's process and its checkpoints are
-  // on that machine — answering with THIS host's cache would put models the
-  // provider cannot reach into its catalog.
-  it('refuses a provider pointed at another machine even when it names the runtime', async () => {
-    expect(await localCachedModelIds({ id: 'mtplx', type: 'api', mtplxBacked: true, endpoint: 'http://100.64.0.5:8000/v1' })).toBeNull();
-    expect(mtplxProbe).not.toHaveBeenCalled();
-  });
-
-
-  it('passes a probe’s own refusal straight through', async () => {
-    // `null` from a probe means "read nothing usable" — the toolkit leaves the
-    // endpoint's answer untouched, which is not the same as this router deciding
-    // the provider was never a candidate.
-    mtplxProbe.mockResolvedValue(null);
-    expect(await localCachedModelIds({ id: 'mtplx', type: 'api', endpoint: 'http://127.0.0.1:8000/v1' })).toBeNull();
-    expect(mtplxProbe).toHaveBeenCalled();
+    expect(mocks.slotstream).toHaveBeenCalledWith(provider);
+    mocks.slotstream.mockResolvedValueOnce(null);
+    expect(await localCachedModelIds(provider)).toBeNull();
+    expect(mocks.findCommand).not.toHaveBeenCalled();
   });
 });

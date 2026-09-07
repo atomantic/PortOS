@@ -270,7 +270,7 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // checkpoint — and for Slotstream it pruned the record's other shipped ids.
       // This lets the refresh merge in what is actually on disk; it answers
       // `null` for every other provider, reads a local cache rather than calling
-      // a model, and imports each runtime's manager lazily so neither subtree
+      // a model, and imports each runtime's cache reader lazily so neither subtree
       // reaches the boot closure (see `services/localCachedModels.js`).
       cachedModelIds: localCachedModelIds
     }),
