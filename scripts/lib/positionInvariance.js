@@ -22,9 +22,6 @@
  * generator proves it directly. Use both.
  */
 
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
-
 /**
  * Two comment lines. Prepending them shifts every line number, byte offset,
  * and character index in the file below without altering one token of the
@@ -33,40 +30,8 @@ import { join } from 'node:path';
 const SHIFT_HEADER = '// position-invariance probe: shifts every line and offset below it.\n'
   + '// Nothing a generated manifest describes lives in these two lines.\n';
 
-/** Every file under `dir`, recursively. One `readdir` per directory, no `stat` per entry. */
-export const walkFiles = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-  const path = join(dir, entry.name);
-  return entry.isDirectory() ? walkFiles(path) : [path];
-});
-
 /** Shift the positions in one in-memory source string. */
 export const shiftSourceText = (source) => `${SHIFT_HEADER}${source}`;
-
-/**
- * Shift the positions in every matching file under `root`, in place.
- *
- * Returns the files it rewrote so a caller can assert it actually shifted
- * something — a probe that silently matched no files proves nothing.
- */
-export const shiftSourcePositions = (root, { extensions = ['.js'] } = {}) => {
-  const targets = walkFiles(root).filter((path) => extensions.some((ext) => path.endsWith(ext)));
-  for (const path of targets) writeFileSync(path, shiftSourceText(readFileSync(path, 'utf8')), 'utf8');
-  return targets;
-};
-
-/**
- * Run `generate` against a fixture tree, shift every position in that tree,
- * and run it again — so a caller only has to compare the two results.
- *
- * Taking the generator as a thunk keeps the order right: it is the second
- * result that has to match the first, and building them in the wrong order
- * would quietly pass.
- */
-export const generateAcrossShiftedSources = (root, generate, options) => {
-  const before = generate();
-  const shiftedFiles = shiftSourcePositions(root, options);
-  return { before, after: generate(), shiftedFiles };
-};
 
 /** Explains a position-invariance failure in terms of what it costs. */
 export const POSITION_INVARIANCE_FAILURE = [

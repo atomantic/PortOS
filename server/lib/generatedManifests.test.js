@@ -19,15 +19,18 @@ import { execFileSync } from './childProcess.js';
  * The fix is the same everywhere: identify a record by something intrinsic —
  * the declaring file plus the semantic identity of the thing declared — and
  * keep any positional detail in memory, where a fresh scan can still use it
- * for verification without committing it. `apiRouteCatalog.generated.json`
- * keys declarations as `file#routerId METHOD /path`; `promptStageCallSites`
- * keys them by stage key and lists file paths only.
+ * for verification without committing it. `promptStageCallSites` keys records
+ * by stage key and lists file paths only.
+ *
+ * The better fix is to not commit the manifest at all — see "Generated
+ * manifests" in `server/AGENTS.md` for when a derivation belongs in memory
+ * instead (the HTTP route catalog moved there).
  *
  * This guard is the cheap tree-wide net, and it is deliberately shallow: it
  * matches key NAMES, so it can only catch spellings someone anticipated. A
  * generator proves itself clean with the property test in
  * `scripts/lib/positionInvariance.js` instead — shift every line in its inputs
- * and demand byte-identical output. Both generators here do that; this file
+ * and demand byte-identical output. The generator here does that; this file
  * catches the manifest whose generator never did.
  */
 
@@ -104,7 +107,6 @@ describe('checked-in generated manifests', () => {
     // A regression here means the glob stopped matching and every assertion
     // below started passing vacuously.
     expect(trackedManifests()).toEqual(expect.arrayContaining([
-      'server/lib/apiRouteCatalog.generated.json',
       'server/lib/promptStageCallSites.generated.json',
     ]));
   });
@@ -153,7 +155,7 @@ describe('checked-in generated manifests', () => {
 
   // The two guards above only reach a generator that followed the naming
   // convention and got its property test written. Neither is structural: a
-  // third generator can be added tomorrow with no position-invariance test at
+  // second generator can be added tomorrow with no position-invariance test at
   // all, and nothing fails — the rule would live only in AGENTS.md prose,
   // which is the same "someone has to remember" problem this whole change set
   // exists to delete. This makes adoption structural instead.
@@ -180,7 +182,6 @@ describe('checked-in generated manifests', () => {
     // Guard the guard: if the filter stops matching, the assertion below passes
     // vacuously over an empty list.
     expect(generators).toEqual(expect.arrayContaining([
-      'scripts/generate-api-route-catalog.js',
       'scripts/generate-prompt-stage-call-sites.js',
     ]));
 
@@ -195,9 +196,8 @@ describe('checked-in generated manifests', () => {
 
     expect(missing, [
       'A generator under scripts/ has no position-invariance property test.',
-      'Import generateAcrossShiftedSources (or shiftSourceText, for a generator that',
-      'takes in-memory sources) from scripts/lib/positionInvariance.js in its sibling',
-      '.test.js, regenerate across shifted sources, and assert byte-identical output.',
+      'Import shiftSourceText from scripts/lib/positionInvariance.js in its sibling',
+      '.test.js, regenerate from shifted sources, and assert byte-identical output.',
       'Without it, this generator can start recording line numbers and only the',
       'shallow key-name net above would notice — and only if it guessed the name.',
     ].join(' ')).toEqual([]);
