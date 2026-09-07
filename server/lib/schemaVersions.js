@@ -448,7 +448,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v4: Video drafts must stay inert. Older peers ignore workspace and could
   // start them through the legacy planner; reject transfers until they upgrade.
   // Existing records remain unchanged and need no data rewrite.
-  creativeDirectorProjects: 4,
+  // v5: Video artifact revisions and stale-context tracking. A v4 peer can
+  // edit a shot while preserving the old artifact revision, or replace the
+  // treatment and drop its artifact. Gate that loss until both peers upgrade.
+  creativeDirectorProjects: 5,
   // v1 = Mood boards (PostgreSQL `mood_boards`) federated via the per-record
   // peer-sync push pipeline (record kind `moodBoard`, sync category `moodBoards`,
   // #1564). Same posture as `creativeDirectorProjects` above: a brand-NEW synced

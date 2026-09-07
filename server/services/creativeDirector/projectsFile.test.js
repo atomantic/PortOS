@@ -66,6 +66,85 @@ const project = (id, extra = {}) => ({
 });
 const journalEntries = () => cj.conflictJournalStore().loadAll();
 
+const videoTreatment = () => ({
+  logline: 'A journey through an imaginary garden.',
+  synopsis: 'A visitor follows a trail and returns home.',
+  script: 'The visitor enters. Leaves rustle. The visitor returns home.',
+  scenes: Array.from({ length: 12 }, (_, order) => ({
+    sceneId: `scene-${order}`, order, intent: 'Follow the trail',
+    prompt: 'An imaginary garden path', durationSeconds: 10,
+  })),
+});
+const createVideo = () => file.createProject({
+  name: 'Example short', workspace: 'video', modelId: '', aspectRatio: '16:9', quality: 'draft',
+  targetDurationSeconds: 120, videoDraft: {
+    durationRange: { min: 60, max: 180 },
+    sources: [{ kind: 'universe', id: 'example-universe', revision: 'revision-1' }],
+  },
+});
+
+describe('Video treatment artifacts', () => {
+  it('persists a timed two-minute script and stable identities across revised drafts and reloads', async () => {
+    const p = await createVideo();
+    const treatment = videoTreatment();
+    // Input order need not be playback order; IDs remain the cross-artifact key.
+    treatment.scenes.reverse();
+    await file.setTreatment(p.id, { ...treatment, artifact: { scriptId: 'forged', revision: 99 } });
+    const saved = await file.getProject(p.id);
+    expect(saved.status).toBe('draft');
+    expect(saved.treatment.script).toBe(treatment.script);
+    expect(saved.treatment.artifact).toMatchObject({
+      scriptId: `script-${p.id}`, revision: 1, targetDurationSeconds: 120, stale: false,
+      references: [{ kind: 'universe', id: 'example-universe', revision: 'revision-1', referenceId: 'universe:example-universe' }],
+    });
+    expect(saved.treatment.artifact.shots).toEqual(Array.from({ length: 12 }, (_, i) => ({
+      shotId: `shot-scene-${i}`, sceneId: `scene-${i}`, startSeconds: i * 10, endSeconds: (i + 1) * 10, durationSeconds: 10,
+    })));
+    await file.setTreatment(p.id, { ...treatment, script: 'The visitor takes a different path.' });
+    const revised = (await file.getProject(p.id)).treatment;
+    expect(revised.artifact).toEqual({ ...saved.treatment.artifact, revision: 2 });
+    expect(revised.script).toBe('The visitor takes a different path.');
+  });
+
+  it('rejects ambiguous scene identities, ordering and a mismatched duration without replacing the saved artifact', async () => {
+    const p = await createVideo();
+    await file.setTreatment(p.id, videoTreatment());
+    const saved = await file.getProject(p.id);
+    const duplicateId = videoTreatment();
+    duplicateId.scenes[1].sceneId = duplicateId.scenes[0].sceneId;
+    const duplicateOrder = videoTreatment();
+    duplicateOrder.scenes[1].order = 0;
+    const wrongDuration = videoTreatment();
+    wrongDuration.scenes[0].durationSeconds = 9;
+    const writesBefore = writeCounter.project;
+    await expect(file.setTreatment(p.id, duplicateId)).rejects.toThrow('unique sceneId');
+    await expect(file.setTreatment(p.id, duplicateOrder)).rejects.toThrow('unique sceneId');
+    await expect(file.setTreatment(p.id, wrongDuration)).rejects.toThrow('exact target of 120s');
+    expect(writeCounter.project).toBe(writesBefore);
+    expect(await file.getProject(p.id)).toEqual(saved);
+    await file.updateProject(p.id, { videoDraft: { ...p.videoDraft, sources: [...p.videoDraft.sources, ...p.videoDraft.sources] } });
+    await expect(file.setTreatment(p.id, videoTreatment())).rejects.toThrow('unique kind and id');
+    expect((await file.getProject(p.id)).treatment).toEqual({ ...saved.treatment, artifact: { ...saved.treatment.artifact, stale: true } });
+  });
+
+  it('versions creative shot changes and marks changed draft context stale until a new compilation', async () => {
+    const p = await createVideo();
+    await file.setTreatment(p.id, videoTreatment());
+    await file.updateScene(p.id, 'scene-0', { status: 'rendering' });
+    expect((await file.getProject(p.id)).treatment.artifact.revision).toBe(1);
+    await file.updateScene(p.id, 'scene-0', { prompt: 'An imaginary garden at dusk' });
+    expect((await file.getProject(p.id)).treatment.artifact.revision).toBe(2);
+    await file.updateProject(p.id, { name: 'A new title' });
+    expect((await file.getProject(p.id)).treatment.artifact.stale).toBe(false);
+    const videoDraft = { ...p.videoDraft, sources: [{ kind: 'universe', id: 'example-universe', revision: 'revision-2' }] };
+    await file.updateProject(p.id, { videoDraft });
+    const stale = (await file.getProject(p.id)).treatment.artifact;
+    expect(stale).toMatchObject({ stale: true, revision: 2, references: [{ revision: 'revision-1' }] });
+    await file.setTreatment(p.id, videoTreatment());
+    expect((await file.getProject(p.id)).treatment.artifact).toMatchObject({ stale: false, revision: 3, references: [{ revision: 'revision-2' }] });
+  });
+});
+
 describe('projectsFile federation merge', () => {
   it('bounds Video targets on create and range edits and preserves them across reload', async () => {
     const p = await file.createProject({ name: 'Example short', workspace: 'video', modelId: '', aspectRatio: '16:9', quality: 'draft', targetDurationSeconds: 240, videoDraft: { durationRange: { min: 60, max: 180 } } });

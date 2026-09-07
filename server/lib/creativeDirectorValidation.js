@@ -313,6 +313,8 @@ export const creativeDirectorSceneSchema = z.object({
 export const creativeDirectorTreatmentSchema = z.object({
   logline: z.string().min(1).max(500),
   synopsis: z.string().min(1).max(5000),
+  // Optional standalone script; artifact IDs/revisions/timing are server-owned.
+  script: z.string().trim().min(1).max(50000).optional(),
   scenes: z.array(creativeDirectorSceneSchema).min(1).max(120),
 });
 
