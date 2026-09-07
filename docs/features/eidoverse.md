@@ -378,6 +378,12 @@ in front of an HTTPS-only host certificate that does not cover the hostname
 (loopback `:5553` / some Vite setups), where the iframe falls back to a direct
 `:uiPort` load — scene renders, handshake stays dormant.
 
+**World only / Open Eidoverse alone** opens `/eidoverse/solo` — a chromeless
+PortOS route that mounts the **same** `/eidoverse-host/` iframe fullscreen
+(outside the app sidebar). A top-level Safari tab aimed at `/eidoverse-host/`
+can stick on the renderer splash; staying inside PortOS reuses the proven iframe
+path through a single-port tailcat forward.
+
 Projection protocol and asset preflight target the same runtime. The default
 HTTP library origin is derived from `EIDOVERSE_WS_URL` by mapping `ws`/`wss` to
 `http`/`https` on the same host and port. Deployments whose one Eidoverse runtime

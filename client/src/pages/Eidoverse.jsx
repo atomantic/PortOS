@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  ExternalLink,
+  ArrowLeft,
+  Maximize2,
   Orbit,
   RotateCcw,
   Settings,
   SlidersHorizontal,
   Tags,
 } from 'lucide-react';
-import { Link } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import useEidoverseFrame from '../hooks/useEidoverseFrame';
@@ -169,6 +170,8 @@ function reconcileResetAliases(current, submitted, after, reset, sources) {
 }
 
 export default function Eidoverse() {
+  const { pathname } = useLocation();
+  const solo = pathname.replace(/\/+$/, '') === '/eidoverse/solo';
   const requestGeneration = useRef(0);
   const configDraftRevision = useRef(0);
   const savedDraftRevision = useRef(0);
@@ -506,19 +509,17 @@ export default function Eidoverse() {
           </button>
         </>
       )}
-      {hostUrl && (
-        <a
-          href={hostUrl}
-          target="_blank"
-          rel="noreferrer"
+      {hostUrl && !solo && (
+        <Link
+          to="/eidoverse/solo"
           aria-label="Open Eidoverse without PortOS controls"
-          title="Open Eidoverse in a separate tab without the PortOS page frame"
+          title="Open Eidoverse fullscreen inside PortOS (same iframe path as this page)"
           className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-1.5 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white"
         >
-          <ExternalLink size={15} aria-hidden="true" />
+          <Maximize2 size={15} aria-hidden="true" />
           <span className="hidden md:inline">Open Eidoverse alone</span>
           <span className="md:hidden">World only</span>
-        </a>
+        </Link>
       )}
       {appId && (
         <Link
@@ -540,26 +541,8 @@ export default function Eidoverse() {
     && !FRESH_WORLD_VISIBLE_CHECKPOINTS.has(reconciliation.checkpoint);
   const showLoadingCurtain = !iframeReady || freshWorldLighting;
 
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-port-bg">
-      <EidoverseTravel travelRef={travelRef} beforeDeparture={frame.leaveWorld} enabled={Boolean(hostUrl)} objects={worldState?.projection?.lastSummary?.objects || []}
-        onDestinationsChange={() => {
-          if (projectionStatus === 'running' || draftDirty) return false;
-          if (worldState?.recipe?.includes?.peers !== false) void runProjection().catch(() => {});
-          return true;
-        }} />
-      <PageHeader
-        icon={Orbit}
-        title="Eidoverse Worlds"
-        subtitle="PortOS rendered as a living systems garden"
-        actions={actions}
-        className="bg-port-bg"
-      />
-
-      {appId && phase !== 'setup' && (
-        <EidoverseUpdateBanner appId={appId} onUpdated={prepare} />
-      )}
-
+  const frameStage = (
+    <>
       {phase === 'ready' && (
         <main className="relative min-h-0 flex-1 overflow-hidden bg-port-bg">
           <iframe
@@ -579,7 +562,7 @@ export default function Eidoverse() {
           )}
 
           {projectionError && (
-            <div className="port-media-overlay-strong pointer-events-auto absolute inset-x-3 top-3 z-10 mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-port-error/50 p-3 text-sm text-port-error shadow-xl" role="status">
+            <div className={`port-media-overlay-strong pointer-events-auto absolute inset-x-3 z-10 mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-port-error/50 p-3 text-sm text-port-error shadow-xl ${solo ? 'bottom-3' : 'top-3'}`} role="status">
               <AlertTriangle className="mt-0.5 shrink-0" size={17} aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <p>{projectionError}</p>
@@ -587,7 +570,6 @@ export default function Eidoverse() {
               </div>
             </div>
           )}
-
         </main>
       )}
 
@@ -625,6 +607,54 @@ export default function Eidoverse() {
           </section>
         </div>
       )}
+    </>
+  );
+
+  // Chromeless world-only surface: same hostUrl iframe as the embedded page,
+  // without a top-level navigation to /eidoverse-host/ (Safari stuck-splash).
+  if (solo) {
+    return (
+      <div className="flex h-dvh flex-col bg-port-bg text-white">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-port-border px-4 py-3">
+          <div>
+            <h1 className="font-semibold">Eidoverse · world only</h1>
+            <p className="text-sm text-gray-400">Fullscreen inside PortOS · same renderer path as the Eidoverse page</p>
+          </div>
+          <Link
+            to="/eidoverse"
+            aria-label="Back to Eidoverse controls"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white"
+          >
+            <ArrowLeft size={15} aria-hidden="true" />
+            Controls
+          </Link>
+        </header>
+        {frameStage}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-port-bg">
+      <EidoverseTravel travelRef={travelRef} beforeDeparture={frame.leaveWorld} enabled={Boolean(hostUrl)} objects={worldState?.projection?.lastSummary?.objects || []}
+        onDestinationsChange={() => {
+          if (projectionStatus === 'running' || draftDirty) return false;
+          if (worldState?.recipe?.includes?.peers !== false) void runProjection().catch(() => {});
+          return true;
+        }} />
+      <PageHeader
+        icon={Orbit}
+        title="Eidoverse Worlds"
+        subtitle="PortOS rendered as a living systems garden"
+        actions={actions}
+        className="bg-port-bg"
+      />
+
+      {appId && phase !== 'setup' && (
+        <EidoverseUpdateBanner appId={appId} onUpdated={prepare} />
+      )}
+
+      {frameStage}
 
       <EidoverseWorldDrawer
         open={settingsOpen}

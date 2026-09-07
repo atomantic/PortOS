@@ -163,7 +163,7 @@ describe('Eidoverse hosted page', () => {
     expect(screen.queryByRole('region', { name: 'PortOS district legend' })).not.toBeInTheDocument();
     expect(screen.queryByText('12/48 live signals')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Eidoverse without PortOS controls' }))
-      .toHaveAttribute('href', `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos&name=example-portos-user`);
+      .toHaveAttribute('href', '/eidoverse/solo');
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
     expect(screen.getByRole('link', { name: 'Manage Eidoverse app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
 
@@ -393,6 +393,21 @@ describe('Eidoverse hosted page', () => {
       setup,
       { protocol: 'http:', hostname: 'localhost', host: 'localhost:5553' },
     )).toBe(`http://localhost:${setup.uiPort}/`);
+  });
+
+  it('opens World only as an in-app chromeless route that reuses the same host iframe', async () => {
+    renderPage('/eidoverse/solo');
+
+    const frame = await screen.findByTitle('Eidoverse Worlds');
+    expect(frame).toHaveAttribute(
+      'src',
+      `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos&name=example-portos-user`,
+    );
+    expect(screen.getByRole('heading', { name: 'Eidoverse · world only' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to Eidoverse controls' })).toHaveAttribute('href', '/eidoverse');
+    expect(screen.queryByRole('link', { name: 'Open Eidoverse without PortOS controls' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'World controls' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Your PortOS, made spatial')).not.toBeInTheDocument();
   });
 
   it('keeps a successful local save visible when projection fails', async () => {

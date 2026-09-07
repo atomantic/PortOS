@@ -254,6 +254,9 @@ export default function App() {
     <Suspense fallback={<PageLoader />}>
       <Routes>
         <Route path="/eidoverse/guest" element={<EidoverseGuest />} />
+        {/* Chromeless world-only surface: same iframe hostUrl as /eidoverse, without
+            a Safari top-level navigation to /eidoverse-host/ (stuck splash). */}
+        <Route path="/eidoverse/solo" element={<Eidoverse />} />
         <Route path="/login" element={<Login />} />
         <Route path="/ambient" element={<Ambient />} />
         {/* Hosted audience devices need the full dynamic viewport, without the
