@@ -1461,6 +1461,7 @@ function activityOnDays(sessions, trainingEntries, dayKeys, timezone) {
     completedSession = true;
     for (const task of session.tasks || []) {
       if (task?.type) drillTypes.add(task.type);
+      if (task?.memoryItemId) memoryItemIds.add(task.memoryItemId);
     }
   }
   for (const entry of trainingEntries || []) {

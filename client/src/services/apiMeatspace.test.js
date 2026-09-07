@@ -83,3 +83,16 @@ describe('apiMeatspace double-toast wrappers forward options', () => {
   });
 });
 // @vitest-environment node
+
+
+it('uses the daily mix for every recommendation consumer and falls back on older servers', async () => {
+  const { getPostRecommendations } = await import('./apiMeatspace.js');
+  const legacy = [{ id: 'memory-due:example' }];
+  const daily = [{ id: 'daily:n-back' }];
+  request.mockResolvedValue({ recommendations: legacy, dailyRecommendations: daily });
+  expect((await getPostRecommendations(1)).recommendations).toEqual(daily);
+  request.mockResolvedValue({ recommendations: legacy, dailyRecommendations: [] });
+  expect((await getPostRecommendations()).recommendations).toEqual([]);
+  request.mockResolvedValue({ recommendations: legacy });
+  expect((await getPostRecommendations()).recommendations).toEqual(legacy);
+});

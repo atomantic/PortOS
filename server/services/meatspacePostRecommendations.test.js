@@ -820,3 +820,40 @@ describe('getPostRecommendations drill rotation (issue #5319)', () => {
     expect(recentPractice.memoryItemIds).toContain('elements-song');
   });
 });
+
+
+describe('daily challenge mix', () => {
+  it('keeps a fixed five-challenge set through completion, varies by local day, and needs no mastery history', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-11T12:00:00Z'));
+    state.config = { topics: { memory: { enabled: false }, morse: { enabled: false }, wordplay: { enabled: false }, verbal: { enabled: false }, imagination: { enabled: false } } };
+    const first = (await getPostRecommendations()).dailyRecommendations;
+    expect(first).toHaveLength(5);
+    expect(new Set(first.map(r => r.id)).size).toBe(5);
+    expect((await getPostRecommendations({ limit: 1 })).dailyRecommendations[0]).toEqual(first[0]);
+    for (const rec of first) {
+      state.training.push({ date: '2026-03-11', drillType: rec.drillType });
+    }
+    const done = (await getPostRecommendations()).dailyRecommendations;
+    expect(done.map(r => r.id).sort()).toEqual(first.map(r => r.id).sort());
+    expect(done.every(r => r.practicedToday)).toBe(true);
+    vi.setSystemTime(new Date('2026-03-12T12:00:00Z'));
+    expect((await getPostRecommendations()).dailyRecommendations.map(r => r.id)).not.toEqual(first.map(r => r.id));
+  });
+
+  it('retains a completed memory slot after its review date advances and honors disabled topics', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-11T12:00:00Z'));
+    state.config = { topics: { math: { enabled: false }, cognitive: { enabled: false }, morse: { enabled: false }, wordplay: { enabled: false }, verbal: { enabled: false }, imagination: { enabled: false } } };
+    const first = (await getPostRecommendations()).dailyRecommendations;
+    expect(first).toHaveLength(1);
+    expect(first[0].memoryItemId).toBe('elements-song');
+    state.memoryItems = [{ id: 'elements-song', title: 'Example Elements', content: {}, schedule: { nextReview: '2026-03-15T00:00:00Z' }, mastery: { overallPct: 10 } }];
+    state.training = [{ date: '2026-03-11', memoryItemId: 'elements-song', mode: 'element-flash' }];
+    const done = (await getPostRecommendations()).dailyRecommendations;
+    expect(done[0].id).toBe(first[0].id);
+    expect(done[0].practicedToday).toBe(true);
+    state.config.topics.memory = { enabled: false };
+    expect((await getPostRecommendations()).dailyRecommendations).toEqual([]);
+  });
+});
