@@ -13,6 +13,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import {
   isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
 } from '../../lib/videoReferenceModes.js';
+import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 import { extendLatentFrames } from '../../lib/videoContinuity.js';
 import { videoLoraLayoutIssue } from '../../lib/safetensors.js';
 import { formatLoraEffect, loraEffectIssue } from '../../lib/loraEffect.js';
@@ -330,7 +331,7 @@ export const ltx25TextEncoderArgs = (textEncoder) => {
   return args;
 };
 
-const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile }) => {
+const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, streamingMode }) => {
   assertByovRuntimeInstalled(model.runtime);
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
@@ -454,6 +455,14 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
   // (the same mechanism the upstream `ltx-2-mlx generate --lora` CLI uses).
   if (Array.isArray(loras) && loras.length > 0) {
     args.push('--user-loras', JSON.stringify(loras.map((l) => ({ path: l.path, strength: l.strength }))));
+  }
+  // Block-streaming request (#6499). Emitted ONLY when it is NOT the default —
+  // 'auto' (absence) is the bridge's own default, so an unswapped render's
+  // argv stays byte-identical to one from before this setting existed. The
+  // bridge, not this builder, decides whether the resolved MODE's pinned
+  // pipeline can honor it — see scripts/generate_ltx2.py#resolve_streaming_policy.
+  if (!isDefaultVideoStreamingMode(streamingMode)) {
+    args.push('--streaming-mode', streamingMode);
   }
   // Two-stage T2V experiment passes an explicit stage-2 step count; omitted
   // otherwise so the pipeline keeps its own default.
@@ -1010,7 +1019,7 @@ export const buildMiniMaxH3Ref2vaArgs = ({
   return { bin: process.execPath, args };
 };
 
-export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, ffmpegPath, ffprobePath }) => {
+export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, streamingMode, ffmpegPath, ffprobePath }) => {
   // Reference-mode promise (#4874) — checked HERE rather than inside
   // buildLtx2Args because every runtime reaches this function and only one can
   // honor a loose reference. A wan22/mlx_video/H3 render that fell through to its
@@ -1028,7 +1037,7 @@ export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequire
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (isLtx2FamilyRuntime(model.runtime)) {
-    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile });
+    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, streamingMode });
   }
   // IC-LoRA remix modes are an LTX-2 primitive (ICLoraPipeline) — no other
   // runtime has an equivalent. The route guards this too, but a non-route

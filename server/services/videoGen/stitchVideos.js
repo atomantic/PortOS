@@ -40,6 +40,19 @@ const unanimousDraftDecodeOutcome = (videos) => {
     : {};
 };
 
+// Fold the per-chunk STREAMPOLICY: reports into one claim, or none (#6499).
+// Unanimity is on the `active` verdict — every chunk streamed, or every chunk
+// stayed resident — rather than deep equality, so a peakMb reading that
+// differs slightly between chunks doesn't defeat a chain that otherwise
+// agrees on WHETHER it streamed.
+const unanimousStreamingPolicyOutcome = (videos) => {
+  const first = videos[0]?.streamingPolicyApplied;
+  if (first === undefined) return {};
+  return videos.every((v) => v?.streamingPolicyApplied?.active === first.active)
+    ? { streamingPolicyApplied: first }
+    : {};
+};
+
 export async function stitchVideos(videoIds, opts = {}) {
   const {
     id = randomUUID(),
@@ -249,6 +262,11 @@ export async function stitchVideos(videoIds, opts = {}) {
       // the stitched record could never say the clip was decoded at preview
       // fidelity, and a Remix would quietly revert to Full.
       'draftDecode',
+      // Block-streaming REQUEST (#6499) — same reasoning as draftDecode above:
+      // every chunk is submitted with the same streamingMode, and the chunks
+      // are hidden, so without inheriting it the stitched record could never
+      // show which mode the chain was rendered with.
+      'streamingMode',
     ].flatMap((key) => videos[0][key] === undefined ? [] : [[key, videos[0][key]]])),
     // The draft-decode OUTCOME is decided per child process — the runner falls
     // back to the full decoder on any load failure — so unlike the request
@@ -258,6 +276,7 @@ export async function stitchVideos(videoIds, opts = {}) {
     // over a clip whose later chunks decoded differently would be exactly the
     // false fidelity claim this field exists to prevent.
     ...unanimousDraftDecodeOutcome(videos),
+    ...unanimousStreamingPolicyOutcome(videos),
     // Inherit applied LoRAs from the first constituent clip (a chunk chain
     // shares one LoRA set across all chunks), so the visible stitched entry
     // round-trips LoRAs on Remix the same way a single render does — mirrors

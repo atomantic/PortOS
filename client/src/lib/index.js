@@ -70,6 +70,7 @@ export * from './videoGenResolutions.js';
 export * from './videoGenSubmission.js';
 export * from './videoReferenceModes.js';
 export * from './videoRenderPhase.js';
+export * from './videoStreamingMode.js';
 export * from './videoTilingOptions.js';
 export * from './wrImageDefaults.js';
 

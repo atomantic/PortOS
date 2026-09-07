@@ -8,6 +8,7 @@ import {
   DEFAULT_SPEED_PROFILE_ID,
   STOCK_TEXT_ENCODER_ID,
 } from '../lib/videoGenParams.js';
+import { DEFAULT_VIDEO_STREAMING_MODE } from '../lib/videoStreamingMode.js';
 
 /**
  * Owns the mutable fields and lifecycle refs for the VideoGen form.
@@ -56,6 +57,7 @@ export function useVideoGenFieldState({
   const [textEncoderId, setTextEncoderId] = useState(STOCK_TEXT_ENCODER_ID);
   const [speedProfileId, setSpeedProfileId] = useState(DEFAULT_SPEED_PROFILE_ID);
   const [draftDecode, setDraftDecode] = useState(DEFAULT_DRAFT_DECODE_ID);
+  const [streamingMode, setStreamingMode] = useState(DEFAULT_VIDEO_STREAMING_MODE);
   const [disableAudio, setDisableAudio] = useState(false);
   const [selectedLoras, setSelectedLoras] = useState([]);
   const [noMusic, setNoMusic] = useState(false);
@@ -126,6 +128,7 @@ export function useVideoGenFieldState({
     sizeManuallySetRef,
     speedProfileId, setSpeedProfileId,
     draftDecode, setDraftDecode,
+    streamingMode, setStreamingMode,
     staleModelToastRef,
     steps, setSteps,
     stylePreset, setStylePreset,

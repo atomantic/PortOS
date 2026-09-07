@@ -919,6 +919,11 @@ describe('videoGen routes', () => {
         'textEncoderId',
         'speedProfileId',
         'draftDecode',
+        // Not in the it.each table above: the route deliberately DROPS the
+        // 'auto' default from persisted params, same reason as draftDecode's
+        // full-decode default — the generic round-trip can't cover it. Its
+        // own case is below.
+        'streamingMode',
       ]);
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
@@ -965,6 +970,35 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(400);
     });
 
+    // Same contract for block streaming (#6499): grok has no such knob, so
+    // naming one keeps the render local — and 'auto' (the bridge's own
+    // default) is dropped from persisted params so an unswapped render's job
+    // params stay byte-identical to a request that never sent the field.
+    it('keeps streamingMode on the local path under a grok pin, without persisting the auto value', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', streamingMode: 'auto' });
+      expect(r.status).toBe(200);
+      const [call] = mediaJobQueue.enqueueJob.mock.calls;
+      expect(call[0].params.mode).not.toBe('grok');
+      expect(call[0].params.streamingMode).toBeUndefined();
+    });
+
+    it('persists a non-default streamingMode on the local path', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', streamingMode: 'stream' });
+      expect(r.status).toBe(200);
+      const [call] = mediaJobQueue.enqueueJob.mock.calls;
+      expect(call[0].params.streamingMode).toBe('stream');
+    });
+
+    // A closed enum — the render bridge, not this route, decides whether the
+    // resolved mode's pinned pipeline can honor 'stream' (#6499).
+    it.each(['fast', 'STREAM', ''])('rejects the streamingMode value %p', async (streamingMode) => {
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', streamingMode });
+      expect(r.status).toBe(400);
+    });
 
     it('keeps textEncoderId on the local path under a grok pin, without persisting the stock value', async () => {
       const { getSettings } = await import('../services/settings.js');

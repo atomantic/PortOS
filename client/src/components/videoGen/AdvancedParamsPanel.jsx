@@ -18,6 +18,7 @@ import {
 } from '../../lib/videoGenParams.js';
 import { VIDEO_TILING_OPTIONS } from '../../lib/videoTilingOptions';
 import { isLtx2FamilyRuntime } from '../../lib/runnerFamilies';
+import { DEFAULT_VIDEO_STREAMING_MODE, VIDEO_STREAMING_MODE_OPTIONS } from '../../lib/videoStreamingMode.js';
 import {
   I2V_REFERENCE_MODE_OPTIONS, DEFAULT_I2V_REFERENCE_MODE,
   normalizeI2vReferenceMode, runtimeSupportsI2vReferenceMode,
@@ -39,6 +40,7 @@ export default function AdvancedParamsPanel({
   guidanceScale, onGuidanceScaleChange,
   speedProfileId = DEFAULT_SPEED_PROFILE_ID, onSpeedProfileChange,
   draftDecode = DEFAULT_DRAFT_DECODE_ID, onDraftDecodeChange, draftDecodeLocked = false,
+  streamingMode = DEFAULT_VIDEO_STREAMING_MODE, onStreamingModeChange,
   imageStrength, onImageStrengthChange,
   i2vReferenceMode = DEFAULT_I2V_REFERENCE_MODE, onI2vReferenceModeChange,
   effectiveImageStrength = null,
@@ -318,6 +320,28 @@ export default function AdvancedParamsPanel({
                         : ''}
                     </>
                   )}
+              </p>
+            </FormField>
+          )}
+
+          {/* Block streaming (#6499) — LTX-2/2.5 MLX only, every other runtime
+              ignores the flag by construction. Auto initially streams on a
+              tight-memory machine; the render bridge inspects the pinned
+              pipeline and this machine's physical RAM, so the client offers no
+              per-model capability table for it. */}
+          {isLtx2FamilyRuntime(currentModel?.runtime) && (
+            <FormField label="Memory" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+              <select
+                value={streamingMode}
+                onChange={(e) => onStreamingModeChange?.(e.target.value)}
+                className={inputCls}
+              >
+                {VIDEO_STREAMING_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                {VIDEO_STREAMING_MODE_OPTIONS.find((o) => o.value === streamingMode)?.description || ''}
               </p>
             </FormField>
           )}

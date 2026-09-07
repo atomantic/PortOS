@@ -687,6 +687,48 @@ describe('stitchVideos — history provenance', () => {
       expect(stitched).not.toHaveProperty('draftDecodeApplied');
     });
   });
+
+  // Block streaming (#6499). Same shape as draft-decode above: the REQUEST is
+  // chain-wide (every chunk is submitted with the same streamingMode), but the
+  // OUTCOME is decided per child process — a mode that streamed on one chunk's
+  // machine state and stayed resident on another's would misreport the clip.
+  describe('streaming-policy outcome', () => {
+    const applied = (active) => ({
+      streamingMode: 'stream',
+      streamingPolicyApplied: { pipeline: 'one-stage', requestedMode: 'stream', active, supports: true, reason: null },
+    });
+
+    it('inherits the request and a unanimous outcome', async () => {
+      const stitched = await stitchHistory(applied(true), applied(true));
+
+      expect(stitched.streamingMode).toBe('stream');
+      expect(stitched.streamingPolicyApplied).toEqual(applied(true).streamingPolicyApplied);
+    });
+
+    it('inherits a unanimous resident outcome even when peakMb readings differ', async () => {
+      const stitched = await stitchHistory(
+        { ...applied(true), streamingPolicyApplied: { ...applied(true).streamingPolicyApplied, peakMb: 400 } },
+        { ...applied(true), streamingPolicyApplied: { ...applied(true).streamingPolicyApplied, peakMb: 420 } },
+      );
+
+      // Unanimity is on the `active` verdict, not deep equality.
+      expect(stitched.streamingPolicyApplied.active).toBe(true);
+    });
+
+    it('keeps the request but omits the outcome when the chunks disagree', async () => {
+      const stitched = await stitchHistory(applied(true), applied(false));
+
+      expect(stitched.streamingMode).toBe('stream');
+      expect(stitched).not.toHaveProperty('streamingPolicyApplied');
+    });
+
+    it('stamps no outcome on a chain that never reported one', async () => {
+      const stitched = await stitchHistory({ streamingMode: 'stream' }, { streamingMode: 'stream' });
+
+      expect(stitched.streamingMode).toBe('stream');
+      expect(stitched).not.toHaveProperty('streamingPolicyApplied');
+    });
+  });
 });
 
 describe('extractLastFrame — anchor selection', () => {
@@ -5545,6 +5587,90 @@ describe('generateVideo — LTX-2.5 speed profile (#4875)', () => {
     it('stamps nothing when the profile was declined', async () => {
       const meta = await metaFor('sp-meta-declined', { speedProfileId: 'turbo' });
       expect(meta.speedProfileId).toBeUndefined();
+    });
+  });
+});
+
+// #6499 — block streaming for the LTX-2/2.5 MLX runtimes. Three things must
+// hold end to end: a non-default request reaches the helper argv; the
+// default ('auto', which is also absence) leaves argv byte-identical to a
+// render from before this setting existed; and history stamps the REQUESTED
+// mode the same way speedProfileId/draftDecode do.
+describe('generateVideo — LTX-2/2.5 block streaming (#6499)', () => {
+  const renderArgs = async ({ jobId, modelId = 'ltx25_mlx_q8', ...rest }) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    await generateVideo({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId,
+      prompt: 'a quiet street at dusk',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      ...rest,
+    });
+    const call = spawnMock.mock.calls.find(
+      ([bin, args]) => (isLtx25Python(bin) || isLtx2Python(bin))
+        && Array.isArray(args) && args.includes('--mode'),
+    );
+    expect(call).toBeTruthy();
+    return call[1];
+  };
+
+  it('threads an explicit request into the helper argv', async () => {
+    const args = await renderArgs({ jobId: 'stream-explicit', mode: 'text', streamingMode: 'stream' });
+    expect(args[args.indexOf('--streaming-mode') + 1]).toBe('stream');
+  });
+
+  it('threads an explicit resident request too — not just the non-default "stream" value', async () => {
+    const args = await renderArgs({ jobId: 'stream-resident', mode: 'text', streamingMode: 'resident' });
+    expect(args[args.indexOf('--streaming-mode') + 1]).toBe('resident');
+  });
+
+  // DEFAULT PRESERVATION: 'auto' (and absence) is the bridge's own default.
+  it.each([
+    ['omitted', 'omitted', undefined],
+    ['the explicit default mode', 'explicit', 'auto'],
+  ])('leaves a render with %s byte-identical to the pre-feature argv', async (_name, label, streamingMode) => {
+    const strip = (a) => a.map((v) => String(v).replace(/stream-[a-z-]+\.mp4$/, '<job>.mp4'));
+    const baseline = strip(await renderArgs({ jobId: `stream-base-${label}`, mode: 'text', seed: 7 }));
+    const args = strip(await renderArgs({ jobId: `stream-default-${label}`, mode: 'text', seed: 7, streamingMode }));
+    expect(args).toEqual(baseline);
+    expect(args).not.toContain('--streaming-mode');
+  });
+
+  describe('history metadata', () => {
+    const metaFor = async (jobId, extra) => {
+      let started = null;
+      const onStarted = (e) => { if (e.generationId === jobId) started = e; };
+      videoGenEvents.on('started', onStarted);
+      await generateVideo({
+        jobId,
+        pythonPath: '/usr/bin/python3',
+        modelId: 'ltx25_mlx_q8',
+        prompt: 'a quiet street at dusk',
+        width: 512, height: 512, numFrames: 25, fps: 24,
+        mode: 'text',
+        ...extra,
+      });
+      videoGenEvents.off('started', onStarted);
+      expect(started).toBeTruthy();
+      return started;
+    };
+
+    it('stamps the REQUESTED mode', async () => {
+      const meta = await metaFor('stream-meta-explicit', { streamingMode: 'stream' });
+      expect(meta.streamingMode).toBe('stream');
+    });
+
+    it('stamps nothing on a default render', async () => {
+      const meta = await metaFor('stream-meta-default', {});
+      expect(meta.streamingMode).toBeUndefined();
+    });
+
+    it('stamps nothing for the explicit default mode either', async () => {
+      const meta = await metaFor('stream-meta-auto', { streamingMode: 'auto' });
+      expect(meta.streamingMode).toBeUndefined();
     });
   });
 });

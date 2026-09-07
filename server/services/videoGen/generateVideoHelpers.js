@@ -196,6 +196,27 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
         return false;
       }
     }
+    // What the runner ACTUALLY resolved for block streaming (STREAMPOLICY:<json>
+    // — see scripts/generate_ltx2.py#resolve_streaming_policy /
+    // report_streaming_policy). `meta.streamingMode` on the history record is
+    // the REQUEST; this is the outcome — whether the pinned pipeline even had
+    // the parameter, whether physical memory put 'auto' over the streaming
+    // threshold, and (when active) the render's peak MLX memory, so a claim
+    // that a smaller machine can now render a given model is backed by a
+    // number from an actual render. Stamped on the job so finalizeGeneratedVideo
+    // persists it.
+    if (line.startsWith('STREAMPOLICY:')) {
+      try {
+        const applied = JSON.parse(line.slice('STREAMPOLICY:'.length));
+        job.streamingPolicy = applied;
+        console.log(`📦 block streaming [${jobId.slice(0, 8)}] ${applied?.pipeline || '?'} — ${applied?.active ? `streaming${applied?.peakMb != null ? ` (peak ${applied.peakMb} MB)` : ''}` : `resident${applied?.reason ? ` (${applied.reason})` : ''}`}`);
+        return true;
+      } catch {
+        // Malformed payload — fall through to raw-logging so the broken line
+        // is visible rather than silently swallowed (same as RUNTIME: above).
+        return false;
+      }
+    }
     // Heartbeat for the queue's idle watchdog (see imageGen/local.js).
     videoGenEvents.emit('activity', { generationId: jobId });
     if (line.startsWith('STATUS:')) {
@@ -744,6 +765,12 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
       // reads back as a full decode instead of claiming a draft one. Absent on
       // every full-decode render and on runners that don't report one.
       ...(job.draftDecode ? { draftDecodeApplied: job.draftDecode } : {}),
+      // What block streaming actually resolved to at render time (#6499).
+      // `meta.streamingMode` above is the REQUEST; this is the outcome —
+      // whether the pinned pipeline had the parameter, the RAM-based 'auto'
+      // decision, and (when active) the render's peak MLX memory. Absent on
+      // a resident-by-default render and on runners that don't report one.
+      ...(job.streamingPolicy ? { streamingPolicyApplied: job.streamingPolicy } : {}),
     });
     return history;
   });
