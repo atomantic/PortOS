@@ -11,6 +11,14 @@ import { EIDOVERSE_PORT } from './eidoverse.js';
 const BAD_GATEWAY_BODY = 'Eidoverse Worlds is not running.';
 const HOST_DESCRIPTOR_PATH = '/host';
 const EMBED_CONFIG_PATH = '/embed-config';
+
+// Where a conflicting listener would sit. A local squatter almost always claims
+// loopback — Docker publishes to 127.0.0.1, dev servers bind localhost — and
+// loopback is also the address this bridge's own traffic arrives on when the
+// page is opened from the host itself. The probe stays short because it runs on
+// the startup path, before this bridge will accept anything.
+const CONFLICT_PROBE_HOST = '127.0.0.1';
+const CONFLICT_PROBE_TIMEOUT_MS = 300;
 const FORWARDED_HEADER_NAMES = new Set(['host', 'x-forwarded-host', 'x-forwarded-proto']);
 
 const targetAuthority = (host, port) => `${host}:${port}`;
@@ -266,7 +274,7 @@ export function createEidoverseHost({
     // collide with — and it is not a connectable address to probe.
     if (!listenPort) return false;
 
-    return isPortReachable({ host: '127.0.0.1', port: listenPort, timeoutMs: 300 });
+    return isPortReachable({ host: CONFLICT_PROBE_HOST, port: listenPort, timeoutMs: CONFLICT_PROBE_TIMEOUT_MS });
   };
 
   const openListener = async () => {

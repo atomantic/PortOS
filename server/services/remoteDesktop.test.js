@@ -38,6 +38,19 @@ describe('remote desktop broker', () => {
     expect(broker.hasSession('not-a-session-token')).toBe(false);
   });
 
+  it('probes reachability through the injected probeFn, at the timeout this caller sets', async () => {
+    // The probe and the VNC data socket are two separate seams (#6451). A refactor
+    // that folds them together drops one of them silently: the bridge keeps
+    // working while reachability stops being injectable, or vice versa. Pin the
+    // probe seam here — including the 750ms budget, which is deliberately NOT the
+    // 500ms isPortReachable default nor the eidoverse bridge's 300ms.
+    const probeFn = vi.fn().mockResolvedValue(false);
+    const broker = createRemoteDesktopBroker({ port: 5900, probeFn });
+
+    await expect(broker.createSession()).rejects.toMatchObject({ code: 'VNC_NOT_CONFIGURED' });
+    expect(probeFn).toHaveBeenCalledWith({ host: '127.0.0.1', port: 5900, timeoutMs: 750 });
+  });
+
   it('refuses sessions when no loopback VNC server is listening', async () => {
     const temporaryServer = createServer();
     await new Promise((resolve) => temporaryServer.listen(0, '127.0.0.1', resolve));
