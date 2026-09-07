@@ -141,7 +141,13 @@ export default function ProviderCard({
   const optional = cardState.state === PROVIDER_CARD_STATE.DISABLED;
   const codexSubscription = isCodexSubscriptionProvider(provider);
   const subscriptionAccountReady = !codexSubscription || codexAccount?.status === 'ready';
-  const subscriptionReady = !codexSubscription || (subscriptionAccountReady && provider.textTransportEnabled === true);
+  // ChatGPT account readiness applies to both Codex modes, but the explicit
+  // text-transport consent only applies to the CLI's app-server path. The TUI
+  // is an interactive PTY launch and must remain selectable before generic
+  // text calls have been opted in.
+  const codexModeReady = (mode) => !isCodexSubscriptionProvider(mode)
+    || (subscriptionAccountReady && (isTuiProvider(mode) || mode.textTransportEnabled === true));
+  const subscriptionReady = codexModeReady(provider);
   return (
     <div
       className={`@container bg-port-card border border-l-4 rounded-xl p-4 ${style.border} ${style.dim || ''} ${
@@ -311,7 +317,7 @@ export default function ProviderCard({
               {provider.enabled && (
                 <button
                   onClick={() => onSetActive(mode.id)}
-                  disabled={mode.id === activeProviderId || (isCodexSubscriptionProvider(mode) && (!subscriptionAccountReady || mode.textTransportEnabled !== true))}
+                  disabled={mode.id === activeProviderId || !codexModeReady(mode)}
                   className="px-3 py-1.5 text-sm bg-port-accent/20 text-port-accent rounded disabled:opacity-50"
                 >
                   {mode.id === activeProviderId ? `${mode.type.toUpperCase()} default` : `Set ${mode.type.toUpperCase()} default`}

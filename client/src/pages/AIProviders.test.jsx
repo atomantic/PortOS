@@ -145,7 +145,7 @@ describe('AIProviders page load error handling', () => {
     await waitFor(() => expect(api.setActiveProvider).toHaveBeenLastCalledWith('example'));
   });
 
-  it('gates each unified Codex default on that mode’s own transport consent', async () => {
+  it('gates the CLI default on transport consent but leaves the TUI default selectable', async () => {
     const executionModes = [{ id: 'codex', type: 'cli' }, { id: 'codex-tui', type: 'tui' }];
     api.getCodexAccount.mockResolvedValue({ readiness: { status: 'ready' } });
     api.getCodexModels.mockResolvedValue({ models: null });
@@ -155,7 +155,9 @@ describe('AIProviders page load error handling', () => {
     ] });
     renderPage();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Set CLI default' })).toBeEnabled());
-    expect(screen.getByRole('button', { name: 'Set TUI default' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Set TUI default' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Set TUI default' }));
+    await waitFor(() => expect(api.setActiveProvider).toHaveBeenCalledWith('codex-tui'));
   });
 
   it('offers an install button on the card of a provider whose CLI is missing', async () => {
