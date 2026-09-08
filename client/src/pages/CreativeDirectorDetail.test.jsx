@@ -118,6 +118,21 @@ describe('Video saved artifacts', () => {
     vi.clearAllMocks();
     cdApi.getCreativeDirectorProject.mockResolvedValue(videoProject);
   });
+  it('restores a historical script from its URL without exposing current shot actions', async () => {
+    const user = userEvent.setup();
+    const previous = { ...videoProject.treatment, script: 'The original script.', artifact: { ...videoProject.treatment.artifact, revision: 1 } };
+    cdApi.getCreativeDirectorProject.mockResolvedValue({ ...videoProject, treatment: { ...videoProject.treatment, history: [previous] } });
+    const page = renderVideo('artifacts?revision=1');
+    expect(await screen.findByText('The original script.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'shot-arrival' })).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('View revision'), '');
+    expect(screen.getByText(/Example script/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'shot-arrival' })).toBeInTheDocument();
+    page.unmount();
+    renderVideo('artifacts?revision=999');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Revision not found');
+    expect(cdApi.startCreativeDirectorProject).not.toHaveBeenCalled();
+  });
   it('opens artifacts from Video navigation and restores the saved revision on a fresh deep link', async () => {
     const user = userEvent.setup();
     const page = renderVideo('overview');
@@ -151,7 +166,7 @@ describe('Video saved artifacts', () => {
     });
     renderVideo();
     await screen.findByText(/This artifact is out of date/);
-    expect(screen.getByRole('status')).toHaveTextContent('This artifact is out of date');
+    expect(screen.getByText(/This artifact is out of date/)).toHaveAttribute('role', 'status');
     expect(screen.getByText('Revision 2 · 120 seconds · 16:9')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Review the current draft' })).toHaveAttribute('href', '/video/cd-example/overview');
     expect(screen.getAllByText(/Scene missing/)).toHaveLength(20);
