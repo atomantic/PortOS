@@ -502,9 +502,10 @@ export default function Eidoverse() {
             aria-pressed={frame.labelVisibility !== 'off'}
             onClick={() => frame.changeLabelVisibility(frame.labelVisibility === 'off' ? 'nearby' : 'off')}
             title="Toggle object labels for this visit"
-            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent hover:text-white aria-pressed:border-port-accent aria-pressed:text-port-accent"
+            className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center gap-1.5 rounded-lg border border-port-border px-2 sm:px-3 text-sm text-gray-200 hover:border-port-accent hover:text-white aria-pressed:border-port-accent aria-pressed:text-port-accent"
           >
-            <Tags size={16} aria-hidden="true" />Labels
+            <Tags size={16} aria-hidden="true" />
+            <span className="hidden sm:inline">Labels</span>
           </button>
           <button
             type="button"
@@ -520,7 +521,7 @@ export default function Eidoverse() {
             type="button"
             aria-label="World controls"
             onClick={() => setSettingsOpen(true)}
-            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-port-accent px-3 py-1.5 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg bg-port-accent px-2 sm:px-3 py-1.5 text-sm font-semibold text-black transition-opacity hover:opacity-90"
           >
             <SlidersHorizontal size={15} aria-hidden="true" />
             <span aria-hidden="true" className="sm:hidden">Controls</span>
@@ -533,11 +534,11 @@ export default function Eidoverse() {
           to="/eidoverse/solo"
           aria-label="Open Eidoverse without PortOS controls"
           title="Open Eidoverse fullscreen inside PortOS (same iframe path as this page)"
-          className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-1.5 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white"
+          className="inline-flex min-h-[40px] min-w-[40px] items-center justify-center gap-1.5 rounded-lg border border-port-border px-2 sm:px-3 py-1.5 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white"
         >
           <Maximize2 size={15} aria-hidden="true" />
           <span className="hidden md:inline">Open Eidoverse alone</span>
-          <span className="md:hidden">World only</span>
+          <span className="hidden sm:inline md:hidden">World only</span>
         </Link>
       )}
       {appId && (

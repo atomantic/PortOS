@@ -53,15 +53,16 @@ export default function EidoverseTravel({ travelRef, enabled, objects = [], onDe
     travelRef.current = depart;
     return () => { travelRef.current = null; };
   }, [depart, travelRef]);
-  if (!enabled) return null;
+  if (!enabled || (!destinations.length && !error)) return null;
   return <div className="flex flex-wrap items-center gap-2 border-b border-port-border px-4 py-2 text-sm">
-    <span className="text-gray-400">Federation Terminal · Use a pod in-world or choose a destination</span>
+    {Boolean(destinations.length) && (
+      <span className="text-gray-400">Federation Terminal · Use a pod in-world or choose a destination</span>
+    )}
     {destinations.map((destination) => <button key={destination.peerId} type="button" disabled={Boolean(pending)}
       onClick={() => depart(destination.peerId)} className="min-h-10 rounded-lg border border-port-border px-3 hover:border-port-accent disabled:opacity-50">
       {pending === destination.peerId ? 'Opening guest visit…' : destination.label}
       <span className="ml-2 text-xs text-gray-400">{objects.find((object) => object.travelPeerId === destination.peerId)?.name}</span>
     </button>)}
-    {!destinations.length && <span className="text-gray-500">No connected guest worlds available</span>}
     {error && <p role="alert" className="text-red-400">{error}</p>}
   </div>;
 }
