@@ -88,6 +88,20 @@ Separate from snapshot restore: `server/routes/database.js` can copy data **betw
 - **The registration tracks settings — no restart needed.** `syncBackupSchedule()` runs at boot *and* on every settings save (subscribed to `settingsEvents`' `settings:updated`), so enabling backups or setting `destPath` when scheduling was previously inactive registers the cron immediately, editing `cronExpression` re-registers it, and disabling backups (or clearing `destPath`) cancels it. A save that doesn't change the registration inputs (cron expression, timezone, active/inactive) is a no-op — `destPath` and the exclude lists are re-read by the handler per run, so changing them never churns the registration.
 - `GET /api/backup/status` surfaces the persisted state including the last `pgBackup` outcome, so the Backup settings tab shows whether the last DB dump succeeded, its size, and table count.
 
+### Omitted schedule fields
+
+The backup settings slice is stored **sparsely** — an install where the user only ever typed a destination has no `enabled` and no `cronExpression` on disk. `server/lib/backupConfig.js` is the single module that says what those omissions mean, and every consumer resolves through it:
+
+| Stored | Effective |
+| --- | --- |
+| `enabled` absent | **enabled** — an omitted toggle has never meant "off" on the server, and changing that would silently stop nightly backups on existing installs |
+| `cronExpression` absent or blank | `0 0 * * *` (midnight, in the user's timezone) |
+| `destPath` absent or blank | **nothing is scheduled**, whatever `enabled` says |
+
+`GET /api/settings` projects these effective values over the stored slice, so the Backup settings tab renders exactly what the scheduler will do. **The client owns no fallback of its own** — it used to read the same sparse config as "disabled at 02:00" while the scheduler read it as "enabled at midnight", so saving an unrelated preference wrote that misreading back and cancelled a live schedule (#6632). If a settings response ever arrives without a resolved schedule the tab shows a load error instead of a form, rather than saving invented values.
+
+This is **read-time resolution only**: nothing on disk changes, sparse configurations stay valid, and older clients can keep submitting the same partial shape.
+
 ## See also
 
 - [Storage Classification Contract](./STORAGE.md) — which data lives in Postgres vs files (and therefore which half of a snapshot captures it).

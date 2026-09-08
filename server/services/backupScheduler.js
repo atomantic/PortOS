@@ -12,9 +12,9 @@ import { schedule, cancel } from './eventScheduler.js';
 import { getSettings, settingsEvents } from './settings.js';
 import { runBackup } from './backup.js';
 import { getUserTimezone } from './userTimezone.js';
+import { resolveBackupConfig } from '../lib/backupConfig.js';
 
 const EVENT_ID = 'backup-daily';
-const DEFAULT_CRON = '0 0 * * *';
 
 // Registration state, so an unrelated settings save is a cheap no-op and a
 // cancel only fires when a cron is actually registered.
@@ -26,10 +26,9 @@ let lastSignature = null;
  * should be inactive (explicitly disabled, or no destination configured).
  */
 function registrationInputs(settings) {
-  const backup = settings?.backup;
-  if (backup?.enabled === false) return null;
-  if (!backup?.destPath) return null;
-  return { cron: backup.cronExpression || DEFAULT_CRON };
+  const effective = resolveBackupConfig(settings?.backup);
+  if (!effective.scheduled) return null;
+  return { cron: effective.cronExpression };
 }
 
 /**
@@ -82,19 +81,19 @@ export async function syncBackupSchedule(settings) {
       timezone,
       handler: async () => {
         const fresh = await getSettings();
-        if (fresh.backup?.enabled === false) {
+        const effective = resolveBackupConfig(fresh.backup);
+        if (!effective.enabled) {
           console.log('💾 Backup scheduler: disabled since registration — skipping run');
           return;
         }
-        const destPath = fresh.backup?.destPath;
-        if (!destPath) {
+        if (!effective.destPath) {
           console.log('💾 Backup scheduler: destPath cleared since registration — skipping run');
           return;
         }
         const excludePaths = fresh.backup?.excludePaths || [];
         const disabledDefaultExcludes = fresh.backup?.disabledDefaultExcludes || [];
         console.log('💾 Backup scheduler: running scheduled backup');
-        await runBackup(destPath, null, { excludePaths, disabledDefaultExcludes });
+        await runBackup(effective.destPath, null, { excludePaths, disabledDefaultExcludes });
       },
       metadata: { source: 'backupScheduler' }
     });
