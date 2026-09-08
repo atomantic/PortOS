@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { uuidv4 } from '../../../../lib/uuid';
 import { Link } from 'react-router';
 import ProviderModelSelector from '../../../ProviderModelSelector';
 import * as api from '../../../../services/api';
@@ -27,7 +28,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
     setMessage('Saving maintenance sequence…');
     // Each invocation gets fresh completion keys. Pins apply to the audits AND
     // their claim drains; the scheduled tasks' saved settings remain intact.
-    const steps = maintenanceSequence(groups, appId, `maintenance-${crypto.randomUUID()}`).map(job => ({
+    const steps = maintenanceSequence(groups, appId, `maintenance-${uuidv4()}`).map(job => ({
       ...job,
       overrides: { ...job.overrides, providerId, model, effort: effort || null },
     }));
