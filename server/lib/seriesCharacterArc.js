@@ -22,6 +22,7 @@
  *     startState,        // who they are at the opening
  *     endState,          // who they are at the close
  *     transitions: [{ id, atIssue, atSceneAnchor, label, kind, note }],
+ *     evolution,         // the optional five-stage lens, absent when unset (#6440)
  *     status,            // 'draft' | 'verified'
  *   }
  *
@@ -29,10 +30,26 @@
  *
  * Used by `services/pipeline/series.js` (sanitize on load/save) and the
  * `arc.transitions` editorial check in `lib/editorial/checkRegistry.js`.
+ *
+ * A pure leaf: the browser bundle imports `CHARACTER_ARC_LIMITS`,
+ * `TRANSITION_KINDS` and `TRANSITION_KIND_LABELS` from here (the arc editor in
+ * `PipelineSeries.jsx` caps its inputs at the numbers the PATCH route enforces),
+ * so this module must reach no Node built-in — ids come from `uuid.js`, which
+ * reads the global WebCrypto (the browser never mints one) — and
+ * `scripts/client-server-import-purity.test.js` walks its import graph.
  */
 
-import { randomUUID } from 'crypto';
-import { isStr, trimTo, trimToClause } from './storyBible.js';
+import { BIBLE_LIMITS } from './bibleLimits.js';
+import { v4 as randomUUID } from './uuid.js';
+import {
+  characterIdentityKey,
+  isCanonCharacterId,
+  isStoryBeatId,
+  optIssueNumber,
+  renderCharacterEvolutionListForPrompt,
+  sanitizeCharacterEvolution,
+} from './characterEvolution.js';
+import { trimTo, trimToClause } from './textUtils.js';
 
 export const CHARACTER_ARC_LIMITS = Object.freeze({
   CHARACTER_NAME_MAX: 200,
@@ -44,7 +61,10 @@ export const CHARACTER_ARC_LIMITS = Object.freeze({
   TRANSITION_NOTE_MAX: 1000,
   TRANSITION_ANCHOR_MAX: 300,
   TRANSITIONS_PER_ARC_MAX: 40,
-  ISSUE_MAX: 9999,
+  // Shared with the evolution lens's own issue anchor, so the two anchor
+  // vocabularies cannot drift apart (`characterEvolution.js` reads the same
+  // constant).
+  ISSUE_MAX: BIBLE_LIMITS.STORY_ISSUE_NUMBER_MAX,
   ARCS_PER_SERIES_MAX: 60,
 });
 
@@ -63,17 +83,25 @@ export const TRANSITION_KINDS = Object.freeze([
   'sacrifice',
 ]);
 
-const CHARACTER_ID_RE = /^chr-[a-zA-Z0-9-]+$/;
+// How each kind reads in the arc editor's picker — beside the ids it labels, the
+// way `characterEvolution.js` keeps `EVOLUTION_STAGE_LABELS`; the test pins one
+// label per kind so a new kind cannot reach the picker unlabeled.
+export const TRANSITION_KIND_LABELS = Object.freeze({
+  decision: 'Decision',
+  realization: 'Realization',
+  'point-of-no-return': 'Point of no return',
+  relapse: 'Relapse',
+  sacrifice: 'Sacrifice',
+});
+
 const TRANSITION_ID_PREFIX = 'trn-';
-const TRANSITION_ID_RE = /^trn-[a-zA-Z0-9-]+$/;
 
+// The canon id shapes, the issue clamp and the identity key are shared with the
+// evolution lens (`characterEvolution.js`, which this module already imports)
+// so the two per-character story lists cannot drift on what counts as a valid
+// pointer or as the same character.
 const ensureTransitionId = (raw) =>
-  (isStr(raw) && TRANSITION_ID_RE.test(raw) ? raw : `${TRANSITION_ID_PREFIX}${randomUUID()}`);
-
-// Optional non-negative integer (e.g. an issue number). Absent / non-finite →
-// null so the caller can distinguish "no issue pinned" from issue 0.
-const optInt = (raw, max) =>
-  (Number.isFinite(raw) ? Math.max(0, Math.min(max, Math.floor(raw))) : null);
+  (isStoryBeatId(raw) ? raw : `${TRANSITION_ID_PREFIX}${randomUUID()}`);
 
 /**
  * Sanitize one transition beat. Returns `null` when it carries no identifying
@@ -100,7 +128,7 @@ export function sanitizeTransition(raw) {
     id: ensureTransitionId(raw.id),
     kind,
     label,
-    atIssue: optInt(raw.atIssue, CHARACTER_ARC_LIMITS.ISSUE_MAX),
+    atIssue: optIssueNumber(raw.atIssue, CHARACTER_ARC_LIMITS.ISSUE_MAX),
     atSceneAnchor: trimTo(raw.atSceneAnchor, CHARACTER_ARC_LIMITS.TRANSITION_ANCHOR_MAX),
     note,
   };
@@ -127,7 +155,7 @@ function cleanTransitions(rawList) {
  */
 export function sanitizeCharacterArc(raw) {
   if (!raw || typeof raw !== 'object') return null;
-  const characterId = isStr(raw.characterId) && CHARACTER_ID_RE.test(raw.characterId) ? raw.characterId : '';
+  const characterId = isCanonCharacterId(raw.characterId) ? raw.characterId : '';
   const characterName = trimTo(raw.characterName, CHARACTER_ARC_LIMITS.CHARACTER_NAME_MAX);
   // want/need/startState/endState are LLM-authored prose rendered back into the
   // verify + resolve prompts — boundary-aware caps for the same reason as the
@@ -138,13 +166,23 @@ export function sanitizeCharacterArc(raw) {
   const startState = trimToClause(raw.startState, CHARACTER_ARC_LIMITS.START_STATE_MAX);
   const endState = trimToClause(raw.endState, CHARACTER_ARC_LIMITS.END_STATE_MAX);
   const transitions = cleanTransitions(raw.transitions);
+  // The OPTIONAL five-stage evolution lens (#6440). The key is OMITTED (not
+  // stored as null) when nothing is authored, so a pre-#6440 arc round-trips
+  // byte-identical and nothing about the lens becomes a gate on a legacy
+  // story — the same shape rule `sanitizeSeriesPlan` uses for the delivery
+  // plan. Wire-gated (pipelineSeries schema v13).
+  const evolution = sanitizeCharacterEvolution(raw.evolution);
   // Without a character pointer/name there's nothing to attach the arc to, and
-  // without any authored field or transition there's nothing to render — either
-  // way it's indistinguishable from "no arc".
+  // without any authored field, transition or lens there's nothing to render —
+  // either way it's indistinguishable from "no arc".
   if (!characterId && !characterName) return null;
-  if (!want && !need && !startState && !endState && transitions.length === 0) return null;
+  if (!want && !need && !startState && !endState && transitions.length === 0 && !evolution) return null;
   const status = CHARACTER_ARC_STATUSES.includes(raw.status) ? raw.status : 'draft';
-  return { characterId, characterName, want, need, startState, endState, transitions, status };
+  return {
+    characterId, characterName, want, need, startState, endState, transitions,
+    ...(evolution ? { evolution } : {}),
+    status,
+  };
 }
 
 /**
@@ -161,9 +199,7 @@ export function sanitizeCharacterArcList(rawList) {
   for (const raw of rawList) {
     const arc = sanitizeCharacterArc(raw);
     if (!arc) continue;
-    // Identity key: the canon pointer wins; fall back to the case-folded name so
-    // a name-only arc still de-dupes against itself.
-    const key = arc.characterId || `name:${arc.characterName.trim().toLowerCase()}`;
+    const key = characterIdentityKey(arc.characterId, arc.characterName);
     if (!byKey.has(key)) {
       if (byKey.size >= CHARACTER_ARC_LIMITS.ARCS_PER_SERIES_MAX) continue;
       order.push(key);
@@ -200,4 +236,33 @@ export function renderCharacterArcsForPrompt(arcs) {
     }
   }
   return lines.length ? lines.join('\n') : null;
+}
+
+/**
+ * Reference sets an evolution lens's evidence anchors resolve against on this
+ * host — the arc's own authored transition beats. Hand it to
+ * `evolutionEvidenceStatus` / `renderCharacterEvolutionForPrompt` so a stage
+ * pointing at a since-deleted `trn-` beat reports `stale` instead of passing
+ * as proof. Kept beside the arc because the arc owns the beats.
+ */
+export function characterArcEvidenceRefs(arc) {
+  const transitions = Array.isArray(arc?.transitions) ? arc.transitions : [];
+  return { transitionIds: new Set(transitions.map((t) => t?.id).filter(Boolean)) };
+}
+
+/**
+ * Render every authored five-stage evolution lens across the cast as one
+ * compact prompt block, or `null` when no arc carries a lens — the cast-level
+ * companion to `renderCharacterArcsForPrompt`, consumed by the character-arc
+ * editorial checks (#6442) and the arc planner's character-first constraint.
+ *
+ * Each lens resolves its evidence anchors against ITS OWN arc's transition
+ * beats (`characterArcEvidenceRefs`), so a stage pointing at a since-deleted
+ * `trn-` beat is annotated `stale` rather than presented to the model as proof.
+ * Returning `null` (not '') keeps the caller's `{{#characterEvolution}}`
+ * section empty when the lens is unset, which is what makes every consumer
+ * degrade to exactly its pre-lens behavior.
+ */
+export function renderCharacterEvolutionsForPrompt(arcs) {
+  return renderCharacterEvolutionListForPrompt(arcs, characterArcEvidenceRefs);
 }

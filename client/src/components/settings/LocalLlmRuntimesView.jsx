@@ -7,13 +7,14 @@ import BrailleSpinner from '../BrailleSpinner';
 import { formatBytes } from '../../utils/formatters';
 import useDownloadPreflightConfirm from '../../hooks/useDownloadPreflightConfirm';
 import useLocalLlmStatus from '../../hooks/useLocalLlmStatus';
-import { migrateLocalLlmBackend, controlOllamaService, patchSettingsSlice, getLlamaServerStatus, getLlamaServerUpdateStatus, startLlamaServer, stopLlamaServer, installLlamaServer, upgradeLlamaServer, downloadSpecDecodeModel, cancelSpecDecodeModelDownload, previewLocalLlmDownload, controlLmStudioService, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, searchMtplxModels, pullMtplxModel, removeMtplxModel, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, downloadSlotstreamModel, cancelSlotstreamModelDownload, saveRuntimeStartupList } from '../../services/api';
+import { migrateLocalLlmBackend, controlOllamaService, patchSettingsSlice, getLlamaServerStatus, getLlamaServerUpdateStatus, startLlamaServer, stopLlamaServer, installLlamaServer, upgradeLlamaServer, downloadSpecDecodeModel, cancelSpecDecodeModelDownload, removeSpecDecodeModel, previewLocalLlmDownload, controlLmStudioService, getMtplxServerStatus, startMtplxServer, stopMtplxServer, installMtplx, searchMtplxModels, pullMtplxModel, removeMtplxModel, getSlotstreamServerStatus, startSlotstreamServer, stopSlotstreamServer, installSlotstream, downloadSlotstreamModel, cancelSlotstreamModelDownload, saveRuntimeStartupList } from '../../services/api';
 import socket from '../../services/socket';
 import SpecDecodeWeightRow from './SpecDecodeWeightRow.jsx';
 import RuntimeServersCard from './RuntimeServersCard.jsx';
 import MtplxServerCard from './MtplxServerCard.jsx';
 import SlotstreamServerCard from './SlotstreamServerCard.jsx';
 import HardwareLlmRecommendation from './HardwareLlmRecommendation.jsx';
+import LocalPersistentMindSetupCard from './LocalPersistentMindSetupCard.jsx';
 import LocalLlmBackendCard from './LocalLlmBackendCard.jsx';
 import DownloadPreflightConfirm from '../models/DownloadPreflightConfirm.jsx';
 import { LOCAL_LLM_BACKENDS as BACKENDS, localLlmBackendLabel as labelFor } from '../../lib/localLlmBackends.js';
@@ -548,6 +549,17 @@ export default function LocalLlmRuntimesView() {
     }
   };
 
+  const handleDeleteSpecModel = async (role) => {
+    try {
+      const res = await removeSpecDecodeModel(llamaPresetId, role, { silent: true });
+      toast.success(res?.path ? `Deleted ${res.path}` : 'Weight file deleted');
+    } catch (err) {
+      toast.error(err?.message || 'Could not delete the weight file');
+    } finally {
+      loadLlamaStatus();
+    }
+  };
+
   const handleStartLlama = async (e) => {
     e?.preventDefault?.();
     // Submitting with Enter bypasses the disabled button, so re-check here.
@@ -636,6 +648,7 @@ export default function LocalLlmRuntimesView() {
   return (
     <section id="llm-management-panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" className="space-y-4">
       <HardwareLlmRecommendation />
+      <LocalPersistentMindSetupCard />
       {/* One start/stop/install surface for every local server PortOS can run */}
       <RuntimeServersCard
         status={status}
@@ -918,6 +931,7 @@ export default function LocalLlmRuntimesView() {
                     progress={llamaDownloads[downloadKey(llamaPresetId, entry.role)]}
                     onDownload={handleDownloadSpecModel}
                     onCancel={handleCancelSpecModelDownload}
+                    onDelete={handleDeleteSpecModel}
                     disabled={llamaLoading}
                   />
                 ))}

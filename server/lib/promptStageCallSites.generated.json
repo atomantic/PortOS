@@ -433,6 +433,12 @@
     "server/services/universeCanon.js",
     "server/services/universeCanonEntryExpand.js"
   ],
+  "universe-cast-integrity-review": [
+    "server/services/universeCastIntegrity.js"
+  ],
+  "universe-character-augment": [
+    "server/services/characterAugmentation.js"
+  ],
   "universe-character-expand": [
     "server/services/universeCharacterExpand.js"
   ],

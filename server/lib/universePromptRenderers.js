@@ -6,6 +6,8 @@
  * consolidating here keeps the LLM input shape consistent across stages.
  */
 
+import { isEntryRevealGated } from './storyBible.js';
+
 export function renderCategoriesForPrompt(categories, { showLocked = false } = {}) {
   const entries = Object.entries(categories || {});
   if (!entries.length) return '';
@@ -88,11 +90,96 @@ const formatObject = (o) => {
   return `  - ${o.name}${desc ? `: ${desc}` : ''}${sig}`;
 };
 
+// --- The single reveal gate for prompt-facing canon ------------------------
+//
+// A canon entry carrying a hard `spoiler` flag or a `revealIssue` holds
+// authored history the audience has not earned yet. Every prompt-facing block
+// in this module routes through this ONE gate — the descriptive canon block
+// (`renderCanonForPrompt`) and the authored psychology block
+// (`renderCharacterNarrativeContext`) — so the two cannot drift into parallel
+// rules the way they had before #6426, when the psychology block withheld a
+// spoiler character's ghost while the descriptive block rendered that same
+// character's `background` in the very next paragraph.
+//
+// The gate is an ALLOWLIST PROJECTION, not a per-field subtraction: a gated
+// entry is rebuilt from `CONCEALMENT_SAFE_CANON_FIELDS` alone and rendered by
+// `renderGatedCanonLine` instead of by its per-kind formatter. A field added to
+// a canon record (or to a formatter) later is therefore withheld by default and
+// has to be argued onto the list — it cannot leak by simply not having been
+// thought about here.
+//
+// What a gated entry may still show:
+//   `id`                — callers key pinning/priority off it; carries no fact.
+//   `name` / `slugline` — the roster has to be able to name a cast member or a
+//                         location; withholding identity makes the block
+//                         unusable rather than safe.
+//   `role`              — "antagonist" is a cast slot, not the concealed
+//                         history behind it.
+//   `surfaceDescriptor` — the author's OWN sanctioned pre-reveal stand-in.
+//                         `surfaceCanonEntry` in storyBible.js makes exactly
+//                         this call for the drafting-context filter; reusing it
+//                         keeps one project-wide answer to "what may a gated
+//                         entry show" instead of inventing a second one here.
+//
+// `personality` and `physicalDescription` are deliberately NOT safe — the call
+// #6426 left open, recorded here because the next reader will ask. An authored
+// bible routinely puts the post-reveal true self in `personality` ("a meek
+// clerk who signed the order"), the same concealed-interiority register the
+// psychology block already withholds wholesale, and a `physicalDescription`
+// just as routinely carries the tell ("the burn scar from the fire she set").
+// `surfaceDescriptor` exists precisely to say what the audience is allowed to
+// see so far, so masking those two costs an author nothing they cannot state
+// deliberately. `background` is the concealed-history field and was the actual
+// leak this gate closes.
+export const CONCEALMENT_SAFE_CANON_FIELDS = Object.freeze(['id', 'name', 'role', 'slugline', 'surfaceDescriptor']);
+
+const REVEAL_GATED_CANON_NOTE = '(reveal-gated — concealed canon withheld until the story earns it)';
+
+// Project a gated entry down to the safe fields. Returns null when the gate is
+// off or the entry is ungated, so callers read as `concealCanonEntry(e, on) ?? e`.
+const concealCanonEntry = (entry, respectRevealGates) => {
+  if (!respectRevealGates || !isEntryRevealGated(entry)) return null;
+  const safe = {};
+  for (const field of CONCEALMENT_SAFE_CANON_FIELDS) {
+    if (entry[field] !== undefined) safe[field] = entry[field];
+  }
+  return safe;
+};
+
+// One line shape for a gated entry of ANY kind. The per-kind formatter is never
+// reached, which is what makes a newly added descriptive field unable to bypass
+// the gate even if nobody remembers this comment.
+const renderGatedCanonLine = (entry) => {
+  const label = entry.name || entry.slugline || '(unnamed)';
+  const role = entry.role ? ` [${entry.role}]` : '';
+  const surface = truncDesc(entry.surfaceDescriptor || '');
+  return `  - ${label}${role}: ${surface ? `${surface} — ` : ''}${REVEAL_GATED_CANON_NOTE}`;
+};
+
 const CANON_SECTIONS = [
   { field: 'characters', header: 'characters', formatEntry: formatCharacter },
   { field: 'places', header: 'places', formatEntry: formatPlace },
   { field: 'objects', header: 'objects', formatEntry: formatObject },
 ];
+
+// Accept a Set, an array, or a single id and normalize to a Set of non-empty
+// string ids. Callers pass whatever they already hold (a bound protagonist id,
+// a scoped cast list) without pre-building a Set.
+const asIdSet = (ids) => {
+  if (ids instanceof Set) return ids;
+  const list = Array.isArray(ids) ? ids : (ids == null ? [] : [ids]);
+  return new Set(list.filter((id) => typeof id === 'string' && id));
+};
+
+// Stable partition: priority entries first (in their original relative order),
+// everything else after. Not a sort — a comparator would reorder equal elements
+// under an unstable engine and scramble the canon's authored importance order.
+const hoistPriorityEntries = (entries, priority) => {
+  const first = [];
+  const rest = [];
+  for (const entry of entries) (priority.has(entry?.id) ? first : rest).push(entry);
+  return first.length ? [...first, ...rest] : entries;
+};
 
 // Render the universe's canon arrays (characters/places/objects) into a
 // prompt-friendly text block. Distinct from renderCategoriesForPrompt because
@@ -101,15 +188,26 @@ const CANON_SECTIONS = [
 // Caps each section at CANON_PROMPT_ENTRIES_PER_KIND_MAX entries; an
 // "(… + N more)" footer signals truncation so the LLM doesn't assume the
 // canon is complete.
-export function renderCanonForPrompt(world) {
+export function renderCanonForPrompt(world, { priorityCharacterIds = null, respectRevealGates = false } = {}) {
   if (!world || typeof world !== 'object') return '';
+  const priority = asIdSet(priorityCharacterIds);
   const sections = [];
   for (const { field, header, formatEntry } of CANON_SECTIONS) {
-    const entries = Array.isArray(world[field]) ? world[field] : [];
+    const raw = Array.isArray(world[field]) ? world[field] : [];
+    // A character the caller explicitly bound (the FableLoom protagonist) must
+    // survive the per-kind cap — otherwise a 60-character universe can silently
+    // drop the one entry the story is ABOUT. Hoisting is stable: the priority
+    // entries keep their relative order, and so does everything after them.
+    const entries = field === 'characters' && priority.size
+      ? hoistPriorityEntries(raw, priority)
+      : raw;
     if (!entries.length) continue;
     const shown = entries.slice(0, CANON_PROMPT_ENTRIES_PER_KIND_MAX);
     const hiddenCount = entries.length - shown.length;
-    const lines = shown.map(formatEntry);
+    const lines = shown.map((entry) => {
+      const concealed = concealCanonEntry(entry, respectRevealGates);
+      return concealed ? renderGatedCanonLine(concealed) : formatEntry(entry);
+    });
     if (hiddenCount > 0) {
       lines.push(`  - (… + ${hiddenCount} more ${header} not shown — prompt budget reached)`);
     }
@@ -214,4 +312,180 @@ export function renderEntitiesSummary(world, { maxPerKind = ENTITIES_SUMMARY_MAX
     lines.push(hidden > 0 ? `${header}: ${joined}; (+${hidden} more)` : `${header}: ${joined}`);
   }
   return lines.join('\n');
+}
+
+// --- Authored character psychology (the "engines" block) -------------------
+//
+// A character's Ghost/Wound/Lie/Want/Need chain, motivations, relationship
+// pressure and declared arc intent are PLOT inputs — the causal machinery that
+// makes a character drive the story instead of decorating it. `formatCharacter`
+// above deliberately renders only the descriptive/visual half of a canon
+// record, so every consumer that reasons about CHOICE needs this second block.
+//
+// One vocabulary, one renderer: the Series arc planner
+// (`renderCharacterFoundationForArc`), the FableLoom canon digest, and the
+// series-concept seed all render through here so the labels the LLM learns in
+// one stage mean the same thing in the next.
+
+export const CHARACTER_NARRATIVE_FIELD_MAX = 220;
+
+// Default caps per purpose. Arc planning keeps the historical top-six engine
+// (it rides inside an already-long shape-guidance block); the FableLoom canon
+// digest and the series-concept seed can afford a wider ensemble because the
+// psychology block is the only place those prompts see causal motivation.
+export const CHARACTER_NARRATIVE_ARC_MAX = 6;
+const CHARACTER_NARRATIVE_DIGEST_MAX = 12;
+
+/**
+ * Ordered field spec. A newly authored psychology field (theory of control,
+ * drives, …) becomes ONE row here and reaches the arc planner, the FableLoom
+ * canon digest and the series seed in the same commit — that is the seam the
+ * schema work plugs into, and the reason this table is not inlined per caller.
+ *
+ * `secrets` is deliberately absent: it is the one authored field whose whole
+ * purpose is to stay unsaid, and this block feeds generation prompts.
+ */
+const CHARACTER_NARRATIVE_FIELD_SPECS = Object.freeze([
+  { field: 'role', label: 'role', identity: true },
+  { field: 'ghost', label: 'ghost' },
+  { field: 'wound', label: 'wound' },
+  { field: 'lie', label: 'lie' },
+  { field: 'want', label: 'want' },
+  { field: 'need', label: 'need' },
+  { field: 'motivations', label: 'motives' },
+  { field: 'relationships', label: 'relationships' },
+  { field: 'arcType', label: 'arc intent' },
+]);
+
+const CORE_ROLE_RE = /protagonist|lead|hero|antagonist|villain|deuteragonist|mentor/i;
+
+const compactCharacterField = (value, max = CHARACTER_NARRATIVE_FIELD_MAX) => {
+  const flat = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+};
+
+// How many psychology fields (identity excluded — `role` is already the
+// core-role signal) the author actually filled in. Used as the ranking
+// tiebreak: a fully authored supporting player is worth more prompt budget
+// than a name-only walk-on.
+const narrativeDepth = (character) => CHARACTER_NARRATIVE_FIELD_SPECS
+  .filter(({ field, identity }) => !identity && compactCharacterField(character?.[field]))
+  .length;
+
+/**
+ * Rank a cast for prompt inclusion and report what fell off the end.
+ *
+ * Order: caller-pinned ids (a bound protagonist) → recognized core roles →
+ * authored depth → original canon order. Returns `{ shown, omitted }` so the
+ * caller can render an explicit coverage footer instead of letting the model
+ * assume it saw the whole ensemble.
+ */
+function rankCharactersForNarrativeContext(characters, {
+  max = CHARACTER_NARRATIVE_ARC_MAX,
+  priorityIds = null,
+} = {}) {
+  const list = (Array.isArray(characters) ? characters : []).filter((c) => c && typeof c === 'object');
+  const priority = asIdSet(priorityIds);
+  const ranked = list
+    .map((character, index) => ({
+      character,
+      index,
+      pinned: priority.has(character.id),
+      coreRole: CORE_ROLE_RE.test(character.role || ''),
+      depth: narrativeDepth(character),
+    }))
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned)
+      || Number(b.coreRole) - Number(a.coreRole)
+      || b.depth - a.depth
+      || a.index - b.index)
+    .map(({ character }) => character);
+  return { shown: ranked.slice(0, max), omitted: ranked.slice(max) };
+}
+
+/**
+ * Render the authored psychology block.
+ *
+ * `respectRevealGates` is the safety valve: a character carrying a hard
+ * `spoiler` flag or a `revealIssue` has authored history the audience has NOT
+ * earned yet, so the gated entry renders as a named placeholder rather than
+ * handing a generation prompt the concealed origin. Author-side planning
+ * surfaces that already reason over the full bible leave it off. It is the SAME
+ * predicate and allowlist the descriptive block uses (`concealCanonEntry`) —
+ * see the gate comment above; do not add a second rule here.
+ *
+ * `reportOmitted` appends a coverage footer naming how many cast members the
+ * cap withheld — a reviewer that is told the ensemble is complete when it is
+ * not will confidently report on characters it never saw.
+ */
+export function renderCharacterNarrativeContext(characters, {
+  max = CHARACTER_NARRATIVE_ARC_MAX,
+  priorityIds = null,
+  respectRevealGates = false,
+  reportOmitted = false,
+} = {}) {
+  const { shown, omitted } = rankCharactersForNarrativeContext(characters, { max, priorityIds });
+  if (!shown.length) return '';
+  const lines = shown.map((character) => {
+    const name = character.name || 'Unnamed';
+    // Same projection the descriptive block uses — one predicate, one
+    // allowlist. The psychology block replaces the WHOLE line rather than
+    // rendering the safe fields, because every spec row below `role` is
+    // concealed interiority by construction.
+    if (concealCanonEntry(character, respectRevealGates)) {
+      return `- ${name}: (reveal-gated — authored psychology withheld until the story earns it)`;
+    }
+    const fields = CHARACTER_NARRATIVE_FIELD_SPECS
+      .map(({ field, label }) => [label, compactCharacterField(character[field])])
+      .filter(([, value]) => value)
+      .map(([label, value]) => `${label}=${value}`);
+    return `- ${name}: ${fields.join(' | ') || '(framework not authored)'}`;
+  });
+  if (reportOmitted && omitted.length) {
+    lines.push(`- (… + ${omitted.length} more characters not shown — prompt budget reached; do not treat this cast list as complete)`);
+  }
+  return lines.join('\n');
+}
+
+// Header for the psychology block inside a canon digest. Carries the standing
+// craft constraint with it (behavior, not exposition) so every stage template
+// that renders `{{canonDigest}}` inherits the rule without a template edit.
+const CHARACTER_ENGINES_HEADER = 'character engines (author-only canon — motivate behavior and choices with these; do not have characters recite them as exposition, and do not reveal concealed history before the story earns it):';
+
+/**
+ * Compose the full story-facing canon digest for a linked universe: the
+ * verified protagonist binding, the descriptive canon block, and the authored
+ * psychology block. Shared by FableLoom generation/review (`weave.js`) and the
+ * author-side editorial pass (`editorial.js`) so both reason from the same
+ * facts — before this, both rendered `renderCanonForPrompt` alone and the
+ * Ghost/Wound/Lie/Want/Need chain never reached the model at all (#6416).
+ *
+ * NOT for reader-facing surfaces. The play turn and the cold-opening
+ * first-time-viewer review deliberately withhold canon; they must keep passing
+ * their own placeholder rather than calling this.
+ *
+ * `respectRevealGates` defaults ON and drives BOTH blocks from the one gate
+ * above, so a spoiler character's concealed `background` can no longer ride the
+ * descriptive block into a generation prompt while the psychology block masks
+ * that same character (#6426). Read-only author-side surfaces that are supposed
+ * to reason over the whole bible — the editorial pass, whose continuity checks
+ * exist precisely to catch a premature reveal — pass `false` explicitly.
+ */
+export function renderStoryCanonDigest(universe, { protagonistCharacterId = null, respectRevealGates = true } = {}) {
+  if (!universe || typeof universe !== 'object') return '';
+  const characters = Array.isArray(universe.characters) ? universe.characters : [];
+  const protagonist = protagonistCharacterId
+    ? characters.find((character) => character?.id === protagonistCharacterId)
+    : null;
+  const priorityIds = protagonist ? [protagonist.id] : null;
+  const narrative = renderCharacterNarrativeContext(characters, {
+    max: CHARACTER_NARRATIVE_DIGEST_MAX,
+    priorityIds,
+    respectRevealGates,
+    reportOmitted: true,
+  });
+  return [
+    protagonist ? `Verified Universe protagonist: id=${protagonist.id}; name=${protagonist.name}.` : '',
+    renderCanonForPrompt(universe, { priorityCharacterIds: priorityIds, respectRevealGates }),
+    narrative ? `${CHARACTER_ENGINES_HEADER}\n${narrative}` : '',
+  ].filter(Boolean).join('\n\n');
 }

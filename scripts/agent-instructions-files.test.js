@@ -37,7 +37,7 @@ const INSTRUCTION_DIRS = [
 const IMPORT_BODY = '@AGENTS.md\n';
 
 // Historical records and frozen data. Rewriting these would falsify history or,
-// for the migrations and prior prompt defaults, break the exact-string matching
+// for the migrations and the prompt-integrity snapshot, break the exact matching
 // they perform against what an older version actually wrote.
 const EXCLUDED_PREFIXES = [
   '.changelog/',
@@ -46,7 +46,6 @@ const EXCLUDED_PREFIXES = [
   'data/',
   'lib/slashdo/',
   'scripts/migrations/',
-  'server/services/taskPromptDefaults/previousDefaults.js',
   'server/services/taskPromptDefaults/integrity.snapshot.json',
 ];
 

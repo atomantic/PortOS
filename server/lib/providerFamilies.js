@@ -25,21 +25,25 @@ export const PROVIDER_FAMILIES = [
   {
     id: 'claude',
     label: 'Claude Code',
+    idPattern: /claude/i,
     matches: (p) => (p.type === 'cli' || p.type === 'tui') && isClaudeCommand(p.command)
   },
   {
     id: 'codex',
     label: 'Codex',
+    idPattern: /codex/i,
     matches: (p) => commandBasename(p.command) === 'codex'
   },
   {
     id: 'agy',
     label: 'Antigravity',
+    idPattern: /antigravity|(^|[-_])agy([-_]|$)/i,
     matches: (p) => commandBasename(p.command) === 'agy' || /antigravity/i.test(p.id || '')
   },
   {
     id: 'grok',
     label: 'Grok',
+    idPattern: /grok/i,
     matches: (p) => isGrokCommand(p.command) || /grok/i.test(p.id || '')
   }
 ];
@@ -59,4 +63,22 @@ export const familyLabel = (id) => PROVIDER_FAMILIES.find((f) => f.id === id)?.l
 export function familyForProvider(provider) {
   if (!provider || provider.ollamaBacked === true || provider.lmstudioBacked === true || provider.mtplxBacked === true || provider.llamaBacked === true || provider.vllmBacked === true || provider.sglangBacked === true) return null;
   return PROVIDER_FAMILIES.find((f) => f.matches(provider))?.id ?? null;
+}
+
+/**
+ * The family a provider ID alone identifies, or `null` when the id says nothing.
+ *
+ * Strictly weaker than `familyForProvider`, and deliberately so: the BINARY is
+ * what really identifies a family, and a schema validating a stored config has
+ * only the id — the provider list is service state a Zod schema cannot reach.
+ * So this answers the one question that CAN be settled from an id, and answers
+ * `null` for everything else, letting the caller fall through to the live
+ * check. Used by `quotaBurnValidation.js` to reject a burn step pinned to
+ * another family's subscription before it reaches disk; a provider whose id
+ * names no family is accepted there and resolved at dispatch time instead.
+ */
+export function familyForProviderId(id) {
+  const value = typeof id === 'string' ? id.trim() : '';
+  if (!value) return null;
+  return PROVIDER_FAMILIES.find((f) => f.idPattern.test(value))?.id ?? null;
 }

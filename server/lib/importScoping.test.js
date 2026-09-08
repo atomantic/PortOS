@@ -88,6 +88,27 @@ describe('narrowed imports stay narrow (#6009)', () => {
   });
 });
 
+// Serve must never acquire outbound peer registration through shared CLI support.
+describe('Tailcat shared owners stay independent of forwarding (#6570)', () => {
+  it.each(['services/tailcatServe.js', 'services/tailcatRuntime.js', 'lib/tailcatAddress.js'])(
+    '%s does not reach forward orchestration or instance registration', (entry) => {
+      const closure = staticImportClosure(abs(entry)).files;
+      expect(closure.has(abs(entry))).toBe(true);
+      expect(closure.has(abs('services/tailcatPeer.js'))).toBe(false);
+      expect(closure.has(abs('services/instances.js'))).toBe(false);
+    },
+  );
+
+  it('both dial directions reach the shared owners and forwarding retains registration', () => {
+    for (const entry of ['services/tailcatPeer.js', 'services/tailcatServe.js']) {
+      expect(reaches(entry, 'services/tailcatRuntime.js')).toBe(true);
+      expect(reaches(entry, 'lib/tailcatAddress.js')).toBe(true);
+    }
+    expect(reaches('services/tailcatRuntime.js', 'lib/tailcatVersion.js')).toBe(true);
+    expect(reaches('services/tailcatPeer.js', 'services/instances.js')).toBe(true);
+  });
+});
+
 /**
  * Deferred imports (#6156).
  *
@@ -105,6 +126,8 @@ describe('narrowed imports stay narrow (#6009)', () => {
 // [entry, target, why, specifier] — same first three columns as NARROWED above,
 // plus the specifier the call site must still name in its `await import()`.
 const DEFERRED = [
+  ['services/agentManagement.js', 'lib/privateSecuritySandbox.js',
+    'loads sandbox cleanup only for private assessments', '../lib/privateSecuritySandbox.js'],
   ['services/cos.js', 'services/persistentMindAdapter.js',
     'is registered once at daemon start, but pulls the CoS tool registry, voice tools, ask service and image-gen backends',
     './persistentMindAdapter.js'],
@@ -179,7 +202,88 @@ describe('deferred imports stay deferred (#6156)', () => {
 // Deferring catalog/version parsers removes 296 instantiations (88,360 →
 // 88,064). Restore the documented ~1.5k allowance for ordinary leaf growth;
 // keep the negative runtime-installer guard above so eager parsing cannot return.
-const MAX_STATIC_INSTANTIATIONS = 89500;
+//
+// #6377 measures 89,889. Its share is ~389, and it is the tolerated shape, not
+// the one this budget exists to catch: two new LEAF vocabulary modules with no
+// subtree behind them — `lib/taskTargetScope.js` (four constants, zero imports)
+// and `lib/quotaBurnTaskRef.js` (pure shape + resolver, importing only
+// `objects.js`, which every reacher already had). They are reached by the ~200
+// suites that cross `lib/quotaBurnConfig.js`, so a leaf costs ~200 apiece with
+// nothing to defer. Restore the ~1.5k allowance again rather than inching the
+// number up by a few hundred per PR.
+//
+// #6368 adds `lib/callerModePolicy.js`, another zero-dependency leaf reached by
+// the routing boundary and the lib barrel (~92 instantiations). Same tolerated
+// shape; it fits inside the allowance above.
+//
+// #6375 adds `lib/autonomousJobIntervals.js` — the autonomous-job cadence
+// vocabulary `cosValidation.js` validates against, so ~194 suites reach it. It is
+// a zero-import leaf (its time units are declared locally precisely so it drags
+// nothing); the alternative is re-declaring the cadence list at the Zod boundary,
+// which is the drift that issue exists to close. Fits inside the allowance above.
+//
+// #6364 retires the server/client copy convention, splitting four pure leaves
+// out of modules the client now imports (`bibleLimits.js` out of `storyBible.js`,
+// `portosUrls.js` out of `ports.js`, `youtubeUrlAssert.js` out of `youtubeUrl.js`,
+// `avatarStyles.js` in from the client tree). Each is one extra NODE on a path
+// that already existed — a flatter graph, not a new eager edge into a heavy
+// subtree. Fits inside the allowance above.
+//
+// #6380 measures 91,710 — the ~1.5k allowance restored at #6377 is spent, so
+// re-measure and restore it rather than inching. The +371 is ONE new suite,
+// `services/cosTaskGenerator.auditMode.test.js`, and its cost IS its point: it
+// generates a real audit task through `cosTaskGenerator.js` (274) and renders
+// the final agent prompt from it through `agentPromptBuilder.js` (+94
+// marginal), because the file-issues mode is enforced across exactly that seam
+// and neither half alone can prove an issues-only run cannot acquire
+// commit/push/PR instructions. No new eager edge into a heavy subtree: the
+// production change adds only `lib/auditCatalog.js` (a zero-import leaf) to
+// `autonomousJobs/skillTemplates.js`, worth 2.
+// #6434: after deferring the private sandbox at all three CoS call sites,
+// this branch measures 93,722 versus 93,229 on its current main base. The
+// remaining +493 is the shared policy/provenance leaves and two boundary
+// suites, not an eager sandbox/runtime subtree. Main already exceeded the
+// previous ceiling; restore the documented ~1.5k ordinary-growth allowance.
+// The DEFERRED row above prevents the avoidable sandbox edge from returning.
+//
+// #6442 adds 344 on top of that base (94,066), which fits inside the allowance
+// #6434 restored — so the ceiling stays put. All 344 is three NEW suites and
+// none of it a new eager edge; the production change adds no import its module
+// did not already reach. The largest,
+// services/pipeline/editorial/reviewStaleness.test.js (198), earns its reach:
+// only the real SOURCE_RESOLVERS table can prove the evolution lens has its own
+// fingerprint token, so a lens edit stales a review while a want/need edit does
+// not. services/pipeline/arcPlanner/context.test.js (78) and
+// lib/editorial/checks/characterArcEvolution.test.js (68) are boundary tests
+// over modules those trees already instantiate.
+// #6532: same-origin Eidoverse proxy (`eidoverseProxy.js` + route allowlist)
+// loaded via the host mount at boot. Measured 95,246 on this branch (+46 over
+// the prior ceiling) — ordinary growth for an intentional main-server edge,
+// not an eager heavy subtree. Raise the ceiling to keep the ~1.5k allowance.
+//
+// Replacing five client hand-copies of server constants (the component and page
+// mirrors the earlier sweeps left) with imports added two pure leaves the
+// browser bundle reads: `lib/characterIntegrityVocabulary.js`
+// (split out of `characterIntegrity.js`, which reaches `crypto`) and
+// `lib/creativeBriefLimits.js` (the caps both creative validation modules
+// enforce). Measured 95,470 (+223 over main's 95,247): `creativeBriefLimits.js`
+// +206 (every suite that reaches `creativeCommissionValidation.js` through
+// `validation.js`'s flat re-export), `uuid.js` +56 (newly reached through
+// `seriesCharacterArc.js`), the vocabulary leaf +24, less the five deleted
+// mirror suites — leaves with nothing behind them to defer, the tolerated shape,
+// not an eager edge. Restore the ~1.5k allowance.
+//
+// #6590 is the same shape again: the image-gen capability literals the client
+// hand-copied (input-image caps, the prompt rule, the shipped default
+// models/effort, the aspect-ratio alphabets) moved out of three
+// `services/imageGen/*` modules — unreachable from the browser bundle because
+// they import `errorHandler.js` — into one dependency-free leaf,
+// `lib/imageGenCapabilities.js`. Measured 96,975 (+108 over main's 96,867): the
+// leaf is +1 in each of the 108 closures that already reached `imageGen/modes.js`,
+// and it pulls in nothing new (its only import, `generationModes.js`, was
+// already in every one of them). A leaf with nothing behind it to defer is the
+// tolerated shape. The allowance had drifted to ~30 again, so restore the ~1.5k.
+const MAX_STATIC_INSTANTIATIONS = 98500;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {
@@ -257,4 +361,14 @@ describe('server suite import budget (#6156)', () => {
       `Static module instantiations across the server suite rose to ${total.toLocaleString()}. Something added an eager import into a heavy subtree from a widely-reached module — narrow it, defer it with a call-site await import(), or raise the budget deliberately. See the "Import scoping" section of server/AGENTS.md.`,
     ).toBeLessThanOrEqual(MAX_STATIC_INSTANTIATIONS);
   }, 60_000);
+});
+
+// The shared compiler must remain usable without loading project mutations.
+it('keeps Video compilation independent of project storage and execution', () => {
+  const closure = staticImportClosure(abs('lib/creativeDirectorVideoCompiler.js')).files;
+  expect(closure.has(abs('lib/grokVideoClip.js'))).toBe(true);
+  expect(closure.has(abs('lib/reactorVideoClip.js'))).toBe(true);
+  expect(closure.has(abs('services/creativeDirector/projectsLogic.js'))).toBe(false);
+  expect(closure.has(abs('services/creativeDirector/videoExecution.js'))).toBe(false);
+  expect(closure.has(abs('lib/validation.js'))).toBe(false);
 });

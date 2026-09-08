@@ -3,7 +3,7 @@ import { Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, E
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import { timeAgo, timeUntil, formatDateNumeric } from '../../utils/formatters';
-import { DEFAULT_CRON, describeCron, describeRecurrence, parseCronToRecurrence, buildCronFromRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS } from '../../utils/cronHelpers';
+import { DEFAULT_CRON, describeCron, describeRecurrence, parseCronToRecurrence, buildCronFromRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS, ON_DEMAND_INTERVAL } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
 import AgentJobProviderFields, { hasRunnableAgentProvider } from './AgentJobProviderFields';
 import { AGENT_OPTIONS, agentOptionButtonClass } from './constants';
@@ -45,6 +45,12 @@ export const JOB_TYPE_OPTIONS = [
 // AI-agent jobs — shell/script jobs run a fixed command and never reach the
 // AI runner.
 export const isAgentJobType = (type) => type !== 'shell' && type !== 'script';
+
+// Interval-mode job with the no-recurrence cadence: never due, never scheduled,
+// runnable only from the Run-now button. Cron mode overrides it — a job switched
+// to Cron keeps whatever cadence it last had. Mirrors isOnDemandJob on the server.
+export const isOnDemandSchedule = (job) =>
+  !job?.cronExpression && !job?.cronSchedule && job?.interval === ON_DEMAND_INTERVAL;
 
 const BRIEFING_CONFIG_OPTIONS = [
   { key: 'dailyJoke', label: 'Daily Joke', desc: 'Include a short joke to start the day' },
@@ -127,25 +133,35 @@ export function ScheduleFields({ data, onChange, timezone }) {
           />
         </div>
       ) : (
-        <div className="flex gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <select
             aria-label="Interval"
             value={data.interval}
-            onChange={e => onChange('interval', e.target.value)}
+            onChange={e => {
+              onChange('interval', e.target.value);
+              // The on-demand cadence has no recurrence for a time-of-day to
+              // align to; the server clears it too, so drop it here rather than
+              // saving a value the job will never honor.
+              if (e.target.value === ON_DEMAND_INTERVAL) onChange('scheduledTime', null);
+            }}
             className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
           >
             {INTERVAL_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
-          <input
-            type="time"
-            value={data.scheduledTime || ''}
-            onChange={e => onChange('scheduledTime', e.target.value || null)}
-            className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
-            title="Run at specific time (leave empty for any time)"
-            aria-label="Run at a specific time (leave empty for any time)"
-          />
+          {data.interval === ON_DEMAND_INTERVAL ? (
+            <span className="text-xs text-gray-500">Runs only when you press Run now.</span>
+          ) : (
+            <input
+              type="time"
+              value={data.scheduledTime || ''}
+              onChange={e => onChange('scheduledTime', e.target.value || null)}
+              className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+              title="Run at specific time (leave empty for any time)"
+              aria-label="Run at a specific time (leave empty for any time)"
+            />
+          )}
         </div>
       )}
     </div>
@@ -156,6 +172,8 @@ function formatNextDue(job) {
   // Cron jobs: show human-readable schedule (server computes exact next fire time)
   if (job.cronSchedule) return describeRecurrence(job.cronSchedule);
   if (job.cronExpression) return describeCron(job.cronExpression);
+  // No recurrence — rendering lastRun + a null intervalMs would print 'Invalid Date'.
+  if (isOnDemandSchedule(job)) return 'On demand';
 
   const { lastRun, intervalMs, scheduledTime } = job;
   if (!lastRun) return scheduledTime ? `at ${scheduledTime}` : 'Immediately';
@@ -325,7 +343,7 @@ export default function JobCard({
     onUpdate();
   };
 
-  const isDue = job.enabled && (job.cronSchedule
+  const isDue = job.enabled && !isOnDemandSchedule(job) && (job.cronSchedule
     ? (!job.lastRun || Boolean(job.nextRunAt && Date.now() >= new Date(job.nextRunAt).getTime()))
     : (!job.lastRun || (Date.now() - new Date(job.lastRun).getTime() >= job.intervalMs)));
 

@@ -42,6 +42,18 @@ const providersById = (res) => Object.fromEntries(res.body.providers.map((p) => 
 beforeEach(() => vi.clearAllMocks());
 
 describe('#4611: GET /api/providers publishes each provider\'s prerequisites', () => {
+  it('retains separate selectable execution records while describing one card per matching connection', async () => {
+    const tui = { ...CODEX, id: 'codex-tui', name: 'Codex TUI', type: 'tui' };
+    const response = await request(appWith([CODEX, tui, LOCAL_API])).get('/api/providers');
+    const byId = providersById(response);
+    expect(response.body.providers).toHaveLength(3);
+    expect(byId.codex.executionModes).toEqual([{ id: 'codex', type: 'cli' }, { id: 'codex-tui', type: 'tui' }]);
+    expect(byId['codex-tui'].executionModes).toEqual(byId.codex.executionModes);
+    expect(byId.lmstudio.executionModes).toEqual([{ id: 'lmstudio', type: 'api' }]);
+    const separate = providersById(await request(appWith([CODEX, { ...tui, envVars: { EXAMPLE_BACKEND: 'remote' } }])).get('/api/providers'));
+    expect(separate.codex.executionModes).toHaveLength(1);
+  });
+
   it('flags a CLI provider whose binary is absent, and names it', async () => {
     const byId = providersById(await request(appWith([CODEX, CLAUDE])).get('/api/providers'));
 

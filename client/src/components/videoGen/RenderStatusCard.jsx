@@ -12,7 +12,10 @@
  * conditioning still to say something a status line says better.
  *
  * Three things a stalled-looking render needs and a percentage can't give:
- *   - the named step it is on, drawn from the runner's own STAGE: markers;
+ *   - the named step it is on, drawn from the runner's own STAGE: markers —
+ *     or, when `remote` says an external provider owns the render, from the
+ *     much shorter submit / render / fetch round trip that is all this machine
+ *     can actually observe;
  *   - elapsed wall clock, so "silent" is visibly distinct from "stuck";
  *   - the display-sleep warning, BEFORE the screen goes dark. An MLX render
  *     sleeps the display on purpose (the Apple GPU watchdog panics when
@@ -54,8 +57,9 @@ export default function RenderStatusCard({
   error = null,
   startedAt = null,
   sleepsDisplay = false,
+  remote = false,
 }) {
-  const { steps, activeId } = resolveVideoRenderSteps({ generating, phase, progressPct });
+  const { steps, activeId } = resolveVideoRenderSteps({ generating, phase, progressPct, remote });
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">

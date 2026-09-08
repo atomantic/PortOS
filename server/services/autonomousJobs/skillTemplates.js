@@ -11,6 +11,7 @@ import { ensureDir, PATHS, tryReadFile, writeFileGuarded } from '../../lib/fileU
 import { JOBS_SKILLS_DIR, JOB_SKILL_MAP } from './constants.js'
 import { getAppById } from '../apps.js'
 import { appendTaskDataInputs, resolveTaskDataInputs } from '../taskDataInputs.js'
+import { FILE_ISSUES_DELIVERY_SETTINGS, isExplicitFileIssuesRequest } from '../../lib/auditCatalog.js'
 
 /**
  * Load a job skill template from disk
@@ -149,7 +150,7 @@ async function generateTaskFromJob(job) {
     ? (job.appId ? await getAppById(job.appId) : { id: null, name: 'PortOS', repoPath: PATHS.root })
     : null
   const inputs = selectedInputs.length > 0
-    ? await resolveTaskDataInputs(selectedInputs, { app })
+    ? await resolveTaskDataInputs(selectedInputs, { app, taskMetadata: job.taskMetadata })
     : []
   const taskPrompt = appendTaskDataInputs(prompt, inputs)
   const description = taskPrompt.split('\n').map(line => line.trim()).find(Boolean) || job.name
@@ -177,6 +178,15 @@ async function generateTaskFromJob(job) {
       // needed. This is only a completion marker; agentFinalization still
       // requires verifyPrClaim to prove the branch is empty before honoring it.
       ...(meta.noChangeSuccess === true ? { noChangeSuccess: true } : {}),
+      // The "lands no code" posture a job converted from a legacy quota-burn
+      // step carries (#6381). Forwarded beside the git-workflow flags above
+      // because the legacy executor derived all of them together: either of
+      // these forces openPR/simplify off and makes a CLEAN worktree the success
+      // condition, so dropping one here would turn a report-shaped run into a
+      // `pr-missing` retry that burns agent quota on work already done.
+      ...(meta.noCodeOutput != null ? { noCodeOutput: meta.noCodeOutput } : {}),
+      ...(meta.discardWorktree != null ? { discardWorktree: meta.discardWorktree } : {}),
+      ...(meta.worktreeChangesExpected != null ? { worktreeChangesExpected: meta.worktreeChangesExpected } : {}),
       // Optional per-job AI provider + model override. resolveAgentProviderAndModel
       // reads metadata.provider to switch providers and selectModelForTask reads
       // metadata.model as the highest-priority model choice. Absent = active
@@ -186,7 +196,15 @@ async function generateTaskFromJob(job) {
       // Reasoning-effort override — agentLifecycle reads metadata.effort and the
       // spawn builders emit `--effort`/`-c model_reasoning_effort=` (no-op for
       // non-effort providers). Absent = provider default.
-      ...(job.effort ? { effort: job.effort } : {})
+      ...(job.effort ? { effort: job.effort } : {}),
+      // File-issues delivery, from the SAME catalog object a scheduled audit
+      // stamps (`lib/auditCatalog.js`) rather than a second definition of the
+      // mode. A custom job is user-authored, so there is no catalog default to
+      // consult — it is opt-in, and the opt-in is the explicit `fileIssues`
+      // flag on the job's own taskMetadata. Stamped LAST so it wins over the
+      // useWorktree/openPR/simplify forwards above: those describe a
+      // code-shipping run, which is exactly what this mode is not.
+      ...(isExplicitFileIssuesRequest(meta) ? FILE_ISSUES_DELIVERY_SETTINGS : {})
     },
     taskType: 'internal',
     autoApprove: job.autonomyLevel === 'yolo'

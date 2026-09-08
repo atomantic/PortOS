@@ -27,7 +27,9 @@
  *   backlog arrived with no `model:`/`effort:` routing on it.
  * - Migration 305 matches on the MISSION half instead (everything above
  *   `## How to run this audit`, the part that says WHAT to audit) and replaces
- *   the contract half, which is the part this file owns and revises. Copy that
+ *   the contract half, which is the part this file owns and revises. That rule
+ *   is `matchStoredAuditPreset` below, shared with #6381's conversion so
+ *   "still a shipped preset" means one thing. Copy that
  *   migration for the next contract edit rather than 294's.
  *
  * Pure module: strings only, no I/O. `routes/quotaBurn.js` serves the list in
@@ -709,35 +711,50 @@ const contractHeadings = (contract) =>
   Array.from(contract.matchAll(/\*\*(.+?)\*\*/g), (match) => match[1]);
 
 /**
- * The current render for a stored audit prompt that is still a shipped preset,
- * or `null` to leave the stored text exactly as it is.
+ * The shipped preset a stored audit prompt still IS, or `null` when the text is
+ * no longer purely ours.
  *
- * Matching is on the MISSION half — everything above `AUDIT_CONTRACT_HEADING` —
- * rather than on the whole string. A job seeded N contract revisions ago matches
- * no reconstructed prior render byte-for-byte (that is why migration 294 skipped
+ * This is the recognition rule migration 305 settled on, extracted so the
+ * reference-model conversion (#6381) reuses it rather than inventing a second
+ * one: match the MISSION half — everything above `AUDIT_CONTRACT_HEADING` —
+ * rather than the whole string. A job seeded N contract revisions ago matches no
+ * reconstructed prior render byte-for-byte (that is why migration 294 skipped
  * every real job as "user-edited"), but its mission half is unchanged, because
  * revisions land in the contract. Two gates keep that looser rule from eating a
  * user's own text: `SHIPPED_CONTRACT_ANCHORS` proves the shipped skeleton is
  * still there (they did not replace the procedure), and
  * `SHIPPED_CONTRACT_HEADINGS` proves nothing was ADDED to it (no step of their
  * own that a wholesale replacement would delete). Either gate failing means
- * leave it alone.
- *
- * Returns `null` when the prompt is already current, so a caller can count real
- * upgrades without diffing.
+ * leave it alone — and, for the conversion, means the prompt is CUSTOMIZED and
+ * must become a custom task rather than be mapped onto a shipped one.
  */
-export function upgradeStoredAuditPrompt(stored) {
+export function matchStoredAuditPreset(stored) {
   if (typeof stored !== 'string' || !stored.includes(AUDIT_CONTRACT_HEADING)) return null;
   const index = stored.indexOf(AUDIT_CONTRACT_HEADING);
   const storedMission = stored.slice(0, index);
   const storedContract = stored.slice(index);
   if (!SHIPPED_CONTRACT_ANCHORS.every((anchor) => storedContract.includes(anchor))) return null;
   if (!contractHeadings(storedContract).every((heading) => SHIPPED_CONTRACT_HEADINGS.has(heading))) return null;
-
-  for (const preset of QUOTA_BURN_PROMPT_PRESETS) {
+  return QUOTA_BURN_PROMPT_PRESETS.find((preset) => {
     const current = preset.params.prompt;
-    if (current.slice(0, current.indexOf(AUDIT_CONTRACT_HEADING)) !== storedMission) continue;
-    return current === stored ? null : current;
-  }
-  return null;
+    return current.slice(0, current.indexOf(AUDIT_CONTRACT_HEADING)) === storedMission;
+  }) || null;
+}
+
+/**
+ * The current render for a stored audit prompt that is still a shipped preset,
+ * or `null` to leave the stored text exactly as it is.
+ *
+ * Recognition is `matchStoredAuditPreset` above — one rule, two readers, so a
+ * gate tightened for the migration cannot leave the conversion recognizing a
+ * prompt the refresh would refuse to touch.
+ *
+ * Returns `null` when the prompt is already current, so a caller can count real
+ * upgrades without diffing.
+ */
+export function upgradeStoredAuditPrompt(stored) {
+  const preset = matchStoredAuditPreset(stored);
+  if (!preset) return null;
+  const current = preset.params.prompt;
+  return current === stored ? null : current;
 }

@@ -475,11 +475,10 @@ aggregate diagnostics and cache post-steps can complete normally.
 - Barrel/catalog guards are added when reusable `lib`, `hooks`, or `utils`
   directories change, and catalog-only barrels are excluded from import-graph
   expansion. JSX changes include the global accessibility convention guard.
-- Any server source change adds the two generated-manifest drift tests
-  (`generate-api-route-catalog`, `generate-prompt-stage-call-sites`). They
-  regenerate from the tree rather than importing what they scan, so no import
-  edge reaches them; before this rule a route added on a scoped plan could
-  merge with a stale catalog and turn every later full-plan PR red.
+- Any server source change adds the tree-scanning guards
+  (`server/lib/apiRouteGraph.test.js`, `server/lib/apiRouteParity.test.js`,
+  `scripts/generate-prompt-stage-call-sites.test.js`): they read the tree
+  rather than importing what they scan, so no import edge reaches them (#5898).
 - A `scripts/*.py` sidecar selects every test that names a python script
   (`git grep`), in `files` mode, and falls back to the full suite when none do
   — see "Python sidecar scripts" above.

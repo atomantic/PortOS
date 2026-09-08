@@ -1,4 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { buildAlbumRecord, TRACK_IDS_MAX } from './albums/logic.js';
+import { buildTrackRecord, makeRender } from './tracks/logic.js';
 const queue = vi.hoisted(() => {
   const listeners = new Set();
   return {
@@ -26,8 +28,8 @@ describe('music studio completion hook', () => {
     trackStore.getTrack.mockReset();
     trackStore.buildRenderAppend.mockReset().mockReturnValue({ renders: [{ id: 'render-1' }] });
     trackStore.updateTrack.mockReset().mockResolvedValue({ id: 'track-1' });
-    trackStore.createTrack.mockReset().mockResolvedValue({ id: 'track-new', albumId: 'album-1' });
-    albumStore.getAlbum.mockReset().mockResolvedValue({ trackIds: [] });
+    trackStore.createTrack.mockReset().mockImplementation(async (input) => ({ id: 'track-new', ...input }));
+    albumStore.getAlbum.mockReset().mockResolvedValue({ id: 'album-1', trackIds: [] });
     albumStore.updateAlbum.mockReset().mockResolvedValue({});
     initMusicStudioHook();
   });
@@ -128,6 +130,36 @@ describe('music studio completion hook', () => {
     });
     await new Promise((resolve) => setImmediate(resolve));
     expect(trackStore.updateTrack).not.toHaveBeenCalledWith('deleted-track', expect.anything());
+  });
+
+  it.each(['full', 'missing'])('preserves completed audio as an unassigned track when the album is %s', async (state) => {
+    const now = '2026-01-01T00:00:00.000Z';
+    const album = state === 'full' ? buildAlbumRecord({
+      title: 'Example Album', trackIds: Array.from({ length: TRACK_IDS_MAX }, (_, i) => `track-example-${i}`),
+    }, { id: 'album-1', now }) : null;
+    albumStore.getAlbum.mockResolvedValue(album);
+    let storedTrack;
+    trackStore.createTrack.mockImplementation(async (input) => {
+      storedTrack = buildTrackRecord(input, { id: 'track-new', now });
+      return storedTrack;
+    });
+    trackStore.buildRenderAppend.mockImplementation((_track, input) => ({
+      renders: [makeRender(input, { id: 'render-new', now })],
+    }));
+    queue.events.emit('completed', {
+      id: 'job-preserved', kind: 'audio', queuedAt: now,
+      params: { prompt: 'Example prompt', musicStudio: { trackId: null, title: 'Example Track', albumId: 'album-1' } },
+      result: { filename: 'completed.wav', durationSec: 8, engine: 'musicgen', modelId: 'example-model' },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(storedTrack).toMatchObject({ id: 'track-new', albumId: '', audioFilename: 'completed.wav' });
+    expect(storedTrack.renders).toEqual([expect.objectContaining({ audioFilename: 'completed.wav' })]);
+    expect(albumStore.updateAlbum).not.toHaveBeenCalled();
+    expect(queue.updateJobResult).toHaveBeenCalledWith('job-preserved', {
+      trackId: 'track-new',
+      albumAssignmentError: { code: state === 'full' ? 'ALBUM_FULL' : 'ALBUM_NOT_FOUND', message: expect.any(String) },
+    });
   });
 
   it('files the privacy-safe profile prompt instead of the rollback-safe empty prompt', async () => {

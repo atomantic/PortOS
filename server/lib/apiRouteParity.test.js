@@ -9,17 +9,16 @@
  * green while the feature 404'd in the browser (#5716).
  *
  * This closes that boundary by diffing two static scans of the real tree:
- * `scripts/generate-api-route-catalog.js` for the mounted server routes (the
- * inventory the API Explorer already ships) and `clientApiPaths.js` for the
- * paths the client wrappers request. The server side is REGENERATED here rather
- * than read from `apiRouteCatalog.generated.json`, so a rename that skipped the
- * regeneration step still fails this test.
+ * `apiRouteGraph.js` for the mounted server routes (the inventory the API
+ * Explorer serves) and `clientApiPaths.js` for the paths the client wrappers
+ * request. Both are derived fresh from source here, so neither side can be a
+ * stale copy of the tree it describes.
  */
 
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { generateApiRouteCatalog } from '../../scripts/generate-api-route-catalog.js';
+import { buildApiRouteCatalog } from './apiRouteGraph.js';
 import { findUnmountedClientPaths, scanClientApiPaths } from './clientApiPaths.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -45,7 +44,7 @@ const CALLER_SUPPLIED_PATH_SITES = [
 
 const describeSite = (site) => `${site.file}: ${site.expression}`;
 
-const catalog = generateApiRouteCatalog(REPO_ROOT);
+const catalog = buildApiRouteCatalog({ repoRoot: REPO_ROOT });
 const serverPaths = catalog.routes.map((route) => route.path);
 const { paths: clientPaths, unresolved } = scanClientApiPaths({ repoRoot: REPO_ROOT });
 

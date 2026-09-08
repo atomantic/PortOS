@@ -1,3 +1,19 @@
+import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
+import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/providerGraphPreview.js';
+import {
+  createBinding,
+  createConnection,
+  getManagementGraph,
+  linkBinding,
+  previewBindingLink,
+  refreshConnectionCatalog,
+  removeConnection,
+  unlinkBinding,
+  updateBindingSettings,
+  updateConnectionSettings,
+  updateRouteModelAliases,
+  updateRouteSettings,
+} from '../services/providerGraph.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
@@ -12,11 +28,21 @@ import {
   codexLoginStartSchema,
   providerVisionTestSchema,
   providerVisionSuiteSchema,
+  providerBindingCreateSchema,
+  providerBindingLinkSchema,
+  providerBindingUnlinkSchema,
+  providerBindingUpdateSchema,
+  providerConnectionCreateSchema,
+  providerConnectionUpdateSchema,
+  providerRouteModelAliasSchema,
+  providerRouteSettingsUpdateSchema,
 } from '../lib/validation.js';
 import {
   getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
 } from '../services/providerRuntimeInstaller.js';
+import { refreshHarnessModels, usesHarnessCatalog } from '../services/harnesses.js';
+import { providerRuntimeKey } from '../lib/providerPrerequisites.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { getProviderReadinessMap, resetProviderReadinessCache, servedModelId } from '../services/providerReadiness.js';
 import { getLlamaServerEndpoint, relaunchLlamaServerWithAlias } from '../services/llamaServerManager.js';
@@ -115,6 +141,11 @@ const withTuiLaunchCommand = (provider) => {
   return launch ? { ...provider, tuiCommandLine: launch.commandLine } : provider;
 };
 
+// Reuse the harness catalog only for wrappers the managed OpenCode refresh
+// can update; custom binaries and declared backends keep their own catalogs.
+const refreshesOpenCodeCatalog = (provider) =>
+  providerRuntimeKey(provider) === 'opencode' && usesHarnessCatalog(provider);
+
 /**
  * The shape a provider takes on its way OUT to the client: secrets stripped,
  * plus the derived `canRefreshModels` flag the AI Providers page reads to
@@ -149,6 +180,7 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
   const publicReviewPostures = publicReviewPosturesForProvider(provider);
   return sanitizeProvider({
     ...decorated,
+    canRefreshModels: decorated.canRefreshModels || refreshesOpenCodeCatalog(provider),
     publicReviewPostures,
     publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),
     publicReviewSupported: publicReviewPostures.includes(PUBLIC_REVIEW_NO_TOOL_POSTURE),
@@ -219,6 +251,8 @@ export function createPortOSProviderRoutes(aiToolkit) {
   router.get('/', asyncHandler(async (req, res) => {
     const data = await providerService.getAllProviders();
     const prerequisites = getProviderPrerequisiteMap(data.providers);
+    const modeGroups = new Map(providerModeGroups(data.providers).flatMap(group =>
+      group.map(provider => [provider.id, group.map(({ id, type }) => ({ id, type }))])));
     const capabilities = await detectSystemCapabilities();
     // Cache-only: this list must stay a synchronous read that spawns nothing.
     // `null` here means NOT PROBED, and the dedicated `/codex/account` fetch is
@@ -233,6 +267,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
       activeProvider: data.activeProvider,
       providers: data.providers.map((provider) => ({
         ...presentProvider(provider, capabilities),
+        executionModes: modeGroups.get(provider.id),
         prerequisitesMet: prerequisites[provider.id]?.met ?? true,
         missingPrerequisites: prerequisites[provider.id]?.missing ?? [],
         // NON-blocking notices — today only 'this install's own ~/.codex/config.toml
@@ -264,6 +299,176 @@ export function createPortOSProviderRoutes(aiToolkit) {
       throw new ServerError('Provider not found', { status: 404 });
     }
     res.json(presentProvider(provider, await detectSystemCapabilities()));
+  }));
+
+  /**
+   * READ-ONLY preview of the provider connection graph (#6366) — what an
+   * import WOULD create from the records this install already runs, and which
+   * records it would leave isolated, with reasons.
+   *
+   * Nothing is persisted, no provider is written, and no AI provider is
+   * contacted: this is a pure projection of `providers.json` and must stay one,
+   * because it is meant to be safe to open from a configuration screen. The
+   * flat `GET /api/providers` shape is untouched and remains the execution
+   * contract; `activeProvider` here is the same executable provider id string.
+   *
+   * A client talking to a server without this endpoint gets a 404 and falls
+   * back to the flat list — an explicit unsupported answer, not a guess.
+   */
+  router.get('/management/preview', asyncHandler(async (_req, res) => {
+    const data = await providerService.getAllProviders();
+    res.set('Cache-Control', 'no-store').json(toManagementPreviewDto(buildProviderGraphPreview(data)));
+  }));
+
+  /**
+   * The DURABLE provider connection graph (#6367) — the same shape as the
+   * preview above, but read from ai_connections / ai_harness_bindings /
+   * ai_route_bindings rather than derived on every request.
+   *
+   * Sanitized identically: credential PRESENCE only, no projection snapshots,
+   * no raw provider records. An install whose database is unavailable gets an
+   * explicit 503 `PROVIDER_GRAPH_UNAVAILABLE` rather than a silent empty graph,
+   * so a client can fall back to the flat list on a known answer instead of
+   * guessing from a failed request.
+   */
+  router.get('/management', asyncHandler(async (_req, res) => {
+    res.set('Cache-Control', 'no-store').json(await getManagementGraph());
+  }));
+
+  /**
+   * Add a NEW backend to the graph (#6369) — mock flow 3 in the decision
+   * record: a distinct remote endpoint with its own credentials, created as its
+   * own identity even when its model names match a backend already configured.
+   *
+   * Creation only. Nothing is probed, no model list is fetched, no route is
+   * minted and `activeProvider` does not move: a connection with no binding is
+   * a legitimate row the user then attaches a harness to.
+   */
+  router.post('/connections', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerConnectionCreateSchema, req.body ?? {});
+    res.status(201).json(await createConnection(input));
+  }));
+
+  /**
+   * Add a harness to an existing backend (#6369) — mock flow 2: the same
+   * daemon, driven by a second program, as an INDEPENDENT binding with its own
+   * executable route ids.
+   *
+   * The route records are minted from the harness's command recipe
+   * (`PROVIDER_HARNESSES[].recipe`), which is what this endpoint waited on: the
+   * registry could classify an existing record but not describe how to spawn a
+   * fresh one.
+   *
+   * Every minted route arrives DISABLED with no model pins. Creating a route is
+   * a management act; executing one is a separate grant on `PATCH
+   * /api/providers/:id`, and nothing here launches, probes or generates.
+   */
+  router.post('/bindings', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingCreateSchema, req.body ?? {});
+    res.status(201).json(await createBinding(input));
+  }));
+
+  /**
+   * What linking this binding into another connection WOULD change: which
+   * executable route ids move, how the two backends differ, and which variant
+   * key the binding would occupy. Read-only — POST because the body carries the
+   * revisions being reviewed, not because anything is written.
+   */
+  router.post('/bindings/:id/link/preview', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingLinkSchema, req.body ?? {});
+    res.json(await previewBindingLink({ bindingId: req.params.id, ...input }));
+  }));
+
+  // Apply a reviewed link. Every named revision is re-checked inside the graph
+  // transaction; a stale one is a 409 that requires a fresh preview.
+  router.post('/bindings/:id/link', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingLinkSchema, req.body ?? {});
+    res.json(await linkBinding({ bindingId: req.params.id, ...input }));
+  }));
+
+  // Give this binding its own copy of the connection it shares. Route ids,
+  // activeProvider, task pins and fallback references are all retained.
+  router.post('/bindings/:id/unlink', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingUnlinkSchema, req.body ?? {});
+    res.json(await unlinkBinding({ bindingId: req.params.id, ...input }));
+  }));
+
+  // Remove a connection no binding uses. Refused with a 409 while one still
+  // does — the graph never silently orphans a binding to tidy a row away.
+  router.delete('/connections/:id', asyncHandler(async (req, res) => {
+    res.json(await removeConnection(req.params.id));
+  }));
+
+  /**
+   * Edit one SHARED backend (#6369) — its label, transports and credentials —
+   * and materialize the result into every executable route on it.
+   *
+   * This is the edit the graph exists for: an endpoint or key changed once
+   * rather than retyped per harness. `expectedRevision` is required and
+   * re-checked inside the serialized pass, so an edit made against a row that
+   * has since moved is a 409 instead of a silent overwrite.
+   */
+  router.patch('/connections/:id', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerConnectionUpdateSchema, req.body ?? {});
+    res.json(await updateConnectionSettings({ connectionId: req.params.id, ...input }));
+  }));
+
+  /**
+   * Refresh a connection's SHARED model catalog once for every harness on it.
+   *
+   * An explicit discovery request and nothing more: it lists models, it never
+   * generates, and a failed probe keeps the catalog the connection already had
+   * rather than reporting an empty backend.
+   */
+  router.post('/connections/:id/refresh-models', asyncHandler(async (req, res) => {
+    res.json(await refreshConnectionCatalog(req.params.id));
+  }));
+
+  /**
+   * Edit one harness binding's management state: its label and the subset of
+   * the shared catalog it offers. Never its routes' enablement or consent —
+   * those stay on `PATCH /api/providers/:id`, where granting them is explicit.
+   */
+  router.patch('/bindings/:id', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerBindingUpdateSchema, req.body ?? {});
+    res.json(await updateBindingSettings({ bindingId: req.params.id, ...input }));
+  }));
+
+  /**
+   * Edit ONE route's mode overrides (#6369) — args, timeout, effort, model pins.
+   *
+   * The per-mode counterpart to the shared-backend edit above, so a whole
+   * backend is configurable from one screen instead of a connection plus three
+   * route editors. Route-owned only: an endpoint, a credential and the `enabled`
+   * flag are all unreachable here by construction, and `PATCH
+   * /api/providers/:id` remains the place execution consent is granted.
+   *
+   * `expectedRevision` is the route's `settingsRevision` from
+   * `GET /api/providers/management` — a fingerprint of the values on disk, so an
+   * edit made in the route editor while this panel was open is a 409 too.
+   */
+  router.patch('/routes/:providerId', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerRouteSettingsUpdateSchema, req.body ?? {});
+    res.json(await updateRouteSettings({ providerId: req.params.providerId, ...input }));
+  }));
+
+  /**
+   * Correct ONE route's canonical→executable model aliases by hand (#6369).
+   *
+   * A refresh records only the aliases it can VERIFY — a stored model string
+   * round-trips through the harness's own adapter or it stays an unresolved
+   * alias rather than being rewritten — so a spelling the adapter cannot
+   * reproduce reaches no shared catalog and no model menu. This is where a
+   * human supplies it.
+   *
+   * `null` for a key removes that override and is the ONLY thing that does: a
+   * refresh rewrites what it observed in a separate column, so a correction
+   * survives it and an alias for a model the route no longer lists is kept and
+   * reported stale rather than dropped.
+   */
+  router.patch('/routes/:providerId/model-aliases', asyncHandler(async (req, res) => {
+    const input = validateRequest(providerRouteModelAliasSchema, req.body ?? {});
+    res.json(await updateRouteModelAliases({ providerId: req.params.providerId, ...input }));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {
@@ -691,7 +896,18 @@ export function createPortOSProviderRoutes(aiToolkit) {
   // provider record receives the same secret redaction as every other provider
   // response. The toolkit returns its raw persisted record here.
   router.post('/:id/refresh-models', asyncHandler(async (req, res) => {
-    const provider = await providerService.refreshProviderModels(req.params.id);
+    const stored = await providerService.getProviderById(req.params.id);
+    if (!stored) throw new ServerError('Provider not found', { status: 404 });
+    let provider;
+    if (refreshesOpenCodeCatalog(stored)) {
+      const result = await refreshHarnessModels('opencode');
+      if (!result.ok || !result.updated.includes(stored.id)) {
+        throw new ServerError(result.reason || 'No models matched this provider’s namespace; its catalog was preserved.', { status: 502 });
+      }
+      provider = await providerService.getProviderById(stored.id);
+    } else {
+      provider = await providerService.refreshProviderModels(req.params.id);
+    }
     if (!provider) throw new ServerError('Provider not found', { status: 404 });
     res.json(presentProvider(provider, await detectSystemCapabilities()));
   }));

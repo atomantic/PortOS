@@ -35,7 +35,7 @@ import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
 import { CD_MAX_SCENE_RETRIES } from '../creativeDirectorPrompts.js';
 import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
-import { grokVideoJobParams, resolveVideoBackendPin } from '../videoGen/backendPin.js';
+import { videoBackendJobParams, resolveVideoBackendPin } from '../videoGen/backendPin.js';
 import { mediaJobEvents } from '../mediaJobQueue/index.js';
 import { enqueueUnattendedMediaJob, hasConfiguredMediaRoute } from '../federatedMedia/defaultRouting.js';
 import { getSettings } from '../settings.js';
@@ -64,9 +64,18 @@ export function resolveImageStrength({ explicit, isContinuation }) {
  * the evaluate task or schedule a retry.
  */
 export async function runSceneRender(project, scene) {
+  if (project.workspace === 'video') {
+    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+    if (!await videoReviewAllowsDispatch(project.id, ['script-shot-plan', 'references'])) return null;
+    const { effectiveVideoProject } = await import('./videoExecution.js');
+    project = effectiveVideoProject(await getProject(project.id));
+    scene = project.treatment?.scenes?.find(value => value.sceneId === scene.sceneId);
+    if (!scene || scene.status !== 'pending') return null;
+  }
   console.log(`🎞️  CD scene render starting: ${project.id} / ${scene.sceneId} (order ${scene.order}, attempt ${(scene.retryCount || 0) + 1}/${CD_MAX_SCENE_RETRIES + 1})`);
 
   await updateScene(project.id, scene.sceneId, {
+    ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}),
     status: 'rendering',
     renderedJobId: null,
   });
@@ -82,7 +91,7 @@ export async function runSceneRender(project, scene) {
   // to Grok still rendered every scene on the MLX runtime, and the pythonPath
   // guard below failed the whole project even when Grok was the pinned backend.
   const videoPin = resolveVideoBackendPin(project, settings);
-  const useGrok = videoPin.mode === VIDEO_GEN_MODE.GROK;
+  const useLocal = videoPin.mode === VIDEO_GEN_MODE.LOCAL;
 
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
   // Fail fast when local video gen isn't configured. Without this guard the
@@ -91,12 +100,12 @@ export async function runSceneRender(project, scene) {
   // — none of which can ever succeed without operator intervention. Mark
   // the scene failed and let advanceAfterSceneSettled flag the project so
   // the user can configure pythonPath and Resume from the UI. Only the local
-  // lane needs it — a Grok render shells out to the CLI and never touches
-  // Python (the media-job queue gates its own pythonPath check the same way).
+  // lane needs this runtime — cloud backends provision/use their own execution
+  // path (the media-job queue gates local readiness the same way).
   // A routed video render never touches local Python — on a machine that
   // routes precisely BECAUSE it cannot render locally, this gate would fail
   // every scene the provider was going to handle (#4348).
-  if (!useGrok && !pythonPath && !(await hasConfiguredMediaRoute('video'))) {
+  if (useLocal && !pythonPath && !(await hasConfiguredMediaRoute('video'))) {
     // A pin that named a cloud backend but resolved to local means the ladder
     // degraded it (the backend's `enabled` toggle is off). Say so — otherwise
     // the user reads "configure Python" on a project they explicitly pinned to
@@ -107,6 +116,7 @@ export async function runSceneRender(project, scene) {
       : '';
     console.log(`❌ CD scene ${scene.sceneId}: local video gen not configured (settings.imageGen.local.pythonPath missing)${detail}`);
     await updateScene(project.id, scene.sceneId, {
+      ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}),
       status: 'failed',
       evaluation: {
         accepted: false,
@@ -209,24 +219,13 @@ export async function runSceneRender(project, scene) {
     height: renderParams.height,
     sourceImagePath,
   };
-  const params = useGrok
-    ? {
-      ...shared,
-      // Scene duration is authored in the local lane's continuous seconds;
-      // grokVideoJobParams snaps it up to a length Grok actually delivers.
-      // Geometry rides along in `shared` — grok.js reads it to derive the
-      // project's aspect ratio for the base image.
-      ...grokVideoJobParams(settings, { sourceImagePath, durationSeconds: scene.durationSeconds }),
-      creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
-    }
-    : {
-      ...shared,
+  const sceneParams = {
+    ...shared,
+    creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
+    disableAudio: project.disableAudio === true,
+    ...(useLocal ? {
       pythonPath,
-      // A pinned local model (the commission's `generation.videoModelId`, or the
-      // creative-agent render default) wins over the project's own modelId —
-      // the project's is the creation-time default, the pin is the user's
-      // explicit later choice.
-      modelId: videoPin.modelId || project.modelId,
+      modelId: project.modelId,
       numFrames: renderParams.numFrames,
       fps: renderParams.fps,
       steps: renderParams.steps,
@@ -234,16 +233,8 @@ export async function runSceneRender(project, scene) {
       tiling: 'auto',
       mode: sourceImagePath ? 'image' : 'text',
       imageStrength: effectiveImageStrength,
-      // Smoke-test / dev knob: skips the mlx_video audio-gen pass to cut
-      // wall-clock per scene roughly in half. Project-level so every scene
-      // in the project inherits the same setting.
-      disableAudio: project.disableAudio === true,
-      creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
-    };
-
-  if (useGrok) {
-    console.log(`☁️  CD scene ${scene.sceneId} rendering on grok (${params.duration}s clip)`);
-  }
+    } : {}),
+  };
 
   const owner = `cd:${project.id}:${scene.sceneId}`;
   // The scene is ALREADY persisted as 'rendering' by this point, and the
@@ -253,11 +244,31 @@ export async function runSceneRender(project, scene) {
   // throw here leaves the scene stuck in 'rendering' forever with nothing to
   // advance the project. Settle it through the normal failure path instead.
   let jobId;
+  let videoAttemptId;
   try {
-    ({ jobId } = await enqueueUnattendedMediaJob({ kind: 'video', params, owner }));
+    const params = videoBackendJobParams(settings, videoPin, sceneParams, { durationSeconds: scene.durationSeconds });
+    if (project.workspace === 'video') {
+      const { enqueueVideoProductionJob } = await import('./videoExecution.js');
+      const queued = await enqueueVideoProductionJob(project, { params, sceneId: scene.sceneId, workRevision: scene.workRevision || 0 });
+      if (!queued) {
+        await updateScene(project.id, scene.sceneId, { expectedWorkRevision: scene.workRevision || 0, status: 'pending' });
+        return null;
+      }
+      jobId = queued.jobId;
+      videoAttemptId = queued.attemptId;
+      await updateScene(project.id, scene.sceneId, { expectedWorkRevision: scene.workRevision || 0, renderedJobId: jobId });
+    } else ({ jobId } = await enqueueUnattendedMediaJob({ kind: 'video', params, owner }));
   } catch (error) {
     console.error(`❌ CD scene ${scene.sceneId}: could not queue the render: ${error.message}`);
-    await handleRenderFailed(project.id, scene.sceneId, error.message || 'could not queue the render');
+    if (project.workspace === 'video') {
+      const { pauseVideoExecution } = await import('./videoExecution.js');
+      await pauseVideoExecution(project.id, error.message);
+      return null;
+    }
+    await handleRenderFailed(project.id, scene.sceneId, error.message || 'could not queue the render', {
+      workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined,
+      retry: error.code !== 'VIDEO_BACKEND_INPUT_UNSUPPORTED' && error.code !== 'VIDEO_BACKEND_UNSUPPORTED',
+    });
     return null;
   }
 
@@ -267,25 +278,35 @@ export async function runSceneRender(project, scene) {
   // cancelJob handlers — we MUST listen for all three or a user-initiated
   // cancel via the Render Queue UI would leave the scene stuck in
   // `rendering` forever and leak listeners.
-  const onCompleted = async (job) => {
-    if (job.id !== jobId) return;
+  const settleReceipt = (status) => videoAttemptId
+    ? import('./videoExecution.js').then(({ settleVideoAttempt }) => settleVideoAttempt(project.id, videoAttemptId, { status }))
+    : Promise.resolve();
+  let settled = false;
+  const onCompleted = (job) => {
+    if (settled || job.id !== jobId) return;
+    settled = true;
     cleanup();
-    await handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack });
+    settleReceipt('completed').then(() => handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack, workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined }))
+      .catch(error => console.error(`❌ CD render completion failed: ${error.message}`));
   };
-  const onFailed = async (job) => {
-    if (job.id !== jobId) return;
+  const onFailed = (job) => {
+    if (settled || job.id !== jobId) return;
+    settled = true;
     cleanup();
-    await handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed');
+    settleReceipt(/timeout|timed out|interrupted/i.test(job.error || '') ? 'uncertain' : 'failed').then(() => handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed', { workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined }))
+      .catch(error => console.error(`❌ CD render failure handling failed: ${error.message}`));
   };
-  const onCanceled = async (job) => {
-    if (job.id !== jobId) return;
+  const onCanceled = (job) => {
+    if (settled || job.id !== jobId) return;
+    settled = true;
     cleanup();
     // Treat user-initiated cancel as a terminal stop for this scene — do
     // NOT route through handleRenderFailed (which would retry up to
     // CD_MAX_SCENE_RETRIES); the user explicitly stopped this. Mark the scene
     // failed and let the completionHook flag the project so the user can
     // resume from the UI.
-    await handleRenderCanceled(project.id, scene.sceneId);
+    settleReceipt(job.params?.videoProduction?.submissionUncertain ? 'uncertain' : 'canceled').then(() => handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined))
+      .catch(error => console.error(`❌ CD render cancellation handling failed: ${error.message}`));
   };
   function cleanup() {
     mediaJobEvents.off('completed', onCompleted);
@@ -295,6 +316,13 @@ export async function runSceneRender(project, scene) {
   mediaJobEvents.on('completed', onCompleted);
   mediaJobEvents.on('failed', onFailed);
   mediaJobEvents.on('canceled', onCanceled);
+  if (project.workspace === 'video') {
+    const { getJob } = await import('../mediaJobQueue/index.js');
+    const settled = getJob(jobId);
+    if (settled?.status === 'completed') onCompleted(settled);
+    if (settled?.status === 'failed') onFailed(settled);
+    if (settled?.status === 'canceled') onCanceled(settled);
+  }
 
   return jobId;
 }
@@ -304,7 +332,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
   const fresh = await getProject(projectId);
   if (!fresh) return;
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
-  if (!scene) return;
+  if (!scene || (opts.workRevision !== undefined && opts.workRevision !== (scene.workRevision || 0))) return;
   // autoAcceptScenes — smoke-test path that bypasses the cognitive evaluator.
   // Mark the scene accepted with a synthetic evaluation, drop the rendered
   // video into the project's collection, and let the orchestrator advance.
@@ -329,7 +357,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
       // stitch the surviving clips into a `complete` project and report the
       // smoke run as green even though i2v chaining is provably broken.
       // Fail the whole project so the smoke fixture goes red.
-      await updateScene(projectId, sceneId, {
+      await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
         status: 'failed',
         evaluation: {
           accepted: false,
@@ -348,7 +376,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     if (!playable.ok) {
       const reason = playable.reason || 'video file unplayable';
       console.log(`❌ CD auto-accept: video unplayable for ${jobId.slice(0, 8)}: ${reason} — failing smoke project directly (retrying would waste renders; a broken render must not produce a green smoke result).`);
-      await updateScene(projectId, sceneId, {
+      await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
         status: 'failed',
         evaluation: {
           accepted: false,
@@ -362,7 +390,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
       }).catch((e) => console.log(`⚠️ CD updateProject(failed) for ${projectId} failed: ${e.message}`));
       return;
     }
-    await updateScene(projectId, sceneId, {
+    await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
       status: 'accepted',
       renderedJobId: jobId,
       evaluation: {
@@ -389,7 +417,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
   // run in runs[]) and re-fires the evaluator — closing the loop without
   // wasting the rendered clip.
   const skipEvaluatorForPause = async (statusLabel, frames) => {
-    await updateScene(projectId, sceneId, {
+    await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
       status: 'evaluating',
       renderedJobId: jobId,
       evaluationFrames: frames,
@@ -419,7 +447,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     await skipEvaluatorForPause(postFrames.status, evaluationFrames);
     return;
   }
-  await updateScene(projectId, sceneId, {
+  await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
     status: 'evaluating',
     renderedJobId: jobId,
     evaluationFrames,
@@ -439,9 +467,9 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
   await dispatchSceneEvaluation(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', evaluationFrames });
 }
 
-async function handleRenderCanceled(projectId, sceneId) {
+async function handleRenderCanceled(projectId, sceneId, workRevision) {
   console.log(`🛑 CD scene ${sceneId} render canceled by user`);
-  await updateScene(projectId, sceneId, {
+  await updateScene(projectId, sceneId, { ...(workRevision === undefined ? {} : { expectedWorkRevision: workRevision }),
     status: 'failed',
     evaluation: {
       accepted: false,
@@ -453,21 +481,26 @@ async function handleRenderCanceled(projectId, sceneId) {
   await advanceAfterSceneSettled(projectId);
 }
 
-async function handleRenderFailed(projectId, sceneId, errorMsg) {
+async function handleRenderFailed(projectId, sceneId, errorMsg, { retry = true, workRevision } = {}) {
   const fresh = await getProject(projectId);
   if (!fresh) return;
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
-  if (!scene) return;
+  if (!scene || (workRevision !== undefined && workRevision !== (scene.workRevision || 0))) return;
   const nextRetry = (scene.retryCount || 0) + 1;
-  if (nextRetry <= CD_MAX_SCENE_RETRIES) {
+  if (fresh.workspace === 'video' && /quota|credit|balance|429|timeout|timed out|interrupted/i.test(errorMsg)) {
+    const { pauseVideoExecution } = await import('./videoExecution.js');
+    await pauseVideoExecution(projectId, `Render blocked: ${errorMsg}. Review the provider and saved job before Resume.`);
+    return;
+  }
+  if (retry && nextRetry <= (fresh.workspace === 'video' ? fresh.videoExecution?.limits?.maxRetries ?? 0 : CD_MAX_SCENE_RETRIES)) {
     console.log(`🔁 CD scene ${sceneId} render failed (${errorMsg}) — retry ${nextRetry}/${CD_MAX_SCENE_RETRIES}`);
-    await updateScene(projectId, sceneId, { status: 'pending', retryCount: nextRetry });
+    await updateScene(projectId, sceneId, { ...(workRevision === undefined ? {} : { expectedWorkRevision: workRevision }), status: 'pending', retryCount: nextRetry });
     const updated = { ...scene, retryCount: nextRetry };
     await runSceneRender(fresh, updated);
     return;
   }
   console.log(`❌ CD scene ${sceneId} render failed terminally: ${errorMsg}`);
-  await updateScene(projectId, sceneId, {
+  await updateScene(projectId, sceneId, { ...(workRevision === undefined ? {} : { expectedWorkRevision: workRevision }),
     status: 'failed',
     evaluation: {
       accepted: false,

@@ -694,3 +694,311 @@ describe('editorial generation guards', () => {
     );
   });
 });
+
+describe('editorial canon dependencies carry authored psychology (#6416)', () => {
+  // Obviously-fake placeholder canon — the authored causal chain the editor
+  // needs in order to tell a broken arc from an intended one.
+  const authoredUniverse = (over = {}) => ({
+    characters: [{
+      id: 'character-example',
+      name: 'Mara',
+      role: 'protagonist',
+      description: 'silver-eyed courier',
+      lie: 'Asking for help is how couriers get killed.',
+      want: 'Run the deep line alone and clear the debt.',
+      need: 'Let the harbour crew carry half the run.',
+    }],
+    places: [],
+    objects: [],
+    ...over,
+  });
+  const loomWithUniverse = () => ({
+    ...makeLoom(), universeId: 'universe-example', protagonistCharacterId: 'character-example',
+  });
+  const load = (universe) => __testing.loadEditorialDependencies(loomWithUniverse(), {
+    getUniverseFn: async () => universe,
+    listVoiceProfilesFn: async () => [],
+  });
+
+  it('renders the same engines block the generation stages receive', async () => {
+    const { canonDigest } = await load(authoredUniverse());
+    expect(canonDigest).toContain('Verified Universe protagonist: id=character-example; name=Mara.');
+    expect(canonDigest).toContain('lie=Asking for help is how couriers get killed.');
+    expect(canonDigest).toContain('want=Run the deep line alone and clear the debt.');
+    expect(canonDigest).toContain('need=Let the harbour crew carry half the run.');
+  });
+
+  it('reports the cast it could not fit instead of implying a complete review', async () => {
+    const crowd = Array.from({ length: 20 }, (_, index) => ({
+      id: `extra-${index}`, name: `Extra ${index}`, want: 'a berth off the dock',
+    }));
+    const { canonDigest } = await load(authoredUniverse({
+      characters: [...crowd, ...authoredUniverse().characters],
+    }));
+    expect(canonDigest).toContain('- Mara [protagonist]');
+    expect(canonDigest).toContain('more characters not shown');
+    expect(canonDigest).toContain('do not treat this cast list as complete');
+  });
+
+it('still shows the editorial reviewer a reveal-gated character in full (#6426)', async () => {
+    // The generation stages now mask a spoiler character's concealed history in
+    // BOTH canon blocks. The editorial pass must not inherit that: its
+    // continuity checks exist to catch a premature reveal, and a reviewer handed
+    // the masked view cannot tell concealed history from history that was never
+    // written.
+    const { canonDigest } = await load(authoredUniverse({
+      characters: [{
+        id: 'character-masked', name: 'The Auditor', role: 'antagonist', spoiler: true,
+        surfaceDescriptor: 'a clerk with a ledger',
+        background: 'Signed off on the collapse.',
+        lie: 'The ledger is the only honest thing left.',
+      }],
+    }));
+    expect(canonDigest).toContain('background: Signed off on the collapse.');
+    expect(canonDigest).toContain('lie=The ledger is the only honest thing left.');
+    expect(canonDigest).not.toContain('reveal-gated');
+  });
+
+  it('invalidates an in-flight editorial result when a belief is edited mid-run', async () => {
+    const before = await load(authoredUniverse());
+    const edited = authoredUniverse();
+    edited.characters[0].lie = 'Debt is the only honest contract.';
+    const after = await load(edited);
+
+    expect(after.canonDigest).not.toBe(before.canonDigest);
+    expect(() => __testing.assertEditorialDependenciesUnchanged(
+      after,
+      __testing.editorialDependencyFingerprint(before),
+      { code: 'LOOM_DEPENDENCIES_CHANGED_DURING_GENERATION', message: 'Linked canon changed' },
+    )).toThrow(/linked canon changed/i);
+  });
+
+  it('counts the engines block against the single-editor context budget', async () => {
+    const { canonDigest } = await load(authoredUniverse());
+    expect(() => __testing.assertEditorialPromptBudget({ canonDigest }, canonDigest.length - 1))
+      .toThrow(/single-editor limit/i);
+  });
+});
+
+describe('FableLoom editorial cast integrity (#6415)', () => {
+  // Obviously-fake placeholder canon.
+  const lead = {
+    id: 'character-lead',
+    name: 'Mara',
+    role: 'protagonist',
+    ghost: 'Lost the harbour crew on the deep line.',
+    wound: 'Nobody came back for her.',
+    lie: 'Asking for help is how couriers get killed.',
+    want: 'Run the deep line alone and clear the debt.',
+    need: 'Let the harbour crew carry half the run.',
+    motivations: 'Clear the debt before the season closes.',
+  };
+  const spearCarrier = {
+    id: 'character-dockhand',
+    name: 'Dockhand',
+    role: 'minor background dockhand',
+    motivations: 'Finish the shift.',
+    want: 'A quiet night.',
+  };
+  const explained = {
+    id: 'character-auditor',
+    name: 'The Auditor',
+    role: 'antagonist',
+    psychology: {
+      assessment: 'unknown',
+      assessmentNote: 'The story is told from outside this one. Its interior stays closed on purpose.',
+    },
+  };
+  const offstage = { id: 'character-offstage', name: 'Never Seen', role: 'protagonist' };
+  const universe = { characters: [lead, spearCarrier, explained, offstage] };
+
+  const stagedLoom = () => {
+    const loom = makeLoom();
+    return {
+      ...loom,
+      universeId: 'universe-example',
+      protagonistCharacterId: lead.id,
+      episodes: loom.episodes.map((episode, index) => (index > 0 ? episode : {
+        ...episode,
+        nodes: episode.nodes.map((node, nodeIndex) => {
+          if (nodeIndex === 1) {
+            return {
+              ...node,
+              visualCanon: { mode: 'locked', characterAppearances: [{ characterId: spearCarrier.id }] },
+            };
+          }
+          if (nodeIndex === 2) {
+            return {
+              ...node,
+              interactionWindow: { enabled: true, protagonistCharacterId: explained.id },
+            };
+          }
+          return node;
+        }),
+      })),
+    };
+  };
+
+  it('measures only the cast the story actually stages', () => {
+    // The universe holds every character its author ever wrote. Handing the
+    // editor binding depth rulings about people this loom never puts on screen
+    // spends the block's budget saying nothing and invites findings against
+    // scenes that do not exist.
+    expect([...__testing.loomCastCharacterIds(stagedLoom())].sort())
+      .toEqual([explained.id, spearCarrier.id, lead.id].sort());
+
+    const report = __testing.loomCastIntegrityReport(stagedLoom(), universe);
+    expect(report.coverage.map((row) => row.characterId).sort())
+      .toEqual([explained.id, spearCarrier.id, lead.id].sort());
+    expect(report.findings.some((finding) => finding.characterId === offstage.id)).toBe(false);
+  });
+
+  it('falls back to the linked cast when a loom has staged nobody yet', () => {
+    // A loom with no protagonist and no visual bindings stages nobody, and an
+    // empty block would silently exempt exactly the early stories that most
+    // need the ruling.
+    const unbound = { ...makeLoom(), universeId: 'universe-example', protagonistCharacterId: null };
+    expect(__testing.loomCastIntegrityReport(unbound, universe).castCount)
+      .toBe(universe.characters.length);
+  });
+
+  it('holds a spear-carrier and an explained unknown to lighter requirements', () => {
+    const report = __testing.loomCastIntegrityReport(stagedLoom(), universe);
+    const depths = Object.fromEntries(report.coverage.map((row) => [row.characterId, row.depth]));
+    expect(depths[lead.id]).toBe('full');
+    expect(depths[spearCarrier.id]).toBe('light');
+    expect(depths[explained.id]).toBe('explained');
+    // No manufactured trauma: the ONLY thing this block may report about a
+    // declared minor role or an author-closed interior is nothing at all.
+    const ownFields = (characterId) => report.findings
+      .filter((finding) => finding.characterId === characterId)
+      .map((finding) => finding.field);
+    expect(ownFields(spearCarrier.id)).toEqual([]);
+    expect(ownFields(explained.id)).toEqual([]);
+    // And the lead's unwritten interior IS reported — the psychology profile is
+    // the one thing no blank count or canon digest reaches.
+    expect(ownFields(lead.id)).toContain('psychology');
+  });
+
+  it('renders the depth rulings as binding, in this surface\'s own terms', () => {
+    const block = __testing.renderLoomCastIntegrity(
+      __testing.loomCastIntegrityReport(stagedLoom(), universe),
+      100_000,
+    );
+    expect(block).toContain('story-linked characters');
+    expect(block).toContain('Depth rulings are BINDING');
+    expect(block).toContain('**Dockhand** [light]');
+    expect(block).toContain('**The Auditor** [explained]');
+    expect(block).toContain('**Mara** [full]');
+  });
+
+  it('is carved out of the editorial budget, never added beside it', () => {
+    // The whole "no budget growth" claim rests on this: the block can never
+    // cost more than the budget it is subtracted from, so the digest that
+    // receives the remainder is always offered a non-negative share.
+    const report = __testing.loomCastIntegrityReport(stagedLoom(), universe);
+    for (const budget of [200, 1_000, 500_000]) {
+      expect(__testing.castIntegrityBudgetChars(budget)).toBeLessThanOrEqual(budget);
+    }
+    // Rows are dropped to fit; the header is the one line that always survives,
+    // so a truncated block can never read to the editor as a clean cast.
+    const tight = __testing.renderLoomCastIntegrity(report, 2_000);
+    expect(tight.length).toBeLessThanOrEqual(2_000);
+    expect(__testing.renderLoomCastIntegrity(report, 1)).toContain(
+      "Depth rulings are BINDING",
+    );
+  });
+
+  it('reports the cast integrity count without gating the autopilot on it', async () => {
+    // A thin spear-carrier must not block a FableLoom run the way a broken
+    // graph does — the editor is TOLD about it, the pass/fail contract is not.
+    const withCast = await collectFableLoomEditorialDiagnostics(
+      stagedLoom(),
+      { universe, voiceProfiles: [], canonDigest: '' },
+    );
+    const withoutCast = await collectFableLoomEditorialDiagnostics(
+      stagedLoom(),
+      { universe: { characters: [] }, voiceProfiles: [], canonDigest: '' },
+    );
+    expect(withCast.stats.castCharacterCount).toBe(3);
+    expect(withCast.stats.castIntegrityFindings).toBeGreaterThan(0);
+    expect(withoutCast.stats.castIntegrityFindings).toBe(0);
+    expect(withCast.passed).toBe(withoutCast.passed);
+  });
+});
+
+describe('character evolution branch coverage in the editorial diagnostics (#6444)', () => {
+  const dependencies = { universe: null, voiceProfiles: [], canonDigest: '' };
+
+  const evolutionStage = (stageId, sceneKey) => ({
+    stageId,
+    characterChoice: 'She stops negotiating and walks onto the bridge.',
+    evidence: { episodeId: 'episode-example', sceneKey },
+  });
+
+  const lensedLoom = (stages, outcome = 'full-change') => {
+    const base = makeLoom();
+    return sanitizeLoom({
+      ...base,
+      seriesPlan: {
+        ...base.seriesPlan,
+        characterEvolutions: [{
+          characterId: 'chr-mara',
+          characterName: 'Mara',
+          evolution: { outcome, stages },
+        }],
+      },
+    });
+  };
+
+  it('adds nothing at all to a loom that never opted into the lens', async () => {
+    // The optional-lens non-negotiable, asserted as a literal baseline: a
+    // pre-#6444 install's diagnostics must be byte-identical, so the coverage
+    // block and every stat it contributes are omitted rather than nulled.
+    const diagnostics = await collectFableLoomEditorialDiagnostics(makeLoom(), dependencies);
+
+    expect(Object.hasOwn(diagnostics, 'evolutionCoverage')).toBe(false);
+    expect(Object.keys(diagnostics.stats).filter((key) => /evolution/i.test(key))).toEqual([]);
+    expect(__testing.diagnosticLines(diagnostics)).not.toMatch(/evolution/i);
+    expect(__testing.compactEditorialDiagnostics(diagnostics).findings
+      .some((finding) => finding.category === 'character')).toBe(false);
+  });
+
+  it('reports an unearned inheritance as a character finding without gating the run', async () => {
+    // `left` and `right` rejoin at the ending scene, and only `left` proves the
+    // commitment — a viewer who took `right` arrives having never watched it.
+    const lensed = lensedLoom([evolutionStage('commitment-to-change', 'left')]);
+    const plain = await collectFableLoomEditorialDiagnostics(makeLoom(), dependencies);
+    const diagnostics = await collectFableLoomEditorialDiagnostics(lensed, dependencies);
+
+    expect(diagnostics.evolutionCoverage.stats.unearnedInheritanceCount).toBe(1);
+    expect(diagnostics.stats.evolutionCoverageStatus).toBe('findings');
+    const characterFindings = __testing.compactEditorialDiagnostics(diagnostics).findings
+      .filter((item) => item.category === 'character');
+    // The rejoin scene is also this graph's only ending, so it is both the
+    // inherited convergence and the ending the declared change never reaches.
+    const inherited = characterFindings.find((item) => item.problem.includes('Buried Wire'));
+    expect(inherited).toMatchObject({
+      severity: 'medium', episodeId: 'episode-example', nodeId: 'ending',
+    });
+    expect(inherited.suggestion).toBeTruthy();
+    expect(characterFindings.some((item) => item.problem.includes('Signal found'))).toBe(true);
+    expect(characterFindings.every((item) => item.pathId)).toBe(true);
+    // Reported, never gating — and the graph the editor is handed is untouched.
+    expect(diagnostics.passed).toBe(plain.passed);
+    expect(__testing.exactGraphIdContract(lensed.episodes[0]))
+      .toBe(__testing.exactGraphIdContract(makeLoom().episodes[0]));
+    expect(__testing.teleplayDigest(lensed)).toBe(__testing.teleplayDigest(makeLoom()));
+  });
+
+  it('carries an unreviewed lens through to the editor instead of a silent pass', async () => {
+    const diagnostics = await collectFableLoomEditorialDiagnostics(
+      lensedLoom([evolutionStage('final-proof', 'a-deleted-scene')]),
+      dependencies,
+    );
+
+    expect(diagnostics.stats.evolutionCoverageStatus).toBe('unreviewed');
+    expect(diagnostics.stats.unreviewedEvolutionLenses).toBe(1);
+    expect(__testing.diagnosticLines(diagnostics)).toContain('Character evolution coverage: unreviewed');
+  });
+});

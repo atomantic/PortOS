@@ -7,6 +7,14 @@ import QuotaBurn, { PENDING_POLL_MS, SAVE_DEBOUNCE_MS } from './QuotaBurn';
 vi.mock('../services/api', () => ({
   getQuotaBurn: vi.fn(),
   getQuotaBurnCatalog: vi.fn(),
+  // The SHARED scheduled-task catalogs a burn step references. Mocked here (and
+  // asserted as never WRITTEN to below) because the whole point of the reference
+  // model is that this page reads that catalog and never edits it.
+  getCosSchedule: vi.fn(),
+  getCosJobs: vi.fn(),
+  updateCosTaskInterval: vi.fn(),
+  updateCosJob: vi.fn(),
+  deleteCosJob: vi.fn(),
   saveQuotaBurn: vi.fn(),
   runQuotaBurn: vi.fn(),
   rearmQuotaBurn: vi.fn(),
@@ -25,6 +33,27 @@ vi.mock('../components/ui/Toast', () => {
 
 import * as api from '../services/api';
 
+const NO_OVERRIDES = { providerId: null, model: null, effort: null, params: {} };
+
+// One burn step, in the shape the GET actually hands the page: a reference plus
+// an overrides bag, with the server's compat mirrors alongside — the editor must
+// send the bag and DROP the mirrors, which resolve by presence.
+const step = (overrides = {}) => ({
+  id: 'j1',
+  enabled: true,
+  label: 'Bible images',
+  taskRef: { kind: 'builtin', taskType: 'universe-bible-images', appId: null },
+  jobType: null,
+  runOnce: false,
+  unavailable: null,
+  overrides: { ...NO_OVERRIDES },
+  model: null,
+  providerId: null,
+  effort: null,
+  params: {},
+  ...overrides,
+});
+
 const config = {
   enabled: false,
   checkIntervalMinutes: 30,
@@ -32,7 +61,7 @@ const config = {
     grok: {
       enabled: true, resetWithinHours: 24, reservePercent: 10,
       maxDispatchesPerWindow: 5, priority: 0,
-      jobs: [{ id: 'j1', enabled: true, label: 'Bible images', jobType: 'universe-bible-images', model: null, providerId: null, params: {} }],
+      jobs: [step()],
     },
     codex: { enabled: false, resetWithinHours: 24, reservePercent: 0, maxDispatchesPerWindow: 5, priority: 0, jobs: [] },
   },
@@ -47,33 +76,36 @@ const status = {
   runs: [{ at: new Date().toISOString(), trigger: 'scheduled', dispatched: false, reason: 'no burnable window' }],
 };
 
-const catalog = {
-  families: ['grok', 'codex'],
-  jobTypes: [
-    { id: 'universe-bible-images', label: 'Universe bible images', description: 'Render missing bible images.', params: [{ key: 'universeId', kind: 'universe', label: 'Universe', default: 'all' }] },
-    {
-      id: 'agent-prompt',
-      label: 'Agent prompt',
-      description: 'Queue a CoS agent.',
-      params: [
-        { key: 'appId', kind: 'app', label: 'Managed app', required: true },
-        { key: 'prompt', kind: 'text', label: 'Work prompt', required: true },
-        { key: 'openPR', kind: 'boolean', label: 'Open a PR', default: true },
-      ],
+// `GET /api/cos/schedule`, trimmed to the fields the picker reads. `ux` acts on
+// one managed app, `universe-bible-images` is programmatic, `repo-sync` sweeps
+// install-wide — the three target shapes the server's schema distinguishes.
+const schedule = {
+  tasks: {
+    ux: {
+      enabled: true,
+      description: 'Audit the interface and file issues.',
+      appOverrides: { a1: { enabled: true }, a2: { enabled: false } },
+      providerId: null,
+      model: null,
+      taskMetadata: { useWorktree: false, openPR: false },
+      fileIssuesCapable: true,
+      defaultFileIssues: true,
     },
-  ],
-  presets: [{
-    id: 'ux-audit',
-    label: 'UX issues',
-    summary: 'Audit the UI and file issues.',
-    jobType: 'agent-prompt',
-    // Mirrors the real audit posture in server/lib/quotaBurnPresets.js: no
-    // worktree (it writes nothing), no code output, nothing to ship.
-    params: { prompt: 'Audit the UI. File issues. Change no code.', useWorktree: false, noCodeOutput: true, openPR: false, simplify: false },
-  }],
-  apps: [{ id: 'a1', name: 'App One' }],
-  universes: [{ id: 'u1', name: 'Example Universe' }],
-  imageModes: ['codex', 'grok'],
+    'universe-bible-images': {
+      enabled: true, programmatic: true, appOverrides: {}, taskMetadata: { scope: 'all', maxEntries: 10 },
+    },
+    'repo-sync': { enabled: true, installWide: true, appOverrides: {} },
+    'shell-only': { enabled: true, appOverrides: {}, invocation: { userInvokable: false } },
+  },
+};
+
+const cosJobs = { jobs: [{ id: 'job-a', name: 'Nightly changelog', appId: 'a1', enabled: true, type: 'agent' }] };
+
+// What the burn's own catalog endpoint still supplies: target apps and the
+// providers a per-invocation pin may name.
+const catalog = {
+  apps: [{ id: 'a1', name: 'App One' }, { id: 'a2', name: 'App Two' }],
+  providers: [],
 };
 
 const renderPage = (path = '/devtools/quota-burn') => render(
@@ -87,6 +119,7 @@ const renderPage = (path = '/devtools/quota-burn') => render(
 
 const setupSaveUser = () => userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 const flushSave = () => act(async () => { await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS); });
+
 // Past the debounce/poll window rather than up to its edge, so a "did not
 // happen" assertion runs AFTER the moment the thing would have happened.
 const pastSaveWindow = () => act(async () => { await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS + 100); });
@@ -101,6 +134,8 @@ beforeEach(() => {
   globalThis.sessionStorage.clear();
   api.getQuotaBurn.mockResolvedValue({ config, status });
   api.getQuotaBurnCatalog.mockResolvedValue(catalog);
+  api.getCosSchedule.mockResolvedValue(schedule);
+  api.getCosJobs.mockResolvedValue(cosJobs);
   api.saveQuotaBurn.mockResolvedValue({ config });
   api.runQuotaBurn.mockResolvedValue({ result: { dispatched: false, reason: 'nothing to burn' } });
   api.rearmQuotaBurn.mockResolvedValue({ config, status });
@@ -284,84 +319,167 @@ describe('QuotaBurn page', () => {
     ));
   });
 
-  it('adds a fully-configured job from a preset, inheriting the plan\'s app', async () => {
+  it('offers the SHARED scheduled-task catalog, grouped, and filters it as you type', async () => {
+    // The picker is a view over the same two catalogs CoS → Schedule and System
+    // Tasks render — not a second automation catalog of this page's own.
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    const picker = await screen.findByLabelText('Add a step');
+    const groups = Array.from(picker.querySelectorAll('optgroup')).map((group) => group.label);
+    expect(groups).toEqual(['PortOS scheduled tasks', 'App custom tasks']);
+    expect(Array.from(picker.querySelectorAll('option')).map((option) => option.value))
+      // `shell-only` is not user-invokable, so a burn can never run it.
+      .toEqual(['', 'builtin:repo-sync', 'builtin:universe-bible-images', 'builtin:ux', 'custom:job-a']);
+
+    await user.type(screen.getAllByLabelText('Search tasks')[0], 'changelog');
+    expect(Array.from(picker.querySelectorAll('option')).map((option) => option.value))
+      .toEqual(['', 'custom:job-a']);
+  });
+
+  it('adds a step that REFERENCES the picked task, targeting the app the plan already uses', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
-    await user.selectOptions(await screen.findByLabelText(/Add a preset job/), 'ux-audit');
+    await user.selectOptions(await screen.findByLabelText('Add a step'), 'builtin:ux');
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalled();
     const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
     const added = patch.families.grok.jobs.at(-1);
-    expect(added.jobType).toBe('agent-prompt');
-    expect(added.label).toBe('UX issues');
-    expect(added.params.prompt).toContain('File issues');
-    // Read-only audit work: it reads the app's checkout in place (no worktree —
-    // worktree + no PR is the auto-merge posture), delivers by filing issues,
-    // and has no diff to open a PR for or run /simplify against.
-    expect(added.params.useWorktree).toBe(false);
-    expect(added.params.noCodeOutput).toBe(true);
-    expect(added.params.openPR).toBe(false);
+    // A reference, not a copied prompt — and no free-text work of its own.
+    expect(added.taskRef).toEqual({ kind: 'builtin', taskType: 'ux', appId: 'a1' });
+    expect(added).not.toHaveProperty('jobType');
+    expect(added.overrides).toEqual(NO_OVERRIDES);
   });
 
-  it('asks before a preset overwrites a work prompt the user already wrote', async () => {
+  it('never sends an appId for a task the server would reject one on', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
+    renderPage('/devtools/quota-burn/grok');
+    await user.selectOptions(await screen.findByLabelText('Add a step'), 'builtin:repo-sync');
+    // …and it says so on the row instead of leaving an empty target picker.
+    // Asserted before the save round-trips: the mocked PUT answers with the
+    // pre-existing plan, which is what the page then adopts.
+    expect(await screen.findByText(/Runs install-wide/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Target app')).not.toBeInTheDocument();
+    await flushSave();
+    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    expect(patch.families.grok.jobs.at(-1).taskRef).toEqual({ kind: 'builtin', taskType: 'repo-sync', appId: null });
+  });
+
+  it('offers a target only for a task that acts on one app, limited to the apps that enabled it', async () => {
     const user = userEvent.setup();
+    const uxConfig = {
+      ...config,
+      families: { ...config.families, grok: { ...config.families.grok, jobs: [step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' } })] } },
+    };
+    api.getQuotaBurn.mockResolvedValue({ config: uxConfig, status });
     renderPage('/devtools/quota-burn/grok');
     await user.click(await screen.findByLabelText('Expand step 1'));
-    await user.selectOptions(await screen.findByLabelText('Job type'), 'agent-prompt');
-    const promptBox = screen.getByLabelText('Work prompt');
-    await user.type(promptBox, 'my own prompt');
-    await user.selectOptions(screen.getByLabelText(/Start from a preset/), 'ux-audit');
-
-    // Held, not applied — the typed prompt is still on screen behind a confirm.
-    expect(promptBox).toHaveValue('my own prompt');
-    await user.click(screen.getByRole('button', { name: 'Keep mine' }));
-    expect(promptBox).toHaveValue('my own prompt');
-
-    await user.selectOptions(screen.getByLabelText(/Start from a preset/), 'ux-audit');
-    await user.click(screen.getByRole('button', { name: 'Replace' }));
-    expect(promptBox).toHaveValue('Audit the UI. File issues. Change no code.');
+    const target = await screen.findByLabelText('Target app');
+    expect(target).toHaveValue('a1');
+    // App Two's override is OFF, and the server reports `wrong-scope` for it —
+    // offering it would be offering a target the step can never run against.
+    expect(Array.from(target.querySelectorAll('option')).map((option) => option.textContent))
+      .toEqual(['Select an app…', 'App One']);
   });
 
-  it('shows which preset a step currently matches, and drops it once the prompt is edited', async () => {
-    // The picker used to snap straight back to "Choose a preset…", so applying
-    // one looked like a no-op — its only visible effect was a textarea further
-    // down the row. The selection is DERIVED from the prompt text (nothing on
-    // disk records a preset id), so it stays honest across an edit.
-    const user = userEvent.setup();
+  it('shows the EFFECTIVE settings and audit mode, and saves an override without touching the task', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
+    const uxConfig = {
+      ...config,
+      families: { ...config.families, grok: { ...config.families.grok, jobs: [step({ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' } })] } },
+    };
+    api.getQuotaBurn.mockResolvedValue({ config: uxConfig, status });
     renderPage('/devtools/quota-burn/grok');
     await user.click(await screen.findByLabelText('Expand step 1'));
-    await user.selectOptions(await screen.findByLabelText('Job type'), 'agent-prompt');
-    const picker = screen.getByLabelText(/Start from a preset/);
-    expect(picker).toHaveValue('');
 
-    await user.selectOptions(picker, 'ux-audit');
-    expect(screen.getByLabelText('Work prompt')).toHaveValue('Audit the UI. File issues. Change no code.');
-    expect(picker).toHaveValue('ux-audit');
+    // Inherited from the task's saved settings: `defaultFileIssues: true`.
+    expect(await screen.findByText(/files issues, changes no code/)).toBeInTheDocument();
+    const mode = screen.getByLabelText('Audit mode');
+    expect(mode).toHaveValue('');
+    expect(mode.querySelector('option').textContent).toContain('Inherit (file issues only)');
 
-    // Edited away from the preset ⇒ the row no longer IS that preset, and the
-    // control must stop claiming it is.
-    await user.type(screen.getByLabelText('Work prompt'), ' plus my own note');
-    expect(picker).toHaveValue('');
+    await user.selectOptions(mode, 'false');
+    // The effective line follows the override immediately, before the save lands.
+    expect(await screen.findByText(/does the work/)).toBeInTheDocument();
+    await flushSave();
+    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    expect(patch.families.grok.jobs[0].overrides.params).toEqual({ fileIssues: false });
+    // The referenced task is never written to — that is the whole reference model.
+    expect(api.updateCosTaskInterval).not.toHaveBeenCalled();
+    expect(api.updateCosJob).not.toHaveBeenCalled();
   });
 
-  it('keeps the work prompt when the job type picker is clicked through', async () => {
-    // Params are carried across a type switch: resetting them destroyed a long
-    // hand-written prompt with no confirmation and no undo.
+  it('links out to view / edit / create the source scheduled task instead of editing it here', async () => {
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
-    await user.click(await screen.findByLabelText('Expand step 1'));
-    await user.selectOptions(await screen.findByLabelText('Job type'), 'agent-prompt');
-    await user.type(screen.getByLabelText('Work prompt'), 'keep me');
-    await user.selectOptions(screen.getByLabelText('Job type'), 'universe-bible-images');
-    await user.selectOptions(screen.getByLabelText('Job type'), 'agent-prompt');
-    expect(screen.getByLabelText('Work prompt')).toHaveValue('keep me');
+    // Creating new work is a link out, on the family card, next to the picker.
+    expect(await screen.findByRole('link', { name: /Create an on-demand scheduled task/ }))
+      .toHaveAttribute('href', '/cos/jobs');
+    await user.click(screen.getByLabelText('Expand step 1'));
+    expect(screen.getByRole('link', { name: /View \/ edit the task/ }))
+      .toHaveAttribute('href', '/cos/schedule?task=universe-bible-images');
   });
 
-  it('never persists a status field alongside the job config', async () => {
+  it('renders a stale reference with its reason and NO run affordance', async () => {
+    // The server stamps availability from the live catalog on every read: a step
+    // whose task was deleted keeps its place in the plan and says why it cannot
+    // run — offering a ▶ that can only produce a decline toast is worse.
+    const stale = {
+      ...config,
+      families: {
+        ...config.families,
+        grok: {
+          ...config.families.grok,
+          jobs: [step({
+            taskRef: { kind: 'builtin', taskType: 'deleted-task', appId: null },
+            unavailable: { code: 'unknown-task', reason: 'scheduled task "deleted-task" is not available on this install' },
+          })],
+        },
+      },
+    };
+    api.getQuotaBurn.mockResolvedValue({ config: stale, status });
+    renderPage('/devtools/quota-burn/grok');
+    expect(await screen.findByText(/scheduled task "deleted-task" is not available on this install/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Run step 1 now')).not.toBeInTheDocument();
+    // It is still editable — the picker is right there to re-point it.
+    expect(screen.getByLabelText('Remove step 1')).toBeInTheDocument();
+  });
+
+  it('gates Run Now on the SAVED plan, not the form input', async () => {
+    // Every run control reads server-side config, so a run fired between the
+    // keystroke and the PUT would burn with the previous settings.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
+    renderPage('/devtools/quota-burn/grok');
+    await user.click(await screen.findByLabelText('Name for step 1'));
+    await user.keyboard('!');
+    expect(screen.getByLabelText('Run step 1 now')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Evaluate now' })).toBeDisabled();
+    await flushSave();
+    await waitFor(() => expect(screen.getByLabelText('Run step 1 now')).toBeEnabled());
+  });
+
+  it('removes a burn step without deleting the scheduled task it referenced', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = setupSaveUser();
+    renderPage('/devtools/quota-burn/grok');
+    await user.click(await screen.findByLabelText('Remove step 1'));
+    await user.click(screen.getByRole('button', { name: 'Remove' }));
+    await flushSave();
+    // The ONLY call is the plan PUT with the step gone.
+    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    expect(patch.families.grok.jobs).toEqual([]);
+    expect(api.deleteCosJob).not.toHaveBeenCalled();
+    expect(api.updateCosJob).not.toHaveBeenCalled();
+    expect(api.updateCosTaskInterval).not.toHaveBeenCalled();
+  });
+
+  it('never persists a status field, or an override mirror, alongside the step', async () => {
     // Pending counts live on the STATUS side and reach JobRow as their own prop.
-    // If they were merged into the job objects they would have to be stripped
-    // back off before every save — the PUT schema is strict and would 400.
+    // The top-level `model`/`params` mirrors are the subtler one: the server
+    // resolves them by PRESENCE, so echoing them back would let a stale mirror
+    // outrank the overrides bag the editor writes.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();
     renderPage('/devtools/quota-burn/grok');
@@ -370,8 +488,10 @@ describe('QuotaBurn page', () => {
     await flushSave();
     expect(api.saveQuotaBurn).toHaveBeenCalled();
     const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
-    expect(patch.families.grok.jobs[0]).not.toHaveProperty('pending');
-    expect(patch.families.grok.jobs[0]).not.toHaveProperty('ranAt');
+    const saved = patch.families.grok.jobs[0];
+    for (const key of ['pending', 'ranAt', 'model', 'providerId', 'effort', 'params']) {
+      expect(saved).not.toHaveProperty(key);
+    }
   });
 });
 
@@ -441,46 +561,45 @@ describe('QuotaBurn run-once steps', () => {
 });
 
 /**
- * The catalog is the page's second read, and it fails independently of the
- * plan: the plan renders perfectly while every choice the form offers is empty.
- * Swallowing that failure left the preset picker gone, "Add job" disabled, and
- * every dropdown blank with nothing saying why — and editing a step against an
- * empty job-type list saves `jobType: ""`, which the strict PUT rejects.
+ * The catalog reads fail independently of the plan: the plan renders perfectly
+ * while every choice the pickers offer is empty. Swallowing that left the task
+ * picker with nothing in it and nothing on screen saying why — and a step saved
+ * against an empty catalog references nothing, which the strict PUT rejects.
  */
 describe('QuotaBurn catalog failure', () => {
   it('names a failed catalog read instead of silently emptying the form', async () => {
-    api.getQuotaBurnCatalog.mockRejectedValueOnce(new Error('Catalog request failed'));
+    api.getCosSchedule.mockRejectedValueOnce(new Error('Schedule request failed'));
+    api.getCosJobs.mockRejectedValueOnce(new Error('Jobs request failed'));
     renderPage('/devtools/quota-burn/grok');
 
     expect(await screen.findByText('Job choices could not be loaded')).toBeInTheDocument();
-    expect(screen.getByText(/Catalog request failed/)).toBeInTheDocument();
-    // The controls the catalog feeds are gone or inert — the banner is the only
-    // thing on screen that explains either.
-    expect(screen.queryByLabelText(/Add a preset job/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Add job/ })).toBeDisabled();
+    expect(screen.getByText(/Schedule request failed/)).toBeInTheDocument();
+    // The picker is inert rather than silently empty.
+    expect(screen.getByLabelText('Add a step')).toBeDisabled();
     // The plan itself still rendered: a catalog failure is not a page failure.
     expect(screen.getByText(/62% left/)).toBeInTheDocument();
   });
 
   it('re-fetches the catalog from the banner without a page reload', async () => {
     const user = userEvent.setup();
-    api.getQuotaBurnCatalog.mockRejectedValueOnce(new Error('Catalog request failed'));
+    api.getCosSchedule.mockRejectedValueOnce(new Error('Schedule request failed'));
     renderPage('/devtools/quota-burn/grok');
 
     await user.click(await screen.findByRole('button', { name: 'Retry catalog load' }));
-    await waitFor(() => expect(api.getQuotaBurnCatalog).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.getCosSchedule).toHaveBeenCalledTimes(2));
     // The success clears the banner AND restores the controls it was standing in for.
     await waitFor(() => expect(screen.queryByText('Job choices could not be loaded')).not.toBeInTheDocument());
-    expect(screen.getByLabelText(/Add a preset job/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Add job/ })).toBeEnabled();
+    expect(screen.getByLabelText('Add a step')).toBeEnabled();
   });
 
-  it('treats a catalog that answered with no job types as its own failure', async () => {
-    // Same symptom as a thrown read — every dropdown empty — but a different
-    // cause, so it must not be reported as a successful load.
-    api.getQuotaBurnCatalog.mockResolvedValueOnce({ ...catalog, jobTypes: [] });
+  it('treats a catalog with no burn-invokable task as its own failure', async () => {
+    // Same symptom as a thrown read — an empty picker — but a different cause,
+    // so it must not be reported as a successful load. Every task here is
+    // ineligible or a shell job.
+    api.getCosSchedule.mockResolvedValueOnce({ tasks: { hidden: { enabled: true, invocation: { userInvokable: false } } } });
+    api.getCosJobs.mockResolvedValueOnce({ jobs: [{ id: 'sh', name: 'Sweep', type: 'shell', enabled: true }] });
     renderPage('/devtools/quota-burn/grok');
-    expect(await screen.findByText(/The server returned no job types\./)).toBeInTheDocument();
+    expect(await screen.findByText(/The server returned no scheduled tasks a burn can run\./)).toBeInTheDocument();
   });
 
   it('survives a partial catalog payload whose lists are null', async () => {
@@ -488,16 +607,18 @@ describe('QuotaBurn catalog failure', () => {
     // consumer reads `.length` on these lists — so an older peer or a partial
     // response would take the whole page down with a TypeError instead of
     // reporting an unusable catalog.
-    api.getQuotaBurnCatalog.mockResolvedValueOnce({ jobTypes: null, apps: null, universes: null, imageModes: null });
+    api.getQuotaBurnCatalog.mockResolvedValueOnce({ apps: null, providers: null });
+    api.getCosSchedule.mockResolvedValueOnce({ tasks: null });
+    api.getCosJobs.mockResolvedValueOnce({ jobs: null });
     renderPage('/devtools/quota-burn/grok');
-    expect(await screen.findByText(/The server returned no job types\./)).toBeInTheDocument();
+    expect(await screen.findByText(/The server returned no scheduled tasks a burn can run\./)).toBeInTheDocument();
     expect(screen.getByText(/62% left/)).toBeInTheDocument();
   });
 
   it('announces the banner to assistive tech rather than only drawing it', async () => {
     // It appears after the card is already on screen — the read resolves late,
     // and a retry can put it back — so nothing announces it without a live region.
-    api.getQuotaBurnCatalog.mockRejectedValueOnce(new Error('Catalog request failed'));
+    api.getCosSchedule.mockRejectedValueOnce(new Error('Schedule request failed'));
     renderPage('/devtools/quota-burn/grok');
     // Scope to the banner's own text: the first-paint PageSkeleton is also a
     // `status` region, so a bare role query would race it.
@@ -508,7 +629,7 @@ describe('QuotaBurn catalog failure', () => {
 
   it('says nothing about the catalog when it loaded', async () => {
     renderPage('/devtools/quota-burn/grok');
-    await screen.findByLabelText(/Add a preset job/);
+    await screen.findByLabelText('Add a step');
     expect(screen.queryByText('Job choices could not be loaded')).not.toBeInTheDocument();
   });
 });
@@ -846,220 +967,143 @@ describe('QuotaBurn save races', () => {
   });
 });
 
-describe('QuotaBurn collapsible jobs', () => {
-  it('renders configured jobs in a collapsed state by default with summary details', async () => {
+describe('QuotaBurn collapsible steps', () => {
+  it('renders configured steps collapsed, summarising the task they reference', async () => {
     renderPage('/devtools/quota-burn/grok');
     expect(await screen.findByDisplayValue('Bible images')).toBeInTheDocument();
-    // Compact summary badge shows job type
-    expect(screen.getByText(/Universe bible images/)).toBeInTheDocument();
+    // The picker's own <option> carries the same text, so pick the summary span.
+    expect(screen.getAllByText('universe-bible-images').find((node) => node.tagName === 'SPAN')).toBeTruthy();
     // Inner fields are collapsed
-    expect(screen.queryByLabelText('Job type')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Scheduled task')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Expand step 1')).toBeInTheDocument();
   });
 
-  it('expands and collapses a single job using its chevron toggle', async () => {
+  it('expands and collapses a single step using its chevron toggle', async () => {
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
-    const toggle = await screen.findByLabelText('Expand step 1');
-    await user.click(toggle);
+    await user.click(await screen.findByLabelText('Expand step 1'));
 
-    // Now expanded: shows inner fields
-    expect(await screen.findByLabelText('Job type')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Scheduled task')).toBeInTheDocument();
     expect(screen.getByLabelText('Collapse step 1')).toBeInTheDocument();
 
-    // Click again to collapse
     await user.click(screen.getByLabelText('Collapse step 1'));
-    expect(screen.queryByLabelText('Job type')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Scheduled task')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Expand step 1')).toBeInTheDocument();
   });
 
-  it('expands all and collapses all jobs via header control', async () => {
-    const twoJobConfig = {
+  it('expands all and collapses all steps via the header control', async () => {
+    const twoStepConfig = {
       ...config,
       families: {
         ...config.families,
         grok: {
           ...config.families.grok,
-          jobs: [
-            { id: 'j1', enabled: true, label: 'Job 1', jobType: 'universe-bible-images', params: {} },
-            { id: 'j2', enabled: true, label: 'Job 2', jobType: 'agent-prompt', params: {} },
-          ],
+          jobs: [step(), step({ id: 'j2', label: 'UX audit', taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' } })],
         },
       },
     };
-    api.getQuotaBurn.mockResolvedValue({ config: twoJobConfig, status });
+    api.getQuotaBurn.mockResolvedValue({ config: twoStepConfig, status });
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
 
     expect(await screen.findByRole('button', { name: /Expand all/i })).toBeInTheDocument();
     expect(screen.queryByLabelText('Collapse step 1')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Collapse step 2')).not.toBeInTheDocument();
 
-    // Expand all
     await user.click(screen.getByRole('button', { name: /Expand all/i }));
     expect(screen.getByLabelText('Collapse step 1')).toBeInTheDocument();
     expect(screen.getByLabelText('Collapse step 2')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Collapse all/i })).toBeInTheDocument();
 
-    // Collapse all
     await user.click(screen.getByRole('button', { name: /Collapse all/i }));
     expect(screen.queryByLabelText('Collapse step 1')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Collapse step 2')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Expand all/i })).toBeInTheDocument();
   });
 
-  it('automatically expands newly added jobs for editing', async () => {
+  it('automatically expands a newly added step for editing', async () => {
     const user = userEvent.setup();
     renderPage('/devtools/quota-burn/grok');
-    await user.click(await screen.findByRole('button', { name: /Add job/i }));
+    await user.selectOptions(await screen.findByLabelText('Add a step'), 'builtin:ux');
     expect(await screen.findByLabelText('Collapse step 2')).toBeInTheDocument();
   });
 });
 
-describe('QuotaBurn preset addition filtering', () => {
-  const multiPresetCatalog = {
+describe('QuotaBurn per-invocation overrides', () => {
+  const claudeProviders = {
     ...catalog,
-    presets: [
-      { id: 'ux-audit', label: 'UX issues', summary: 'Audit UI.', jobType: 'agent-prompt', params: { prompt: 'Prompt 1' } },
-      { id: 'a11y-audit', label: 'A11y issues', summary: 'Audit A11y.', jobType: 'agent-prompt', params: { prompt: 'Prompt 2' } },
-    ],
+    providers: [{
+      id: 'claude-code',
+      name: 'Claude Code',
+      type: 'tui',
+      command: 'claude',
+      models: [{ id: 'claude-sonnet-4', name: 'Claude Sonnet 4' }, { id: 'claude-opus-4', name: 'Claude Opus 4' }],
+    }],
   };
-
-  it('filters preset addition dropdown to only presets not already in the family', async () => {
-    const grokWithUx = {
-      ...config,
-      families: {
-        ...config.families,
-        grok: {
-          ...config.families.grok,
-          jobs: [
-            { id: 'j1', enabled: true, label: 'UX issues', jobType: 'agent-prompt', params: { prompt: 'Prompt 1' } },
-          ],
-        },
+  const claudeConfig = (overrides) => ({
+    ...config,
+    families: {
+      ...config.families,
+      claude: {
+        enabled: true, resetWithinHours: 24, reservePercent: 0, maxDispatchesPerWindow: 5, priority: 0,
+        jobs: [step({ id: 'j1', label: 'Audit UI', taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' }, overrides })],
       },
-    };
-    api.getQuotaBurn.mockResolvedValue({ config: grokWithUx, status });
-    api.getQuotaBurnCatalog.mockResolvedValue(multiPresetCatalog);
-
-    renderPage('/devtools/quota-burn/grok');
-    const select = await screen.findByLabelText(/Add a preset job/);
-    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value);
-
-    // 'ux-audit' is already in the list, so only '' (placeholder) and 'a11y-audit' should be available
-    expect(options).toEqual(['', 'a11y-audit']);
+    },
   });
 
-  it('hides preset addition picker when all catalog presets are in the jobs list', async () => {
-    const grokWithAll = {
-      ...config,
-      families: {
-        ...config.families,
-        grok: {
-          ...config.families.grok,
-          jobs: [
-            { id: 'j1', enabled: true, label: 'UX issues', jobType: 'agent-prompt', params: { prompt: 'Prompt 1' } },
-            { id: 'j2', enabled: true, label: 'A11y issues', jobType: 'agent-prompt', params: { prompt: 'Prompt 2' } },
-          ],
-        },
-      },
-    };
-    api.getQuotaBurn.mockResolvedValue({ config: grokWithAll, status });
-    api.getQuotaBurnCatalog.mockResolvedValue(multiPresetCatalog);
-
-    renderPage('/devtools/quota-burn/grok');
-    expect(await screen.findByDisplayValue('UX issues')).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Add a preset job/)).not.toBeInTheDocument();
-  });
-
-  it('renders standard model select and effort picker for effort-capable providers', async () => {
-    const claudeProviderCatalog = {
-      ...catalog,
-      providers: [
-        {
-          id: 'claude-code',
-          name: 'Claude Code',
-          type: 'tui',
-          command: 'claude',
-          models: [{ id: 'claude-sonnet-4', name: 'Claude Sonnet 4' }, { id: 'claude-opus-4', name: 'Claude Opus 4' }],
-        },
-      ],
-    };
-    const claudeConfig = {
-      ...config,
-      families: {
-        ...config.families,
-        claude: {
-          enabled: true,
-          resetWithinHours: 24,
-          reservePercent: 0,
-          maxDispatchesPerWindow: 5,
-          priority: 0,
-          jobs: [
-            { id: 'j1', enabled: true, label: 'Audit UI', jobType: 'agent-prompt', model: 'claude-sonnet-4', effort: 'high', params: { appId: 'a1', prompt: 'audit' } },
-          ],
-        },
-      },
-    };
-    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig, status });
-    api.getQuotaBurnCatalog.mockResolvedValue(claudeProviderCatalog);
+  it('pins model and effort into the overrides bag, never the top-level mirrors', async () => {
+    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig({ ...NO_OVERRIDES, model: 'claude-sonnet-4', effort: 'high' }), status });
+    api.getQuotaBurnCatalog.mockResolvedValue(claudeProviders);
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = setupSaveUser();
 
     renderPage('/devtools/quota-burn/claude');
     await user.click(await screen.findByLabelText('Expand step 1'));
 
-    const modelSelect = await screen.findByLabelText('Model (optional)');
-    expect(modelSelect).toBeInTheDocument();
-    expect(modelSelect.tagName).toBe('SELECT');
-    expect(modelSelect).toHaveValue('claude-sonnet-4');
-
+    expect(await screen.findByLabelText('Model')).toHaveValue('claude-sonnet-4');
     const effortSelect = screen.getByLabelText('Thinking effort');
-    expect(effortSelect).toBeInTheDocument();
-    expect(effortSelect.tagName).toBe('SELECT');
     expect(effortSelect).toHaveValue('high');
 
-    // Change effort to medium and verify auto-save
     await user.selectOptions(effortSelect, 'medium');
     await flushSave();
-    expect(api.saveQuotaBurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        families: expect.objectContaining({
-          claude: expect.objectContaining({
-            jobs: [
-              expect.objectContaining({
-                id: 'j1',
-                model: 'claude-sonnet-4',
-                effort: 'medium',
-              }),
-            ],
-          }),
-        }),
-      }),
-      expect.anything(),
-    );
+    const [patch] = api.saveQuotaBurn.mock.calls.at(-1);
+    const saved = patch.families.claude.jobs[0];
+    expect(saved.overrides).toMatchObject({ model: 'claude-sonnet-4', effort: 'medium' });
+    expect(saved).not.toHaveProperty('effort');
   });
 
-  it('displays model and effort in collapsed step summary badge', async () => {
-    const claudeConfig = {
-      ...config,
-      families: {
-        ...config.families,
-        claude: {
-          enabled: true,
-          resetWithinHours: 24,
-          reservePercent: 0,
-          maxDispatchesPerWindow: 5,
-          priority: 0,
-          jobs: [
-            { id: 'j1', enabled: true, label: '', jobType: 'agent-prompt', model: 'claude-sonnet-4', effort: 'high', params: { appId: 'a1', prompt: 'audit' } },
-          ],
-        },
-      },
-    };
-    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig, status });
-    api.getQuotaBurnCatalog.mockResolvedValue(catalog);
-
+  it('names what an unset override inherits rather than showing an empty box', async () => {
+    // Presence, not truthiness: an unset override INHERITS the task's saved
+    // setting, and the control has to say which value that is.
+    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig(NO_OVERRIDES), status });
+    api.getQuotaBurnCatalog.mockResolvedValue({
+      ...claudeProviders,
+    });
+    api.getCosSchedule.mockResolvedValue({
+      tasks: { ...schedule.tasks, ux: { ...schedule.tasks.ux, providerId: 'claude-code', model: 'claude-opus-4' } },
+    });
+    const user = userEvent.setup();
     renderPage('/devtools/quota-burn/claude');
-    expect(await screen.findByText(/Agent prompt · claude-sonnet-4 · high/)).toBeInTheDocument();
+    await user.click(await screen.findByLabelText('Expand step 1'));
+
+    const model = await screen.findByLabelText('Model');
+    expect(model).toHaveValue('');
+    expect(model.querySelector('option').textContent).toBe('Inherit (claude-opus-4)');
+    expect(screen.getByText(/claude-code · claude-opus-4/)).toBeInTheDocument();
+  });
+
+  it('shows a programmatic task\'s run parameters read-only, with no agent options', async () => {
+    // PortOS executes these itself against its own records — there is no agent,
+    // so worktree/PR/simplify are meaningless, and the parameters are per-type
+    // and live on the task.
+    const user = userEvent.setup();
+    renderPage('/devtools/quota-burn/grok');
+    await user.click(await screen.findByLabelText('Expand step 1'));
+    expect(await screen.findByText(/Run parameters come from the scheduled task: scope=all · maxEntries=10/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Open PR')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Audit mode')).not.toBeInTheDocument();
+  });
+
+  it('displays the referenced task and its pins in the collapsed summary', async () => {
+    api.getQuotaBurn.mockResolvedValue({ config: claudeConfig({ ...NO_OVERRIDES, model: 'claude-sonnet-4', effort: 'high' }), status });
+    renderPage('/devtools/quota-burn/claude');
+    expect(await screen.findByText(/ux · App One · claude-sonnet-4 · high/)).toBeInTheDocument();
   });
 });

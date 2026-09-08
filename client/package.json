@@ -23,11 +23,11 @@
     "@dnd-kit/sortable": "10.0.0",
     "@react-three/drei": "10.7.8",
     "@react-three/fiber": "9.7.0",
-    "@scalar/api-reference-react": "0.9.66",
+    "@scalar/api-reference-react": "0.9.67",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-web-links": "0.12.0",
     "@xterm/xterm": "6.0.0",
-    "lucide-react": "1.40.0",
+    "lucide-react": "1.42.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-router": "8.3.1",
@@ -47,7 +47,7 @@
     "rollup-plugin-visualizer": "7.1.1",
     "tailwindcss": "4.3.3",
     "vite": "8.2.2",
-    "vitest": "4.1.11"
+    "vitest": "5.0.0"
   },
   "overrides": {
     "socket.io-parser": "4.2.7",

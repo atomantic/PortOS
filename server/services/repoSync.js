@@ -51,6 +51,7 @@ import {
 } from './git.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
+import { countWords } from '../lib/textUtils.js';
 import {
   DEFAULT_REPO_SYNC_VERIFY_MODE, REPO_SYNC_ACTION_KEYS, REPO_SYNC_VERIFY_MODES, sanitizeTaskMetadata
 } from '../lib/cosValidation.js';
@@ -199,7 +200,7 @@ export function parseStashList(stdout) {
     .map(([ref, sha, parents, ...rest]) => ({
       ref: ref.trim(),
       sha: sha.trim(),
-      parentCount: parents.trim().split(/\s+/).filter(Boolean).length,
+      parentCount: countWords(parents), // whitespace-separated parent SHAs
       message: rest.join('\x1f').trim()
     }));
 }

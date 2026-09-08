@@ -6,10 +6,9 @@
  * server route a feature lives at, and their co-located tests assert the wrapper
  * produced the string the wrapper produces — nothing compares those strings to
  * the routes `server/index.js` actually mounts. `apiRouteParity.test.js` closes
- * that gap by diffing this scanner's output against
- * `apiRouteCatalog.generated.json` (the existing server-side route inventory
- * built by `scripts/generate-api-route-catalog.js`); this module is only the
- * client half.
+ * that gap by diffing this scanner's output against the server-side route
+ * inventory `apiRouteGraph.js` derives from the mounted routers; this module
+ * is only the client half.
  *
  * Why a source scan rather than importing the modules: `apiCore.request` builds
  * its URL at call time from arguments the wrapper supplies, so the paths exist

@@ -24,8 +24,8 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-character-foundation.md': 'b7d2bac347e11171606f4c6acfcd32e1', // post-256 (series-linked cast)
-  'pipeline-judge-foundation.md': 'e44b6c50d741bbd21fc86f481684c410', // post-256 (series-linked cast)
+  'pipeline-character-foundation.md': 'c606061954b23a9957c68dd068b54dc4', // post-256 (series-linked cast)
+  'pipeline-judge-foundation.md': '75714f0e41c77ff5c8b9623cb4fb0a25', // post-256 (series-linked cast)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

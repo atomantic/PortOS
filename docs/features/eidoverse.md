@@ -360,20 +360,29 @@ An instance that needs a broader trust model should configure Eidoverse access
 control in that project before starting it.
 
 Eidoverse itself remains a plain-HTTP service on `:8940`. The embedded page
-lazily opens a PortOS-owned HTTP/WebSocket bridge on `:5563` that forwards to
-`127.0.0.1:8940`; when a machine certificate is present it serves HTTPS using
-the same certificate as `:5555`, which is what avoids browser mixed-content
-rejection. Both external repositories stay unchanged. The bridge starts only
-when the page is opened, waits for the managed app to answer before mounting the
-iframe, and returns an explicit unavailable state when the runtime does not
-become ready.
+starts the on-demand PortOS host and loads the renderer at the **same origin**
+as the PortOS UI — `${location.origin}/eidoverse-host/?…` — so a single-port
+tailcat forward (`127.0.0.1:15555` → remote `:5555`) works. The main `:5555`
+server reverse-proxies `/eidoverse-host` to loopback `:8940` (prefix stripped)
+and, while the host is active, also forwards allowlisted absolute root routes
+the renderer issues (`/ws`, `/version`, `/library/…`, `/node_modules/…`, …),
+including the WebSocket upgrade for `/ws`. Both external repositories stay
+unchanged. The host starts only when the page is opened, waits for the managed
+app to answer before mounting the iframe, and returns an explicit unavailable
+state when the runtime does not become ready.
 
-The page embeds through that bridge whenever the bridge's scheme matches the
-page's, because the bridge is also what arms the renderer's frame bridge (see
-below). The single exception is a plain-HTTP page in front of an HTTPS bridge —
-the loopback `:5553` mirror and the Vite dev server — where the shared
-certificate does not cover the hostname in use; there the iframe points straight
-at `:8940`, the scene renders normally, and the frame handshake stays dormant.
+An optional legacy bridge on `:5563` still starts with the host (HTTPS when a
+machine certificate is present) for ExternalLink / direct access on the box.
+The iframe prefers the same-origin path; the single escape is a plain-HTTP page
+in front of an HTTPS-only host certificate that does not cover the hostname
+(loopback `:5553` / some Vite setups), where the iframe falls back to a direct
+`:uiPort` load — scene renders, handshake stays dormant.
+
+**World only / Open Eidoverse alone** opens `/eidoverse/solo` — a chromeless
+PortOS route that mounts the **same** `/eidoverse-host/` iframe fullscreen
+(outside the app sidebar). A top-level Safari tab aimed at `/eidoverse-host/`
+can stick on the renderer splash; staying inside PortOS reuses the proven iframe
+path through a single-port tailcat forward.
 
 Projection protocol and asset preflight target the same runtime. The default
 HTTP library origin is derived from `EIDOVERSE_WS_URL` by mapping `ws`/`wss` to
@@ -455,7 +464,7 @@ pretend it supports the updated runtime.
 After each iframe load, PortOS posts to its **exact hosted origin**:
 
 ```json
-{"type":"portos:connect","version":1,"nonce":"fresh-opaque-session","capabilities":{"portosNavigation":1,"labelPreferences":1},"labelVisibility":"nearby"}
+{"type":"portos:connect","version":1,"nonce":"fresh-opaque-session","capabilities":{"portosNavigation":1,"labelPreferences":1,"identityRenameRequest":1},"labelVisibility":"nearby"}
 ```
 
 The renderer validates `event.source === parent` and the embedding PortOS origin,
@@ -465,9 +474,11 @@ the expected parent origin from its trusted embedding configuration; accepting
 an arbitrary opener as the parent is not sufficient.
 
 **PortOS supplies that configuration.** The renderer reads it from
-`GET /embed-config`, which the bridge on `:5563` answers itself rather than
-forwarding: the hostname is the one the browser just used to reach the bridge,
-and the scheme and port are PortOS's own. The checkout's static
+`GET /embed-config`, which PortOS answers itself rather than forwarding: on the
+same-origin `/eidoverse-host` mount (and the root allowlist proxy) the
+`parentOrigin` is the full browser `Host` including a non-5555 forward port
+(e.g. `http://127.0.0.1:15555`); on the legacy `:5563` bridge it is the PortOS
+page origin (hostname + API port), not the bridge port. The checkout's static
 `EMBED_PARENT_ORIGIN` is deliberately left unset, because one install is
 reachable as `localhost`, as a LAN address and as a MagicDNS name, and a single
 configured origin could only ever match one of them — an unmatched origin leaves
@@ -485,6 +496,19 @@ and exact equality between the requested route and that object's known PortOS
 section route. Only the fixed source-section routes (plus `/eidoverse`) are
 allowed. URLs, query strings, encoded/relative paths, record payloads, and
 unknown entities cannot navigate. No URL proxy is exposed.
+
+When both sides advertise `identityRenameRequest: 1`, `/name <new name>` and
+`/rename <new name>` in the home-world renderer send
+`{type:'eidoverse:identity-rename', version:1, nonce, name}`. PortOS accepts the
+request only from the current iframe window, exact hosted origin, and current
+nonce, and only for a trimmed 1–64 character name without control characters.
+The request stages the existing World Design human-name field and opens its
+Experience tab; it cannot write configuration, change an actor id, or rename a
+live session. **Save and project** uses the normal validated configuration path,
+reconciles presence, and re-enters the world with the saved URL identity. Older
+renderers keep the manual World Design flow. Standalone, authenticated, and
+guest sessions retain their authoritative identity and receive guidance instead
+of sending a host configuration request.
 
 The Eidoverse framework leaves object labels off by default. PortOS explicitly enables
 them through its trusted frame session only after the user enables Labels. Each

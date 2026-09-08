@@ -34,7 +34,7 @@ import {
   ON_DEMAND_ORIGINS,
   decodeIntervalType,
   isCronExpression,
-  isRefillRequest
+  isUserOriginRequest
 } from './taskScheduleConstants.js';
 import {
   DEFAULT_TASK_INTERVALS,
@@ -44,8 +44,8 @@ import {
   getTaskTypeDescription,
   getTaskTypeInvocation,
   getTaskTypePromptInfo,
-  requiresManagedAppTarget,
   requiresInstallWideTarget,
+  isProgrammaticScheduledTaskType,
   enforceBranchReconcileBatch,
   enforceManagedAgentOptions
 } from './taskScheduleRegistry.js';
@@ -53,6 +53,8 @@ import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { recordUserAction } from './userActions.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
+import { normalizeQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { enabledAppIdsByTaskType, evaluateOnDemandEligibility } from '../lib/quotaBurnTaskRef.js';
 import {
   clearFailureLedgerFields,
   clearTaskTypeFailurePark,
@@ -62,7 +64,7 @@ import {
 
 export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION } from './taskPromptDefaults.js';
 export {
-  INTERVAL_TYPES, ON_DEMAND_ORIGINS, isRefillRequest
+  INTERVAL_TYPES, ON_DEMAND_ORIGINS, isRefillRequest, isUserOriginRequest
 } from './taskScheduleConstants.js';
 export {
   DEFAULT_BRANCHES_PER_AGENT, DEFAULT_TASK_INTERVALS, INSTALL_WIDE_TASK_TYPES,
@@ -70,6 +72,7 @@ export {
   MANAGED_AGENT_OPTIONS, PERPETUAL_DRAIN_DISPATCH_CAP, SELF_IMPROVEMENT_TASK_TYPES,
   TASK_TYPE_DESCRIPTIONS, TASK_TYPE_INVOCATION, TASK_TYPE_PROMPT_INFO,
   getTaskTypeInvocation, getTaskTypePromptInfo, requiresManagedAppTarget, requiresInstallWideTarget,
+  isProgrammaticScheduledTaskType, PROGRAMMATIC_SCHEDULED_TASK_TYPES,
   stripManagedAgentOptionsFromOverride
 } from './taskScheduleRegistry.js';
 export { loadSchedule } from './taskScheduleStore.js';
@@ -80,7 +83,7 @@ export {
 } from './taskScheduleBackoff.js';
 export { addTemplateTask, deleteTemplateTask, getTemplateTasks } from './taskScheduleTemplates.js';
 
-const createFeatureGate = () => {
+export const createFeatureGate = () => {
   const enabledByFeature = new Map();
   return async (interval) => {
     const featureId = interval?.feature;
@@ -737,7 +740,12 @@ export async function resetPerpetualForManualRun(taskType, appId = null) {
  *   applied) — callers use it to decide whether user-facing feedback is warranted
  */
 export async function applyOnDemandRunResets(request, appId = null) {
-  if (isRefillRequest(request)) return false;
+  // Every AUTOMATED origin inherits the brakes — the drain's own refill and a
+  // quota burn alike. Written as "is this a human?" rather than "is this a
+  // refill?" so an origin added later fails CLOSED instead of silently
+  // acquiring a human's park/convergence resets (a burn that cleared them would
+  // re-run a converged drain every time its window opened).
+  if (!isUserOriginRequest(request)) return false;
   // A user-initiated "Run" must re-check live state, never honor a stale park or
   // convergence verdict.
   await resetPerpetualForManualRun(request.taskType, appId);
@@ -790,9 +798,11 @@ async function checkRunAfterDeps(schedule, taskType, appId = null, featureEnable
 }
 
 /**
- * Check if a task type should run for a specific app (or globally)
+ * Check if a task type should run for a specific app (or globally).
+ * Successful completion may continue its perpetual drain past the initiating
+ * cron slot; all eligibility and park gates still apply.
  */
-export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate() } = {}) {
+export async function shouldRunTask(taskType, appId = null, { featureEnabled = createFeatureGate(), continuePerpetual = false } = {}) {
   if (appId && requiresInstallWideTarget(taskType)) {
     return { shouldRun: false, reason: 'requires-install-wide-target' };
   }
@@ -906,6 +916,10 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
       if (isPerpetual) {
         const parked = perpetualParkResult();
         if (parked) { result = parked; break; }
+        if (continuePerpetual) {
+          result = { shouldRun: true, reason: 'perpetual-drain' };
+          break;
+        }
         // Unparked: the cron evaluation below decides whether to INITIATE a
         // drain. Once one is running, the completion-refill lane keeps it going
         // back-to-back regardless of subsequent ticks.
@@ -1015,7 +1029,7 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
 /**
  * Get all enabled task types that are due to run (optionally for a specific app)
  */
-export async function getDueTasks(appId = null) {
+export async function getDueTasks(appId = null, { continuingTaskType = null } = {}) {
   const schedule = await loadSchedule();
   const due = [];
   const featureEnabled = createFeatureGate();
@@ -1023,7 +1037,7 @@ export async function getDueTasks(appId = null) {
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!interval.enabled) continue;
 
-    const check = await shouldRunTask(taskType, appId, { featureEnabled });
+    const check = await shouldRunTask(taskType, appId, { featureEnabled, continuePerpetual: taskType === continuingTaskType });
     if (check.shouldRun) {
       due.push({ taskType, reason: check.reason, interval });
     }
@@ -1035,8 +1049,8 @@ export async function getDueTasks(appId = null) {
 /**
  * Get the next task type to run (optionally for a specific app)
  */
-export async function getNextTaskType(appId = null, { perpetualOnly = false } = {}) {
-  const dueTasks = await getDueTasks(appId);
+export async function getNextTaskType(appId = null, { perpetualOnly = false, continuingTaskType = null } = {}) {
+  const dueTasks = await getDueTasks(appId, { continuingTaskType });
 
   // `perpetualOnly` constrains the pick to a due perpetual (drain-until-done)
   // task, skipping every other schedule type. Callers set this when the app is
@@ -1083,40 +1097,64 @@ export async function getNextTaskType(appId = null, { perpetualOnly = false } = 
  * perpetual drain re-issued ITSELF through the same lane after a completed run —
  * automated, and therefore NOT allowed to clear its own brakes.
  */
-export async function triggerOnDemandTask(taskType, appId = null, { emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null } = {}) {
+export async function triggerOnDemandTask(taskType, appId = null, {
+  emit = true, origin = ON_DEMAND_ORIGINS.USER, targetPullRequest = null, burn = null,
+  provider = null, model = null, effort = null,
+} = {}) {
   // A targeted run names ONE open PR/MR instead of letting the task pick from
   // the app's whole open set (the PR/MR row's "Review this PR" button). Coerced
   // and validated here so a bad value can't reach the generator's forge filter.
   const requested = Number(targetPullRequest);
   const scopedPullRequest = Number.isInteger(requested) && requested > 0 ? requested : null;
+  // Burn provenance rides ON the request because acceptance is asynchronous —
+  // an on-demand engine generates the task minutes later and stamps these keys
+  // onto it (lib/quotaBurnOrigin.js). Refused BEFORE the schedule write rather
+  // than dropped: an unattributable burn would leave a task that reads as
+  // cooldown-exempt with no family to credit its refusal to.
+  const burnProvenance = origin === ON_DEMAND_ORIGINS.QUOTA_BURN ? normalizeQuotaBurnProvenance(burn) : null;
+  if (origin === ON_DEMAND_ORIGINS.QUOTA_BURN && !burnProvenance) {
+    return { error: 'A quota-burn request must name the burning family and its burn step' };
+  }
+  // Optional per-request provider/model/effort pin (the PR/MR row's "Run with"
+  // picker) — layered onto the task's metadata by
+  // generateManagedAppImprovementTaskForType as the MOST specific pin, above
+  // the schedule interval and the app's own per-app override.
+  const providerOverride = (provider || model || effort) ? { provider, model, effort } : null;
   const request = await updateSchedule(async (schedule) => {
-    // Cheap per-task-type check first; the master-flag check pays a state.json read.
     const tasks = schedule.tasks || {};
-    if (!Object.prototype.hasOwnProperty.call(tasks, taskType)) {
-      return { result: { error: `Unknown task type '${taskType}'` }, changed: false };
-    }
-    if (!tasks[taskType].enabled) {
-      return { result: { error: `Task type '${taskType}' is disabled` }, changed: false };
-    }
-    if (!(await createFeatureGate()(tasks[taskType]))) {
-      return { result: { error: `Task type '${taskType}' requires the '${tasks[taskType].feature}' feature` }, changed: false };
-    }
-    const invocation = getTaskTypeInvocation(taskType);
-    if (origin === ON_DEMAND_ORIGINS.USER && !invocation.userInvokable) {
-      return { result: { error: `Task type '${taskType}' is managed by another automation and cannot be run manually` }, changed: false };
-    }
-    if (requiresManagedAppTarget(taskType) && !appId) {
-      return { result: { error: `Task type '${taskType}' requires a managed app target` }, changed: false };
-    }
-    if (appId && requiresInstallWideTarget(taskType)) {
-      return { result: { error: `Task type '${taskType}' requires an install-wide target (no app)` }, changed: false };
-    }
+    const config = Object.prototype.hasOwnProperty.call(tasks, taskType) ? tasks[taskType] : null;
+    const entry = config ? {
+      enabled: config.enabled === true,
+      featureEnabled: await createFeatureGate()(config),
+      feature: config.feature || null,
+      // A quota burn faces this gate alongside a human Run: a type owned by
+      // another automation is not something an unattended burn may commandeer
+      // either. Only the drain's own REFILL is exempt — it is that automation
+      // re-issuing itself.
+      eligible: origin === ON_DEMAND_ORIGINS.REFILL || getTaskTypeInvocation(taskType).userInvokable !== false,
+      // Per-app enablement is a rung for an UNATTENDED origin only. A human
+      // pressing Run is deliberately overriding the app's cadence switch — the
+      // drain's applyOnDemandRunResets exists for exactly that — while a burn
+      // picks its own step and must respect the switch the user set. Omitted,
+      // the ladder skips the rung.
+      appIds: origin === ON_DEMAND_ORIGINS.QUOTA_BURN
+        ? enabledAppIdsByTaskType(await getActiveApps().catch(() => [])).get(taskType) || []
+        : undefined,
+    } : null;
 
-    // Reject if the master Improve toggle is off — request would be silently dropped downstream
-    const state = await loadState();
-    if (!isImprovementEnabled(state)) {
-      return { result: { error: 'Improvement is disabled — enable it in CoS → Config to run on-demand tasks' }, changed: false };
-    }
+    // The ladder itself lives in lib/quotaBurnTaskRef.js so the Quota Burn page
+    // renders exactly the verdict this dispatch would produce (#6405).
+    const gate = evaluateOnDemandEligibility({ taskType, appId, entry });
+    if (gate) return { result: { error: gate.reason }, changed: false };
+
+    // The master Improve switch is the one ladder input that pays a state.json
+    // read, so it is resolved only once the cheap rungs pass and then fed back
+    // through the SAME ladder — the rung is never restated here. Rejecting on it
+    // matters: the request would be silently dropped downstream.
+    const improvement = evaluateOnDemandEligibility({
+      taskType, appId, entry, improvementEnabled: isImprovementEnabled(await loadState()),
+    });
+    if (improvement) return { result: { error: improvement.reason }, changed: false };
 
     if (!schedule.onDemandRequests) {
       schedule.onDemandRequests = [];
@@ -1128,7 +1166,9 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
       appId,
       origin,
       requestedAt: new Date().toISOString(),
-      ...(scopedPullRequest ? { targetPullRequest: scopedPullRequest } : {})
+      ...(scopedPullRequest ? { targetPullRequest: scopedPullRequest } : {}),
+      ...(burnProvenance ? { burn: burnProvenance } : {}),
+      ...(providerOverride ? { providerOverride } : {})
     };
 
     schedule.onDemandRequests.push(request);
@@ -1141,7 +1181,7 @@ export async function triggerOnDemandTask(taskType, appId = null, { emit = true,
   // drain re-issues itself through this same lane with `origin: REFILL` — logging
   // that would fill the ledger with events the user never performed and make
   // "what did I trigger?" unanswerable.
-  if (origin === ON_DEMAND_ORIGINS.USER) {
+  if (isUserOriginRequest(request)) {
     await recordUserAction({
       type: 'cos.schedule.trigger',
       target: taskType,
@@ -1281,7 +1321,14 @@ export async function getScheduleStatus() {
       // managed app in one dispatch). Served from the server registry rather than
       // mirrored in client constants, so the UI cannot drift from the set the
       // dispatch engines actually treat as install-wide.
-      installWide: INSTALL_WIDE_TASK_TYPES.has(taskType)
+      installWide: INSTALL_WIDE_TASK_TYPES.has(taskType),
+      // Whether PortOS executes this type ITSELF (services/scheduledHandlers/)
+      // rather than dispatching an agent. Served from the registry rather than
+      // mirrored in client constants for the same reason as `installWide`: the
+      // UI must not drift from the set the dispatch engines actually treat as
+      // programmatic. It drives the Run Now affordance (no app picker — these
+      // never target a managed app) and the prompt panel (there is no prompt).
+      programmatic: isProgrammaticScheduledTaskType(taskType)
     };
 
     // Include default stage prompts for pipeline tasks so UI can display them

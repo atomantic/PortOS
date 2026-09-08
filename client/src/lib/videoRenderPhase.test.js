@@ -94,3 +94,44 @@ describe('resolveVideoRenderSteps', () => {
     expect(activeLabel(resolveVideoRenderSteps({ generating: true, progressPct: 0 }))).toBe('Loading model');
   });
 });
+
+// The reported bug: a reactor.inc / Grok / fal.ai render is done on someone
+// else's hardware, so none of the local STAGE: markers can ever arrive — the
+// card sat on "Loading model" (with "Downloading weights" ticked off as though
+// this machine had streamed a checkpoint) from submit until the clip appeared.
+describe('resolveVideoRenderSteps on the provider ladder', () => {
+  it('drops the local weight/encode steps a provider render never performs', () => {
+    const { steps } = resolveVideoRenderSteps({ generating: true, remote: true });
+    expect(steps.map((s) => s.label))
+      .toEqual(['Queued', 'Submitting', 'Rendering', 'Downloading result']);
+  });
+
+  it('defaults a started-but-silent provider render to submitting, not loading', () => {
+    expect(activeLabel(resolveVideoRenderSteps({ generating: true, remote: true }))).toBe('Submitting');
+  });
+
+  it('advances through the provider round trip', () => {
+    const at = (phase) => activeLabel(resolveVideoRenderSteps({ generating: true, remote: true, phase }));
+    expect(at('queued')).toBe('Queued');
+    expect(at('submit')).toBe('Submitting');
+    expect(at('render')).toBe('Rendering');
+    expect(at('fetch')).toBe('Downloading result');
+  });
+
+  // `download` is the one id both ladders claim, and it means opposite things:
+  // weights arriving on this GPU locally, the finished clip arriving here
+  // remotely. Reading it against the wrong ladder would put a provider render
+  // back near the start of its list.
+  it('reads a shared phase id against the ladder it was asked for', () => {
+    expect(videoRenderStepFor('download')).toBe('download');
+    expect(videoRenderStepFor('download', { remote: true })).toBe('fetch');
+  });
+
+  it('returns null for a local-only marker rather than guessing a provider step', () => {
+    expect(videoRenderStepFor('load-transformer', { remote: true })).toBeNull();
+    expect(videoRenderStepFor('constructor', { remote: true })).toBeNull();
+    // …and an unmappable phase still falls back to the ladder's own default.
+    expect(activeLabel(resolveVideoRenderSteps({ generating: true, remote: true, phase: 'load-transformer' })))
+      .toBe('Submitting');
+  });
+});

@@ -16,6 +16,7 @@ import { createDefaultPersistentMindState, normalizePersistentMindState } from '
 import { createDefaultPersistentMindCapabilities, normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { createDefaultPersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { createDefaultPersistentMindPrompt, normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import { createDefaultPersistentMindPlaybook, normalizePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import {
   createDefaultPersistentMindThinkingPresets,
   normalizePersistentMindThinkingPresets,
@@ -94,6 +95,7 @@ export const DEFAULT_CONFIG = {
   persistentMindProfile: createDefaultPersistentMindProfile(),
   persistentMindThinkingPresets: createDefaultPersistentMindThinkingPresets(),
   persistentMindPrompt: createDefaultPersistentMindPrompt(),
+  persistentMindPlaybook: createDefaultPersistentMindPlaybook(),
   // Action grants are independent of the provider profile. Existing and fresh
   // conversation-only installs never gain task-creation authority on upgrade.
   persistentMindCapabilities: createDefaultPersistentMindCapabilities(),
@@ -214,6 +216,7 @@ function mergeStoredConfig(storedConfig) {
     persistentMindProfile: normalizePersistentMindProfile(persistedConfig.persistentMindProfile),
     persistentMindThinkingPresets: normalizePersistentMindThinkingPresets(persistedConfig.persistentMindThinkingPresets),
     persistentMindPrompt: normalizePersistentMindPrompt(persistedConfig.persistentMindPrompt),
+    persistentMindPlaybook: normalizePersistentMindPlaybook(persistedConfig.persistentMindPlaybook),
   };
 }
 

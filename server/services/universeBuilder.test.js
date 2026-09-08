@@ -4,6 +4,7 @@ import { writeFile, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { mockNoPeerSync, mockNoPeers } from "../lib/mockPathsDataRoot.js";
+import { BIBLE_LIMITS } from "../lib/bibleLimits.js";
 
 // Real per-suite tmpdir backing the universes/ layout. Each test wipes the
 // tree in beforeEach. The fileUtils mock below overrides PATHS.data so the
@@ -2994,6 +2995,169 @@ describe("universeBuilder service", () => {
       // Sibling universe's slot survives.
       expect(slot.getPendingSheetSlot(u2.id, "char-1")).toBe("job-b1");
       slot.clearPendingSheetSlotsForUniverse(u2.id);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Character psychology profile (#6414)
+  // ---------------------------------------------------------------------------
+  //
+  // The public boundary is create → getUniverse → updateUniverse, which is what
+  // the Cast tab actually drives. These cases pin the contract that makes the
+  // field safe to ship into installs that already hold characters: it is
+  // absent until authored, it never rewrites the legacy framework fields, a
+  // partial PATCH cannot wipe the leaves it omits, and an explicit clear works.
+  describe("character psychology (#6414)", () => {
+    const fullProfile = () => ({
+      theoryOfControl: "If I stay useful, nobody leaves.",
+      strategy: "Absorbs everyone else's work and never asks for anything back.",
+      protectiveBenefit: "Keeps her from ever testing whether she'd be kept anyway.",
+      presentCost: "Exhaustion, and a crew who never learns to carry its own weight.",
+      testingPressure: "A job she physically cannot do alone.",
+      candidateChange: "Asking for help before the failure, not after.",
+      drives: {
+        survival: { desire: "a berth she cannot be put out of", fear: "being turned out" },
+        connection: { desire: "to be kept", fear: "being easy to replace" },
+        status: { desire: "to be the one the crew counts on", fear: "being read as surplus" },
+      },
+    });
+
+    it("round-trips a full profile through create → load → patch, and stays ABSENT until authored", async () => {
+      const w = await svc.createUniverse({
+        name: "Example Universe",
+        characters: [
+          { name: "Nera Vost", psychology: fullProfile() },
+          { name: "Unassessed Sib" },
+        ],
+      });
+      const loaded = await svc.getUniverse(w.id);
+      const nera = loaded.characters.find((c) => c.name === "Nera Vost");
+      const sib = loaded.characters.find((c) => c.name === "Unassessed Sib");
+
+      expect(nera.psychology).toEqual({ ...fullProfile(), assessment: null, assessmentNote: "" });
+      // A character nobody assessed carries no key at all — legacy records stay
+      // byte-identical rather than gaining an empty husk that reads as filled.
+      expect("psychology" in sib).toBe(false);
+
+      const patched = await svc.updateUniverse(w.id, (cur) => ({
+        characters: cur.characters.map((c) => (c.id === nera.id
+          ? { ...c, psychology: { ...c.psychology, presentCost: "A crew that never grows up." } }
+          : c)),
+      }));
+      const repatched = patched.characters.find((c) => c.id === nera.id);
+      expect(repatched.psychology.presentCost).toBe("A crew that never grows up.");
+      expect(repatched.psychology.theoryOfControl).toBe(fullProfile().theoryOfControl);
+      expect(repatched.psychology.drives.status.fear).toBe("being read as surplus");
+    });
+
+    it("preserves an existing Lie verbatim when a psychology profile is added", async () => {
+      const lie = "I only matter if I win.";
+      const w = await svc.createUniverse({
+        name: "Example Universe",
+        characters: [{ name: "Nera Vost", lie, want: "the salvage contract", need: "to be kept anyway" }],
+      });
+      const [character] = w.characters;
+      const patched = await svc.updateUniverse(w.id, (cur) => ({
+        characters: cur.characters.map((c) => (c.id === character.id ? { ...c, psychology: fullProfile() } : c)),
+      }));
+      const next = patched.characters.find((c) => c.id === character.id);
+      // The Lie is a judgment ABOUT a belief and the theory of control is the
+      // operating rule — related, never the same statement, never overwritten.
+      expect(next.lie).toBe(lie);
+      expect(next.want).toBe("the salvage contract");
+      expect(next.need).toBe("to be kept anyway");
+      expect(next.psychology.theoryOfControl).toBe(fullProfile().theoryOfControl);
+      expect(next.psychology.theoryOfControl).not.toBe(lie);
+    });
+
+    it("a PATCH that omits nested leaves clears only what it omitted — the caller sends the whole object", async () => {
+      // The universe canon PATCH is a whole-list write, so a nested field is
+      // replaced by the object the caller sends. That is exactly why the editor
+      // spreads the persisted profile before committing; assert the contract so
+      // a future caller that forgets is caught by a failing test, not by data
+      // loss on a writer's machine.
+      const w = await svc.createUniverse({
+        name: "Example Universe",
+        characters: [{ name: "Nera Vost", psychology: fullProfile() }],
+      });
+      const [character] = w.characters;
+      const patched = await svc.updateUniverse(w.id, (cur) => ({
+        characters: cur.characters.map((c) => (c.id === character.id
+          ? { ...c, psychology: { theoryOfControl: "Only the work is safe." } }
+          : c)),
+      }));
+      const next = patched.characters.find((c) => c.id === character.id);
+      expect(next.psychology.theoryOfControl).toBe("Only the work is safe.");
+      expect(next.psychology.strategy).toBe("");
+      expect(next.psychology.drives.survival).toEqual({ desire: "", fear: "" });
+    });
+
+    it("clears the profile on an explicit null and on an all-blank object", async () => {
+      const w = await svc.createUniverse({
+        name: "Example Universe",
+        characters: [
+          { name: "Nera Vost", psychology: fullProfile() },
+          { name: "Sole Ryn", psychology: fullProfile() },
+        ],
+      });
+      const [nera, ryn] = w.characters;
+      const patched = await svc.updateUniverse(w.id, (cur) => ({
+        characters: cur.characters.map((c) => {
+          if (c.id === nera.id) return { ...c, psychology: null };
+          if (c.id === ryn.id) return { ...c, psychology: { theoryOfControl: "   ", drives: {} } };
+          return c;
+        }),
+      }));
+      for (const id of [nera.id, ryn.id]) {
+        const next = patched.characters.find((c) => c.id === id);
+        expect("psychology" in next).toBe(false);
+      }
+    });
+
+    it("records an explicit unknown / not-applicable ruling, and drops an unrecognized one", async () => {
+      const w = await svc.createUniverse({
+        name: "Example Universe",
+        characters: [
+          {
+            name: "The Choir",
+            psychology: {
+              assessment: "not-applicable",
+              assessmentNote: "A distributed swarm with no single interior to read a control theory from.",
+            },
+          },
+          { name: "Bad Enum", psychology: { assessment: "definitely", theoryOfControl: "keep moving" } },
+        ],
+      });
+      const choir = w.characters.find((c) => c.name === "The Choir");
+      const badEnum = w.characters.find((c) => c.name === "Bad Enum");
+      expect(choir.psychology.assessment).toBe("not-applicable");
+      expect(choir.psychology.assessmentNote).toMatch(/distributed swarm/);
+      expect(choir.psychology.theoryOfControl).toBe("");
+      // An unrecognized ruling collapses to null rather than persisting a token
+      // no consumer knows how to read — the rest of the profile survives.
+      expect(badEnum.psychology.assessment).toBeNull();
+      expect(badEnum.psychology.theoryOfControl).toBe("keep moving");
+    });
+
+    it("bounds every leaf and refuses a malformed nested shape", async () => {
+      const w = await svc.createUniverse({
+        name: "Example Universe",
+        characters: [{
+          name: "Nera Vost",
+          psychology: {
+            theoryOfControl: "x".repeat(BIBLE_LIMITS.THEORY_OF_CONTROL_MAX + 500),
+            strategy: 42,
+            drives: [{ desire: "not an object map" }],
+          },
+        }],
+      });
+      const [character] = w.characters;
+      expect(character.psychology.theoryOfControl).toHaveLength(BIBLE_LIMITS.THEORY_OF_CONTROL_MAX);
+      expect(character.psychology.strategy).toBe("");
+      // A non-object `drives` still materializes the three empty axes rather
+      // than persisting an array a reader would index by number.
+      expect(Object.keys(character.psychology.drives)).toEqual(["survival", "connection", "status"]);
+      expect(character.psychology.drives.connection).toEqual({ desire: "", fear: "" });
     });
   });
 });

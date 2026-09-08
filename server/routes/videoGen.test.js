@@ -101,6 +101,12 @@ vi.mock('../lib/pythonSetup.js', () => ({
   detectVenvBasePythonSync: vi.fn(() => null),
 }));
 
+// The generative upscale is queued, not run inline (#6511), so it lives in
+// its own service module and the route reaches it directly.
+vi.mock('../services/videoGen/upscaleJob.js', () => ({
+  enqueueLtxUpscale: vi.fn(),
+}));
+
 vi.mock('../services/videoGen/local.js', () => ({
   // The route checks `runtime` on the default model when validating a2v —
   // include it so the a2v happy-path tests don't trip the runtime capability
@@ -119,6 +125,7 @@ vi.mock('../services/videoGen/local.js', () => ({
   extractLastFrame: vi.fn(),
   stitchVideos: vi.fn(),
   upscaleHistoryItem: vi.fn(),
+  planUpscaleHistoryItem: vi.fn(),
   // Mirrors the real export — keeps the route's keyframe-range check in
   // sync with whatever the service actually defaults to.
   DEFAULT_NUM_FRAMES: 121,
@@ -283,12 +290,15 @@ vi.mock('fs/promises', () => ({
 
 import { copyFile, unlink } from 'fs/promises';
 import * as videoGenService from '../services/videoGen/local.js';
+import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
 import { getTrack } from '../services/tracks/index.js';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
-import { listIcLoraWeights } from '../lib/icLoraWeights.js';
+import {
+  listIcLoraWeights, listIcLoraRemixModes, IC_LORA_MODES, icLoraWeightKey,
+} from '../lib/icLoraWeights.js';
 import videoGenRoutes, { isAudioMime, LOCAL_ONLY_VIDEO_PARAMS } from './videoGen.js';
 
 // isAudioMime is the gating function inside the fileFilter callback. The
@@ -919,6 +929,11 @@ describe('videoGen routes', () => {
         'textEncoderId',
         'speedProfileId',
         'draftDecode',
+        // Not in the it.each table above: the route deliberately DROPS the
+        // 'auto' default from persisted params, same reason as draftDecode's
+        // full-decode default — the generic round-trip can't cover it. Its
+        // own case is below.
+        'streamingMode',
       ]);
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
@@ -965,6 +980,35 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(400);
     });
 
+    // Same contract for block streaming (#6499): grok has no such knob, so
+    // naming one keeps the render local — and 'auto' (the bridge's own
+    // default) is dropped from persisted params so an unswapped render's job
+    // params stay byte-identical to a request that never sent the field.
+    it('keeps streamingMode on the local path under a grok pin, without persisting the auto value', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', streamingMode: 'auto' });
+      expect(r.status).toBe(200);
+      const [call] = mediaJobQueue.enqueueJob.mock.calls;
+      expect(call[0].params.mode).not.toBe('grok');
+      expect(call[0].params.streamingMode).toBeUndefined();
+    });
+
+    it('persists a non-default streamingMode on the local path', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: grokReady, videoGen: { mode: 'grok' } });
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', streamingMode: 'stream' });
+      expect(r.status).toBe(200);
+      const [call] = mediaJobQueue.enqueueJob.mock.calls;
+      expect(call[0].params.streamingMode).toBe('stream');
+    });
+
+    // A closed enum — the render bridge, not this route, decides whether the
+    // resolved mode's pinned pipeline can honor 'stream' (#6499).
+    it.each(['fast', 'STREAM', ''])('rejects the streamingMode value %p', async (streamingMode) => {
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a fox', streamingMode });
+      expect(r.status).toBe(400);
+    });
 
     it('keeps textEncoderId on the local path under a grok pin, without persisting the stock value', async () => {
       const { getSettings } = await import('../services/settings.js');
@@ -2788,7 +2832,7 @@ describe('videoGen routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
       expect(r.body.video).toEqual(upscaled);
-      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId);
+      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'lanczos' });
     });
 
     it('forwards a shared-gallery upload id to upscaleHistoryItem', async () => {
@@ -2796,7 +2840,7 @@ describe('videoGen routes', () => {
       videoGenService.upscaleHistoryItem.mockResolvedValue({ id: otherValidId, filename: `${otherValidId}.mp4`, upscaledFrom: uploadId });
       const r = await request(app).post(`/api/video-gen/upscale/${uploadId}`).send({});
       expect(r.status).toBe(200);
-      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(uploadId);
+      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(uploadId, { method: 'lanczos' });
     });
 
     it('returns the ServerError status when the service rejects', async () => {
@@ -2806,6 +2850,83 @@ describe('videoGen routes', () => {
       const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({});
       expect(r.status).toBe(404);
       expect(r.body.error).toMatch(/not found/i);
+    });
+
+    // Method selection (#6509). The whole point of the default is that a client
+    // written before the option existed keeps its exact behavior, so the
+    // no-body request and the explicit Lanczos request must be indistinguishable
+    // at the service boundary.
+    it('sends an explicit lanczos request identically to a no-body request', async () => {
+      videoGenService.upscaleHistoryItem.mockResolvedValue({ id: otherValidId });
+      await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({});
+      await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'lanczos' });
+      const [noBody, explicit] = videoGenService.upscaleHistoryItem.mock.calls;
+      expect(explicit).toEqual(noBody);
+    });
+
+    // The generative method answers with a QUEUED JOB, not a finished row: it
+    // is a multi-minute GPU render, so running it inline would hold the request
+    // open and skip cancellation/watchdog/partial-output cleanup (#6511).
+    it('queues the generative method instead of running it inline', async () => {
+      upscaleJobService.enqueueLtxUpscale.mockResolvedValue({ jobId: 'job-1', position: 2, status: 'queued' });
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'ltx' });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, job: { jobId: 'job-1', position: 2, status: 'queued' } });
+      expect(upscaleJobService.enqueueLtxUpscale).toHaveBeenCalledWith(validHistoryId);
+      expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unknown method with a 400 and never reaches the service', async () => {
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'realesrgan' });
+      expect(r.status).toBe(400);
+      expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    it('surfaces the 501 capability error the service raises for an unavailable runtime', async () => {
+      upscaleJobService.enqueueLtxUpscale.mockRejectedValue(
+        Object.assign(new Error('needs LTX-2.5 MLX (ltx25)'), { status: 501, code: 'UNSUPPORTED_RUNTIME' }),
+      );
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({ method: 'ltx' });
+      expect(r.status).toBe(501);
+      expect(r.body.error).toMatch(/ltx25/);
+    });
+  });
+
+  describe('GET /upscale/:id/plan', () => {
+    const validHistoryId = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa1';
+
+    it('rejects history ids outside known render and upload shapes', async () => {
+      const r = await request(app).get('/api/video-gen/upscale/not-a-uuid/plan');
+      expect(r.status).toBe(400);
+      expect(videoGenService.planUpscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    it('defaults to lanczos and wraps the plan', async () => {
+      const plan = { id: validHistoryId, method: 'lanczos', scale: 2 };
+      videoGenService.planUpscaleHistoryItem.mockResolvedValue(plan);
+      const r = await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan`);
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true, plan });
+      expect(videoGenService.planUpscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'lanczos' });
+    });
+
+    it('forwards the requested method', async () => {
+      videoGenService.planUpscaleHistoryItem.mockResolvedValue({ method: 'ltx' });
+      await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan?method=ltx`);
+      expect(videoGenService.planUpscaleHistoryItem).toHaveBeenCalledWith(validHistoryId, { method: 'ltx' });
+    });
+
+    it('rejects an unknown method with a 400', async () => {
+      const r = await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan?method=realesrgan`);
+      expect(r.status).toBe(400);
+      expect(videoGenService.planUpscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    // #6502: nothing may be queued or downloaded before the user submits.
+    it('never touches the upscale action', async () => {
+      videoGenService.planUpscaleHistoryItem.mockResolvedValue({ method: 'ltx' });
+      await request(app).get(`/api/video-gen/upscale/${validHistoryId}/plan?method=ltx`);
+      expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
     });
   });
 
@@ -2990,6 +3111,53 @@ describe('videoGen routes', () => {
         expect(rejected.status).toBe(400);
       }
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The IC-LoRA provisioning endpoints span the whole weight registry, not just
+  // the remix modes — the LTX-2.5 upscale adapter (#6502) is downloadable and
+  // repairable without ever being a render mode. These pin that split.
+  describe('IC-LoRA provisioning endpoints', () => {
+    const upscaler = IC_LORA_MODES['pixel-upscale'];
+
+    it('downloads a pinned weight single-file, at its pinned revision', async () => {
+      const res = await request(app).get(`/api/video-gen/ic-loras/${icLoraWeightKey(upscaler)}/download`);
+      expect(res.status).toBe(200);
+      const [{ fallbacks, repo }] = sseDownload.start.mock.calls[0];
+      // Never a whole-repo snapshot: the pin names one commit and one file, and
+      // a bare `repo` argument would ignore both.
+      expect(repo).toBeUndefined();
+      expect(fallbacks).toEqual([{
+        repo: upscaler.repo,
+        only: [upscaler.filename],
+        revision: upscaler.revision,
+      }]);
+    });
+
+    it('keeps an unpinned, un-mirrored weight on the cheap whole-repo path', async () => {
+      const res = await request(app).get('/api/video-gen/ic-loras/ic-control/download');
+      expect(res.status).toBe(200);
+      const [args] = sseDownload.start.mock.calls[0];
+      expect(args.repo).toBe(IC_LORA_MODES.control.repo);
+      expect(args.fallbacks).toBeUndefined();
+    });
+
+    it('404s an unknown weight key and names the real ones', async () => {
+      const res = await request(app).get('/api/video-gen/ic-loras/not-a-weight/download');
+      expect(res.status).toBe(404);
+      expect(res.body.error).toMatch(/pixel-upscale/);
+      expect(res.body.error).toMatch(/ic-control/);
+    });
+
+    it('rejects the upscale adapter as a render mode', async () => {
+      // The registry entry exists, so the only thing keeping it out of a render
+      // is the mode enum. Every spelling must 400 rather than reaching the
+      // LTX-2.3 remix pipeline it cannot be fused into.
+      expect(listIcLoraRemixModes()).not.toContain(upscaler);
+      for (const mode of ['pixel-upscale', 'ic-pixel-upscale']) {
+        const res = await request(app).post('/api/video-gen/').send({ prompt: 'Example shot', mode });
+        expect(res.status).toBe(400);
+      }
     });
   });
 

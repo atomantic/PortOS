@@ -122,12 +122,15 @@ vi.mock('../services/specDecodeModels.js', () => ({
     kind: 'spec-decode', verdict: 'ok', destPath: 'models/base.gguf', expectedBytes: 6, freeBytes: 1e12, requiredBytes: 6, headroomBytes: 0, alreadyDownloaded: false,
   })),
   cancelSpecDecodeModelDownload: vi.fn(() => true),
+  removeSpecDecodeModel: vi.fn(async () => ({ success: true, deleted: true, path: 'models/base.gguf' })),
 }));
 
 // /loaded reads getSettings() to honor a user's intentionally-disabled backends,
 // so mock it (defaults to no backends disabled; the disabled-case test flips it).
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
+  // localPersistentMindSetup → cos → cosTaskStore → codeReview listens on boot.
+  settingsEvents: { on: vi.fn(), emit: vi.fn(), setMaxListeners: vi.fn() },
 }));
 
 function makeApp() {
@@ -834,6 +837,25 @@ describe('llama-server routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true, cancelled: true });
     expect(cancelSpecDecodeModelDownload).toHaveBeenCalledWith({ presetId: 'test-preset', role: 'model' });
+  });
+
+  it('POST /api/local-llm/llama-server/download-model/remove deletes one preset GGUF', async () => {
+    const { removeSpecDecodeModel } = await import('../services/specDecodeModels.js');
+    const res = await request(makeApp())
+      .post('/api/local-llm/llama-server/download-model/remove')
+      .send({ presetId: 'test-preset', role: 'model' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, deleted: true, path: 'models/base.gguf' });
+    expect(removeSpecDecodeModel).toHaveBeenCalledWith({ presetId: 'test-preset', role: 'model' });
+  });
+
+  it('POST /api/local-llm/llama-server/download-model/remove rejects an unknown role', async () => {
+    const res = await request(makeApp())
+      .post('/api/local-llm/llama-server/download-model/remove')
+      .send({ presetId: 'test-preset', role: 'sneaky' });
+
+    expect(res.status).toBe(400);
   });
 
   it('POST /api/local-llm/llama-server/start launches server with valid payload', async () => {

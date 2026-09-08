@@ -22,6 +22,7 @@ import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, guardChildStdin } from './bufferedSpawn.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
 import { modelPinIsOffered } from './localProviderRuntime.js';
+import { filterCallerModeEligible } from './callerModePolicy.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
 // or a stack's first frames, short enough to embed in an error message or a
@@ -47,7 +48,9 @@ const stderrTailOf = (stderr) => stderr.trim().slice(-STDERR_TAIL_LIMIT);
 export function pickCliProvider(providers, config = {}) {
   const { providerId, model, fallbackId = 'claude-code' } = config || {};
   const list = Array.isArray(providers) ? providers : Object.values(providers || {});
-  const cli = list.filter((p) => p && p.type === 'cli' && p.enabled !== false);
+  // 'cli-harness' is the shared name for this caller context — see
+  // callerModePolicy.js. Same rule the fallback chain and the pickers apply.
+  const cli = filterCallerModeEligible(list.filter((p) => p?.enabled !== false), 'cli-harness');
   if (cli.length === 0) {
     return { error: 'No enabled CLI provider is configured — add one under AI Providers.' };
   }

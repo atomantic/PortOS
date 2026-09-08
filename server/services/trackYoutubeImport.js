@@ -13,7 +13,8 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'path';
-import { assertYoutubeVideoUrl, YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
+import { YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
+import { assertYoutubeVideoUrl } from '../lib/youtubeUrlAssert.js';
 import { shortId, PATHS } from '../lib/fileUtils.js';
 import { probeVideoDuration } from '../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';

@@ -13,13 +13,6 @@ vi.mock('./settings.js', () => ({
 // Same one-liner stub for the two backend managers — `getCodeReviewDefaults`
 // + `pickCodeReviewDefaults` don't touch them, only `runLocalCodeReview`
 // does, and those tests stub `global.fetch` directly.
-// The install's default AI provider, which the unconfigured reviewer fallback
-// now follows. Mutable holder so each test picks the vendor it is asserting on;
-// `null` reproduces an install with no provider (or an uninitialized toolkit).
-const mockedActiveProvider = { current: null }
-vi.mock('./providers.js', () => ({
-  getActiveProvider: () => Promise.resolve(mockedActiveProvider.current),
-}))
 vi.mock('./lmStudioManager.js', () => ({ getBaseUrl: () => 'http://localhost:1234' }))
 // MTPLX's endpoint is resolved through a DYNAMIC import in the SUT (its manager
 // drags in the managed-daemon/PM2 graph), and it reports the OpenAI `/v1` root
@@ -67,7 +60,6 @@ const testDeps = {
 describe('codeReview helpers', () => {
   afterEach(() => {
     mockedSettings.current = {}
-    mockedActiveProvider.current = null
     __resetCodeReviewDefaultsCache()
     __resetReviewerCliInstalledCache()
     __resetThinkingUnsupportedCache()
@@ -105,9 +97,9 @@ describe('codeReview helpers', () => {
     // than more `<reviewer>*` scalars: it is a different review with a different
     // question, and the user can run it on a different model.
     const NO_GOAL_FIDELITY = { goalFidelity: { enabled: true, backend: null, model: null, effort: null } }
-    it('returns the hardcoded fallback when settings has no codeReview slice', () => {
+    it('returns no reviewers when settings has no codeReview slice', () => {
       expect(pickCodeReviewDefaults(null)).toEqual({
-        reviewers: ['copilot'],
+        reviewers: [],
         usernames: [],
         optionalReviewers: [],
         reviewerMaxRounds: {},
@@ -118,7 +110,7 @@ describe('codeReview helpers', () => {
         ...NO_GOAL_FIDELITY,
       })
       expect(pickCodeReviewDefaults({})).toEqual({
-        reviewers: ['copilot'],
+        reviewers: [],
         usernames: [],
         optionalReviewers: [],
         reviewerMaxRounds: {},
@@ -220,63 +212,6 @@ describe('codeReview helpers', () => {
       expect(pickCodeReviewDefaults({ codeReview: { reviewers: ['copilot'] } }).usernames).toEqual([])
     })
 
-    describe('unconfigured fallback follows the default AI provider', () => {
-      const claudeProvider = { id: 'claude-code-tui', command: 'claude', defaultModel: 'claude-opus-5', effort: 'high' }
-
-      it('reviews with the active provider, its model, and its effort', () => {
-        const out = pickCodeReviewDefaults(null, { activeProvider: claudeProvider })
-        expect(out.reviewers).toEqual(['claude'])
-        expect(out.claudeModel).toBe('claude-opus-5')
-        expect(out.claudeEffort).toBe('high')
-        // Only the derived reviewer gets pins — the rest stay at "its own default".
-        expect(out.codexModel).toBeNull()
-        expect(out.codexEffort).toBeNull()
-      })
-
-      it('leaves a configured chain alone', () => {
-        const out = pickCodeReviewDefaults(
-          { codeReview: { reviewers: ['copilot'] } },
-          { activeProvider: claudeProvider }
-        )
-        expect(out.reviewers).toEqual(['copilot'])
-        expect(out.claudeModel).toBeNull()
-      })
-
-      it('lets a stored pin win over the provider-derived one', () => {
-        const out = pickCodeReviewDefaults(
-          { codeReview: { claudeModel: 'claude-sonnet-5', claudeEffort: 'low' } },
-          { activeProvider: claudeProvider }
-        )
-        expect(out.reviewers).toEqual(['claude'])
-        expect(out.claudeModel).toBe('claude-sonnet-5')
-        expect(out.claudeEffort).toBe('low')
-      })
-
-      it('keeps copilot for a provider that maps to no reviewer', () => {
-        // A hosted API provider spawns no binary and is not a local backend.
-        const out = pickCodeReviewDefaults(null, { activeProvider: { id: 'openrouter', type: 'api', defaultModel: 'stealth/ox-alpha' } })
-        expect(out.reviewers).toEqual(['copilot'])
-      })
-
-      it('drops a configured-default sentinel rather than pinning it as a model', () => {
-        const out = pickCodeReviewDefaults(null, {
-          activeProvider: { id: 'antigravity-cli', command: 'agy', defaultModel: 'antigravity-configured-default' },
-        })
-        expect(out.reviewers).toEqual(['antigravity'])
-        // The sentinel means "whatever agy is configured for" — `agy --model
-        // antigravity-configured-default` is not a runnable invocation.
-        expect(out.antigravityModel).toBeNull()
-      })
-
-      it('drops an effort outside the derived reviewer\'s own ladder', () => {
-        // agy rejects `--effort max`, so a provider pinned there must not
-        // silently review at a level its CLI refuses.
-        const out = pickCodeReviewDefaults(null, {
-          activeProvider: { id: 'antigravity-cli', command: 'agy', defaultModel: 'gemini-3.6-flash', effort: 'max' },
-        })
-        expect(out.antigravityEffort).toBeNull()
-      })
-    })
   })
 
   describe('getCodeReviewDefaults', () => {
@@ -290,12 +225,11 @@ describe('codeReview helpers', () => {
       expect(out.stopMode).toBe('all')
     })
 
-    it('falls back to the active provider when nothing is configured', async () => {
+    it('keeps the reviewer chain empty when nothing is configured', async () => {
       mockedSettings.current = {}
-      mockedActiveProvider.current = { id: 'codex', command: 'codex', defaultModel: 'gpt-5.6-terra' }
       const out = await getCodeReviewDefaults()
-      expect(out.reviewers).toEqual(['codex'])
-      expect(out.codexModel).toBe('gpt-5.6-terra')
+      expect(out.reviewers).toEqual([])
+      expect(out.codexModel).toBeNull()
     })
   })
 
@@ -326,6 +260,16 @@ describe('codeReview helpers', () => {
   })
 
   describe('resolveReviewLoopOptions', () => {
+    // Reviewers inspecting public PR content are advisory only — the follow-up
+    // must never hand an untrusted diff to a second process with write authority.
+    // Pinned on the resolver itself because this is the one place the rule lives:
+    // a task pin and a saved default that both ask for it are still refused.
+    it('forces reviewerApplies off no matter what the task or the defaults ask for', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['codex'], reviewerApplies: true } }
+      const out = await resolveReviewLoopOptions({ reviewerApplies: true }, testDeps)
+      expect(out.reviewerApplies).toBe(false)
+    })
+
     it('assembles a reviewer-keyed model map from the per-CLI-reviewer scalars', async () => {
       mockedSettings.current = {
         codeReview: {

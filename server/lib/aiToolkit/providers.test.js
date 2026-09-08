@@ -23,6 +23,29 @@ describe('Provider Service', () => {
     if (TEST_DATA_DIR) await rm(TEST_DATA_DIR, { recursive: true, force: true });
   });
 
+  it('shares mode enablement and models while preserving mode-specific arguments, defaults and IDs', async () => {
+    await writeFile(join(TEST_DATA_DIR, 'providers.json'), JSON.stringify({ activeProvider: 'example-tui', providers: {
+      example: { id: 'example', name: 'Example CLI', type: 'cli', command: 'example', enabled: false, models: ['a'], args: ['--print'], defaultModel: 'a' },
+      'example-tui': { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'example', enabled: true, models: ['b'], args: [], defaultModel: 'b' },
+      remote: { id: 'remote', type: 'api', enabled: false, models: ['remote'] },
+    } }));
+    expect((await providerService.getProviderById('example')).enabled).toBe(true);
+    expect((await providerService.getActiveProvider()).id).toBe('example-tui');
+    await providerService.updateProvider('example-tui', { enabled: false, models: ['c'], args: ['--interactive'], defaultModel: 'c' });
+    expect(await providerService.getProviderById('example')).toMatchObject({ enabled: false, models: ['c'], args: ['--print'], defaultModel: 'c' });
+    expect(await providerService.getProviderById('remote')).toMatchObject({ enabled: false, models: ['remote'] });
+    const catalog = vi.spyOn(providerService, 'fetchProviderModelCatalog').mockResolvedValue({ models: ['fresh'], contextWindows: { fresh: 8192 } });
+    await providerService.refreshProviderModelsBatch(['example-tui']);
+    expect((await providerService.getProviderById('example')).models).toEqual(['fresh']);
+    expect((await providerService.getProviderById('example-tui')).models).toEqual(['fresh']);
+    catalog.mockRestore();
+    await providerService.setActiveProvider('example');
+    expect((await providerService.getActiveProvider()).type).toBe('cli');
+    await providerService.deleteProvider('example-tui');
+    expect(await providerService.getProviderById('example')).toBeNull();
+    expect((await providerService.getActiveProvider()).id).toBe('remote');
+  });
+
   it.skipIf(process.platform === 'win32')('refreshes Pi models and distinguishes authentication from probe failure', async () => {
     const command = join(TEST_DATA_DIR, 'pi');
     const emit = async (text, code = 0) => {
@@ -176,6 +199,7 @@ describe('Provider Service', () => {
       lightModel: 'model-b',
       mediumModel: 'model-a',
       heavyModel: 'model-c',
+      ultraModel: 'model-c',
       fallbackProvider: 'fallback-provider-id',
       fallbackModel: 'fallback-model-id',
       numCtx: 32768,
@@ -1545,6 +1569,132 @@ rl.on('line', (line) => {
       for (const [url] of fetchSpy.mock.calls) {
         expect(url).toBe('http://127.0.0.1:8000/v1/models');
       }
+    });
+
+    /**
+     * The cached-checkpoint half of that refresh.
+     *
+     * MTPLX loads ONE checkpoint per process and reports only that one, under
+     * the slug its launch line minted — so clicking "Refresh Models" after
+     * pulling a second checkpoint kept answering with the same lone id, and the
+     * new weights were unreachable from the provider's model list. The host
+     * injects the on-disk listing (`services/mtplxServerManager.js`); this
+     * directory stays self-contained.
+     *
+     * Driven through `refreshProviderModels` — the boundary the route calls —
+     * so the PERSISTED record is what proves the behavior.
+     */
+    describe('cached checkpoints the daemon is not serving', () => {
+      const SERVED = 'mtplx-qwen38-27b-optimized-speed';
+      const CACHED = 'wang-yang/Ornith-1.0-35B-MTPLX';
+      const MTPLX_ENDPOINT = 'http://127.0.0.1:8000/v1';
+
+      let cachedModelIds;
+      let hostedService;
+
+      /** The listing a running MTPLX answers with. */
+      const servesModels = (ids) => vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: ids.map((id) => ({ id, context_length: 262144 })) }),
+      }));
+
+      const seedProvider = (shape = {}) => hostedService.createProvider({
+        name: 'MTPLX provider',
+        type: 'cli',
+        command: 'opencode',
+        mtplxBacked: true,
+        endpoint: MTPLX_ENDPOINT,
+        models: [SERVED],
+        ...shape,
+      });
+
+      beforeEach(() => {
+        // Keyed on the endpoint, the way the real host predicate is: every
+        // provider that is not MTPLX's gets `null` and an untouched probe.
+        cachedModelIds = vi.fn(async (provider) => (
+          provider.endpoint === MTPLX_ENDPOINT ? [SERVED, CACHED] : null
+        ));
+        hostedService = createProviderService({
+          dataDir: TEST_DATA_DIR,
+          providersFile: 'providers.json',
+          cachedModelIds,
+        });
+      });
+
+      // Two rows, because there are two dispatch arms: the `mtplxBacked` fetcher
+      // (which the test above already pins BOTH OpenCode modes reach) and the
+      // generic `api` branch, which the marker never reaches.
+      it.each([
+        ['an OpenCode wrapper', { type: 'cli', command: 'opencode', mtplxBacked: true }],
+        ['the unmarked API record', { type: 'api' }],
+      ])('adds them to what %s is serving', async (_label, shape) => {
+        servesModels([SERVED]);
+        const provider = await seedProvider(shape);
+        const updated = await hostedService.refreshProviderModels(provider.id);
+        // Served first — it is the one id live right now, so it stays the
+        // natural default — then what the daemon has on disk but has not loaded.
+        expect(updated.models).toEqual([SERVED, CACHED]);
+        // Only the served entry declares a window; guessing one for an unloaded
+        // checkpoint would be worse than the caller's own fallback.
+        expect(updated.modelContextWindows).toEqual({ [SERVED]: 262144 });
+      });
+
+      // The served id and the cached ids are DIFFERENT namespaces — MTPLX
+      // answers as a slug its launch line minted, its cache yields HF repo ids —
+      // and the slug is the shipped record's `defaultModel`. A stopped daemon
+      // must not cost the provider its pin, so a FAILED probe keeps what the
+      // record already listed. (A successful one stays authoritative: the
+      // delisting cases above still prune.)
+      it('reports the cache when the daemon is stopped, keeping the pin it can no longer probe', async () => {
+        const provider = await seedProvider({ defaultModel: SERVED });
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+        const updated = await hostedService.refreshProviderModels(provider.id);
+        expect(updated.models).toEqual([SERVED, CACHED]);
+        expect(updated.models).toContain(updated.defaultModel);
+      });
+
+      // The mirror of the case above: when the endpoint DOES answer, its list is
+      // the truth, so an id it dropped leaves the record.
+      it('drops a delisted model when the daemon answers', async () => {
+        const provider = await seedProvider({ models: [SERVED, 'retired-checkpoint'] });
+        servesModels([SERVED]);
+        const updated = await hostedService.refreshProviderModels(provider.id);
+        expect(updated.models).toEqual([SERVED, CACHED]);
+      });
+
+      it('rethrows the probe failure when nothing is cached', async () => {
+        // The throw-don't-degrade posture `_refreshAPIProviderModels` documents:
+        // with no cache to fall back on, an unreachable endpoint must not
+        // persist a plausible-looking list over the one already stored.
+        const provider = await seedProvider({});
+        cachedModelIds.mockResolvedValue([]);
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+        await expect(hostedService.refreshProviderModels(provider.id)).rejects.toThrow(/503/);
+        expect((await hostedService.getProviderById(provider.id)).models).toEqual([SERVED]);
+      });
+
+      // A rejection carrying a falsy value is still a failure. Keyed on the
+      // outcome rather than the error's truthiness, or this probe reads as a
+      // success whose catalog is `undefined` — swallowed instead of rethrown,
+      // and treated as authoritative so the record's own ids get pruned.
+
+      it('leaves a provider the host does not claim exactly as the endpoint answered', async () => {
+        servesModels(['gpt-example']);
+        const provider = await hostedService.createProvider({
+          name: 'Other API', type: 'api', endpoint: 'https://api.example.com/v1', models: [],
+        });
+        expect((await hostedService.refreshProviderModels(provider.id)).models).toEqual(['gpt-example']);
+      });
+
+      it('survives a throwing probe rather than failing the refresh', async () => {
+        // `mtplx models` runs a subprocess, so it can time out — a refresh that
+        // still has the endpoint's answer should report it.
+        servesModels([SERVED]);
+        const provider = await seedProvider({});
+        cachedModelIds.mockRejectedValue(new Error('`mtplx models` timed out'));
+        expect((await hostedService.refreshProviderModels(provider.id)).models).toEqual([SERVED]);
+      });
     });
   });
 

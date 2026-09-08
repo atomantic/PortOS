@@ -51,6 +51,7 @@
  * scheduler graph.
  */
 
+import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
@@ -280,6 +281,7 @@ export function sanitizeCommission(raw) {
     assignment: {
       providerId: assignmentProviderId,
       model: assignmentModel,
+      ...(assignmentProviderId && EFFORT_LEVELS.includes(assignment.effort) ? { effort: assignment.effort } : {}),
     },
     // Phase 2: deep-sanitize each reaction (drop ratingless/malformed entries)
     // and cap history. Phase 1 records carry an empty array, so this is a no-op

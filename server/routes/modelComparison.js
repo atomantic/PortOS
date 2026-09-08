@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, modelComparisonImportSchema, modelComparisonDiscoverySchema, modelComparisonSyncSchema } from '../lib/validation.js';
 import { getModelComparison, importModelComparison } from '../services/modelComparison.js';
-import { syncArtificialAnalysisCatalog } from '../services/artificialAnalysis.js';
+import { hasArtificialAnalysisKey, syncArtificialAnalysisCatalog } from '../services/artificialAnalysis.js';
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
 import { providerCatalogSlugs } from '../lib/comparisonModelScope.js';
@@ -10,7 +10,9 @@ import { providerCatalogSlugs } from '../lib/comparisonModelScope.js';
 export function createModelComparisonRoutes(providerService) {
   const router = Router();
   router.get('/', asyncHandler(async (req, res) => {
-    const [catalog, { providers }] = await Promise.all([getModelComparison(), providerService.getAllProviders()]);
+    const [catalog, { providers }, artificialAnalysisKeyConfigured] = await Promise.all([
+      getModelComparison(), providerService.getAllProviders(), hasArtificialAnalysisKey(),
+    ]);
     const inventory = providers.filter(p => p.enabled !== false).map(p => ({
       id: p.id, name: p.name, type: p.type, canDiscover: canRefreshModels(p),
       models: filterSelectableModels(p.models).filter(m => typeof m === 'string' && m).map(model => ({
@@ -19,7 +21,11 @@ export function createModelComparisonRoutes(providerService) {
     }));
     // Benchmark rows the user can act on: the chart defaults to the models their
     // own providers can dispatch, with the rest of the index one click away.
-    res.json({ ...catalog, inventory, availableModels: [...providerCatalogSlugs(inventory)].sort() });
+    res.json({
+      ...catalog, inventory, availableModels: [...providerCatalogSlugs(inventory)].sort(),
+      // Presence only, never the key — the page skips its key prompt when set.
+      artificialAnalysisKeyConfigured,
+    });
   }));
   // Explicit read-only catalog discovery: no model inference or provider writes.
   router.post('/discover', asyncHandler(async (req, res) => {

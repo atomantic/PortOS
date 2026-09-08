@@ -1,12 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
+  characterArcEvidenceRefs,
   sanitizeTransition,
   sanitizeCharacterArc,
   sanitizeCharacterArcList,
   renderCharacterArcsForPrompt,
+  renderCharacterEvolutionsForPrompt,
   CHARACTER_ARC_LIMITS,
   TRANSITION_KINDS,
+  TRANSITION_KIND_LABELS,
 } from './seriesCharacterArc.js';
+import { evolutionEvidenceStatus } from './characterEvolution.js';
 
 describe('sanitizeTransition', () => {
   it('keeps a well-formed transition and mints an id', () => {
@@ -37,9 +41,10 @@ describe('sanitizeTransition', () => {
     expect(sanitizeTransition({ kind: 'decision', label: 'x', atIssue: 'foo' }).atIssue).toBeNull();
   });
 
-  it('exposes the full kind taxonomy', () => {
+  it('exposes the full kind taxonomy, each kind labelled for the editor picker', () => {
     expect(TRANSITION_KINDS).toContain('point-of-no-return');
     expect(TRANSITION_KINDS).toContain('sacrifice');
+    expect(Object.keys(TRANSITION_KIND_LABELS)).toEqual([...TRANSITION_KINDS]);
   });
 
   // The arc auto-resolve path writes through this sanitizer directly (the route
@@ -181,5 +186,78 @@ describe('renderCharacterArcsForPrompt', () => {
     expect(block).toContain('wants: revenge');
     expect(block).toContain('needs: to forgive');
     expect(block).toContain('realization (issue 3): sees the cost');
+  });
+});
+
+describe('optional five-stage evolution lens (#6440)', () => {
+  it('leaves an arc that never opted in byte-identical', () => {
+    // The lens must add no key at all to a legacy arc — an `evolution: null`
+    // stamp would rewrite every stored characterArcs entry on its next save.
+    const arc = sanitizeCharacterArc({
+      characterId: 'chr-1', characterName: 'Mara', want: 'revenge', need: 'to forgive',
+    });
+    expect(Object.prototype.hasOwnProperty.call(arc, 'evolution')).toBe(false);
+    expect(JSON.stringify(sanitizeCharacterArc(arc))).toBe(JSON.stringify(arc));
+  });
+
+  it('keeps a lens-only arc and resolves its stages against the arc\'s own beats', () => {
+    const arc = sanitizeCharacterArc({
+      // No want/need/startState — a writer may plan the evolution first, and the
+      // lens alone is enough to keep the arc.
+      characterName: 'Mara',
+      transitions: [{ id: 'trn-live', kind: 'decision', label: 'walks out' }],
+      evolution: {
+        outcome: 'full-change',
+        stages: [
+          { stageId: 'final-proof', characterChoice: 'stays', evidence: { transitionId: 'trn-live' } },
+          { stageId: 'cost-tested', characterChoice: 'pays', evidence: { transitionId: 'trn-deleted' } },
+        ],
+      },
+    });
+    expect(JSON.stringify(sanitizeCharacterArc(arc))).toBe(JSON.stringify(arc));
+    // Only the beat this arc still owns counts as proof; the pointer to the
+    // deleted one survives as authored intent and reads stale.
+    const refs = characterArcEvidenceRefs(arc);
+    expect(Object.fromEntries(arc.evolution.stages
+      .map((st) => [st.stageId, evolutionEvidenceStatus(st.evidence, refs)])))
+      .toEqual({ 'cost-tested': 'stale', 'final-proof': 'anchored' });
+    expect(arc.evolution.stages[0].evidence.transitionId).toBe('trn-deleted');
+  });
+});
+
+describe('renderCharacterEvolutionsForPrompt', () => {
+  it('returns null until some arc actually carries a lens', () => {
+    // null (not '') is what keeps every consumer's `{{#characterEvolution}}`
+    // section empty, which is the whole "degrades to today's behavior" promise.
+    expect(renderCharacterEvolutionsForPrompt(undefined)).toBeNull();
+    expect(renderCharacterEvolutionsForPrompt([])).toBeNull();
+    expect(renderCharacterEvolutionsForPrompt([
+      sanitizeCharacterArc({ characterName: 'Mara', want: 'revenge' }),
+      null,
+      'not an arc',
+    ])).toBeNull();
+  });
+
+  it('resolves each lens against ITS OWN arc\'s beats, never the whole cast\'s', () => {
+    // Both stages point at `trn-burn`, but only Mara owns that beat. A shared
+    // ref set across the cast would report Joss's dangling pointer `anchored`
+    // and hand the model a fabricated proof.
+    const stage = { stageId: 'final-proof', characterChoice: 'stays', evidence: { transitionId: 'trn-burn' } };
+    const block = renderCharacterEvolutionsForPrompt([
+      sanitizeCharacterArc({
+        characterName: 'Mara',
+        transitions: [{ id: 'trn-burn', kind: 'decision', label: 'burns the bridge' }],
+        evolution: { outcome: 'full-change', stages: [stage] },
+      }),
+      sanitizeCharacterArc({
+        characterName: 'Joss',
+        evolution: { outcome: 'flat-testing', stages: [stage] },
+      }),
+    ]);
+    expect(block).toContain('- Mara');
+    expect(block).toContain('[anchored]');
+    expect(block).toContain('- Joss');
+    expect(block).toContain('[stale]');
+    expect(block.indexOf('[anchored]')).toBeLessThan(block.indexOf('- Joss'));
   });
 });

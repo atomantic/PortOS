@@ -34,15 +34,26 @@
  * Everything fails CLOSED and nothing here throws into the timer: a probe that
  * errors, a job that declines, or an unreadable config all end the cycle with a
  * logged reason instead of charging a dispatch or crashing the process.
+ *
+ * ACCOUNTING happens on acceptance, not on dispatch. The two synchronous lanes
+ * (a programmatic handler, a custom job) are accepted the moment they return, so
+ * this file charges them itself. A reference step goes out as an on-demand
+ * REQUEST an engine may still refuse, so it takes a reservation instead — which
+ * counts against the window cap and blocks a second dispatch of the same step
+ * until `quotaBurnAcceptance.js` settles it into exactly one charge, or releases
+ * it uncharged. Each cycle settles the previous one's requests before deciding
+ * what to ask for next.
  */
 
 import { getProviderQuotas } from './providerUsage.js';
-import { getQuotaBurnDispatches, evaluateFamilies, PLAN_COMPLETE_SKIP_REASON, recordQuotaBurnDispatch, selectBurnCandidates } from './quotaBurn.js';
+import { getQuotaBurnDispatches, evaluateFamilies, PLAN_COMPLETE_SKIP_REASON, recordQuotaBurnDispatch, selectBurnCandidates, withPendingDispatches } from './quotaBurn.js';
+import { reconcileQuotaBurnReservations, reserveQuotaBurnDispatch } from './quotaBurnAcceptance.js';
 import { getQuotaBurnCompletions, recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';
 import { getActiveQuotaBurnBlocks, recordBurnAgentCompletion } from './quotaBurnDenials.js';
-import { getQuotaBurnConfig, getQuotaBurnRuns, recordQuotaBurnRun } from './quotaBurnStore.js';
-import { countJobPending, runBurnJob } from './quotaBurnJobs/index.js';
+import { getQuotaBurnConfig, getQuotaBurnReservations, getQuotaBurnRuns, quotaBurnReservationKey, recordQuotaBurnRun } from './quotaBurnStore.js';
+import { countQuotaBurnStepPending, getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
 import { familyHasRunnableJobs, familyIsConfigured, jobIsSpent, quotaBurnJobKey } from '../lib/quotaBurnConfig.js';
+import { applyQuotaBurnAvailability } from '../lib/quotaBurnTaskRef.js';
 import { windowLabelOf } from '../lib/quotaWindows.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
 import { cosEvents } from './cosEvents.js';
@@ -79,6 +90,49 @@ const selectJobs = (family, { jobId = null, force = false, completions = {} } = 
  * opt into the wire deliberately.
  */
 const wireShape = (pending) => ({ count: pending?.count ?? 0, detail: pending?.detail ?? '' });
+
+/**
+ * What a step names, for the run log and the skip report: the scheduled task it
+ * references, or the legacy job type a plan that has not been converted yet is
+ * still carrying. `jobType` is null on a reference step, so recording it
+ * unconditionally wrote `jobType: undefined` on every one of them.
+ */
+const stepIdentity = (job) => (job?.taskRef
+  ? { taskRef: job.taskRef }
+  : { jobType: job?.jobType ?? null });
+
+/**
+ * ONE invocation path, whatever the step names.
+ *
+ * There is no second lane any more: the quota-only `JOB_MODULES` registry and
+ * its direct `agentPrompt` executor are retired (#6381), so a step still
+ * carrying a legacy `jobType` has no reference to run and resolves to
+ * `LEGACY_UNMIGRATED` inside the shared path — reported as "nothing pending"
+ * with its migration reason rather than dispatched down an executor that no
+ * longer exists. Keeping the refusal INSIDE the shared path is deliberate: the
+ * page and the runner then say the same thing about the same step.
+ */
+const probeStep = ({ job, family, catalog }) => countQuotaBurnStepPending({ step: job, family, catalog });
+
+const runStep = ({ job, family, candidate, context, force, catalog }) =>
+  invokeQuotaBurnStep({ step: job, family, candidate, context, force, catalog });
+
+/**
+ * The live task catalog, read at most once per cycle/status pass and only when a
+ * reference step is actually present — it reads the schedule, the app registry
+ * and the custom-job store, and a plan made entirely of legacy steps needs none
+ * of them, and neither does an unreadable one. Both come back EMPTY rather than
+ * as a third state: `resolveQuotaBurnStepAvailability` reads `{}` as "ask no
+ * catalog questions", so target scope is still judged (it is decidable from the
+ * reference alone), no step is mass-orphaned by a transient read failure, and a
+ * legacy-only plan resolves to exactly the verdict it already had.
+ */
+const catalogFor = async (jobs) => ((jobs || []).some((job) => job?.taskRef)
+  ? await getQuotaBurnTaskCatalog().catch((err) => {
+    console.error(`❌ Quota-burn could not read the scheduled-task catalog: ${err.message}`);
+    return {};
+  })
+  : {});
 
 /**
  * The plan, re-anchored to start just AFTER the job this family last dispatched.
@@ -126,7 +180,7 @@ async function lastDispatchedJobByFamily() {
  * and `run` needs the very same scan to know what to render. Without the
  * passthrough that multi-megabyte read happened twice per dispatch.
  */
-async function dispatchFromCandidate(candidate, { jobId = null, force = false, afterJobId = null, completions = {} } = {}) {
+async function dispatchFromCandidate(candidate, { jobId = null, force = false, afterJobId = null, completions = {}, catalog = {}, reserved = new Set() } = {}) {
   const attempts = [];
   // A forced run of a NAMED job skips the pending probe entirely and calls the
   // job directly. The probe exists to pick which job in the plan to run; when
@@ -138,14 +192,23 @@ async function dispatchFromCandidate(candidate, { jobId = null, force = false, a
   // its own cooldown too.
   const targeted = force && jobId;
   for (const job of rotatePlanAfter(selectJobs(candidate.family, { jobId, force, completions }), afterJobId)) {
-    const pending = targeted ? null : await countJobPending({ job, family: candidate.family });
-    if (pending && !(pending.count > 0)) {
-      attempts.push({ jobId: job.id, jobType: job.jobType, skipped: pending.detail || 'no pending work' });
+    // A burn of this step is already out and not yet accepted. Re-dispatching it
+    // would queue the same work twice and charge the window twice for one unit —
+    // the case `quotaBurnAcceptance.js` exists to close — so the walk moves on to
+    // the next step instead. Not bypassable by `force`: a duplicate is not a
+    // quota gate, it is the same work twice (see quotaBurnInvoke.js's header).
+    if (reserved.has(quotaBurnReservationKey(candidate.family.id, job.id))) {
+      attempts.push({ jobId: job.id, ...stepIdentity(job), skipped: 'a burn of this step is already awaiting acceptance' });
       continue;
     }
-    const result = await runBurnJob({ job, family: candidate.family, candidate, context: pending?.context, force });
+    const pending = targeted ? null : await probeStep({ job, family: candidate.family, catalog });
+    if (pending && !(pending.count > 0)) {
+      attempts.push({ jobId: job.id, ...stepIdentity(job), skipped: pending.detail || 'no pending work' });
+      continue;
+    }
+    const result = await runStep({ job, family: candidate.family, candidate, context: pending?.context, force, catalog });
     if (!result.dispatched) {
-      attempts.push({ jobId: job.id, jobType: job.jobType, skipped: result.reason || 'declined' });
+      attempts.push({ jobId: job.id, ...stepIdentity(job), skipped: result.reason || 'declined' });
       continue;
     }
     return { dispatched: true, job, result, attempts };
@@ -236,6 +299,16 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   // allowlist of automatic triggers so a trigger added later fails CLOSED.
   if (!config.enabled && trigger !== 'manual') return { skipped: 'disabled' };
 
+  // Settle what the LAST dispatch asked for before deciding what this cycle may
+  // ask for. A reference burn's acceptance is asynchronous, so this is where a
+  // request that produced a task is charged and one that was refused releases
+  // its reservation — both of which change the ladder's answers below. Ahead of
+  // the run-once read for the same reason: a step accepted here is spent now.
+  const settlement = await reconcileQuotaBurnReservations();
+  if (settlement.accepted || settlement.refused) {
+    console.log(`🧾 Quota-burn settled ${settlement.accepted} accepted and ${settlement.refused} refused burn${settlement.accepted + settlement.refused === 1 ? '' : 's'}`);
+  }
+
   // Read once per cycle and threaded through selection, the gate ladder, and the
   // dispatch record, so a job spent mid-cycle can't be re-picked by a later
   // family's walk.
@@ -287,11 +360,21 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   });
   if (!quotas) return finish({ dispatched: false, reason: 'provider quota read failed' });
 
-  const [dispatches, blocks] = await Promise.all([getQuotaBurnDispatches(), getActiveQuotaBurnBlocks()]);
+  const [charged, blocks, reservations] = await Promise.all([
+    getQuotaBurnDispatches(), getActiveQuotaBurnBlocks(), getQuotaBurnReservations(),
+  ]);
   // An unreadable dispatch ledger reads as "0 used this window", which would
   // walk straight past `maxDispatchesPerWindow` and spend quota the user already
   // spent (#4115). Same posture as the provider-quota read above: skip the cycle.
-  if (!dispatches) return finish({ dispatched: false, reason: 'dispatch ledger read failed' });
+  if (!charged) return finish({ dispatched: false, reason: 'dispatch ledger read failed' });
+  // And the same posture for the reservations: reading them as "nothing pending"
+  // would both re-queue a step already awaiting acceptance and re-open the share
+  // of the cap that step is holding.
+  if (!reservations) return finish({ dispatched: false, reason: 'pending reservations read failed' });
+  // What the ladder gates on: charges plus the burns already committed to this
+  // window and not yet accepted.
+  const dispatches = withPendingDispatches(charged, reservations);
+  const reserved = new Set(Object.keys(reservations));
   // `force` is the page's explicit family/job "Run now" — the
   // window/reserve/cap/denial gates that bound UNATTENDED burns don't apply to a
   // run the user just asked for. It goes through the same selection, so the
@@ -322,44 +405,74 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   // cycle, before any dispatch, so two families in the same cycle can't see each
   // other's fresh run-log entries.
   const cursors = await lastDispatchedJobByFamily();
+  // ONE catalog for the whole cycle. It reads the schedule, the app registry and
+  // the custom-job store, none of which vary per family — building it inside the
+  // loop paid all three once per enabled family, every tick.
+  const catalog = await catalogFor(candidates.flatMap((entry) => entry.family.jobs || []));
   // Every eligible family gets its own dispatch — see the module header. The
   // loop does NOT break on the first success: `candidates` is already the set
   // that passed the full gate ladder, and each entry spends a different
   // provider's window.
   for (const candidate of candidates) {
     const outcome = await dispatchFromCandidate(candidate, {
-      jobId, force, completions, afterJobId: cursors.get(candidate.family.id) || null,
+      jobId, force, completions, catalog, reserved, afterJobId: cursors.get(candidate.family.id) || null,
     });
     attempts.push(...outcome.attempts.map((entry) => ({ familyId: candidate.family.id, ...entry })));
     if (!outcome.dispatched) continue;
-    // Charge the window only once work actually started. `runBurnJob` reports a
-    // decline rather than throwing, and a declined job never reaches here — so
-    // the cap bounds real burns, not attempts. `charge` is false for a forced
-    // run, which the user asked for outside the automatic budget.
-    if (candidate.charge) await recordQuotaBurnDispatch(candidate.dispatchKey);
-    // A `run once` job records its one dispatch even when the run was FORCED
-    // and therefore uncharged. The two ledgers answer different questions:
-    // `charge` is about this window's automatic budget, while `runOnce` is a
-    // statement about the WORK ("this only needs doing once") — and the work
-    // just happened, however it was triggered. The ▶ on the row stays the way
-    // back, since a forced run bypasses this gate too.
-    if (outcome.job.runOnce) {
-      await recordQuotaBurnJobCompletion(candidate.family.id, outcome.job.id)
-        // A ledger failure must not fail a dispatch that already happened —
-        // the worst case is the job running one extra time next cycle, which
-        // is the pre-`runOnce` behavior.
-        .catch((err) => console.error(`⚠️ Quota-burn run-once ledger for ${candidate.family.id}/${outcome.job.id}: ${err.message}`));
+    // Charge the window only once work is actually ACCEPTED. A declined step
+    // reports rather than throwing and never reaches here, so the cap bounds
+    // real burns and not attempts — but a step whose lane accepts
+    // asynchronously (`awaiting`) is not accepted yet either. That one holds a
+    // reservation instead, which counts against the cap for the whole in-flight
+    // window and converts to exactly one charge when the request is joined to
+    // the task it produced (`quotaBurnAcceptance.js`). `charge` is false for a
+    // forced run, which the user asked for outside the automatic budget.
+    const requestId = outcome.result.awaiting?.requestId || null;
+    if (requestId) {
+      const held = await reserveQuotaBurnDispatch({
+        familyId: candidate.family.id,
+        stepId: outcome.job.id,
+        dispatchKey: candidate.dispatchKey,
+        charge: candidate.charge,
+        runOnce: outcome.job.runOnce === true,
+        requestId,
+      });
+      // The request is already on the schedule and cannot be recalled, so this
+      // is a warning rather than a failure: the burn will run, it just will not
+      // be charged. Better an uncharged burn than a charge for work that may
+      // still be refused.
+      if (!held) console.error(`⚠️ Quota-burn could not reserve ${candidate.family.id}/${outcome.job.id} for request ${requestId} — this burn will go uncharged`);
+    } else {
+      if (candidate.charge) await recordQuotaBurnDispatch(candidate.dispatchKey);
+      // A `run once` job records its one dispatch even when the run was FORCED
+      // and therefore uncharged. The two ledgers answer different questions:
+      // `charge` is about this window's automatic budget, while `runOnce` is a
+      // statement about the WORK ("this only needs doing once") — and the work
+      // just happened, however it was triggered. The ▶ on the row stays the way
+      // back, since a forced run bypasses this gate too.
+      if (outcome.job.runOnce) {
+        await recordQuotaBurnJobCompletion(candidate.family.id, outcome.job.id)
+          // A ledger failure must not fail a dispatch that already happened —
+          // the worst case is the job running one extra time next cycle, which
+          // is the pre-`runOnce` behavior.
+          .catch((err) => console.error(`⚠️ Quota-burn run-once ledger for ${candidate.family.id}/${outcome.job.id}: ${err.message}`));
+      }
     }
     // One run-log entry PER dispatch, recorded as it happens: the page's
     // "Recent runs" list is how the user audits what their subscriptions were
     // spent on, and folding three families into one row would hide two of them.
+    // A pending row is settled IN PLACE once its request is accepted or refused
+    // (`settleQuotaBurnRun`), so one burn stays one line in a capped feed.
     dispatched.push(await finish({
       dispatched: true,
       familyId: candidate.family.id,
       jobId: outcome.job.id,
-      jobType: outcome.job.jobType,
+      ...stepIdentity(outcome.job),
       dispatchKey: candidate.dispatchKey,
-      charged: candidate.charge,
+      requestId,
+      pending: Boolean(requestId),
+      taskId: outcome.result.detail?.taskId ?? null,
+      charged: candidate.charge && !requestId,
       hoursUntilReset: Math.round(candidate.hoursUntilReset * 10) / 10,
       percentRemaining: candidate.limit?.percentRemaining ?? null,
       summary: outcome.result.summary || 'dispatched',
@@ -416,8 +529,9 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
 export async function getQuotaBurnStatus({ refresh = false } = {}) {
   // Independent reads: only `quotas` is slow (a PTY scrape on the Refresh path),
   // and nothing else waits on it.
-  const [config, quotas, dispatches, blocks, completions, runs] = await Promise.all([
-    getQuotaBurnConfig(),
+  const configPromise = getQuotaBurnConfig();
+  const [config, quotas, charged, blocks, completions, runs, catalog, reservations] = await Promise.all([
+    configPromise,
     getProviderQuotas({ wait: refresh ? WAIT.FRESH : WAIT.NEVER }).catch((err) => {
       console.error(`❌ Quota-burn status could not read provider quota: ${err.message}`);
       return [];
@@ -434,8 +548,19 @@ export async function getQuotaBurnStatus({ refresh = false } = {}) {
     // while on the cycle's path it is re-spending quota on finished work.
     getQuotaBurnCompletions().then((ledger) => ledger || {}),
     getQuotaBurnRuns(),
+    // Depends only on the config, never on `quotas` — so it overlaps the PTY
+    // scrape the Refresh path waits on instead of queueing behind it.
+    configPromise.then((cfg) => catalogFor(Object.values(cfg.families).flatMap((family) => family.jobs || []))),
+    // READ ONLY. The page shows a reserved burn as already used against the cap
+    // — it is committed to this window — but it never settles one: a probe read
+    // that charged quota would make opening the page a spend (AGENTS.md).
+    // Degrades to "nothing pending" for the same reason the two ledgers above
+    // do: on this path the cost of being wrong is a stale `N/M used` label,
+    // while the cycle refuses to run instead.
+    getQuotaBurnReservations().then((pending) => pending || {}),
   ]);
 
+  const dispatches = withPendingDispatches(charged, reservations);
   const cards = new Map(quotas.map((card) => [card.family, card]));
   // ONE pass over the gate ladder the runner uses — the page's "will burn" and
   // its reason come from the same verdict, so they can't contradict each other.
@@ -485,13 +610,16 @@ export async function getQuotaBurnStatus({ refresh = false } = {}) {
             // for the universe jobs a picked-universe payload. The page renders
             // `count` and `detail` only, so shipping the rest would put probe
             // internals on the wire and grow with every job type.
-            pending: family.enabled && !spent ? wireShape(await countJobPending({ job, family })) : null,
+            pending: family.enabled && !spent ? wireShape(await probeStep({ job, family, catalog })) : null,
           };
         })),
       };
     }));
 
-  return { config, status: { running, families, runs } };
+  // Availability is a fact about the catalog RIGHT NOW — a reference whose task
+  // was disabled or deleted has to render its reason and lose its Run affordance
+  // — so it is stamped onto the config the page receives and never onto disk.
+  return { config: applyQuotaBurnAvailability(config, catalog), status: { running, families, runs } };
 }
 
 /**

@@ -13,6 +13,7 @@ import { moltworldWsEvents } from './moltworldWs.js';
 import { queueEvents } from './moltworldQueue.js';
 import { instanceEvents } from './instanceEvents.js';
 import { sanitizePeerForClient } from './instances.js';
+import { attachTailcatForwardsToPeers } from './tailcatPeer.js';
 import { reviewEvents } from './review.js';
 import { loopEvents } from './loops.js';
 import { imageGenEvents } from './imageGenEvents.js';
@@ -379,6 +380,9 @@ function setupCosEventForwarding() {
   // this so an explicit trigger that finds no actionable work (parked) isn't a
   // silent no-op.
   cosEvents.on('schedule:on-demand-empty', (data) => broadcastToCos('cos:schedule:on-demand-empty', data));
+  // Programmatic scheduled handlers report what they actually did — no agent
+  // task is created, so there is nothing else for the user to watch.
+  cosEvents.on('schedule:on-demand-handled', (data) => broadcastToCos('cos:schedule:on-demand-handled', data));
 }
 
 // Set up error event forwarding
@@ -481,7 +485,10 @@ function setupInstanceEventForwarding() {
   // route applies. `data` is the full peers array.
   instanceEvents.on('peers:updated', (data) => {
     const sanitized = Array.isArray(data) ? data.map(sanitizePeerForClient) : data;
-    broadcastToInstances('instances:peers:updated', sanitized);
+    // Best-effort attach; never block the broadcast if forward metadata is busy.
+    Promise.resolve(Array.isArray(sanitized) ? attachTailcatForwardsToPeers(sanitized) : sanitized)
+      .then((enriched) => broadcastToInstances('instances:peers:updated', enriched))
+      .catch(() => broadcastToInstances('instances:peers:updated', sanitized));
   });
   // Realtime sync lifecycle for the Instances cards: { phase, peerId, ... }.
   // No secrets — just a peer instanceId + counts — so forward as-is.
@@ -505,13 +512,13 @@ function setupReviewEventForwarding() {
   if (reviewForwardingSetup) return;
   reviewForwardingSetup = true;
   reviewEvents.on('item:created', (data) => {
-    if (ioInstance) ioInstance.emit('review:item:created', data);
+    if (ioInstance) ioInstance.emit('review:item:created', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:updated', (data) => {
-    if (ioInstance) ioInstance.emit('review:item:updated', data);
+    if (ioInstance) ioInstance.emit('review:item:updated', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
   reviewEvents.on('item:deleted', (data) => {
-    if (ioInstance) ioInstance.emit('review:item:deleted', data);
+    if (ioInstance) ioInstance.emit('review:item:deleted', data?.metadata?.privateSecurity ? { id: data.id, metadata: { privateSecurity: true } } : data);
   });
 }
 

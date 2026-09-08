@@ -27,6 +27,7 @@ import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../lib/validation.js';
 import { localRuntimeForProvider, localEndpointPort, normalizeOpenAiBaseUrl } from '../lib/localProviderRuntime.js';
 import { listProviders, getActiveProvider } from './providers.js';
 import { isProviderAvailable, getFallbackProvider } from './providerStatus.js';
+import { allowedModesFor } from '../lib/callerModePolicy.js';
 
 /**
  * The raw base URL a provider's inference actually goes to, local or not.
@@ -203,7 +204,10 @@ export async function buildLocalEndpointSlotContext() {
       primaryId,
       providersMap,
       task?.metadata?.fallbackProvider ?? null,
-      task?.metadata?.fallbackModel ?? null
+      task?.metadata?.fallbackModel ?? null,
+      // Same caller mode policy `resolveAgentProviderAndModel` sends, or this
+      // prediction would follow a swap onto a route spawn will refuse.
+      { allowedModes: allowedModesFor('agent-harness') }
     )?.provider ?? null,
   });
 }

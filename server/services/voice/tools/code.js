@@ -4,6 +4,7 @@
 // imported lazily inside execute() to keep this module's load graph light.
 
 import { getVoiceConfig } from '../config.js';
+import { isCallerModeEligible } from '../../../lib/callerModePolicy.js';
 
 // Code-agent delegation — software-engineering requests and explicit
 // "have <agent> …" phrasing. The ambiguous verbs (implement/debug/rewrite/
@@ -91,7 +92,9 @@ export const CODE_TOOLS = [
       // copy if none exists. A pin that doesn't resolve to a known provider is
       // left as-is (the spawner surfaces the unknown-provider error).
       const { getActiveProvider, getAllProviders, getProviderById } = await import('../../providers.js');
-      const isCodeCapable = (p) => p?.type === 'cli' || p?.type === 'tui';
+      // Same named policy the CoS agent resolver and the fallback chain apply,
+      // so "can this route run agent work?" has one answer across all three.
+      const isCodeCapable = (p) => isCallerModeEligible(p, 'agent-harness');
       const candidate = provider
         ? await getProviderById(provider).catch(() => null)
         : await getActiveProvider().catch(() => null);

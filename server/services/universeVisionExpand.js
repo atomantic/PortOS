@@ -60,6 +60,14 @@ const LIST_FIELD_SHAPES = {
 // are already absent from both shared lists (merged specially in the text flow),
 // so they never reach the vision prompt either.
 const NON_VISUAL_FRAMEWORK_FIELDS = new Set(['ghost', 'wound', 'lie', 'want', 'need', 'secrets']);
+// The structured psychology profile (#6414) is the same kind of material one
+// level deeper — a theory of control and its survival/connection/status drives
+// are an interior, not a rendered surface. It never reaches the prompt (it is
+// an `objects` field, so it is in neither shared list), but the shared
+// `applyExpansion` WOULD merge it, so a model that volunteers the key anyway
+// must not be able to author a character's psychology from a picture. Stripped
+// from the payload before the merge rather than trusted to the prompt.
+const NON_VISUAL_PROPOSAL_KEYS = Object.freeze(['psychology']);
 
 /**
  * Build the vision prompt. The model is told to return ONE JSON object keyed by
@@ -202,6 +210,7 @@ export async function expandEntityFromImages({
   // fills only blank fields and sanitizes list rows. Surface just the fields it
   // would fill (name → merged value) so the modal can present them for review;
   // the client applies the kept/edited values via the normal entry-PATCH path.
+  for (const key of NON_VISUAL_PROPOSAL_KEYS) delete content[key];
   const { merged, updatedFields } = applyExpansion(target, content);
   const fields = {};
   for (const f of updatedFields) fields[f] = merged[f];

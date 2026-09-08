@@ -19,6 +19,7 @@ import { readFile } from 'fs/promises';
 import { atomicWrite, ensureDir, rmGuarded } from '../../lib/fileUtils.js';
 import { countWords } from '../../lib/textUtils.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
+import { renderCharacterEvolutionListForPrompt } from '../../lib/characterEvolution.js';
 import { sanitizeVoiceExemplars, renderVoiceExemplars } from '../../lib/styleGuide.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { nowIso, badRequest, notFound, wrWorkDir, wrDraftPath } from './_shared.js';
@@ -29,11 +30,12 @@ const store = () => writersRoomStore();
 
 // ---------- text analysis ----------
 
-// `countWords` now lives in lib/textUtils.js (the canonical home it shares with
-// issueLength.js). Re-exported here so existing importers of this module keep
-// working unchanged. (The editorial checks keep their own copies on purpose:
-// checkInfra.js uses a different alphabetic-only tokenizer, and
-// letteringDensity.js is held byte-for-byte in sync with its client mirror.)
+// `countWords` lives in lib/textUtils.js — the one whitespace word count, on
+// both sides of the client/server line (`textUtils.test.js` fails the suite on a
+// re-spelled copy). Re-exported here so existing importers of this module keep
+// working unchanged. The editorial prose checks count LETTER words instead,
+// through lib/editorial/proseTics.js#tokenizeWords — a different rule on
+// purpose, owned the same way.
 export { countWords };
 
 export function contentHash(text) {
@@ -90,6 +92,61 @@ export function buildSegmentIndex(text) {
     });
   });
   return segments;
+}
+
+// ---------- retrospective evolution-lens anchors (#6445) ----------
+
+/**
+ * The reference set a Writers Room evolution-lens anchor resolves against: a
+ * Map of `segmentId` -> that segment's prose, ready for
+ * `evolutionEvidenceStatus` / `renderCharacterEvolutionForPrompt`.
+ *
+ * A Map rather than a Set of ids because a `seg-NNN` is POSITIONAL. The index
+ * is rebuilt from scratch by every `saveDraftBody`, so inserting one chapter
+ * heading renumbers every segment after it: the id `seg-003` survives the edit
+ * while naming a different chapter. Resolving the id alone would therefore
+ * report a lens stage as proven against prose it was never written for — the
+ * exact "silently verified" failure epic #6418 forbids. Handing the passage
+ * text in lets the shared leaf check the stage's `anchorQuote` and report
+ * `stale` when the anchor has drifted.
+ *
+ * A stage with no quote gets the weaker existence check the other hosts get;
+ * the editor asks for a quote, and the prompt block reports the resulting
+ * status verbatim, so an unquoted anchor is never presented as more than it is.
+ */
+export function segmentEvidenceRefs(segmentIndex, text) {
+  const body = typeof text === 'string' ? text : '';
+  const segments = (Array.isArray(segmentIndex) ? segmentIndex : [])
+    .filter((segment) => segment && typeof segment.id === 'string');
+  // Sentinel, not an empty container: OMITTING the key means "not checked
+  // here", which the shared leaf reports as `unverified`. An empty Map would
+  // mean "checked, and nothing exists" and would condemn every authored anchor
+  // as stale the moment a caller forgot to pass the index.
+  if (!segments.length) return {};
+  return {
+    segmentIds: new Map(segments.map((segment) => [segment.id, body.slice(segment.start, segment.end)])),
+  };
+}
+
+/**
+ * Every authored evolution lens across a work's cast, as one compact prompt
+ * block — or `null` when nobody has authored one, which is what keeps a work
+ * with no lens byte-identical to its pre-#6445 analysis.
+ *
+ * The Writers Room companion to `renderCharacterEvolutionsForPrompt`
+ * (`seriesCharacterArc.js`): same shared renderer, same stage vocabulary, same
+ * `[stale]` / `[unverified]` annotations — only the reference set differs,
+ * because this host anchors to manuscript segments instead of authored beats.
+ * Nothing here promotes the work to a Pipeline series; it is a read over the
+ * per-work cast bible and the draft body.
+ */
+export function renderWorkCharacterEvolutions(characters, { segmentIndex, text } = {}) {
+  const refs = segmentEvidenceRefs(segmentIndex, text);
+  return renderCharacterEvolutionListForPrompt(
+    (Array.isArray(characters) ? characters : [])
+      .map((character) => ({ characterName: character?.name, evolution: character?.evolution })),
+    refs,
+  );
 }
 
 // ---------- folder CRUD ----------

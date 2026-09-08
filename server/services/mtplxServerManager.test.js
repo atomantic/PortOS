@@ -12,6 +12,7 @@ import {
   ensureMtplxRunning,
   ensureMtplxProviderReady,
   isMtplxProvider,
+  mtplxCachedModelIds,
   MTPLX_APP,
 } from './mtplxServerManager.js';
 import * as processEnv from '../lib/processEnv.js';
@@ -24,6 +25,25 @@ import * as streamingSpawn from '../lib/streamingSpawn.js';
 
 const BINARY = '/opt/homebrew/bin/mtplx';
 const cachedModel = (repoId, extra = {}) => ({ repo_id: repoId, validation: { ok: true }, ...extra });
+
+/**
+ * A Homebrew `mtplx` shim on disk: the few-line wrapper that lazily bootstraps a
+ * version-keyed Python venv. `describeMtplxRuntime` reads its `VENV=` line and
+ * tests the venv for executability rather than running it, so writing a real one
+ * is how a suite exercises the un-bootstrapped runtime without a download.
+ */
+const writeMtplxWrapper = async (dir, venv) => {
+  const path = join(dir, 'mtplx');
+  await writeFile(path, [
+    '#!/bin/bash',
+    `VENV="\${MTPLX_BREW_VENV:-${venv}}"`,
+    'if [ ! -x "$VENV/bin/mtplx" ]; then echo "MTPLX runtime is not installed. Bootstrapping with pip..."; fi',
+    'exec "$VENV/bin/mtplx" "$@"',
+    '',
+  ].join('\n'));
+  await chmod(path, 0o755);
+  return path;
+};
 const FAST_TIMING = {
   startupWait: 50,
   startupPoll: 0,
@@ -682,15 +702,7 @@ describe('mtplxServerManager', () => {
     let runtimeDir = null;
 
     const wrapperOnPath = async (venv) => {
-      const path = join(runtimeDir, 'mtplx');
-      await writeFile(path, [
-        '#!/bin/bash',
-        `VENV="\${MTPLX_BREW_VENV:-${venv}}"`,
-        'if [ ! -x "$VENV/bin/mtplx" ]; then echo "MTPLX runtime is not installed. Bootstrapping with pip..."; fi',
-        'exec "$VENV/bin/mtplx" "$@"',
-        '',
-      ].join('\n'));
-      await chmod(path, 0o755);
+      const path = await writeMtplxWrapper(runtimeDir, venv);
       vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(path);
       return path;
     };
@@ -953,6 +965,16 @@ describe('mtplxServerManager', () => {
     it('matches an MTPLX-backed TUI provider', () => {
       expect(isMtplxProvider({ type: 'tui', endpoint: 'http://127.0.0.1:8000/v1', id: 'mtplx-tui', mtplxBacked: true })).toBe(true);
     });
+  });
+
+  /**
+   * The catalog an MTPLX provider's "Refresh Models" merges in. MTPLX serves ONE
+   * checkpoint per process and reports only that one, so without this a refresh
+   * after pulling a second checkpoint answered with the same lone id.
+   */
+  it('keeps the cached-model export compatible with the discovery owner', async () => {
+    const discovery = await import('./localCachedModels.js');
+    expect(mtplxCachedModelIds).toBe(discovery.mtplxCachedModelIds);
   });
 
   describe('ensureMtplxProviderReady', () => {

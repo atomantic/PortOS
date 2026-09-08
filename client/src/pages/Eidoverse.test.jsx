@@ -149,7 +149,7 @@ describe('Eidoverse hosted page', () => {
     renderPage();
 
     const frame = await screen.findByTitle('Eidoverse Worlds');
-    expect(frame).toHaveAttribute('src', `http://${window.location.hostname}:5563/?world=portos&name=example-portos-user`);
+    expect(frame).toHaveAttribute('src', `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos&name=example-portos-user`);
     expect(screen.getByRole('button', { name: 'Refresh world' }))
       .toHaveAttribute('aria-label', 'Refresh world');
     expect(screen.getByRole('button', { name: 'Refresh world' })).not.toHaveClass('port-media-overlay');
@@ -163,7 +163,7 @@ describe('Eidoverse hosted page', () => {
     expect(screen.queryByRole('region', { name: 'PortOS district legend' })).not.toBeInTheDocument();
     expect(screen.queryByText('12/48 live signals')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Eidoverse without PortOS controls' }))
-      .toHaveAttribute('href', `http://${window.location.hostname}:5563/?world=portos&name=example-portos-user`);
+      .toHaveAttribute('href', '/eidoverse/solo');
     await waitFor(() => expect(api.projectEidoverseWorld).toHaveBeenCalledWith({ silent: true }));
     expect(screen.getByRole('link', { name: 'Manage Eidoverse app' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
 
@@ -265,7 +265,38 @@ describe('Eidoverse hosted page', () => {
     await user.type(screen.getByLabelText('My Eidoverse name'), '-edited');
     await user.click(screen.getByRole('button', { name: 'Save and project' }));
     await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ labelAliases, humanName: 'example-portos-user-edited' }), { silent: true },
+      expect.objectContaining({
+        labelAliases,
+        humanName: 'example-portos-user-edited',
+        cosId: 'portos-cos',
+      }), { silent: true },
+    ));
+  });
+
+  it('saves a CoS join name and offers the mind identity suggestion', async () => {
+    const user = userEvent.setup();
+    api.getEidoverseWorldStatus.mockResolvedValueOnce({
+      ...worldResponse,
+      suggestedCosId: 'Helm',
+    });
+    api.updateEidoverseWorldConfig.mockResolvedValueOnce({
+      ...worldResponse,
+      cos: { id: 'Helm', enabled: true },
+      suggestedCosId: null,
+      human: worldResponse.identity,
+    });
+    renderPage();
+    await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    const cosInput = screen.getByLabelText('CoS / Persistent Mind name');
+    expect(cosInput).toHaveValue('portos-cos');
+    expect(screen.getByRole('button', { name: 'Use mind name (Helm)' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Use mind name (Helm)' }));
+    expect(cosInput).toHaveValue('Helm');
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    await waitFor(() => expect(api.updateEidoverseWorldConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ cosId: 'Helm', humanName: 'example-portos-user' }),
+      { silent: true },
     ));
   });
 
@@ -360,36 +391,71 @@ describe('Eidoverse hosted page', () => {
     expect(api.startApp).toHaveBeenCalledTimes(2);
   });
 
-  it('uses the PortOS TLS bridge for an HTTPS MagicDNS page', () => {
+  it('uses the same-origin /eidoverse-host path for an HTTPS MagicDNS page', () => {
     expect(hostUrlFor(
       { running: true, protocol: 'https', port: 5563 },
       setup,
-      { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net' },
-    )).toBe('https://host-alpha.example-tailnet.ts.net:5563/');
+      { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net', host: 'host-alpha.example-tailnet.ts.net' },
+    )).toBe('https://host-alpha.example-tailnet.ts.net/eidoverse-host/');
     expect(() => hostUrlFor(
       { running: true, protocol: 'http', port: 5563 },
       setup,
-      { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net' },
+      { protocol: 'https:', hostname: 'host-alpha.example-tailnet.ts.net', host: 'host-alpha.example-tailnet.ts.net' },
     )).toThrow(/shared certificate/);
   });
 
-  // Only the bridge answers the renderer's /embed-config with this page's
-  // origin, and without that answer the renderer never completes the frame
-  // handshake — so a plain-HTTP install has to go through it too. The one
-  // exception is an HTTP page in front of an HTTPS-only bridge (the loopback
-  // mirror, the dev server): the shared certificate does not cover those
-  // hostnames, so the iframe would fail on the certificate instead.
-  it('routes a plain-HTTP page through the bridge, and only falls back when the bridge is HTTPS', () => {
+  // Same-origin path keeps a single-port tailcat forward working (UI host+port
+  // only). The one escape is an HTTP page in front of an HTTPS-only host
+  // certificate that does not cover the hostname — loopback mirror / some Vite
+  // setups — where we still fall back to the direct :uiPort load.
+  it('routes through /eidoverse-host on the UI origin, with a direct-uiPort escape for HTTP+HTTPS-cert', () => {
     expect(hostUrlFor(
       { running: true, protocol: 'http', port: 5563 },
       setup,
-      { protocol: 'http:', hostname: 'host-alpha.example-tailnet.ts.net' },
-    )).toBe('http://host-alpha.example-tailnet.ts.net:5563/');
+      { protocol: 'http:', hostname: 'host-alpha.example-tailnet.ts.net', host: 'host-alpha.example-tailnet.ts.net:5555' },
+    )).toBe('http://host-alpha.example-tailnet.ts.net:5555/eidoverse-host/');
+    expect(hostUrlFor(
+      { running: true, protocol: 'http', port: 5563 },
+      setup,
+      { protocol: 'http:', hostname: '127.0.0.1', host: '127.0.0.1:15555' },
+    )).toBe('http://127.0.0.1:15555/eidoverse-host/');
     expect(hostUrlFor(
       { running: true, protocol: 'https', port: 5563 },
       setup,
-      { protocol: 'http:', hostname: 'localhost' },
+      { protocol: 'http:', hostname: 'localhost', host: 'localhost:5553' },
     )).toBe(`http://localhost:${setup.uiPort}/`);
+  });
+
+  it('opens World only as an in-app chromeless route that reuses the same host iframe', async () => {
+    renderPage('/eidoverse/solo');
+
+    const frame = await screen.findByTitle('Eidoverse Worlds');
+    expect(frame).toHaveAttribute(
+      'src',
+      `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos&name=example-portos-user`,
+    );
+    expect(screen.getByRole('heading', { name: 'Eidoverse · world only' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to Eidoverse controls' })).toHaveAttribute('href', '/eidoverse');
+    expect(screen.queryByRole('link', { name: 'Open Eidoverse without PortOS controls' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'World controls' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Your PortOS, made spatial')).not.toBeInTheDocument();
+
+    const source = frame.contentWindow;
+    const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(frame);
+    const [hello] = post.mock.calls.at(-1);
+    act(() => window.dispatchEvent(new MessageEvent('message', {
+      source, origin: new URL(frame.src).origin,
+      data: { type: 'eidoverse:ready', version: 1, nonce: hello.nonce,
+        capabilities: { identityRenameRequest: 1 } },
+    })));
+    act(() => window.dispatchEvent(new MessageEvent('message', {
+      source, origin: new URL(frame.src).origin,
+      data: { type: 'eidoverse:identity-rename', version: 1, nonce: hello.nonce,
+        name: 'Example Solo Visitor' },
+    })));
+    expect(await screen.findByLabelText('My Eidoverse name')).toHaveValue('Example Solo Visitor');
+    expect(screen.getByRole('heading', { name: 'Eidoverse · world only' })).toBeInTheDocument();
   });
 
   it('keeps a successful local save visible when projection fails', async () => {
@@ -405,6 +471,61 @@ describe('Eidoverse hosted page', () => {
     expect(await screen.findByText('Saved locally and queued for projection.')).toBeInTheDocument();
     expect(await screen.findByText('Example projection failure')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Check the Eidoverse runtime' })).toHaveAttribute('href', '/apps/app-eidoverse/overview');
+  });
+
+  it('stages a renderer name request in World Design and retains it when save fails', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const frame = await screen.findByTitle('Eidoverse Worlds');
+    await user.click(screen.getByRole('button', { name: 'World controls' }));
+    const worldInput = screen.getByLabelText('World name');
+    await user.type(worldInput, '-draft');
+    await user.click(screen.getByRole('tab', { name: 'Districts & Data' }));
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    const source = frame.contentWindow;
+    const post = vi.spyOn(source, 'postMessage').mockImplementation(() => {});
+    fireEvent.load(frame);
+    const [hello] = post.mock.calls.at(-1);
+    expect(hello.capabilities.identityRenameRequest).toBe(1);
+    act(() => window.dispatchEvent(new MessageEvent('message', {
+      source, origin: new URL(frame.src).origin,
+      data: { type: 'eidoverse:ready', version: 1, nonce: hello.nonce,
+        capabilities: { identityRenameRequest: 1 } },
+    })));
+    act(() => window.dispatchEvent(new MessageEvent('message', {
+      source, origin: new URL(frame.src).origin,
+      data: { type: 'eidoverse:identity-rename', version: 1, nonce: hello.nonce,
+        name: 'Example Visitor' },
+    })));
+
+    const nameInput = await screen.findByLabelText('My Eidoverse name');
+    expect(screen.getByRole('tab', { name: 'Experience' })).toHaveAttribute('aria-selected', 'true');
+    expect(nameInput).toHaveValue('Example Visitor');
+    expect(screen.getByLabelText('World name')).toHaveValue('portos-draft');
+    expect(screen.getByText(/Save and project leaves the current session and re-enters/)).toBeInTheDocument();
+
+    api.updateEidoverseWorldConfig.mockRejectedValueOnce(new Error('Example identity save failure'));
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    expect(await screen.findByText('Example identity save failure')).toBeInTheDocument();
+    expect(nameInput).toHaveValue('Example Visitor');
+    expect(screen.getByLabelText('World name')).toHaveValue('portos-draft');
+    expect(api.updateEidoverseWorldConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({ world: 'portos-draft', humanName: 'Example Visitor' }),
+      { silent: true },
+    );
+    expect(frame).toHaveAttribute('src', `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos&name=example-portos-user`);
+
+    api.updateEidoverseWorldConfig.mockResolvedValueOnce({
+      ...worldResponse,
+      world: 'portos-draft',
+      identity: { name: 'Example Visitor' },
+      human: { name: 'Example Visitor' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Save and project' }));
+    await waitFor(() => expect(frame).toHaveAttribute(
+      'src',
+      `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos-draft&name=Example+Visitor`,
+    ));
   });
 
   it('keeps newer edits intact while an earlier save is in flight', async () => {
@@ -441,7 +562,7 @@ describe('Eidoverse hosted page', () => {
 
     await waitFor(() => expect(screen.getByTitle('Eidoverse Worlds')).toHaveAttribute(
       'src',
-      `http://${window.location.hostname}:5563/?world=portos-two&name=example-portos-user`,
+      `${window.location.protocol}//${window.location.host}/eidoverse-host/?world=portos-two&name=example-portos-user`,
     ));
   });
 

@@ -90,6 +90,7 @@ import { startSignalScheduler } from './signalScheduler.js';
 import { startSpotifyScheduler } from './spotifyScheduler.js';
 import { startYoutubeScheduler } from './youtubeScheduler.js';
 import { reconcileStackerNewsSchedulers } from './stackerNewsScheduler.js';
+import { onProvidersSaved as onProvidersSavedForGraph } from './providerGraph.js';
 import { startBrainScheduler } from './brainScheduler.js';
 import { startActivityDigestScheduler } from './activityDigestScheduler.js';
 import { startTwinEnrichmentScheduler } from './twinEnrichmentScheduler.js';
@@ -150,6 +151,7 @@ import { outcomesStore as liOutcomesStore } from './layeredIntelligenceOutcomes.
 import * as gameStore from './games/store.js';
 import * as fableLoomStore from './fableLoom/store.js';
 import { prerequisitesMetForRouting } from './providerPrerequisites.js';
+import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
 
 /**
@@ -253,11 +255,24 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       // canonical `{ error, code, timestamp, context? }` envelope (issue #1084).
       ServerError,
       hooks: aiToolkitHooks,
+      // Keep the provider connection graph reconciled with any write to
+      // providers.json — an old client's PATCH, a model refresh, a delete.
+      // Injected rather than imported by the toolkit, which stays
+      // self-contained. A no-op until the database phase enables the graph.
+      onProvidersSaved: () => onProvidersSavedForGraph(),
       // Keep the fallback chain off providers whose CLI is not installed on
       // this host (#4611), so a run falls through to the next candidate instead
       // of dying at spawn time. Sync by contract: it reads the runtime probe's
       // cache and never blocks.
-      prerequisitesMet: prerequisitesMetForRouting
+      prerequisitesMet: prerequisitesMetForRouting,
+      // MTPLX and Slotstream each serve one checkpoint per process and report
+      // only that one, so a refresh could never surface a newly downloaded
+      // checkpoint — and for Slotstream it pruned the record's other shipped ids.
+      // This lets the refresh merge in what is actually on disk; it answers
+      // `null` for every other provider, reads a local cache rather than calling
+      // a model, and imports each runtime's cache reader lazily so neither subtree
+      // reaches the boot closure (see `services/localCachedModels.js`).
+      cachedModelIds: localCachedModelIds
     }),
 
     // Compatibility shims for services that import from the old service files.
@@ -680,6 +695,11 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     pruneLegacyFiles: async () => (await import('../scripts/pruneImportedLegacyFiles.js')).pruneImportedLegacyFiles()
   }),
 
+  // Provider connection graph (#6367): first run imports every provider record
+  // into ai_connections / ai_harness_bindings / ai_route_bindings; later runs
+  // reconcile against providers.json. Reads and writes local state only.
+  reconcileProviderGraph: async () => (await import('./providerGraph.js')).initProviderGraph(),
+
   reconcileStackerNews: reconcileStackerNewsSchedulers
 });
 
@@ -817,7 +837,16 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       // failures also surface in the UI.
       setupProcessErrorHandlers: () => setupProcessErrorHandlers(io),
       backfillOriginInstanceId,
-      startPolling,
+      startPolling: () => {
+        startPolling();
+        // Best-effort: re-attach tailcat forwards persisted across restarts.
+        void import('./tailcatPeer.js')
+          .then(({ restoreForwards }) => restoreForwards())
+          .catch((err) => console.log(`⚠️ tailcat forward restore failed: ${err.message}`));
+        void import('./tailcatServe.js')
+          .then(({ restoreServe }) => restoreServe())
+          .catch((err) => console.log(`⚠️ tailcat serve restore failed: ${err.message}`));
+      },
       initSyncOrchestrator
     }))
   });
@@ -876,6 +905,10 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // microseconds from now — and its exit handler must already know the PTY
     // died because PortOS is going down, not because the agent finished (#3202).
     markHostShuttingDown();
+    await import('./tailcatPeer.js').then(({ stopAllForwards }) => stopAllForwards())
+      .catch(() => console.error('❌ Tailcat forward shutdown failed'));
+    await import('./tailcatServe.js').then(({ stopServeProcess }) => stopServeProcess())
+      .catch(() => console.error('❌ Tailcat serve shutdown failed'));
     // Disarm the idle reaper before anything awaits: a sweep that fires mid
     // -shutdown would `pm2 stop` a model server the user never asked to lose,
     // and PortOS is about to stop being the thing that could restart it.
@@ -952,6 +985,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // hangs forever — the real cause of the reconcile "stopping apps" hang.
     await withGrace('Socket.IO', 3000, (finish) =>
       io.close((err) => finish(err ? `⚠️ Error closing Socket.IO: ${err.message}` : '✅ Socket.IO closed', !!err)));
+    await import('./tailcatIngress.js').then(({ stopTailcatIngress }) => stopTailcatIngress())
+      .catch(() => console.error('❌ Tailcat ingress shutdown failed'));
     // Close BOTH servers explicitly. Whichever one io.close() already closed resolves
     // immediately (ERR_SERVER_NOT_RUNNING → treated as success by closeServer), and
     // the bounded backstop in closeServer guarantees neither can hang shutdown even

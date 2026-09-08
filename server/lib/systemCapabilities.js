@@ -9,6 +9,8 @@
  */
 
 import os from 'os';
+import { isLocalInstanceEndpoint } from './localEndpoint.js';
+import { localRuntimeKind } from './localProviderRuntime.js';
 import { isAppleSilicon } from './platform.js';
 import { getCudaCapability, getCudaComputeCapability } from './cudaCapability.js';
 
@@ -103,13 +105,18 @@ const providerRuntimeRequirements = Object.freeze({
   }),
 });
 
+// The trailing `id === 'mtplx'` shortcut used to duplicate a check
+// `localRuntimeKind` could not make on its own — the shipped `mtplx` record is
+// a plain API endpoint with no `mtplxBacked` marker to read. #6466 gave
+// `localRuntimeKind` an id-based fallback for exactly that record, so the
+// shortcut here is now a call to it instead of a hand-rolled copy.
 const localProvider = (provider) => provider?.ollamaBacked
   || provider?.lmstudioBacked
   || provider?.llamaBacked
   || provider?.mtplxBacked
   || provider?.vllmBacked
   || provider?.sglangBacked
-  || provider?.id === 'mtplx';
+  || localRuntimeKind(provider) === 'mtplx';
 
 const localModelHardwareRequirements = (model) => {
   if (typeof model !== 'string' || !model.trim()) return {};
@@ -321,6 +328,20 @@ export function evaluateHardwareRequirements(requirements, capabilities = captur
 
 export const isHardwareCompatible = (compatibility) => compatibility?.state !== 'unavailable';
 
+/**
+ * The one sentence explaining WHY a host was refused, so callers stop
+ * hand-rolling it. This module already owns the verdict; owning its wording —
+ * and the fallback for an `unavailable` state that carries no reasons — is what
+ * keeps every refusal reading the same. `subject` is what the message is about
+ * (a model id, a pack name).
+ *
+ * Mirrored in `client/src/utils/systemCapabilities.js`, like `isHardwareCompatible`.
+ */
+export const hardwareUnavailableReason = (subject, compatibility) => (
+  `${subject} is unavailable on this machine: ${
+    (compatibility?.reasons || []).join(' · ') || 'this host does not meet its hardware requirements'}`
+);
+
 /** Resolve the derived requirements for an image or video registry entry. */
 export function hardwareRequirementsForMediaModel(model, { kind = 'image', bucket } = {}) {
   const runtimeRequirements = {};
@@ -353,7 +374,7 @@ export function hardwareRequirementsForLocalLlm(entry) {
 
 /** Resolve inferred and user-configured provider requirements. */
 export function hardwareRequirementsForProvider(provider) {
-  const runtime = provider?.mtplxBacked || provider?.id === 'mtplx'
+  const runtime = localRuntimeKind(provider) === 'mtplx'
     ? 'mtplx'
     : provider?.vllmBacked
       ? 'vllm'
@@ -385,6 +406,13 @@ export function withHardwareCompatibility(item, capabilities, requirements) {
 }
 
 export function withProviderHardwareCompatibility(provider, capabilities) {
+  // These probes describe this PortOS host, not the machine serving a remote
+  // API (including a local CLI harness backed by a fleet GPU endpoint).
+  // Preserve requirements, but leave remote hardware unverified and selectable.
+  const endpoint = provider?.endpoint;
+  const remoteEndpoint = typeof endpoint === 'string' && URL.canParse(endpoint)
+    && !isLocalInstanceEndpoint(endpoint);
+  const runtimeCapabilities = remoteEndpoint ? null : capabilities;
   const hardwareRequirements = hardwareRequirementsForProvider(provider);
   const modelRequirementLayers = provider?.modelHardwareRequirements || {};
   const modelIds = [...new Set([
@@ -394,11 +422,12 @@ export function withProviderHardwareCompatibility(provider, capabilities) {
     provider?.lightModel,
     provider?.mediumModel,
     provider?.heavyModel,
+    provider?.ultraModel,
     provider?.fallbackModel,
   ].filter((model) => typeof model === 'string' && model))];
   const modelHardwareCompatibility = Object.fromEntries(modelIds.map((model) => {
     const requirements = hardwareRequirementsForProviderModel(provider, model);
-    return [model, evaluateHardwareRequirements(requirements, capabilities)];
+    return [model, evaluateHardwareRequirements(requirements, runtimeCapabilities)];
   }));
   const hasModelRequirements = Object.values(modelHardwareCompatibility).some(
     (compatibility) => Object.keys(compatibility.requirements).length > 0,
@@ -407,7 +436,7 @@ export function withProviderHardwareCompatibility(provider, capabilities) {
   return {
     ...provider,
     hardwareRequirements,
-    hardwareCompatibility: evaluateHardwareRequirements(hardwareRequirements, capabilities),
+    hardwareCompatibility: evaluateHardwareRequirements(hardwareRequirements, runtimeCapabilities),
     modelHardwareCompatibility,
   };
 }

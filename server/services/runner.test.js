@@ -354,6 +354,29 @@ describe('patchRunMetadata — serialized merges', () => {
   });
 });
 
+describe('executeCliRun — Codex response channel', () => {
+  it('returns only stdout while retaining diagnostic chunks for observers', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner' });
+    const onComplete = vi.fn();
+    const onData = vi.fn();
+    await executeCliRun({
+      runId: 'run-response-channel',
+      provider: { id: 'codex', command: 'codex', args: [], timeout: 5000 },
+      prompt: 'Return JSON', workspacePath: TEST_WORKSPACE, onData, onComplete,
+    });
+    child.stderr.emit('data', Buffer.from('OpenAI Codex v1\nuser\n{"message":"example"}\n'));
+    child.stdout.emit('data', Buffer.from('{"message":'));
+    child.stderr.emit('data', Buffer.from('tokens used\n20\n'));
+    child.stdout.emit('data', Buffer.from('"answer"}'));
+    child.emit('close', 0);
+    await flushMicrotasks();
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: true, text: '{"message":"answer"}' }));
+    expect(onData).toHaveBeenCalledTimes(4);
+  });
+});
+
 describe('executeCliRun — wall-clock timeout classification', () => {
   // The CLI runner kills its own child on timeout, so the close event carries
   // `exitCode: null` rather than the 124 finalizeRunRecord keys on. Without the

@@ -8,7 +8,7 @@
  * re-exports this module so existing import paths keep working.
  */
 
-import { isStr, preserveLegacyCharacterProductionPackages } from '../../lib/storyBible.js';
+import { isStr, preserveLegacyCharacterFields } from '../../lib/storyBible.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
   deleteSyncBaseHash, withBaseHashFlushBatch,
@@ -150,7 +150,7 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
         if (!sanitized.moodBoardId && local.moodBoardId && !senderKnowsMoodBoardId) {
           sanitized.moodBoardId = local.moodBoardId;
         }
-        sanitized.characters = preserveLegacyCharacterProductionPackages(
+        sanitized.characters = preserveLegacyCharacterFields(
           sanitized.characters,
           local.characters,
           senderUniversesVersion,

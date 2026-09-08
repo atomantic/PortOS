@@ -9,21 +9,26 @@ const api = vi.hoisted(() => ({
   listImageModels: vi.fn(), listVideoModels: vi.fn(),
 }));
 vi.mock('../../services/api', () => api);
-vi.mock('../ProviderModelSelector', () => ({ default: () => <div data-testid="provider-model-selector" /> }));
+vi.mock('../../services/apiLocalLlm', () => ({ getToolUseModels: vi.fn(async () => ({ providers: [] })) }));
 
-function Harness() {
+
+function Harness({ assignment } = {}) {
   const [form, setForm] = useState(toForm({
+    assignment,
     targetAbility: 'music',
     brief: { intent: 'original ambient track', musicTaste: { source: 'digital-twin' } },
     generation: { lengthSeconds: 45 },
   }));
   return (
+    <>
+    <output data-testid="assignment">{JSON.stringify(form.assignment)}</output>
     <CommissionConfigForm
       form={form}
       patchForm={(path, value) => setForm((prev) => patchFormState(prev, path, value))}
       saving={false}
       onSave={() => {}}
     />
+    </>
   );
 }
 
@@ -124,4 +129,14 @@ describe('CommissionConfigForm video duration controls', () => {
     fireEvent.change(screen.getByLabelText('Video length'), { target: { value: 'manual' } });
     expect(screen.getByLabelText('Duration (sec)')).toHaveValue(10);
   });
+});
+
+
+it('keeps a newly selected model when that selection clears unsupported effort', async () => {
+  api.getProviders.mockResolvedValue({ providers: [{ id: 'agent', type: 'cli', enabled: true, name: 'Example agent', models: ['thinking', 'plain'], effortLevels: ['low', 'high'], effortLevelsByModel: { thinking: ['low', 'high'], plain: [] } }] });
+  render(<Harness assignment={{ providerId: 'agent', model: 'thinking', effort: 'high' }} />);
+  await waitFor(() => expect(screen.getByLabelText('Thinking effort')).toHaveValue('high'));
+  const modelSelect = screen.getAllByRole('combobox').find(select => [...select.options].some(option => option.value === 'plain'));
+  fireEvent.change(modelSelect, { target: { value: 'plain' } });
+  expect(JSON.parse(screen.getByTestId('assignment').textContent)).toEqual({ providerId: 'agent', model: 'plain', effort: '' });
 });

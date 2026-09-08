@@ -42,6 +42,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 - `games` — Game studio workspaces (#3177): one row per managed-app asset plan, with the full reusable sprite/music binding set, current compiled-manifest pointer, compile history, and user-requested AI feedback history in `data` JSONB; `app_id`/`name`/`updated_at` are mirrored for list and relationship queries. The record is **machine-local** because managed-app registration, sprite atlases, and music-library bytes are machine-local; there is no peer-sync cursor or tombstone, and deletes are hard deletes. Compiled manifests are immutable, SHA-256-addressed artifacts under `data/games/{id}/manifests/`; their pointers and hashes live in the DB record. Adapter: `server/services/games/db.js`, selected pg-vs-collectionStore by `server/services/games/store.js` (collectionStore is test/unsupported file escape hatch only).
 - `fableloom_stories` — FableLoom branching narratives: one row per loom (a branching-narrative story), with episodes, scene-node graphs, and intent transitions in `data` JSONB; `name`/`universe_id`/`series_id`/`updated_at` are mirrored for list and relationship queries (both refs are soft — no FK). `db-primary` because looms relate to universes and series and the index queries by recency. Federates through the opt-in per-record `fableLoom` category: whole-record LWW merges carry soft-delete tombstones, conflict-journal recovery, and hashed manifests for scene images/videos; there is no snapshot cursor or `sync_sequence`. Adapter: `server/services/fableLoom/db.js`, selected pg-vs-collectionStore by `server/services/fableLoom/store.js` (collectionStore is the test/unsupported file escape hatch only). Feature doc: [FableLoom](./features/fableloom.md).
 - `threejs_models` — generated procedural 3D-model workspaces: one row per model with gallery-image lineage, provider/model attribution, generation/refinement status, and the validated declarative scene spec in `data` JSONB. The referenced image bytes remain under `data/images/`; deterministic Three.js source is derived from the stored spec rather than persisted as a second mutable artifact. The table is local-only in this first slice, with soft-delete columns retained so federation can be added without a record-shape migration.
+- `ai_connections` / `ai_harness_bindings` / `ai_route_bindings` — the AI provider connection graph (#6367, design record [provider connections and harnesses](./plans/2026-09-06-provider-connections-and-harnesses.md)): the backend a harness talks to, each harness configuration bound to it, and the executable route each one projects. `db-primary` because it is a real graph — a connection has many bindings, a binding has one route per mode, and the uniqueness rules (`UNIQUE(binding_id, mode)`, `UNIQUE(connection_id, harness_id, variant_key)` plus a partial index for null-harness API bindings) are integrity constraints a set of JSON files cannot hold. `data/providers.json` REMAINS the execution contract and stays fully materialized: every connection-owned value is projected back into it, so a downgraded release runs unchanged with these tables simply idle. **Intentionally machine-local — never federated**: rows carry endpoints, credential material and this host's execution environment (ADR [privacy records machine-local](./decisions/2026-08-08-privacy-records-machine-local.md)). No `sync_sequence`, no tombstones, no `PORTOS_SCHEMA_VERSIONS` entry, no `dataSync` category; deletes are hard deletes and are refused while a binding still references the row. `ai_route_bindings.projected` / `.pending` are the projection snapshots that make an interrupted file write recoverable — as private as the credentials, and covered by the Postgres dump like every other db-primary table. Adapters: `server/services/providerGraphStore.js` (rows) and `server/services/providerGraph.js` (import, reconciliation, link/unlink), over the pure `server/lib/providerGraphRecords.js`.
 - `privacy_subjects` / `privacy_vault_records` / `privacy_consents` / `privacy_orgs` / `privacy_org_holdings` / `privacy_change_events` / `privacy_brokers` / `privacy_broker_cases` — the Privacy Center (epic #2138): the household subjects the suite works on behalf of (`self` plus consenting partners/children/parents — every other table carries a `subject_id` FK defaulted to the seeded `self` row, #3658), the encrypted PII vault, the trusted-organization registry with per-field holdings, the change-of-address inventory, and the data-broker opt-out ledger. Relational by nature (org ↔ holdings ↔ vault records ↔ change events ↔ broker cases), which is why they are `db-primary`. Vault *values* are AES-256-GCM ciphertext (`v1:<iv>:<tag>:<ct>`, key from `PRIVACY_VAULT_KEY`) — the DB holds bytes of ciphertext, never plaintext PII, and plaintext never appears in logs (`server/lib/vaultCrypto.js`). **Intentionally machine-local — never federated**, and this is a product *guarantee*, not a deferred feature (ADR [privacy records machine-local](./decisions/2026-08-08-privacy-records-machine-local.md), #2148). NO `sync_sequence`, NO peer-sync record kind, NO `dataSync` category, NO `PORTOS_SCHEMA_VERSIONS` entry, and no `deleted`/`deleted_at` tombstones — deletes are hard deletes, mirroring `tribe`. The reasoning is the same class as the Tribe graph but stronger: the peer-sync **pull** path (`GET /api/peer-sync/record`) carries no peer identity, `masked_value` is plaintext by design so even ciphertext-only sync would leak a PII fingerprint, and a shared `PRIVACY_VAULT_KEY` would widen the at-rest blast radius to every peer's `.env`. A second machine gets the vault by restoring a backup and copying the key by hand — a deliberate act, not continuous replication. Enforced by `server/services/sharing/privacyNeverFederates.test.js`. Adapters: `server/services/privacySubjects.js`, `privacyVault.js`, `privacyOrgs.js`, `privacyChanges.js`, `privacyBrokers.js`, `privacyOptOut.js`.
 
 **Postgres-First target.** Pipeline series/issues, Story Builder sessions, and searchable media metadata are still `db-primary` targets — they currently live in `data/` JSON but carry relationships and status that belong in the DB. The schema for the Create domains is designed in [`docs/plans/2026-06-07-create-relational-schema-design.md`](./plans/2026-06-07-create-relational-schema-design.md) (#999), with implementation tracked as #1014–#1018. (Creative Director project/scene/run state moved to Postgres in Phase 3 / #997; catalog user-defined types moved in Phase 4 lead-in / #1001; **universes moved in Phase 3 Create slice 1 / #1014** — see the `universes` entry above. Pipeline series/issues #1015, Story Builder #1016, Writers Room #1017, and the catalog ref resolver #1018 are the remaining slices.)
@@ -56,6 +57,8 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 **CoS task queues** (`data/TASKS.md`, `data/COS-TASKS.md`, or configured paths) remain file-primary because direct Markdown editing and watcher-driven updates are supported inputs. `cosTaskStore.js` caches parsed snapshots by file stamp and lazily indexes task IDs; single-task reads clone only the matching record, without grouping or copying either backlog. Store writes invalidate the snapshot and index together; external changes are detected on the next read. This optimization changes no persisted format, config key, or peer payload, so existing installs upgrade without an import or migration. PostgreSQL would permit per-row writes, but a future migration must explicitly replace the direct-edit/watch contract, import both configured sources without losing task metadata/order, and retain recovery copies before switching authority. Merely storing the complete Markdown blob in PostgreSQL would retain whole-queue parsing and rewriting.
 
+**Private security assessments** reuse the existing Review Hub item store for report prose and CoS agent archives for local source/transcripts. They add no store format or database migration. The source inventory stays in run memory; interruption before report validation requires a new assessment. Assessment tasks and all their archive files are excluded from peer federation, and shared socket notifications carry no report prose. Reports follow existing local backup and Review Hub retention; temporary sandbox homes are removed after completion. See [the assessment design and research](research/2026-09-06-private-security-models.md).
+
 **Where it lives.** Filesystem under `./data/` (or an OS-managed sync container). DB may hold metadata/index rows (hashes, word counts, segment indexes) but **not** the body.
 
 **Examples.**
@@ -64,11 +67,13 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 - App scaffolds / cloned repos / browser profiles — `data/repos`, `data/browser-profile` — inherently filesystem-oriented.
 - Eidoverse PortOS integration and world logs — `data/eidoverse/portos-world.json` stores the PortOS-owned private-world identity, versioned design selection, explicit display aliases keyed by opaque resource identity (never backfilled from records), user overrides, deterministic asset-resolution lock (paths, fingerprints, size, and provenance only; never model bytes), migration report, and last-good reconciliation checkpoint; `data/eidoverse/worlds` stores the external runtime's append-only world files. Both are `file-primary`, included in filesystem backups, and intentionally machine-local — never federated by PortOS. Guest travel sessions and live chat cursors are ephemeral transport state held only in memory; they are not a new record store or sync category. Explicit guest conversation follows the [guest-chat ADR](decisions/2026-09-05-eidoverse-guest-chat.md). PortOS selects the runtime's world-store location through `.env.portos` but does not edit the external checkout to build content. The separately licensed git checkouts and Eidoverse-owned asset library/cache live under the existing re-cloneable `data/repos/` backup class.
 - Sprite animation-track definitions — `data/sprites/animation-tracks.json` (#3152). A small hand-editable authoring config: which animation types exist beyond the compiled-in `walk` (label, directionality, frame/fps bounds, prompt template, and the on-disk `setKind` strings). `file-primary` rather than `db-primary` because it is **machine-local and inseparable from the on-disk sprite tree it describes** — a row names the `setKind` an approved set under `data/sprites/{id}/` already carries, so the two travel together or neither means anything — and because it has no cross-record queries, no relationships beyond `kinds` strings, and no sync cursor. Read synchronously and cached per process (`server/services/sprites/animationTrackStore.js`): `server/lib/validation.js` builds sprite Zod ranges from it at module load, so it must resolve without `await`. Seeded from `data.reference/sprites/animation-tracks.json` (migration 211), which is also the fallback read when no user copy exists yet. Backed up in full by the rsync snapshot.
-- Quota-burn plan — `data/cos/quota-burn.json` (#3390). The install's burn plan: master switch, poll interval, and per-provider-family windows + ordered job list. `file-primary` and **intentionally machine-local — never federated**: quota belongs to a particular machine and provider account, so a synced plan would have each peer spending against the other's window budget, and the plan's `agent-prompt` jobs name managed apps that only exist on this machine. No sync cursor, no tombstone. Its four companions are `ephemeral-file` — regenerable telemetry, all safe to delete: `data/cos/quota-burn-dispatches.json` (per-window dispatch counts, self-pruning at 30 days), `data/cos/quota-burn-runs.json` (capped run log), `data/cos/quota-burn-inflight.json` (entries a burn job has enqueued but whose renders have not completed, self-pruning at 6 hours — deleting it only risks re-queueing a render already in flight), and `data/cos/quota-burn-denials.json` (per-family blocks from an observed provider refusal, cleared by the next successful burn or a 5-hour TTL — deleting it only risks one dispatch into a still-exhausted window). Backed up with the rest of `data/cos/`; a restored plan simply re-applies on this machine. See [Quota Burn](./QUOTA-BURN.md).
+- Quota-burn plan — `data/cos/quota-burn.json` (#3390). The install's burn plan: master switch, poll interval, and per-provider-family windows + an ordered list of steps, each a REFERENCE to a scheduled task (`data/cos/task-schedule.json` or the app job store) plus its per-invocation overrides. `file-primary` and **intentionally machine-local — never federated**: quota belongs to a particular machine and provider account, so a synced plan would have each peer spending against the other's window budget, and a step's scheduled-task reference names task types and managed apps that only exist on this machine. No sync cursor, no tombstone. Its four companions are `ephemeral-file` — regenerable telemetry, all safe to delete: `data/cos/quota-burn-dispatches.json` (per-window dispatch counts, self-pruning at 30 days), `data/cos/quota-burn-runs.json` (capped run log), `data/cos/quota-burn-inflight.json` (entries a burn job has enqueued but whose renders have not completed, self-pruning at 6 hours — deleting it only risks re-queueing a render already in flight), and `data/cos/quota-burn-denials.json` (per-family blocks from an observed provider refusal, cleared by the next successful burn or a 5-hour TTL — deleting it only risks one dispatch into a still-exhausted window). Backed up with the rest of `data/cos/`; a restored plan simply re-applies on this machine. See [Quota Burn](./QUOTA-BURN.md).
 - YouTube brain ingests — `data/brain/youtube/{videoId}.md` (transcript), `{videoId}.mp3` (optional audio), plus `data/brain/youtube/index.json` (the ingest index) and `data/brain/youtube-ingest-settings.json`. The transcript IS an external file: it is mirrored into the user's Obsidian vault, edited there, and syncs through iCloud — the same boundary that keeps the Daily Log file-backed. The index is **intentionally machine-local — never federated**: every field in it is a local filesystem path, an Obsidian vault id, or a local video-history id, so a peer's copy would be meaningless and would poison brain reconcile exactly the way the daily log's `journal-obsidian-locations.json` sidecar would. The playlist/video reference shelf at `data/youtube/playlists.json` follows the same local-only rule: it is a bounded cache of browser-scraped YouTube metadata and links, not a federated Brain record. The durable, federated record of "I consumed and kept this" is the brain `links` entry (`db-primary` via the brain store) plus a `media.watch` row in `human_activity_events`. No tombstone. Adapters: `server/services/youtubeIngest.js` and `server/services/youtubePlaylists.js`.
 - Spotify brain playlist shelf — `data/spotify/playlists.json`. `file-primary`, intentionally machine-local and never federated: it is a bounded cache of Spotify playlist and track metadata used as local reference material, while listening evidence remains in the federated Brain activity record. No sync cursor or tombstone. Adapter: `server/services/spotifyPlaylists.js`.
 - IdeaLoom lists — `data/brain/idealoom-lists/{uuid}/index.json` with a schema-stamped collection index holding the disabled-by-default local integration settings. Lists retain their ordered idea strings, prompt/title/category/status/help, timestamps, and importer-owned local sync metadata. Explicit exchange reads/writes only the configured vault's `Idea Loom/` folder through the specialized `server/services/idealoomObsidian.js` parser/renderer; new notes use a date/title filename and imported note paths remain stable. **Intentionally machine-local — never federated, reconciled, or memory-bridged**: a vault id, note path, and content hash are meaningful only on the install that configured them. Native Brain `ideas` remain a separate federated collection. Exchange is base-hash reconciled: a note and a list that both changed since the stored hash report `conflicted` and neither is written, and a note deleted in the vault reports `missing` rather than being recreated (an iCloud note that is merely un-downloaded is `unavailable`, a separate outcome). Opt-in automatic export (`autoSync`, off by default, debounced by `server/services/idealoomAutoSync.js`) can only update an existing note — it never deletes, recreates, or resolves a conflict. Backed up in full with the rest of `data/brain/`; the vault notes themselves are the user's Obsidian data and are outside PortOS's snapshot. Adapters: `server/services/idealoomLists.js` (records), `server/services/idealoomObsidian.js` (exchange).
 - Local-model assessments — `data/local-llm/assessments.json` (#4539). Measured evidence for one installed local model per (backend, model): the fit verdict (`fits`/`does-not-fit`/`incompatible`/`unknown`), per-context throughput/TTFT samples, resident footprint, and the coarse hardware environment the measurement was taken in. `file-primary` — a flat, capped, single-JSON projection with no cross-record queries and no relationships; the newest measurement replaces the old one per model rather than accumulating history. **Intentionally machine-local — never federated**: an assessment is a claim about THIS box, so a peer inheriting a 128 GB machine's its verdict for its 8 GB laptop would be actively wrong. No sync cursor, no tombstone, no `PORTOS_SCHEMA_VERSIONS` entry. Backed up (a run costs the user minutes of local compute), and the environment record deliberately carries no hostname/username/path. Adapter: `server/services/localModelAssessmentStore.js` (durable store + environment capture; no path to a provider, so read-only consumers like the catalog fit badge can import it); the run lives in `server/services/localModelAssessments.js` and the scoring in `server/lib/localModelAssessment.js`. Each record's environment is re-compared against the live machine on read, so a reading taken before a RAM upgrade or backend update is flagged stale rather than silently trusted.
+- Tailcat peer forwards — `data/tailcat-forwards.json`. `file-primary`, **intentionally machine-local — never federated**: each row stores the bearer `tc…` address needed to restart `tailcat forward` after a PortOS reboot or to retry one that failed to start, plus the local/remote port mapping, the optional peer Basic credential, and the last (redacted) startup error. A row is written *before* the forward is attempted, so a failed add stays retryable instead of discarding the operator's pasted capability. The capability must not cross the wire, reach an API response, or appear in logs in full — `listTailcatForwards()` returns only the redacted form (see [features/tailcat-peers.md](./features/tailcat-peers.md)). No sync cursor or tombstone. Adapter: `server/services/tailcatPeer.js`.
+- Tailcat serve — `data/tailcat-serve.json`. `file-primary`, **intentionally machine-local — never federated**: enabled flag, status, local remote-ingress port (`5565`, migrated from the legacy main API port), key name (`portos-api`), last (redacted) startup error, and the listen `tc…` address needed to restore `tailcat serve` after reboot and to offer Copy in the Instances UI. Adapter: `server/services/tailcatServe.js`. See [features/tailcat-peers.md](./features/tailcat-peers.md).
 - LoRA training datasets — `data/lora-datasets/{id}/index.json` + `images/*.png` (collectionStore). The record is inseparable from the image bytes it organizes, has no cross-record queries beyond a small characterId scan, and is **machine-local** like `data/loras/` itself (training artifacts tied to this machine's GPU output — never federates, no sync cursor/tombstone). Backed up in full: uploads and hand-edited captions are not re-creatable. Training RUN records are `db-primary` (`lora_training_runs`); run artifacts (checkpoints/samples) live under `data/training-runs/{runId}/` with checkpoints/cache excluded from backup.
 
 ---
@@ -102,6 +107,8 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 **Definition.** Regenerable, short-lived runtime state. Losing it costs at most an in-flight job or a cache rebuild — never durable user data. It should never be the only home for anything the user expects to persist.
 
 **When to use.** Upload staging, in-flight job queues, caches, and scratch state. If a record must survive a reinstall or be queryable across records, it is **not** `ephemeral-file` — promote it.
+
+**Private security assessments** reuse the existing Review Hub item store for report prose and CoS agent archives for local source/transcripts. They add no store format or database migration. The source inventory stays in run memory; interruption before report validation requires a new assessment. Assessment tasks and all their archive files are excluded from peer federation, and shared socket notifications carry no report prose. Reports follow existing local backup and Review Hub retention; temporary sandbox homes are removed after completion. See [the assessment design and research](research/2026-09-06-private-security-models.md).
 
 **Where it lives.** Filesystem under `./data/`, frequently excluded from backups (see `DEFAULT_EXCLUDES` in `server/services/backup.js`). The DB may hold a durable **job reference** even when the staging bytes are ephemeral.
 
@@ -226,3 +233,125 @@ Apply this checklist to **every new feature that persists data**, and require it
 `data/model-comparison.json` is `file-primary`: a bounded, externally researched reference snapshot, directly inspectable/importable as a portable JSON document, with no app-record foreign keys, cross-record queries, search index or accumulated history. It follows the local-assessment reference pattern, rather than representing app-native relational records. It is intentionally machine-local and never federated because configuration and quota interpretation can be install-specific. Schema version 1 is seeded for new installs and migration 351 preserves existing catalogs. Rsync backups include it; no backup exclusion, sync cursor or tombstone is added. Source dates and exact benchmark/configuration identities remain attached to metrics. The server rejects future/malformed versions and merges imports through a serialized last-good-preserving write. See [Models Comparison](MODEL-COMPARISON.md).
 
 Optional SDK environments under `data/venvs/` are machine-local, regenerable runtime files, not application records. Reactor provisions its pinned SDK, private Python and checksum-verified uv manager on the first authorized render (or optionally through `npm run setup:reactor`); no seed, migration, database table, or peer synchronization is needed. Data Manager identifies these environments but does not purge them while render processes may use them.
+
+### Private integration API keys
+
+`data/private/api-keys.json` is machine-local `file-primary` configuration,
+not a relational record store or a federation payload. Its directory is owner-only
+(0700) and the file is owner-readable/writable (0600) on POSIX systems. It is not
+mounted under the HTTP asset routes. Filesystem backups include it: protect backup
+access as carefully as the install. This is permission-protected storage, not
+application-level encryption.
+
+Settings > Credentials manages Artificial Analysis, Hugging Face, CivitAI, fal.ai,
+and reactor.inc keys through a write-only endpoint. Existing integration settings
+screens use the same store. Server-side settings readers retain their legacy shape;
+public settings and inventory responses never contain these values. Stored keys
+win over environment fallbacks; clearing a saved key allows an existing environment
+credential (or Hugging Face CLI login) to apply again.
+
+Migration 357 copies existing settings keys before removing their old fields and
+preserves keys already in the private store on retry. There is no seed file. The
+runtime also reads legacy settings until their next save, so independently updated
+installs do not need to re-enter keys. Environment credentials remain supported and
+are not copied automatically. Artificial Analysis saves a supplied key after a
+successful API fetch and subsequent syncs can omit it. Downgrades to versions before
+this store require re-entering keys through the older settings UI or environment.
+Other credentials (provider connections, account-specific logins, and auth) retain
+their existing dedicated stores and management flows.
+
+### Video workspace drafts
+
+Creative Director is the production entry point (`/creative-director?new=video`).
+Create > Video (`/video`) browses existing project and commission outputs; old
+Video project/tab/shot URLs redirect to the same Creative Director project ID.
+The standalone clip generator remains `/video/generate`.
+
+Video reuses `creative_director_projects` and its existing project IDs, collection
+links, PostgreSQL JSONB record, and test-only file adapter. New records opt in
+with `workspace: 'video'`; missing workspace means the existing Creative Director
+behavior. The additive `videoDraft` stores a bounded duration range, source IDs
+and optional revisions, audio choices, review policy, and four review checkpoints.
+Brief/style/quality and cognitive/media pins use the existing project fields.
+No new table, file store, seed, or record-rewriting migration is needed: legacy
+records must retain their prior behavior. Both adapters share record construction
+and patch validation. Draft creation and save perform no provider work.
+
+Schema category `creativeDirectorProjects` advances to v4 because an older peer
+would ignore the Video dispatch barrier. Video production stays unavailable at
+both HTTP start/resume and background advancement until revision-specific approval
+support ships. Selecting autonomous policy only saves intent; it cannot authorize
+dispatch while that barrier is present. Source references do not copy or mutate
+the referenced creative-suite records.
+
+Video treatments optionally carry a bounded `script` plus server-owned `artifact`
+metadata inside that same project JSONB: stable project-scoped script/shot/reference
+IDs, monotonically increasing treatment revision, exact contiguous shot timing,
+and selected source IDs/revisions. Scene IDs and playback orders must be unique;
+shot durations must sum to the exact project target. Treatment writes keep Video
+projects in their current state and do not dispatch production. Creative shot
+edits increment the artifact revision; runtime status updates do not. Changes to
+brief, source selection or production settings mark the artifact stale until it
+is compiled again. Source snapshots remain references, not copied source records.
+Replacing a Video treatment or changing a creative shot retains the previous
+script, scenes and artifact metadata in `treatment.history`. Each entry is one
+snapshot without nested history; runtime-only updates do not create revisions.
+The Artifacts revision selector uses the `revision` query parameter for reloadable
+read-only history. Missing history on older records means no retained snapshots;
+previously overwritten content cannot be reconstructed. History shares the same
+JSONB storage and backup coverage as its project.
+Sync v6 prevents older writers from discarding retained history.
+Planning resolves bounded source summaries only on explicit task dispatch. The
+existing canon/style renderers supply Universe context, including a selected
+Series' linked Universe. Only source IDs, store revision fingerprints and the
+combined context fingerprint persist in `videoPlanningContext`; resolved content
+is passed to the local planner, not copied into the project. Its output must echo
+`sourceContextRevision`, and source edits/deletions during planning reject the
+write until the user plans again. A source without revision metadata must be
+saved or repaired first. Each summary is bounded and the combined source context
+is limited to 60,000 characters; exceeding that limit requires fewer attachments.
+Sync v7 gates writers that cannot enforce this planning-context contract.
+This is additive optional metadata: legacy treatments are unchanged and existing
+records are not backfilled. `creativeDirectorProjects` v5 originally shipped because
+a v4 peer can edit a shot without incrementing its artifact revision, or discard
+the artifact on treatment replacement. The Video dispatch barrier remains in
+force; this artifact does not certify backend compatibility or grant approval.
+
+Video planning tasks carry `metadata.machineLocal`, preserved on agent archives. CoS live task sync, archive manifests, direct archive downloads, and incoming task merges exclude them so resolved source context stays on the owning install.
+
+Video review decisions, revision counters, feedback and retained shot/plan versions
+live in the existing project JSONB. Checkpoints fingerprint their creative inputs
+and upstream artifacts, so runtime progress does not stale script approval while
+creative edits do. Feedback never grants permission to dispatch. Revision requests
+pause the production and invalidate the selected shot/step and its dependent work.
+
+New Video projects record the creating install as `videoOwnerInstanceId`. Synced
+copies are read-only replicas; `videoExecution` and the receiver-local replica flag
+never ride the wire. Owner records reject remote overwrites, and receivers never
+acquire local execution authorization from sync. Pre-owner Video drafts remain inert
+and can be recreated locally from their settings. Legacy generalized projects retain
+their prior sync/execution behavior. Project sync v8 gates these semantics.
+
+Video execution authorization and attempt receipts persist in the same project
+JSONB as `videoExecution`: frozen provider/model identifiers, reviewed configuration
+revision, limits, and queued job/task IDs. These are machine-local and excluded
+from sync. No credentials or separate store are introduced. Clip submissions,
+agent calls, retries and replans consume explicit limits; unknown provider prices
+prevent promising a dollar cap. Pause revokes dispatch before canceling owned work.
+Restart reconciles receipts without replaying provider submissions; uncertain
+submissions require explicit retry consent because they may already have charged.
+Completed jobs can be reused after reconciliation. Project sync v9 gates the
+execution semantics; existing records need no rewrite and remain unauthorized
+until the owner explicitly starts them.
+
+Validated `videoRoughCut` / `videoFinalCut` references and `videoCutHistory` remain
+in the Creative Director project JSONB. Timeline records and video-history entries
+use their existing stores; rendered files remain under `data/videos/`, thumbnails
+under `data/video-thumbnails/`, and standalone soundtrack assets under `data/music/`.
+Existing backup classification covers those assets. Generated soundtracks create
+ordinary Music Track records; no synthetic Series or source issue is created.
+The machine-local execution receipt also carries audio jobs and the current
+Timeline render ID, so restart can reconcile output without new provider work.
+Project sync v10 gates cut validation and explicit audio semantics. Older Video
+audio settings default to native clip audio when read; new drafts explicitly
+select a contract. No new store, seed or data-rewriting migration is required.

@@ -30,6 +30,8 @@ import { schedule as scheduleEvent, cancel as cancelEvent } from './eventSchedul
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { recordJobExecution } from './autonomousJobs.js';
 import { safeJSONParse, sleep, isTopLevelEntryName } from '../lib/fileUtils.js';
+import { onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
+import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { todayInTimezone } from '../lib/timezone.js';
@@ -39,6 +41,7 @@ import { normalizeDomainBudgets, remainingActionBudget } from '../lib/domainBudg
 import { mergePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { mergePersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { mergePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import { mergePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkingPresets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
@@ -133,6 +136,7 @@ import {
   generateManagedAppImprovementTaskForType,
   recordDeferredPerpetualDispatch,
   applyOnDemandConsent,
+  drainProgrammaticOnDemandRequests,
   emitOnDemandEmpty,
   blockIfExceedsMaxSpawns,
   selectDryRunAutoApproved,
@@ -247,6 +251,7 @@ export async function updateConfig(updates) {
     const priorPersistentMindCapabilities = current.persistentMindCapabilities;
     const priorPersistentMindProfile = current.persistentMindProfile;
     const priorPersistentMindPrompt = current.persistentMindPrompt;
+    const priorPersistentMindPlaybook = current.persistentMindPlaybook;
     const priorPersistentMindThinkingPresets = current.persistentMindThinkingPresets;
     const next = { ...current, ...updates };
     if (updates.domainAutonomy !== undefined) {
@@ -293,6 +298,12 @@ export async function updateConfig(updates) {
       next.persistentMindPrompt = mergePersistentMindPrompt(
         priorPersistentMindPrompt,
         updates.persistentMindPrompt,
+      );
+    }
+    if (updates.persistentMindPlaybook !== undefined) {
+      next.persistentMindPlaybook = mergePersistentMindPlaybook(
+        priorPersistentMindPlaybook,
+        updates.persistentMindPlaybook,
       );
     }
     return saveConfig(next);
@@ -996,10 +1007,19 @@ async function spawnDequeuePriority0OnDemand(ctx) {
   // (avoids a second load).
   ctx.taskSchedule = taskSchedule;
 
+  // Programmatic handlers first, and outside the slot-bounded loop below: they
+  // spawn nothing, so a full spawn budget must not hold a user's Run Now.
+  const handledProgrammatically = await drainProgrammaticOnDemandRequests({
+    taskScheduleMod, requests: onDemandRequests, schedule: taskSchedule, state
+  });
+
   // Track apps already marked review-started this cycle so multiple on-demand
   // requests for the same app don't each rewrite its activity record.
   const reviewStartedApps = new Set();
   for (const request of onDemandRequests) {
+    // Already handled above (and its request cleared) — `onDemandRequests` is a
+    // snapshot taken before that drain.
+    if (handledProgrammatically.has(request.id)) continue;
     if (capacity.spawned >= capacity.availableSlots) break;
 
     if (!isImprovementEnabled(state)) {
@@ -1050,7 +1070,14 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
         skipPreconditions: true,
         deferPerpetualDispatch: true,
-        targetPullRequest: request.targetPullRequest ?? null
+        targetPullRequest: request.targetPullRequest ?? null,
+        providerOverride: request.providerOverride ?? null,
+        // Mirrors the sibling engine in cosTaskGenerator.js#spawnPriority0OnDemand
+        // — either may drain any given request, so a quota-burn step's run
+        // parameters have to reach the generator from both or the mode a
+        // migrated issues-only step pinned depends on which engine got there
+        // first.
+        runOverrides: request.burn?.overrides?.params ?? null
       });
       if (task) {
         await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
@@ -1076,7 +1103,10 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       // continues in the same user-initiated lane instead of the auto-run-gated
       // queue path (see perpetualRefillPlan). Stamped before addTask so the
       // blocked-revive branch below inherits it via `task.metadata` too.
-      task.metadata = { ...(task.metadata || {}), onDemand: true };
+      // `onDemandRequestMetadata` also carries the request's ORIGIN, which
+      // `perpetualRefillPlan` reads to decide whether the completed run may
+      // continue its drain — and a quota burn's provenance when it is one.
+      task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(request) };
       // Forward `ignoreTaskId` so a completion-triggered re-issue is dedup-safe:
       // the perpetual drain regenerates an identical first-line for the same app,
       // and `agent:completed` fires before the completing task's updateTask
@@ -1496,6 +1526,13 @@ function agentScheduledType(agent) {
     || null;
 }
 
+/**
+ * The on-demand origins whose completed perpetual run may re-issue itself: a
+ * human Run, and the drain re-issuing itself through the same lane. Everything
+ * else — a quota burn today, whatever is added tomorrow — stops after one unit.
+ */
+const DRAINABLE_ON_DEMAND_ORIGINS = new Set([ON_DEMAND_ORIGINS.USER, ON_DEMAND_ORIGINS.REFILL]);
+
 export function isPerpetualRefillCandidate(agent, schedule) {
   const analysisType = agentScheduledType(agent);
   if (!analysisType) return false;
@@ -1540,6 +1577,16 @@ export function perpetualRefillPlan(agent, schedule) {
   // silently promote that click into a sweep of every open contributor PR.
   if (agent?.metadata?.taskTargetPullRequest) return { lane: 'skip' };
   if (agent?.metadata?.taskOnDemand) {
+    // Which ORIGINS may keep draining in this lane, as an allowlist rather than
+    // a growing list of exclusions — so an automated origin added later fails
+    // CLOSED. A QUOTA BURN invokes exactly ONE unit of its referenced task: the
+    // burn has its own continuation (quotaBurnRunner#onBurnAgentCompleted) behind
+    // the window/reserve/cap ladder, and refilling here as well would walk the
+    // whole backlog outside every one of those gates, on the very subscription
+    // the plan was rationing. An unrecorded origin is a human Run — that is what
+    // a task queued before the field existed is.
+    const origin = agent?.metadata?.taskOnDemandOrigin || ON_DEMAND_ORIGINS.USER;
+    if (!DRAINABLE_ON_DEMAND_ORIGINS.has(origin)) return { lane: 'skip' };
     return { lane: 'onDemand', taskType: agentScheduledType(agent), appId: agent?.metadata?.taskApp || null };
   }
   return { lane: 'queue' };
@@ -1616,7 +1663,12 @@ async function refillPerpetualForCompletedAgent(agent) {
   // regenerates an identical first-line per app) is rejected as a duplicate of
   // the completing task and the drain stalls until the next scheduler tick.
   const cosTaskData = await getCosTasks();
-  await queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId: agent?.taskId, wakeAfterRecord: false });
+  await queueEligibleImprovementTasks(state, cosTaskData, {
+    ignoreTaskId: agent?.taskId,
+    wakeAfterRecord: false,
+    // Continue only this completed drain: its cron slot already initiated it.
+    perpetualContinuation: { taskType: agentScheduledType(agent), appId: agent?.metadata?.taskApp || null }
+  });
   // NOTE: the caller (the agent:completed handler) runs dequeueNextTask AFTER
   // this resolves, so the freshly-queued perpetual task is on the queue before
   // slots are filled. Do not dequeue here — that would re-introduce the ordering

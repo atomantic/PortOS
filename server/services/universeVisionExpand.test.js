@@ -176,3 +176,29 @@ describe('expandEntityFromImages', () => {
       .rejects.toMatchObject({ code: 'VALIDATION_ERROR', status: 400 });
   });
 });
+
+describe('universeVisionExpand — psychology is never authored from a picture (#6414)', () => {
+  it('drops a volunteered psychology profile instead of merging it', async () => {
+    promptRunner.runPromptThroughProvider.mockResolvedValue({
+      text: JSON.stringify({
+        pronouns: 'she/her',
+        psychology: {
+          theoryOfControl: 'If I stay armored, nothing reaches me.',
+          drives: { survival: { desire: 'cover', fear: 'exposure' } },
+        },
+      }),
+      model: 'qwen-vl',
+    });
+    const out = await expandEntityFromImages({ universeId: 'uni-1', entryId: 'chr-1', screenshots: ['a.png'] });
+    // The visible field still fills; the interior does not.
+    expect(out.fields.pronouns).toBe('she/her');
+    expect(out.fields).not.toHaveProperty('psychology');
+    expect(out.updatedFields).not.toContain('psychology');
+  });
+
+  it('never asks a vision model for the profile in the first place', () => {
+    const full = buildVisionExpandPrompt({ imageCount: 1 });
+    expect(full).not.toMatch(/"psychology"/);
+    expect(full).not.toMatch(/theoryOfControl/);
+  });
+});

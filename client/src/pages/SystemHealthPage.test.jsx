@@ -48,12 +48,25 @@ vi.mock('../hooks/useProviderModels', () => ({
   }),
 }));
 
-vi.mock('../components/ui/Toast', () => ({
-  default: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn(), custom: vi.fn() }
+vi.mock('../components/ui/Toast', () => {
+  const toast = Object.assign(vi.fn(), {
+    success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn(), custom: vi.fn()
+  });
+  return { default: toast };
+});
+
+// useHealthWarningDismiss (client/src/hooks/) calls apiSystem.js directly
+// rather than through the '../services/api' barrel — mock it separately so
+// dismiss/undo assertions observe what the hook actually calls.
+vi.mock('../services/apiSystem.js', () => ({
+  dismissHealthWarning: vi.fn(() => Promise.resolve({ message: 'x', dismissedAt: '2026-01-01T00:00:00.000Z' })),
+  undismissHealthWarning: vi.fn(() => Promise.resolve({ success: true })),
 }));
 
 import * as api from '../services/api';
-import SystemHealthPage from './SystemHealthPage';
+import { dismissHealthWarning } from '../services/apiSystem.js';
+import SystemHealthPage, { RESOURCE_TABS } from './SystemHealthPage';
+import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
 const renderPage = (path = '/system-resources/overview') => render(
   <MemoryRouter initialEntries={[path]}>
@@ -132,6 +145,33 @@ describe('SystemHealthPage remediation links', () => {
     expect(api.getSystemHealth).toHaveBeenCalledTimes(2);
   });
 
+  it('dismisses a warning as resolved and refetches health', async () => {
+    const user = userEvent.setup();
+    api.getSystemHealth
+      .mockResolvedValueOnce(withWarnings([{ type: 'disk', message: 'Disk usage at or above 90%' }]))
+      .mockResolvedValueOnce(withWarnings([]));
+    renderPage();
+
+    await screen.findByText('Disk usage at or above 90%');
+    await user.click(screen.getByRole('button', { name: 'Dismiss warning: Disk usage at or above 90%' }));
+
+    expect(dismissHealthWarning).toHaveBeenCalledWith('disk', 'Disk usage at or above 90%', { silent: true });
+    await waitFor(() => expect(screen.queryByText('Disk usage at or above 90%')).not.toBeInTheDocument());
+  });
+
+  it('toasts an error and does not refetch when dismissing fails', async () => {
+    const user = userEvent.setup();
+    api.getSystemHealth.mockResolvedValue(withWarnings([{ type: 'disk', message: 'Disk usage at or above 90%' }]));
+    dismissHealthWarning.mockRejectedValueOnce(new Error('offline'));
+    renderPage();
+
+    await screen.findByText('Disk usage at or above 90%');
+    await user.click(screen.getByRole('button', { name: 'Dismiss warning: Disk usage at or above 90%' }));
+
+    await waitFor(() => expect(api.getSystemHealth).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('Disk usage at or above 90%')).toBeInTheDocument();
+  });
+
   it('keeps the active section in the URL and runs storage scans explicitly', async () => {
     api.runSystemResourceReport.mockResolvedValue({
       generatedAt: '2026-08-16T00:00:00.000Z',
@@ -202,5 +242,18 @@ describe('SystemHealthPage remediation links', () => {
     expect(screen.queryByRole('button', { name: 'Remove Cache B' })).not.toBeInTheDocument();
 
     await act(async () => { finishRescan({ ...firstReport, generatedAt: '2026-08-16T00:01:00.000Z', cleanupCandidates: [] }); });
+  });
+});
+
+// System Resources derives its tab bar from the nav manifest's
+// `tabGroup: 'system-resources'` (#6383) — this pins the id/label/order the page
+// means to render, and that every manifest tab has a presentation entry (icon)
+// in SystemHealthPage.jsx, which would otherwise only surface as a thrown
+// import-time error. The short labels come from the manifest's `tabLabel`; ⌘K
+// and voice still show "System Resources Overview"/"Storage Report"/"Active
+// Queues" so each is unambiguous out of page context.
+describe('RESOURCE_TABS ↔ nav manifest', () => {
+  it('renders the system-resources tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(RESOURCE_TABS, ['overview:Overview', 'storage:Storage', 'queues:Queues']);
   });
 });

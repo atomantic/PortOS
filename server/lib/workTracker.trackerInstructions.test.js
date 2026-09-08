@@ -11,8 +11,10 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  DISPATCH_HINT_GUIDANCE,
   JIRA_DISPATCH_HINT_GUIDANCE,
+  MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE,
+  MANDATORY_DISPATCH_HINT_GUIDANCE,
+  REFERENCE_WATCH_LABEL_CONTRACT,
   REPO_STUDY_LABEL_CONTRACT,
   formatOptionalIssueLabelFlags,
 } from './dispatchLabels.js';
@@ -31,11 +33,12 @@ const EXPECTED_PLAN = `This app records autonomous work in **PLAN.md** at the re
 - **Finalize:** Commit the PLAN.md edit with message \`docs(reference-watch): propose <N> item(s) from <ref names>\`. Do NOT create branches or PRs — \`/claim\` (or the \`plan-task\` agent) picks the slugs up later.`;
 
 function expectForgeDispatchContract(block, { cli, issueLabel }) {
-  expect(block).toContain(DISPATCH_HINT_GUIDANCE.split('\n')[0]);
+  expect(block).toContain(MANDATORY_DISPATCH_HINT_GUIDANCE.split('\n')[0]);
   expect(block).toContain('model:light|medium|heavy');
   expect(block).toContain('effort:low|medium|high|xhigh|max');
-  expect(block).toContain('Omit an axis rather than guessing');
-  expect(block).toContain(`--label ${issueLabel} --label plan ${formatOptionalIssueLabelFlags()}`);
+  expect(block).toContain('REQUIRED on every issue you file');
+  expect(block).not.toContain('Omit an axis rather than guessing');
+  expect(block).toContain(`--label ${issueLabel} --label plan ${formatOptionalIssueLabelFlags(REFERENCE_WATCH_LABEL_CONTRACT.forgeFlags)}`);
   // The planner axis is part of that list, so the copy-pasteable command offers
   // it — not just the guidance prose above it.
   expect(block).toContain('[--label planner:<model>]');
@@ -78,6 +81,10 @@ describe('formatTrackerInstructions — forge dispatch hints (#4351)', () => {
     const github = formatTrackerInstructions('github', REF_WATCH);
     expectForgeDispatchContract(github, { cli: 'gh', issueLabel: 'reference-watch' });
     expect(github).toContain('--search "ref-watch in:title"');
+    expect(github).toContain('Reference-watch complete-label contract (mandatory)');
+    expect(github).not.toContain('[--label model:<tier>]');
+    expect(github).not.toContain('[--label effort:<level>]');
+    expect(github).toContain('create each required dispatch-hint label');
     expect(formatTrackerInstructions('github')).toBe(github);
     expect(formatTrackerInstructions('github', TRACKER_FILING_PRESETS['reference-watch'])).toBe(github);
   });
@@ -86,13 +93,16 @@ describe('formatTrackerInstructions — forge dispatch hints (#4351)', () => {
     const gitlab = formatTrackerInstructions('gitlab', REF_WATCH);
     expectForgeDispatchContract(gitlab, { cli: 'glab', issueLabel: 'reference-watch' });
     expect(gitlab).toContain('glab issue list --label reference-watch');
+    expect(gitlab).toContain('Reference-watch complete-label contract (mandatory)');
     expect(formatTrackerInstructions('gitlab')).toBe(gitlab);
   });
 
   it('teaches Jira the hyphenated equivalent labels and leaves PLAN.md fallback intact', () => {
     const jira = formatTrackerInstructions('jira', REF_WATCH);
-    expect(jira).toContain(JIRA_DISPATCH_HINT_GUIDANCE.split('\n')[0]);
-    expect(jira).toContain('model-light|model-medium|model-heavy');
+    expect(jira).toContain(MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE.split('\n')[0]);
+    expect(jira).not.toContain(JIRA_DISPATCH_HINT_GUIDANCE.split('\n')[0]);
+    expect(jira).toContain('`model-<tier>` + `effort-<level>`');
+    expect(jira).toContain('plus the required equivalent dispatch-hint labels');
     expect(jira).toContain('effort-low|effort-medium|effort-high|effort-xhigh|effort-max');
     expect(jira).toContain('Do not relabel a ticket you skipped as a duplicate');
     expect(jira).toContain('Issue-quality gate');
@@ -241,5 +251,21 @@ describe('formatTrackerInstructions — repo-study complete labels', () => {
     const jira = formatTrackerInstructions('jira', repoStudy);
     expect(jira).toContain('Repo-study complete-label contract (mandatory)');
     expect(jira).toContain('`area:<area>` + `model-<tier>` + `effort-<level>`');
+  });
+});
+
+// The transcript dispatch must use the app's tracker without repo-study
+// provenance requirements (there is no source repository or license to inspect).
+describe('YouTube analysis tracker dispatch', () => {
+  it('keeps external filing and local PLAN work aligned with completion metadata', async () => {
+    const { resolveTrackerFilingBlock } = await import('./workTracker.js');
+    for (const tracker of ['github', 'gitlab', 'jira', 'plan']) {
+      const block = await resolveTrackerFilingBlock({ repoPath: '/example', workTracker: tracker }, 'youtube-analysis');
+      expect(block.workTracker).toBe(tracker);
+      expect(block.worktreeChangesExpected).toBe(tracker === 'plan');
+      expect(block.trackerInstructions).toContain('video');
+      expect(block.trackerInstructions).not.toContain('repo-study');
+      expect(block.trackerInstructions).not.toContain('license');
+    }
   });
 });

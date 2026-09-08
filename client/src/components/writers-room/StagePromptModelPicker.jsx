@@ -146,6 +146,7 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
           <option value="quick">Quick — provider's light/fast model</option>
           <option value="coding">Coding — provider's medium model</option>
           <option value="heavy">Heavy — provider's heavy model</option>
+          <option value="ultra">Ultra — provider's frontier model</option>
         </select>
       ) : (
         <ProviderModelSelector

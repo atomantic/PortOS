@@ -13,6 +13,13 @@ import { asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validation.js';
 import * as canonSvc from '../../services/universeCanon.js';
 import { expandUniverseCharacter } from '../../services/universeCharacterExpand.js';
+import {
+  getUniverseCastIntegrity,
+  reviewUniverseCast,
+  proposeCharacterAugmentation,
+  applyCharacterAugmentation,
+} from '../../services/universeCastIntegrity.js';
+import { characterAugmentProposeSchema, characterAugmentApplySchema } from '../../lib/characterAugmentValidation.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../../services/canonUsage.js';
 import { mapServiceError, lockParamsSchema } from './shared.js';
 
@@ -54,6 +61,56 @@ router.post('/:id/characters/:entryId/refine', asyncHandler(async (req, res) => 
 router.post('/:id/characters/:entryId/expand', asyncHandler(async (req, res) => {
   const body = validateRequest(refineCharSchema, req.body ?? {});
   const result = await expandUniverseCharacter(req.params.id, req.params.entryId, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// ── Cast integrity (#6415) ───────────────────────────────────────────────
+// Character ids the caller wants scoped. Omitted entirely = the whole cast;
+// an explicit `[]` is an empty selection and reviews nobody. The two are
+// deliberately different answers, so the schema must not default it to [].
+const castScopeSchema = z.object({
+  characterIds: z.array(z.string().trim().min(1).max(120)).max(500).optional(),
+  providerId: z.string().trim().max(64).optional(),
+  model: z.string().trim().max(128).optional(),
+});
+
+// DETERMINISTIC integrity report — no provider call, safe on page load. Also
+// returns `reviewScope` (provider / model / batch size) so the UI can name what
+// a semantic review would spend BEFORE the user opts into it.
+router.get('/:id/characters/integrity', asyncHandler(async (req, res) => {
+  const characterIds = typeof req.query.characterIds === 'string' && req.query.characterIds.trim()
+    ? req.query.characterIds.split(',').map((s) => s.trim()).filter(Boolean)
+    : undefined;
+  const result = await getUniverseCastIntegrity(req.params.id, { characterIds })
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// SEMANTIC review — one bounded LLM call, explicit user action only. Characters
+// past the batch cap come back `truncated`, never silently passed.
+router.post('/:id/characters/integrity/review', asyncHandler(async (req, res) => {
+  const body = validateRequest(castScopeSchema, req.body ?? {});
+  const result = await reviewUniverseCast(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Propose sharper values for POPULATED fields. Writes NOTHING — returns
+// before/after per field for the author to accept individually.
+router.post('/:id/characters/:entryId/augment', asyncHandler(async (req, res) => {
+  const body = validateRequest(characterAugmentProposeSchema, req.body ?? {});
+  const result = await proposeCharacterAugmentation(req.params.id, req.params.entryId, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Apply only the proposals the author accepted. `fingerprint` is the character
+// state the preview was reviewed against — a mismatch is a 409, not a silent
+// overwrite of whatever was edited in the meantime.
+router.post('/:id/characters/:entryId/augment/apply', asyncHandler(async (req, res) => {
+  const body = validateRequest(characterAugmentApplySchema, req.body ?? {});
+  const result = await applyCharacterAugmentation(req.params.id, req.params.entryId, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

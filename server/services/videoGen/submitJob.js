@@ -8,6 +8,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { buildFederatedMediaRequest } from '../../lib/federatedMediaRequest.js';
 import { asFableLoomRenderSettings } from '../../lib/fableLoomProduction.js';
 import { isFullDecode } from '../../lib/videoDraftDecoders.js';
+import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { isDefaultSpeedProfile } from '../../lib/videoSpeedProfiles.js';
 import { isStockTextEncoder } from '../../lib/videoTextEncoders.js';
@@ -281,6 +282,7 @@ const submitValidatedVideoGenJob = async (body, uploads) => {
     ...(isStockTextEncoder(body.textEncoderId) ? {} : { textEncoderId: body.textEncoderId }),
     ...(isDefaultSpeedProfile(body.speedProfileId) ? {} : { speedProfileId: body.speedProfileId }),
     ...(isFullDecode(body.draftDecode) ? {} : { draftDecode: body.draftDecode }),
+    ...(isDefaultVideoStreamingMode(body.streamingMode) ? {} : { streamingMode: body.streamingMode }),
     disableAudio: body.disableAudio === true || body.disableAudio === 'true',
     // Absent means "use the settings.videoGen.displaySleep default" — only
     // forward it when the form actually sent an explicit choice.

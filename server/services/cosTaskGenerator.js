@@ -1,3 +1,4 @@
+import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 /**
  * CoS Task Generator Module
  *
@@ -28,8 +29,8 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { MODEL_ABUSE_GUARD_ID, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { isPlainObject } from '../lib/objects.js';
+import { hasQuotaBurnProvenance, onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -57,11 +58,12 @@ import {
   auditDoWorkRequiresWorktree,
   modeContractFor,
   applyAuditModeWrapper,
+  FILE_ISSUES_DELIVERY_SETTINGS,
 } from '../lib/auditCatalog.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { isReconcileDrainTaskType } from './taskScheduleConstants.js';
-import { requiresInstallWideTarget } from './taskScheduleRegistry.js';
+import { isProgrammaticScheduledTaskType, requiresInstallWideTarget } from './taskScheduleRegistry.js';
 import {
   appendClaimOverrideContext,
   appendPrefetchedIssueContext,
@@ -74,7 +76,7 @@ import {
   normalizeWorkItemRef,
 } from './cosTaskPrompts.js';
 import { appendTaskDataInputs, resolveTaskDataInputs } from './taskDataInputs.js';
-import { ensurePrReviewerPipeline } from './prReviewerPipeline.js';
+import { ensurePrReviewerPipeline, runPrReviewerSecurityPreflight, scopeDescriptionToPullRequest } from './prReviewerPipeline.js';
 import {
   applyPerpetualDrainCap,
   buildImprovementTaskDescription,
@@ -107,6 +109,10 @@ export {
   buildTargetWorkItemBlock,
   normalizeWorkItemRef,
 } from './cosTaskPrompts.js';
+
+// `buildSecurityScanPipelineOutput` was public here before the pr-reviewer
+// security preflight moved beside the rest of that pipeline's contract.
+export { buildSecurityScanPipelineOutput } from './prReviewerPipeline.js';
 
 // Claim prompts create and manage their own claim/<item> worktree and
 // push/PR/MR/review lifecycle. This marker is separate from `openPR: false`,
@@ -160,7 +166,10 @@ export function exceedsMaxSpawns(task) {
  *     exempt and therefore keeps completing) it never lapses — and the burn task
  *     sits in Pending until its window resets unspent, which is the exact outcome
  *     quota burn exists to prevent. (Tasks queued before this stamp existed are
- *     back-filled by migration 225, so the predicate reads metadata only.)
+ *     back-filled by migration 225, so the predicate reads metadata only.) Read
+ *     through `hasQuotaBurnProvenance` rather than the raw key so this gate stays
+ *     tied to the one block definition in `lib/quotaBurnOrigin.js` — a task
+ *     written by any release, in either the flat or the block shape, is exempt.
  *
  * `metadata.perpetual` is a bare boolean set upstream, but it round-trips through
  * COS-TASKS.md as the STRING `"true"` (taskParser serializes non-string/-object
@@ -177,7 +186,7 @@ export function isCooldownExemptTask(task) {
   if (!meta) return false;
   return meta.pipeline?.currentStage > 0
     || meta.perpetual === true || meta.perpetual === 'true'
-    || Boolean(meta.quotaBurnFamily);
+    || hasQuotaBurnProvenance(meta);
 }
 
 /**
@@ -775,10 +784,20 @@ async function spawnPriority0OnDemand(ctx) {
   // names an unknown app and get cleared, silently dropping user-initiated
   // work. On a failure we leave the requests queued for the next cycle.
   const apps = onDemandRequests.length > 0 ? await getActiveApps().catch(() => null) : [];
+
+  // Programmatic handlers first, and outside the slot-bounded loop below: they
+  // spawn nothing, so a busy autonomy budget must not hold a user's Run Now.
+  const handledProgrammatically = await drainProgrammaticOnDemandRequests({
+    taskScheduleMod: taskSchedule, requests: onDemandRequests, schedule: liveSchedule, state
+  });
+
   if (!apps) {
     emitLog('warn', `On-demand requests deferred — the app registry could not be read this cycle`);
   } else if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
     for (const request of onDemandRequests) {
+      // Already handled above (and its request cleared) — `onDemandRequests` is
+      // a snapshot taken before that drain.
+      if (handledProgrammatically.has(request.id)) continue;
       if (tasksToSpawn.length >= availableSlots) break;
 
       if (!isImprovementEnabled(state)) {
@@ -828,7 +847,17 @@ async function spawnPriority0OnDemand(ctx) {
         task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
           skipPreconditions: true,
           deferPerpetualDispatch: true,
-          targetPullRequest: request.targetPullRequest ?? null
+          targetPullRequest: request.targetPullRequest ?? null,
+          providerOverride: request.providerOverride ?? null,
+          // A quota-burn step's per-invocation run parameters. They must reach
+          // the PROMPT, so unlike the provider/model/effort pins they cannot
+          // ride the post-generation `onDemandRequestMetadata` stamp below —
+          // the generator overlays them before it picks the mode banner.
+          // `normalizeQuotaBurnProvenance` (lib/quotaBurnOrigin.js) has to keep
+          // `overrides.params` for a step to reach this; it drops them today,
+          // so a burn currently runs the task's SAVED mode, which is correct
+          // for every step until the migration starts pinning one.
+          runOverrides: request.burn?.overrides?.params ?? null
         });
         if (task) {
           await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
@@ -851,7 +880,10 @@ async function spawnPriority0OnDemand(ctx) {
         // the on-demand lane (see perpetualRefillPlan in cos.js). BOTH on-demand
         // engines must stamp it — either may drain a given request. Stamped before
         // addTask so the blocked-revive branch inherits it via `task.metadata`.
-        task.metadata = { ...(task.metadata || {}), onDemand: true };
+        // `onDemandRequestMetadata` also carries the request's ORIGIN, which
+        // `perpetualRefillPlan` reads to decide whether the completed run may
+        // continue its drain — and a quota burn's provenance when it is one.
+        task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(request) };
         const persisted = await addTask(task, 'internal', { raw: true, suppressDequeue: true });
         if (!persisted?.duplicate) {
           await recordDeferredPerpetualDispatch(task, taskSchedule);
@@ -1514,7 +1546,7 @@ export async function queueDueInstallWideImprovementTasks({
  * Called during every evaluation to ensure system tasks are queued even when user tasks exist
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
-export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null, wakeAfterRecord = true } = {}) {
+export async function queueEligibleImprovementTasks(state, cosTaskData, { ignoreTaskId = null, wakeAfterRecord = true, perpetualContinuation = null } = {}) {
   const taskSchedule = await import('./taskSchedule.js');
   const { getDueTasks, getNextTaskType, recordExecution } = taskSchedule;
 
@@ -1598,7 +1630,10 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // alone). When NOT on cooldown, the normal full-priority pick runs.
     const onCooldown = isAppActivityOnCooldown(appActivity, state.config.appReviewCooldownMs);
 
-    const nextTypeResult = await getNextTaskType(app.id, { perpetualOnly: onCooldown }).catch(() => null);
+    const nextTypeResult = await getNextTaskType(app.id, {
+      perpetualOnly: onCooldown,
+      continuingTaskType: perpetualContinuation?.appId === app.id ? perpetualContinuation.taskType : null
+    }).catch(() => null);
     if (!nextTypeResult) continue;
     const nextType = nextTypeResult.taskType;
 
@@ -1886,7 +1921,9 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   }
 
   const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, {
-    app: { id: null, name: 'PortOS', repoPath: PATHS.root }
+    app: { id: null, name: 'PortOS', repoPath: PATHS.root },
+    taskMetadata: metadata,
+    taskType
   });
   description = appendTaskDataInputs(description, taskDataInputs);
 
@@ -1975,312 +2012,6 @@ function initializePipelineMetadata(metadata) {
       metadata[flag] = false;
     }
   }
-}
-
-const SECURITY_SCAN_ACTIVE_TASK_STATUSES = new Set(['pending', 'in_progress', 'blocked'])
-const SECURITY_SCAN_PIPELINE_OUTPUT_MAX_CHARS = 11_000
-
-function securityScanReports(scan) {
-  if (Array.isArray(scan?.reports)) return scan.reports
-  if (Array.isArray(scan?.reviewedPrs)) return scan.reviewedPrs
-  return []
-}
-
-const reportIsSafe = (report) => report?.safe === true
-
-const reportFindingCount = (report) => (
-  Array.isArray(report?.securityFindings) && report.securityFindings.length > 0
-    ? report.securityFindings.length
-    : reportIsSafe(report) ? 0 : 1
-)
-
-/**
- * Serialize only the trust decision needed by the app-code reviewer. The
- * human-facing report and the raw model response deliberately never cross
- * this boundary: even a report that calls itself an explanation is still
- * untrusted model output and could contain a second prompt injection.
- */
-export function buildSecurityScanPipelineOutput(scan, reports, status) {
-  const base = {
-    securityScan: status,
-    scanCode: scan.code || null,
-    reviewedCount: reports.length,
-    reviewedPrs: [],
-  }
-  const included = []
-  for (const report of reports) {
-    const candidate = {
-      number: report.number,
-      safe: reportIsSafe(report),
-      headRefOid: reportIsSafe(report) && typeof report.headRefOid === 'string' ? report.headRefOid : null,
-      findingCount: reportFindingCount(report),
-    }
-    const next = JSON.stringify({ ...base, reviewedPrs: [...included, candidate] })
-    if (next.length <= SECURITY_SCAN_PIPELINE_OUTPUT_MAX_CHARS) {
-      included.push(candidate)
-      continue
-    }
-    return JSON.stringify({ ...base, complete: false, reviewedPrs: included })
-  }
-  return JSON.stringify({ ...base, complete: true, reviewedPrs: included })
-}
-
-/**
- * Name the single PR a targeted pr-reviewer run covers. The number goes in the
- * FIRST line specifically: `addTask`'s duplicate guard keys on (first line +
- * app), so without it, targeting a second PR while the first run is still in
- * flight would be rejected as a duplicate of it. The trailing sentence repeats
- * the scope for the agent; the header keeps its `[Improvement: <app>] …` shape
- * so the CoS queue still reads the same way.
- */
-function scopeDescriptionToPullRequest(description, metadata) {
-  const number = metadata?.targetPullRequest;
-  if (!number) return description;
-  const [firstLine, ...rest] = description.split('\n');
-  return [
-    `${firstLine} — pull request #${number} only`,
-    ...rest,
-    '',
-    `This run is scoped to pull request #${number}: it is the only request the server cleared, and the only one this run may act on.`,
-  ].join('\n');
-}
-
-function formatSecurityScanContext(scan, reports, status) {
-  const findingCount = reports.filter((report) => !reportIsSafe(report)).length
-  return [
-    `Security scan status: ${status}.`,
-    `Reviewed ${reports.length} external pull request${reports.length === 1 ? '' : 's'}${findingCount ? `; ${findingCount} contained model-abuse flags or an unvalidated response` : ''}.`,
-    'No GitHub pull request or issue actions have been taken.',
-    status === 'findings'
-      ? 'This scan is only a model-abuse boundary. Flagged PR content and its source text are withheld from the Eligibility Gate; the gate may process only PRs explicitly marked safe and must not fetch or inspect flagged PRs.'
-      : status === 'unavailable'
-        ? `The scan stopped with ${scan.code || 'an unknown error'} after retaining the reports collected so far. No PR has a safe status; leave every PR untouched until the scan can be completed.`
-        : 'All reviewed PRs have an explicit model-abuse safety status. The Eligibility Gate may process only the PRs marked safe, after approval.',
-  ].join('\n')
-}
-
-async function findActiveSecurityScanTask(appId, scanKey) {
-  if (!scanKey) return { unavailable: false, task: null }
-  const cosTasks = await getCosTasks().catch(() => null)
-  if (!cosTasks) return { unavailable: true, task: null }
-  const task = cosTasks.tasks?.find((candidate) => (
-    SECURITY_SCAN_ACTIVE_TASK_STATUSES.has(candidate.status)
-    && candidate.metadata?.analysisType === 'pr-reviewer'
-    && candidate.metadata?.app === appId
-    && candidate.metadata?.pipeline?.securityScan?.scanKey === scanKey
-  )) || null
-  return { unavailable: false, task }
-}
-
-/**
- * Run pr-reviewer's Security Scan through the direct local, no-tools path and
- * hand only safe PR metadata to the Eligibility Gate. A normal stage-0 agent
- * is intentionally never spawned: `readOnly` is prompt guidance, not an OS
- * sandbox, and the generic agent resolver rejects API providers anyway.
- *
- * External contributor PRs are held for human approval before the stage that
- * can review, comment, or merge. The preflight itself remains read-only and
- * does not checkout or execute any contributor branch.
- *
- * `targetPullRequest` narrows the run to ONE open PR — the per-row "Review this
- * PR" trigger on an app's PRs / MRs tab. The narrowing happens BEFORE the
- * fingerprint and the security scan, so every downstream contract (scan key,
- * public-review snapshot, `issueWatcher.pullRequests` coverage, and the output
- * hook's strict envelope check) is scoped to that one PR by construction rather
- * than by a prompt asking the agent to ignore the rest.
- */
-async function runPrReviewerSecurityPreflight(taskType, app, metadata, targetPullRequest = null, taskSchedule = null) {
-  if (taskType !== 'pr-reviewer') return { skipped: false };
-
-  // A churn park has to be a STOP, not just a log line (#6124). pr-reviewer runs
-  // on the ON_DEMAND cadence, and `shouldRunTask` only reads `parkedUntil` on a
-  // `perpetual` interval — so the park `observeAgentChurn` stamps when a stage
-  // loops ("parked ${type} so the loop stops burning quota") gated nothing, and
-  // the drain regenerated a fresh task seconds later. Ask here, the one place
-  // every pr-reviewer run is built, and ask BEFORE the security scan so a parked
-  // type does not keep paying for the preflight it is only going to discard.
-  // A human "Run" is unaffected: applyOnDemandRunResets clears the park for a
-  // USER-origin request before it reaches generation.
-  if (taskSchedule && await taskSchedule.isPerpetualParkActive(taskType, app.id)) {
-    const reason = 'parked';
-    emitLog('info', `Skipping pr-reviewer for ${app.name}: ${reason} until its recheck cadence`, { appId: app.id, analysisType: taskType });
-    return { skipped: true, reason };
-  }
-
-  const stages = metadata.pipeline?.stages;
-  const securityStage = stages?.[0];
-  const nextStage = stages?.[1];
-  if (!securityStage || !nextStage) {
-    const reason = 'pipeline-misconfigured';
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason} — security pipeline requires an eligibility gate`, { appId: app.id, analysisType: taskType });
-    return { skipped: true, reason };
-  }
-
-  const { listExternalOpenPullRequests, runPrReviewerSecurityScan, securityScanFingerprint } = await import('./prReviewerSecurity.js');
-  const { writePublicReviewInputSnapshot } = await import('./modelAbuseGuard.js');
-  let target = await listExternalOpenPullRequests(app);
-  if (!target.ok) {
-    const reason = target.code || 'security-scan-target-unavailable';
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
-    return { skipped: true, reason };
-  }
-  if (target.prs.length === 0) {
-    const reason = 'no-external-open-prs';
-    emitLog('info', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
-    return { skipped: true, reason };
-  }
-  if (targetPullRequest) {
-    const scoped = target.prs.filter((pr) => pr.number === targetPullRequest);
-    if (scoped.length === 0) {
-      const reason = 'target-pull-request-not-reviewable';
-      emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason} (#${targetPullRequest})`, { appId: app.id, analysisType: taskType });
-      return { skipped: true, reason };
-    }
-    // A maintainer pressed "Review this PR" on this row. The linked-open-issue
-    // prerequisite exists to bound UNATTENDED spend on unsolicited PRs; an
-    // explicit per-PR request is the maintainer choosing to spend that review,
-    // so the fact set records the waiver. The Eligibility Gate still judges the
-    // change itself, and Stage 1 still screens it. Stamped BEFORE the
-    // fingerprint so a targeted run never shares a scan key with a sweep.
-    target = {
-      ...target,
-      prs: scoped.map((pr) => ({ ...pr, eligibilityFacts: { ...normalizeEligibilityFacts(pr.eligibilityFacts), maintainerTargeted: true } })),
-    };
-    metadata.targetPullRequest = targetPullRequest;
-  }
-  const scanKey = securityScanFingerprint(target);
-  const active = await findActiveSecurityScanTask(app.id, scanKey);
-  if (active.unavailable) {
-    const reason = 'security-scan-task-state-unavailable';
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
-    return { skipped: true, reason };
-  }
-  if (active.task) {
-    emitLog('info', `Skipping pr-reviewer for ${app.name}: security-scan-report-pending`, { appId: app.id, analysisType: taskType, taskId: active.task.id });
-    return { skipped: true, reason: 'security-scan-report-pending', task: active.task };
-  }
-
-  const scan = await runPrReviewerSecurityScan({
-    app,
-    target,
-  });
-  const reports = securityScanReports(scan);
-  if (!scan.ok && !reports.length) {
-    const reason = scan.code || 'security-scan-not-passed';
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
-    return { skipped: true, reason };
-  }
-
-  const status = !scan.ok ? 'unavailable' : (scan.passed ? 'passed' : 'findings');
-  const snapshotWritten = await writePublicReviewInputSnapshot({
-    scanKey: scan.scanKey || scanKey,
-    pullRequests: scan.ok ? (scan.reviewInputs || []) : [],
-  });
-  if (!snapshotWritten) {
-    const reason = 'public-review-input-snapshot-failed';
-    emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
-    return { skipped: true, reason };
-  }
-  const reviewOutput = buildSecurityScanPipelineOutput(scan, reports, status);
-  // A partial/unavailable scan is never a usable allowlist. Keeping already
-  // safe-looking reports here would let a later stage review a subset while
-  // the remaining PRs had no completed safety verdict.
-  const safeReports = scan.ok ? reports.filter(reportIsSafe) : [];
-  metadata.pipeline = {
-    ...metadata.pipeline,
-    currentStage: 1,
-    stageResults: [{
-      stage: 0,
-      name: securityStage.name,
-      agentId: null,
-      success: scan.ok,
-      completedAt: new Date().toISOString(),
-      summary: {
-        guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
-        guardModel: scan.guardModel || null,
-        guardRevision: scan.guardRevision || null,
-        code: scan.code || null,
-        reviewedPrCount: reports.length,
-        findingCount: reports.filter((report) => !reportIsSafe(report)).length,
-        reportStatus: status,
-      },
-    }],
-    previousStageAgentId: null,
-    previousStageOutput: reviewOutput,
-    securityScan: {
-      completed: scan.ok,
-      status,
-      code: scan.code || null,
-      guardId: scan.guardId || MODEL_ABUSE_GUARD_ID,
-      guardModel: scan.guardModel || null,
-      guardRevision: scan.guardRevision || null,
-      layers: scan.layers || null,
-      repoFullName: scan.repoFullName || target.repoFullName,
-      defaultBranch: scan.defaultBranch || target.defaultBranch,
-      scanKey: scan.scanKey || scanKey,
-      reviewedPrCount: reports.length,
-      findingCount: reports.filter((report) => !reportIsSafe(report)).length,
-      reports,
-      noActionsTaken: true,
-      safePrCount: safeReports.length,
-    },
-  };
-  const safeInputByNumber = new Map((scan.reviewInputs || []).map((input) => [input.number, input]));
-  metadata.issueWatcher = {
-    repoFullName: scan.repoFullName || target.repoFullName,
-    defaultBranch: scan.defaultBranch || target.defaultBranch,
-    issueComments: [],
-    pullRequests: safeReports.map((report) => ({
-      number: report.number,
-      headSha: report.headRefOid,
-      authorLogin: safeInputByNumber.get(report.number)?.authorLogin || null,
-      eligibilityFacts: safeInputByNumber.get(report.number)?.eligibilityFacts || null,
-      diffTruncated: false,
-      contentFingerprint: report.contentFingerprint,
-    })),
-    strictPullRequestCoverage: true,
-  };
-  metadata.executionProfile = nextStage.executionProfile || null;
-  metadata.pipeline.reviewInputKey = scan.scanKey || scanKey;
-  metadata.context = formatSecurityScanContext(scan, reports, status);
-
-  // Apply the next stage's provider/model/effort and behavior flags exactly as
-  // the ordinary agent-completion hand-off does. Keeping this in the generator
-  // makes the synthetic stage-0 result indistinguishable from a real one to
-  // the rest of task creation.
-  metadata.readOnly = nextStage.readOnly ?? false;
-  if (nextStage.model) metadata.model = nextStage.model;
-  if (nextStage.providerId) {
-    metadata.provider = nextStage.providerId;
-    metadata.providerId = nextStage.providerId;
-  }
-  if (nextStage.effort) metadata.effort = nextStage.effort;
-  const nextStageReadOnly = nextStage.readOnly ?? false;
-  const taskDefaults = metadata.pipeline.taskDefaults || {};
-  for (const flag of PIPELINE_STAGE_BEHAVIOR_FLAGS) {
-    if (flag in nextStage) {
-      metadata[flag] = nextStage[flag];
-    } else if (nextStageReadOnly) {
-      metadata[flag] = false;
-    } else if (flag in taskDefaults) {
-      metadata[flag] = taskDefaults[flag];
-    }
-  }
-
-  // No forced human approval here. The pipeline's own gates bound what an
-  // external PR can do: Stage 1 already screened it, the Eligibility Gate is
-  // tool-free, and Stage 3 runs sandboxed with the deterministic coordinator
-  // owning every forge mutation. Forcing approval on every scanned PR held
-  // the cheap tool-free gate behind a click on each run, including a targeted
-  // "Review this PR" the maintainer had just pressed. The schedule's own
-  // "Require approval" toggle (metadata.requireApproval from the interval
-  // config) still holds the run when the user asks for that.
-  emitLog(
-    status === 'passed' ? 'info' : 'warn',
-    `pr-reviewer security scan ${status} for ${app.name}: ${reports.length} external PR(s)`,
-    { appId: app.id, analysisType: taskType },
-  );
-  return { skipped: false, scan };
 }
 
 // Apply app-level worktree/PR defaults only when not already set by task-type metadata.
@@ -2457,6 +2188,91 @@ function takePerpetualTransient(taskType, appId) {
   transientVerdicts.delete(key);
   if (!verdict || (Date.now() - verdict.at) > TRANSIENT_VERDICT_TTL_MS) return null;
   return verdict;
+}
+
+/**
+ * Drain the on-demand requests for PROGRAMMATIC scheduled task types
+ * (`services/scheduledHandlers/`) — the ones PortOS performs ITSELF.
+ *
+ * They never become a CoS task and never spawn an agent, so they are drained
+ * ahead of (and outside) the slot-bounded loops in the two on-demand engines:
+ * queueing a describe/render batch behind agent capacity it does not use would
+ * leave a user's explicit "Run Now" sitting until an unrelated agent finished.
+ *
+ * Both engines call this once per cycle and then skip the ids it returns in
+ * their own loop, so a request drained here is handled exactly once whichever
+ * engine gets there first (the request is cleared before the handler runs).
+ * Returning the ids rather than re-testing the task type keeps the engines from
+ * importing the handler registry statically — see server/AGENTS.md's import
+ * scoping rule — and covers requests the drain cleared WITHOUT running (the
+ * type was disabled, or Improve is off), which must not fall through either.
+ *
+ * `force: true` — a manual Run is explicit consent for THIS work, so the run
+ * ignores the shared in-flight cooldown that stops the burn rotation re-picking
+ * rows whose render hasn't landed yet. `context` is deliberately omitted: with
+ * no probe to reuse, `run` does its own scan, which is the contract's
+ * `context: undefined` path.
+ *
+ * Returns the ids of the requests it took responsibility for. Never throws —
+ * `runScheduledHandler` converts a handler throw into a non-dispatch, and this
+ * runs outside the request lifecycle.
+ */
+export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, requests, schedule, state }) {
+  const handled = new Set();
+  const pending = (requests || []).filter((request) => isProgrammaticScheduledTaskType(request.taskType));
+  if (pending.length === 0) return handled;
+
+  const { runScheduledHandler } = await import('./scheduledHandlers/index.js');
+  for (const request of pending) {
+    const taskConfig = schedule?.tasks?.[request.taskType];
+    handled.add(request.id);
+    if (!isImprovementEnabled(state)) {
+      emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
+      await taskScheduleMod.clearOnDemandRequest(request.id);
+      continue;
+    }
+    // Parity with the agent engines: the type may have been disabled after the
+    // request was queued.
+    if (!taskConfig?.enabled) {
+      emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
+      await taskScheduleMod.clearOnDemandRequest(request.id);
+      continue;
+    }
+
+    // CLAIM the request, and only run if this drain is the one that took it.
+    // The two engines are independent and each drains its own snapshot, so both
+    // can hold the same request; `clearOnDemandRequest` is a serialized
+    // read-modify-write that returns the record only to the caller that removed
+    // it, and returns null to the loser. Without this check one "Run Now" would
+    // spend two describe/render batches and toast twice — the agent path gets
+    // the same protection from `addTask`'s duplicate detection, which a handler
+    // that queues nothing has no equivalent of.
+    const claimed = await taskScheduleMod.clearOnDemandRequest(request.id);
+    if (!claimed) continue;
+
+    await taskScheduleMod.recordExecution(`task:${request.taskType}`);
+    const outcome = await runScheduledHandler({
+      taskType: request.taskType,
+      params: taskConfig.taskMetadata || {},
+      job: { model: taskConfig.model || null, effort: taskConfig.effort || null, providerId: taskConfig.providerId || null },
+      force: true,
+    });
+
+    emitLog(outcome?.dispatched ? 'info' : 'debug',
+      `${request.taskType}: ${outcome?.summary || outcome?.reason || 'nothing to do'}`,
+      { requestId: request.id });
+    // The client toasts this so an explicit Run isn't a silent no-op. Separate
+    // from `schedule:on-demand-empty`: that channel means "no agent task was
+    // produced", while this one reports work PortOS already finished.
+    cosEvents.emit('schedule:on-demand-handled', {
+      requestId: request.id,
+      taskType: request.taskType,
+      dispatched: outcome?.dispatched === true,
+      summary: outcome?.summary || null,
+      reason: outcome?.reason || null,
+    });
+  }
+  return handled;
 }
 
 /**
@@ -2806,10 +2622,11 @@ async function resolveAppProviderPin({ app, taskType, appOverride, interval }) {
 /**
  * Layer the provider/model/effort pins onto `metadata`, least specific first:
  * the global schedule interval, then the app's own per-app pin, then a
- * buildTaskInput hook's fully-resolved choice. A model is only ever pinned when
- * explicitly configured — otherwise it stays unset so selectModelForTask resolves
- * the active provider's tier/default model at spawn time (see the note in
- * generateSelfImprovementTaskForType).
+ * buildTaskInput hook's fully-resolved choice, then an explicit per-request
+ * override (the Pull Requests tab's "Run with" picker on one on-demand run). A
+ * model is only ever pinned when explicitly configured — otherwise it stays
+ * unset so selectModelForTask resolves the active provider's tier/default
+ * model at spawn time (see the note in generateSelfImprovementTaskForType).
  */
 function applyOneProviderPin(metadata, pin) {
   // A model pinned with no provider REFINES the layer below (the user picked a
@@ -2831,7 +2648,7 @@ function applyOneProviderPin(metadata, pin) {
   else delete metadata.model;
 }
 
-function applyProviderModelPins(metadata, interval, appPin, hookOverride) {
+function applyProviderModelPins(metadata, interval, appPin, hookOverride, requestOverride) {
   // Least specific first: the task's global Schedule pin. Then the app's own
   // per-app pin, which is the more specific choice — honored for EVERY task type
   // (#4783), not just the one whose buildTaskInput hook read it. Then a
@@ -2842,13 +2659,25 @@ function applyProviderModelPins(metadata, interval, appPin, hookOverride) {
   }
   applyOneProviderPin(metadata, appPin);
   applyOneProviderPin(metadata, hookOverride);
+  // Most specific: an explicit per-request pin (e.g. one "PR review" click from
+  // the Pull Requests tab), applied last so it wins over every configured pin
+  // above. A public-review posture still gates the final provider to its own
+  // eligible set at spawn time (resolveAgentProviderAndModel) — an ineligible
+  // pin here is dropped with a warning there, same as any other stored pin.
+  applyOneProviderPin(metadata, { providerId: requestOverride?.provider || null, model: requestOverride?.model || null });
+  if (requestOverride?.effort) {
+    metadata.effort = requestOverride.effort;
+  }
 }
 
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, {
   skipPreconditions = false,
   ignoreTaskId = null,
   deferPerpetualDispatch = false,
-  targetPullRequest = null
+  targetPullRequest = null,
+  // Per-request provider/model/effort pin — see applyProviderModelPins.
+  providerOverride = null,
+  runOverrides = null
 } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
@@ -2881,6 +2710,24 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   ]);
   const appOverride = appOverrides[taskType] || null;
   const metadata = buildImprovementTaskMetadata(taskType, app, interval, taskSchedule, appOverride);
+
+  // Per-INVOCATION run parameters, layered on top of the schedule + per-app
+  // metadata the task saved. A quota-burn step is the caller that needs them: a
+  // step migrated from an issues-only burn preset pins `fileIssues: true`
+  // explicitly, so it keeps filing even against an audit type whose shipped
+  // scheduled default is `false` — migration must never silently turn an
+  // issues-only burn into code-writing work.
+  //
+  // It has to land HERE, before the mode decision and the prompt render below.
+  // The post-generation stamp both on-demand engines apply
+  // (`onDemandRequestMetadata`) is far too late: by then the banner is chosen
+  // and the description is built, so a `fileIssues` arriving there would flip
+  // the flag while the agent still read a "fix and commit" prompt.
+  //
+  // Sanitized through the SAME allowlist the schedule and per-app overrides
+  // pass, so an invocation can carry nothing a stored override could not.
+  const sanitizedRunMeta = sanitizeTaskMetadata(runOverrides);
+  if (sanitizedRunMeta) Object.assign(metadata, sanitizedRunMeta);
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);
@@ -3024,7 +2871,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
       planConstraint: planConstraintBlock
     }
   });
-  const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, { app });
+  const taskDataInputs = await resolveTaskDataInputs(interval.dataInputs, { app, taskMetadata: metadata, taskType: promptTaskType });
   const description = scopeDescriptionToPullRequest(
     appendTaskDataInputs(baseDescription, taskDataInputs),
     metadata
@@ -3034,11 +2881,10 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // File-issues posture wins over app worktree/PR defaults — the deliverable
   // is tracker items, so a managed worktree or an implied PR is the wrong shape.
   if (fileIssues) {
-    metadata.fileIssues = true;
-    metadata.noCodeOutput = true;
-    metadata.useWorktree = false;
-    metadata.openPR = false;
-    metadata.simplify = false;
+    // The catalog's one delivery posture, stamped rather than restated — the
+    // custom-job lane (autonomousJobs/skillTemplates.js) applies this same
+    // object, so the two cannot drift into different definitions of the mode.
+    Object.assign(metadata, FILE_ISSUES_DELIVERY_SETTINGS);
   } else if (auditDoWorkRequiresWorktree(taskType)) {
     // Some structural audits are safe to remediate only in isolation. Enforce
     // this after schedule/app defaults so a stale file-issues toggle transition
@@ -3054,7 +2900,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const appPin = hookOverride.providerId
     ? EMPTY_PROVIDER_PIN
     : await resolveAppProviderPin({ app, taskType, appOverride, interval });
-  applyProviderModelPins(metadata, interval, appPin, hookOverride);
+  applyProviderModelPins(metadata, interval, appPin, hookOverride, providerOverride);
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`, metadata);
   stampApprovalReason(metadata, approval);
@@ -3084,6 +2930,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     }
     metadata[key] = value;
   }
+  if (isPrivateSecurityTask({ metadata })) Object.assign(metadata, PRIVATE_SECURITY_DELIVERY);
   await updateAppActivity(app.id, { lastImprovementType: taskType });
   emitLog('info', `Generating improvement task for ${app.name}: ${taskType}`, { appId: app.id, analysisType: taskType });
 

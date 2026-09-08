@@ -20,7 +20,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-judge-foundation.md': 'e44b6c50d741bbd21fc86f481684c410', // post-256 (series-linked cast)
+  'pipeline-judge-foundation.md': '75714f0e41c77ff5c8b9623cb4fb0a25', // post-256 (series-linked cast)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

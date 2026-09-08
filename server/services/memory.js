@@ -12,6 +12,7 @@
  */
 
 import { v4 as uuidv4 } from '../lib/uuid.js';
+import { persistentMindMemoryProtection } from '../lib/persistentMindMemory.js';
 import { cosEvents } from './cosEvents.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
 import * as notifications from './notifications.js';
@@ -734,7 +735,7 @@ export async function consolidateMemories(threshold = 0.9, dryRun = false) {
   const index = await loadIndex();
   const embeddings = await loadEmbeddings();
 
-  const activeMemories = index.memories.filter(m => m.status === 'active');
+  const activeMemories = index.memories.filter(m => m.status === 'active' && persistentMindMemoryProtection(m) === 'standard');
 
   // Get memories with embeddings
   const memoriesWithEmbeddings = [];
@@ -790,7 +791,7 @@ export async function applyDecay(decayRate = 0.01) {
   let updated = 0;
 
   // Filter active memories first
-  const activeMemories = index.memories.filter(m => m.status === 'active');
+  const activeMemories = index.memories.filter(m => m.status === 'active' && persistentMindMemoryProtection(m) === 'standard');
 
   // Batch load all active memories to avoid N+1 query pattern
   const memoryLoadPromises = activeMemories.map(m => loadMemory(m.id));
@@ -800,7 +801,7 @@ export async function applyDecay(decayRate = 0.01) {
   for (let i = 0; i < activeMemories.length; i++) {
     const meta = activeMemories[i];
     const memory = loadedMemories[i];
-    if (!memory) continue;
+    if (!memory || persistentMindMemoryProtection(memory) !== 'standard') continue;
 
     const ageInDays = (now - new Date(memory.createdAt).getTime()) / (1000 * 60 * 60 * 24);
     const accessRecency = memory.lastAccessed
@@ -834,7 +835,7 @@ export async function clearExpired() {
   let cleared = 0;
 
   // Filter active memories first
-  const activeMemories = index.memories.filter(m => m.status === 'active');
+  const activeMemories = index.memories.filter(m => m.status === 'active' && persistentMindMemoryProtection(m) === 'standard');
 
   // Batch load all active memories to avoid N+1 query pattern
   const memoryLoadPromises = activeMemories.map(m => loadMemory(m.id));
@@ -844,7 +845,7 @@ export async function clearExpired() {
   for (let i = 0; i < activeMemories.length; i++) {
     const meta = activeMemories[i];
     const memory = loadedMemories[i];
-    if (!memory) continue;
+    if (!memory || persistentMindMemoryProtection(memory) !== 'standard') continue;
 
     if (memory.expiresAt && memory.expiresAt < now) {
       await updateMemory(meta.id, { status: 'expired' });

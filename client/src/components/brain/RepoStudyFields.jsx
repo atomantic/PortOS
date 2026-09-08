@@ -29,6 +29,7 @@ export default function RepoStudyFields({
   providers,
   activeProviderId,
   setProviderOverride,
+  targetAppLabel = 'File study issues against',
   contextLabel = 'Study context',
   contextPlaceholder = 'What should the agent look for, and where might an implementation fit?',
   providerHint = 'Optional override for this study only. Leave it on the default to use the configured CoS provider.',
@@ -37,7 +38,7 @@ export default function RepoStudyFields({
     <>
       {managedApps.length > 0 && (
         <label htmlFor={`${idPrefix}-target-app`} className="block text-xs text-gray-400">
-          File study issues against
+          {targetAppLabel}
           <select
             id={`${idPrefix}-target-app`}
             value={targetAppId}

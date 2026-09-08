@@ -18,7 +18,7 @@ vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   ScatterChart: ({ children }) => <div>{children}</div>,
   Scatter: ({ name, data, line }) => (
-    <div data-testid={`scatter-${name}`} data-has-line={!!line} data-points={data?.length} />
+    <div data-testid={`scatter-${name}`} data-has-line={!!line} data-points={data?.length} data-values={JSON.stringify(data?.map(({ x, y }) => [x, y]))} />
   ),
   CartesianGrid: () => null,
   LabelList: () => null,
@@ -50,7 +50,7 @@ beforeEach(() => {
 it('shows missing evidence, filters models and estimates token costs without inventing reasoning prices or local cost', async () => {
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
   await act(async () => {});
-  await screen.findByText('1 plotted · 1 missing quality or cost');
+  await screen.findByText('1 plotted · 1 missing selected metrics or outside log scale');
   fireEvent.click(screen.getByText(/Evidence & sources/));
   fireEvent.click(screen.getByText('Show or hide providers, models & effort'));
   expect(screen.getAllByText(/E2E unknown/)).toHaveLength(2);
@@ -111,7 +111,7 @@ it('connects reasoning effort points with line and allows toggling line style an
   expect(screen.getByTestId('scatter-gpt-5.6-sol')).toHaveAttribute('data-has-line', 'false');
 
   // Test scale toggle
-  fireEvent.change(screen.getByLabelText('Cost scale'), { target: { value: 'log' } });
+  fireEvent.change(screen.getByLabelText('X-axis scale'), { target: { value: 'log' } });
   expect(screen.getByTestId('xaxis')).toHaveAttribute('data-scale', 'log');
 
   // Test quick filter reasoning curves
@@ -120,7 +120,7 @@ it('connects reasoning effort points with line and allows toggling line style an
   expect(screen.getByRole('button', { name: 'Toggle gpt-5.6-sol' })).toHaveAttribute('aria-pressed', 'true');
 });
 
-it('opens the Artificial Analysis sync modal and syncs observations', async () => {
+it('prompts for a key when none is stored and closes the modal once the sync lands', async () => {
   api.syncArtificialAnalysis.mockResolvedValue({ success: true, observations: 636, total: 636 });
 
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
@@ -128,12 +128,52 @@ it('opens the Artificial Analysis sync modal and syncs observations', async () =
 
   fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
   expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Start Sync' })).toBeDisabled();
 
   fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'test-key-123' } });
   fireEvent.click(screen.getByRole('button', { name: 'Start Sync' }));
 
-  await screen.findByText(/Sync successful! Updated 636 models/);
-  expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({ apiKey: 'test-key-123' }, { silent: true });
+  await waitFor(() => expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({ apiKey: 'test-key-123' }, { silent: true }));
+  await waitFor(() => expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull());
+});
+
+it('syncs straight away without a key prompt when one is already configured', async () => {
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation], inventory: [], artificialAnalysisKeyConfigured: true });
+  api.syncArtificialAnalysis.mockResolvedValue({ success: true, observations: 636, total: 636 });
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+
+  await waitFor(() => expect(api.syncArtificialAnalysis).toHaveBeenCalledWith({}, { silent: true }));
+  expect(screen.queryByLabelText(/Artificial Analysis API Key/i)).toBeNull();
+});
+
+it('discards a typed key when the prompt is cancelled', async () => {
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  fireEvent.change(screen.getByLabelText(/Artificial Analysis API Key/i), { target: { value: 'abandoned-key' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+  expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toHaveValue('');
+  expect(api.syncArtificialAnalysis).not.toHaveBeenCalled();
+});
+
+it('falls back to the key prompt when a sync with the stored key is rejected', async () => {
+  api.getModelComparison.mockResolvedValue({ schemaVersion: 1, observations: [observation], inventory: [], artificialAnalysisKeyConfigured: true });
+  api.syncArtificialAnalysis.mockRejectedValue(new Error('Artificial Analysis API failed (401): Unauthorized'));
+
+  render(<MemoryRouter><ModelComparison /></MemoryRouter>);
+  await act(async () => {});
+
+  fireEvent.click(screen.getByRole('button', { name: /Sync from Artificial Analysis/i }));
+
+  await screen.findByText(/Artificial Analysis API failed \(401\)/);
+  expect(screen.getByLabelText(/Artificial Analysis API Key/i)).toBeTruthy();
 });
 
 it('opens on a log cost axis and scopes the chart to the providers models', async () => {
@@ -204,7 +244,7 @@ it('stretches chart width and adjusts height', async () => {
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
   await act(async () => {});
 
-  await screen.findByText('1 plotted · 1 missing quality or cost');
+  await screen.findByText('1 plotted · 1 missing selected metrics or outside log scale');
 
   // Initially at 1x
   expect(screen.getByRole('button', { name: '1×' })).toHaveAttribute('aria-pressed', 'true');
@@ -232,7 +272,7 @@ it('scales axes via zoom buttons and manual bounds inputs', async () => {
   render(<MemoryRouter><ModelComparison /></MemoryRouter>);
   await act(async () => {});
 
-  await screen.findByText('3 plotted · 0 missing quality or cost');
+  await screen.findByText('3 plotted · 0 missing selected metrics or outside log scale');
   const xaxis = screen.getByTestId('xaxis');
   const yaxis = screen.getByTestId('yaxis');
 
@@ -296,3 +336,57 @@ it('respects initial zoom and stretch URL search parameters', async () => {
   expect(screen.getByTestId('yaxis')).toHaveAttribute('data-domain', JSON.stringify([40, 60]));
 });
 
+it('persists settings to localStorage and restores them on a fresh visit', async () => {
+  localStorage.clear();
+  const { unmount } = render(
+    <MemoryRouter initialEntries={['/']}>
+      <ModelComparison />
+    </MemoryRouter>
+  );
+  await act(async () => {});
+  await screen.findByText(/1 plotted/);
+
+  fireEvent.click(screen.getByRole('button', { name: '1.5×' }));
+  await waitFor(() => expect(localStorage.getItem('portos-model-comparison-settings')).toContain('stretch=1.5'));
+  unmount();
+
+  render(
+    <MemoryRouter initialEntries={['/']}>
+      <ModelComparison />
+    </MemoryRouter>
+  );
+  await act(async () => {});
+  await screen.findByText(/1 plotted/);
+  expect(screen.getByRole('button', { name: '1.5×' })).toHaveAttribute('aria-pressed', 'true');
+});
+
+
+it('switches metric coordinates, clears stale zoom, and preserves evidence table units', async () => {
+  api.getModelComparison.mockResolvedValue({ observations: [
+    { ...observation, tokensPerSecond: metric(80), responseSeconds: metric(12) },
+    { ...observation, id: 'missing-speed', model: 'other', tokensPerSecond: null },
+  ], inventory: [] });
+  render(<MemoryRouter initialEntries={['/?xMin=0.1&yMin=40']}><ModelComparison /></MemoryRouter>);
+  await screen.findByLabelText('X axis');
+  fireEvent.change(screen.getByLabelText('X axis'), { target: { value: 'tokensPerSecond' } });
+  fireEvent.change(screen.getByLabelText('Y axis'), { target: { value: 'responseSeconds' } });
+  expect(screen.getByTestId('scatter-example-model')).toHaveAttribute('data-values', '[[80,12]]');
+  expect(screen.queryByTestId('scatter-other')).toBeNull();
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-scale', 'linear');
+  expect(screen.getByTestId('xaxis')).toHaveAttribute('data-allow-overflow', 'false');
+  expect(screen.getAllByText('$0.5000')).toHaveLength(2);
+  expect(screen.getAllByText('50')).toHaveLength(2);
+});
+
+it('keeps exact Zen IDs in available coverage and plots free prices without inventing quality', async () => {
+  const free = { ...observation, id: 'free', model: 'example-free', benchmark: 'Unbenchmarked (pricing only)', quality: null, costPerTask: null, inputPerMillion: metric(0), outputPerMillion: metric(0) };
+  api.getModelComparison.mockResolvedValue({ observations: [observation, free], availableModels: ['example'], inventory: [{ id: 'zen', models: [{ model: `opencode/${free.model}`, efforts: [] }] }] });
+  render(<MemoryRouter initialEntries={['/?xAxis=inputPerMillion&yAxis=outputPerMillion&scale=linear']}><ModelComparison /></MemoryRouter>);
+  expect(await screen.findByTestId('scatter-example-free')).toHaveAttribute('data-values', '[[0,0]]');
+  fireEvent.click(screen.getByRole('button', { name: 'Fit visible' }));
+  const domain = JSON.parse(screen.getByTestId('xaxis').getAttribute('data-domain'));
+  expect(domain[1]).toBeGreaterThan(domain[0]);
+  fireEvent.change(screen.getByLabelText('Y axis'), { target: { value: 'quality' } });
+  expect(screen.queryByTestId('scatter-example-free')).toBeNull();
+  expect(screen.getAllByText('Unknown').length).toBeGreaterThan(0);
+});

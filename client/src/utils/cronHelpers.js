@@ -1,3 +1,6 @@
+import { INTERVAL_OPTIONS } from '../../../server/lib/autonomousJobIntervals.js';
+export { ON_DEMAND_INTERVAL } from '../../../server/lib/autonomousJobIntervals.js';
+
 export const CRON_PRESETS = [
   { value: '*/15 * * * *', label: 'Every 15 min' },
   { value: '0 * * * *', label: 'Every hour' },
@@ -278,19 +281,6 @@ export function describeCron(expr) {
   return segments.join(' ');
 }
 
-// Interval-mode cadences for autonomous jobs — the client mirror of
-// `INTERVAL_OPTIONS` in `server/services/autonomousJobs/constants.js`. Values
-// must stay in lockstep with `resolveIntervalMs` there, since the server
-// recomputes `intervalMs` from whichever value a picker submits. Lives here
-// rather than in a component so a second job-scheduling surface doesn't fork
-// its own copy of the list.
-export const JOB_INTERVAL_OPTIONS = [
-  { value: 'hourly', label: 'Every Hour' },
-  { value: 'every-2-hours', label: 'Every 2 Hours' },
-  { value: 'every-4-hours', label: 'Every 4 Hours' },
-  { value: 'every-8-hours', label: 'Every 8 Hours' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'biweekly', label: 'Every 2 Weeks' },
-  { value: 'monthly', label: 'Monthly' }
-];
+// Both autonomous-job pickers use the same vocabulary as server validation and
+// duration resolution. Keep the client projection's existing value/label shape.
+export const JOB_INTERVAL_OPTIONS = INTERVAL_OPTIONS.map(({ value, label }) => ({ value, label }));

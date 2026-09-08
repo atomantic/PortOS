@@ -24,12 +24,12 @@ import {
   registerTool, updateTool, getToolsList,
   saveHfToken, clearHfToken,
 } from '../../services/api';
-import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
+import { deriveAvailableBackends, imageGenReadiness, isCloudCliMode, IMAGE_GEN_MODE, AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL, GROK_ASPECT_RATIOS, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel, normalizeRenderPinValue, supportsCloudModelOverride } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 import { useAgyModels } from '../../hooks/useAgyModels';
 import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
-import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
+import { effortLevelsForProvider } from '../../utils/providers';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
@@ -37,11 +37,6 @@ const GROK_TOOL_ID = 'grok-imagegen';
 const AGY_TOOL_ID = 'agy-imagegen';
 // Mirror of server/services/imageGen/modes.js — shown as placeholder/default
 // hints so the user sees what a blank Model / Effort field will actually use.
-// The server owns the real default; these are display-only. The effort default
-// lives in the shared imageGenBackends lib (imported above) so the Render Queue
-// and this settings form don't drift; the model default stays local (only used
-// here as a placeholder string).
-const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-5.6-luna';
 const DEFAULT_TEST_PROMPT = 'a small cyberpunk fox sitting on a neon-lit rooftop at night, cinematic, highly detailed';
 const normalizeUrl = (url) => (url || '').trim().replace(/\/+$/, '');
 
@@ -129,6 +124,13 @@ export function ImageGenTab() {
   const [codexModel, setCodexModel] = useState('');
   // Empty = use the shipped default effort (CODEX_IMAGEGEN_DEFAULT_EFFORT).
   const [codexEffort, setCodexEffort] = useState('');
+  // Codex's effort ladder is MODEL-gated, so the options track the model field
+  // above rather than a fixed constant: the gpt-6 family has no `minimal` rung
+  // and rejects it with an HTTP 400, failing the render.
+  const codexEffortLevels = effortLevelsForProvider(
+    { id: 'codex', command: 'codex' },
+    codexModel.trim() || CODEX_IMAGEGEN_DEFAULT_MODEL,
+  );
   const [codexParallelLimit, setCodexParallelLimit] = useState(1);
   // Grok Build CLI provider config — gated by `grokEnabled` the same way as
   // Codex (renders spend the user's Grok quota). No model/effort fields:
@@ -1007,11 +1009,11 @@ export function ImageGenTab() {
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
               >
                 <option value="">Default ({CODEX_IMAGEGEN_DEFAULT_EFFORT})</option>
-                {CODEX_EFFORT_LEVELS.map((lvl) => (
+                {codexEffortLevels.map((lvl) => (
                   <option key={lvl} value={lvl}>{lvl}</option>
                 ))}
               </select>
-              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -c model_reasoning_effort=&lt;level&gt;</code>. Lower effort is cheaper; leave on the shipped default (<code>{CODEX_IMAGEGEN_DEFAULT_EFFORT}</code>) or drop to <code>minimal</code> for the cheapest possible renders.</p>
+              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -c model_reasoning_effort=&lt;level&gt;</code>. Lower effort is cheaper; leave on the shipped default (<code>{CODEX_IMAGEGEN_DEFAULT_EFFORT}</code>) or drop to <code>{codexEffortLevels[0]}</code> for the cheapest possible renders. The levels offered depend on the model above.</p>
             </FormField>
             <FormField label="Parallel render limit" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <input

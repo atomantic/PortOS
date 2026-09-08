@@ -14,10 +14,12 @@ import { isPlainObject } from './objects.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
+import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
 import { PUBLIC_REVIEW_EXECUTION_PROFILES } from './agentExecutionProfiles.js';
 import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
+import { JOB_INTERVAL_VALUES } from './autonomousJobIntervals.js';
 import { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
 import {
   EFFORT_SELECTABLE_REVIEWERS,
@@ -408,7 +410,13 @@ export const createCosJobSchema = z.object({
   description: z.string().optional(),
   category: z.string().optional(),
   type: z.enum(['agent', 'shell', 'script']).optional(),
-  interval: z.string().optional(),
+  // The autonomous-job cadence vocabulary. Previously a bare z.string(), so a
+  // typo'd cadence reached disk and silently rescheduled the job daily via
+  // resolveIntervalMs's old `default: DAY` fall-through. Note this is NOT the
+  // scheduled-CoS-task INTERVAL_TYPES vocabulary — nothing converts between them.
+  interval: z.enum(JOB_INTERVAL_VALUES).optional(),
+  // Only meaningful for the `custom` cadence; never required or back-filled for
+  // the on-demand one, which resolves to a null intervalMs by design.
   intervalMs: z.number().positive().int().optional(),
   // Null actively clears a pinned time/cron mode on update. The jobs UI has
   // always emitted null for the inactive mode; accepting it here lets updateJob
@@ -427,8 +435,12 @@ export const createCosJobSchema = z.object({
   // An empty array actively clears every selection on update; absent preserves
   // the stored selection.
   dataInputs: taskDataInputsSchema.optional(),
-  command: z.string().optional(),
-  triggerAction: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
+  // Null actively clears the field: the jobs UI emits `command: null` /
+  // `triggerAction: null` whenever a job is saved as an AI-agent type (the two
+  // keys only apply to shell/script jobs), so rejecting null 400'd every edit of
+  // an agent job. Empty string keeps its historical meaning per field.
+  command: z.string().nullable().optional(),
+  triggerAction: z.preprocess(v => (v === '' ? undefined : v), z.string().nullable().optional()),
   // Optional AI provider + model override for agent jobs. Empty string from the
   // UI picker → null so a PUT can actively clear the override back to the active
   // provider/default model (updateJob only skips `undefined`). Forwarded into the
@@ -458,6 +470,25 @@ export const createCosJobSchema = z.object({
     // PortOS-owned audits may succeed after proving the branch is empty; the
     // finalizer still requires the forge/no-commit proof before honoring this.
     noChangeSuccess: z.boolean().optional(),
+    // Opt a custom AGENT job into file-issues delivery. A custom job is
+    // user-authored, so unlike a built-in audit type it has no catalog default
+    // — the explicit flag IS the opt-in, and `generateTaskFromJob` turns it
+    // into the shared posture from lib/auditCatalog.js
+    // (`FILE_ISSUES_DELIVERY_SETTINGS`), overriding the code-shipping
+    // useWorktree/openPR/simplify keys above. Zod strips unknown keys, so
+    // without this row the flag never survives a job create/update.
+    fileIssues: z.boolean().optional(),
+    // The two "lands no code" postures, which are NOT the same. `noCodeOutput`
+    // = the deliverable is something the agent DOES during the run (files an
+    // issue, calls an endpoint), so there is no branch and every commit/push/PR
+    // instruction is stripped from the prompt. `discardWorktree` = it wants a
+    // scratch checkout but nothing in it may land — without which
+    // `useWorktree` + `openPR: false` is the AUTO-MERGE posture. Both are
+    // carried by a job converted from a legacy quota-burn step (#6381), and Zod
+    // strips unknown keys, so without these rows the posture would silently
+    // vanish the first time the user saved that job.
+    noCodeOutput: z.boolean().optional(),
+    discardWorktree: z.boolean().optional(),
   }).optional(),
 });
 
@@ -781,8 +812,36 @@ const ALLOWED_TASK_METADATA_KEYS = [
   // Dispatch gate: when true, the generated system task is always awaiting-
   // approve — including an explicit Run Now. Absent/false keeps the default
   // (Run Now consents; unattended runs follow confidence/safety-kind).
-  'requireApproval'
+  'requireApproval',
+  // `universe-bible-images`: hold canon entries that have no description yet
+  // out of the render batch, so image quota isn't spent on a name with nothing
+  // behind it. See services/scheduledHandlers/universeBibleImages.js.
+  'requireDescribed'
 ];
+
+// The params bag for the PROGRAMMATIC scheduled handlers
+// (services/scheduledHandlers/) is stored as taskMetadata, so its non-boolean
+// keys need the same constrained treatment as `verifyMode` / `branchesPerAgent`
+// below — a hand-edited schedule must not smuggle an arbitrary string into a
+// value the handler feeds to a store lookup or a render backend.
+//
+// `scope` accepts the UNION of the two handlers' option lists: task metadata is
+// keyed by task type but sanitized by one type-agnostic function, and each
+// handler already normalizes a scope it doesn't recognize back to 'all'
+// (`SCOPE_KINDS[scope] || SCOPE_KINDS.all`, `wantsScope`). Widening here can
+// therefore only accept a value the wrong handler ignores, never run the wrong
+// work — which is why the enum stays explicit rather than becoming a free string.
+export const BIBLE_HANDLER_SCOPES = ['all', 'characters', 'places', 'objects', 'variations', 'canon', 'sheets'];
+export const BIBLE_HANDLER_DEPTHS = ['core', 'full'];
+// Mirrors QUOTA_BURN_BOUNDS.maxEntries in lib/quotaBurnConfig.js — the same
+// range the burn job form advertises. Both doors bound the same batch.
+export const BIBLE_HANDLER_MAX_ENTRIES = { min: 1, max: 50 };
+// `universeId` is a universe collection-store id, or the literal 'all'. Held to
+// the store's OWN id alphabet (createCollectionStore's `idPattern`) so a
+// hand-edited schedule can't put a path segment where a record id belongs.
+const UNIVERSE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const isBibleUniverseId = (value) =>
+  value === 'all' || (typeof value === 'string' && UNIVERSE_ID_PATTERN.test(value));
 
 // pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated
 // user (the PortOS operator / their automation); 'others' = everyone else;
@@ -899,6 +958,15 @@ export const slashdoTaskSchema = createCosTaskSchema
     overrideContext: claimOverrideContextSchema,
     issueAuthorFilter: z.enum(ISSUE_AUTHOR_FILTERS).optional(),
   });
+
+// POST /api/apps/:id/pull-requests/:number/resolve|review — the Pull Requests
+// tab's "Run with" picker (mirrors the Issues tab's same picker). PICKED
+// from createCosTaskSchema so the provider/model/effort vocabulary and its
+// preprocessors stay identical to every other manual dispatch surface. Every
+// field is optional — an untouched picker resolves the install's active
+// provider, same as the bare button always did.
+export const pullRequestProviderOverrideSchema = createCosTaskSchema
+  .pick({ model: true, provider: true, effort: true });
 
 // POST /api/cos/agents/:id/resume — the resume dialog's edits for a paused
 // agent's next run. PICKED from createCosTaskSchema for the same reason
@@ -1050,6 +1118,34 @@ export function sanitizeTaskMetadata(raw) {
       && raw.branchesPerAgent >= BRANCHES_PER_AGENT_MIN
       && raw.branchesPerAgent <= BRANCHES_PER_AGENT_MAX) {
     clean.branchesPerAgent = raw.branchesPerAgent;
+    hasKeys = true;
+  }
+  // The programmatic bible handlers' params bag (BIBLE_HANDLER_* above). Each
+  // key is dropped when it doesn't match, so a bad value falls back to the
+  // handler's own default instead of reaching a store lookup or a render
+  // backend. `mode` accepts only a QUEUEABLE image backend: `external` renders
+  // through a remote SD-API that batch rendering rejects downstream anyway, and
+  // storing it would advertise a setting that always fails at dispatch.
+  if (isBibleUniverseId(raw.universeId)) {
+    clean.universeId = raw.universeId;
+    hasKeys = true;
+  }
+  if (BIBLE_HANDLER_SCOPES.includes(raw.scope)) {
+    clean.scope = raw.scope;
+    hasKeys = true;
+  }
+  if (BIBLE_HANDLER_DEPTHS.includes(raw.depth)) {
+    clean.depth = raw.depth;
+    hasKeys = true;
+  }
+  if (Number.isInteger(raw.maxEntries)
+      && raw.maxEntries >= BIBLE_HANDLER_MAX_ENTRIES.min
+      && raw.maxEntries <= BIBLE_HANDLER_MAX_ENTRIES.max) {
+    clean.maxEntries = raw.maxEntries;
+    hasKeys = true;
+  }
+  if (QUEUEABLE_IMAGE_MODES.includes(raw.mode)) {
+    clean.mode = raw.mode;
     hasKeys = true;
   }
   // Pipeline configuration is the one nested task-metadata shape. Keep only

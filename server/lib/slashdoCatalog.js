@@ -222,7 +222,7 @@ export function slashdoWorkflowAppliesTo(workflow, isSwiftApp) {
 }
 
 /**
- * The workflows launchable for one app. Mirrored in
+ * The workflows launchable for one app. Also applied by
  * `client/src/lib/slashdoCatalog.js`, which drives the Agent Operations buttons;
  * the route uses `slashdoWorkflowAppliesTo` to reject a mismatched command rather
  * than trusting the client to only offer applicable ones.

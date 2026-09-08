@@ -20,13 +20,7 @@ const SETTINGS_PAGE = path.join(REPO_ROOT, 'client/src/pages/Settings.jsx');
 
 // Maps URL prefix → how to extract the page's own tab set from its source. Each
 // page validates the :tab/:section param against this list, so the nav manifest
-// must agree. Three source shapes are supported:
-//   kind 'ids'    — `export const <constName> = [{ id: '<slug>', … }]`, where each
-//                   tab lives at `<prefix>/<slug>` (Brain/CoS/Calendar/Goals/…).
-//   kind 'links'  — `export const <constName> = [{ to|path: '<abs path>', … }]`,
-//                   where the page's own tabs are the entries whose path is exactly
-//                   `<prefix>` or under `<prefix>/`; entries pointing elsewhere
-//                   (e.g. Settings' "Prompts" → /prompts) are cross-links, not tabs.
+// must agree. Two source shapes are left:
 //   kind 'section' — the header exports a generated `TABS` list sourced from
 //                   the nav manifest; `section` identifies the manifest group.
 //   kind 'switch' — the page has no tab array; its tabs are a `switch (<switchVar>)`
@@ -34,26 +28,16 @@ const SETTINGS_PAGE = path.join(REPO_ROOT, 'client/src/pages/Settings.jsx');
 //                   default (POST). Reading the switch directly means the guard
 //                   can't drift from a parallel constant; inner subtab branches
 //                   (`if (subtab === 'x')`) aren't cases, so drill-downs are excluded.
+// Every OTHER tabbed page now derives its tab list from `getPageNavTabs(group)`
+// (#6365, #6383), so the manifest is the one registry and there is nothing left
+// to scrape — each page's own test file asserts its presentation map covers
+// every manifest tab in its `tabGroup` instead.
 const TABBED_PAGES = [
-  { prefix: '/brain', file: 'client/src/components/brain/constants.js', kind: 'ids', constName: 'TABS' },
-  { prefix: '/cos', file: 'client/src/components/cos/constants.js', kind: 'ids', constName: 'TABS' },
-  { prefix: '/digital-twin', file: 'client/src/components/digital-twin/constants.js', kind: 'ids', constName: 'TABS' },
-  { prefix: '/meatspace', file: 'client/src/components/meatspace/constants.js', kind: 'ids', constName: 'TABS' },
-  { prefix: '/calendar', file: 'client/src/pages/Calendar.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/goals', file: 'client/src/pages/Goals.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/insights', file: 'client/src/pages/Insights.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/privacy', file: 'client/src/pages/Privacy.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/messages', file: 'client/src/pages/Messages.jsx', kind: 'ids', constName: 'TABS' },
-  { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/settings', section: 'Settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'section', constName: 'TABS' },
   { prefix: '/models', section: 'Models', file: 'client/src/components/models/ModelsTabsHeader.jsx', kind: 'section', constName: 'TABS',
     nestedIdSources: [
       { parent: 'llms', file: 'client/src/components/settings/LocalLlmTab.jsx', constName: 'LLM_NAV_SUBROUTES' },
     ] },
-  { prefix: '/media', file: 'client/src/pages/MediaGen.jsx', kind: 'ids', constName: 'TABS', allowBasePrefix: true },
-  { prefix: '/music', file: 'client/src/pages/Music.jsx', kind: 'ids', constName: 'TABS', allowBasePrefix: true },
-  { prefix: '/sharing', file: 'client/src/pages/Sharing.jsx', kind: 'links', constName: 'SECTIONS' },
-  { prefix: '/system-resources', file: 'client/src/pages/SystemHealthPage.jsx', kind: 'ids', constName: 'RESOURCE_TABS', allowBasePrefix: true },
   // POST's morse tab has routed `:mode` sub-pages (/post/morse/copy|send) and the
   // memory tab has the Elements study sub-page (/post/memory/elements) plus its
   // own routed practice modes — none are top-level switch cases, so declare their
@@ -73,14 +57,10 @@ const TABBED_PAGES = [
 
 // Pull the inner text of `export const <constName> = [ … ];` (requiring `export`
 // also asserts the constant stays importable — a forgotten `export` fails loudly).
-// The terminator is line-anchored, so a nested array literal — OPEN_WORLD_REGIONS'
-// per-region `aliases: [...]`, the first such source here — closes with `],` mid-line
-// and cannot end the block early. Only a `];` at column 0 terminates; a nested literal
-// formatted that way would still truncate the guard, but no source does that today.
+// The terminator is line-anchored (`^];`) so a NESTED array literal can't close the
+// block early and silently truncate the guard to the entries above it; a nested
+// literal formatted with its own `];` at column 0 still would, but no source does.
 function extractConstArrayBlock(src, constName) {
-  // Terminator is line-anchored (`^];`) so a NESTED array literal — e.g. the per-region
-  // `aliases: [...]` in OPEN_WORLD_REGIONS, the first source here to carry one — can't end
-  // the block early and silently truncate the guard to the entries above it.
   const block = src.match(new RegExp(`export const ${constName}\\s*=\\s*\\[([\\s\\S]*?)^\\];`, 'm'));
   if (!block) throw new Error(`No exported ${constName} array found`);
   return block[1];
@@ -105,7 +85,7 @@ function extractSwitchTabs(src, switchVar) {
   return [def[1], ...extractSwitchCases(src, switchVar)];
 }
 
-// The `id:` values of an exported const array (`kind: 'ids'` shape), used to
+// The `id:` values of an exported `[{ id: '<slug>', … }]` const array, used to
 // pull routed sub-page ids (e.g. morse's copy/send MODES) out of another file.
 function extractConstIds(filePath, constName) {
   const src = fs.readFileSync(filePath, 'utf8');
@@ -114,26 +94,14 @@ function extractConstIds(filePath, constName) {
 }
 
 // The set of absolute tab paths a page serves under its own prefix.
-function extractTabPaths(filePath, { kind, constName, switchVar, prefix, section, nestedIdSources, allowBasePrefix }) {
-  const src = fs.readFileSync(filePath, 'utf8');
+function extractTabPaths(filePath, { kind, switchVar, prefix, section, nestedIdSources }) {
   const nested = (nestedIdSources || []).flatMap(({ parent, file, constName: c }) =>
     extractConstIds(path.join(REPO_ROOT, file), c).map((id) => `${prefix}/${parent}/${id}`));
   if (kind === 'switch') {
+    const src = fs.readFileSync(filePath, 'utf8');
     return [...extractSwitchTabs(src, switchVar).map((id) => `${prefix}/${id}`), ...nested];
   }
-  if (kind === 'section') return [...getSectionNavTabs(section).map((tab) => tab.to), ...nested];
-  const block = extractConstArrayBlock(src, constName);
-  if (kind === 'ids') {
-    const ids = [...block.matchAll(/id:\s*['"]([^'"]+)['"]/g)].map((m) => `${prefix}/${m[1]}`);
-    return [...(allowBasePrefix ? [prefix, ...ids] : ids), ...nested];
-  }
-  // kind 'links': keep only entries that point at this page, dropping cross-links.
-  return [
-    ...[...block.matchAll(/(?:to|path):\s*['"]([^'"]+)['"]/g)]
-      .map((m) => m[1])
-      .filter((p) => p === prefix || p.startsWith(`${prefix}/`)),
-    ...nested,
-  ];
+  return [...getSectionNavTabs(section).map((tab) => tab.to), ...nested];
 }
 
 describe('navManifest — shape invariants', () => {
@@ -771,4 +739,10 @@ describe('nav contract — POST Practice Library links are registered destinatio
       expect(unregistered).toEqual([]);
     });
   }
+});
+
+it('keeps Video browsing separate from Creative Director production aliases', () => {
+  expect(resolveNavCommand('video').path).toBe('/video');
+  expect(resolveNavCommand('create-video').path).toBe('/creative-director');
+  expect(resolveNavCommand('video-production').path).toBe('/creative-director');
 });

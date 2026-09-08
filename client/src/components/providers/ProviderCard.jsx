@@ -11,6 +11,7 @@
  * and which section the page filed the card under can never disagree.
  */
 
+import { hardwareUnavailableReason } from '../../utils/systemCapabilities';
 import { Link } from 'react-router';
 import { ExternalLink, Network, Terminal } from 'lucide-react';
 import {
@@ -90,6 +91,8 @@ export default function ProviderCard({
   status,
   isDefault,
   providersById,
+  activeProviderId,
+  statuses = {},
   runnerAllowedCommands,
   testResult,
   refreshing,
@@ -118,6 +121,9 @@ export default function ProviderCard({
   onCodexCopyCode,
   onCodexEnable,
 }) {
+  const modes = (provider.executionModes || []).map(mode => providersById?.[mode.id]).filter(Boolean);
+  const unified = modes.length > 1;
+  const shellProvider = unified ? modes.find(isTuiProvider) : provider;
   const style = CARD_STATE_STYLES[cardState.state];
   // Non-blocking: it never touches `cardState`, only what the card SAYS about
   // where this provider's runs actually go.
@@ -136,7 +142,13 @@ export default function ProviderCard({
   const optional = cardState.state === PROVIDER_CARD_STATE.DISABLED;
   const codexSubscription = isCodexSubscriptionProvider(provider);
   const subscriptionAccountReady = !codexSubscription || codexAccount?.status === 'ready';
-  const subscriptionReady = !codexSubscription || (subscriptionAccountReady && provider.textTransportEnabled === true);
+  // ChatGPT account readiness applies to both Codex modes, but the explicit
+  // text-transport consent only applies to the CLI's app-server path. The TUI
+  // is an interactive PTY launch and must remain selectable before generic
+  // text calls have been opted in.
+  const codexModeReady = (mode) => !isCodexSubscriptionProvider(mode)
+    || (subscriptionAccountReady && (isTuiProvider(mode) || mode.textTransportEnabled === true));
+  const subscriptionReady = codexModeReady(provider);
   return (
     <div
       className={`@container bg-port-card border border-l-4 rounded-xl p-4 ${style.border} ${style.dim || ''} ${
@@ -153,13 +165,13 @@ export default function ProviderCard({
           to split, and it is narrower than the viewport by the sidebar. */}
       <div className="flex flex-col @2xl:flex-row @2xl:items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2 min-w-0">
-          <h3 className="text-lg font-semibold text-white">{provider.name}</h3>
+          <h3 className="text-lg font-semibold text-white">{unified ? provider.name.replace(/\b(CLI|TUI)\b\s*/i, '').trim() : provider.name}</h3>
           <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
-            {provider.type.toUpperCase()}
+            {unified ? 'CLI / TUI' : provider.type.toUpperCase()}
           </span>
           {isDefault && (
             <span className="text-xs px-2 py-0.5 rounded bg-port-accent/20 text-port-accent">
-              DEFAULT
+              DEFAULT{unified ? ` · ${provider.type.toUpperCase()}` : ''}
             </span>
           )}
           {fleetProvider && (
@@ -231,7 +243,7 @@ export default function ProviderCard({
           {!isProviderHardwareCompatible(provider) && (
             <span
               className="text-xs px-2 py-0.5 rounded bg-port-warning/20 text-port-warning"
-              title={provider.hardwareCompatibility?.reasons?.join(' · ')}
+              title={hardwareUnavailableReason('This provider', provider.hardwareCompatibility)}
             >
               HARDWARE MISMATCH
             </span>
@@ -249,11 +261,11 @@ export default function ProviderCard({
               are secret, so they can't ride a URL anyway. `tuiCommandLine` is
               the display half of the same resolution: it shows what will run,
               and an older server that omits it simply renders no button. */}
-          {isLaunchableTuiProvider(provider) && (
+          {isLaunchableTuiProvider(shellProvider) && (
             <Link
-              to={`/shell?provider=${encodeURIComponent(provider.id)}`}
+              to={`/shell?provider=${encodeURIComponent(shellProvider.id)}`}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-port-accent/20 text-port-accent hover:bg-port-accent/30 rounded transition-colors"
-              title={`Launch in Shell: ${provider.tuiCommandLine}`}
+              title={`Launch TUI in Shell: ${shellProvider.tuiCommandLine}`}
             >
               <Terminal size={14} />
               Launch in Shell
@@ -291,7 +303,7 @@ export default function ProviderCard({
             {provider.enabled ? 'Disable' : 'Enable'}
           </button>
 
-          {!isDefault && provider.enabled && (
+          {!unified && !isDefault && provider.enabled && (
             <button
               onClick={() => onSetActive(provider.id)}
               disabled={!subscriptionReady}
@@ -301,12 +313,28 @@ export default function ProviderCard({
             </button>
           )}
 
-          <button
+          {unified && modes.map(mode => (
+            <span key={mode.id} className="inline-flex flex-wrap items-center gap-2">
+              {provider.enabled && (
+                <button
+                  onClick={() => onSetActive(mode.id)}
+                  disabled={mode.id === activeProviderId || !codexModeReady(mode)}
+                  className="px-3 py-1.5 text-sm bg-port-accent/20 text-port-accent rounded disabled:opacity-50"
+                >
+                  {mode.id === activeProviderId ? `${mode.type.toUpperCase()} default` : `Set ${mode.type.toUpperCase()} default`}
+                </button>
+              )}
+              <button onClick={() => onEdit(mode)} className="px-3 py-1.5 text-sm bg-port-border text-white rounded">
+                Edit {mode.type.toUpperCase()}
+              </button>
+            </span>
+          ))}
+          {!unified && <button
             onClick={() => onEdit(provider)}
             className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
           >
             Edit
-          </button>
+          </button>}
 
           <button
             onClick={() => onDelete(provider.id)}
@@ -320,6 +348,17 @@ export default function ProviderCard({
       {/* Card body — full width, below the header row rather than beside the
           action buttons. */}
       <div className="mt-3 space-y-2">
+        {unified && (
+          <div className="text-xs text-gray-400 space-y-1">
+            <p>CLI and TUI share enablement and the model catalog. Edit a mode to configure its arguments and model defaults.</p>
+            {modes.filter(mode => mode.id !== provider.id && statuses[mode.id]?.available === false).map(mode => (
+              <p key={mode.id} className="text-port-warning">
+                {mode.type.toUpperCase()} benched: {statuses[mode.id].message || statuses[mode.id].reason}{' '}
+                <button onClick={() => onRecover(mode.id)} className="underline">Retry {mode.type.toUpperCase()}</button>
+              </p>
+            ))}
+          </div>
+        )}
         <CodexRoutingNotice
           advisory={routingAdvisory}
           className="max-w-3xl"
@@ -385,7 +424,7 @@ export default function ProviderCard({
 
         {!isProviderHardwareCompatible(provider) && (
           <div className="max-w-3xl text-xs rounded border border-port-warning/40 bg-port-warning/10 px-3 py-2 text-port-warning">
-            Hidden from provider/model pickers on this machine: {provider.hardwareCompatibility?.reasons?.join(' · ') || 'hardware requirements are not met'}.
+            {hardwareUnavailableReason('This provider', provider.hardwareCompatibility)}. Hidden from provider/model pickers on this machine.
           </div>
         )}
 
@@ -476,12 +515,13 @@ export default function ProviderCard({
               </p>
             );
           })()}
-          {(provider.lightModel || provider.mediumModel || provider.heavyModel) && (
+          {(provider.lightModel || provider.mediumModel || provider.heavyModel || provider.ultraModel) && (
             <p className="text-xs">
               Tiers:
               {provider.lightModel && <span className="ml-1 text-port-success">{provider.lightModel}</span>}
               {provider.mediumModel && <span className="ml-1 text-port-warning">{provider.mediumModel}</span>}
               {provider.heavyModel && <span className="ml-1 text-port-error">{provider.heavyModel}</span>}
+              {provider.ultraModel && <span className="ml-1 text-purple-400">Ultra: {provider.ultraModel}</span>}
             </p>
           )}
           {provider.headlessArgs?.length > 0 && (

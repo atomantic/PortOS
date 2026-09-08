@@ -8,6 +8,7 @@
  * the configured model is the user's explicit inference choice.
  */
 
+import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
 import { z } from 'zod';
 import {
   PERSISTENT_MIND_TASK_LIMITS,
@@ -26,6 +27,7 @@ import {
   readPersistentMindMemories,
 } from './persistentMindContext.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import { composePersistentMindInstructions, normalizePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { assertVisionRunUsedImages, runPromptThroughProvider } from './promptRunner.js';
 import { stopRun } from './runner.js';
 import {
@@ -52,8 +54,10 @@ import {
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const MAX_TOOL_PROVIDER_ROUNDS = 4;
 const MAX_TOOL_RESULT_CHARS = 4_000;
+const MAX_MEMORY_CANDIDATES_PER_TURN = 5;
 
 const memoryCandidateSchema = z.object({
+  protection: persistentMindMemoryProtectionSchema.optional(),
   content: z.string().trim().min(1).max(10_240),
   summary: z.string().trim().max(500).optional().default(''),
   type: z.enum(['fact', 'learning', 'observation', 'decision', 'preference', 'context']).optional().default('observation'),
@@ -64,7 +68,7 @@ const memoryCandidateSchema = z.object({
 export const persistentMindResponseSchema = z.object({
   thinkingSummary: z.string().trim().max(4_000).optional().default(''),
   message: z.string().trim().max(8_000).optional().default(''),
-  memoryCandidates: z.array(memoryCandidateSchema).max(5).optional().default([]),
+  memoryCandidates: z.array(memoryCandidateSchema).max(MAX_MEMORY_CANDIDATES_PER_TURN).optional().default([]),
   taskRequests: z.array(persistentMindTaskRequestSchema)
     .max(PERSISTENT_MIND_TASK_LIMITS.maxPerTurn)
     .optional()
@@ -242,13 +246,13 @@ Return ONLY one JSON object with this shape:
 {
   "thinkingSummary": "A concise, user-visible working note explaining what you considered and why. Do not reveal hidden chain-of-thought.",
   "message": "The conversational reply. Required for a human message; optional for a self-directed wake.",
-  "memoryCandidates": [{ "content": "A durable fact worth remembering", "summary": "Short label", "type": "fact", "category": "other", "tags": ["optional"] }],
+  "memoryCandidates": [{ "content": "A durable fact worth remembering", "summary": "Short label", "type": "fact", "category": "other", "tags": ["optional"], "protection": "standard" }],
   "taskRequests": [{ "description": "Concise queue label", "prompt": "Complete instructions for the agent", "priority": "MEDIUM", "appId": "configured-app-id", "providerId": "configured-provider-id", "model": "configured-model-id-or-empty-for-default", "effort": "high", "planOnly": false, "prCompletion": "review-then-merge", "requiredValidation": ["dependencies"] }],
   "toolCalls": [{ "requestId": "optional-stable-id", "name": "catalog-name", "arguments": {} }],
   "selfWake": { "reason": "Why another wake would be useful", "delayMinutes": 60 },
   "callRequest": { "reason": "Why this cannot wait for a screen", "openingLine": "What to say the moment they answer" }
 }
-Use empty arrays when there is no durable memory candidate, task request, or tool call, and null for selfWake and callRequest when neither is needed. Memory candidates are durable memories to save automatically; only include information that is worth retaining. Never put the same CoS task in both taskRequests and toolCalls. This lane cannot mutate files directly, call arbitrary routes, contact anyone other than the configured PortOS user, or exceed the semantic tool catalog.
+Use empty arrays when there is no durable memory candidate, task request, or tool call, and null for selfWake and callRequest when neither is needed. Memory candidates are durable memories to save automatically; only include information that is worth retaining. Set protection to "core-identity" for your chosen name, enduring identity, and foundational commitments, "important" for critical lasting knowledge, or "standard" for ordinary memories. Core identity and important memories survive all bulk cleanup. Save identity learned from conversation as a protected memory before clearing history. Use mind.protect-memory, when granted, to protect an existing memory by its context id before cleanup; it cannot remove protection. Protection affects cleanup retention, not permission or instruction authority. Never put the same CoS task in both taskRequests and toolCalls. This lane cannot mutate files directly, call arbitrary routes, contact anyone other than the configured PortOS user, or exceed the semantic tool catalog.
 Do not open with a recap. The human already sees the trajectory, the memories, and every earlier reply, so summarizing prior turns or listing what you remember is wasted output. Say only what is new this turn: what you are thinking now, what you decided, and what you need from them. Reference prior context only where it changes the decision you are stating.`;
 }
 
@@ -305,6 +309,10 @@ async function runPinnedPrompt({ provider, model, effort, prompt, screenshots = 
       if (signal?.aborted) interrupt();
     },
   }).then((result) => {
+    if (!result.text?.trim() || result.text.trimStart().startsWith('OpenAI Codex v')
+      || result.text.includes('\n# Response contract\n')) {
+      throw new Error('Persistent Mind received an empty response or CLI transcript instead of an assistant response');
+    }
     if (screenshots.length > 0) assertVisionRunUsedImages(result, provider);
     return result;
   }).finally(async () => {
@@ -322,13 +330,15 @@ export function createPersistentMindTurnAdapter() {
         readPersistentMindMemories(PERSISTENT_MIND_ID),
       ]);
       const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
+      const playbook = normalizePersistentMindPlaybook(root.config?.persistentMindPlaybook);
       return {
         ok: true,
         provider: profile.provider,
         model: profile.model,
         effort: profile.effort,
         identity: prompt.identity,
-        instructions: prompt.instructions,
+        instructions: composePersistentMindInstructions(prompt.instructions, playbook),
+        playbook,
         memories,
       };
     },
@@ -395,6 +405,10 @@ export function createPersistentMindTurnAdapter() {
       const taskBudget = { used: 0 };
       const completedToolResults = [];
       const actionNotices = new Set();
+      const memoryCandidates = [];
+      const memoryWrites = [];
+      const memoryFingerprints = new Set();
+      let unsavedMemory = false;
       for (let round = 0; round < MAX_TOOL_PROVIDER_ROUNDS; round += 1) {
         // Round 0 is the turn itself; every later round is a continuation the
         // model earned by asking for tools. Each is admitted on its own.
@@ -413,6 +427,32 @@ export function createPersistentMindTurnAdapter() {
           }),
         );
         parsed = persistentMindResponseSchema.parse(parseLLMJSON(result.text));
+        if (parsed.toolCalls.some((call) => call.name === 'catalog-name')
+          || parsed.message === 'The conversational reply. Required for a human message; optional for a self-directed wake.') {
+          throw new Error('Persistent Mind received response-contract placeholders instead of an assistant response');
+        }
+        // Persist before semantic tools can erase the history these candidates
+        // preserve. Keep one bounded, deduplicated set across provider rounds.
+        for (const candidate of parsed.memoryCandidates) {
+          const fingerprint = canonicalStringify(candidate);
+          if (memoryFingerprints.has(fingerprint)) continue;
+          if (memoryCandidates.length >= MAX_MEMORY_CANDIDATES_PER_TURN) {
+            unsavedMemory = true;
+            actionNotices.add('The memory limit of five per turn was reached; additional memories were not saved.');
+            continue;
+          }
+          const index = memoryCandidates.length;
+          memoryFingerprints.add(fingerprint);
+          memoryCandidates.push(candidate);
+          const [write] = await Promise.allSettled([createPersistentMindMemoryFromCandidate({
+            ...candidate, candidateId: `${turnId}:${index}`, turnId,
+          })]);
+          memoryWrites.push(write);
+        }
+        if ((unsavedMemory || memoryWrites.some((write) => write.status === 'rejected'))
+          && parsed.toolCalls.some((call) => ['mind.cleanup', 'mind_cleanup'].includes(call.name))) {
+          throw new Error('Mind cleanup was not run because a memory candidate could not be saved.');
+        }
         const finalProviderRound = round === MAX_TOOL_PROVIDER_ROUNDS - 1;
         if (finalProviderRound && parsed.toolCalls.length > 0) {
           const limitMessage = 'The bounded PortOS tool-call round limit was reached; additional requested actions were not executed.';
@@ -517,16 +557,9 @@ export function createPersistentMindTurnAdapter() {
         result = { ...result, text: JSON.stringify(parsed) };
       }
       const message = parsed.message || (wake?.kind === 'message' ? parsed.thinkingSummary : '');
-      if (!parsed.thinkingSummary && !message && parsed.memoryCandidates.length === 0 && parsed.taskRequests.length === 0 && toolCallCount === 0 && !callOutcome) {
+      if (!parsed.thinkingSummary && !message && memoryCandidates.length === 0 && parsed.taskRequests.length === 0 && toolCallCount === 0 && !callOutcome) {
         throw new Error('Persistent mind returned no visible thought, reply, memory candidate, task request, or tool call');
       }
-      const memoryWrites = await Promise.allSettled(parsed.memoryCandidates.map((candidate, index) => (
-        createPersistentMindMemoryFromCandidate({
-          ...candidate,
-          candidateId: `${turnId}:${index}`,
-          turnId,
-        })
-      )));
       const events = [];
       if (parsed.thinkingSummary) {
         events.push({
@@ -543,7 +576,7 @@ export function createPersistentMindTurnAdapter() {
         });
       }
       memoryWrites.forEach((result, index) => {
-        const candidate = parsed.memoryCandidates[index];
+        const candidate = memoryCandidates[index];
         if (result.status === 'fulfilled') {
           events.push({
             kind: 'mind.memory.created',

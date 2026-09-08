@@ -11,6 +11,7 @@ import {
   validateRequest, optionalBooleanMap, llmSchema, isPaginationRequested, paginateArray,
 } from '../../lib/validation.js';
 import { recordRenderPinFields } from '../../lib/sharedSchemas.js';
+import { characterEvolutionSchema } from '../../lib/characterEvolutionValidation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import { TRIM_SIZES, INTERIOR_FONTS } from '../../lib/proseExportSettings.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
@@ -103,6 +104,12 @@ const characterArcSchema = z.object({
   endState: z.string().trim().max(CHARACTER_ARC_LIMITS.END_STATE_MAX).optional(),
   transitions: z.array(characterArcTransitionSchema)
     .max(CHARACTER_ARC_LIMITS.TRANSITIONS_PER_ARC_MAX).optional(),
+  // The OPTIONAL five-stage evolution lens (#6440). `characterArcs` is a
+  // wholesale replace, so a client sends each arc whole — an omitted or null
+  // `evolution` is a real clear here, exactly like an omitted `want`. The
+  // absent-key-preserves rule applies one level up, on the sync-merge path
+  // (`ADDITIVE_SERIES_FIELDS` already lists `characterArcs`).
+  evolution: characterEvolutionSchema.nullable().optional(),
   status: z.enum(CHARACTER_ARC_STATUSES).optional(),
 });
 

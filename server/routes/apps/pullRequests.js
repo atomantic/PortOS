@@ -16,6 +16,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
+import { pullRequestProviderOverrideSchema } from '../../lib/cosValidation.js';
 import { claimSafeReviewers, normalizeReviewers, validateRequest } from '../../lib/validation.js';
 import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { isTruthyMeta } from '../../services/agentState.js';
@@ -192,6 +193,10 @@ router.get('/:id/pull-requests', loadApp, asyncHandler(async (req, res) => {
 router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
   const { number } = validateRequest(pullRequestParamsSchema, req.params);
+  // Optional provider/model/effort pin from the tab's "Run with" picker — left
+  // blank, the follow-up resolves the install's active provider exactly as it
+  // always did.
+  const { provider, model, effort } = validateRequest(pullRequestProviderOverrideSchema, req.body || {});
   const { result, tasks } = await listWithActionState(app);
   throwForgeReadError(result);
 
@@ -251,6 +256,12 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
     metadata: {
       app: app.id,
       reviewLoopPRTitle: `--- BEGIN UNTRUSTED FORGE PR TITLE ---\n${title}\n--- END UNTRUSTED FORGE PR TITLE ---`,
+      // Read by spawnReviewLoopFollowUp below as the source task's pin — the
+      // same `providerPins` inheritance every other follow-up gets, just seeded
+      // from this request instead of the original task that opened the PR.
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
+      ...(effort ? { effort } : {}),
     },
   };
 
@@ -314,6 +325,11 @@ router.post('/:id/pull-requests/:number/resolve', loadApp, asyncHandler(async (r
 router.post('/:id/pull-requests/:number/review', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
   const { number } = validateRequest(pullRequestParamsSchema, req.params);
+  // Optional provider/model/effort pin from the tab's "Run with" picker. A
+  // public-review posture (see resolveAgentProviderAndModel) still gates the
+  // provider to its own eligible set — an ineligible pin is dropped with a
+  // warning rather than honored, same as any other pr-reviewer pin.
+  const { provider, model, effort } = validateRequest(pullRequestProviderOverrideSchema, req.body || {});
 
   const target = await listExternalOpenPullRequests(app);
   if (!target.ok) {
@@ -358,7 +374,12 @@ router.post('/:id/pull-requests/:number/review', loadApp, asyncHandler(async (re
     return;
   }
 
-  const request = await triggerOnDemandTask(PR_REVIEWER_TASK_TYPE, app.id, { targetPullRequest: number });
+  const request = await triggerOnDemandTask(PR_REVIEWER_TASK_TYPE, app.id, {
+    targetPullRequest: number,
+    provider,
+    model,
+    effort,
+  });
   if (request?.error) {
     throw new ServerError(request.error, { status: 409, code: 'PR_REVIEWER_UNAVAILABLE' });
   }

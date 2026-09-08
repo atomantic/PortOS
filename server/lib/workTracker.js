@@ -18,6 +18,7 @@
 import {
   DISPATCH_HINT_GUIDANCE,
   JIRA_DISPATCH_HINT_GUIDANCE,
+  REFERENCE_WATCH_LABEL_CONTRACT,
   REPO_STUDY_LABEL_CONTRACT,
   formatOptionalIssueLabelFlags,
 } from './dispatchLabels.js';
@@ -182,6 +183,7 @@ export const TRACKER_FILING_PRESETS = {
     // The forge label applied to each filed issue (created if absent).
     issueLabel: 'reference-watch',
     labelDescription: 'Proposed from a reference-repo watch',
+    issueLabelContract: REFERENCE_WATCH_LABEL_CONTRACT,
     // Everything after `**<Short title.>** ` in the PLAN.md checklist item.
     planItemBody: 'From `reference-watch` review of <ref name> (commit(s) `<sha>` [+ `<sha>` …], <today\'s date>). <1–2 sentences.> Fix: <files + functions in {appName}>. <Estimated scope.>',
     // What the forge issue / JIRA description body must contain.
@@ -201,6 +203,15 @@ export const TRACKER_FILING_PRESETS = {
   // as opposed to `reference-watch`'s recurring commit-diff review of a repo
   // configured on the app. Same clean-room contract: propose reimplementation in
   // the app's OWN code, never copy upstream source.
+  'youtube-analysis': {
+    slugPrefix: 'youtube-analysis-',
+    label: 'youtube-analysis',
+    issueLabel: 'youtube-analysis',
+    labelDescription: 'Proposed from analysis of a captured YouTube transcript',
+    planItemBody: 'From <video URL> (<today’s date>). <Rationale for {appName}.> Fix: <files and functions>. <Scope and validation.>',
+    bodyRequirements: 'the source video URL, rationale for {appName}, inspected files/functions to change, estimated scope, and validation plan',
+    planCommitMessage: 'docs: propose improvements from transcript analysis',
+  },
   'repo-study': {
     slugPrefix: 'repo-study-',
     label: 'repo-study',
@@ -245,14 +256,27 @@ export const TRACKER_FILING_TASK_TYPES = new Set(Object.keys(TRACKER_FILING_PRES
  * @param {object} [options] wording overrides — see TRACKER_FILING_PRESETS
  */
 export function formatTrackerInstructions(tracker, options = {}) {
+  const referenceWatchPreset = TRACKER_FILING_PRESETS['reference-watch'];
   const {
     slugPrefix, label, issueLabel, labelDescription,
-    issueLabelContract,
     planItemBody, bodyRequirements, planCommitMessage,
-  } = { ...TRACKER_FILING_PRESETS['reference-watch'], ...options };
+  } = { ...referenceWatchPreset, ...options };
+  // The reference-watch preset is the backwards-compatible default, but its
+  // complete-label contract must not bleed into other filing presets when they
+  // omit an issueLabelContract of their own.
+  const issueLabelContract = options.issueLabelContract
+    || (slugPrefix === referenceWatchPreset.slugPrefix ? REFERENCE_WATCH_LABEL_CONTRACT : null);
+  const dispatchLabelCreateWording = issueLabelContract
+    ? 'Then create each required dispatch-hint label immediately before applying it.'
+    : 'Then create each justified dispatch-hint label immediately before applying it.';
+  const jiraDispatchLabelWording = issueLabelContract
+    ? `plus the required equivalent dispatch-hint labels ${issueLabelContract.jiraFlags}:`
+    : 'plus equivalent dispatch-hint labels when justified:';
   // Rendered from the shared slot list rather than a literal, so a new label
   // axis reaches this copy-pasteable example without re-patching it here.
   const forgeLabelFlags = formatOptionalIssueLabelFlags(issueLabelContract?.forgeFlags);
+  const dispatchGuidance = issueLabelContract?.dispatchGuidance || DISPATCH_HINT_GUIDANCE;
+  const jiraDispatchGuidance = issueLabelContract?.jiraDispatchGuidance || JIRA_DISPATCH_HINT_GUIDANCE;
   const jiraLabelContract = issueLabelContract
     ? `\n  ${issueLabelContract.instructions.split('\n').join('\n  ')}\n  For JIRA, use the equivalent labels ${issueLabelContract.jiraFlags}.`
     : '';
@@ -279,8 +303,8 @@ export function formatTrackerInstructions(tracker, options = {}) {
 
 - **Inventory:** From {repoPath}, resolve the repo (\`gh repo view --json nameWithOwner -q .nameWithOwner\`) and list existing ${label} issues so you don't duplicate: \`gh issue list --state all --search "${slugStem} in:title" --limit 100 --json number,title\`. Each carries a \`[${slugPrefix}…]\` slug in its title — collect them. If \`gh\` is not authenticated or the remote is not GitHub, exit cleanly.
 - **Record** each NEW proposal as a GitHub issue. Do not relabel or edit an existing issue you skipped as a duplicate. Keep the \`[<slug>]\` inventory tag in the title so later runs can de-duplicate; do NOT add \`[category]\` / \`[SEVERITY]\` / \`[model:…]\` / \`[effort:…]\` prefixes (those belong in labels).
-  1. Ensure each label you will apply exists. Create the category label first (\`gh label create ${issueLabel} --description "${labelDescription}" --force\`) and \`gh label create plan --description "Tracked by /do:replan" --force\`. Then create each justified dispatch-hint label immediately before applying it.
-  2. ${DISPATCH_HINT_GUIDANCE.split('\n').join('\n     ')}
+  1. Ensure each label you will apply exists. Create the category label first (\`gh label create ${issueLabel} --description "${labelDescription}" --force\`) and \`gh label create plan --description "Tracked by /do:replan" --force\`. ${dispatchLabelCreateWording}
+  2. ${dispatchGuidance.split('\n').join('\n     ')}
 ${forgeLabelContract}
   ${forgeFileStep} File with repeated \`--label\` flags so the category/scope labels stay intact:
   \`\`\`bash
@@ -293,8 +317,8 @@ ${forgeLabelContract}
 
 - **Inventory:** From {repoPath}, confirm the forge (\`glab repo view\`) and list existing ${label} issues so you don't duplicate: \`glab issue list --label ${issueLabel} --per-page 100 --output json\` (also scan titles for the \`[${slugPrefix}…]\` slug). Collect the existing slugs. If \`glab\` is not authenticated or the remote is not GitLab, exit cleanly.
 - **Record** each NEW proposal as a GitLab issue. Do not relabel or edit an existing issue you skipped as a duplicate. Keep the \`[<slug>]\` inventory tag in the title so later runs can de-duplicate; do NOT add \`[category]\` / \`[SEVERITY]\` / \`[model:…]\` / \`[effort:…]\` prefixes (those belong in labels).
-  1. Ensure each label you will apply exists. Create the category label first (\`glab label create --name ${issueLabel} --color "#0366D6" --description "${labelDescription}" 2>/dev/null || true\`) and the same for \`plan\`. Then create each justified dispatch-hint label immediately before applying it (glab needs \`--name\` and \`#<hex>\`).
-  2. ${DISPATCH_HINT_GUIDANCE.split('\n').join('\n     ')}
+  1. Ensure each label you will apply exists. Create the category label first (\`glab label create --name ${issueLabel} --color "#0366D6" --description "${labelDescription}" 2>/dev/null || true\`) and the same for \`plan\`. ${dispatchLabelCreateWording} (glab needs \`--name\` and \`#<hex>\`).
+  2. ${dispatchGuidance.split('\n').join('\n     ')}
 ${forgeLabelContract}
   ${forgeFileStep} File with repeated \`--label\` flags so the category/scope labels stay intact:
   \`\`\`bash
@@ -306,8 +330,8 @@ ${forgeLabelContract}
     jira: `This app tracks autonomous work in **JIRA**. Create one JIRA issue per proposal in the app's configured project using whatever JIRA CLI/REST this environment provides. **If no JIRA credentials are available, fall back to recording proposals in PLAN.md at {repoPath} (slug-tagged \`- [ ] [<slug>] …\` checklist items under \`## Next Up\`, committed) and say so in your final summary.**
 
 - **Inventory:** Search existing JIRA issues (and PLAN.md, if you fall back) for the \`[${slugPrefix}…]\` slug so you don't duplicate; collect the existing slugs.
-- **Record** each NEW proposal as a JIRA issue whose summary starts with the \`[<slug>]\` tag. Do not relabel a ticket you skipped as a duplicate. The description must contain ${bodyRequirements}. Apply the category label \`${issueLabel}\` plus equivalent dispatch-hint labels when justified:
-  ${JIRA_DISPATCH_HINT_GUIDANCE.split('\n').join('\n  ')}
+- **Record** each NEW proposal as a JIRA issue whose summary starts with the \`[<slug>]\` tag. Do not relabel a ticket you skipped as a duplicate. The description must contain ${bodyRequirements}. Apply the category label \`${issueLabel}\` ${jiraDispatchLabelWording}
+  ${jiraDispatchGuidance.split('\n').join('\n  ')}
 ${jiraLabelContract}
   For **Maybe — needs human call** items, end the description with \`**Decision needed:** <one sentence>.\`.
 - **Finalize:** No source-code edits, no branches, no PRs — the tickets (or the committed PLAN.md fallback) ARE the deliverable. The \`claim-issue-jira\` flow picks them up later.`,

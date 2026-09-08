@@ -1,25 +1,33 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import * as api from '../services/api';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
+import useMounted from '../hooks/useMounted';
 
 import WikiOverviewTab from '../components/wiki/tabs/OverviewTab';
 import WikiBrowseTab from '../components/wiki/tabs/BrowseTab';
 import WikiSearchTab from '../components/wiki/tabs/SearchTab';
 import WikiGraphTab from '../components/wiki/tabs/GraphTab';
 import WikiLogTab from '../components/wiki/tabs/LogTab';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
-// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
-export const TABS = [
-  { id: 'overview', label: 'Overview', icon: BarChart3 },
-  { id: 'browse', label: 'Browse', icon: FileText },
-  { id: 'search', label: 'Search', icon: Search },
-  { id: 'graph', label: 'Graph', icon: Network },
-  { id: 'log', label: 'Log', icon: Activity }
-];
+// Icon per tab id. The manifest (`tabGroup: 'wiki'`) owns id/label/order —
+// this page owns only how each tab looks; the page-local "Overview" label
+// (vs. the manifest's "Wiki") comes from the manifest's `tabLabel`. Throws at
+// import time on drift.
+const TAB_PRESENTATION = {
+  overview: { icon: BarChart3 },
+  browse: { icon: FileText },
+  search: { icon: Search },
+  graph: { icon: Network },
+  log: { icon: Activity },
+};
+
+export const TABS = buildPageNavTabs(getPageNavTabs('wiki'), TAB_PRESENTATION, 'Wiki');
 
 export default function Wiki() {
   const { tab } = useParams();
@@ -31,7 +39,9 @@ export default function Wiki() {
 
   const [vaults, setVaults] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [notes, setNotes] = useState([]);
+  const [noteSnapshot, setNoteSnapshot] = useState(null);
+  const mountedRef = useMounted();
+  const scanSequence = useRef(0);
 
   const loadVaults = useCallback(async () => {
     const data = await api.getNotesVaults().catch(() => []);
@@ -47,6 +57,12 @@ export default function Wiki() {
   );
   const selectedVaultId = selectedVault?.id || null;
   const vaultNotFound = !loading && vaults.length > 0 && !!vaultParam && !selectedVault;
+  // Each visit owns its data, including A -> B -> A while an old A scan is
+  // still running. Do not show the previous vault's list during the new scan.
+  const vaultScopeRef = useRef(null);
+  if (vaultScopeRef.current?.id !== selectedVaultId) vaultScopeRef.current = { id: selectedVaultId };
+  const vaultScope = vaultScopeRef.current;
+  const notes = useMemo(() => noteSnapshot?.scope === vaultScope ? noteSnapshot.notes : [], [noteSnapshot, vaultScope]);
 
   // Selection handler writes the id to the URL; the tab route param is untouched.
   const selectVault = useCallback((id) => {
@@ -66,12 +82,13 @@ export default function Wiki() {
   }, [setSearchParams]);
 
   const loadNotes = useCallback(async () => {
-    if (!selectedVaultId) return;
-    const data = await api.scanNotesVault(selectedVaultId, { limit: 1000 }).catch(() => null);
-    if (data) {
-      setNotes(data.notes);
+    if (!vaultScope.id || !mountedRef.current || vaultScopeRef.current !== vaultScope) return;
+    const sequence = ++scanSequence.current;
+    const data = await api.scanNotesVault(vaultScope.id, { limit: 1000 }).catch(() => null);
+    if (data && mountedRef.current && vaultScopeRef.current === vaultScope && scanSequence.current === sequence) {
+      setNoteSnapshot({ scope: vaultScope, notes: data.notes });
     }
-  }, [selectedVaultId]);
+  }, [vaultScope, mountedRef]);
 
   useEffect(() => {
     loadVaults();
@@ -157,7 +174,7 @@ export default function Wiki() {
       case 'overview':
         return <WikiOverviewTab vaultId={selectedVaultId} stats={stats} notes={wikiNotes} allNotes={notes} onRefresh={handleRefresh} />;
       case 'browse':
-        return <WikiBrowseTab vaultId={selectedVaultId} notes={wikiNotes} rawNotes={rawNotes} allNotes={notes} onRefresh={handleRefresh} />;
+        return <WikiBrowseTab key={selectedVaultId} vaultId={selectedVaultId} notes={wikiNotes} rawNotes={rawNotes} allNotes={notes} onRefresh={handleRefresh} />;
       case 'search':
         return <WikiSearchTab vaultId={selectedVaultId} onRefresh={handleRefresh} />;
       case 'graph':

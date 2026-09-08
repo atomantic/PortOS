@@ -29,15 +29,7 @@ const {
   runInlineLLM,
   resolveModel,
   extractJson,
-  DEFAULT_LARGE_CONTEXT_WINDOW,
-  CODEX_CONTEXT_WINDOW,
-  GEMINI_CONTEXT_WINDOW,
-  GROK_CONTEXT_WINDOW,
-  KIMI_CONTEXT_WINDOW,
-  catalogModelContextWindow,
   effectiveContextWindow,
-  knownModelContextWindow,
-  knownProviderContextWindow,
   resolveStageContext,
   resolveJudgeForStage,
   resolveEffortHint,
@@ -46,6 +38,7 @@ const {
   LOCAL_LLM_MAX_CONCURRENCY,
 } = await import('./stageRunner.js');
 const { withStagePinsIgnored, stagePinsIgnored } = await import('../lib/stagePinPolicy.js');
+const { CODEX_CONTEXT_WINDOW, DEFAULT_LARGE_CONTEXT_WINDOW } = await import('../lib/providerContextWindows.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', name: 'Mock', type: 'api', enabled: true, defaultModel: 'm-default', ...extra,
@@ -96,47 +89,6 @@ describe('stageRunner — resolveModel', () => {
 });
 
 describe('stageRunner — context windows', () => {
-  it('resolves known model windows from the selected model id', () => {
-    expect(knownModelContextWindow('gpt-5.5')).toBe(CODEX_CONTEXT_WINDOW);
-    expect(knownModelContextWindow('gpt-5.4')).toBe(CODEX_CONTEXT_WINDOW);
-    expect(knownModelContextWindow('gpt-5.4-mini')).toBe(400_000);
-    expect(knownModelContextWindow('gpt-5.4-nano')).toBeNull();
-    expect(knownModelContextWindow('claude-opus-5')).toBe(1_000_000);
-    expect(knownModelContextWindow('global.anthropic.claude-opus-5')).toBe(1_000_000);
-    expect(knownModelContextWindow('claude-opus-4-8')).toBe(1_000_000);
-    expect(knownModelContextWindow('claude-sonnet-5')).toBe(1_000_000);
-    expect(knownModelContextWindow('claude-sonnet-4-6')).toBe(1_000_000);
-    expect(knownModelContextWindow('us.anthropic.claude-sonnet-4-5-20250929-v1:0')).toBe(200_000);
-    expect(knownModelContextWindow('gemini-2.5-pro')).toBe(GEMINI_CONTEXT_WINDOW);
-    expect(knownModelContextWindow('unknown-model')).toBeNull();
-  });
-
-  it('resolves configured-default provider windows by provider identity', () => {
-    expect(knownProviderContextWindow({ id: 'codex-tui', type: 'tui', command: 'codex' })).toBe(CODEX_CONTEXT_WINDOW);
-    expect(knownProviderContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' })).toBe(GEMINI_CONTEXT_WINDOW);
-    // Mirrors client/src/utils/providers.js — a custom grok CLI/TUI without an
-    // explicit contextWindow must resolve the same 256K on both sides.
-    expect(knownProviderContextWindow({ id: 'grok-cli', type: 'cli', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
-    expect(knownProviderContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
-    // Kimi Code (K2's 256K window) — same on both server + client mirrors.
-    expect(knownProviderContextWindow({ id: 'kimi-cli', type: 'cli', command: 'kimi' })).toBe(KIMI_CONTEXT_WINDOW);
-    expect(knownProviderContextWindow({ id: 'kimi-tui', type: 'tui', command: 'kimi' })).toBe(KIMI_CONTEXT_WINDOW);
-  });
-
-  it('normalizes command paths to the basename for vendor windows (#2337)', () => {
-    // Absolute path to the binary (common when the service PATH can't resolve the CLI).
-    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/grok' })).toBe(GROK_CONTEXT_WINDOW);
-    expect(knownProviderContextWindow({ id: 'custom', type: 'tui', command: '/usr/local/bin/codex' })).toBe(CODEX_CONTEXT_WINDOW);
-    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/agy' })).toBe(GEMINI_CONTEXT_WINDOW);
-    // Relative path.
-    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: './bin/codex' })).toBe(CODEX_CONTEXT_WINDOW);
-    // Windows .exe suffix + backslash separators.
-    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: 'C:\\tools\\grok.exe' })).toBe(GROK_CONTEXT_WINDOW);
-    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/kimi' })).toBe(KIMI_CONTEXT_WINDOW);
-    // Unrelated custom command still falls through to null.
-    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/mycli' })).toBeNull();
-  });
-
   it('keeps an explicit provider contextWindow above model defaults', () => {
     expect(effectiveContextWindow(
       { type: 'tui', contextWindow: 64_000 },
@@ -168,14 +120,6 @@ describe('stageRunner — context windows', () => {
       { type: 'tui', contextWindow: 64_000, modelContextWindows: { m: 1_000_000 } },
       'm'
     )).toBe(64_000);
-  });
-
-  it('ignores a malformed or unrelated catalog entry instead of budgeting from it', () => {
-    expect(catalogModelContextWindow({ modelContextWindows: { m: 0 } }, 'm')).toBeNull();
-    expect(catalogModelContextWindow({ modelContextWindows: { m: 'lots' } }, 'm')).toBeNull();
-    expect(catalogModelContextWindow({ modelContextWindows: { other: 1_000 } }, 'm')).toBeNull();
-    expect(catalogModelContextWindow({ modelContextWindows: null }, 'm')).toBeNull();
-    expect(catalogModelContextWindow({ modelContextWindows: { m: 1_000 } }, null)).toBeNull();
   });
 
   it('uses model and provider windows before provider numCtx', () => {
@@ -950,4 +894,10 @@ describe('stageRunner — withStagePinsIgnored', () => {
     expect(insideSaw).toBe(true);
     expect(outsideSaw).toBe(false);
   });
+});
+
+it('resolves an Ultra stage without passing a tier name to the provider', () => {
+  expect(resolveModel({ ultraModel: 'frontier', heavyModel: 'strong' }, 'ultra')).toBe('frontier');
+  expect(resolveModel({ heavyModel: 'strong' }, 'ultra')).toBe('strong');
+  expect(resolveModel({ defaultModel: 'default' }, 'ultra')).toBe('default');
 });

@@ -49,9 +49,11 @@ vi.mock('node:fs/promises', () => ({
   stat: vi.fn(async () => ({ mtimeMs: worktreeMtimeMs })),
 }));
 const ensureForgeReachableMock = vi.fn(async () => ({ ok: true, status: 'ok', detail: null, remedy: null }));
+const getIssueDispatchHintMock = vi.fn(async () => ({ status: 'unavailable', model: null, effort: null }));
 vi.mock('./github.js', () => ({
   execGh: vi.fn(async () => '[]'),
   ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
+  getIssueDispatchHint: (...args) => getIssueDispatchHintMock(...args),
 }));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({
@@ -63,7 +65,12 @@ vi.mock('../lib/gitRemote.js', () => ({
 // which is the fail-open "analyze everything" path the pre-#3842 suite assumes.
 const tryReadFileMock = vi.fn(async () => null);
 vi.mock('../lib/fileUtils.js', () => ({
-  PATHS: { root: '/repo', cos: '/repo/data/cos' },
+  // `data` added alongside `root`/`cos` because `formatInFlightForPrompt`'s
+  // dispatch-hint lookup now reaches `issueNumberFromRef` from
+  // `issueReconcile.js`, whose module graph (via jira.js) reads `PATHS.data`
+  // at import time — an incomplete PATHS here crashed with a raw TypeError
+  // rather than a test failure.
+  PATHS: { root: '/repo', cos: '/repo/data/cos', data: '/repo/data' },
   safeJSONParse: (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } },
   isPathInsideDir: (dir, candidate) => typeof dir === 'string' && typeof candidate === 'string'
     && candidate.startsWith(`${dir}/`),
@@ -1612,8 +1619,15 @@ describe('actionableSignature', () => {
 });
 
 describe('formatInFlightForPrompt', () => {
-  it('renders the default branch, each branch with its PR + worktree + Do line', () => {
-    const block = formatInFlightForPrompt([
+  beforeEach(() => {
+    // Default: no dispatch hint. Keeps these tests from asserting on a line
+    // that only the dedicated dispatch-hint tests below exercise.
+    getIssueDispatchHintMock.mockReset();
+    getIssueDispatchHintMock.mockResolvedValue({ status: 'unavailable', model: null, effort: null });
+  });
+
+  it('renders the default branch, each branch with its PR + worktree + Do line', async () => {
+    const block = await formatInFlightForPrompt([
       { branch: 'next/issue-1', state: 'IN_REVIEW', worktreePath: '/wt/1', openPr: { number: 42, mergeable: 'MERGEABLE', url: 'https://pr/42' } },
       { branch: 'next/issue-2', state: 'NEEDS_PR' }
     ], { defaultBranch: 'main', actions: {} });
@@ -1625,8 +1639,8 @@ describe('formatInFlightForPrompt', () => {
     expect(block).toContain('- Do: ');
   });
 
-  it('flags a never-pushed NEEDS_PR branch so the agent knows the push needs -u', () => {
-    const block = formatInFlightForPrompt([
+  it('flags a never-pushed NEEDS_PR branch so the agent knows the push needs -u', async () => {
+    const block = await formatInFlightForPrompt([
       { branch: 'claim/issue-1', state: 'NEEDS_PR', hasUpstream: false },
       { branch: 'claim/issue-2', state: 'NEEDS_PR', hasUpstream: true }
     ], { defaultBranch: 'main', actions: {} });
@@ -1635,8 +1649,8 @@ describe('formatInFlightForPrompt', () => {
     expect(second).not.toContain('Never pushed');
   });
 
-  it('states the configured batch limit when supplied', () => {
-    const block = formatInFlightForPrompt(
+  it('states the configured batch limit when supplied', async () => {
+    const block = await formatInFlightForPrompt(
       [{ branch: 'next/issue-1', state: 'NEEDS_PR' }],
       { defaultBranch: 'main', actions: {}, branchesPerAgent: 3 }
     );
@@ -1645,8 +1659,8 @@ describe('formatInFlightForPrompt', () => {
 
   // The collision set gets its own line, not just prose inside the Do: text, so
   // the agent can open those files directly instead of re-deriving the set.
-  it('surfaces drift and the collision files as their own lines', () => {
-    const block = formatInFlightForPrompt([{
+  it('surfaces drift and the collision files as their own lines', async () => {
+    const block = await formatInFlightForPrompt([{
       branch: 'cos/task-x/agent-deadbeef',
       state: 'ABANDONED_WIP',
       worktreePath: '/wt/agent-deadbeef',
@@ -1660,13 +1674,65 @@ describe('formatInFlightForPrompt', () => {
     expect(block).toContain('holds UNCOMMITTED work');
   });
 
-  it('omits the drift and collision lines when there is nothing to report', () => {
-    const block = formatInFlightForPrompt(
+  it('omits the drift and collision lines when there is nothing to report', async () => {
+    const block = await formatInFlightForPrompt(
       [{ branch: 'fresh', state: 'NEEDS_PR', behind: 0, ahead: 3, collisionPaths: [] }],
       { defaultBranch: 'main', actions: {} }
     );
     expect(block).toContain('- Drift: 0 commit(s) behind');
     expect(block).not.toContain('supersession shows up');
+  });
+
+  // Dispatch-hint routing (#6373) — mirrors the swarm block's per-issue
+  // routing, but here it's real code reading the forge rather than prose
+  // telling an LLM coordinator to do it.
+  it("names the issue's model:/effort: labels for a claim/issue-<num> branch", async () => {
+    getIssueDispatchHintMock.mockResolvedValue({ status: 'known', model: 'heavy', effort: 'max' });
+    const block = await formatInFlightForPrompt(
+      [{ branch: 'claim/issue-77', state: 'NEEDS_PR' }],
+      { defaultBranch: 'main', actions: {}, repoPath: '/repo' }
+    );
+    expect(block).toContain("Recommended dispatch (issue #77's labels): model:heavy, effort:max");
+    expect(getIssueDispatchHintMock).toHaveBeenCalledWith(77, expect.objectContaining({ cwd: '/repo' }));
+  });
+
+  it("names the issue's number from a cos/<task>/issue-<num>/<agent> branch", async () => {
+    getIssueDispatchHintMock.mockResolvedValue({ status: 'known', model: 'light', effort: null });
+    const block = await formatInFlightForPrompt(
+      [{ branch: 'cos/branch-reconcile/issue-5/agent-abc', state: 'NEEDS_PR' }],
+      { defaultBranch: 'main', actions: {} }
+    );
+    expect(block).toContain("Recommended dispatch (issue #5's labels): model:light");
+    expect(getIssueDispatchHintMock).toHaveBeenCalledWith(5, expect.anything());
+  });
+
+  it('omits the line when the branch is not issue-derived', async () => {
+    const block = await formatInFlightForPrompt(
+      [{ branch: 'cos/task-x/agent-deadbeef', state: 'NEEDS_PR' }],
+      { defaultBranch: 'main', actions: {} }
+    );
+    expect(getIssueDispatchHintMock).not.toHaveBeenCalled();
+    expect(block).not.toContain('Recommended dispatch');
+  });
+
+  it('omits the line when the issue carries neither dispatch label', async () => {
+    getIssueDispatchHintMock.mockResolvedValue({ status: 'known', model: null, effort: null });
+    const block = await formatInFlightForPrompt(
+      [{ branch: 'claim/issue-9', state: 'NEEDS_PR' }],
+      { defaultBranch: 'main', actions: {} }
+    );
+    expect(block).not.toContain('Recommended dispatch');
+  });
+
+  it('a failed forge read omits the line rather than blocking or reshaping the rest of the block', async () => {
+    getIssueDispatchHintMock.mockRejectedValue(new Error('gh: rate limited'));
+    const block = await formatInFlightForPrompt(
+      [{ branch: 'claim/issue-9', state: 'NEEDS_PR' }],
+      { defaultBranch: 'main', actions: {} }
+    );
+    expect(block).not.toContain('Recommended dispatch');
+    expect(block).toContain('### `claim/issue-9` [NEEDS_PR] — no PR');
+    expect(block).toContain('- Do: ');
   });
 });
 

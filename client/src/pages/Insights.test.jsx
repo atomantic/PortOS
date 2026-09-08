@@ -27,7 +27,16 @@ import {
   refreshInsightThemes,
   refreshInsightNarrative,
 } from '../services/api';
-import { OverviewTab } from './Insights';
+import { OverviewTab, TABS } from './Insights';
+import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
+
+describe('Insights TABS ↔ nav manifest', () => {
+  it('renders the insights tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(TABS, [
+      'overview:Overview', 'genome-health:Genome-Health', 'taste-identity:Taste & Identity', 'cross-domain:Cross-Domain Patterns', 'goal-scorecard:Goal Scorecard',
+    ]);
+  });
+});
 
 const renderOverview = () => render(
   <MemoryRouter>

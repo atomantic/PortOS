@@ -244,3 +244,79 @@ describe('universeCharacterExpand — applyExpansion (no-clobber merge semantics
     expect(merged.pronouns).toBe('');
   });
 });
+
+describe('universeCharacterExpand — psychology profile merge (#6414)', () => {
+  const proposal = () => ({
+    psychology: {
+      theoryOfControl: 'If I stay useful, nobody leaves.',
+      strategy: "Absorbs everyone else's work.",
+      protectiveBenefit: 'Never has to test whether she would be kept anyway.',
+      presentCost: 'Exhaustion.',
+      drives: {
+        survival: { desire: 'a berth she cannot be put out of', fear: 'being turned out' },
+        connection: { desire: 'to be kept', fear: 'being easy to replace' },
+        status: { desire: 'to be counted on', fear: 'being read as surplus' },
+      },
+    },
+  });
+
+  it('authors a whole profile on a character that has none', () => {
+    const { merged, updatedFields } = applyExpansion({ name: 'Nera' }, proposal());
+    expect(updatedFields).toContain('psychology');
+    expect(merged.psychology.theoryOfControl).toBe('If I stay useful, nobody leaves.');
+    expect(merged.psychology.drives.status.fear).toBe('being read as surplus');
+  });
+
+  it('fills only the blank leaves of a partly-authored profile', () => {
+    const target = {
+      name: 'Nera',
+      psychology: {
+        theoryOfControl: 'Only the work is safe.',
+        strategy: '',
+        drives: {
+          survival: { desire: 'her own berth', fear: '' },
+          connection: { desire: '', fear: '' },
+          status: { desire: '', fear: '' },
+        },
+      },
+    };
+    const { merged, updatedFields } = applyExpansion(target, proposal());
+    expect(updatedFields).toContain('psychology');
+    // Authored leaves survive verbatim…
+    expect(merged.psychology.theoryOfControl).toBe('Only the work is safe.');
+    expect(merged.psychology.drives.survival.desire).toBe('her own berth');
+    // …blank ones fill, including one blank leaf inside a partly-filled axis.
+    expect(merged.psychology.strategy).toBe("Absorbs everyone else's work.");
+    expect(merged.psychology.drives.survival.fear).toBe('being turned out');
+    expect(merged.psychology.drives.connection.desire).toBe('to be kept');
+  });
+
+  it('reports no update when every proposed leaf is already authored', () => {
+    const target = { name: 'Nera', psychology: proposal().psychology };
+    const { merged, updatedFields } = applyExpansion(target, proposal());
+    expect(updatedFields).not.toContain('psychology');
+    expect(merged.psychology).toBe(target.psychology);
+  });
+
+  it('never proposes an assessment ruling over one the author already made', () => {
+    const target = {
+      name: 'The Choir',
+      psychology: { assessment: 'not-applicable', assessmentNote: 'A swarm with no single interior.' },
+    };
+    const { merged } = applyExpansion(target, {
+      psychology: { assessment: 'assessed', theoryOfControl: 'Consensus keeps the body alive.' },
+    });
+    expect(merged.psychology.assessment).toBe('not-applicable');
+    expect(merged.psychology.assessmentNote).toBe('A swarm with no single interior.');
+    // The blank prose leaf still fills — the ruling is what is protected.
+    expect(merged.psychology.theoryOfControl).toBe('Consensus keeps the body alive.');
+  });
+
+  it('ignores an empty or malformed proposal rather than stamping an empty husk', () => {
+    for (const psychology of [{}, { drives: {} }, [], 'nope', { theoryOfControl: '   ' }]) {
+      const { merged, updatedFields } = applyExpansion({ name: 'Nera' }, { psychology });
+      expect(updatedFields).not.toContain('psychology');
+      expect(merged.psychology).toBeUndefined();
+    }
+  });
+});

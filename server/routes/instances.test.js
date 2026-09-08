@@ -11,6 +11,7 @@ vi.mock('../services/syncOrchestrator.js', () => ({
 }));
 vi.mock('../services/instances.js', () => ({
   updatePeer: vi.fn(),
+  addPeer: vi.fn(),
   sanitizePeerForClient: vi.fn((peer) => peer),
   getAssignableInstances: vi.fn(),
 }));
@@ -27,6 +28,32 @@ vi.mock('../lib/tailscale.js', () => ({
 import { getSyncStatus } from '../services/syncOrchestrator.js';
 import * as instances from '../services/instances.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
+vi.mock('../services/tailcatPeer.js', async (original) => ({
+  ...(await original()),
+  addPeerViaTailcat: vi.fn(),
+  listTailcatForwards: vi.fn(),
+  retryTailcatForward: vi.fn(),
+  forgetTailcatForward: vi.fn(),
+}));
+vi.mock('../services/tailcatServe.js', async (original) => ({
+  ...(await original()),
+  getTailcatServeStatus: vi.fn(),
+  ensureTailcatServe: vi.fn(),
+  retryTailcatServe: vi.fn(),
+  stopTailcatServe: vi.fn(),
+}));
+import {
+  addPeerViaTailcat,
+  listTailcatForwards,
+  retryTailcatForward,
+  forgetTailcatForward,
+} from '../services/tailcatPeer.js';
+import {
+  getTailcatServeStatus,
+  ensureTailcatServe,
+  retryTailcatServe,
+  stopTailcatServe,
+} from '../services/tailcatServe.js';
 import instancesRoutes from './instances.js';
 
 const buildApp = () => {
@@ -191,4 +218,117 @@ describe('PUT /api/instances/peers/:id — media provider selection', () => {
     expect(res.status).toBe(400);
     expect(instances.updatePeer).not.toHaveBeenCalled();
   });
+});
+
+describe('POST /api/instances/peers/tailcat', () => {
+  const tcAddress = 'tcEXAMPLE' + 'A'.repeat(40);
+  beforeEach(() => vi.clearAllMocks());
+
+  it('passes the selected HTTPS protocol and credentials through the managed transport', async () => {
+    const peer = { id: 'peer-example', transport: 'tailcat', address: '127.0.0.1', port: 15555, protocol: 'https' };
+    addPeerViaTailcat.mockResolvedValue(peer);
+    const auth = { password: 'example-password' };
+    const res = await request(buildApp()).post('/api/instances/peers/tailcat')
+      .send({ tcAddress: ` ${tcAddress} `, protocol: 'https', auth });
+    expect(res.status).toBe(201);
+    expect(addPeerViaTailcat).toHaveBeenCalledWith({ tcAddress, protocol: 'https', auth, remotePort: 5565 });
+    expect(instances.sanitizePeerForClient).toHaveBeenCalledWith(peer);
+    expect(res.body).toEqual(peer);
+  });
+
+  it('rejects invalid addresses and protocols without starting a transport', async () => {
+    for (const body of [{ tcAddress: 'invalid' }, { tcAddress, protocol: 'file' }]) {
+      const res = await request(buildApp()).post('/api/instances/peers/tailcat').send(body);
+      expect(res.status).toBe(400);
+    }
+    expect(addPeerViaTailcat).not.toHaveBeenCalled();
+  });
+
+  it('keeps the classic loopback guard in force', async () => {
+    const res = await request(buildApp()).post('/api/instances/peers')
+      .send({ address: '127.0.0.1', port: 15555, transport: 'tailcat' });
+    expect(res.status).toBe(400);
+    expect(instances.addPeer).not.toHaveBeenCalled();
+    expect(addPeerViaTailcat).not.toHaveBeenCalled();
+  });
+});
+
+describe('saved tailcat forward routes', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('lists saved forwards ahead of the /peers/:id patterns', async () => {
+    const rows = [{ id: 'fwd_1', tcAddress: 'tcEX…wxyz', status: 'failed', lastError: 'startup timed out' }];
+    listTailcatForwards.mockResolvedValue(rows);
+    const res = await request(buildApp()).get('/api/instances/peers/tailcat/forwards');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ forwards: rows });
+  });
+
+  it('retries a saved forward and sanitizes the resulting peer', async () => {
+    const peer = { id: 'peer-example', transport: 'tailcat', address: '127.0.0.1', port: 15556 };
+    retryTailcatForward.mockResolvedValue(peer);
+    const res = await request(buildApp()).post('/api/instances/peers/tailcat/forwards/fwd_1/retry');
+    expect(res.status).toBe(200);
+    expect(retryTailcatForward).toHaveBeenCalledWith('fwd_1', {});
+    expect(instances.sanitizePeerForClient).toHaveBeenCalledWith(peer);
+  });
+
+  it('forgets a saved forward', async () => {
+    forgetTailcatForward.mockResolvedValue({ id: 'fwd_1', peerId: 'peer-example' });
+    const res = await request(buildApp()).delete('/api/instances/peers/tailcat/forwards/fwd_1');
+    expect(res.status).toBe(200);
+    expect(forgetTailcatForward).toHaveBeenCalledWith('fwd_1');
+    expect(res.body).toEqual({ id: 'fwd_1', peerId: 'peer-example' });
+  });
+});
+
+
+describe('tailcat serve routes', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns serve status including a copyable address shape', async () => {
+    const status = {
+      enabled: true,
+      status: 'active',
+      live: true,
+      localPort: 5555,
+      keyName: 'portos-api',
+      tcAddress: 'tcEXAMPLE' + 'A'.repeat(40),
+      tcAddressRedacted: 'tcEX…AAAA',
+      hasAddress: true,
+      lastError: null,
+      lastErrorAt: null,
+    };
+    getTailcatServeStatus.mockResolvedValue(status);
+    const res = await request(buildApp()).get('/api/instances/peers/tailcat/serve');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(status);
+  });
+
+  it('starts serve via POST', async () => {
+    const status = { enabled: true, live: true, status: 'active', localPort: 5555, keyName: 'portos-api', hasAddress: true };
+    ensureTailcatServe.mockResolvedValue(status);
+    const res = await request(buildApp()).post('/api/instances/peers/tailcat/serve').send({});
+    expect(res.status).toBe(200);
+    expect(ensureTailcatServe).toHaveBeenCalled();
+    expect(res.body).toEqual(status);
+  });
+
+  it('retries and stops serve', async () => {
+    retryTailcatServe.mockResolvedValue({ enabled: true, live: true, status: 'active' });
+    stopTailcatServe.mockResolvedValue({ enabled: false, live: false, status: 'stopped' });
+    const retry = await request(buildApp()).post('/api/instances/peers/tailcat/serve/retry');
+    expect(retry.status).toBe(200);
+    expect(retryTailcatServe).toHaveBeenCalled();
+    const stop = await request(buildApp()).delete('/api/instances/peers/tailcat/serve');
+    expect(stop.status).toBe(200);
+    expect(stopTailcatServe).toHaveBeenCalledWith({ disable: true });
+  });
+});
+
+it('rejects main API and HTTP mirror ports for managed serving', async () => {
+  for (const localPort of [5555, 5553]) {
+    const response = await request(buildApp()).post('/api/instances/peers/tailcat/serve').send({ localPort });
+    expect(response.status).toBe(400);
+  }
 });

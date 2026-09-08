@@ -4,11 +4,12 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import migration from './332-release-check-fix-blockers-prompt.js';
-import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS, PREVIOUS_DEFAULT_PROMPTS } from '../../server/services/taskPromptDefaults.js';
+import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS } from '../../server/services/taskPromptDefaults.js';
 
 const writeJson = (path, value) => writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf-8'));
-const oldPrompt = PREVIOUS_DEFAULT_PROMPTS['release-check'].at(-1);
+// The migration keys on promptVersion + promptCustomized alone, never the body.
+const oldPrompt = '[stored release-check v12 default]';
 
 describe('migration 332 — make release-check fix release blockers', () => {
   let rootDir;

@@ -72,7 +72,16 @@ vi.mock('../services/api', () => ({
   draftChangeUpdateEmail: vi.fn(),
 }));
 
-import Privacy from './Privacy';
+import Privacy, { TABS } from './Privacy';
+import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
+
+describe('Privacy TABS ↔ nav manifest', () => {
+  it('renders the privacy tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(TABS, [
+      'overview:Overview', 'vault:Vault', 'organizations:Organizations', 'changes:Changes', 'brokers:Brokers',
+    ]);
+  });
+});
 import {
   revealVaultRecord, getVaultRecords, getPrivacyStatus, getPrivacySubjects,
 } from '../services/api';

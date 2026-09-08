@@ -102,6 +102,30 @@ function knownContextWindow(provider, model) {
   return planning;
 }
 
+/**
+ * Why this candidate's EXECUTION MODE disqualifies it for the caller, or null.
+ *
+ * `requestCapabilities.allowedModes` is the caller's mode policy — the host
+ * resolves it from `server/lib/callerModePolicy.js` and passes the plain array
+ * down, because this directory stays self-contained. Absent (the default) means
+ * "no mode constraint", so every existing caller routes exactly as before.
+ *
+ * Kept OUT of `capabilityRejection` on purpose. A capability rejection means
+ * "the request itself cannot be satisfied" and throws `NO_ELIGIBLE_FALLBACK` so
+ * the caller learns why; a mode rejection means "this candidate is not for this
+ * caller", which is an ordinary skip — the next candidate may well serve. Making
+ * it throw would turn a routine CLI-only fan-out into a new exception class at
+ * every fallback call site.
+ */
+function modeRejection(provider, requestCapabilities) {
+  const allowed = requestCapabilities?.allowedModes;
+  if (!Array.isArray(allowed) || allowed.length === 0) return null;
+  const mode = provider?.type;
+  if (typeof mode !== 'string' || !mode) return `has no executable mode (type: ${mode ?? 'none'})`;
+  if (!allowed.includes(mode)) return `runs in ${mode} mode; this caller allows ${allowed.join('/')}`;
+  return null;
+}
+
 function capabilityRejection(provider, model, requestCapabilities) {
   if (!requestCapabilities || typeof requestCapabilities !== 'object') return null;
   if (requestCapabilities.hasImages === true && provider?.type !== 'api') {
@@ -482,10 +506,24 @@ export function createProviderStatusService(config = {}) {
     // and it hasn't failed lately — neither says its CLI is installed or its
     // key is stored. Skipping an un-runnable candidate here is what turns a
     // late `spawn <binary> ENOENT` into "try the next provider instead".
+    //
+    // `requestCapabilities.allowedModes` is the caller's EXECUTION-MODE policy
+    // (resolved by the host from `lib/callerModePolicy.js`). An ineligible
+    // candidate is skipped, not thrown on — see `modeRejection`.
     getFallbackProvider(primaryProviderId, providers, taskFallbackId = null, taskFallbackModelId = null, requestCapabilities = null) {
       const capabilityRejections = [];
       const acceptCandidate = (provider, source, pinnedModel = null) => {
         if (!provider?.enabled || !this.isAvailable(provider.id) || !meetsPrerequisites(provider, providers)) return null;
+        // Caller mode policy, applied to EVERY tier — task-level, configured and
+        // system-priority alike. A configured `fallbackProvider` pointing at a
+        // TUI route is a saved value, not an execution permit: a caller with no
+        // PTY to drive would otherwise inherit one through the very chain that
+        // exists to keep it running.
+        const modeReason = modeRejection(provider, requestCapabilities);
+        if (modeReason) {
+          console.log(`⚠️ Fallback ${provider.id} skipped (${source}): ${modeReason}`);
+          return null;
+        }
         // Correct stale pins before checking the selected model's window. A pin
         // that no longer exists falls back to the provider default, and THAT
         // model must still fit the request before the retry is admitted.

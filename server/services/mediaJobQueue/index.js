@@ -148,7 +148,13 @@ async function safeUnlinkUpload(path) {
   await unlink(path).catch(() => {});
 }
 
-export const JOB_KINDS = Object.freeze(['video', 'image', 'training', 'audio']);
+// 'video-upscale' (#6511) is its OWN kind rather than a 'video' mode so the
+// generative upscale can never be offered to a peer: the federation layer's
+// kind maps (REMOTE_MEDIA_MODULES here, ROUTABLE_MEDIA_KINDS and
+// KNOWN_MEDIA_KINDS in federatedMedia/) are closed lists that do not name it,
+// so shipping a user's source video across the wire would take a deliberate
+// edit to one of them rather than a mode string slipping through.
+export const JOB_KINDS = Object.freeze(['video', 'video-upscale', 'image', 'training', 'audio']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
 // Returns a Promise that resolves to the gen module for the given job's
@@ -161,6 +167,7 @@ function getGenModuleForJob(job) {
   // later local branch would happily claim it and render a second time on this
   // machine.
   if (isRemoteMediaJob(job)) return REMOTE_MEDIA_MODULES[job.kind]();
+  if (job.kind === 'video-upscale') return import('../videoGen/upscaleJob.js');
   if (job.kind === 'video' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../videoGen/grok.js');
   if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.FAL) return import('../videoGen/fal.js');
   if (job.kind === 'video' && job.params?.mode === VIDEO_GEN_MODE.REACTOR) return import('../videoGen/reactor.js');
@@ -487,6 +494,14 @@ export async function initMediaJobQueue() {
     const videoReap = await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
     if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
     for (const j of persistedJobs) {
+      // Explicit Video Start grants one process lifetime. Restored jobs wait for
+      // project reconciliation; replaying an unknown paid submit could charge twice.
+      if (j.params?.videoProduction && ['queued', 'running'].includes(j.status)) {
+        archive.push({ ...j, status: 'failed', error: 'Video production paused after restart', completedAt: new Date().toISOString(),
+          params: { ...restoredParams(j), videoProduction: { ...j.params.videoProduction, submissionUncertain: j.status === 'running' } } });
+        restartedFailedIds.push(j.id);
+        continue;
+      }
       if (j.status === 'running') {
         // A remote provider job survives this process: its local queue id is
         // also the stable Idempotency-Key. Re-enqueue the same record and let
@@ -806,7 +821,7 @@ function recomputeQueuePositions() {
 // the queue, even though the underlying emitters don't supply one.
 function synthesizeMessage(e, kind) {
   if (typeof e.step === 'number' && typeof e.totalSteps === 'number' && e.totalSteps > 0) {
-    const verb = kind === 'video' ? 'Rendering' : kind === 'training' ? 'Training' : 'Generating';
+    const verb = kind === 'video' ? 'Rendering' : kind === 'video-upscale' ? 'Upscaling' : kind === 'training' ? 'Training' : 'Generating';
     return `${verb} step ${e.step}/${e.totalSteps}`;
   }
   return undefined;
@@ -954,6 +969,12 @@ async function runJob(job) {
     // (how far it got) — consumers gate the progress UI on status === 'running',
     // so the residual values are not displayed for terminal jobs.
     job.completedAt = new Date().toISOString();
+    if (job.params?.videoProduction) {
+      const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
+      const tag = job.params.videoProduction;
+      await settleVideoAttempt(tag.projectId, tag.attemptId, { jobId: job.id, status: job.params.videoProduction.submissionUncertain || (state === 'failed' && /timeout|timed out|interrupted/i.test(job.error || '')) ? 'uncertain' : state })
+        .catch(error => console.error(`❌ Video receipt could not settle: ${error.message}`));
+    }
     // Wake the lane finalizer without polling. Some providers emit their
     // terminal event just before their kickoff promise resolves; the promise
     // retains that signal until runJob reaches the await below.
@@ -1054,7 +1075,7 @@ async function runJob(job) {
 
   await resolveLiveParams(job, safeParams);
 
-  const emitter = job.kind === 'video' ? videoGenEvents
+  const emitter = job.kind === 'video' || job.kind === 'video-upscale' ? videoGenEvents
     : job.kind === 'training' ? trainingEvents
     : job.kind === 'audio' ? audioGenEvents
     : imageGenEvents;
@@ -1074,6 +1095,9 @@ async function runJob(job) {
     // the chunk-scaled local-video one (the provider emits 'activity' on
     // stdout so a long-but-active render never trips the idle cap).
     if (isCloudImageJob(job)) return WATCHDOG_CODEX_MS;
+    // An upscale is a single GPU render with no chunking, so it takes the
+    // video idle window flat rather than the chunk-scaled one.
+    if (job.kind === 'video-upscale') return WATCHDOG_VIDEO_MS;
     if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
     if (job.kind === 'training') return WATCHDOG_TRAINING_MS;
     if (job.kind === 'audio') return WATCHDOG_AUDIO_MS;
@@ -1134,6 +1158,10 @@ async function runJob(job) {
 
   try {
     const mod = await getGenModuleForJob(job);
+    if (job.params?.videoProduction) {
+      const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+      await assertVideoAttemptDispatch(job.params.videoProduction.projectId, job.params.videoProduction.attemptId, { jobId: job.id });
+    }
     if (!mod) throw new Error(`Unknown job kind: ${job.kind}`);
     // A cancel that arrived while this job was still queued lives on the
     // persisted marker, not on any in-memory adapter state. Re-stamp it for
@@ -1150,6 +1178,8 @@ async function runJob(job) {
       await mod.generateChainedVideo({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'video') {
       await mod.generateVideo({ ...safeParams, jobId: job.id });
+    } else if (job.kind === 'video-upscale') {
+      await mod.runVideoUpscale({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'training') {
       await mod.runTraining({ ...safeParams, jobId: job.id });
     } else if (job.kind === 'audio') {
@@ -1318,6 +1348,10 @@ export async function cancelJob(jobId) {
     // cancelRequested flips the dispatcher's `failed` handler into the
     // `canceled` branch instead of marking it failed.
     runningJob.cancelRequested = true;
+    if (runningJob.params?.videoProduction && ['reactor', 'fal', 'grok'].includes(runningJob.params.mode)) {
+      runningJob.params.videoProduction = { ...runningJob.params.videoProduction, submissionUncertain: true };
+      await persist();
+    }
     if (isRemoteMediaJob(runningJob)) {
       // Remote cancellation can outlive this process when the peer is down.
       // Persist the intent before signaling the adapter so boot reconciliation

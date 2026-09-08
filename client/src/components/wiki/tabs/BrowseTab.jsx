@@ -11,6 +11,7 @@ import { WIKI_CATEGORIES } from '../constants.jsx';
 import BrailleSpinner from '../../BrailleSpinner';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import { useNoteSave } from '../../../hooks/useNoteSave.js';
+import useMounted from '../../../hooks/useMounted';
 import ForceSaveNoteRow from '../../ForceSaveNoteRow.jsx';
 
 const WIKI_FOLDERS = WIKI_CATEGORIES.map(c => ({ key: c.folder, label: c.label, icon: c.icon, color: c.textClass }));
@@ -19,10 +20,12 @@ const RAW_FOLDERS = [{ key: 'raw', label: 'Raw Sources', icon: FolderOpen, color
 export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefresh }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const noteParam = searchParams.get('note');
-  const [selectedNote, setSelectedNote] = useState(null);
+  const [loadedNote, setSelectedNote] = useState(null);
+  const selectedNote = loadedNote?.path === noteParam ? loadedNote : null;
   const [noteContent, setNoteContent] = useState('');
   const [editing, setEditing] = useState(false);
   const [loadingNote, setLoadingNote] = useState(false);
+  const [noteUnavailable, setNoteUnavailable] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState(new Set(['wiki/sources', 'wiki/entities', 'wiki/concepts']));
   const [activeSection, setActiveSection] = useState('wiki');
   const [tags, setTags] = useState([]);
@@ -31,6 +34,8 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   const [showTags, setShowTags] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const editorRef = useRef(null);
+  const mountedRef = useMounted();
+  const noteSequence = useRef(0);
 
   // Owns the write plus the iCloud force-save escape hatch (#3717).
   const { saving, save, forceOffered, dismissForce } = useNoteSave({
@@ -49,33 +54,40 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
     }, options);
   };
 
-  // Handle deep-link from the URL.
+  // URL identity owns the read. Loading/error state must not re-trigger it, or
+  // a missing note retries forever. Cleanup also invalidates pending saves.
   useEffect(() => {
-    if (noteParam && !loadingNote) {
-      // URLSearchParams already decodes the serialized query value. Keeping
-      // the returned path intact also preserves literal percent signs in note paths.
-      const notePath = noteParam;
-      if (selectedNote?.path !== notePath) handleSelectNote(notePath);
-    }
-  }, [noteParam, selectedNote?.path, loadingNote]);
-
-  const handleSelectNote = async (notePath) => {
-    updateNoteParam(notePath);
-    setLoadingNote(true);
+    const sequence = ++noteSequence.current;
+    setSelectedNote(null);
+    setNoteContent('');
     setEditing(false);
-    const data = await api.getNote(vaultId, notePath).catch(() => null);
-    if (data && !data.error) {
-      setSelectedNote(data);
-      setNoteContent(data.content);
+    setConfirmDelete(null);
+    setNoteUnavailable(false);
+    setLoadingNote(!!noteParam);
+    if (noteParam) {
+      api.getNote(vaultId, noteParam).catch(() => null).then(data => {
+        if (!mountedRef.current || sequence !== noteSequence.current) return;
+        if (data && !data.error) {
+          setSelectedNote(data);
+          setNoteContent(data.content);
+        } else {
+          setNoteUnavailable(true);
+        }
+        setLoadingNote(false);
+      });
     }
-    setLoadingNote(false);
-  };
+    return () => { ++noteSequence.current; };
+  }, [vaultId, noteParam, mountedRef]);
+
+  const handleSelectNote = (notePath) => updateNoteParam(notePath);
 
   // `force` is ONLY ever passed by <ForceSaveNoteRow>'s confirm (#3717) — never
   // by the Save button or ⌘S.
   const handleSaveNote = async (options) => {
+    if (!selectedNote) return;
+    const sequence = noteSequence.current;
     const data = await save(options);
-    if (!data) return;
+    if (!data || !mountedRef.current || sequence !== noteSequence.current) return;
     setSelectedNote(data);
     setEditing(false);
     toast.success('Note saved');
@@ -83,7 +95,10 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
   };
 
   const handleDeleteNote = async (notePath) => {
-    await api.deleteNote(vaultId, notePath).catch(() => null);
+    if (selectedNote?.path !== notePath) return;
+    const sequence = noteSequence.current;
+    const deleted = await api.deleteNote(vaultId, notePath).then(() => true).catch(() => false);
+    if (!deleted || !mountedRef.current || sequence !== noteSequence.current) return;
     toast.success('Note deleted');
     setConfirmDelete(null);
     if (selectedNote?.path === notePath) setSelectedNote(null);
@@ -93,6 +108,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
 
   const loadTags = async () => {
     const data = await api.getNotesVaultTags(vaultId).catch(() => null);
+    if (!mountedRef.current) return;
     if (data?.tags) setTags(data.tags);
     setSkippedTagNotes(data?.skippedUnavailable || 0);
   };
@@ -127,7 +143,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
     // header never clips it.
     <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] grid-rows-1 h-full min-h-0 overflow-hidden">
       {/* Left panel — tree/list. Hidden on mobile while a note is open. */}
-      <div className={`border-r border-port-border flex-col min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`border-r border-port-border flex-col min-h-0 overflow-hidden ${noteParam ? 'hidden md:flex' : 'flex'}`}>
         {/* Section toggle */}
         <div className="p-3 border-b border-port-border flex items-center gap-2">
           <button
@@ -226,10 +242,17 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
       </div>
 
       {/* Right panel: note viewer. Hidden on mobile until a note is opened. */}
-      <div className={`flex-col min-w-0 min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'flex' : 'hidden md:flex'}`}>
+      <div className={`flex-col min-w-0 min-h-0 overflow-hidden ${noteParam ? 'flex' : 'hidden md:flex'}`}>
         {loadingNote ? (
           <div className="flex items-center justify-center h-full">
             <BrailleSpinner text="Loading" />
+          </div>
+        ) : noteUnavailable ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 p-4 text-gray-500">
+            <p className="text-sm">Page unavailable in this vault</p>
+            <button type="button" onClick={() => updateNoteParam(null, { replace: true })} className="text-sm text-port-accent hover:underline">
+              Back to list
+            </button>
           </div>
         ) : selectedNote ? (
           <>

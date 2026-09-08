@@ -31,18 +31,18 @@
     "kokoro-js": "1.2.1",
     "node-pty": "1.2.0-beta.15",
     "pg": "8.23.0",
-    "playwright-core": "1.62.1",
+    "playwright-core": "1.63.0",
     "pm2": "7.0.4",
     "sharp": "0.35.4",
     "socket.io": "4.8.3",
     "socket.io-client": "4.8.3",
-    "undici": "8.10.1",
+    "undici": "8.10.2",
     "ws": "8.21.3",
     "zod": "4.5.4"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "4.1.11",
-    "vitest": "4.1.11"
+    "@vitest/coverage-v8": "5.0.0",
+    "vitest": "5.0.0"
   },
   "overrides": {
     "path-to-regexp": "8.4.2",

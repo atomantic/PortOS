@@ -50,6 +50,8 @@ export function buildOrchestrationDoctrineSection(task) {
     '',
     ...ORCHESTRATION_ROLES.map(role => roleLine(task, role)),
     '',
+    'Prefer capability tiers (`light`, `medium`, `heavy`, `ultra`) in role model assignments when no exact model is required. Resolve tiers through the selected provider configuration; Ultra is for exceptional reasoning and must be explicitly requested. Reasoning effort is a separate choice.',
+    '',
     '**Delegate exploration.** Do not spend your own context reading the repository to find things. Send a sub-agent to locate the files, signatures, and conventions, and have it report back the findings — not the file contents.',
     '',
     '**Emit specs, not code.** Break the work into units that one lane can finish alone, and hand each lane a spec carrying ALL SIX parts below. The lane sees only what you write; anything you leave implicit, it will invent.',

@@ -7,9 +7,9 @@
 // `server/lib/navManifest.js` (`NAV_COMMANDS`) so deep-links can't drift — this
 // is enforced by `server/lib/goalFeatureMap.test.js`.
 //
-// MIRROR: this file is kept byte-for-byte in sync with
-// `server/lib/goalFeatureMap.js` (the server uses it to validate the per-goal
-// `featureAreas` override and to build the same rows server-side if needed).
+// `client/src/lib/goalFeatureMap.js` re-exports this module, so the picker and
+// the server-side validation of the per-goal `featureAreas` override read one
+// table. Keep it pure: no Node built-in, nothing outside `server/lib`.
 // `icon` is a lucide-react icon NAME (string) so this module stays React-free
 // and importable from server-side tests; the widget resolves the name to a
 // component at render time.

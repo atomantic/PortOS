@@ -235,6 +235,16 @@ vi.mock('../../lib/sseUtils.js', () => ({
   PYTHON_NOISE_RE: /^\s*$/,
 }));
 
+// What ffprobe "reads back" from a rendered file. `durationSeconds: null` is
+// the real helper's could-not-measure sentinel and must never read as valid.
+const probeState = vi.hoisted(() => ({ frames: 25, durationSeconds: null }));
+// Held apart from the vi.mock factory for the same reason as fsMockImpl below:
+// tests pin these probes for their own scenario and the override outlives them.
+const probeMockImpl = vi.hoisted(() => ({
+  probeFrameCount: async () => probeState.frames,
+  probeVideoDuration: async () => probeState.durationSeconds,
+}));
+
 vi.mock('../../lib/ffmpeg.js', async () => ({
   findFfmpeg: vi.fn(async () => '/usr/bin/ffmpeg'),
   safeUnder: vi.fn((base, file) => (file ? join(base, file) : null)),
@@ -245,8 +255,14 @@ vi.mock('../../lib/ffmpeg.js', async () => ({
   // Chained renders on a window-continuity runtime probe each chunk's length
   // and cut the next hop's conditioning window from it. 25 matches the
   // numFrames the chain tests render, so the prefix math below lands on a
-  // realistic value.
-  probeFrameCount: vi.fn(async () => 25),
+  // realistic value. `probeState` lets the post-completion teardown tests drive
+  // both probes — including the "could not answer" null sentinel — without
+  // disturbing that default.
+  probeFrameCount: vi.fn(probeMockImpl.probeFrameCount),
+  probeVideoDuration: vi.fn(probeMockImpl.probeVideoDuration),
+  // The upscale plan endpoint (#6509) reads source geometry through this one.
+  // Unused by the render paths here, but the module graph still links it.
+  probeVideoStreamInfo: vi.fn(async () => ({ width: 768, height: 512, fps: 24, frameCount: 25 })),
   trimVideoFromFrame: vi.fn(async (_videoPath, outPath) => ({ ok: true, outPath })),
   hasAudioStream: vi.fn(async () => false),
   // The real builder is pure and covered by ffmpeg.test.js; keep it real here
@@ -299,21 +315,31 @@ vi.mock('../../lib/hfCache.js', () => ({
 // cache MISS on a path that then exists after ffmpeg writes it — which is the
 // only way to reach extractLastFrame's extraction path at all, since a
 // stat-everything mock otherwise short-circuits on the cache hit.
-const fsState = vi.hoisted(() => ({ missOnce: [], candidateCount: null }));
-vi.mock('fs', () => ({
+// `mtimeMs: null` means "written just now", which is what every pre-existing
+// test wants; a test can pin an older stamp to model a stale leftover output.
+const fsState = vi.hoisted(() => ({ missOnce: [], candidateCount: null, mtimeMs: null }));
+// Held apart from the vi.mock factory so afterEach can put them back: several
+// tests below install a whole-suite `mockReturnValue` on existsSync/statSync,
+// and vi.clearAllMocks() drops calls but NOT a return-value override — so a
+// leaked one silently reshapes the filesystem every later test sees.
+const fsMockImpl = vi.hoisted(() => ({
   // `candidateCount` caps how many anchor candidates 'exist', so a test can
   // model ffmpeg writing fewer frames than the window asked for.
-  existsSync: vi.fn((p) => {
+  existsSync: (p) => {
     const s = String(p);
     if (fsState.candidateCount == null || !s.includes('anchorcand-')) return true;
     const n = s.match(/cand-(\d+)\.png$/);
     return n ? Number(n[1]) <= fsState.candidateCount : true;
-  }),
-  statSync: vi.fn((p) => {
+  },
+  statSync: (p) => {
     const i = fsState.missOnce.findIndex((frag) => String(p).includes(frag));
     if (i >= 0) { fsState.missOnce.splice(i, 1); return undefined; }
-    return { size: 1000 };
-  }),
+    return { size: 1000, mtimeMs: fsState.mtimeMs ?? Date.now() };
+  },
+}));
+vi.mock('fs', () => ({
+  existsSync: vi.fn(fsMockImpl.existsSync),
+  statSync: vi.fn(fsMockImpl.statSync),
   watch: vi.fn(() => ({ close: vi.fn() })),
 }));
 
@@ -463,12 +489,24 @@ beforeEach(async () => {
   ({ videoGenEvents } = await import('./events.js'));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Put the shared filesystem mock back before anything else — a test that
+  // pinned existsSync/statSync to a fixed value keeps that override across
+  // vi.clearAllMocks(), and the next test inherits its filesystem.
+  const { existsSync, statSync } = await import('fs');
+  vi.mocked(existsSync).mockImplementation(fsMockImpl.existsSync);
+  vi.mocked(statSync).mockImplementation(fsMockImpl.statSync);
+  const { probeFrameCount, probeVideoDuration } = await import('../../lib/ffmpeg.js');
+  vi.mocked(probeFrameCount).mockImplementation(probeMockImpl.probeFrameCount);
+  vi.mocked(probeVideoDuration).mockImplementation(probeMockImpl.probeVideoDuration);
   byovRevisionState.current = null;
   byovRevisionState.expectedRevision = null;
   settingsState.acceptedModelTerms = [];
   fsState.missOnce = [];
   fsState.candidateCount = null;
+  fsState.mtimeMs = null;
+  probeState.frames = 25;
+  probeState.durationSeconds = null;
   spawnState.nextExitCode = null;
   anchorPick.best = null;
   vi.clearAllMocks();
@@ -650,6 +688,48 @@ describe('stitchVideos — history provenance', () => {
 
       expect(stitched.draftDecode).toBe('draft');
       expect(stitched).not.toHaveProperty('draftDecodeApplied');
+    });
+  });
+
+  // Block streaming (#6499). Same shape as draft-decode above: the REQUEST is
+  // chain-wide (every chunk is submitted with the same streamingMode), but the
+  // OUTCOME is decided per child process — a mode that streamed on one chunk's
+  // machine state and stayed resident on another's would misreport the clip.
+  describe('streaming-policy outcome', () => {
+    const applied = (active) => ({
+      streamingMode: 'stream',
+      streamingPolicyApplied: { pipeline: 'one-stage', requestedMode: 'stream', active, supports: true, reason: null },
+    });
+
+    it('inherits the request and a unanimous outcome', async () => {
+      const stitched = await stitchHistory(applied(true), applied(true));
+
+      expect(stitched.streamingMode).toBe('stream');
+      expect(stitched.streamingPolicyApplied).toEqual(applied(true).streamingPolicyApplied);
+    });
+
+    it('inherits a unanimous resident outcome even when peakMb readings differ', async () => {
+      const stitched = await stitchHistory(
+        { ...applied(true), streamingPolicyApplied: { ...applied(true).streamingPolicyApplied, peakMb: 400 } },
+        { ...applied(true), streamingPolicyApplied: { ...applied(true).streamingPolicyApplied, peakMb: 420 } },
+      );
+
+      // Unanimity is on the `active` verdict, not deep equality.
+      expect(stitched.streamingPolicyApplied.active).toBe(true);
+    });
+
+    it('keeps the request but omits the outcome when the chunks disagree', async () => {
+      const stitched = await stitchHistory(applied(true), applied(false));
+
+      expect(stitched.streamingMode).toBe('stream');
+      expect(stitched).not.toHaveProperty('streamingPolicyApplied');
+    });
+
+    it('stamps no outcome on a chain that never reported one', async () => {
+      const stitched = await stitchHistory({ streamingMode: 'stream' }, { streamingMode: 'stream' });
+
+      expect(stitched.streamingMode).toBe('stream');
+      expect(stitched).not.toHaveProperty('streamingPolicyApplied');
     });
   });
 });
@@ -5514,6 +5594,90 @@ describe('generateVideo — LTX-2.5 speed profile (#4875)', () => {
   });
 });
 
+// #6499 — block streaming for the LTX-2/2.5 MLX runtimes. Three things must
+// hold end to end: a non-default request reaches the helper argv; the
+// default ('auto', which is also absence) leaves argv byte-identical to a
+// render from before this setting existed; and history stamps the REQUESTED
+// mode the same way speedProfileId/draftDecode do.
+describe('generateVideo — LTX-2/2.5 block streaming (#6499)', () => {
+  const renderArgs = async ({ jobId, modelId = 'ltx25_mlx_q8', ...rest }) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    await generateVideo({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId,
+      prompt: 'a quiet street at dusk',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      ...rest,
+    });
+    const call = spawnMock.mock.calls.find(
+      ([bin, args]) => (isLtx25Python(bin) || isLtx2Python(bin))
+        && Array.isArray(args) && args.includes('--mode'),
+    );
+    expect(call).toBeTruthy();
+    return call[1];
+  };
+
+  it('threads an explicit request into the helper argv', async () => {
+    const args = await renderArgs({ jobId: 'stream-explicit', mode: 'text', streamingMode: 'stream' });
+    expect(args[args.indexOf('--streaming-mode') + 1]).toBe('stream');
+  });
+
+  it('threads an explicit resident request too — not just the non-default "stream" value', async () => {
+    const args = await renderArgs({ jobId: 'stream-resident', mode: 'text', streamingMode: 'resident' });
+    expect(args[args.indexOf('--streaming-mode') + 1]).toBe('resident');
+  });
+
+  // DEFAULT PRESERVATION: 'auto' (and absence) is the bridge's own default.
+  it.each([
+    ['omitted', 'omitted', undefined],
+    ['the explicit default mode', 'explicit', 'auto'],
+  ])('leaves a render with %s byte-identical to the pre-feature argv', async (_name, label, streamingMode) => {
+    const strip = (a) => a.map((v) => String(v).replace(/stream-[a-z-]+\.mp4$/, '<job>.mp4'));
+    const baseline = strip(await renderArgs({ jobId: `stream-base-${label}`, mode: 'text', seed: 7 }));
+    const args = strip(await renderArgs({ jobId: `stream-default-${label}`, mode: 'text', seed: 7, streamingMode }));
+    expect(args).toEqual(baseline);
+    expect(args).not.toContain('--streaming-mode');
+  });
+
+  describe('history metadata', () => {
+    const metaFor = async (jobId, extra) => {
+      let started = null;
+      const onStarted = (e) => { if (e.generationId === jobId) started = e; };
+      videoGenEvents.on('started', onStarted);
+      await generateVideo({
+        jobId,
+        pythonPath: '/usr/bin/python3',
+        modelId: 'ltx25_mlx_q8',
+        prompt: 'a quiet street at dusk',
+        width: 512, height: 512, numFrames: 25, fps: 24,
+        mode: 'text',
+        ...extra,
+      });
+      videoGenEvents.off('started', onStarted);
+      expect(started).toBeTruthy();
+      return started;
+    };
+
+    it('stamps the REQUESTED mode', async () => {
+      const meta = await metaFor('stream-meta-explicit', { streamingMode: 'stream' });
+      expect(meta.streamingMode).toBe('stream');
+    });
+
+    it('stamps nothing on a default render', async () => {
+      const meta = await metaFor('stream-meta-default', {});
+      expect(meta.streamingMode).toBeUndefined();
+    });
+
+    it('stamps nothing for the explicit default mode either', async () => {
+      const meta = await metaFor('stream-meta-auto', { streamingMode: 'auto' });
+      expect(meta.streamingMode).toBeUndefined();
+    });
+  });
+});
+
 // #4875 — the chunk entries of a chain are written `hidden: true`, so the
 // STITCHED record is the only one the user ever sees. Without inheriting the
 // profile there, a chained render's lightbox shows no "Speed profile" row at
@@ -5857,5 +6021,217 @@ describe('resident video batches', () => {
     expect(terminal.results.map((item) => item.seed)).toEqual(complete ? [0, 1] : outputs ? [0] : []);
     if (invalidOutput) expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
     else expect(proc.kill).not.toHaveBeenCalled();
+  });
+});
+
+// ── verified post-completion native teardown abort (#6501) ───────────────────
+// The MiniMax H3 MLX runner can finish its render, mux the clip, print the
+// `emit_result` completion contract from scripts/_minimax_h3_common.py, and THEN
+// abort inside native interpreter teardown. The clip on disk is complete; only
+// the interpreter died. A real abort can't be produced here, so the child is
+// driven directly — the result line goes onto its stdout and it is closed on
+// SIGABRT exactly as the OS would. What is under test is the decision
+// generateVideo makes from that wreckage, and every way it must still say
+// "failed" instead.
+describe('generateVideo — post-completion native teardown abort', () => {
+  const NUM_FRAMES = 124;
+  const FPS = 24;
+  let restorePlatform = () => {};
+  let completed;
+  let failed;
+
+  beforeEach(async () => {
+    // MLX is Apple-Silicon only and the recovery is gated on the real platform,
+    // so pin it — otherwise this whole describe would silently assert "never
+    // recovers" on Windows CI. Pinned in the hook, never at module scope.
+    const { pinPlatform } = await import('../../lib/testHelper.js');
+    restorePlatform = pinPlatform('darwin');
+    settingsState.acceptedModelTerms = [H3_TERMS];
+    probeState.frames = NUM_FRAMES;
+    probeState.durationSeconds = NUM_FRAMES / FPS;
+    completed = vi.fn();
+    failed = vi.fn();
+    videoGenEvents.on('completed', completed);
+    videoGenEvents.on('failed', failed);
+  });
+
+  afterEach(() => {
+    videoGenEvents.off('completed', completed);
+    videoGenEvents.off('failed', failed);
+    restorePlatform();
+  });
+
+  const makeChild = async () => {
+    const { EventEmitter } = await import('node:events');
+    const proc = Object.assign(new EventEmitter(), {
+      pid: 4321,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: vi.fn((signal) => { proc.killed = true; proc.signalCode = signal; }),
+    });
+    return proc;
+  };
+
+  // Starts a render against a child the caller then drives by hand.
+  const startRender = async ({ jobId, modelId = 'minimax_h3_8bit', numFrames = NUM_FRAMES, batchSize = 1 }) => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const proc = await makeChild();
+    vi.mocked(spawnDetached).mockResolvedValueOnce(proc);
+    await generateVideo({
+      jobId,
+      prompt: 'a fox watches the rain',
+      modelId,
+      width: 1344, height: 768, numFrames, fps: FPS, mode: 'text',
+      displaySleep: false,
+      ...(batchSize > 1 ? { batchSize, seed: 0 } : {}),
+    });
+    return proc;
+  };
+
+  const emitResult = (proc, payload) => proc.stdout.emit('data', Buffer.from(`${JSON.stringify(payload)}\n`));
+
+  const closeChild = async (proc, code, signal) => {
+    proc.exitCode = code;
+    proc.signalCode = signal;
+    proc.emit('close', code, signal);
+  };
+
+  it('keeps the verified render when the child aborts in teardown after reporting it done', async () => {
+    const jobId = 'h3-teardown-recover';
+    const proc = await startRender({ jobId });
+
+    emitResult(proc, { video_path: join(MOCK_PATHS.videos, `${jobId}.mp4`) });
+    await closeChild(proc, null, 'SIGABRT');
+
+    await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+    // Exactly one terminal event, and it is NOT the 'failed' the media queue
+    // counts toward its repeated-failure hold.
+    expect(failed).not.toHaveBeenCalled();
+    expect(completed.mock.calls[0][0]).toMatchObject({ generationId: jobId });
+
+    // One concise teardown warning that names the fault and nothing about this
+    // machine — no filesystem path, no host identity.
+    const { broadcastSse } = await import('../../lib/sseUtils.js');
+    const warnings = vi.mocked(broadcastSse).mock.calls
+      .map(([, frame]) => frame)
+      .filter((frame) => frame?.type === 'status' && /native teardown/i.test(frame.message || ''));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).not.toContain(MOCK_PATHS.videos);
+  });
+
+  // Each of these is a bypass probe: the SAME SIGABRT close, with exactly one
+  // element of the evidence chain broken. Every one must stay a failure.
+  it.each([
+    ['no completion result was ever reported (a pre-completion crash)', {
+      report: () => {},
+    }],
+    ['the reported result names some other file', {
+      report: (proc) => emitResult(proc, { video_path: join(MOCK_PATHS.videos, 'someone-elses.mp4') }),
+    }],
+    ['the completion evidence is only a progress sentence', {
+      report: (proc) => proc.stdout.emit('data', Buffer.from('[Decoding video + audio + muxing] done in 3.2s\n')),
+    }],
+    ['the output on disk predates this render', {
+      setup: () => { fsState.mtimeMs = Date.now() - 3_600_000; },
+    }],
+    ['the output is truncated to a fraction of the requested frames', {
+      setup: () => { probeState.frames = 40; },
+    }],
+    ['the output runs short of the requested duration', {
+      setup: () => { probeState.durationSeconds = 2; },
+    }],
+    ['the frame probe could not answer', {
+      setup: () => { probeState.frames = null; },
+    }],
+    ['the duration probe could not answer', {
+      setup: () => { probeState.durationSeconds = null; },
+    }],
+  ])('still fails when %s', async (_label, { setup, report }) => {
+    setup?.();
+    const jobId = 'h3-teardown-reject';
+    const proc = await startRender({ jobId });
+
+    if (report) report(proc);
+    else emitResult(proc, { video_path: join(MOCK_PATHS.videos, `${jobId}.mp4`) });
+    await closeChild(proc, null, 'SIGABRT');
+
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(completed).not.toHaveBeenCalled();
+  });
+
+  it('still fails a cancellation that raced an in-flight abort', async () => {
+    const jobId = 'h3-teardown-cancel';
+    const proc = await startRender({ jobId });
+
+    emitResult(proc, { video_path: join(MOCK_PATHS.videos, `${jobId}.mp4`) });
+    // What cancel() leaves behind: PortOS asked this child to die. A death we
+    // caused is never a spontaneous teardown abort to recover from, whatever
+    // signal it finally lands on.
+    proc.kill('SIGTERM');
+    await closeChild(proc, null, 'SIGABRT');
+
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(completed).not.toHaveBeenCalled();
+  });
+
+  it('still fails an ordinary nonzero exit that follows a completion result', async () => {
+    const jobId = 'h3-teardown-exit1';
+    const proc = await startRender({ jobId });
+
+    emitResult(proc, { video_path: join(MOCK_PATHS.videos, `${jobId}.mp4`) });
+    await closeChild(proc, 1, null);
+
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(completed).not.toHaveBeenCalled();
+  });
+
+  it('does not extend the recovery to another runtime that aborts the same way', async () => {
+    probeState.frames = 25;
+    probeState.durationSeconds = 25 / FPS;
+    const jobId = 'ltx-teardown-abort';
+    const proc = await startRender({ jobId, modelId: 'ltx2_unified', numFrames: 25 });
+
+    emitResult(proc, { video_path: join(MOCK_PATHS.videos, `${jobId}.mp4`) });
+    await closeChild(proc, null, 'SIGABRT');
+
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(completed).not.toHaveBeenCalled();
+  });
+
+  it('recovers a warm batch only once every output is accepted and finalized', async () => {
+    const { planVideoBatch } = await import('./batch.js');
+    const jobId = 'h3-teardown-batch-full';
+    const batch = planVideoBatch({ jobId, batchSize: 2, seed: 0 });
+    const proc = await startRender({ jobId, batchSize: 2 });
+
+    for (const item of batch) {
+      emitResult(proc, { video_path: join(MOCK_PATHS.videos, item.filename), batch_index: item.index, seed: item.seed });
+    }
+    const { atomicWrite } = await import('../../lib/fileUtils.js');
+    await vi.waitFor(() => expect(vi.mocked(atomicWrite).mock.calls.length).toBeGreaterThanOrEqual(2));
+    await closeChild(proc, null, 'SIGABRT');
+
+    await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+    expect(failed).not.toHaveBeenCalled();
+    expect(completed.mock.calls[0][0].results).toHaveLength(2);
+  });
+
+  it('leaves a partial warm batch failed, with the results it already saved', async () => {
+    const { planVideoBatch } = await import('./batch.js');
+    const jobId = 'h3-teardown-batch-partial';
+    const batch = planVideoBatch({ jobId, batchSize: 2, seed: 0 });
+    const proc = await startRender({ jobId, batchSize: 2 });
+
+    emitResult(proc, { video_path: join(MOCK_PATHS.videos, batch[0].filename), batch_index: 0, seed: batch[0].seed });
+    const { atomicWrite } = await import('../../lib/fileUtils.js');
+    await vi.waitFor(() => expect(vi.mocked(atomicWrite).mock.calls.length).toBeGreaterThanOrEqual(1));
+    await closeChild(proc, null, 'SIGABRT');
+
+    await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+    expect(completed).not.toHaveBeenCalled();
+    expect(failed.mock.calls[0][0].results).toHaveLength(1);
   });
 });

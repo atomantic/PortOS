@@ -42,7 +42,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'cd-treatment.md': 'd940eadfb406ce584f0e244032f33382', // #1808 shipped reference (cast list + per-scene cast field)
+  'cd-treatment.md': '16c5ce4a199d8efbf80016424315beb6', // current shipped reference; migration 371 upgrades existing installs
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

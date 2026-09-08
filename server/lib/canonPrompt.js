@@ -1,7 +1,7 @@
 /**
  * Shared per-kind field-precedence rules for canon entries. Pure ESM, no
- * Node-only deps — mirrored to `client/src/lib/canonPrompt.js` for the
- * client bundle.
+ * Node-only deps — `client/src/lib/canonPrompt.js` re-exports it for the client
+ * bundle, so nothing here may import outside `server/lib`.
  *
  * Source of truth for "which fields describe a canon entry of this kind,
  * in what order". Consumers:
@@ -261,8 +261,8 @@ export function hasCanonDescriptorContent(kind, entry) {
 // builder and future per-page render prompts so the join logic stays in one
 // place. Each returns `''` when the input is missing/empty.
 //
-// Server-only — NOT part of the `client/src/lib/canonPrompt.js` mirror
-// contract. Adding them client-side would bloat the bundle for code that
+// Server-only: `client/src/lib/canonPrompt.js` re-exports this module by NAME,
+// and deliberately leaves these out — they would bloat the bundle for code that
 // only runs in image-gen / prompt-building paths.
 export function flattenStats(stats) {
   if (!Array.isArray(stats) || stats.length === 0) return '';

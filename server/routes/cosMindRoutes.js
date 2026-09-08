@@ -1,3 +1,4 @@
+import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
 import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistentMindThinkingRequests.js';
 /** Persistent Chief-of-Staff mind conversation and lifecycle routes. */
 
@@ -26,6 +27,7 @@ import {
   persistentMindThinkingSelectionSchema,
 } from '../lib/persistentMindThinkingPresets.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PERSISTENT_MIND_PLAYBOOK_CATALOG } from '../lib/persistentMindPlaybook.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
 import { validateRequest } from '../lib/validation.js';
@@ -133,6 +135,7 @@ const promotionSchema = z.object({
 }).strict();
 const memoryType = z.enum(['fact', 'learning', 'observation', 'decision', 'preference', 'context']);
 const memoryFields = {
+  protection: persistentMindMemoryProtectionSchema.optional(),
   content: z.string().trim().min(1).max(10_240),
   summary: z.string().trim().max(500).optional(),
   type: memoryType,
@@ -221,6 +224,7 @@ router.delete('/mind/thinking-request', asyncHandler(async (_req, res) => {
 router.get('/mind/context', asyncHandler(async (_req, res) => {
   const root = await loadState();
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
+  const playbook = normalizePersistentMindPlaybook(root.config?.persistentMindPlaybook);
   const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
   const [memories, rollups, provider] = await Promise.all([
     readPersistentMindMemories(PERSISTENT_MIND_ID),
@@ -230,11 +234,13 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
   const preview = await preparePersistentMindContext({
     mindId: PERSISTENT_MIND_ID,
     identity: prompt.identity,
-    instructions: prompt.instructions,
+    instructions: composePersistentMindInstructions(prompt.instructions, playbook),
     memories,
   });
   res.json({
     prompt,
+    playbook,
+    playbookCatalog: PERSISTENT_MIND_PLAYBOOK_CATALOG,
     preview,
     memories,
     rollups,

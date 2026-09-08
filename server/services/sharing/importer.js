@@ -41,7 +41,7 @@ import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem a
 import { adoptImportedSubscription, withReexportSuppressed } from './subscriptions.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
-import { isStr, preserveLegacyCharacterProductionPackages } from '../../lib/storyBible.js';
+import { isStr, preserveLegacyCharacterFields } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { maybeJournalBeforeOverwrite, flushBaseHashes, setSyncBaseHash, contentHashForRecord } from '../../lib/conflictJournal.js';
 
@@ -566,7 +566,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       if (kind === 'universe') {
         record = {
           ...record,
-          characters: preserveLegacyCharacterProductionPackages(
+          characters: preserveLegacyCharacterFields(
             record.characters,
             existing.characters,
             senderUniversesVersion,

@@ -2,6 +2,7 @@ import { request } from './apiCore.js';
 import { fetchByIds } from './apiBatch.js';
 
 export const listCreativeDirectorProjects = (options = {}) => request('/creative-director', options);
+export const getCreativeDirectorSources = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/sources`, options);
 // Pass `{ slim: true }` to receive only the fields a polling consumer needs
 // (status / per-scene status / finalVideoId / failureReason / updatedAt) —
 // drops the `runs[]` history and the full treatment text. Useful
@@ -103,3 +104,13 @@ export const applyCreativeDirectorAutoCast = (id, { brief, types, limit, compose
     }),
     ...options,
   });
+
+export const getCreativeDirectorVideoReview = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/review`, options);
+export const submitCreativeDirectorVideoReview = (id, input, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/review`, {
+  method: 'POST', body: JSON.stringify(input), ...options,
+});
+
+export const getCreativeDirectorVideoExecution = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/execution`, options);
+export const startCreativeDirectorVideoExecution = (id, input, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/start`, {
+  method: 'POST', body: JSON.stringify(input), ...options,
+});

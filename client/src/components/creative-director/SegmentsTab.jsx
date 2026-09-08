@@ -1,10 +1,11 @@
-import { Link } from 'react-router';
+import { Link, useParams } from 'react-router';
 import { Bot } from 'lucide-react';
 import { extractKind } from './ActiveAgentsBanner.jsx';
 import ScenePreview from './ScenePreview.jsx';
 import { SCENE_STATUS_BADGE } from './sceneStatus.js';
 
-export default function SegmentsTab({ project, activeAgents = [] }) {
+export default function SegmentsTab({ project, activeAgents = [], basePath = '/creative-director' }) {
+  const { sceneId: selectedSceneId } = useParams();
   const scenes = project.treatment?.scenes;
   if (!scenes?.length) {
     return <div className="text-port-text-muted text-sm">No scenes yet — the treatment hasn't been generated.</div>;
@@ -41,9 +42,12 @@ export default function SegmentsTab({ project, activeAgents = [] }) {
     return [];
   };
 
+  if (selectedSceneId && !sorted.some(s => s.sceneId === selectedSceneId)) return <div>Shot not found. <Link to={`${basePath}/${project.id}/segments`}>View all shots</Link></div>;
   return (
+    <div>
+      {selectedSceneId && <Link to={`${basePath}/${project.id}/segments`} className="block mb-3 text-port-accent">View all shots</Link>}
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-      {sorted.map((s) => {
+      {sorted.filter(s => !selectedSceneId || s.sceneId === selectedSceneId).map((s) => {
         const isInflight = isSceneInflight(s.sceneId);
         const decoratedStatus = isInflight && s.status === 'pending' ? 'rendering' : s.status;
         return (
@@ -61,7 +65,7 @@ export default function SegmentsTab({ project, activeAgents = [] }) {
             )}
             <div className="p-2 space-y-1">
               <div className="flex items-center justify-between gap-2">
-                <div className="text-sm font-medium">Scene {s.order + 1}</div>
+                <Link className="text-sm font-medium hover:underline" to={`${basePath}/${project.id}/segments/${encodeURIComponent(s.sceneId)}`}>Scene {s.order + 1}</Link>
                 <span className={`text-xs px-2 py-0.5 rounded ${SCENE_STATUS_BADGE[decoratedStatus] || ''}`}>{decoratedStatus}</span>
               </div>
               <div className="text-xs text-port-text-muted truncate" title={s.intent}>{s.intent}</div>
@@ -90,6 +94,7 @@ export default function SegmentsTab({ project, activeAgents = [] }) {
           </div>
         );
       })}
+    </div>
     </div>
   );
 }

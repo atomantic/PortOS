@@ -298,6 +298,23 @@ describe('providerModels', () => {
         .toBe(ANTIGRAVITY_EFFORT_LEVELS);
     });
 
+    it('drops `minimal` from the picker for the gpt-6 family, which rejects it', () => {
+      const codex = { id: 'codex', command: 'codex' };
+      // Real rejection: "'minimal' is not supported with the 'gpt-6-astra'
+      // model. Supported values are: 'low', 'medium', 'high', 'xhigh', 'max'."
+      expect(effortLevelsForProvider(codex, 'gpt-6-astra')).not.toContain('minimal');
+      expect(effortLevelsForProvider(codex, 'gpt-6-astra')).toContain('ultra');
+      expect(effortLevelsForProvider(codex, ' GPT-6-Astra ')).not.toContain('minimal');
+      // A future gpt-6/gpt-7 id is covered by the family prefix, so the 400
+      // can't come back the next time OpenAI ships one.
+      expect(effortLevelsForProvider(codex, 'gpt-6.1-nova')).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+      // gpt-5-era models keep the rung.
+      expect(effortLevelsForProvider(codex, 'gpt-5.6-sol')).toContain('minimal');
+      expect(effortLevelsForProvider(codex, 'gpt-5.3-codex-spark')).toContain('minimal');
+      // Not a family match: only the version segment gates the rung.
+      expect(effortLevelsForProvider(codex, 'gpt-56-experimental')).toContain('minimal');
+    });
+
     it('ignores `model` for non-antigravity providers', () => {
       expect(effortLevelsForProvider({ id: 'codex', command: 'codex' }, 'gpt-5-high')).toBe(CODEX_EFFORT_LEVELS);
       expect(effortLevelsForProvider({ id: 'claude-code', command: 'claude' }, 'claude-opus-5-high'))
@@ -421,6 +438,20 @@ describe('providerModels', () => {
         .toEqual(['-c', 'model_reasoning_effort=ultra']);
       expect(buildEffortArgs('ultra', codex, [], 'gpt-5.6-luna'))
         .toEqual(['-c', 'model_reasoning_effort=max']);
+    });
+
+    it('clamps `minimal` UP to low on gpt-6 models, which reject it', () => {
+      // Sending `model_reasoning_effort=minimal` to gpt-6-astra fails the run
+      // with HTTP 400 `unsupported_value`, so an effort stored against a gpt-5
+      // model must resolve to the weakest rung gpt-6 actually offers.
+      const codex = { id: 'codex', command: 'codex' };
+      expect(buildEffortArgs('minimal', codex, [], 'gpt-6-astra'))
+        .toEqual(['-c', 'model_reasoning_effort=low']);
+      expect(buildEffortArgs('minimal', codex, [], 'gpt-5.6-sol'))
+        .toEqual(['-c', 'model_reasoning_effort=minimal']);
+      // The gpt-6 gate does not cost Astra its Ultra rung.
+      expect(buildEffortArgs('ultra', codex, [], 'gpt-6-astra'))
+        .toEqual(['-c', 'model_reasoning_effort=ultra']);
     });
 
     it('returns [] when unset, unsupported, or already baked into existing args', () => {

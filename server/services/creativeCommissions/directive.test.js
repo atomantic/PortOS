@@ -3,7 +3,7 @@ import {
   commissionToCron, commissionToRecurrence, renderFeedbackDigest, composeDirectiveGoal,
   MAX_DIRECTIVE_GOAL_LEN, MAX_SYSTEM_PREFIX_LEN,
 } from './directive.js';
-import { CREATIVE_DIRECTOR_GOAL_MAX } from '../../lib/creativeDirectorValidation.js';
+import { CREATIVE_DIRECTOR_GOAL_MAX } from '../../lib/creativeBriefLimits.js';
 import {
   renderMusicTasteRecipePrompt,
   MUSIC_TASTE_RECIPE_MAX_CONTEXT, MUSIC_TASTE_RECIPE_MAX_SOURCE_VERSION,

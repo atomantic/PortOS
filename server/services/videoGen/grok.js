@@ -33,7 +33,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
 import { videoGenEvents } from './events.js';
-import { finalizeGeneratedVideo } from './generateVideoHelpers.js';
+import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { noImageReason, deriveAspectRatio, GROK_ASPECT_RATIOS } from '../imageGen/grok.js';
 import { resolveGrokDuration } from '../../lib/grokVideoClip.js';
@@ -182,7 +182,7 @@ export async function generateVideo({
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}] grok: ${prompt.slice(0, 60)}…`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
-  broadcastSse(job, { type: 'status', message: 'Spawning grok…' });
+  emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Spawning grok…');
 
   runGrokVideo(job, jobId, bin, args, {
     useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, uploadedTempPath,
@@ -244,7 +244,7 @@ async function runGrokVideo(job, jobId, bin, args, {
   proc.stdout.on('data', (chunk) => {
     stdoutTail += chunk.toString();
     if (stdoutTail.length > STDOUT_TAIL_BYTES) stdoutTail = stdoutTail.slice(-STDOUT_TAIL_BYTES);
-    broadcastSse(job, { type: 'status', message: 'Running…' });
+    emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.RENDER, 'Running…');
     // Feed the mediaJobQueue's idle watchdog — grok narrates while working,
     // so a genuinely wedged child stops emitting and still trips the 20-min
     // idle cap, while a long-but-active image_to_video render doesn't.

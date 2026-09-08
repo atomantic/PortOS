@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  countWords,
   overflowSeverity,
   panelLetteringMetrics,
   analyzeComicLettering,
@@ -13,11 +12,6 @@ import {
 const balloon = (character, n) => ({ character, line: Array.from({ length: n }, (_, i) => `w${i}`).join(' ') });
 
 describe('letteringDensity (client mirror)', () => {
-  it('countWords counts whitespace tokens, 0 for non-strings', () => {
-    expect(countWords('one two three')).toBe(3);
-    expect(countWords(null)).toBe(0);
-  });
-
   it('overflowSeverity scales by overflow ratio', () => {
     expect(overflowSeverity(26, 25)).toBe('low');
     expect(overflowSeverity(35, 25)).toBe('medium');

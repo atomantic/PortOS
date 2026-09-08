@@ -32,39 +32,43 @@ import {
   Package,
   UserRound
 } from 'lucide-react';
+import { getPageNavTabs } from '../../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
-// Main navigation sections, ordered by the group they belong to (see
-// SECTION_GROUPS below). This array stays FLAT and stays the single registry of
-// section ids: `server/lib/navManifest.test.js` scrapes `id:` out of it to prove
-// every section is addressable as `/digital-twin/<id>` from ⌘K and voice, and
-// its extractor stops at the first `];` — so a nested array here would silently
-// truncate the guard. Grouping therefore lives in a separate constant.
-export const TABS = [
+// Icon per section id. The manifest (`tabGroup: 'digital-twin'`) owns
+// id/label/order — this file owns only how each section looks, plus the
+// SECTION_GROUPS slicing below. The page-local "Goals"/"Legacy" labels (vs the
+// manifest's "Twin Goals"/"Legacy Bundle", which need the qualifier to be
+// unambiguous in ⌘K) come from the manifest's `tabLabel`. Throws at import time
+// on drift.
+const TAB_PRESENTATION = {
   // Profile
-  { id: 'overview', label: 'Overview', icon: Heart },
-  { id: 'identity', label: 'Identity', icon: Fingerprint },
-  { id: 'personas', label: 'Personas', icon: Drama },
-  { id: 'goals', label: 'Goals', icon: Target },
-  { id: 'taste', label: 'Taste', icon: Palette },
+  overview: { icon: Heart },
+  identity: { icon: Fingerprint },
+  personas: { icon: Drama },
+  goals: { icon: Target },
+  taste: { icon: Palette },
   // Sources
-  { id: 'documents', label: 'Documents', icon: FileText },
-  { id: 'import', label: 'Import', icon: Upload },
-  { id: 'accounts', label: 'Accounts', icon: Globe },
-  { id: 'interview', label: 'Interview', icon: MessageSquare },
-  { id: 'autobiography', label: 'Autobiography', icon: PenLine },
-  { id: 'enrich', label: 'Enrich', icon: Sparkles },
+  documents: { icon: FileText },
+  import: { icon: Upload },
+  accounts: { icon: Globe },
+  interview: { icon: MessageSquare },
+  autobiography: { icon: PenLine },
+  enrich: { icon: Sparkles },
   // Assessment
-  { id: 'test', label: 'Test', icon: CheckCircle },
-  { id: 'personality', label: 'Personality', icon: Brain },
+  test: { icon: CheckCircle },
+  personality: { icon: Brain },
   // Presence
-  { id: 'voice', label: 'Voice', icon: Mic },
-  { id: 'appearance', label: 'Appearance', icon: Camera },
-  { id: 'avatar-bio', label: 'Avatar Bio', icon: UserRound },
+  voice: { icon: Mic },
+  appearance: { icon: Camera },
+  'avatar-bio': { icon: UserRound },
   // Legacy
-  { id: 'export', label: 'Export', icon: Download },
-  { id: 'legacy', label: 'Legacy', icon: Package },
-  { id: 'time-capsule', label: 'Time Capsule', icon: Archive }
-];
+  export: { icon: Download },
+  legacy: { icon: Package },
+  'time-capsule': { icon: Archive },
+};
+
+export const TABS = buildPageNavTabs(getPageNavTabs('digital-twin'), TAB_PRESENTATION, 'Digital Twin');
 
 // Two-level nav taxonomy (#3795). 19 sections in one flat strip stopped working
 // as navigation, so they collapse into five groups keyed on what the user is

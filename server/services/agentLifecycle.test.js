@@ -546,7 +546,7 @@ describe('runAgentSpawn source — handedOff pre-spawn vs post-handoff split', (
     expect(RUN_SPAWN_BODY).toMatch(/if\s*\(\s*handedOff\s*\)\s*\{[\s\S]{0,800}?throw\s+err\s*;/);
     // The pre-spawn branch runs cleanupOnError + re-emits job:spawn-failed for
     // autonomous-job tasks so cos.js can clear its job-level guard.
-    expect(RUN_SPAWN_BODY).toMatch(/cleanupOnError\(err\.message\)/);
+    expect(RUN_SPAWN_BODY).toMatch(/cleanupOnError\(setupError\)/);
     expect(RUN_SPAWN_BODY).toMatch(/job:spawn-failed/);
     expect(RUN_SPAWN_BODY).toMatch(/task\.metadata\??\.jobId/);
   });
@@ -918,4 +918,23 @@ describe('runAgentSpawn source — local prompt/prefill budget (#6117)', () => {
     const metaSlice = AGENT_LIFECYCLE_SRC.slice(registerIdx, AGENT_LIFECYCLE_SRC.indexOf('\n  });', registerIdx));
     expect(metaSlice).toMatch(/\blocalPromptBudget,/);
   });
+});
+
+// Source-level assertion (#6406): agent.metadata is a hand-picked projection of
+// task.metadata, so a provenance key the projection forgets is a field that
+// reaches disk and never reaches the runner's completion continuation or the
+// denial ledger — exactly what happened to `quotaBurnStepId`. The projection has
+// to derive from the one block definition in lib/quotaBurnOrigin.js (whose own
+// test pins that the block covers every persisted field), which means naming a
+// `taskQuotaBurn*` key by hand here is the regression.
+describe('runAgentSpawn source — quota-burn provenance projection (#6406)', () => {
+  it('spreads the shared provenance block instead of naming its keys', () => {
+    expect(AGENT_LIFECYCLE_SRC).toMatch(/\.\.\.quotaBurnAgentMetadata\(task\.metadata\)/);
+    expect(AGENT_LIFECYCLE_SRC.match(/^\s*taskQuotaBurn\w*\s*:/gm) || []).toEqual([]);
+  });
+});
+
+// Archive classification must survive the task-to-agent metadata projection.
+it('preserves the machine-local privacy marker in spawned agent metadata', () => {
+  expect(AGENT_LIFECYCLE_SRC).toContain('machineLocal: isTruthyMeta(task.metadata?.machineLocal)');
 });

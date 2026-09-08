@@ -29,3 +29,30 @@ describe('PromptEditor', () => {
     expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
   });
 });
+
+describe('PromptEditor — programmatic tasks', () => {
+  it('offers no prompt at all for work PortOS performs itself', () => {
+    // Distinct from 'runtime-generated': there is no agent and no prompt, so
+    // offering to show or edit one would describe execution that never happens.
+    render(
+      <PromptEditor
+        config={{
+          promptMode: 'programmatic',
+          promptDescription: 'PortOS enqueues the renders itself.'
+        }}
+        promptValue=""
+        setPromptValue={() => {}}
+        editingPrompt={false}
+        setEditingPrompt={() => {}}
+        handleSavePrompt={() => {}}
+        updating={false}
+        activeApps={[]}
+      />
+    );
+
+    expect(screen.getByText('No prompt — PortOS runs this itself')).toBeInTheDocument();
+    expect(screen.getByText('PortOS enqueues the renders itself.')).toBeInTheDocument();
+    expect(screen.queryByText('Generated at run time')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+  });
+});

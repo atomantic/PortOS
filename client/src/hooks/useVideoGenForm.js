@@ -23,6 +23,7 @@ import {
   DEFAULT_DRAFT_DECODE_ID, draftDecodeOptionsForModel,
   resolveDraftDecodeForModel, draftDecodeFromRecord,
 } from '../lib/videoGenParams.js';
+import { videoStreamingModeFromRecord } from '../lib/videoStreamingMode.js';
 import { useVideoGenFieldState } from './useVideoGenFieldState.js';
 import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
 import { useVideoGenValidation } from './useVideoGenValidation.js';
@@ -135,6 +136,7 @@ export function useVideoGenForm({
     sizeManuallySetRef,
     speedProfileId, setSpeedProfileId,
     draftDecode, setDraftDecode,
+    streamingMode, setStreamingMode,
     staleModelToastRef,
     steps, setSteps,
     stylePreset, setStylePreset,
@@ -1082,6 +1084,7 @@ export function useVideoGenForm({
     setTextEncoderId(textEncoderIdFromRecord(item.textEncoderId));
     setSpeedProfileId(speedProfileIdFromRecord(item.speedProfileId));
     setDraftDecode(draftDecodeFromRecord(item.draftDecode));
+    setStreamingMode(videoStreamingModeFromRecord(item.streamingMode));
     // disableAudio: always set explicitly (true/false) so the toggle reliably
     // matches the remixed render. Skipping the false branch would leave the
     // toggle stuck ON when the user remixes a clip that had audio enabled.
@@ -1201,6 +1204,7 @@ export function useVideoGenForm({
     setTextEncoderId(textEncoderIdFromRecord(p.textEncoderId));
     setSpeedProfileId(speedProfileIdFromRecord(p.speedProfileId));
     setDraftDecode(draftDecodeFromRecord(p.draftDecode));
+    setStreamingMode(videoStreamingModeFromRecord(p.streamingMode));
     if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
     if (p.mode === 'grok') {
       // Grok job: 'grok' is the queue discriminator, not a semantic video
@@ -1300,7 +1304,7 @@ export function useVideoGenForm({
     prompt, negativePrompt, stylePreset, selectedUniverse,
     width, height, mode, sourceImageFile, sourceImageUpload,
     numFrames, fps, steps, guidanceScale, seed, batchSize,
-    currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
+    currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode, streamingMode,
     disableAudio, noMusic, imageStrength, i2vReferenceMode,
     keyframesActive, keyframes, loraFamily, selectedLoras,
     lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
@@ -1353,6 +1357,7 @@ export function useVideoGenForm({
     textEncoderId, setTextEncoderId, textEncoderOptions,
     speedProfileId, setSpeedProfileId,
     draftDecode, setDraftDecode, draftDecodeOptions,
+    streamingMode, setStreamingMode,
     disableAudio, setDisableAudio,
     noMusic, setNoMusic,
     // Frames

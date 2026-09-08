@@ -10,9 +10,11 @@ const mocks = vi.hoisted(() => ({
   getToolSpecs: vi.fn(),
   getSettings: vi.fn(),
   recordRun: vi.fn(),
+  updateProject: vi.fn(),
   commissionStagePin: vi.fn(),
 }));
 
+vi.mock('./videoExecution.js', () => ({ effectiveVideoProject: project => project, reserveVideoAttempt: vi.fn(async () => ({ id: 'example-attempt' })), assertVideoAttemptDispatch: vi.fn(async () => ({})), settleVideoAttempt: vi.fn(async () => {}), pauseVideoExecution: vi.fn(async () => {}) }));
 vi.mock('../cos.js', () => ({
   addTask: mocks.addTask,
   reviveBlockedTask: mocks.reviveBlockedTask,
@@ -25,12 +27,77 @@ vi.mock('../creativeDirectorPrompts.js', () => ({
 }));
 vi.mock('../creative/toolRegistry.js', () => ({ getToolSpecs: mocks.getToolSpecs }));
 vi.mock('../settings.js', () => ({ getSettings: mocks.getSettings }));
-vi.mock('./local.js', () => ({ recordRun: mocks.recordRun }));
+vi.mock('./local.js', () => ({ recordRun: mocks.recordRun, updateProject: mocks.updateProject }));
+vi.mock('../universeBuilder/crud.js', () => ({ getUniverse: vi.fn() }));
+import { settleVideoAttempt } from './videoExecution.js';
+import { getUniverse } from '../universeBuilder/crud.js';
+vi.mock('../pipeline/series.js', () => ({ getSeries: vi.fn() }));
+vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
+vi.mock('../voice/profiles.js', () => ({ getVoiceProfile: vi.fn() }));
+import { getSeries } from '../pipeline/series.js';
+import { getTrack } from '../tracks/index.js';
+import { getVoiceProfile } from '../voice/profiles.js';
 vi.mock('../creativeCommissions/projectControl.js', () => ({ commissionStagePin: mocks.commissionStagePin }));
 
 const { enqueueTreatmentTask, enqueuePlanTask, enqueueEvaluateTask } = await import('./agentBridge.js');
 
 const project = { id: 'cd-1', name: 'Test project', treatment: { scenes: [] } };
+
+describe('Video planning source context', () => {
+  it('keeps the bounded video tool specification and retires a failed enqueue reservation', async () => {
+    mocks.getToolSpecs.mockReturnValue([
+      { type: 'function', function: { name: 'media_enqueueVideoJob', description: 'Video', parameters: {} } },
+      { type: 'function', function: { name: 'pipeline_runSeriesAutopilot', description: 'Batch', parameters: {} } },
+    ]);
+    const video = { ...project, workspace: 'video', videoDraft: { sources: [], audio: { mode: 'silent' } } };
+    await enqueuePlanTask(video);
+    expect(mocks.buildPlanPrompt.mock.calls[0][1].toolSpecs).toEqual([
+      expect.objectContaining({ function: expect.objectContaining({ name: 'media_enqueueVideoJob', description: expect.stringContaining('exactly one clip') }) }),
+    ]);
+    expect(mocks.addTask.mock.calls[0][0].metadata.context).toContain('Saved Video audio contract: {"mode":"silent"}');
+    mocks.addTask.mockRejectedValueOnce(new Error('store unavailable'));
+    await expect(enqueueTreatmentTask(video)).rejects.toThrow('store unavailable');
+    expect(settleVideoAttempt).toHaveBeenLastCalledWith('cd-1', 'example-attempt', { status: 'failed' });
+  });
+
+  it('includes a series linked canon and selected audio context without voice bindings or audio paths', async () => {
+    const updatedAt = '2026-09-01T00:00:00Z';
+    getSeries.mockResolvedValue({ updatedAt, title: 'Example series', logline: 'A traveler returns', arc: { summary: 'A reunion' }, universeId: 'example-universe' });
+    getUniverse.mockResolvedValue({ updatedAt, name: 'Example universe', characters: [{ name: 'Example traveler', physicalDescription: 'A silver cloak' }] });
+    getTrack.mockResolvedValue({ updatedAt, title: 'Example song', lyrics: 'Invented test lyrics', audioFilename: 'private-audio.wav' });
+    getVoiceProfile.mockResolvedValue({ updatedAt, label: 'Example narrator', kind: 'tts', approval: { status: 'approved' }, binding: { credential: 'example-secret' }, inferencePath: 'private-model.bin' });
+    mocks.buildPlanPrompt.mockImplementationOnce(async p => JSON.stringify(p.resolvedVideoSources));
+    await enqueuePlanTask({ ...project, workspace: 'video', videoDraft: { sources: [
+      { kind: 'series', id: 'example-series' }, { kind: 'music', id: 'example-song' }, { kind: 'voice', id: 'example-voice' },
+    ] } });
+    const { context } = mocks.addTask.mock.calls[0][0].metadata;
+    expect(context).toContain('A reunion');
+    expect(context).toContain('A silver cloak');
+    expect(context).toContain('Invented test lyrics');
+    expect(context).toContain('Example narrator');
+    expect(context).not.toMatch(/example-secret|private-model|private-audio/);
+    expect(mocks.updateProject.mock.calls[0][1].videoPlanningContext.references).toHaveLength(4);
+  });
+
+  it('resolves canon and style before task dispatch while persisting only revision references', async () => {
+    const video = { ...project, workspace: 'video', videoDraft: { sources: [{ kind: 'universe', id: 'example-universe' }] } };
+    getUniverse.mockResolvedValue({ id: 'example-universe', name: 'Example universe', updatedAt: '2026-09-01T00:00:00Z', characters: [{ name: 'Example traveler', physicalDescription: 'A silver cloak' }], influences: { embrace: ['watercolor'] }, privateNotes: 'Do not copy this private field' });
+    mocks.buildTreatmentPrompt.mockImplementationOnce(async p => JSON.stringify(p.resolvedVideoSources));
+    await enqueueTreatmentTask(video);
+    expect(mocks.addTask.mock.calls[0][0].metadata.machineLocal).toBe(true);
+    const context = mocks.addTask.mock.calls[0][0].metadata.context;
+    expect(context).toContain('A silver cloak');
+    expect(context).toContain('watercolor');
+    expect(context).not.toContain('private field');
+    const persisted = mocks.updateProject.mock.calls[0][1].videoPlanningContext;
+    expect(persisted.references[0]).toMatchObject({ kind: 'universe', id: 'example-universe', sourceRevision: expect.any(String) });
+    expect(JSON.stringify(persisted)).not.toMatch(/silver cloak|watercolor|privateNotes/);
+    mocks.addTask.mockClear();
+    getUniverse.mockResolvedValue(null);
+    await expect(enqueuePlanTask(video)).rejects.toMatchObject({ code: 'VIDEO_SOURCE_MISSING' });
+    expect(mocks.addTask).not.toHaveBeenCalled();
+  });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -265,5 +332,25 @@ describe('deliverable baseline stamped on the run row (#4146)', () => {
     mocks.buildEvaluatePrompt.mockResolvedValue('evaluate context');
     await enqueueEvaluateTask({ id: 'cd-1', name: 'p', treatment: { scenes: [{ sceneId: 's1', order: 0 }] } }, { sceneId: 's1', order: 0, intent: 'x' });
     expect(mocks.recordRun.mock.calls[0][1]).not.toHaveProperty('deliverableMark');
+  });
+});
+
+
+describe('cognitive effort dispatch', () => {
+  it('takes the entire project, live commission, or global pin, including effort', async () => {
+    mocks.getSettings.mockResolvedValue({ creativeDirector: { plan: { providerId: 'global', model: 'global-model', effort: 'low' } } });
+    mocks.commissionStagePin.mockResolvedValue({ providerId: 'commission', model: 'commission-model', effort: 'high' });
+    const owned = { ...project, commissionId: 'commission-1' };
+    const first = await enqueuePlanTask({ ...owned, modelOverrides: { plan: { providerId: 'project', model: 'project-model', effort: 'max' } } });
+    expect(first.metadata).toMatchObject({ providerId: 'project', model: 'project-model', effort: 'max' });
+    const providerOnly = await enqueuePlanTask({ ...owned, modelOverrides: { plan: { providerId: 'project' } } });
+    expect(providerOnly.metadata).not.toHaveProperty('effort');
+    expect(providerOnly.metadata).not.toHaveProperty('model');
+    expect((await enqueuePlanTask(owned)).metadata).toMatchObject({ providerId: 'commission', effort: 'high' });
+    mocks.commissionStagePin.mockResolvedValue(null);
+    expect((await enqueuePlanTask(owned)).metadata).toMatchObject({ providerId: 'global', effort: 'low' });
+    const evaluation = await enqueueEvaluateTask({ ...owned, modelOverrides: { evaluation: { providerId: 'vision', effort: 'high' } } }, { sceneId: 'scene-1', order: 0 });
+    expect(evaluation.metadata).not.toHaveProperty('effort');
+    expect(evaluation.metadata).not.toHaveProperty('providerId');
   });
 });

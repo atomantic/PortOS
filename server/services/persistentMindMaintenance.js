@@ -29,6 +29,7 @@ export async function cleanupPersistentMind({
   const clearContext = clearHistory || selected.has('context');
   const results = {
     memoriesArchived: 0,
+    memoriesPreserved: 0,
     historyEventsCleared: 0,
     historyEventsPreserved: 0,
     rollupsCleared: 0,
@@ -38,6 +39,7 @@ export async function cleanupPersistentMind({
   if (selected.has('memories')) {
     const memoryResult = await archivePersistentMindMemories(mindId);
     results.memoriesArchived = memoryResult.archived;
+    results.memoriesPreserved = memoryResult.preserved || 0;
   }
   if (clearContext) {
     const rollupResult = await clearPersistentMindRollups(mindId);

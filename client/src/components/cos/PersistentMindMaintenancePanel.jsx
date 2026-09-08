@@ -1,4 +1,5 @@
 import { useId, useState } from 'react';
+import { Link } from 'react-router';
 import { Brain, Database, Eraser, MessagesSquare, ShieldCheck } from 'lucide-react';
 import * as api from '../../services/api';
 import Banner from '../ui/Banner';
@@ -19,8 +20,8 @@ const CLEANUP_OPTIONS = [
   {
     scope: 'memories',
     icon: Database,
-    label: 'Archive curated memories',
-    detail: 'Removes all Persistent Mind-owned active memories from future context without hard-deleting them from Brain.',
+    label: 'Archive unprotected memories',
+    detail: 'Archives only standard memories owned by this mind. Core identity and important memories stay active and available for future context.',
   },
 ];
 
@@ -77,6 +78,12 @@ export default function PersistentMindMaintenancePanel({
           <span className="rounded-full border border-port-border px-2.5 py-1 text-xs text-port-text-muted">Machine-local only</span>
         </div>
 
+        <div className="mt-4 rounded border border-port-success/40 bg-port-success/5 p-3 text-xs text-port-text">
+          <p className="flex items-center gap-2 font-medium"><ShieldCheck size={16} aria-hidden="true" /> Core identity and important memories survive cleanup</p>
+          <p className="mt-1 text-port-text-muted">This applies to manual cleanup and self-cleanup. The mind can add protection; only you can remove it in the memory editor. Facts that exist only in conversation history must be saved as protected memories before clearing history.</p>
+          <Link to="/cos/mind?panel=memories" className="mt-2 inline-block font-medium text-port-accent hover:underline">Review memory protection</Link>
+        </div>
+
         <fieldset className="mt-4 grid gap-3 lg:grid-cols-3">
           <legend className="sr-only">Mindspace cleanup scopes</legend>
           {CLEANUP_OPTIONS.map(({ scope, icon: Icon, label, detail }) => {
@@ -113,7 +120,7 @@ export default function PersistentMindMaintenancePanel({
       )}
       {result && (
         <Banner tone="success" title="Mindspace cleaned">
-          Archived {result.memoriesArchived || 0} memories, cleared {result.historyEventsCleared || 0} history events and {result.rollupsCleared || 0} context rollups. Persistent Mind is stopped and ready for a deliberate fresh start.
+          Archived {result.memoriesArchived || 0} unprotected memories{result.scopes?.includes('memories') ? ` and kept ${result.memoriesPreserved || 0} protected memories` : ''}, cleared {result.historyEventsCleared || 0} history events and {result.rollupsCleared || 0} context rollups. Persistent Mind is stopped and ready for a deliberate fresh start.
         </Banner>
       )}
 
@@ -121,7 +128,7 @@ export default function PersistentMindMaintenancePanel({
         <h3 id="mind-self-cleanup-heading" className="flex items-center gap-2 text-sm font-semibold text-port-text"><ShieldCheck size={16} aria-hidden="true" /> Self-maintenance authority</h3>
         <p className="mt-1 text-xs text-port-text-muted">
           {selfCleanupEnabled
-            ? 'The mind may request the same bounded cleanup during a turn. History cleanup preserves that current turn so its final reply remains attributable.'
+            ? 'The mind may protect its memories and request the same bounded cleanup during a turn. It cannot remove memory protection. History cleanup preserves that current turn so its final reply remains attributable.'
             : 'Self-cleanup is off by default. Grant it in Tools if the mind should be able to discard stale state on its own.'}
         </p>
         {!selfCleanupEnabled && onOpenTools && <button type="button" onClick={onOpenTools} className="mt-3 rounded border border-port-border px-3 py-1.5 text-xs font-medium text-port-accent hover:border-port-accent">Open Tools permissions</button>}

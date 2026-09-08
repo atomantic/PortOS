@@ -1,0 +1,661 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { redactTcAddress } from '../lib/tailcatAddress.js';
+import { EventEmitter } from 'node:events';
+import {
+  allocateLocalPort,
+  startForwardProcess,
+  classifyTailcatRuntimeError,
+  verifyTunnelReachable,
+  addPeerViaTailcat,
+  listTailcatForwards,
+  attachTailcatForwardsToPeers,
+  retryTailcatForward,
+  forgetTailcatForward,
+  _resetLiveForwardsForTests,
+  _liveForwardCountForTests,
+  stopAllForwards,
+  stopForwardForPeer,
+  restoreForwards,
+} from './tailcatPeer.js';
+import { DEFAULT_TAILCAT_LOCAL_PORT, DEFAULT_TAILCAT_REMOTE_PORT } from '../lib/ports.js';
+
+vi.mock('../lib/fileUtils.js', async (original) => ({
+  ...(await original()),
+  readJSONFile: vi.fn(),
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
+}));
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
+
+// No installed CLI or package manager: exercise the real shared installation failure.
+vi.mock('../lib/commandExists.js', () => ({ commandOutput: vi.fn().mockResolvedValue(null) }));
+vi.mock('../lib/processEnv.js', async (original) => ({
+  ...(await original()),
+  findCommandOnPath: vi.fn().mockReturnValue(null),
+}));
+
+const EXAMPLE_TC = 'tcEXAMPLE' + 'A'.repeat(40);
+
+function fakeChild() {
+  const child = new EventEmitter();
+  child.killed = false;
+  child.stderr = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    child.emit('exit', 0, null);
+  });
+  return child;
+}
+
+describe('tailcatPeer helpers', () => {
+  beforeEach(() => {
+    _resetLiveForwardsForTests();
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [] });
+  });
+
+  afterEach(() => {
+    _resetLiveForwardsForTests();
+    vi.useRealTimers();
+  });
+
+  it('surfaces shared installation failure without starting a tunnel', async () => {
+    const startForward = vi.fn();
+    await expect(addPeerViaTailcat({ tcAddress: EXAMPLE_TC, startForward })).rejects.toMatchObject({
+      status: 503, code: 'TAILCAT_MISSING',
+    });
+    expect(startForward).not.toHaveBeenCalled();
+    expect(_liveForwardCountForTests()).toBe(0);
+  });
+
+  it('allocateLocalPort prefers 15555 then walks upward when busy', async () => {
+    expect(DEFAULT_TAILCAT_LOCAL_PORT).toBe(15555);
+    expect(DEFAULT_TAILCAT_REMOTE_PORT).toBe(5565);
+    const isFree = vi.fn(async (port) => port === 15557);
+    const port = await allocateLocalPort({ preferred: 15555, isFree, limit: 5 });
+    expect(port).toBe(15557);
+    expect(isFree).toHaveBeenCalledWith(15555);
+    expect(isFree).toHaveBeenCalledWith(15556);
+    expect(isFree).toHaveBeenCalledWith(15557);
+  });
+
+  it('startForwardProcess spawns tailcat forward with local:remote mapping', async () => {
+    const child = fakeChild();
+    const spawnFn = vi.fn(() => {
+      queueMicrotask(() => child.stderr.emit('data', 'forwarding 127.0.0.1:15555 -> remote localhost:5555\n'));
+      return child;
+    });
+    const started = await startForwardProcess({
+      bin: '/usr/bin/tailcat',
+      tcAddress: EXAMPLE_TC,
+      localPort: 15555,
+      remotePort: 5555,
+      spawnFn,
+      readyMs: 200,
+      probeMs: 5,
+      isListening: async () => false,
+    });
+    expect(started).toBe(child);
+    expect(spawnFn).toHaveBeenCalledWith(
+      '/usr/bin/tailcat',
+      ['forward', '--verbose', '--bind=127.0.0.1', EXAMPLE_TC, '15555:5555'],
+      expect.any(Object)
+    );
+  });
+
+  it('startForwardProcess rejects when the child exits immediately', async () => {
+    const child = fakeChild();
+    const spawnFn = vi.fn(() => {
+      // Schedule exit after startForwardProcess attaches its listeners.
+      process.nextTick(() => child.emit('exit', 2, null));
+      return child;
+    });
+    await expect(startForwardProcess({
+      bin: '/usr/bin/tailcat',
+      tcAddress: EXAMPLE_TC,
+      localPort: 15555,
+      spawnFn,
+      readyMs: 5_000,
+      isListening: async () => false,
+    })).rejects.toThrow(/exited early/);
+  });
+
+  it('times out and kills a process that never confirms its listener', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild();
+    const result = startForwardProcess({ bin: 'tailcat', tcAddress: EXAMPLE_TC,
+      localPort: 15555, spawnFn: () => child, readyMs: 8000, isListening: async () => false });
+    const assertion = expect(result).rejects.toThrow('startup timed out');
+    await vi.advanceTimersByTimeAsync(8000);
+    await assertion;
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    vi.useRealTimers();
+  });
+
+  it('never exposes capability diagnostics across repeated or split chunks', async () => {
+    const child = fakeChild();
+    const result = startForwardProcess({ bin: 'tailcat', tcAddress: EXAMPLE_TC,
+      localPort: 15555, spawnFn: () => child, isListening: async () => false });
+    child.stderr.emit('data', EXAMPLE_TC.slice(0, 10));
+    child.stderr.emit('data', EXAMPLE_TC.slice(10) + EXAMPLE_TC);
+    child.emit('error', new Error(EXAMPLE_TC));
+    // The message now carries tailcat's own (redacted) diagnostics, which is the
+    // whole point — but never the capability itself, however it was chunked.
+    const failure = await result.catch((err) => err);
+    expect(failure.message).toContain('tailcat forward process failed');
+    expect(failure.message).not.toContain('tcEXAMPLE');
+  });
+
+  it('reports a post-startup delivery failure instead of a bound-but-dead "running"', async () => {
+    const child = fakeChild();
+    const errors = [];
+    const logSpy = vi.spyOn(console, 'error').mockImplementation((line) => errors.push(line));
+    const spawnFn = vi.fn(() => {
+      queueMicrotask(() => child.stderr.emit('data', 'forwarding 127.0.0.1:15555 -> remote localhost:5555\n'));
+      return child;
+    });
+    await startForwardProcess({
+      bin: 'tailcat', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+      spawnFn, readyMs: 200, probeMs: 5, isListening: async () => false,
+    });
+    // Healthy relay churn is not a verdict; only a failed delivery is.
+    child.stderr.emit('data', 'derp-301: [v1] backoff: 114 msec\n');
+    expect(child.tailcatRuntimeError).toBeNull();
+
+    // Split across chunks, exactly as a real pipe delivers it.
+    child.stderr.emit('data', 'dial remote port 5555: context');
+    child.stderr.emit('data', ' deadline exceeded\n');
+    expect(child.tailcatRuntimeError.message).toContain('dial remote port 5555');
+    expect(errors.join(' ')).toContain('cannot reach the remote');
+    logSpy.mockRestore();
+  });
+
+  it('never leaks the capability through a post-startup diagnostic', async () => {
+    const child = fakeChild();
+    const spawnFn = vi.fn(() => {
+      queueMicrotask(() => child.stderr.emit('data', 'forwarding 127.0.0.1:15555 -> remote localhost:5555\n'));
+      return child;
+    });
+    await startForwardProcess({
+      bin: 'tailcat', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+      spawnFn, readyMs: 200, probeMs: 5, isListening: async () => false,
+    });
+    child.stderr.emit('data', `dial remote target ${EXAMPLE_TC}: refused\n`);
+    expect(child.tailcatRuntimeError.message).not.toContain('tcEXAMPLE');
+  });
+
+  it('classifyTailcatRuntimeError ignores relay churn and picks the delivery failure', () => {
+    expect(classifyTailcatRuntimeError('netcheck: UDP is blocked, trying HTTPS')).toBeNull();
+    expect(classifyTailcatRuntimeError('derp-301: [v1] backoff: 5 msec')).toBeNull();
+    expect(classifyTailcatRuntimeError(
+      'derp-301: [v1] backoff: 5 msec\ndial remote port 5555: context deadline exceeded'
+    )).toContain('dial remote port 5555: context deadline exceeded');
+  });
+
+  it.each([5555, DEFAULT_TAILCAT_REMOTE_PORT])('adds a peer using the selected remote port %s', async (remotePort) => {
+    const child = fakeChild();
+    const addPeerFn = vi.fn(async (data) => ({ id: 'peer-1', ...data }));
+    const peer = await addPeerViaTailcat({
+      tcAddress: EXAMPLE_TC,
+      remotePort,
+      name: 'sandbox',
+      ensureInstalled: async () => ({ bin: '/usr/bin/tailcat', installed: false }),
+      allocatePort: async () => 15555,
+      startForward: async (options) => { expect(options.remotePort).toBe(remotePort); return child; },
+      addPeerFn,
+      primeDerpMap: async () => ({ primed: false }),
+      persistForwardEntry: async (entry) => { expect(entry.remotePort).toBe(remotePort); },
+      patchForwardEntry: async (_id, patch) => { expect(patch.remotePort).toBe(remotePort); return {}; },
+    });
+    expect(addPeerFn).toHaveBeenCalledWith({
+      address: '127.0.0.1',
+      port: 15555,
+      name: 'sandbox',
+      auth: undefined,
+      transport: 'tailcat',
+      protocol: 'http',
+    });
+    expect(peer.transport).toBe('tailcat');
+    expect(peer.address).toBe('127.0.0.1');
+  });
+});
+
+
+describe('tailcat lifecycle failure contracts', () => {
+  beforeEach(() => {
+    _resetLiveForwardsForTests();
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [] });
+  });
+  afterEach(() => { _resetLiveForwardsForTests(); vi.useRealTimers(); });
+
+  function addOptions(child, overrides = {}) {
+    return {
+      tcAddress: EXAMPLE_TC,
+      ensureInstalled: async () => ({ bin: '/example/bin/tailcat' }),
+      allocatePort: async () => 15555,
+      startForward: async () => child,
+      addPeerFn: async (data) => ({ id: 'peer-example', ...data }),
+      primeDerpMap: async () => ({ primed: false }),
+      persistForwardEntry: async () => {},
+      patchForwardEntry: async () => ({}),
+      ...overrides,
+    };
+  }
+
+  it('rejects stalled startup at the deadline and terminates the process', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild();
+    const pending = startForwardProcess({ bin: 'tailcat', tcAddress: EXAMPLE_TC,
+      localPort: 15555, spawnFn: () => child, readyMs: 8000, isListening: async () => false });
+    const failure = expect(pending).rejects.toThrow('startup timed out');
+    await vi.advanceTimersByTimeAsync(7999);
+    expect(child.kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await failure;
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('waits for the correct listener and accepts a readiness line split over chunks', async () => {
+    const child = fakeChild();
+    let ready = false;
+    const pending = startForwardProcess({ bin: 'tailcat', tcAddress: EXAMPLE_TC,
+      localPort: 15555, remotePort: 5555, spawnFn: () => child, probeMs: 5, isListening: async () => false })
+      .then(() => { ready = true; });
+    child.stderr.emit('data', 'forwarding 127.0.0.1:15556 -> remote localhost:5555\n');
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    child.stderr.emit('data', 'forwarding 127.0.0.1:15555 -> ');
+    child.stderr.emit('data', 'remote localhost:5555\n');
+    await pending;
+    expect(ready).toBe(true);
+  });
+
+  it('never includes split or repeated capability diagnostics in startup errors', async () => {
+    const child = fakeChild();
+    const pending = startForwardProcess({ bin: 'tailcat', tcAddress: EXAMPLE_TC,
+      localPort: 15555, spawnFn: () => child, isListening: async () => false });
+    child.stderr.emit('data', EXAMPLE_TC.slice(0, 16));
+    child.stderr.emit('data', EXAMPLE_TC.slice(16) + EXAMPLE_TC + EXAMPLE_TC);
+    child.emit('exit', 1, null);
+    await expect(pending).rejects.toThrow('tailcat forward exited early (code=1, signal=null)');
+    await pending.catch((error) => expect(error.message).not.toContain('tcEXAMPLE'));
+  });
+
+  it('rolls back the peer and child if restart metadata cannot be saved', async () => {
+    const child = fakeChild();
+    const removePeerFn = vi.fn().mockResolvedValue(undefined);
+    await expect(addPeerViaTailcat(addOptions(child, {
+      patchForwardEntry: async () => { throw new Error('disk full'); }, removePeerFn,
+    }))).rejects.toMatchObject({ code: 'TAILCAT_PERSIST_FAILED' });
+    expect(removePeerFn).toHaveBeenCalledWith('peer-example', { stopTransport: false });
+    expect(child.killed).toBe(true);
+    expect(_liveForwardCountForTests()).toBe(0);
+  });
+
+  it('terminates the forward when peer registration fails', async () => {
+    const child = fakeChild();
+    await expect(addPeerViaTailcat(addOptions(child, {
+      addPeerFn: async () => { throw new Error('peer write failed'); },
+    }))).rejects.toThrow('peer write failed');
+    expect(child.killed).toBe(true);
+  });
+
+  it('refuses to register a peer the tunnel cannot actually reach', async () => {
+    const child = fakeChild();
+    child.tailcatRuntimeError = { message: 'dial remote port 5555: context deadline exceeded', at: 'now' };
+    const addPeerFn = vi.fn();
+    const saved = [];
+    // tailcat's own line is the cause; ours would only say the request failed.
+    await expect(addPeerViaTailcat(addOptions(child, {
+      addPeerFn,
+      patchForwardEntry: async (_id, patch) => { saved.push(patch); return {}; },
+      verifyTunnel: async () => 'fetch failed',
+    }))).rejects.toMatchObject({
+      code: 'TAILCAT_TUNNEL_UNREACHABLE',
+      status: 502,
+      message: expect.stringContaining('dial remote port 5555: context deadline exceeded'),
+    });
+    // A forward whose tunnel is dead must not leave a peer behind that will
+    // never answer — and the entry stays retryable without re-pasting the tc address.
+    expect(addPeerFn).not.toHaveBeenCalled();
+    expect(child.killed).toBe(true);
+    expect(_liveForwardCountForTests()).toBe(0);
+    expect(saved.at(-1)).toMatchObject({ status: 'failed' });
+  });
+
+  it('passes the verification through when the tunnel answers', async () => {
+    const child = fakeChild();
+    const verifyTunnel = vi.fn(async () => null);
+    const peer = await addPeerViaTailcat(addOptions(child, { verifyTunnel, protocol: 'https' }));
+    expect(peer.id).toBe('peer-example');
+    expect(verifyTunnel).toHaveBeenCalledWith({ localPort: 15555, protocol: 'https', auth: null });
+  });
+
+  it('stops children on shutdown while preserving their restart metadata', async () => {
+    const child = fakeChild();
+    await addPeerViaTailcat(addOptions(child));
+    stopAllForwards();
+    expect(child.killed).toBe(true);
+    expect(_liveForwardCountForTests()).toBe(0);
+    expect(atomicWrite).not.toHaveBeenCalled();
+    await expect(addPeerViaTailcat(addOptions(fakeChild()))).rejects.toThrow('shutting down');
+  });
+
+  it('restores only mappings that still belong to existing managed peers, and retires them on removal', async () => {
+    // Pre-retry entries carried no id/status, so restore must still recognize them.
+    const entry = { peerId: 'peer-example', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555 };
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [entry, { ...entry, peerId: 'deleted-peer' }] });
+    const child = fakeChild();
+    const startForward = vi.fn().mockResolvedValue(child);
+    const getPeersFn = async () => [{ id: 'peer-example', transport: 'tailcat', address: '127.0.0.1', port: 15555 }];
+    const options = {
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => ({ primed: false }),
+      startForward,
+      getPeersFn,
+    };
+    await expect(restoreForwards(options)).resolves.toEqual({ restored: 1 });
+    await expect(restoreForwards(options)).resolves.toEqual({ restored: 0 });
+    expect(startForward).toHaveBeenCalledTimes(1);
+    await stopForwardForPeer('peer-example');
+    expect(child.killed).toBe(true);
+    // Removing the peer drops only its own mapping; the stale one stays put.
+    const [, written] = atomicWrite.mock.calls.at(-1);
+    expect(written.version).toBe(1);
+    expect(written.forwards).toHaveLength(1);
+    expect(written.forwards[0]).toMatchObject({ peerId: 'deleted-peer', tcAddress: EXAMPLE_TC });
+  });
+
+  it('records why a boot-time restore failed so the retry surface can show it', async () => {
+    const entry = { id: 'fwd_1', peerId: 'peer-example', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555 };
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [entry] });
+    await expect(restoreForwards({
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => ({ primed: false }),
+      startForward: async () => { throw new Error(`could not dial ${EXAMPLE_TC}`); },
+      getPeersFn: async () => [{ id: 'peer-example', transport: 'tailcat', address: '127.0.0.1', port: 15555 }],
+    })).resolves.toEqual({ restored: 0 });
+    const [, written] = atomicWrite.mock.calls.at(-1);
+    expect(written.forwards[0]).toMatchObject({ id: 'fwd_1', status: 'failed' });
+    expect(written.forwards[0].lastError).toContain('could not dial');
+    expect(written.forwards[0].lastError).not.toContain('tcEXAMPLE');
+  });
+});
+
+describe('saved tailcat forwards', () => {
+  beforeEach(() => {
+    _resetLiveForwardsForTests();
+    vi.clearAllMocks();
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [] });
+  });
+  afterEach(() => { _resetLiveForwardsForTests(); });
+
+  it('saves the capability before anything can fail, so a broken add stays retryable', async () => {
+    const saved = [];
+    await expect(addPeerViaTailcat({
+      tcAddress: EXAMPLE_TC,
+      name: 'sandbox',
+      ensureInstalled: async () => { throw new Error('tailcat is not installed'); },
+      persistForwardEntry: async (entry) => { saved.push(entry); },
+      patchForwardEntry: async () => ({}),
+    })).rejects.toThrow('tailcat is not installed');
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({ tcAddress: EXAMPLE_TC, name: 'sandbox', status: 'pending', peerId: null });
+  });
+
+  it('never lets the capability out through the list endpoint', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+      name: 'sandbox', protocol: 'https', auth: { username: 'u', password: 'p' },
+      status: 'failed', lastError: 'tailcat listener startup timed out', createdAt: '2026-01-01T00:00:00.000Z',
+    }] });
+    const [row] = await listTailcatForwards();
+    expect(row).toMatchObject({
+      id: 'fwd_1', peerId: 'peer-1', localPort: 15555, protocol: 'https',
+      hasAuth: true, status: 'failed', live: false,
+    });
+    expect(row.tcAddress).toBe(redactTcAddress(EXAMPLE_TC));
+    expect(JSON.stringify(row)).not.toContain(EXAMPLE_TC);
+    // The stored Basic credential is a secret too — presence only, never a value.
+    expect(JSON.stringify(row)).not.toContain('password');
+  });
+
+  it('attaches the redacted forward onto a tailcat peer payload for the peer card', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+      name: 'sandbox', protocol: 'http', auth: null,
+      status: 'active', lastError: null, createdAt: '2026-01-01T00:00:00.000Z',
+    }] });
+    const peers = [
+      { id: 'peer-1', name: 'sandbox', transport: 'tailcat', address: '127.0.0.1', port: 15555 },
+      { id: 'peer-2', name: 'classic', address: '10.0.0.2', port: 5555 },
+    ];
+    const enriched = await attachTailcatForwardsToPeers(peers);
+    expect(enriched[0].tailcatForward).toMatchObject({
+      id: 'fwd_1', peerId: 'peer-1', localPort: 15555, status: 'active', live: false,
+    });
+    expect(JSON.stringify(enriched[0].tailcatForward)).not.toContain(EXAMPLE_TC);
+    expect(enriched[1].tailcatForward).toBeUndefined();
+  });
+
+  it('separates a bound listener from a tunnel that cannot carry a request', async () => {
+    const child = fakeChild();
+    const saved = [];
+    await addPeerViaTailcat({
+      tcAddress: EXAMPLE_TC,
+      name: 'sandbox',
+      ensureInstalled: async () => ({ bin: '/example/bin/tailcat' }),
+      primeDerpMap: async () => null,
+      allocatePort: async () => 15555,
+      startForward: async () => child,
+      addPeerFn: async (data) => ({ id: 'peer-1', ...data }),
+      persistForwardEntry: async (entry) => { saved.push(entry); },
+      patchForwardEntry: async (id, patch) => ({ ...saved[0], ...patch, id }),
+    });
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      ...saved[0], peerId: 'peer-1', localPort: 15555, status: 'active',
+    }] });
+
+    // Bound and tracked: the row reads exactly as the operator's did — green.
+    const [healthy] = await listTailcatForwards();
+    expect(healthy).toMatchObject({ live: true, status: 'active', tunnelError: null });
+
+    const at = new Date().toISOString();
+    child.tailcatRuntimeError = { message: 'dial remote port 5555: context deadline exceeded', at };
+    const [broken] = await listTailcatForwards();
+    expect(broken).toMatchObject({
+      live: true, status: 'active', tunnelErrorAt: at,
+      tunnelError: 'dial remote port 5555: context deadline exceeded',
+    });
+
+    // A forward that started working again goes quiet, so the failure ages out
+    // rather than latching "no route" on a tunnel that now delivers.
+    child.tailcatRuntimeError = { message: 'dial remote port 5555: context deadline exceeded',
+      at: new Date(Date.now() - 6 * 60 * 1000).toISOString() };
+    const [recovered] = await listTailcatForwards();
+    expect(recovered).toMatchObject({ live: true, tunnelError: null, tunnelErrorAt: null });
+  });
+
+  it('retries from the stored address without the operator supplying it again', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: null, tcAddress: EXAMPLE_TC, localPort: null, remotePort: 5555,
+      name: 'sandbox', protocol: 'https', status: 'failed', lastError: 'startup timed out',
+    }] });
+    const child = fakeChild();
+    const startForward = vi.fn().mockResolvedValue(child);
+    const addPeerFn = vi.fn(async (data) => ({ id: 'peer-9', ...data }));
+    const patches = [];
+    const peer = await retryTailcatForward('fwd_1', {
+      ensureInstalled: async () => ({ bin: '/example/bin/tailcat' }),
+      primeDerpMap: async () => ({ primed: true }),
+      allocatePort: async () => 15556,
+      startForward,
+      addPeerFn,
+      patchForwardEntry: async (id, patch) => { patches.push([id, patch]); return { id, ...patch }; },
+      getPeersFn: async () => [],
+    });
+    expect(startForward).toHaveBeenCalledWith(expect.objectContaining({ tcAddress: EXAMPLE_TC, localPort: 15556, remotePort: 5555 }));
+    expect(addPeerFn).toHaveBeenCalledWith(expect.objectContaining({
+      address: '127.0.0.1', port: 15556, name: 'sandbox', transport: 'tailcat', protocol: 'https',
+    }));
+    expect(peer.id).toBe('peer-9');
+    expect(patches).toEqual([['fwd_1', expect.objectContaining({ peerId: 'peer-9', status: 'active', lastError: null })]]);
+  });
+
+  it('repoints an existing peer when a retry has to bind a different port', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+    }] });
+    const addPeerFn = vi.fn();
+    const setPeerPort = vi.fn(async (id, port) => ({ id, port, transport: 'tailcat' }));
+    const peer = await retryTailcatForward('fwd_1', {
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => ({ primed: false }),
+      allocatePort: async () => 15557,
+      remotePort: DEFAULT_TAILCAT_REMOTE_PORT,
+      startForward: async ({ remotePort }) => { expect(remotePort).toBe(DEFAULT_TAILCAT_REMOTE_PORT); return fakeChild(); },
+      addPeerFn,
+      patchForwardEntry: async (id, patch) => ({ id, ...patch }),
+      getPeersFn: async () => [{ id: 'peer-1', transport: 'tailcat', address: '127.0.0.1', port: 15555 }],
+      setPeerPortFn: setPeerPort,
+    });
+    // Re-registering would create a duplicate peer; the record has to follow the port.
+    expect(addPeerFn).not.toHaveBeenCalled();
+    expect(setPeerPort).toHaveBeenCalledWith('peer-1', 15557);
+    expect(peer.port).toBe(15557);
+  });
+
+  it('fails the retry rather than leaving a peer pointed at the dead port', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+    }] });
+    const child = fakeChild();
+    await expect(retryTailcatForward('fwd_1', {
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => ({ primed: false }),
+      allocatePort: async () => 15557,
+      startForward: async () => child,
+      addPeerFn: async () => { throw new Error('must not register a duplicate'); },
+      patchForwardEntry: async (id, patch) => ({ id, ...patch }),
+      getPeersFn: async () => [{ id: 'peer-1', transport: 'tailcat', address: '127.0.0.1', port: 15555 }],
+      // The record vanished (or stopped being a tailcat peer) mid-retry.
+      setPeerPortFn: async () => null,
+    })).rejects.toMatchObject({ code: 'TAILCAT_PEER_REPOINT_FAILED', status: 409 });
+    expect(child.killed).toBe(true);
+  });
+
+  it('registers a fresh peer when the saved peerId no longer names a tailcat peer', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+    }] });
+    const addPeerFn = vi.fn(async (data) => ({ id: 'peer-new', ...data }));
+    const setPeerPortFn = vi.fn();
+    const peer = await retryTailcatForward('fwd_1', {
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => ({ primed: false }),
+      allocatePort: async () => 15555,
+      startForward: async () => fakeChild(),
+      addPeerFn,
+      patchForwardEntry: async (id, patch) => ({ id, ...patch }),
+      // Same id, but a classic peer now — adopting it would repoint an unrelated route.
+      getPeersFn: async () => [{ id: 'peer-1', address: '192.0.2.10', port: 5555 }],
+      setPeerPortFn,
+    });
+    expect(setPeerPortFn).not.toHaveBeenCalled();
+    expect(addPeerFn).toHaveBeenCalledOnce();
+    expect(peer.id).toBe('peer-new');
+  });
+
+  it('records a redacted reason when a retry fails again', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: null, tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+    }] });
+    const patches = [];
+    await expect(retryTailcatForward('fwd_1', {
+      ensureInstalled: async () => ({ bin: 'tailcat' }),
+      primeDerpMap: async () => ({ primed: false }),
+      allocatePort: async () => 15555,
+      startForward: async () => { throw new Error(`no relay for ${EXAMPLE_TC}`); },
+      patchForwardEntry: async (id, patch) => { patches.push(patch); return { id, ...patch }; },
+      getPeersFn: async () => [],
+    })).rejects.toMatchObject({ code: 'TAILCAT_FORWARD_FAILED' });
+    expect(patches.at(-1)).toMatchObject({ status: 'failed' });
+    expect(patches.at(-1).lastError).toContain('no relay');
+    expect(patches.at(-1).lastError).not.toContain('tcEXAMPLE');
+  });
+
+  it('rejects a retry for an unknown forward instead of inventing one', async () => {
+    await expect(retryTailcatForward('fwd_missing')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('forget removes the stored capability along with its peer', async () => {
+    readJSONFile.mockResolvedValue({ version: 1, forwards: [{
+      id: 'fwd_1', peerId: 'peer-1', tcAddress: EXAMPLE_TC, localPort: 15555, remotePort: 5555,
+    }] });
+    const removePeerFn = vi.fn().mockResolvedValue({ id: 'peer-1' });
+    await expect(forgetTailcatForward('fwd_missing', { removePeerFn })).rejects.toMatchObject({ status: 404 });
+    await expect(forgetTailcatForward('fwd_1', { removePeerFn })).resolves.toEqual({ id: 'fwd_1', peerId: 'peer-1' });
+    expect(removePeerFn).toHaveBeenCalledWith('peer-1', { stopTransport: false });
+    const [, written] = atomicWrite.mock.calls.at(-1);
+    expect(written.forwards).toEqual([]);
+  });
+});
+
+describe('tailcat startup diagnostics', () => {
+  beforeEach(() => { _resetLiveForwardsForTests(); vi.clearAllMocks(); });
+  afterEach(() => { _resetLiveForwardsForTests(); });
+
+  it('reports what tailcat said when startup times out, instead of only that it did', async () => {
+    vi.useFakeTimers();
+    const child = fakeChild();
+    const pending = startForwardProcess({ bin: 'tailcat', tcAddress: EXAMPLE_TC, localPort: 15555,
+      spawnFn: () => child, readyMs: 8000, isListening: async () => false });
+    const assertion = expect(pending).rejects.toThrow(/fetching DERPMap/);
+    child.stderr.emit('data', 'Expand: fetching DERPMap for region -1: context deadline exceeded\n');
+    await vi.advanceTimersByTimeAsync(8000);
+    await assertion;
+    vi.useRealTimers();
+  });
+
+  it('accepts a listening local port as readiness, so a quiet CLI build still works', async () => {
+    // tailcat <=0.5.0 logs `forwarding …` only under --verbose; readiness must not
+    // depend on any log wording, or a released build times out while working fine.
+    const child = fakeChild();
+    let probes = 0;
+    await expect(startForwardProcess({
+      bin: 'tailcat', tcAddress: EXAMPLE_TC, localPort: 15555, spawnFn: () => child,
+      readyMs: 2_000, probeMs: 5,
+      // First probe: nothing listening yet. Second: the listener is up.
+      isListening: async () => { probes += 1; return probes > 1; },
+    })).resolves.toBe(child);
+  });
+
+
+});
+
+describe('verifyTunnelReachable', () => {
+  const url = 'http://127.0.0.1:15555/api/system/health';
+
+  it('treats any HTTP response as proof the tunnel carried the request', async () => {
+    // 401 from an auth-gating proxy still means bytes crossed — this probes the
+    // transport, not the API.
+    const fetchFn = vi.fn(async () => ({ status: 401 }));
+    await expect(verifyTunnelReachable({ localPort: 15555, fetchFn })).resolves.toBeNull();
+    expect(fetchFn.mock.calls[0][0]).toBe(url);
+  });
+
+  it('returns the failure detail when nothing answers, and honors https + auth', async () => {
+    const fetchFn = vi.fn(async () => { throw new Error('fetch failed'); });
+    const auth = { username: 'u', password: 'p' };
+    await expect(verifyTunnelReachable({ localPort: 15556, protocol: 'https', auth, fetchFn }))
+      .resolves.toBe('fetch failed');
+    expect(fetchFn.mock.calls[0][0]).toBe('https://127.0.0.1:15556/api/system/health');
+    expect(fetchFn.mock.calls[0][2]).toEqual({ auth });
+  });
+
+  it('skips verification rather than reaching the network when no fetch is available', async () => {
+    await expect(verifyTunnelReachable({ localPort: 15555, fetchFn: null })).resolves.toBeNull();
+  });
+});

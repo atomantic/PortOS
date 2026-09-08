@@ -27,7 +27,8 @@ import { getBranches, getDefaultBranch, isBranchMergedInto, deleteBranch } from 
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees } from './worktreeManager.js';
 import { isAgentWorktreeId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
-import { execGh, ensureForgeReachable } from './github.js';
+import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js';
+import { issueNumberFromRef } from './issueReconcile.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
@@ -1448,18 +1449,46 @@ export function limitBranchesForAgent(inFlight, branchesPerAgent) {
 }
 
 /**
- * Render the actionable in-flight branch set into the coordinator prompt body
- * (injected as `{inFlightBranches}`).
- * @param {object[]} inFlight - actionable branches (post-filterActionable)
- * @param {{ defaultBranch:string, actions:object, branchesPerAgent?:number }} ctx
- * @returns {string}
+ * The recommended `model:`/`effort:` line for one issue-derived branch, or ''
+ * when the branch is not issue-derived, the issue carries neither label, or
+ * the forge read fails. A failed read must never block or reshape
+ * reconciliation: `getIssueDispatchHint` already collapses every failure mode
+ * to `status: 'unavailable'` and never rejects, but the `.catch` here holds
+ * that guarantee even if a future forge implementation (or a test double)
+ * throws instead — this call site is the one place the "never block" rule
+ * actually has to hold, so it doesn't trust the callee alone to keep it.
+ * @param {string} branchName
+ * @param {string} [repoPath] - repo dir gh resolves the remote from
+ * @returns {Promise<string>}
  */
-export function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent } = {}) {
+async function dispatchHintLineForBranch(branchName, repoPath) {
+  const issueNumber = issueNumberFromRef(branchName);
+  if (!issueNumber) return '';
+  const hint = await getIssueDispatchHint(issueNumber, { cwd: repoPath }).catch(() => ({ status: 'unavailable', model: null, effort: null }));
+  if (hint.status !== 'known' || (!hint.model && !hint.effort)) return '';
+  const parts = [hint.model ? `model:${hint.model}` : null, hint.effort ? `effort:${hint.effort}` : null].filter(Boolean);
+  return `- Recommended dispatch (issue #${issueNumber}'s labels): ${parts.join(', ')} — run this branch's work at that capability/effort.`;
+}
+
+/**
+ * Render the actionable in-flight branch set into the coordinator prompt body
+ * (injected as `{inFlightBranches}`). Async because each issue-derived branch
+ * gets one forge read for its issue's `model:`/`effort:` labels — see
+ * `dispatchHintLineForBranch`.
+ * @param {object[]} inFlight - actionable branches (post-filterActionable)
+ * @param {{ defaultBranch:string, actions:object, branchesPerAgent?:number, repoPath?:string }} ctx
+ * @returns {Promise<string>}
+ */
+export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent, repoPath } = {}) {
+  // One gh round-trip per issue-derived branch — resolved in parallel (not
+  // inline in the loop below) so N branches cost one round-trip's latency,
+  // not N of them in series.
+  const dispatchLines = await Promise.all(inFlight.map((b) => dispatchHintLineForBranch(b.branch, repoPath)));
   const lines = [`Default branch: \`${defaultBranch}\`. Branches to reconcile (${inFlight.length}):`, ''];
   if (Number.isInteger(branchesPerAgent) && branchesPerAgent > 0) {
     lines.splice(1, 0, `This coordinator run is limited to up to ${branchesPerAgent} branch(es); finish every branch listed below before reporting done.`);
   }
-  for (const b of inFlight) {
+  inFlight.forEach((b, i) => {
     const pr = b.openPr ? ` — PR #${b.openPr.number} (${b.openPr.mergeable})${b.openPr.url ? ` ${b.openPr.url}` : ''}` : ' — no PR';
     lines.push(`### \`${b.branch}\` [${b.state}]${pr}`);
     if (b.worktreePath) lines.push(`- Worktree: \`${b.worktreePath}\`${b.state === 'ABANDONED_WIP' ? ' (holds UNCOMMITTED work — read it before doing anything)' : ''}`);
@@ -1477,6 +1506,7 @@ export function formatInFlightForPrompt(inFlight, { defaultBranch, actions, bran
     if (b.collisionPaths?.length) {
       lines.push(`- Also changed on \`${defaultBranch}\` since this branch diverged (**read these first — they are where supersession shows up**): ${b.collisionPaths.map((p) => `\`${p}\``).join(', ')}`);
     }
+    if (dispatchLines[i]) lines.push(dispatchLines[i]);
     lines.push(`- Do: ${desiredEndState(b.state, actions, {
       prNumber: b.openPr?.number,
       worktreePath: b.worktreePath,
@@ -1484,6 +1514,6 @@ export function formatInFlightForPrompt(inFlight, { defaultBranch, actions, bran
       behind: b.behind
     })}`);
     lines.push('');
-  }
+  });
   return lines.join('\n');
 }

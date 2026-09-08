@@ -36,7 +36,7 @@ import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getUniverseRenderPin } from '../universeBuilder/crud.js';
 import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
-import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
+import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { usesDiffusersRunner } from '../../lib/runners.js';
 
 // The job tags that name the record owning a render, each mapped to the record
@@ -382,7 +382,7 @@ export function resolveLocalImageModel(settings, params) {
   const selectedModel = selectLocalImageModel(params.modelId, allModels);
   if (selectedModel && !isHardwareCompatible(selectedModel.hardwareCompatibility)) {
     throw new ServerError(
-      `Image model "${selectedModel.id}" is unavailable on this machine: ${selectedModel.hardwareCompatibility.reasons.join(' · ')}`,
+      hardwareUnavailableReason(`Image model "${selectedModel.id}"`, selectedModel.hardwareCompatibility),
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }

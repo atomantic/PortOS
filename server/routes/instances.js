@@ -11,7 +11,9 @@ import { getSyncStatus, syncWithPeer } from '../services/syncOrchestrator.js';
 import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { provisionTailscaleCert } from '../services/certProvisioner.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { DEFAULT_PEER_PORT } from '../lib/ports.js';
+import { DEFAULT_PEER_PORT, DEFAULT_TAILCAT_REMOTE_PORT, PORTS } from '../lib/ports.js';
+import * as tailcatPeer from '../services/tailcatPeer.js';
+import * as tailcatServe from '../services/tailcatServe.js';
 import { getTailscaleStatus } from '../lib/tailscale.js';
 import { federatedMediaPeerSettingsSchema, validateRequest } from '../lib/validation.js';
 
@@ -127,7 +129,12 @@ router.get('/', asyncHandler(async (req, res) => {
   ]);
   // Redact each peer's stored proxy password (keep username + hasPassword) —
   // the browser never needs the secret. Mirrors providers' hasApiKey pattern.
-  res.json({ self, peers: peers.map(instances.sanitizePeerForClient), syncStatus });
+  // Tailcat peers also carry their live forward summary so the peer card is the
+  // primary status surface (orphan forwards stay on the dedicated panel).
+  const sanitized = await tailcatPeer.attachTailcatForwardsToPeers(
+    peers.map(instances.sanitizePeerForClient),
+  );
+  res.json({ self, peers: sanitized, syncStatus });
 }));
 
 // GET /api/instances/assignable — id/name pairs a CoS task may be pinned to
@@ -247,9 +254,81 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
   });
 }));
 
+const addTailcatPeerSchema = z.object({
+  tcAddress: z.string().trim().min(24).max(2048),
+  protocol: z.enum(['http', 'https']).default('http'),
+  name: z.string().optional(),
+  auth: peerAuthSchema,
+  remotePort: z.number().int().min(1).max(65535).default(DEFAULT_TAILCAT_REMOTE_PORT),
+});
+
+// POST /api/instances/peers/tailcat — add a peer via tailcat forward (no Tailscale account).
+// Starts `tailcat forward <tc> LOCAL:5565` (LOCAL defaults to 15555) and registers
+// a loopback peer. The classic POST /peers path still rejects 127/8.
+router.post('/peers/tailcat', asyncHandler(async (req, res) => {
+  const data = validateRequest(addTailcatPeerSchema, req.body);
+  if (!tailcatPeer.isValidTcAddress(data.tcAddress)) {
+    throw new ServerError('Invalid tailcat address — paste a tc… address from the peer', { status: 400 });
+  }
+  const peer = await tailcatPeer.addPeerViaTailcat(data);
+  res.status(201).json(instances.sanitizePeerForClient(peer));
+}));
+
+// GET /api/instances/peers/tailcat/forwards — saved tailcat forwards.
+// The tc address is a bearer capability, so rows carry only its redacted form;
+// what they DO carry is which forward is down and why, so a failed add can be
+// retried without the operator producing the address again.
+router.get('/peers/tailcat/forwards', asyncHandler(async (_req, res) => {
+  res.json({ forwards: await tailcatPeer.listTailcatForwards() });
+}));
+
+// POST /api/instances/peers/tailcat/forwards/:id/retry — restart a saved forward
+// using the stored capability, registering its peer if the original add never got
+// that far.
+router.post('/peers/tailcat/forwards/:id/retry', asyncHandler(async (req, res) => {
+  const data = validateRequest(z.object({ remotePort: z.number().int().min(1).max(65535).optional() }), req.body || {});
+  const peer = await tailcatPeer.retryTailcatForward(req.params.id, data);
+  res.json(instances.sanitizePeerForClient(peer));
+}));
+
+// DELETE /api/instances/peers/tailcat/forwards/:id — stop the forward, drop the
+// stored capability, and remove its peer if one was registered.
+router.delete('/peers/tailcat/forwards/:id', asyncHandler(async (req, res) => {
+  res.json(await tailcatPeer.forgetTailcatForward(req.params.id));
+}));
+
+
+// GET /api/instances/peers/tailcat/serve — this node's managed tailcat serve status.
+// Returns the full tc address when known so the operator can Copy it out of band
+// (our own serve capability — unlike peer forwards, which stay redacted).
+router.get('/peers/tailcat/serve', asyncHandler(async (_req, res) => {
+  res.json(await tailcatServe.getTailcatServeStatus());
+}));
+
+// POST /api/instances/peers/tailcat/serve — ensure serve is running for the remote ingress only.
+router.post('/peers/tailcat/serve', asyncHandler(async (req, res) => {
+  const data = validateRequest(z.object({
+    localPort: z.literal(PORTS.TAILCAT_INGRESS).optional(),
+    keyName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/).optional(),
+  }), req.body || {});
+  const status = await tailcatServe.ensureTailcatServe(data);
+  res.status(200).json(status);
+}));
+
+// POST /api/instances/peers/tailcat/serve/retry — restart from saved config.
+router.post('/peers/tailcat/serve/retry', asyncHandler(async (_req, res) => {
+  res.json(await tailcatServe.retryTailcatServe());
+}));
+
+// DELETE /api/instances/peers/tailcat/serve — stop serve and disable restore-on-boot.
+router.delete('/peers/tailcat/serve', asyncHandler(async (_req, res) => {
+  res.json(await tailcatServe.stopTailcatServe({ disable: true }));
+}));
+
+
 // POST /api/instances/peers — add a peer
 router.post('/peers', asyncHandler(async (req, res) => {
-  const data = addPeerSchema.parse(req.body);
+  const data = validateRequest(addPeerSchema, req.body);
   // Reject invalid DNS names up front so the UI gets a clear error instead of
   // addPeer() silently dropping the field (validHost returns undefined for invalid input).
   if (data.host !== undefined && data.host !== null && data.host !== '') {
@@ -325,7 +404,8 @@ router.post('/peers/:id/probe', asyncHandler(async (req, res) => {
   const peer = peers.find(p => p.id === req.params.id);
   if (!peer) throw new ServerError('Peer not found', { status: 404 });
   const result = await instances.probePeer(peer);
-  res.json(instances.sanitizePeerForClient(result));
+  const sanitized = instances.sanitizePeerForClient(result);
+  res.json(await tailcatPeer.attachTailcatForwardToPeer(sanitized));
 }));
 
 // POST /api/instances/peers/:id/sync — force an immediate sync with this peer.

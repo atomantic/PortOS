@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router';
 import { ArrowLeft, Play, Pause, RefreshCw, SlidersHorizontal, Square, Trash2 } from 'lucide-react';
+import TabPills from '../components/ui/TabPills.jsx';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -13,8 +14,13 @@ import {
   stopCreativeDirectorProject,
   resumeCreativeDirectorProject,
 } from '../services/apiCreativeDirector.js';
+import VideoCutPanel from '../components/creative-director/VideoCutPanel.jsx';
+import VideoExecutionPanel from '../components/creative-director/VideoExecutionPanel.jsx';
+import VideoReviewPanel from '../components/creative-director/VideoReviewPanel.jsx';
+import VideoDraftDrawer from '../components/creative-director/VideoDraftDrawer.jsx';
 import OverviewTab from '../components/creative-director/OverviewTab.jsx';
 import TreatmentTab from '../components/creative-director/TreatmentTab.jsx';
+import VideoArtifactsTab from '../components/creative-director/VideoArtifactsTab.jsx';
 import SegmentsTab from '../components/creative-director/SegmentsTab.jsx';
 import PlanTab from '../components/creative-director/PlanTab.jsx';
 import RunsTab from '../components/creative-director/RunsTab.jsx';
@@ -27,6 +33,8 @@ import useMediaJobProgress from '../hooks/useMediaJobProgress';
 
 const TERMINAL_PROJECT_STATUSES = new Set(['complete', 'failed', 'paused', 'draft']);
 
+const VIDEO_DRAFT_TABS = [{ id: 'overview', label: 'Overview' }, { id: 'review', label: 'Review' }, { id: 'artifacts', label: 'Artifacts' }, { id: 'segments', label: 'Shots' }, { id: 'runs', label: 'Runs' }];
+
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'plan', label: 'Plan' },
@@ -35,11 +43,15 @@ const TABS = [
   { id: 'runs', label: 'Runs' },
 ];
 
-export default function CreativeDirectorDetail() {
+export default function CreativeDirectorDetail({ basePath = '/creative-director' } = {}) {
   const { id } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = useValidTab(TABS, 'overview');
+  const editingDraft = searchParams.get('draft') === '1';
+  const setEditingDraft = open => setSearchParams(prev => { const next = new URLSearchParams(prev); if (open) next.set('draft', '1'); else next.delete('draft'); return next; }, { replace: true });
+  const [project, setProject] = useState(null);
+  const tabs = project?.workspace === 'video' ? VIDEO_DRAFT_TABS : TABS;
+  const activeTab = useValidTab(tabs, 'overview');
   // Deep-linkable open state for the per-project AI models drawer (URL is the
   // source of truth for what's open, per the project convention).
   const modelsOpen = searchParams.get('models') === '1';
@@ -51,7 +63,6 @@ export default function CreativeDirectorDetail() {
       return params;
     }, { replace: !next });
   }, [setSearchParams]);
-  const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeAgents, setActiveAgents] = useState([]);
   // Extends polling past the terminal-status gate below for a bounded window
@@ -203,7 +214,7 @@ export default function CreativeDirectorDetail() {
     try {
       await deleteCreativeDirectorProject(id, { silent: true });
       toast.success('Creative Director project deleted');
-      navigate('/creative-director');
+      navigate(basePath);
     } catch (err) {
       toast.error(err.message || 'Failed to delete project');
       setDeleting(false);
@@ -231,14 +242,14 @@ export default function CreativeDirectorDetail() {
   }
   if (!project) return <div className="p-6 text-port-error">Project not found.</div>;
 
-  const goTo = (tabId) => navigate(`/creative-director/${id}/${tabId}`);
+  const goTo = (tabId) => navigate(`${basePath}/${id}/${tabId}`);
 
   return (
     <div className="flex flex-col h-full">
       <div className="shrink-0 px-6 pt-6 pb-3 border-b border-port-border">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <Link to="/creative-director" className="text-port-text-muted hover:text-port-text"><ArrowLeft className="w-4 h-4" /></Link>
+            <Link to={basePath} className="text-port-text-muted hover:text-port-text"><ArrowLeft className="w-4 h-4" /></Link>
             <div className="min-w-0">
               <h1 className="line-clamp-2 break-words text-xl font-semibold" title={project.name}>{project.name}</h1>
               <div className="text-xs text-port-text-muted truncate">
@@ -253,12 +264,12 @@ export default function CreativeDirectorDetail() {
             <button onClick={() => setModelsOpen(true)} title="AI provider + model for this project's treatment, plan, and scene evaluation" className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs">
               <SlidersHorizontal className="w-3 h-3" /> Models
             </button>
-            {(project.status === 'draft' || project.status === 'failed') && (
+            {project.workspace !== 'video' && (project.status === 'draft' || project.status === 'failed') && (
               <button onClick={() => handleAction('start')} className="flex items-center gap-1 px-2 py-1 bg-port-accent/30 text-port-accent rounded text-xs">
                 <Play className="w-3 h-3" /> Start
               </button>
             )}
-            {project.status === 'paused' && (
+            {project.workspace !== 'video' && project.status === 'paused' && (
               <button onClick={() => handleAction('resume')} className="flex items-center gap-1 px-2 py-1 bg-port-accent/30 text-port-accent rounded text-xs">
                 <Play className="w-3 h-3" /> Resume
               </button>
@@ -312,36 +323,40 @@ export default function CreativeDirectorDetail() {
             )}
           </div>
         </div>
-        <div className="flex gap-1 mt-3">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => goTo(t.id)}
-              className={`px-3 py-1.5 text-sm rounded ${activeTab === t.id ? 'bg-port-accent/30 text-port-accent' : 'text-port-text-muted hover:text-port-text'}`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <TabPills tabs={tabs} activeTab={activeTab} onChange={goTo} mobileDropdown ariaLabel="Video project sections" className="mt-3" />
       </div>
 
       <div className="flex-1 overflow-auto p-6">
+        {project.workspace === 'video' && activeTab === 'review' && <VideoReviewPanel key={project.id} project={project} onChange={fetchProject} />}
+
         <ActiveAgentsBanner agents={activeAgents} />
-        {activeTab === 'overview' && (
+        {project.workspace === 'video' && activeTab === 'overview' && <section className="space-y-4">
+          <h2 className="text-lg font-medium">Video production</h2>
+          <p className="text-port-text-muted">Stage: {project.status}. Start authorizes the saved choices within your limits. Enabled review checkpoints pause for your approval.</p>
+          <p className="whitespace-pre-wrap">{project.userStory || 'Add a brief to describe this video.'}</p>
+          <p className="text-sm">Exact target: {project.targetDurationSeconds} seconds (requested: {project.videoDraft?.durationRange?.min}–{project.videoDraft?.durationRange?.max} seconds) · {project.aspectRatio} · {project.quality}</p>
+          <p className="text-sm">Review: {project.videoDraft?.reviewPolicy || 'review'} · Checkpoints: {(project.videoDraft?.checkpoints || []).join(', ')}</p>
+          {['draft', 'paused', 'failed'].includes(project.status) && <button onClick={() => setEditingDraft(true)} className="px-3 py-2 rounded bg-port-accent text-white">{project.status === 'draft' ? 'Edit draft' : 'Edit production settings'}</button>}
+          <VideoCutPanel project={project} />
+          <VideoExecutionPanel key={project.id} project={project} onChange={fetchProject} basePath={basePath} />
+          <VideoDraftDrawer open={editingDraft} onClose={() => setEditingDraft(false)} project={project} onSaved={saved => setProject(prev => ({ ...prev, ...saved }))} />
+        </section>}
+        {project.workspace !== 'video' && activeTab === 'overview' && (
           <OverviewTab
             project={project}
             onProjectUpdate={(updates) => setProject((p) => p ? { ...p, ...updates } : p)}
             onAsyncWorkQueued={extendPollingForAsyncWork}
           />
         )}
-        {activeTab === 'plan' && (
+        {project.workspace !== 'video' && activeTab === 'plan' && (
           <PlanTab
             project={project}
             onProjectUpdate={(updated) => setProject((p) => (p ? { ...p, ...updated } : updated))}
           />
         )}
-        {activeTab === 'treatment' && <TreatmentTab project={project} />}
-        {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} />}
+        {project.workspace !== 'video' && activeTab === 'treatment' && <TreatmentTab project={project} />}
+        {project.workspace === 'video' && activeTab === 'artifacts' && <VideoArtifactsTab project={project} basePath={basePath} />}
+        {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} basePath={basePath} />}
         {activeTab === 'runs' && <RunsTab project={project} />}
       </div>
 

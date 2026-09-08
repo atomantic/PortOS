@@ -1,3 +1,4 @@
+import { CREDENTIALS } from './credentialRegistry.js';
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap } from './zodCompat.js';
@@ -12,6 +13,8 @@ import {
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
+import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
 import {
   FEDERATED_MEDIA_ASSET_MAX_COUNT,
@@ -554,6 +557,163 @@ export const codexLoginCancelSchema = z.object({
 export const codexLoginStartSchema = z.object({
   deviceCode: z.boolean().optional().default(false),
 });
+
+// POST /api/providers/bindings/:id/link  (and /link/preview).
+//
+// Every revision the caller reviewed is named explicitly. Omitting one is
+// allowed for a PREVIEW (there is nothing to be stale against yet), but the
+// service refuses to APPLY a link whose named revisions have moved -- a link is
+// a decision about a specific difference, so a changed row invalidates it.
+export const providerBindingLinkSchema = z.object({
+  targetConnectionId: z.string().uuid(),
+  expectedRevisions: z.object({
+    binding: z.number().int().positive().optional(),
+    sourceConnection: z.number().int().positive().optional(),
+    targetConnection: z.number().int().positive().optional(),
+  }).strict().optional().default({}),
+}).strict();
+
+// POST /api/providers/bindings/:id/unlink. No target: unlink clones the
+// connection this binding already uses, so only the binding and its source
+// participate.
+export const providerBindingUnlinkSchema = z.object({
+  expectedRevisions: z.object({
+    binding: z.number().int().positive().optional(),
+    sourceConnection: z.number().int().positive().optional(),
+  }).strict().optional().default({}),
+}).strict();
+
+// POST /api/providers/connections (#6369) — a NEW backend.
+//
+// This schema bounds the SHAPE only. Which backend kinds and transport
+// protocols are real is checked by `connectionBlocker` in the service, which
+// already owns the harness/transport registries — importing them here would
+// pull that subtree into the one module nearly every route validates through
+// (`lib/importScoping.test.js`), for two enum lists and no extra safety.
+//
+// Exactly ONE transport, and this is the load-bearing rule: a provider record
+// names one endpoint, so the profile a minted route reports always declares one
+// transport. A connection declaring two would not be the connection its own
+// routes describe, and reconciliation would clone each binding onto a fresh
+// single-transport row on the next pass — silently undoing the create.
+//
+// Credentials take no `null` here, unlike the PATCH above: there is nothing yet
+// to clear, so a null would only be a typo with a destructive reading.
+export const providerConnectionCreateSchema = z.object({
+  kind: z.string().trim().min(1).max(64),
+  label: z.string().trim().min(1).max(200),
+  transports: z.record(
+    z.string().trim().min(1).max(64),
+    z.object({ baseUrl: z.string().trim().min(1).max(2048) }).strict(),
+  ).refine((value) => Object.keys(value).length === 1, {
+    message: 'Declare exactly one transport protocol for this backend',
+  }),
+  credentials: z.record(
+    z.string().trim().min(1).max(128),
+    z.string().min(1).max(4096),
+  ).optional().default({}),
+}).strict();
+
+// POST /api/providers/bindings (#6369) — a NEW harness configuration on an
+// existing backend, and the executable routes it owns.
+//
+// `harnessId` accepts every registry id, not only the creatable ones: a harness
+// with no command recipe gets the service's explanation of WHY it cannot be
+// pointed at a backend, which is more useful than a schema enum error. `null`
+// is the direct API binding and is spelled explicitly rather than by omission,
+// because "no harness" is a real choice here, not a missing field.
+export const providerBindingCreateSchema = z.object({
+  connectionId: z.string().uuid(),
+  harnessId: z.enum(PROVIDER_HARNESS_IDS).nullable(),
+  modes: z.array(z.enum(ROUTE_MODES)).min(1).max(ROUTE_MODES.length)
+    .refine((value) => new Set(value).size === value.length, { message: 'Name each mode once' }),
+  label: z.string().trim().min(1).max(200).optional(),
+}).strict();
+
+// PATCH /api/providers/connections/:id (#6369).
+//
+// `expectedRevision` is REQUIRED, unlike the link schemas where a preview may
+// omit it: this endpoint always writes, and a shared backend edit that lands on
+// a row the human never saw is exactly the silent overwrite the graph exists to
+// prevent.
+//
+// Credentials are three-valued on purpose — absent preserves, `null` clears, a
+// string sets — so a client that never received the secret (the DTO carries
+// only `hasCredentials`) can edit a label without wiping the key.
+export const providerConnectionUpdateSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  label: z.string().trim().max(200).optional(),
+  transports: z.record(
+    z.string().trim().min(1).max(64),
+    z.object({ baseUrl: z.string().trim().min(1).max(2048) }).strict(),
+  ).optional(),
+  credentials: z.record(z.string().trim().min(1).max(128), z.string().max(4096).nullable()).optional(),
+}).strict();
+
+// PATCH /api/providers/bindings/:id (#6369). Management state only: no
+// `enabled`, because route enablement is an executable-record field that
+// PATCH /api/providers/:id owns and a binding toggle must never grant it.
+export const providerBindingUpdateSchema = z.object({
+  expectedRevision: z.number().int().positive(),
+  label: z.string().trim().max(200).optional(),
+  selectedModels: z.array(z.string().trim().min(1).max(512)).max(1000).optional(),
+}).strict();
+
+// PATCH /api/providers/routes/:providerId (#6369) — ONE route's mode overrides.
+//
+// Deliberately not `providerSchema.partial()`: that would reopen the whole
+// executable record, including the connection-owned endpoint/key the graph
+// projects and the `enabled` flag that grants execution consent. The accepted
+// keys are exactly the route-owned table in `providerRouteSettings.js`;
+// `providerRouteSettings.test.js` fails if the two ever drift.
+//
+// `expectedRevision` is a FINGERPRINT of the values on disk, not a row counter
+// — these fields live in providers.json, which the route editor and a model
+// refresh also write. An empty patch is refused rather than written: it would
+// rewrite the provider file to say nothing.
+//
+// `timeout` takes no `null`. The executable record's own schema has no null
+// timeout, so storing one here would 400 the next save from the route editor;
+// clearing a custom timeout stays that editor's job.
+const nullableModelPin = z.preprocess(emptyToNull, z.string().trim().max(512).nullable());
+export const providerRouteSettingsUpdateSchema = z.object({
+  expectedRevision: z.string().trim().min(1).max(64),
+  settings: z.object({
+    args: z.array(z.string().trim().min(1).max(2048)).max(200).optional(),
+    timeout: z.number().int().min(AI_RUN_TIMEOUT_MIN_MS).max(AI_RUN_TIMEOUT_MAX_MS).optional(),
+    effort: z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable()).optional(),
+    defaultModel: nullableModelPin.optional(),
+    lightModel: nullableModelPin.optional(),
+    mediumModel: nullableModelPin.optional(),
+    heavyModel: nullableModelPin.optional(),
+    ultraModel: nullableModelPin.optional(),
+  }).strict().refine((value) => Object.keys(value).length > 0, {
+    message: 'Name at least one setting to change',
+  }),
+}).strict();
+
+// PATCH /api/providers/routes/:providerId/model-aliases (#6369) — ONE route's
+// HAND-AUTHORED canonical→executable model aliases.
+//
+// Three-valued like the connection credentials above, and for the same reason:
+// a panel that read three aliases and changed one must be able to send one. An
+// absent key is preserved, a string sets, and `null` DELETES — the only way an
+// override is ever removed, because a refresh must never delete a correction.
+//
+// The keys are model names, so the record is not enumerable and each key is
+// length-checked. `expectedRevision` is a FINGERPRINT of the current override
+// map (`ai_route_bindings` has no revision column), and an empty patch is
+// refused rather than written: it would rewrite a row to say nothing.
+export const providerRouteModelAliasSchema = z.object({
+  expectedRevision: z.string().trim().min(1).max(64),
+  aliases: z.record(
+    z.string().trim().min(1).max(MODEL_ALIAS_LIMITS.maxLength),
+    z.string().trim().min(1).max(MODEL_ALIAS_LIMITS.maxLength).nullable(),
+  ).refine((value) => Object.keys(value).length > 0, { message: 'Name at least one alias to change' })
+    .refine((value) => Object.keys(value).length <= MODEL_ALIAS_LIMITS.maxEntries, {
+      message: `At most ${MODEL_ALIAS_LIMITS.maxEntries} aliases at a time`,
+    }),
+}).strict();
 
 // POST /api/providers/:id/vision-suite.
 export const providerVisionSuiteSchema = z.object({
@@ -1304,6 +1464,13 @@ export const databaseExportSchema = z.object({
   backend: z.enum(DB_BACKENDS).optional()
 });
 
+// System health dashboard warnings — see server/routes/systemHealth.js. The
+// `type` enum mirrors every `rawWarnings.push({ type: ... })` call site there;
+// keep the two lists in sync.
+export const SYSTEM_HEALTH_WARNING_TYPES = ['memory', 'cpu', 'disk', 'process', 'restarts', 'apps', 'database', 'forge'];
+export const systemHealthWarningParamsSchema = z.object({ type: z.enum(SYSTEM_HEALTH_WARNING_TYPES) });
+export const systemHealthWarningDismissSchema = z.object({ message: z.string().trim().min(1).max(500) });
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.
@@ -1577,6 +1744,8 @@ export const locationSettingsSchema = z.object({
 // Durable "don't show this again" for the dashboard first-run card (#5640).
 // Top-level general-settings boolean — same record as timezone/location, never
 // localStorage. Absent means show; only an explicit true suppresses.
+export const networkSetupPreferenceSchema = z.enum(['tailscale', 'tailcat', 'none']);
+
 export const hideFirstRunCardSchema = z.boolean();
 
 // Grok Imagegen settings slice (`imageGen.grok`) — the Grok Build CLI backend
@@ -1611,8 +1780,8 @@ const agyImageModelSchema = z.preprocess(
 // route makes for catalogUserTypes. The route persists the raw body, so a
 // newer build's pins survive the round-trip intact rather than being dropped.
 // Known fields keep full enum/charset enforcement (that's what stops a bad
-// model id reaching a CLI argv); the client mirror's parity test guards the
-// known-key alphabet.
+// model id reaching a CLI argv); the known-key alphabet is RENDER_TARGETS from
+// lib/renderTargets.js, which the client re-exports rather than mirrors.
 const renderTargetModelSchema = z.preprocess(
   (v) => (v === '' ? null : v),
   cloudModelIdString('model must be a valid model id').nullable().optional(),
@@ -1910,4 +2079,7 @@ export const modelComparisonImportSchema = z.object({
 });
 
 export const modelComparisonDiscoverySchema = z.object({ providerId: z.string().min(1).max(200) }).strict();
+export const privateCredentialParamsSchema = z.object({ id: z.enum(CREDENTIALS.filter(entry => entry.privateStore).map(entry => entry.id)) });
+export const privateCredentialInputSchema = z.object({ value: z.string().trim().max(2000) }).strict();
+
 export const modelComparisonSyncSchema = z.object({ apiKey: z.string().min(1).max(200).optional() }).strict();

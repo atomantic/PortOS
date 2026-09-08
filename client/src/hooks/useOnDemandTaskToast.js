@@ -128,9 +128,26 @@ export function useOnDemandTaskToast() {
       });
     };
 
+    // A PROGRAMMATIC scheduled handler (universe bible descriptions/images)
+    // finishes its work inside the server — no agent task appears in the CoS
+    // queue for the user to watch — so its outcome is the only feedback the Run
+    // Now button can produce. `dispatched: false` is a decline, not a failure
+    // (nothing to do, or a setting that needs picking), so it stays calm and
+    // always names the handler's own reason rather than a generic gloss.
+    const handleHandled = (data) => {
+      const task = data?.taskType || 'task';
+      if (data?.dispatched) {
+        toast(data.summary || `${task}: done.`, { duration: 7000, icon: '✅' });
+        return;
+      }
+      toast(`${task}: ${data?.reason || 'nothing to do right now'}.`, { duration: 7000, icon: '💤' });
+    };
+
     socket.on('cos:schedule:on-demand-empty', handleEmpty);
+    socket.on('cos:schedule:on-demand-handled', handleHandled);
     return () => {
       socket.off('cos:schedule:on-demand-empty', handleEmpty);
+      socket.off('cos:schedule:on-demand-handled', handleHandled);
       // Don't unsubscribe from cos — other components share the room.
     };
   }, []);

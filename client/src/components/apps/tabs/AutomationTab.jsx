@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router';
-import { RefreshCw, Play, PauseCircle, Settings, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { RefreshCw, Play, PauseCircle, Settings, ChevronDown, ChevronRight, Sparkles, AlertTriangle } from 'lucide-react';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
 import CronInput from '../../CronInput';
 import ToggleSwitch from '../../ToggleSwitch';
 import AppProviderPin from '../../cos/AppProviderPin';
 import * as api from '../../../services/api';
-import { AGENT_OPTIONS, hasProviderPin, toggleAppMetadataOverride, agentOptionButtonClass } from '../../cos/constants';
+import { AGENT_OPTIONS, hasProviderPin, providerPinDivergesFromSchedule, toggleAppMetadataOverride, agentOptionButtonClass } from '../../cos/constants';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
 import { PROVIDER_TYPES, providerDisplayName } from '../../../utils/providers';
 import CustomTasksSection from './CustomTasksSection';
@@ -251,6 +251,12 @@ export default function AutomationTab({ appId, appName }) {
             const effectiveProviderName = override.providerId
               ? providerDisplayName(providers, override.providerId)
               : taskProviderName;
+            // Surfaced collapsed (not just inside Configure): an app-level pin
+            // silently wins over the Schedule pin at spawn (#4783), so a task
+            // schedule showing one provider while this app's override names a
+            // DIFFERENT one is exactly the "why did it run somewhere else"
+            // confusion a user hits with only the Schedule page open.
+            const providerDivergesFromSchedule = providerPinDivergesFromSchedule(override, globalConfig);
 
             return (
               <div key={taskType} className="bg-port-card border border-port-border rounded-lg p-3 space-y-2">
@@ -276,6 +282,15 @@ export default function AutomationTab({ appId, appName }) {
                   </span>
                   <div className="flex-1 min-w-0">
                     <span className="text-white font-mono text-xs">{taskType}</span>
+                    {providerDivergesFromSchedule && (
+                      <span
+                        className="inline-flex items-center gap-1 ml-2 text-port-warning"
+                        title={`Runs on ${effectiveProviderName} — the schedule's default is ${taskProviderName}, but this app's provider override wins`}
+                      >
+                        <AlertTriangle size={11} />
+                        <span className="text-[10px] uppercase tracking-wide">Provider override</span>
+                      </span>
+                    )}
                     <div className="text-xs text-gray-500">{effectiveLabel}{intervalSuffix}</div>
                   </div>
                   <button

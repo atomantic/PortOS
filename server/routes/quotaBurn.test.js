@@ -12,15 +12,15 @@ vi.mock('../services/quotaBurnRunner.js', () => ({
   runQuotaBurnCycle: vi.fn(),
 }));
 vi.mock('../services/quotaBurnCompletions.js', () => ({ clearQuotaBurnJobCompletion: vi.fn() }));
+vi.mock('../services/quotaBurnConversion.js', () => ({ convertLegacyQuotaBurnPatch: vi.fn(async (patch) => patch) }));
 vi.mock('../services/apps.js', () => ({ getActiveApps: vi.fn() }));
-vi.mock('../services/universeBuilder.js', () => ({ listUniverseNames: vi.fn() }));
 vi.mock('../services/providers.js', () => ({ listProviders: vi.fn() }));
 
 import { clearQuotaBurnJobCompletion } from '../services/quotaBurnCompletions.js';
+import { convertLegacyQuotaBurnPatch } from '../services/quotaBurnConversion.js';
 import { getQuotaBurnConfig, saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
-import { listUniverseNames } from '../services/universeBuilder.js';
 import { listProviders } from '../services/providers.js';
 import quotaBurnRoutes from './quotaBurn.js';
 
@@ -39,7 +39,6 @@ beforeEach(() => {
     status: { running: false, families: [], runs: [] },
   });
   getActiveApps.mockResolvedValue([{ id: 'a1', name: 'App One', secret: 'do-not-leak' }]);
-  listUniverseNames.mockResolvedValue([{ id: 'u1', name: 'Example Universe' }]);
   listProviders.mockResolvedValue([{ id: 'claude-code', name: 'Claude Code', type: 'cli' }]);
 });
 
@@ -63,34 +62,55 @@ describe('GET /api/quota-burn', () => {
 });
 
 describe('GET /api/quota-burn/catalog', () => {
-  it('projects apps, universes, and providers', async () => {
+  it('projects apps and providers, and nothing an app record should not leak', async () => {
     const res = await request(buildApp()).get('/api/quota-burn/catalog');
     expect(res.status).toBe(200);
-    expect(res.body.apps).toEqual([{ id: 'a1', name: 'App One' }]);
-    expect(res.body.universes).toEqual([{ id: 'u1', name: 'Example Universe' }]);
-    expect(res.body.providers).toEqual([{ id: 'claude-code', name: 'Claude Code', type: 'cli' }]);
-    expect(res.body.jobTypes.map((type) => type.id)).toContain('universe-bible-images');
+    expect(res.body).toEqual({
+      apps: [{ id: 'a1', name: 'App One' }],
+      providers: [{ id: 'claude-code', name: 'Claude Code', type: 'cli' }],
+    });
   });
 
-  it('still renders when the universe store is unavailable', async () => {
-    // The universe job simply has nothing to pick from — that must not 500 the
-    // whole config page.
-    listUniverseNames.mockRejectedValue(new Error('store down'));
+  it('no longer serves the legacy job catalog or the prompt presets', async () => {
+    // #6381 froze both as compatibility-and-migration inputs. Serving them would
+    // invite a client to author work that has no executor any more.
+    const res = await request(buildApp()).get('/api/quota-burn/catalog');
+    expect(res.body.jobTypes).toBeUndefined();
+    expect(res.body.presets).toBeUndefined();
+  });
+
+  it('still renders when the provider list is unavailable', async () => {
+    listProviders.mockRejectedValue(new Error('store down'));
     const res = await request(buildApp()).get('/api/quota-burn/catalog');
     expect(res.status).toBe(200);
-    expect(res.body.universes).toEqual([]);
+    expect(res.body.providers).toEqual([]);
   });
 });
 
 describe('PUT /api/quota-burn', () => {
   it('saves a partial plan', async () => {
     saveQuotaBurnConfig.mockResolvedValue({ enabled: true });
+    const jobs = [{ taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' } }];
     const res = await request(buildApp()).put('/api/quota-burn')
-      .send({ families: { grok: { enabled: true, jobs: [{ jobType: 'agent-prompt', params: { appId: 'a1' } }] } } });
+      .send({ families: { grok: { enabled: true, jobs } } });
     expect(res.status).toBe(200);
-    expect(saveQuotaBurnConfig).toHaveBeenCalledWith({
-      families: { grok: { enabled: true, jobs: [{ jobType: 'agent-prompt', params: { appId: 'a1' } }] } },
-    });
+    expect(saveQuotaBurnConfig).toHaveBeenCalledWith({ families: { grok: { enabled: true, jobs } } });
+  });
+
+  it('runs a legacy body through the conversion service before it reaches disk', async () => {
+    // The compat door: an old client can still PUT a `jobType` step, and it must
+    // be converted through the SAME service the migration used rather than
+    // persisted as an un-migrated step the runner can only refuse.
+    saveQuotaBurnConfig.mockResolvedValue({ enabled: true });
+    const legacy = { families: { grok: { enabled: true, jobs: [{ jobType: 'agent-prompt', params: { appId: 'a1' } }] } } };
+    const converted = { families: { grok: { enabled: true, jobs: [{ taskRef: { kind: 'custom', jobId: 'job-burn-grok-job-1' } }] } } };
+    convertLegacyQuotaBurnPatch.mockResolvedValueOnce(converted);
+
+    const res = await request(buildApp()).put('/api/quota-burn').send(legacy);
+
+    expect(res.status).toBe(200);
+    expect(convertLegacyQuotaBurnPatch).toHaveBeenCalledWith(legacy);
+    expect(saveQuotaBurnConfig).toHaveBeenCalledWith(converted);
   });
 
   it('accepts the unlimited dispatch cap, which sits below the field\'s own minimum', async () => {
@@ -113,6 +133,54 @@ describe('PUT /api/quota-burn', () => {
     expect((await request(app).put('/api/quota-burn').send({ families: { grok: { jobs: [{ jobType: 'rm-rf' }] } } })).status).toBe(400);
     expect((await request(app).put('/api/quota-burn').send({ checkIntervalMinutes: 1 })).status).toBe(400);
     expect(saveQuotaBurnConfig).not.toHaveBeenCalled();
+  });
+
+  it('saves a scheduled-task reference step with per-invocation overrides', async () => {
+    saveQuotaBurnConfig.mockResolvedValue({ enabled: true });
+    const jobs = [{
+      id: 'step-1', label: 'Nightly UX sweep', runOnce: true,
+      taskRef: { kind: 'builtin', taskType: 'ux', appId: 'a1' },
+      overrides: { providerId: 'claude-code-tui', model: 'opus', effort: 'high', params: { fileIssues: true } },
+    }];
+    const res = await request(buildApp()).put('/api/quota-burn').send({ families: { claude: { enabled: true, jobs } } });
+    expect(res.status).toBe(200);
+    expect(saveQuotaBurnConfig).toHaveBeenCalledWith({ families: { claude: { enabled: true, jobs } } });
+  });
+
+  it('names the offending field when a reference is malformed', async () => {
+    const app = buildApp();
+    const reject = async (families) => {
+      const res = await request(app).put('/api/quota-burn').send({ families });
+      expect(res.status).toBe(400);
+      return (res.body.context?.details || []).map((d) => d.path);
+    };
+    // A type that only makes sense against one managed app, with none named.
+    expect(await reject({ claude: { jobs: [{ taskRef: { kind: 'builtin', taskType: 'pr-reviewer' } }] } }))
+      .toContain('families.claude.jobs.0.taskRef.appId');
+    // A custom reference addressed by something that is not a job id.
+    expect(await reject({ claude: { jobs: [{ taskRef: { kind: 'custom', jobId: 7 } }] } }))
+      .toContain('families.claude.jobs.0.taskRef.jobId');
+    // A pin on another family's subscription — the runner would spend it.
+    expect(await reject({ claude: { jobs: [{ taskRef: { kind: 'custom', jobId: 'j1' }, overrides: { providerId: 'codex-tui' } }] } }))
+      .toContain('families.claude.jobs.0.overrides.providerId');
+    // A step that names no work at all, and one that names two kinds of it.
+    expect(await reject({ claude: { jobs: [{ label: 'orphan' }] } }))
+      .toContain('families.claude.jobs.0.taskRef');
+    expect(await reject({ claude: { jobs: [{ jobType: 'agent-prompt', taskRef: { kind: 'custom', jobId: 'j1' } }] } }))
+      .toContain('families.claude.jobs.0.jobType');
+    expect(saveQuotaBurnConfig).not.toHaveBeenCalled();
+  });
+
+  it('accepts an in-family pin, and one whose id names no family at all', async () => {
+    // Only an id that unambiguously names ANOTHER family is rejected: the binary
+    // decides the family, and a schema cannot read the provider list.
+    saveQuotaBurnConfig.mockResolvedValue({ enabled: true });
+    const app = buildApp();
+    for (const providerId of ['claude-code-tui', 'my-own-wrapper']) {
+      const res = await request(app).put('/api/quota-burn')
+        .send({ families: { claude: { jobs: [{ taskRef: { kind: 'custom', jobId: 'j1' }, overrides: { providerId } }] } } });
+      expect(res.status, providerId).toBe(200);
+    }
   });
 });
 

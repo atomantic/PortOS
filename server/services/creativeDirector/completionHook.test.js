@@ -81,6 +81,20 @@ beforeEach(() => {
 });
 
 describe('handleCreativeDirectorCompletion — plan deliverable', () => {
+  it('settles the planner that wrote the current Video plan but rejects a later revision', async () => {
+    const task = planTask();
+    task.metadata.creativeDirector.productionRevision = 2;
+    const project = planProject({ workspace: 'video', videoWorkRevision: 3,
+      plan: { submittedProductionRevision: 2, replanRounds: 0, updatedAt: 'later', steps: [{ stepId: 'a', status: 'pending' }] } });
+    mockGetProject.mockResolvedValue(project);
+    await handleCreativeDirectorCompletion(task, 'agent-1', true);
+    expect(mockUpdateRun).toHaveBeenCalledWith('cd-1', 'run-1', expect.objectContaining({ status: 'completed' }));
+    mockUpdateRun.mockClear();
+    mockGetProject.mockResolvedValue({ ...project, videoWorkRevision: 4 });
+    await handleCreativeDirectorCompletion(task, 'agent-1', true);
+    expect(mockUpdateRun).not.toHaveBeenCalled();
+  });
+
   it('marks an exit-0 plan run FAILED when no plan was PATCHed', async () => {
     mockGetProject.mockResolvedValue(planProject());
     await handleCreativeDirectorCompletion(planTask(), 'agent-1', true);
@@ -218,4 +232,14 @@ describe('advanceAfterSceneSettled — bounded treatment gate', () => {
     await advanceAfterSceneSettled('cd-1');
     expect(mockEnqueueTreatmentTask).toHaveBeenCalledTimes(1);
   });
+});
+
+it('keeps Video drafts inert through both direct starts and background scene advancement', async () => {
+  mockGetProject.mockResolvedValue({ id: 'cd-video', workspace: 'video', status: 'planning', runs: [], directive: { goal: 'Example' } });
+  await startCreativeDirectorProject('cd-video');
+  await advanceAfterSceneSettled('cd-video');
+  expect(mockAdvancePlan).not.toHaveBeenCalled();
+  expect(mockEnqueueTreatmentTask).not.toHaveBeenCalled();
+  expect(mockRunSceneRender).not.toHaveBeenCalled();
+  expect(mockUpdateProject).not.toHaveBeenCalled();
 });

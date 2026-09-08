@@ -3,7 +3,8 @@ import {
   CODEX_EFFORT_LEVELS,
   ANTIGRAVITY_EFFORT_LEVELS,
   CURSOR_EFFORT_LEVELS,
-  GROK_EFFORT_LEVELS
+  GROK_EFFORT_LEVELS,
+  CODEX_ULTRA_EFFORT_LEVELS
 } from '../utils/providers';
 
 /**
@@ -101,8 +102,30 @@ export const normalizeReviewerSlug = (reviewer) => {
 
 // The ladder for one reviewer token, or `null` when it takes no effort. Accepts
 // the `gemini` alias and `@username` tokens (both → null for the latter).
-export const reviewerEffortLevels = (reviewer) =>
-  REVIEWER_EFFORT_LEVELS[normalizeReviewerSlug(reviewer)] || null;
+// For `codex` reviewers, the ladder is gated on the pinned model: gpt-6 family
+// models reject `minimal`. Pass the model id to get the right tier set for that
+// model; omit it to get the default static ladder.
+export const reviewerEffortLevels = (reviewer, model = null) => {
+  const slug = normalizeReviewerSlug(reviewer);
+  if (!slug) return null;
+
+  const base = REVIEWER_EFFORT_LEVELS[slug] || null;
+
+  // For codex, gate minimal on gpt-6 family models that reject it.
+  // Mirror of codexEffortLevelsForModel from server/lib/providerModels.js.
+  if (slug === 'codex' && model && base) {
+    const modelId = String(model || '').trim().toLowerCase();
+    // gpt-6 and later don't accept minimal; gpt-5.6 and earlier do
+    if (/^gpt-[6-9]([.-]|$)/.test(modelId)) {
+      // Check if it's an ultra model (gpt-5.6 or gpt-6-astra)
+      const isUltra = ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra'].includes(modelId);
+      const ultraLadder = isUltra ? CODEX_ULTRA_EFFORT_LEVELS : CODEX_EFFORT_LEVELS;
+      return ultraLadder.filter(l => l !== 'minimal');
+    }
+  }
+
+  return base;
+};
 
 // Characters that are STRUCTURAL in slashdo's emitted `--review-with` token and
 // have no escape inside the `[<model>]` selector, so the server drops an id
@@ -135,10 +158,10 @@ export const sanitizeReviewerModelInput = (raw) =>
 // review-loop reviewer that never runs; the reverse hides one their install has.
 export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
 
-// The reviewer a task falls back to when none is configured. Mirror of
-// DEFAULT_REVIEWER / DEFAULT_REVIEWERS.
+// The reviewer identity used for Copilot-specific handling. An empty default
+// reviewer list keeps code review opt-in on a fresh install.
 export const DEFAULT_REVIEWER = 'copilot';
-export const DEFAULT_REVIEWERS = [DEFAULT_REVIEWER];
+export const DEFAULT_REVIEWERS = [];
 
 // Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
 // reviewers to gate merging, appended to slashdo's `--review-with` after the

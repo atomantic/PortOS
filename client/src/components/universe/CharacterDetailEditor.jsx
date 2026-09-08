@@ -14,9 +14,26 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity, Users, Swords,
-  Drama, KeyRound, Mic, Images, BadgeCheck, Play,
+  Drama, KeyRound, Mic, Images, BadgeCheck, Play, Compass,
 } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
+// Shared narrative-framework definitions (#2175, #6417) — one source of truth
+// with the server store/schema and the Writers Room cast editor. An
+// unrecognized arc type is coerced to null server-side, so `''` = unset.
+import {
+  CHARACTER_ARC_TYPES,
+  CHARACTER_FRAMEWORK_EDITOR_FIELDS,
+  CHARACTER_MOTIVATIONS_FIELD,
+  CHARACTER_PSYCHOLOGY_DRIVE_HINTS,
+  CHARACTER_PSYCHOLOGY_DRIVE_LEAVES,
+  CHARACTER_PSYCHOLOGY_EDITOR_FIELDS,
+  CHARACTER_PSYCHOLOGY_NOTE_FIELD,
+  CHARACTER_SECRETS_FIELD,
+  CHARACTER_SLIDER_AXES,
+  PSYCHOLOGY_ASSESSMENTS,
+  PSYCHOLOGY_DRIVE_AXES,
+  RELATIONSHIP_LINK_TYPES,
+} from '../../lib/characterFramework';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useRowDraft from '../../hooks/useRowDraft';
 import usePendingListRows from '../../hooks/usePendingListRows';
@@ -50,7 +67,7 @@ const SECTIONS = Object.freeze([
   {
     key: 'personality', label: 'Personality & motivations', icon: Smile,
     fields: [
-      { name: 'motivations', label: 'Motivations', placeholder: 'what they WANT and what they fear losing', max: L.MOTIVATIONS_MAX, type: 'textarea' },
+      { ...CHARACTER_MOTIVATIONS_FIELD, type: 'textarea' },
       { name: 'likes', label: 'Likes', placeholder: 'short prose; comma-separated', max: L.LIKES_MAX, type: 'textarea' },
       { name: 'dislikes', label: 'Dislikes', placeholder: 'short prose; comma-separated', max: L.DISLIKES_MAX, type: 'textarea' },
       { name: 'mannerisms', label: 'Mannerisms', placeholder: 'habitual physical / verbal tics', max: L.MANNERISMS_MAX, type: 'textarea' },
@@ -60,13 +77,10 @@ const SECTIONS = Object.freeze([
   },
   {
     key: 'framework', label: 'Character framework', icon: Drama,
-    fields: [
-      { name: 'ghost', label: 'Ghost (backstory wound cause)', placeholder: 'the past event that wounded them — must causally explain the Lie', max: L.GHOST_MAX, type: 'textarea' },
-      { name: 'wound', label: 'Wound', placeholder: 'the lasting emotional damage the Ghost left', max: L.WOUND_MAX, type: 'textarea' },
-      { name: 'lie', label: 'Lie (false belief)', placeholder: 'state in one sentence — "I only matter if I win"', max: L.LIE_MAX, type: 'textarea' },
-      { name: 'need', label: 'Need (Truth — opposite of the Lie)', placeholder: 'the direct opposite of the Lie — "I matter whether I win or lose"', max: L.NEED_MAX, type: 'textarea' },
-      { name: 'want', label: 'Want (external goal)', placeholder: 'the concrete goal they pursue — usually conflicts with the Need', max: L.WANT_MAX, type: 'textarea' },
-    ],
+    // Shared with the Writers Room cast editor (#6417) — same Ghost → Wound →
+    // Lie → Need → Want definitions, adapted there onto BibleSection's compact
+    // field config instead of being restated.
+    fields: CHARACTER_FRAMEWORK_EDITOR_FIELDS.map((f) => ({ ...f, type: 'textarea' })),
   },
   {
     key: 'visualIdentity', label: 'Visual identity', icon: Eye,
@@ -79,22 +93,13 @@ const SECTIONS = Object.freeze([
   },
 ]);
 
-// Mirrors `RELATIONSHIP_LINK_TYPES` / `RELATIONSHIP_OPPOSITION_AXES` in
-// server/lib/storyBible.js (#1287). The server sanitizer coerces an
-// unrecognized value to 'custom', so adding a token here without the server
-// side just means the UI offers a value the server folds back to custom.
-const RELATIONSHIP_LINK_TYPES = Object.freeze([
-  'ally', 'antagonist', 'rival', 'mentor', 'love-interest', 'family', 'custom',
-]);
+// Opposing-force axes (#1287) stay local: tagging a link as an opposing force
+// is Universe-editor-only, so the Writers Room row editor has no use for them.
+// The link TYPES are shared — see the `characterFramework` import above.
 const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
   'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
 ]);
 
-// Mirrors `CHARACTER_ARC_TYPES` in server/lib/storyBible.js (#2175). The server
-// sanitizer coerces an unrecognized value to null, so an empty selection clears
-// the field. `''` = unset.
-const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
-const SLIDER_AXES = Object.freeze(['proactivity', 'likability', 'competence']);
 const VOICE_SOURCE_POLICIES = Object.freeze(['designed', 'consented-performance', 'licensed']);
 const IDENTITY_ASSET_ROLES = Object.freeze([
   'neutral', 'profile', 'full-body', 'expression-gesture', 'wardrobe',
@@ -151,7 +156,7 @@ const LIST_SECTIONS = Object.freeze([
     // via `toRows` / `fromRows` below (see ListSectionEditor).
     stringList: true,
     columns: [
-      { name: 'text', placeholder: 'something they hide from others or themselves', max: L.SECRET_MAX },
+      { name: 'text', placeholder: CHARACTER_SECRETS_FIELD.placeholder, max: CHARACTER_SECRETS_FIELD.max },
     ],
     summary: (s) => s.text,
   },
@@ -546,7 +551,7 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
   const sliders = (entry.sliders && typeof entry.sliders === 'object') ? entry.sliders : {};
   const arcId = `chr-arc-${idPrefix || 'unknown'}`;
   const patchSlider = (axis, value) => onPatch?.({ sliders: { ...sliders, [axis]: value } });
-  const setCount = SLIDER_AXES.reduce((n, a) => n + (typeof entry[a] === 'string' ? 0 : (sliders[a] != null ? 1 : 0)), 0);
+  const setCount = CHARACTER_SLIDER_AXES.reduce((n, a) => n + (typeof entry[a] === 'string' ? 0 : (sliders[a] != null ? 1 : 0)), 0);
   const summary = `${entry.arcType || 'no arc'}${setCount ? ` · ${setCount}/3 sliders` : ''}`;
   return (
     <BoxedSection icon={Drama} label="Arc type & sliders" summary={summary}>
@@ -568,7 +573,7 @@ function ArcFrameworkControls({ entry, onPatch, disabled, idPrefix }) {
       <p className="text-[10px] text-gray-500 leading-snug">
         Rule: HIGH (≥7) on at least two sliders, or high on one with room to grow. All-low = boring; all-high = Mary Sue.
       </p>
-      {SLIDER_AXES.map((axis) => {
+      {CHARACTER_SLIDER_AXES.map((axis) => {
         const id = `chr-slider-${idPrefix || 'unknown'}-${axis}`;
         const val = sliders[axis];
         const set = val != null;
@@ -1167,6 +1172,144 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
   );
 }
 
+// One draft-buffered textarea inside the psychology profile. A sub-component
+// because `useFieldDraft` is a hook and cannot be called inside a `.map`.
+function PsychologyField({ id, label, hint, placeholder, max, value, onCommit, disabled, rows = 2 }) {
+  const draft = useFieldDraft(value || '', onCommit);
+  return (
+    <div className="space-y-0.5">
+      <label htmlFor={id} className="block text-[10px] uppercase tracking-wider text-gray-500">{label}</label>
+      {hint ? <p className="text-[10px] leading-snug text-gray-500">{hint}</p> : null}
+      <textarea
+        id={id} value={draft.value} onChange={draft.onChange} onBlur={draft.onBlur}
+        placeholder={placeholder} maxLength={max} disabled={disabled} rows={rows}
+        className={REL_INPUT_CLASS}
+      />
+    </div>
+  );
+}
+
+/**
+ * Optional structured psychology (#6414) — the character's operating rule and
+ * the survival / connection / status drives it serves.
+ *
+ * Deliberately NOT auto-derived from the Lie. The Lie is an optional judgment
+ * ABOUT a belief; the theory of control is the belief stated as the rule the
+ * character actually runs on. They are usually related and are never the same
+ * statement, so an existing Lie is offered as read-only legacy context and a
+ * suggested starting point — never copied in, never asserted equivalent.
+ * Absent on every character nobody has assessed, which is why the summary says
+ * "unassessed" rather than showing an empty form as if it were filled in.
+ */
+function PsychologySection({ entry, onPatch, disabled }) {
+  const psychology = (entry.psychology && typeof entry.psychology === 'object') ? entry.psychology : {};
+  const drives = (psychology.drives && typeof psychology.drives === 'object') ? psychology.drives : {};
+  const commit = (patch) => onPatch?.({ psychology: { ...psychology, ...patch } });
+  const commitDrive = (axis, patch) => commit({
+    drives: { ...drives, [axis]: { ...(drives[axis] || {}), ...patch } },
+  });
+  const filled = CHARACTER_PSYCHOLOGY_EDITOR_FIELDS.filter((f) => String(psychology[f.name] || '').trim()).length
+    + PSYCHOLOGY_DRIVE_AXES.filter((axis) => String(drives[axis]?.desire || '').trim() || String(drives[axis]?.fear || '').trim()).length;
+  // "unassessed" is keyed on the PERSISTED object, not on the filled count: an
+  // author who ruled the profile out wrote a real assessment even though every
+  // prose leaf is blank, and the clear action has to stay reachable for them.
+  const hasProfile = Boolean(entry.psychology);
+  const summary = !hasProfile
+    ? 'unassessed'
+    : psychology.assessment && psychology.assessment !== 'assessed'
+      ? psychology.assessment
+      : `${filled}/${CHARACTER_PSYCHOLOGY_EDITOR_FIELDS.length + PSYCHOLOGY_DRIVE_AXES.length} filled`;
+  const assessmentId = `chr-psych-assessment-${entry.id}`;
+  return (
+    <BoxedSection icon={Compass} label="Psychology (theory of control & drives)" summary={summary}>
+      <p className="text-[10px] leading-snug text-gray-500">
+        Optional. The Ghost and Wound above stay the origin history; the Want and Need stay the conscious
+        pursuit and the internal alternative. This section adds the rule the character operates by and the
+        three drives it manages. Leave it empty and the character stays valid and simply unassessed.
+      </p>
+      {entry.lie ? (
+        <p className="text-[10px] leading-snug text-gray-400 border-l-2 border-port-border pl-2">
+          <span className="uppercase tracking-wider text-gray-500">Legacy context — the Lie you already wrote:</span>{' '}
+          <span className="italic">{entry.lie}</span>{' '}
+          A suggested starting point only. The Lie is a judgment about a belief; the theory of control states
+          the belief as the character&apos;s operating rule. They are not the same sentence, and the Need may
+          qualify the belief rather than be its literal opposite.
+        </p>
+      ) : null}
+      <div className="space-y-0.5">
+        <label htmlFor={assessmentId} className="block text-[10px] uppercase tracking-wider text-gray-500">
+          Assessment
+        </label>
+        <select
+          id={assessmentId} value={psychology.assessment || ''} disabled={disabled}
+          onChange={(e) => commit({ assessment: e.target.value || null })}
+          className={REL_INPUT_CLASS}
+        >
+          <option value="">— unset —</option>
+          {PSYCHOLOGY_ASSESSMENTS.map((a) => <option key={a} value={a}>{a}</option>)}
+        </select>
+      </div>
+      {psychology.assessment === 'unknown' || psychology.assessment === 'not-applicable' ? (
+        <PsychologyField
+          id={`chr-psych-note-${entry.id}`}
+          label={CHARACTER_PSYCHOLOGY_NOTE_FIELD.label}
+          hint={CHARACTER_PSYCHOLOGY_NOTE_FIELD.hint}
+          placeholder={CHARACTER_PSYCHOLOGY_NOTE_FIELD.placeholder}
+          max={CHARACTER_PSYCHOLOGY_NOTE_FIELD.max}
+          value={psychology.assessmentNote}
+          onCommit={(v) => commit({ assessmentNote: v })}
+          disabled={disabled}
+        />
+      ) : null}
+      {CHARACTER_PSYCHOLOGY_EDITOR_FIELDS.map((field) => (
+        <PsychologyField
+          key={field.name}
+          id={`chr-psych-${entry.id}-${field.name}`}
+          label={field.label}
+          placeholder={field.placeholder}
+          max={field.max}
+          value={psychology[field.name]}
+          onCommit={(v) => commit({ [field.name]: v })}
+          disabled={disabled}
+        />
+      ))}
+      <p className="text-[10px] leading-snug text-gray-500">
+        Testing pressure and candidate change are what this character sheet EXPECTS. What the story actually
+        delivers belongs to the authored character arc on the series, not here.
+      </p>
+      <div className="space-y-2">
+        <span className="block text-[10px] uppercase tracking-wider text-gray-500">Drives</span>
+        {PSYCHOLOGY_DRIVE_AXES.map((axis) => (
+          <div key={axis} className="space-y-1 border border-port-border/40 rounded p-1.5">
+            <p className="text-[10px] uppercase tracking-wider text-gray-400 capitalize">{axis}</p>
+            <p className="text-[10px] leading-snug text-gray-500">{CHARACTER_PSYCHOLOGY_DRIVE_HINTS[axis]}</p>
+            {CHARACTER_PSYCHOLOGY_DRIVE_LEAVES.map((leaf) => (
+              <PsychologyField
+                key={leaf.name}
+                id={`chr-psych-${entry.id}-${axis}-${leaf.name}`}
+                label={`${axis} ${leaf.name}`}
+                placeholder={leaf.placeholder}
+                max={leaf.max}
+                value={drives[axis]?.[leaf.name]}
+                onCommit={(v) => commitDrive(axis, { [leaf.name]: v })}
+                disabled={disabled}
+                rows={1}
+              />
+            ))}
+          </div>
+        ))}
+      </div>
+      <button
+        type="button" onClick={() => onPatch?.({ psychology: null })}
+        disabled={disabled || !hasProfile}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-port-error hover:border-port-error disabled:opacity-40"
+      >
+        <Trash2 size={10} /> Clear psychology profile
+      </button>
+    </BoxedSection>
+  );
+}
+
 function IdentityPackSection({ entry, onPatch, disabled }) {
   const pack = entry.identityPack || {};
   const assets = Array.isArray(pack.assets) ? pack.assets : [];
@@ -1298,6 +1441,8 @@ export default function CharacterDetailEditor({ entry, universeId = null, onPatc
         disabled={disabled}
         idPrefix={entry.id}
       />
+
+      <PsychologySection entry={entry} onPatch={onPatch} disabled={disabled} />
 
       <VoiceCanonSection entry={entry} onPatch={onPatch} disabled={disabled} />
 

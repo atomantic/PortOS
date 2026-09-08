@@ -72,14 +72,6 @@ vi.mock('../services/api', () => ({
   getApps: vi.fn(() => Promise.resolve([])),
   listPipelineSeries: vi.fn(() => Promise.resolve([])),
   listUniverses: vi.fn(() => Promise.resolve([])),
-  getPaletteManifest: vi.fn(() => Promise.resolve({
-    nav: [{
-      path: '/eidoverse',
-      label: 'Eidoverse Worlds',
-      feature: 'eidoverse',
-      previousPaths: ['/openworld', '/city'],
-    }],
-  })),
   getDailyActions: vi.fn(() => Promise.resolve({ actions: [] })),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
@@ -208,6 +200,25 @@ describe('Layout — pinned single nav rows', () => {
   it('omits the Pinned section entirely when nothing is pinned', async () => {
     await renderLayout();
     expect(pinnedSection()).toBeNull();
+  });
+
+  it('renders a pinned manifest-only path on the first paint, with no network mock', async () => {
+    // `/wiki/log` has a NAV_COMMANDS entry but no sidebar presentation, so it
+    // resolves only through `manifestEntryByPath`. That map is derived from the
+    // statically imported manifest, so the row must be in the DOM on the very
+    // first render — assert BEFORE the act() flush renderLayout does, which is
+    // what a fetch-backed manifest would have needed to land.
+    localStorage.setItem(PINNED_KEY, JSON.stringify(['/wiki/log']));
+    render(
+      <MemoryRouter initialEntries={['/brain/inbox']}>
+        <Layout />
+      </MemoryRouter>,
+    );
+
+    const pinned = pinnedSection();
+    expect(pinned).toBeTruthy();
+    expect(within(pinned).getByRole('link', { name: /Log/i })).toHaveAttribute('href', '/wiki/log');
+    await act(async () => {});
   });
 
   it('filters out an unknown pinned path while keeping the known one', async () => {

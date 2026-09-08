@@ -53,6 +53,8 @@ Each draft version records `id`, `label`, `contentFile`, `contentHash`, `wordCou
 
 Characters, places, and objects extracted by analysis (or entered by hand) live as per-work bible entities with full CRUD (`characters.js` / `places.js` / `objects.js`; client `CharactersBible.jsx`, `PlacesBible.jsx`, `ObjectsBible.jsx`, `StoryboardBibleTab.jsx`). Extraction merges into existing entries rather than duplicating.
 
+A character carries the same narrative framework the Universe Bible stores — motivations, Ghost → Wound → Lie → Need → Want, the declared arc type, secrets, and structured relationship links — from one definition in `server/lib/characterFramework.js` (mirrored for the editors by `client/src/lib/characterFramework.js`), so the store's editable fields, the route schemas, and both cast editors cannot drift. Every field is optional, and clearing one (`''` / `[]` / `null`) is a real authored state, distinct from omitting the key. Prose extraction may PROPOSE framework values but never overwrites an authored one, and the author-side `evaluate` pass receives the cast's framework so it reports delivery against the writer's plan rather than inferring both from the same draft. Promotion to the Pipeline copies the whole framework — including `wr-char-` ids, so relationship links still resolve inside the minted universe.
+
 ## Storyboard & Media
 
 The storyboard suite (`StoryboardPanel.jsx`, `StoryboardScenesTab.jsx`, `StoryboardBoardsTab.jsx`, `StoryboardConfigTab.jsx`, `SceneCard.jsx`) turns script-analysis scenes into rendered boards through the existing image-gen pipeline and media job queue. When the Adapt flow completes, the panel auto-queues a render for every scene that doesn't have an image yet — one Adapt click implies the whole board's image cost. Scene images ride the shared media-collection infrastructure — a work auto-creates its collection on first render.
@@ -85,8 +87,13 @@ The mapping model is a **relational read-model derived on request** rather than 
 - Prose segments come from the active draft's `segmentIndex`.
 - Script scenes come from the latest `script` analysis, whose scenes carry `sourceSegmentIds` back-references.
 - Media comes from the analysis snapshot's scene-image map.
+- Cast integrity comes from the per-work character bible, measured by the shared `server/lib/characterIntegrity.js` contract (#6415) and joined to the scenes that stage each character.
 
 Selecting prose highlights the mapped script and media; media cards show provenance (source segments, prompt, model, render job). Staleness falls out of the pinned analysis `sourceContentHash` — when the draft's hash differs, the UI shows stale badges and requires a deliberate re-run. Media attached to scenes that no longer exist after re-extraction is surfaced explicitly as orphaned rather than silently dropped.
+
+The **Cast pane** is where the cold read of the draft meets author knowledge, and the two are deliberately kept apart. Findings are the deterministic, zero-provider completeness pass over the AUTHORED bible — a character the prose stages vividly still reports every unauthored framework field, because an interior that lives only in the author's head is the defect. What the script extraction saw is reported beside it as `staged` (never as a repair): an authored character no scene stages is a fact rather than a flag, and a name the extraction found with no bible entry is listed under `staging.unmatchedNames` rather than becoming a finding the report has no record to attach. Depth rulings come from the same contract, so a declared minor role or flat arc is held to the conscious pursuit only. No model reads the cast to BUILD this report (`semanticReviewedCount` is 0 and `passed` is false by construction); the cast-wide semantic review still lives in the Universe Bible's Cast Integrity panel.
+
+**Selective augmentation** (#6417) is the write half, reached from a per-character *Sharpen* button that appears only on findings a model can actually repair — a `contradictory` finding never offers one, because nothing but the author can decide which of two disagreeing fields is wrong. Propose writes nothing and returns before/after per field; the author ticks what to keep and only those paths are applied. The proposal carries the character's fingerprint, so an edit that lands while the model is thinking gets a 409 rather than an overwrite. Peers sent to the model are this work's OWN cast — a work bible is work-local, and a universe roster would pull a draft toward a cast it has not been promoted into. The call, the field contract and the prompt stage are shared with the Universe cast editor via `server/services/characterAugmentation.js`.
 
 ## Federation
 
@@ -104,6 +111,7 @@ All under `/api/writers-room` (`server/routes/writersRoom.js`, client wrapper `c
 - **Live director** — `POST /works/:id/live-suggest`, `POST /works/:id/live-render-preview`, `POST /works/:id/cd-bridge/{suggest,send}`
 - **Synced review** — `GET /works/:id/synced-review`
 - **Story bible** — `GET/POST /works/:id/{characters,places,objects}`, `PATCH/DELETE /works/:id/{characters,places,objects}/:entityId`
+- **Cast augmentation** — `POST /works/:id/characters/:characterId/augment` (propose, writes nothing), `POST /works/:id/characters/:characterId/augment/apply` (apply the ticked subset; 409 on a stale fingerprint)
 
 Route inputs are Zod-validated at the boundary (`server/lib/validation.js`), except the scene-image attach route, which validates its fields inside `attachSceneImage` instead.
 

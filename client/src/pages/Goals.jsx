@@ -8,14 +8,21 @@ import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { useValidTab } from '../hooks/useValidTab';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 const GoalsTreeView = lazy(() => import('../components/goals/GoalsTreeView'));
 
-// Exported for the nav-manifest tab-coverage guard (server/lib/navManifest.test.js).
-export const TABS = [
-  { id: 'list', label: 'List', icon: List },
-  { id: 'tree', label: 'Tree', icon: TreePine }
-];
+// Icon per tab id. The manifest (`tabGroup: 'goals'`) owns id/label/order —
+// this page owns only how each tab looks; the short page-local labels
+// ("List"/"Tree" vs. the manifest's "Goals"/"Goals Tree") come from the
+// manifest's `tabLabel`. Throws at import time on drift.
+const TAB_PRESENTATION = {
+  list: { icon: List },
+  tree: { icon: TreePine },
+};
+
+export const TABS = buildPageNavTabs(getPageNavTabs('goals'), TAB_PRESENTATION, 'Goals');
 
 export default function Goals() {
   // `/goals/list/:goalId` carries no `:tab` segment, so `useValidTab` falls back to

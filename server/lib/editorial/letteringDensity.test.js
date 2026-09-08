@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  countWords,
   overflowSeverity,
   sanitizeLetteringThresholds,
   panelLetteringMetrics,
@@ -10,21 +9,6 @@ import {
 
 // Build a panel of N words across a single balloon.
 const balloon = (character, n) => ({ character, line: Array.from({ length: n }, (_, i) => `w${i}`).join(' ') });
-
-describe('countWords', () => {
-  it('counts whitespace-separated tokens', () => {
-    expect(countWords('one two three')).toBe(3);
-    expect(countWords('  spaced   out  ')).toBe(2);
-    expect(countWords('hyphen-ated counts once')).toBe(3);
-  });
-  it('returns 0 for empty / non-string', () => {
-    expect(countWords('')).toBe(0);
-    expect(countWords('   ')).toBe(0);
-    expect(countWords(null)).toBe(0);
-    expect(countWords(undefined)).toBe(0);
-    expect(countWords(42)).toBe(0);
-  });
-});
 
 describe('overflowSeverity', () => {
   it('scales with how far over the threshold the count runs', () => {

@@ -78,12 +78,19 @@ tryReadFile: vi.fn().mockResolvedValue(null), jobId: 'whatever' })),
   // re-attach decision is testable without loading the real trainer module.
   runTraining: vi.fn(() => new Promise(() => {})),
   hasSurvivingTrainer: vi.fn(async () => false),
+  runVideoUpscale: vi.fn(() => new Promise(() => {})),
+  cancelVideoUpscale: vi.fn(),
 };
 
 vi.mock('../videoGen/local.js', () => ({
   generateVideo: (...args) => stubs.generateVideo(...args),
   generateChainedVideo: (...args) => stubs.generateChainedVideo(...args),
   cancel: (...args) => stubs.cancelVideo(...args),
+}));
+
+vi.mock('../videoGen/upscaleJob.js', () => ({
+  runVideoUpscale: (...args) => stubs.runVideoUpscale(...args),
+  cancel: (...args) => stubs.cancelVideoUpscale(...args),
 }));
 
 vi.mock('../videoGen/grok.js', () => ({
@@ -185,6 +192,7 @@ beforeEach(async () => {
   // 'running'). Individual tests override hasSurvivingTrainer as needed.
   stubs.runTraining.mockImplementation(() => new Promise(() => {}));
   stubs.hasSurvivingTrainer.mockResolvedValue(false);
+  stubs.runVideoUpscale.mockImplementation(() => new Promise(() => {}));
   await importFresh();
 });
 
@@ -207,6 +215,46 @@ describe('mediaJobQueue', () => {
     expect(r1.jobId).toMatch(/^[0-9a-f-]{36}$/);
     expect(r1.position).toBe(1);
     expect(r2.position).toBe(2);
+  });
+
+  // The generative video upscale (#6511) rides the queue as its own kind, on
+  // the serialized GPU lane and the videoGen event bus, so it can be watched,
+  // cancelled and watchdogged exactly like a render.
+  describe('video-upscale kind', () => {
+    const upscaleParams = { historyId: 'src-1', sourceFilename: 'src-1.mp4', runtime: 'ltx25', seed: 7 };
+
+    it('dispatches to the upscale service and takes the serialized GPU lane', async () => {
+      const render = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'a' } });
+      const upscale = mediaJobQueue.enqueueJob({ kind: 'video-upscale', params: upscaleParams });
+      await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+
+      // The render holds the one GPU slot; the upscale waits behind it rather
+      // than starting a second heavy child on the same accelerator.
+      expect(mediaJobQueue.getJob(render.jobId).status).toBe('running');
+      expect(mediaJobQueue.getJob(upscale.jobId).status).toBe('queued');
+      expect(stubs.runVideoUpscale).not.toHaveBeenCalled();
+      expect(mediaJobQueue.laneConcurrencyFor({ kind: 'video-upscale', params: upscaleParams })).toBe(1);
+
+      videoGenEvents.emit('completed', { generationId: render.jobId });
+      await waitFor(() => stubs.runVideoUpscale.mock.calls.length === 1);
+      expect(stubs.runVideoUpscale).toHaveBeenCalledWith({ ...upscaleParams, chunks: 1, uploadedTempPaths: [], jobId: upscale.jobId });
+    });
+
+    it('settles on the videoGen event bus and cancels through the upscale service', async () => {
+      const { jobId } = mediaJobQueue.enqueueJob({ kind: 'video-upscale', params: upscaleParams });
+      await waitFor(() => stubs.runVideoUpscale.mock.calls.length === 1);
+
+      await mediaJobQueue.cancelJob(jobId);
+      expect(stubs.cancelVideoUpscale).toHaveBeenCalledWith(jobId);
+      // The service reports the kill as a failure; the queue maps a requested
+      // cancel to 'canceled' so the source-preserving outcome reads correctly.
+      videoGenEvents.emit('failed', { generationId: jobId, error: 'Canceled while running' });
+      await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'canceled');
+    });
+
+    it('reports the kind in queue capacity so it is never invisible', () => {
+      expect(Object.keys(mediaJobQueue.getQueueCapacity().byKind)).toContain('video-upscale');
+    });
   });
 
   describe('getQueueCapacity', () => {
@@ -682,6 +730,19 @@ describe('mediaJobQueue', () => {
     expect(stubs.cancelVideo).not.toHaveBeenCalled();
 
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
+  it('holds restored Video production submissions before any worker can spend', async () => {
+    const jobs = ['queued', 'running'].map((status, index) => ({ id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+      kind: 'video', status, queuedAt: '2026-04-30T10:00:00.000Z',
+      params: { videoProduction: { projectId: 'example-video', attemptId: `example-attempt-${index}` } } }));
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs }));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getJob(jobs[0].id)).toMatchObject({ status: 'failed', params: { videoProduction: { submissionUncertain: false } } });
+    expect(mediaJobQueue.getJob(jobs[1].id)).toMatchObject({ status: 'failed', params: { videoProduction: { submissionUncertain: true } } });
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(stubs.generateVideoRemote).not.toHaveBeenCalled();
   });
 
   it('boot recovery: persisted "running" jobs are reclassified as failed', async () => {

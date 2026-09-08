@@ -1,3 +1,4 @@
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 /** Creative Director file-backed project store (test/development escape hatch). */
 
 import { join } from 'path';
@@ -28,7 +29,12 @@ export async function listProjectsByCommissionId(commissionId) {
 }
 
 export async function createProject(input) {
-  return store.createProject(input, async ({ id }) => {
+  const seeded = { ...input };
+  if (input.workspace === 'video') {
+    const { ensureInstanceId } = await import('../instances.js');
+    seeded.videoOwnerInstanceId = await ensureInstanceId();
+  }
+  return store.createProject(seeded, async ({ id }) => {
     const collection = await createCollection({
       name: `Creative Director: ${input.name}`,
       description: `Auto-created for project ${id}`,
@@ -40,7 +46,9 @@ export async function createProject(input) {
 
 export async function setTreatment(id, treatmentInput) {
   const { all, idx } = await loadAllAndIndex(id);
-  all[idx] = logic.applyTreatment(all[idx], treatmentInput);
+  const { assertVideoSourcesAvailable } = await import('./videoSources.js');
+  const sourceRevisions = await assertVideoSourcesAvailable(all[idx]);
+  all[idx] = logic.applyTreatment(all[idx], treatmentInput, sourceRevisions);
   await saveAll(all);
   return all[idx];
 }
@@ -83,4 +91,14 @@ export async function updateRun(id, runId, patch) {
   all[idx] = project;
   await saveAll(all);
   return updated;
+}
+
+const queueVideoMutation = createFileWriteQueue();
+export async function mutateVideoProject(id, mutate) {
+  return queueVideoMutation(async () => {
+    const { all, idx } = await loadAllAndIndex(id);
+    const { project, result, skipPersist } = await mutate(all[idx]);
+    if (!skipPersist) { all[idx] = project; await saveAll(all); }
+    return { project, result };
+  });
 }

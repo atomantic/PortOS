@@ -27,7 +27,7 @@ export default function DeathClockWidget() {
     >
       <div className="flex items-center gap-2 mb-3">
         <Skull size={16} className="text-gray-500" />
-        <h3 className="text-sm font-semibold text-white">Death Clock</h3>
+        <h3 className="text-sm font-semibold text-white">Meatspace Time Remaining</h3>
       </div>
       <DeathClockCountdown deathDate={deathData.deathDate} size="sm" />
       <div className="mt-2 flex justify-between text-xs">

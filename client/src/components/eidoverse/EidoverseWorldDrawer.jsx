@@ -38,6 +38,9 @@ export default function EidoverseWorldDrawer({
   setWorldName,
   humanName,
   setHumanName,
+  cosId,
+  setCosId,
+  suggestedCosId,
   recipeDraft,
   assetOverridesDraft,
   labelAliasesDraft,
@@ -164,6 +167,34 @@ export default function EidoverseWorldDrawer({
           placeholder="Leave blank for a private generated name"
         />
       </label>
+      <p className="text-xs leading-5 text-gray-400">
+        In the embedded world, <code>/name &lt;new name&gt;</code> stages this field. Save and project leaves the current session and re-enters under the new name.
+      </p>
+      <label className="block text-sm text-gray-300" htmlFor="eidoverse-cos-name">
+        CoS / Persistent Mind name
+        <input
+          id="eidoverse-cos-name"
+          className={fieldClass}
+          value={cosId}
+          onChange={(event) => { markDirty(); setCosId(event.target.value); }}
+          maxLength={64}
+          placeholder="portos-cos"
+          pattern="[A-Za-z0-9_-]+"
+          required
+        />
+      </label>
+      <p className="text-xs leading-5 text-gray-400">
+        This is the join id shown as the chat sender. Eidoverse does not support renaming mid-session, so Save and project reconnects presence under the new name.
+      </p>
+      {suggestedCosId && suggestedCosId !== cosId && (
+        <button
+          type="button"
+          className={secondaryButton}
+          onClick={() => { markDirty(); setCosId(suggestedCosId); }}
+        >
+          Use mind name ({suggestedCosId})
+        </button>
+      )}
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-lg border border-port-border bg-port-bg p-3">
           <p className="text-xs text-gray-500">World</p>
@@ -171,7 +202,8 @@ export default function EidoverseWorldDrawer({
         </div>
         <div className="rounded-lg border border-port-border bg-port-bg p-3">
           <p className="text-xs text-gray-500">CoS presence</p>
-          <p className="mt-1 text-sm text-white">{worldState?.presence?.connected ? 'Connected' : 'Ready to reconnect'}</p>
+          <p className="mt-1 truncate text-sm text-white">{worldState?.cos?.id || cosId || 'portos-cos'}</p>
+          <p className="mt-1 text-[10px] leading-4 text-gray-500">{worldState?.presence?.connected ? 'Connected' : 'Ready to reconnect'}</p>
         </div>
         <div className="rounded-lg border border-port-border bg-port-bg p-3">
           <p className="text-xs text-gray-500">PortOS indicators</p>

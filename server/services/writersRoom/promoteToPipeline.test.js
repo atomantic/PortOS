@@ -107,6 +107,53 @@ describe('promoteWorkToPipeline', () => {
     expect(universe.objects[0].name).toBe('The Locket');
   });
 
+  it('retains the authored character framework and valid relationship links (#6417)', async () => {
+    const work = await seedWorkWithProse();
+    const ines = await createCharacter(work.id, { name: 'Ines Mbeki', role: 'rival' });
+    await createCharacter(work.id, {
+      name: 'Wren Calloway',
+      ghost: 'Left behind at the relay station at nine.',
+      wound: 'Reads every silence as abandonment.',
+      lie: 'I only matter while I am useful.',
+      need: 'Being wanted is not the same as being needed.',
+      want: 'Buy back the family salvage license.',
+      motivations: 'Keep the crew fed.',
+      arcType: 'positive',
+      secrets: ['Sold the license years ago'],
+      psychology: {
+        theoryOfControl: 'If I stay useful, nobody leaves.',
+        assessment: 'assessed',
+        drives: { connection: { desire: 'To be kept', fear: 'To be set down' } },
+      },
+      sliders: { proactivity: 8, competence: 6 },
+      relationshipLinks: [{ targetCharacterId: ines.id, type: 'rival', description: 'Same salvage claim.' }],
+    });
+
+    const { series } = await promoteWorkToPipeline(work.id);
+    const universe = await universeSvc.getUniverse(series.universeId);
+    const wren = universe.characters.find((c) => c.name === 'Wren Calloway');
+
+    expect(wren).toMatchObject({
+      ghost: 'Left behind at the relay station at nine.',
+      wound: 'Reads every silence as abandonment.',
+      lie: 'I only matter while I am useful.',
+      need: 'Being wanted is not the same as being needed.',
+      want: 'Buy back the family salvage license.',
+      motivations: 'Keep the crew fed.',
+      arcType: 'positive',
+      secrets: ['Sold the license years ago'],
+    });
+    expect(wren.psychology.theoryOfControl).toBe('If I stay useful, nobody leaves.');
+    expect(wren.psychology.drives.connection.fear).toBe('To be set down');
+    expect(wren.sliders).toEqual({ proactivity: 8, likability: null, competence: 6 });
+    // Writers-room ids survive the copy, so the link still resolves to a
+    // character that exists in the promoted universe.
+    expect(wren.id).toMatch(/^wr-char-/);
+    expect(wren.relationshipLinks).toHaveLength(1);
+    const targetId = wren.relationshipLinks[0].targetCharacterId;
+    expect(universe.characters.some((c) => c.id === targetId)).toBe(true);
+  });
+
   it('is idempotent: a second promote returns the same series/issue with reused=true', async () => {
     const work = await seedWorkWithProse();
     const first = await promoteWorkToPipeline(work.id);

@@ -8,7 +8,7 @@ import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow, listMediaVideoHolds, resumeMediaVideoHold } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
 import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, supportsCloudModelOverride, modeLabel, mediaJobLane, isCloudVideoMode } from '../../lib/imageGenBackends';
-import { ANTIGRAVITY_CONFIGURED_DEFAULT, CODEX_EFFORT_LEVELS, isConfiguredDefaultModel } from '../../utils/providers';
+import { ANTIGRAVITY_CONFIGURED_DEFAULT, effortLevelsForProvider, isConfiguredDefaultModel } from '../../utils/providers';
 import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import {
   DEFAULT_I2V_REFERENCE_MODE, isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
@@ -662,11 +662,26 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
   const [width, setWidth] = useState(p.width ?? '');
   const [height, setHeight] = useState(p.height ?? '');
   const [steps, setSteps] = useState(p.steps ?? '');
-  // The job's stored effort (a CODEX_EFFORT_LEVELS value) or the "default" option
+  // The job's stored effort (a codex effort level) or the "default" option
   // when it carried none. On submit we only send `effort` when this differs from
   // the original — the sentinel resets to default, a level pins that level.
   const originalEffort = codexEffortOf(p.effort) || EFFORT_DEFAULT_OPTION;
   const [effort, setEffort] = useState(originalEffort);
+  // Codex's ladder is MODEL-gated, so the options track the model field above:
+  // the gpt-6 family has no `minimal` rung and rejects it with an HTTP 400,
+  // failing the retry. An empty override means the shipped default model, whose
+  // ladder is the unrestricted one.
+  const codexEffortLevels = effortLevelsForProvider({ id: 'codex', command: 'codex' }, model.trim());
+  // The ladder is MODEL-gated (comment above), but `effort` only changes on a
+  // direct <select> interaction — retyping `model` to a narrower ladder (e.g.
+  // gpt-6, which drops `minimal`) left a stale out-of-ladder level selected,
+  // so submit still sent it and the server 400ed. Reconcile on every ladder
+  // change, not just on model's own onChange, since model is free-typed text.
+  useEffect(() => {
+    if (effort !== EFFORT_DEFAULT_OPTION && !codexEffortLevels.includes(effort)) {
+      setEffort(EFFORT_DEFAULT_OPTION);
+    }
+  }, [codexEffortLevels, effort]);
 
   const submit = (e) => {
     e.preventDefault();
@@ -755,7 +770,7 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
             className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
           >
             <option value={EFFORT_DEFAULT_OPTION}>Default ({CODEX_IMAGEGEN_DEFAULT_EFFORT})</option>
-            {CODEX_EFFORT_LEVELS.map((lvl) => (
+            {codexEffortLevels.map((lvl) => (
               <option key={lvl} value={lvl}>{lvl}</option>
             ))}
           </select>

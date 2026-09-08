@@ -29,9 +29,10 @@ vi.mock('./agentWorktreeCleanup.js', () => ({
 }));
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
-import { handlePipelineProgression, runAgentCompletionCleanup } from './agentCompletionCleanup.js';
+import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { updateTask, addTask, reviveBlockedTask, getAgent } from './cos.js';
 import { cleanupAgentWorktree, releaseRetryHold } from './agentWorktreeCleanup.js';
+import { resolveReviewLoopOptions } from './codeReview.js';
 
 const runningPipeline = (overrides = {}) => ({
   id: 'p1',
@@ -397,5 +398,108 @@ describe('runAgentCompletionCleanup — resume pointer', () => {
     })).rejects.toThrow('git exploded');
 
     expect(releaseRetryHold).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a1' }));
+  });
+});
+
+// The dispatch the TUI `finish()` and direct-CLI `close` handlers hand off to
+// from their `finally`. It replaced two hand-mirrored inline copies that had
+// drifted in both directions, so what these pin is the sequence itself, the PR
+// disposition it derives from the spawner's ownership verdict, and the two
+// behaviors each copy was missing. The spawner suites pin only the hand-off.
+describe('runSpawnerCompletionCleanup — the in-process spawners\' dispatch', () => {
+  const spawnerArgs = (overrides = {}) => ({
+    agentId: 'a1',
+    task: { id: 't', taskType: 'user', description: 'do it', metadata: { openPR: true } },
+    success: true,
+    // A task that asked for a PR from a harness that does not own the workflow.
+    prOwnership: { taskOpenPR: true, agentOwnsPR: false, prClaimExpected: false },
+    prClaimVerified: false,
+    noChangesToShip: false,
+    outputBuffer: 'out',
+    ...overrides,
+  });
+
+  it('advances a running pipeline, cleans the worktree with the PR disposition, then releases the hold', async () => {
+    const order = [];
+    updateTask.mockImplementationOnce(async () => { order.push('pipeline'); });
+    cleanupAgentWorktree.mockImplementationOnce(async () => { order.push('worktree'); });
+    releaseRetryHold.mockImplementationOnce(async () => { order.push('hold'); });
+    const task = { id: 't', taskType: 'user', description: 'stage', metadata: { openPR: true, pipeline: runningPipeline({ currentStage: 1 }) } };
+
+    await runSpawnerCompletionCleanup(spawnerArgs({ task }));
+
+    expect(order).toEqual(['pipeline', 'worktree', 'hold']);
+    expect(updateTask.mock.calls[0][1].metadata.pipeline.status).toBe('completed');
+    // PortOS opens the PR itself (`always`) and may auto-merge the branch.
+    expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({
+      prCreation: 'always', skipMerge: false, agentOutput: 'out', originalTask: task,
+    }));
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task, success: true });
+  });
+
+  it('threads the resolved reviewer options and the task\'s PR completion through to the worktree cleanup', async () => {
+    resolveReviewLoopOptions.mockResolvedValueOnce({ reviewers: ['codex', 'antigravity'], reviewStopMode: 'on-clean', reviewerApplies: false });
+    const task = { id: 't', taskType: 'user', description: 'do it', metadata: { openPR: true, prCompletion: 'review-then-merge' } };
+
+    await runSpawnerCompletionCleanup(spawnerArgs({ task }));
+
+    expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({
+      prCreation: 'always',
+      prCompletion: 'review-then-merge',
+      reviewers: ['codex', 'antigravity'],
+      reviewStopMode: 'on-clean',
+      reviewerApplies: false,
+    }));
+    // No pipeline on this task: progression is a no-op, not a stray task write.
+    expect(updateTask).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  // A non-owning run whose no-change audit finalize verified: there is nothing
+  // to ship, so no PR is opened for an empty branch and no reviewer defaults
+  // are read for a follow-up that will never spawn.
+  it('never opens a PR when finalize proved there was nothing to ship', async () => {
+    await runSpawnerCompletionCleanup(spawnerArgs({ noChangesToShip: true }));
+
+    expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({ prCreation: 'never' }));
+    expect(resolveReviewLoopOptions).not.toHaveBeenCalled();
+  });
+
+  // The hardening the TUI copy had and the CLI copy lacked: a reviewer-defaults
+  // read that throws must not skip the worktree cleanup and hold release behind
+  // it — that strands the worktree and leaves the task held until the orphan
+  // sweep notices.
+  it('still cleans the worktree and releases the hold when the reviewer resolve throws', async () => {
+    resolveReviewLoopOptions.mockRejectedValueOnce(new Error('settings unreadable'));
+    const args = spawnerArgs({ success: false });
+
+    await runSpawnerCompletionCleanup(args);
+
+    expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', false, expect.objectContaining({ prCreation: 'always' }));
+    expect(cleanupAgentWorktree.mock.calls[0][2]).not.toHaveProperty('reviewers');
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task: args.task, success: false });
+  });
+
+  // ...and a worktree cleanup that rejects must not either (#3373): the hold is
+  // released in a `finally`, not by the previous step's success.
+  it('releases the hold even when the worktree cleanup rejects', async () => {
+    cleanupAgentWorktree.mockRejectedValueOnce(new Error('git exploded'));
+    const args = spawnerArgs({ success: false });
+
+    await expect(runSpawnerCompletionCleanup(args)).resolves.toBeUndefined();
+
+    expect(releaseRetryHold).toHaveBeenCalledWith({ agentId: 'a1', task: args.task, success: false });
+  });
+
+  // The dominant path: a harness that opened and landed its own PR. Cleanup can
+  // spawn no follow-up, so the reviewer defaults are never even read.
+  it('skips the reviewer resolve for a run whose own PR claim finalize verified', async () => {
+    await runSpawnerCompletionCleanup(spawnerArgs({
+      prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: true },
+      prClaimVerified: true,
+    }));
+
+    expect(resolveReviewLoopOptions).not.toHaveBeenCalled();
+    expect(cleanupAgentWorktree).toHaveBeenCalledWith('a1', true, expect.objectContaining({ prCreation: 'never', skipMerge: true }));
   });
 });

@@ -45,12 +45,23 @@ import {
 } from './deliverableGate.js';
 
 export async function handleCreativeDirectorCompletion(task, agentId, success) {
+  const videoAttempt = task?.metadata?.videoProduction;
+  if (videoAttempt) {
+    const { settleVideoAttempt } = await import('./videoExecution.js');
+    await settleVideoAttempt(videoAttempt.projectId, videoAttempt.attemptId, { status: success ? 'completed' : 'failed' });
+  }
   const meta = task?.metadata?.creativeDirector;
   if (!meta?.projectId) return;
   const project = await getProject(meta.projectId).catch(() => null);
   if (!project) {
     console.log(`⚠️ CD completion hook: project ${meta.projectId} not found`);
     return;
+  }
+
+  if (project.workspace === 'video' && meta.productionRevision !== (project.videoWorkRevision || 0)) {
+    const ownsPlanWrite = meta.kind === 'plan' && project.plan?.submittedProductionRevision === meta.productionRevision
+      && project.videoWorkRevision === meta.productionRevision + 1;
+    if (!ownsPlanWrite) return;
   }
 
   // #4146 — a `plan`/`treatment` agent's deliverable is the PATCH its prompt
@@ -265,6 +276,10 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
   const skipSeedDeferSceneId = opts.skipSeedDeferSceneId || null;
   const project = await getProject(projectId);
   if (!project) return;
+  if (project.workspace === 'video') {
+    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+    if (!await videoReviewAllowsDispatch(projectId, [])) return;
+  }
   if (project.status === 'paused' || project.status === 'failed') return;
 
   // No treatment yet → enqueue treatment task.
@@ -609,7 +624,11 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
  */
 export async function startCreativeDirectorProject(projectId) {
   const project = await getProject(projectId).catch(() => null);
-  if (project?.directive) return advanceAfterPlanStepSettled(projectId);
+  if (project?.workspace === 'video') {
+    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+    if (!await videoReviewAllowsDispatch(projectId, [])) return;
+  }
+  if (project?.directive && (project.workspace !== 'video' || project.treatment)) return advanceAfterPlanStepSettled(projectId);
   return advanceAfterSceneSettled(projectId);
 }
 

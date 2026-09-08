@@ -21,7 +21,9 @@ export default function EidoverseGuest() {
         if (!response.ok) throw new Error('This guest invitation is unavailable or has expired.');
         const { host, identity } = await response.json();
         if (window.location.protocol === 'https:' && host.protocol !== 'https') throw new Error('The destination renderer needs HTTPS.');
-        const url = new URL(`${host.protocol}://${window.location.hostname}:${host.port}/`);
+        // Same-origin path so a single-port forward reaches the renderer; root
+        // `/ws` etc. are proxied on the destination's :5555 while its host is up.
+        const url = new URL(`${window.location.protocol}//${window.location.host}/eidoverse-host/`);
         url.searchParams.set('guest', '1');
         for (const key of ['world', 'name', 'avatar']) url.searchParams.set(key, identity[key]);
         if (!controller.signal.aborted) setHostUrl(url.toString());

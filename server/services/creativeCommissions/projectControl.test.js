@@ -62,7 +62,7 @@ const {
 const commission = (over = {}) => ({
   id: 'commission-1',
   enabled: true,
-  assignment: { providerId: 'lmstudio-tui', model: 'qwen3.6:35b' },
+  assignment: { providerId: 'lmstudio-tui', model: 'qwen3.6:35b', effort: 'high' },
   runs: [],
   ...over,
 });
@@ -109,7 +109,7 @@ describe('ledgerProjectIds', () => {
 describe('commissionStagePin', () => {
   it('resolves the commission LIVE, so a dispatch picks up an edited provider', async () => {
     readRawMock.mockResolvedValue(commission());
-    expect(await commissionStagePin('commission-1')).toEqual({ providerId: 'lmstudio-tui', model: 'qwen3.6:35b' });
+    expect(await commissionStagePin('commission-1')).toEqual({ providerId: 'lmstudio-tui', model: 'qwen3.6:35b', effort: 'high' });
   });
 
   it('inherits the default when nothing is pinned', async () => {

@@ -1,9 +1,10 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const mock = vi.hoisted(() => ({
   getCredentialInventory: vi.fn(),
+  saveCredential: vi.fn(),
 }));
 
 vi.mock('../../services/api', () => mock);
@@ -87,4 +88,20 @@ describe('CredentialsTab', () => {
     expect(await screen.findByText('Could not verify')).toBeInTheDocument();
     expect(screen.queryByText('Not configured')).not.toBeInTheDocument();
   });
+});
+
+it('saves and clears a write-only key with immediate feedback and no displayed stored value', async () => {
+  const row = { ...PAYLOAD.credentials[0], editable: true };
+  mock.getCredentialInventory.mockResolvedValue({ ...PAYLOAD, credentials: [row] });
+  mock.saveCredential.mockResolvedValue(row);
+  render(<MemoryRouter><CredentialsTab /></MemoryRouter>);
+  const input = await screen.findByLabelText('New Hugging Face key');
+  expect(input.value).toBe('');
+  fireEvent.change(input, { target: { value: 'hf_example' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+  expect(screen.getByRole('status').textContent).toBe('Saving…');
+  await waitFor(() => expect(input.value).toBe(''));
+  expect(mock.saveCredential).toHaveBeenCalledWith('huggingface', 'hf_example', { silent: true });
+  fireEvent.click(screen.getByRole('button', { name: 'Clear saved key' }));
+  await waitFor(() => expect(mock.saveCredential).toHaveBeenCalledWith('huggingface', '', { silent: true }));
 });

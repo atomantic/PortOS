@@ -82,5 +82,35 @@ describe('dedicated model host setup', () => {
   expect(screen.queryByText(/Available federated host:/)).not.toBeInTheDocument();
   expect(screen.queryByRole('link', { name: 'Set up as provider' })).not.toBeInTheDocument();
  });
+
+ it('prompts to set up this machine itself when its own host is serving and unconfigured', async () => {
+  api.getFleetLlmHost.mockResolvedValue({ ...state, serving: true });
+  api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
+  render(<MemoryRouter><FleetHostSetup compact providers={[]} /></MemoryRouter>);
+  expect(await screen.findByText(/serving its own model host/)).toBeInTheDocument();
+  const setupLink = screen.getByRole('link', { name: 'Set up as provider' });
+  expect(setupLink).toHaveAttribute('href', '/ai/fleet?fleetStep=client&selfHost=1');
+ });
+
+ it('does not prompt for this machine when it already has a matching provider', async () => {
+  api.getFleetLlmHost.mockResolvedValue({ ...state, serving: true });
+  api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
+  // Self-host providers are wired to the loopback queue address (both the
+  // auto-created Direct API one and the `?selfHost=1` OpenCode one) — never
+  // to `state.endpoint`, which is the tailnet address published for OTHER
+  // machines to connect to.
+  const providers = [{ id: 'self-p1', endpoint: 'http://127.0.0.1:18022/v1' }];
+  render(<MemoryRouter><FleetHostSetup compact providers={providers} /></MemoryRouter>);
+  expect(await screen.findByText('Recommended model host setup')).toBeInTheDocument();
+  expect(screen.queryByText(/serving its own model host/)).not.toBeInTheDocument();
+ });
+
+ it('offers a one-click self-host OpenCode TUI setup on the full host panel', async () => {
+  api.getFleetLlmHost.mockResolvedValue(state);
+  api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
+  render(<MemoryRouter><FleetHostSetup /></MemoryRouter>);
+  const link = await screen.findByRole('link', { name: 'Set up OpenCode TUI on this machine' });
+  expect(link).toHaveAttribute('href', '/ai/fleet?fleetStep=client&selfHost=1');
+ });
 });
 

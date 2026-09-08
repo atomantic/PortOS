@@ -26,6 +26,11 @@ import {
   normalizePeerMediaProviderConfig,
   probeFederatedMediaProvider,
 } from './federatedMediaConsumer.js';
+import {
+  classifyPeerProbeFailure,
+  buildLastProbeRecord,
+  formatProbeDiagnosticLog,
+} from '../lib/peerProbeDiagnostics.js';
 
 const INSTANCES_FILE = dataPath('instances.json');
 const PROBE_TIMEOUT_MS = 5000;
@@ -68,22 +73,33 @@ let pollingStartPending = false;
 // was requested.
 let pollingGeneration = 0;
 
-function classifyProbeError(err, peer) {
-  const code = err?.code;
-  if (code === 'ENOTFOUND') return `🌐 ❌ DNS lookup failed for ${peer.host || peer.address} — is Tailscale MagicDNS up?`;
-  if (code === 'ECONNREFUSED') return `🌐 ❌ Connection refused — peer not running on this port`;
-  if (code === 'EHOSTUNREACH') return `🌐 ❌ Host unreachable — Tailscale tunnel down or peer offline`;
-  // Native fetch raises AbortError when the AbortSignal fires; insecureFetch
-  // (used for HTTPS peer hops via peerFetch) destroys the request with a
-  // plain `new Error('Request aborted')` instead — both are timeouts here.
-  if (code === 'ETIMEDOUT' || err?.name === 'AbortError' || err?.message === 'Request aborted') return `🌐 ⏱️ Probe timeout (${PROBE_TIMEOUT_MS}ms)`;
-  // The peer is reachable but gated by an auth proxy (Tailscale serve, Caddy,
-  // nginx Basic auth). Point the user at the per-peer credential field rather
-  // than letting it read like a generic failure.
-  if (err?.httpStatus === 401 || err?.httpStatus === 403) {
-    return `🔒 Authentication required (HTTP ${err.httpStatus}) — set a username/password for this peer in the Instances UI`;
+function classifyProbeError(err, peer, tunnelError = null) {
+  const classified = classifyPeerProbeFailure(err, {
+    peer,
+    tunnelError,
+    probeTimeoutMs: PROBE_TIMEOUT_MS,
+  });
+  // Keep emoji prefixes for classic log grepping; structured class is on lastProbe.
+  if (classified.class === 'dns') return `🌐 ❌ ${classified.message}`;
+  if (classified.class === 'local_refused') return `🌐 ❌ ${classified.message}`;
+  if (classified.class === 'host_unreachable') return `🌐 ❌ ${classified.message}`;
+  if (classified.class === 'probe_timeout') return `🌐 ⏱️ ${classified.message}`;
+  if (classified.class === 'tunnel_dial') return `🐈 ❌ ${classified.message}`;
+  if (classified.class === 'auth_required') return `🔒 ${classified.message}`;
+  if (classified.class === 'probe_http') return `🌐 ❌ ${classified.message}`;
+  return classified.message;
+}
+
+/** Best-effort live forward hint for a tailcat peer (dynamic import avoids a cycle). */
+async function lookupTailcatForwardHint(peer) {
+  if (peer?.transport !== 'tailcat') return null;
+  try {
+    const { listTailcatForwards } = await import('./tailcatPeer.js');
+    const forwards = await listTailcatForwards();
+    return forwards.find((f) => f.peerId === peer.id) || null;
+  } catch {
+    return null;
   }
-  return err?.message || String(err);
 }
 
 // Normalize a credential object off a peer add/update payload. Returns:
@@ -122,11 +138,15 @@ function sameAuth(a, b) {
 // are local-only too, so peers cannot discover or influence our assignments.
 export function redactPeerForWire(peer) {
   if (!peer || typeof peer !== 'object') return peer;
-  if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaProviderStatus' in peer)) return peer;
+  if (!('auth' in peer) && !('mediaProvider' in peer) && !('mediaProviderStatus' in peer)
+    && !('tcAddress' in peer)) {
+    return peer;
+  }
   const {
     auth: _auth,
     mediaProvider: _mediaProvider,
     mediaProviderStatus: _mediaProviderStatus,
+    tcAddress: _tcAddress,
     ...rest
   } = peer;
   return rest;
@@ -153,7 +173,8 @@ export function sanitizePeerForClient(peer) {
   // separately, so masking here would hide the stored selection: every box on a
   // `syncEnabled: false` peer would read unchecked, and ticking one would
   // silently reactivate every other category still true underneath it.
-  return { ...peer, auth, syncCategories: resolveEffectiveCategories(peer, { masterSwitch: false }) };
+  const { tcAddress: _tcAddress, ...safePeer } = peer;
+  return { ...safePeer, auth, syncCategories: resolveEffectiveCategories(peer, { masterSwitch: false }) };
 }
 
 // Default data shape
@@ -468,7 +489,7 @@ const PER_RECORD_CATEGORY_KINDS = Object.freeze([
   ['creativeCommissions', 'creativeCommission'],
 ]);
 
-export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth }) {
+export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth, transport, protocol = 'http' }) {
   const peer = await withData(async (data) => {
     const normalizedHost = validHost(host);
     const normalizedAuth = sanitizePeerAuth(auth);
@@ -484,9 +505,12 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
       // Once true, handleAnnounce never auto-overwrites — it's the only way to
       // honor "the user explicitly cleared this; stay on IP" against a peer
       // that keeps announcing its DNS name.
-      hostManual: !!normalizedHost,
+      hostManual: transport === 'tailcat' || !!normalizedHost,
       port,
       name: validName(name, normalizedHost || address),
+      // Optional transport marker (e.g. 'tailcat'). Never carries the tc address —
+      // that capability lives only in data/tailcat-forwards.json.
+      ...(transport === 'tailcat' ? { transport: 'tailcat', protocol: protocol === 'https' ? 'https' : 'http' } : {}),
       instanceId: null,
       addedAt: new Date().toISOString(),
       lastSeen: null,
@@ -517,8 +541,39 @@ export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, a
   return peer;
 }
 
-export async function removePeer(id) {
+/**
+ * Repoint a tailcat peer at a new loopback port.
+ *
+ * The public updatePeer deliberately owns no `port` field — a peer's address is
+ * how the operator reached it, not something the server rewrites. A managed
+ * tailcat forward is the exception: PortOS chose that loopback port itself, so
+ * when a retry has to bind a different one (the old port got taken while the
+ * forward was down) the peer record has to follow or every request keeps dialing
+ * a dead port. Restricted to `transport: 'tailcat'` for exactly that reason.
+ */
+export async function setTailcatPeerPort(id, port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  const updated = await withData(async (data) => {
+    const peer = data.peers.find(p => p.id === id && p.transport === 'tailcat');
+    if (!peer || peer.port === port) return peer || null;
+    peer.port = port;
+    console.log(`🐈 Tailcat peer ${peer.name} repointed to 127.0.0.1:${port}`);
+    instanceEvents.emit('peers:updated', data.peers);
+    return peer;
+  });
+  // The relay pins the peer URL at connect time, so it has to redial the new port.
+  if (updated) disconnectFromPeer(id);
+  return updated;
+}
+
+export async function removePeer(id, { stopTransport = true } = {}) {
   disconnectFromPeer(id);
+  // Retire the transport outside the data lock: its lifecycle may itself need
+  // that lock when rolling back a failed add. Keep the peer on retirement errors.
+  if (stopTransport && (await getPeers()).some(peer => peer.id === id && peer.transport === 'tailcat')) {
+    const { stopForwardForPeer } = await import('./tailcatPeer.js');
+    await stopForwardForPeer(id);
+  }
   const removed = await withData(async (data) => {
     const idx = data.peers.findIndex(p => p.id === id);
     if (idx === -1) return null;
@@ -640,7 +695,7 @@ export async function updatePeer(id, updates) {
         console.log(`🌐 Remote media provider ${next.enabled ? 'enabled' : 'disabled'}: ${peer.name}`);
       }
     }
-    if (updates.host !== undefined) {
+    if (peer.transport !== 'tailcat' && updates.host !== undefined) {
       const normalized = validHost(updates.host);
       if (normalized !== undefined && normalized !== peer.host) {
         peer.host = normalized; // null clears, string sets
@@ -755,6 +810,13 @@ export async function probePeer(peer) {
   // opposed to an unreachable one. The Instances UI reads this to prompt for a
   // credential instead of showing a generic offline state.
   let authRequired = false;
+  let probeFailure = null;
+  const probeStartedAt = Date.now();
+  // For tailcat peers, read the live forward's tunnelError up front so a probe
+  // that times out / resets can be classified as tunnel dial vs local refuse vs
+  // PortOS health/details failure — the three operator-visible cases.
+  const forwardHint = await lookupTailcatForwardHint(peer);
+  const tunnelError = forwardHint?.tunnelError || null;
   // One shared abort signal spans the instanceId read, all three parallel
   // fetches, AND their body reads, so a single PROBE_TIMEOUT_MS bounds the whole
   // probe (the instanceId read is inside the budget, as it was before).
@@ -807,7 +869,7 @@ export async function probePeer(peer) {
       remoteSyncSeqs = await syncRes.json().catch(() => null);
     }
   }).catch((err) => {
-    console.log(`⚠️ Probe failed for ${baseUrl}: ${classifyProbeError(err, peer)}`);
+    probeFailure = err;
     status = 'offline';
     authRequired = err?.httpStatus === 401 || err?.httpStatus === 403;
     lastHealth = peer.lastHealth; // preserve last known
@@ -823,12 +885,32 @@ export async function probePeer(peer) {
     }
   });
 
+  const latencyMs = Date.now() - probeStartedAt;
+  const probedAt = new Date().toISOString();
+  const classification = probeFailure
+    ? classifyPeerProbeFailure(probeFailure, {
+      peer,
+      tunnelError,
+      probeTimeoutMs: PROBE_TIMEOUT_MS,
+    })
+    : { class: 'ok', message: null, httpStatus: 200 };
+  const lastProbe = buildLastProbeRecord({
+    ok: status === 'online',
+    classification,
+    latencyMs,
+    at: probedAt,
+  });
+  if (status !== 'online') {
+    console.log(`⚠️ Probe failed for ${baseUrl}: ${classifyProbeError(probeFailure, peer, tunnelError)} ${formatProbeDiagnosticLog(lastProbe)}`);
+  }
+
   const stored = await withData(async (data) => {
     const entry = data.peers.find(p => p.id === peer.id);
     if (!entry) return null;
     entry.status = status;
     entry.lastSeen = lastSeen;
     entry.lastHealth = lastHealth;
+    entry.lastProbe = lastProbe;
     // Surface "reachable but needs a credential" distinctly from plain offline.
     // Cleared on any successful probe (including after the user adds the password).
     entry.authRequired = authRequired;
@@ -932,7 +1014,8 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       existing.lastSeen = new Date().toISOString();
       existing.status = 'online';
       existing.instanceId = instanceId;
-      existing.port = port;
+      // A managed forward uses local coordinates, not the remote listen port.
+      if (existing.transport !== 'tailcat') existing.port = port;
       // Only auto-update name if still an IP address (preserve user-set names)
       const sanitized = validName(name, null);
       if (sanitized && isIPAddress(existing.name)) {
@@ -942,7 +1025,7 @@ export async function handleAnnounce({ address, port, instanceId, name, host }) 
       // AND the user hasn't manually intervened. The hostManual flag covers
       // the "user explicitly cleared this — stay on IP" case that the
       // existing.host check alone can't distinguish from "never set".
-      if (normalizedHost && !existing.host && !existing.hostManual) {
+      if (existing.transport !== 'tailcat' && normalizedHost && !existing.host && !existing.hostManual) {
         existing.host = normalizedHost;
         console.log(`🌐 Peer host learned via announce: ${existing.name} → ${normalizedHost}`);
       }

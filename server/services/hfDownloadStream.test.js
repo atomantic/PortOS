@@ -315,9 +315,57 @@ describe('startHfDownloadStream single-file + fallbacks (#3112)', () => {
     const terminal = events.filter((event) => event.type === 'error');
     expect(terminal).toHaveLength(1);
     const last = terminal[0];
-    expect(last).toMatchObject({ type: 'error', kind: 'all_sources_failed' });
+    // Every attempt failed the SAME way, so that kind is still the honest
+    // verdict and survives into the terminal frame — flattening it would strip
+    // the signal the UI keys its "accept the license" affordance off.
+    expect(last).toMatchObject({ type: 'error', kind: 'x' });
     expect(last.message).toContain('org/official broke');
     expect(last.message).toContain('org/mirror-708gb broke');
+  });
+
+  it('falls back to all_sources_failed when the attempts disagree on why', async () => {
+    // Two different causes have no single honest kind, so the generic one is
+    // correct here — the per-attempt reasons are still in the message.
+    downloadHfRepo.mockImplementation(({ repo, onEvent }) => {
+      const kind = repo === 'org/official' ? 'gated_repo' : 'network';
+      onEvent({ type: 'error', kind, message: `${repo} broke` });
+      return {
+        promise: Promise.resolve({ ok: false, errorKind: kind, errorMessage: `${repo} broke` }),
+        kill: vi.fn(),
+      };
+    });
+
+    const { req, res, frames } = makeReqRes();
+    await startHfDownloadStream({ req, res, fallbacks: CANDIDATES, cachedFile: async () => false });
+    const terminal = parseFrames(frames).filter((event) => event.type === 'error');
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0]).toMatchObject({ type: 'error', kind: 'all_sources_failed' });
+  });
+
+  it('keeps a gated failure actionable for a single-candidate weight', async () => {
+    // The LTX-2.5 upscaler has NO mirror, so its one candidate is the whole
+    // chain. Before, its 401 was flattened to `all_sources_failed` and the
+    // client lost the cue to prompt for license acceptance + an HF token.
+    downloadHfRepo.mockImplementation(({ repo, onEvent }) => {
+      const message = `Access to ${repo} is gated. Accept the license and save your Hugging Face token.`;
+      onEvent({ type: 'error', kind: 'gated_repo', message });
+      return {
+        promise: Promise.resolve({ ok: false, errorKind: 'gated_repo', errorMessage: message }),
+        kill: vi.fn(),
+      };
+    });
+
+    const { req, res, frames } = makeReqRes();
+    await startHfDownloadStream({
+      req,
+      res,
+      fallbacks: [{ repo: 'org/gated-only', only: ['weight.safetensors'], revision: 'a'.repeat(40) }],
+      cachedFile: async () => false,
+    });
+    const terminal = parseFrames(frames).filter((event) => event.type === 'error');
+    expect(terminal).toHaveLength(1);
+    expect(terminal[0].kind).toBe('gated_repo');
+    expect(terminal[0].message).toMatch(/Accept the license/);
   });
 
   it('does not roll onto the next source after a user cancel', async () => {

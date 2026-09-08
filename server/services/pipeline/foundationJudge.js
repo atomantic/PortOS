@@ -65,6 +65,7 @@ import {
   buildFoundationContext,
   contentHash,
   countFoundationCharacterBlanks,
+  countSeriesCastIntegrityFindings,
   foundationInputs,
   foundationInputsHash,
   pickFrameworkFields,
@@ -81,6 +82,7 @@ import {
 // foundationJudge.js while their implementation lives with the context builder.
 export {
   countFoundationCharacterBlanks,
+  countSeriesCastIntegrityFindings,
   foundationInputs,
   foundationInputsHash,
   rankFoundationCharacters,
@@ -347,11 +349,23 @@ export function isFoundationStale(snap, currentHash) {
 // ---------- context record reads ----------
 
 /**
- * `countFoundationCharacterBlanks` against live records. Pass `charactersOverride`
- * to measure a checkpoint's cast (the pre-repair snapshot) against the same
- * series/issue roster the live count uses, so only the cast content differs.
+ * The two objective, LLM-free measures of a `character` repair's work, read off
+ * live records. Pass `charactersOverride` to measure a checkpoint's cast (the
+ * pre-repair snapshot) against the same series/issue roster the live read uses,
+ * so only the cast CONTENT differs between a before and an after.
+ *
+ * - `blanks` — named framework/profile/visual fields that are empty across the
+ *   repairable roster. Holds every character to one field list.
+ * - `integrityFindings` — deterministic cast-integrity gaps (#6415), which
+ *   apply a per-character depth (a declared minor role or an author-explained
+ *   unknown owes less) and are the only measure that reaches the psychology
+ *   profile at all.
+ *
+ * Both are facts on disk. Neither subsumes the other: a visual-identity pass
+ * moves only `blanks`, and authoring a theory of control moves only
+ * `integrityFindings`.
  */
-export async function readFoundationCharacterBlanks(seriesId, charactersOverride = null) {
+export async function readFoundationCharacterProgress(seriesId, charactersOverride = null) {
   assertValidSeriesId(seriesId);
   const series = await getSeries(seriesId);
   const [universe, issues] = await Promise.all([
@@ -359,7 +373,10 @@ export async function readFoundationCharacterBlanks(seriesId, charactersOverride
     listIssues({ seriesId }),
   ]);
   const characters = Array.isArray(charactersOverride) ? charactersOverride : universe?.characters;
-  return countFoundationCharacterBlanks(characters, series, issues);
+  return {
+    blanks: countFoundationCharacterBlanks(characters, series, issues),
+    integrityFindings: countSeriesCastIntegrityFindings(characters, series, issues),
+  };
 }
 
 // One deliberate malformed-JSON retry (see module doc). Mirrors pipelineJudge.js.
@@ -532,6 +549,11 @@ const REPAIRABLE_CHARACTER_FIELDS = Object.freeze([
   ...VISUAL_FOUNDATION_LIST_FIELDS,
   'arcType',
   'secrets',
+  // Optional structured psychology (#6414). Allowlisted so a repair proposal
+  // that authors one is applied rather than silently dropped; it is NOT part
+  // of `hasCompleteFramework` below, so its absence never by itself makes an
+  // existing cast read as incomplete and schedule a repair run.
+  'psychology',
   'personality',
   'background',
   'relationships',
@@ -943,7 +965,13 @@ async function repairCharacters(series, issues, universe, finding, options) {
       const next = { ...character };
       for (const field of REPAIRABLE_CHARACTER_FIELDS) {
         const value = sanitized[field];
-        const authored = Array.isArray(value) ? value.length > 0 : !isBlankString(value);
+        // Object-valued fields (`psychology`) are authored when the sanitizer
+        // returned one at all — it collapses an empty proposal to null/absent.
+        const authored = Array.isArray(value)
+          ? value.length > 0
+          : (value && typeof value === 'object')
+            ? Object.keys(value).length > 0
+            : !isBlankString(value);
         if (!authored || JSON.stringify(value) === JSON.stringify(character[field])) continue;
         next[field] = value;
         updatedFields.add(field);

@@ -16,11 +16,14 @@ vi.mock('./apiCore.js', async (importOriginal) => ({
 
 let request;
 let previewLoraInstall;
+let upscaleVideo;
+let getUpscalePlan;
+let upscaleAdapterDownloadUrl;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ request } = await import('./apiCore.js'));
-  ({ previewLoraInstall } = await import('./apiImageVideo.js'));
+  ({ previewLoraInstall, upscaleVideo, getUpscalePlan, upscaleAdapterDownloadUrl } = await import('./apiImageVideo.js'));
   request.mockReset();
 });
 
@@ -46,5 +49,54 @@ describe('previewLoraInstall', () => {
       family: 'ltx-video',
       file: 'weights.safetensors',
     });
+  });
+});
+
+describe('upscaleVideo', () => {
+  it('sends a bare POST with no body when method is omitted (#6510 back-compat)', async () => {
+    request.mockResolvedValue({ ok: true, video: {} });
+    await upscaleVideo('abc', { silent: true });
+
+    expect(request).toHaveBeenCalledWith('/video-gen/upscale/abc', { method: 'POST', silent: true });
+    expect(request.mock.calls[0][1]).not.toHaveProperty('body');
+  });
+
+  it('sends { method: "lanczos" } in the body when explicitly chosen', async () => {
+    request.mockResolvedValue({ ok: true, video: {} });
+    await upscaleVideo('abc', { method: 'lanczos', silent: true });
+
+    const [url, opts] = request.mock.calls[0];
+    expect(url).toBe('/video-gen/upscale/abc');
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body)).toEqual({ method: 'lanczos' });
+    expect(opts.silent).toBe(true);
+  });
+
+  it('sends { method: "ltx" } in the body for the generative method', async () => {
+    request.mockResolvedValue({ ok: true, video: {} });
+    await upscaleVideo('abc', { method: 'ltx', silent: true });
+
+    const opts = request.mock.calls[0][1];
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body)).toEqual({ method: 'ltx' });
+  });
+});
+
+describe('getUpscalePlan', () => {
+  it('is a silent GET against the read-only plan endpoint', async () => {
+    request.mockResolvedValue({ ok: true, plan: {} });
+    await getUpscalePlan('abc', 'ltx');
+
+    expect(request).toHaveBeenCalledWith('/video-gen/upscale/abc/plan?method=ltx', { silent: true });
+  });
+});
+
+describe('upscaleAdapterDownloadUrl', () => {
+  it('builds the shared IC-LoRA download URL for a given key', () => {
+    expect(upscaleAdapterDownloadUrl('pixel-upscale')).toBe('/api/video-gen/ic-loras/pixel-upscale/download');
+  });
+
+  it('returns null with no key rather than a malformed URL', () => {
+    expect(upscaleAdapterDownloadUrl(null)).toBeNull();
   });
 });

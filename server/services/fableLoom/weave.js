@@ -18,7 +18,8 @@ import { startAIOp } from '../aiStatusEvents.js';
 import { runStagedLLM } from '../stageRunner.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { resolveLlmRoutePin } from '../../lib/llmRoutePin.js';
-import { renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
+import { renderStoryCanonDigest } from '../../lib/universePromptRenderers.js';
+import { renderCharacterEvolutionListForPrompt } from '../../lib/characterEvolution.js';
 import { GRAPH_ISSUE_CODES, analyzeEpisodeGraph, describeGraphForPrompt } from '../../lib/fableLoomGraph.js';
 import {
   FABLELOOM_CAMERA_MOVEMENT_VALUES,
@@ -45,7 +46,7 @@ import {
   participationContractForPrompt,
 } from '../../lib/fableLoomParticipation.js';
 import { getUniverse } from '../universeBuilder.js';
-import { LOOM_LIMITS, findEpisode, findNode, getLoom, mutateLoom } from './records.js';
+import { LOOM_LIMITS, fableLoomEvolutionEvidenceRefs, findEpisode, findNode, getLoom, mutateLoom } from './records.js';
 import { asLoomFormat, loomFormatLabel, narrationFormatContract, sceneFormatContract } from './formats.js';
 
 const TRANSCRIPT_TURNS_MAX = 12;
@@ -137,19 +138,25 @@ const playRouting = (loom, perCall) => resolveLlmRoutePin(loom.playSettings, per
 
 /**
  * Render the linked universe's canon as a prompt digest via the shared
- * renderer (field precedence, per-kind caps, and the "+ N more" truncation
- * footer every generative prompt gets). Empty string when the loom has no
- * universe — the stages treat it as optional.
+ * composer (field precedence, per-kind caps, the "+ N more" truncation footer,
+ * and the authored Ghost/Wound/Lie/Want/Need engines every generative prompt
+ * needs to make characters drive the plot). The bound protagonist is pinned so
+ * a large cast can't push the one character the story is about past the cap.
+ * Empty string when the loom has no universe — the stages treat it as optional.
+ *
+ * Reader-facing paths do NOT call this: `playTurn` never renders canon, and the
+ * cold-opening first-time-viewer review passes its own withheld placeholder.
+ *
+ * The composer's reveal gate is left ON (its default): a character carrying a
+ * `spoiler` flag or an unresolved `revealIssue` reaches these generation stages
+ * as name + role + the authored surface stand-in, with the concealed
+ * `background`/`personality` and the psychology block both withheld (#6426).
  */
 export async function buildCanonDigest(loom) {
   if (!loom.universeId) return '';
   const universe = await getUniverse(loom.universeId).catch(() => null);
   if (!universe) return '';
-  const protagonist = universe.characters?.find((character) => character.id === loom.protagonistCharacterId);
-  return [
-    protagonist ? `Verified Universe protagonist: id=${protagonist.id}; name=${protagonist.name}.` : '',
-    renderCanonForPrompt(universe),
-  ].filter(Boolean).join('\n');
+  return renderStoryCanonDigest(universe, { protagonistCharacterId: loom.protagonistCharacterId });
 }
 
 const seriesPlanContext = (loom, episode) => {
@@ -257,6 +264,19 @@ const seriesPlanDigest = (loom) => JSON.stringify({
     beatOutline: storyOutline ? describeStoryOutlineForPrompt(storyOutline) : '(missing)',
   })),
 }, null, 2);
+
+// The OPTIONAL five-stage evolution lens (#6443), rendered for whichever cast
+// members carry one. `seriesPlanDigest` above is a hand-picked projection of
+// `loom.seriesPlan` — it whitelists fields, so the lens would NOT ride along
+// inside it — and the plan review needs the lens gated on its own anyway:
+// unset ⇒ '', the template's {{#characterEvolutions}} section renders nothing,
+// and the review degrades to exactly its pre-lens behavior. Anchors resolve
+// against the whole loom (episode ids and scene keys are loom-wide), so a stage
+// pointing at a deleted episode reads `[stale]` instead of passing as proof.
+const characterEvolutionsDigest = (loom) => renderCharacterEvolutionListForPrompt(
+  loom.seriesPlan?.characterEvolutions,
+  fableLoomEvolutionEvidenceRefs(loom),
+) || '';
 
 const seriesTeleplayDigest = (loom) => loom.episodes.map((episode) => [
   `## Episode ${episode.number}: ${episode.title || 'Untitled'}`,
@@ -1048,6 +1068,7 @@ export async function reviewSeriesPlan(loomId, { providerId, model, effort, oper
     storyContext: [storyContext(loom, undefined, { includeSeriesPlan: false }), planningOnly ? 'PRE-OUTLINE REVIEW: Evaluate the arc, challenge design and episode assignments. Missing or stale episode outlines are expected at this stage and will be drafted or repaired next; do not report their absence as a plan defect. Keep plot-point notes concise; episode beat outlines have their own fields.' : ''].filter(Boolean).join('\n'),
     canonDigest: canonDigest || '(none)',
     seriesPlanJson: seriesPlanDigest(loom),
+    characterEvolutions: characterEvolutionsDigest(loom),
   }, { providerId, model, effort, operationId }, {
     action: 'review-series-plan', label: 'Reviewing series plan', source: 'fableloom-review-series-plan',
   });

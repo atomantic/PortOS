@@ -5,17 +5,23 @@ import { join } from 'node:path';
 // cache and existsSync probes the pinned weight file. Mock them so these tests
 // cover the registry + resolution logic rather than the user's ~/.cache layout
 // (hfCache.test.js already covers the cache walk).
-const { mockFindCachedRepoFile } = vi.hoisted(() => ({ mockFindCachedRepoFile: vi.fn() }));
+const { mockFindCachedRepoFile, mockReadSafetensorsHeader } = vi.hoisted(() => ({
+  mockFindCachedRepoFile: vi.fn(), mockReadSafetensorsHeader: vi.fn(),
+}));
 vi.mock('./hfCache.js', () => ({ findCachedRepoFile: mockFindCachedRepoFile }));
+vi.mock('./safetensors.js', () => ({ readSafetensorsHeader: mockReadSafetensorsHeader }));
 
 const {
-  IC_LORA_MODES, IC_LORA_MODE_VALUES, isIcLoraMode, icLoraSpecForMode,
-  icLoraRepos, listIcLoraWeights, icLoraWeightCandidates, findCachedIcLoraWeight,
-  resolveIcLoraWeight, icResolutionIssue,
+  IC_LORA_MODES, IC_LORA_MODE_VALUES, IC_LORA_WEIGHT_KEYS, IC_LORA_REMIX_BASE_MODEL,
+  isIcLoraMode, icLoraSpecForMode, icLoraSpecByKey, icLoraWeightKey, icLoraProbesExactFile,
+  icLoraRepos, listIcLoraWeights, listIcLoraRemixModes, icLoraWeightCandidates,
+  findCachedIcLoraWeight, resolveIcLoraWeight, resolveIcLoraWeightByKey, icResolutionIssue,
+  readIcLoraReferenceDownscaleFactor,
 } = await import('./icLoraWeights.js');
 
 beforeEach(() => {
   mockFindCachedRepoFile.mockReset();
+  mockReadSafetensorsHeader.mockReset();
 });
 
 describe('IC-LoRA registry', () => {
@@ -49,6 +55,7 @@ describe('IC-LoRA registry', () => {
       'Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control',
       'DoctorDiffusion/LTX-2.3-IC-LoRA-Colorizer',
       'Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients',
+      'Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler',
     ]);
   });
 
@@ -63,14 +70,36 @@ describe('IC-LoRA registry', () => {
 
   it('keeps every entry internally consistent', () => {
     for (const spec of Object.values(IC_LORA_MODES)) {
-      expect(spec.mode).toBe(`ic-${spec.id}`);
       expect(spec.filename.endsWith('.safetensors')).toBe(true);
       expect(spec.repo).toMatch(/^[^/]+\/[^/]+$/);
       expect(spec.sizeBytes).toBeGreaterThan(0);
       expect(spec.uploadLabel).toBeTruthy();
+      expect(spec.baseModel).toMatch(/^ltx-\d+\.\d+$/);
       expect(spec.minReferences).toBeGreaterThanOrEqual(1);
       expect(spec.maxReferences).toBeGreaterThanOrEqual(spec.minReferences);
-      expect(spec.referenceDownscaleFactor).toBeGreaterThanOrEqual(1);
+      // Either a real factor read from the weight's metadata, or an explicit
+      // null meaning "not read yet" — never 0, a string, or a guess.
+      expect(
+        spec.referenceDownscaleFactor === null || spec.referenceDownscaleFactor >= 1,
+      ).toBe(true);
+    }
+  });
+
+  it('keys every registry entry by its own id', () => {
+    // icLoraSpecForMode and icLoraSpecByKey both fall back to a bare-id lookup
+    // straight into this map, so a key that drifts from its entry's `id` makes
+    // that lookup silently miss for one weight and work for the rest.
+    for (const [key, spec] of Object.entries(IC_LORA_MODES)) expect(key).toBe(spec.id);
+  });
+
+  it('names every remix mode ic-<id>, and gives a non-remix weight no mode at all', () => {
+    // The `ic-` prefix is load-bearing for the remix modes; a weight that is not
+    // a remix mode must carry `mode: null` rather than an unreachable `ic-` value
+    // that would read as a render mode the enum silently drops.
+    for (const spec of listIcLoraRemixModes()) expect(spec.mode).toBe(`ic-${spec.id}`);
+    for (const spec of listIcLoraWeights()) {
+      if (listIcLoraRemixModes().includes(spec)) continue;
+      expect(spec.mode).toBeNull();
     }
   });
 
@@ -89,6 +118,19 @@ describe('IC-LoRA registry', () => {
     expect(icResolutionIssue(IC_LORA_MODES.colorize, 705, 449)).toBeNull();
     expect(icResolutionIssue(IC_LORA_MODES.control, 705, 449)).toMatch(/divisible by 2/);
     expect(icResolutionIssue(IC_LORA_MODES.control, 704, 448)).toBeNull();
+  });
+
+  it('applies the upscaler factor now that it has been measured, and no rule for an unread one', () => {
+    // The upscaler's factor was read off the gated weight (#6512), so the
+    // plan can state its rule before a download. A weight whose factor is
+    // genuinely unknown must still yield "no rule": guessing rejects valid
+    // resolutions, and treating a non-number as a divisor produces a nonsense
+    // message.
+    expect(icResolutionIssue(IC_LORA_MODES['pixel-upscale'], 705, 449)).toMatch(/divisible by 2/);
+    expect(icResolutionIssue(IC_LORA_MODES['pixel-upscale'], 704, 448)).toBeNull();
+    expect(icResolutionIssue({ referenceDownscaleFactor: null }, 705, 449)).toBeNull();
+    expect(icResolutionIssue({ referenceDownscaleFactor: undefined }, 705, 449)).toBeNull();
+    expect(icResolutionIssue({ referenceDownscaleFactor: '2' }, 705, 449)).toBeNull();
   });
 });
 
@@ -121,7 +163,7 @@ describe('resolveIcLoraWeight', () => {
     expect(resolved.path).toBe(join('/hf/snap', IC_LORA_MODES.colorize.filename));
     expect(resolved.spec).toBe(IC_LORA_MODES.colorize);
     expect(mockFindCachedRepoFile).toHaveBeenCalledWith(
-      IC_LORA_MODES.colorize.repo, IC_LORA_MODES.colorize.filename,
+      IC_LORA_MODES.colorize.repo, IC_LORA_MODES.colorize.filename, { revision: null },
     );
   });
 
@@ -203,15 +245,42 @@ describe('icLoraWeightCandidates', () => {
     // Order IS the policy: a user WITH an HF token gets the first-party weight; a
     // user without one falls through to the un-gated mirror.
     expect(icLoraWeightCandidates(IC_LORA_MODES.ingredients)).toEqual([
-      { repo: IC_LORA_MODES.ingredients.repo, filename: IC_LORA_MODES.ingredients.filename, mirror: false },
-      { repo: IC_LORA_MODES.ingredients.mirrorRepo, filename: IC_LORA_MODES.ingredients.mirrorFilename, mirror: true },
+      {
+        repo: IC_LORA_MODES.ingredients.repo,
+        filename: IC_LORA_MODES.ingredients.filename,
+        revision: null,
+        mirror: false,
+      },
+      {
+        repo: IC_LORA_MODES.ingredients.mirrorRepo,
+        filename: IC_LORA_MODES.ingredients.mirrorFilename,
+        revision: null,
+        mirror: true,
+      },
     ]);
   });
 
   it('yields a single candidate for a mirror-less spec', () => {
     expect(icLoraWeightCandidates(IC_LORA_MODES.control)).toEqual([
-      { repo: IC_LORA_MODES.control.repo, filename: IC_LORA_MODES.control.filename, mirror: false },
+      {
+        repo: IC_LORA_MODES.control.repo,
+        filename: IC_LORA_MODES.control.filename,
+        revision: null,
+        mirror: false,
+      },
     ]);
+  });
+
+  it('carries a pinned revision on the official candidate only', () => {
+    // The pin belongs to the official repo's history. A mirror is a different
+    // repository whose commits have nothing to do with it, so pinning one there
+    // would resolve nothing — the mirror stays unpinned by construction.
+    const [official] = icLoraWeightCandidates(IC_LORA_MODES['pixel-upscale']);
+    expect(official.revision).toBe(IC_LORA_MODES['pixel-upscale'].revision);
+    expect(official.revision).toMatch(/^[0-9a-f]{40}$/);
+    for (const c of icLoraWeightCandidates(IC_LORA_MODES.ingredients)) {
+      if (c.mirror) expect(c.revision).toBeNull();
+    }
   });
 
   it('returns nothing for a null spec', () => {
@@ -231,5 +300,170 @@ describe('findCachedIcLoraWeight', () => {
   it('returns nothing for a null spec without probing the cache', async () => {
     expect(await findCachedIcLoraWeight(null)).toBeNull();
     expect(mockFindCachedRepoFile).not.toHaveBeenCalled();
+  });
+
+  it('probes a pinned weight inside its pinned revision, not the newest snapshot', async () => {
+    // Without the revision, findCachedRepoFile resolves the NEWEST snapshot —
+    // so an install holding an older commit of the repo would report the weight
+    // cached and hand a different commit's tensors to the pipeline.
+    mockFindCachedRepoFile.mockResolvedValue('/cache/pinned.safetensors');
+    const found = await findCachedIcLoraWeight(IC_LORA_MODES['pixel-upscale']);
+    expect(found.path).toBe('/cache/pinned.safetensors');
+    expect(mockFindCachedRepoFile).toHaveBeenCalledWith(
+      IC_LORA_MODES['pixel-upscale'].repo,
+      IC_LORA_MODES['pixel-upscale'].filename,
+      { revision: IC_LORA_MODES['pixel-upscale'].revision },
+    );
+  });
+
+  it('probes an unpinned weight with no revision, preserving the existing behavior', async () => {
+    mockFindCachedRepoFile.mockResolvedValue('/cache/control.safetensors');
+    await findCachedIcLoraWeight(IC_LORA_MODES.control);
+    expect(mockFindCachedRepoFile).toHaveBeenCalledWith(
+      IC_LORA_MODES.control.repo,
+      IC_LORA_MODES.control.filename,
+      { revision: null },
+    );
+  });
+});
+
+describe('the LTX-2.5 Pixel Spatial Upscaler weight (#6502)', () => {
+  const spec = () => IC_LORA_MODES['pixel-upscale'];
+
+  it('is registered for provisioning but is NOT a remix mode', () => {
+    // The whole point of the base-model split: this adapter rides the same
+    // download/verify/repair surface, but fusing it into the LTX-2.3 remix
+    // pipeline would load without erroring and render garbage.
+    expect(listIcLoraWeights()).toContain(spec());
+    expect(listIcLoraRemixModes()).not.toContain(spec());
+    expect(spec().baseModel).not.toBe(IC_LORA_REMIX_BASE_MODEL);
+  });
+
+  it('is absent from the render-mode enum the route builds its z.enum from', () => {
+    expect(IC_LORA_MODE_VALUES).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients']);
+    expect(IC_LORA_MODE_VALUES).not.toContain('ic-pixel-upscale');
+    expect(isIcLoraMode('ic-pixel-upscale')).toBe(false);
+    expect(isIcLoraMode('pixel-upscale')).toBe(false);
+  });
+
+  it('is unreachable through the render-path spec lookup', () => {
+    // icLoraSpecForMode feeds the render path. It must not resolve a non-remix
+    // weight by ANY spelling, including the bare registry id that the same
+    // helper accepts for the remix modes.
+    expect(icLoraSpecForMode('pixel-upscale')).toBeNull();
+    expect(icLoraSpecForMode('ic-pixel-upscale')).toBeNull();
+    expect(icLoraSpecForMode(spec().id)).toBeNull();
+  });
+
+  it('IS reachable through the provisioning lookup, by its weight key', () => {
+    expect(icLoraWeightKey(spec())).toBe('pixel-upscale');
+    expect(icLoraSpecByKey('pixel-upscale')).toBe(spec());
+    // Remix modes keep their existing URL identity through the same lookup, so
+    // `/ic-loras/ic-control/download` is unchanged.
+    expect(icLoraWeightKey(IC_LORA_MODES.control)).toBe('ic-control');
+    expect(icLoraSpecByKey('ic-control')).toBe(IC_LORA_MODES.control);
+    expect(IC_LORA_WEIGHT_KEYS).toEqual(['ic-control', 'ic-colorize', 'ic-ingredients', 'pixel-upscale']);
+  });
+
+  it('pins the exact repo, filename, revision and byte size from the HF listing', () => {
+    // Read from the repo's public blob listing. The size is exact, not an
+    // estimate — the download badge shows it before the pull.
+    expect(spec().repo).toBe('Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler');
+    expect(spec().filename).toBe('ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors');
+    expect(spec().revision).toBe('5863fdef3eaa8b2d69fa22e259a1d75fede215dd');
+    expect(spec().sizeBytes).toBe(327_322_640);
+  });
+
+  it('is gated with NO mirror, so a gated failure is not swallowed by a fallback', () => {
+    // #6502 rules out adopting a third-party release mirror or side-stepping the
+    // license. A single candidate also means the download stream reports the
+    // gated failure itself instead of downgrading it on the way to a fallback.
+    expect(spec().gated).toBe(true);
+    expect(spec().mirrorRepo).toBeUndefined();
+    expect(icLoraWeightCandidates(spec())).toHaveLength(1);
+  });
+
+  it('is probed by its exact file, never by a repo-wide cache verdict', () => {
+    expect(icLoraProbesExactFile(spec())).toBe(true);
+    // Un-pinned, un-mirrored weights keep the cheaper repo-wide path.
+    expect(icLoraProbesExactFile(IC_LORA_MODES.control)).toBe(false);
+    expect(icLoraProbesExactFile(IC_LORA_MODES.ingredients)).toBe(true);
+  });
+
+  it('never emits a bare repo id for the pipeline to snapshot_download', async () => {
+    // Handing a gated repo id to a pipeline's own resolver produces a 401 deep
+    // inside a render. `path: null` is what makes the caller fail fast with an
+    // actionable "download the weight first" instead.
+    mockFindCachedRepoFile.mockResolvedValue(null);
+    const resolved = await resolveIcLoraWeightByKey('pixel-upscale');
+    expect(resolved).toEqual({ path: null, cached: false, spec: spec() });
+    expect(spec().requiresPreDownload).toBe(true);
+  });
+
+  it('resolves the cached file once it is downloaded', async () => {
+    mockFindCachedRepoFile.mockResolvedValue('/cache/upscaler.safetensors');
+    const resolved = await resolveIcLoraWeightByKey('pixel-upscale');
+    expect(resolved).toMatchObject({ path: '/cache/upscaler.safetensors', cached: true, repo: spec().repo });
+  });
+
+  it('stays unresolvable through the render-path resolver', async () => {
+    expect(await resolveIcLoraWeight('ic-pixel-upscale')).toBeNull();
+    expect(await resolveIcLoraWeight('pixel-upscale')).toBeNull();
+    expect(mockFindCachedRepoFile).not.toHaveBeenCalled();
+  });
+});
+
+// #6512. The Pixel Spatial Upscaler's factor was MEASURED off the gated weight
+// once an install could open it, and the registry now declares that value — but
+// the file is still read whenever it is present, so `measured` keeps "the
+// registry says 2" apart from "this file says 2": a re-pinned weight that
+// changes its factor is measured rather than trusted.
+describe('readIcLoraReferenceDownscaleFactor', () => {
+  const upscaler = () => icLoraSpecByKey('pixel-upscale');
+
+  it('declares the measured factor so the plan can state the rule before the weight is downloaded', () => {
+    expect(upscaler().referenceDownscaleFactor).toBe(2);
+  });
+
+  it('falls back to the registry value when nothing is cached, without reading a file', async () => {
+    mockFindCachedRepoFile.mockResolvedValue(null);
+    expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
+      .toEqual({ factor: 2, measured: false });
+    expect(mockReadSafetensorsHeader).not.toHaveBeenCalled();
+  });
+
+  it('reads the declared factor off the downloaded weight', async () => {
+    mockFindCachedRepoFile.mockResolvedValue('/cache/upscaler.safetensors');
+    mockReadSafetensorsHeader.mockResolvedValue({ __metadata__: { reference_downscale_factor: '2' } });
+    expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
+      .toEqual({ factor: 2, measured: true });
+    expect(mockReadSafetensorsHeader).toHaveBeenCalledWith('/cache/upscaler.safetensors');
+  });
+
+  // An ABSENT key is a real measurement — the pipeline reads it as 1, and a
+  // weight that imposes no rule is exactly what that looks like on disk.
+  it('treats an absent metadata key on a real file as a measured 1', async () => {
+    mockFindCachedRepoFile.mockResolvedValue('/cache/upscaler.safetensors');
+    mockReadSafetensorsHeader.mockResolvedValue({ 'transformer_blocks.0.attn1.to_q.weight': {} });
+    expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
+      .toEqual({ factor: 1, measured: true });
+  });
+
+  // An UNREADABLE header is not a measurement of anything. Collapsing it into a
+  // measured 1 would assert a rule off a file we failed to open; the declared
+  // registry value stands, unmeasured.
+  it('does not claim a measurement when the header cannot be read', async () => {
+    mockFindCachedRepoFile.mockResolvedValue('/cache/truncated.safetensors');
+    mockReadSafetensorsHeader.mockResolvedValue(null);
+    expect(await readIcLoraReferenceDownscaleFactor(upscaler()))
+      .toEqual({ factor: 2, measured: false });
+  });
+
+  // A 2.3 weight already carries a verified number, so a cached read must agree
+  // with it rather than quietly overriding the registry with junk.
+  it('reports a declared 2.3 factor as declared until the file is read', async () => {
+    mockFindCachedRepoFile.mockResolvedValue(null);
+    expect(await readIcLoraReferenceDownscaleFactor(IC_LORA_MODES.control))
+      .toEqual({ factor: 2, measured: false });
   });
 });

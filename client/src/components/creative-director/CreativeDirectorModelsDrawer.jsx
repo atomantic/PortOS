@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Bot, Save } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
+import EffortSelect from '../cos/EffortSelect.jsx';
 import toast from '../ui/Toast';
 import ToolUseWarning from '../ui/ToolUseWarning.jsx';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
@@ -10,6 +11,8 @@ import useVisionModelIds from '../../hooks/useVisionModelIds.js';
 import useToolUseModelIds from '../../hooks/useToolUseModelIds.js';
 import {
   providerDisplayName,
+  effortSurvivingModel,
+  effectiveModelFor,
   assignmentProviderOptions,
   assignmentModelOptions,
   assignmentDefaultModel,
@@ -57,7 +60,7 @@ const assignmentIdFor = (key) => `settings.creativeDirector.${key}`;
 // below sound.
 const draftsFrom = (pinFor) => Object.fromEntries(STAGES.map(({ key }) => {
   const pin = pinFor(key) || {};
-  return [key, { providerId: pin.providerId || '', model: pin.model || '' }];
+  return [key, { providerId: pin.providerId || '', model: pin.model || '', ...(key !== 'evaluation' ? { effort: pin.effort || '' } : {}) }];
 }));
 
 const blankDrafts = () => draftsFrom(() => null);
@@ -159,7 +162,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
       if (JSON.stringify(d) === JSON.stringify(baseline[key])) continue;
       const next = await updateAiAssignment(
         assignmentIdFor(key),
-        { providerId: d.providerId || null, model: d.model || null },
+        { providerId: d.providerId || null, model: d.model || null, ...(key !== 'evaluation' ? { effort: d.effort || null } : {}) },
         { silent: true },
       ).catch((err) => {
         toast.error(`Failed to save ${label}: ${err.message}`);
@@ -177,7 +180,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
     const modelOverrides = {};
     for (const { key } of STAGES) {
       const d = drafts[key];
-      if (d?.providerId) modelOverrides[key] = { providerId: d.providerId, ...(d.model ? { model: d.model } : {}) };
+      if (d?.providerId) modelOverrides[key] = { providerId: d.providerId, ...(d.model ? { model: d.model } : {}), ...(key !== 'evaluation' && d.effort ? { effort: d.effort } : {}) };
     }
     return updateCreativeDirectorProject(project.id, { modelOverrides }, { silent: true })
       .catch((err) => {
@@ -299,7 +302,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                           : '';
                         // Seed the provider's default model on switch; clearing the
                         // provider clears the model too.
-                        setStage(stage.key, { providerId, model: nextDefault });
+                        setStage(stage.key, { providerId, model: nextDefault, ...(stage.key !== 'evaluation' ? { effort: '' } : {}) });
                       }}
                       className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                     >
@@ -322,7 +325,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                       <select
                         value={draft.model}
                         aria-label={`${stage.label} model`}
-                        onChange={(e) => setStage(stage.key, { model: e.target.value })}
+                        onChange={(e) => setStage(stage.key, { model: e.target.value, ...(stage.key !== 'evaluation' ? { effort: effortSurvivingModel(selectedProvider, e.target.value, draft.effort) } : {}) })}
                         className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                       >
                         <option value="">Provider default / auto</option>
@@ -338,13 +341,25 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                       <input
                         value={draft.model}
                         aria-label={`${stage.label} model`}
-                        onChange={(e) => setStage(stage.key, { model: e.target.value })}
+                        onChange={(e) => setStage(stage.key, { model: e.target.value, ...(stage.key !== 'evaluation' ? { effort: effortSurvivingModel(selectedProvider, e.target.value, draft.effort) } : {}) })}
                         placeholder="Provider default / auto"
                         className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white placeholder-gray-600"
                       />
                     )}
                   </div>
                 </div>
+
+                {stage.key !== 'evaluation' && pinned && (
+                  <EffortSelect
+                    provider={selectedProvider}
+                    model={effectiveModelFor(selectedProvider, draft.model)}
+                    value={draft.effort}
+                    onChange={(effort) => setStage(stage.key, { effort })}
+                    label={`${stage.label} effort`}
+                    className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
+                    hint="Default effort uses this provider's default, without inheriting another assignment's effort."
+                  />
+                )}
 
                 {noVisionModels && (
                   <p className="text-xs text-port-warning">

@@ -2,6 +2,8 @@
  * Density-scaled prose-tic finding helpers (#1306) (#2842 split of checkInfra.js).
  */
 
+import { tokenizeWords } from '../proseTics.js';
+
 // ---------------------------------------------------------------------------
 // Registry entries.
 // ---------------------------------------------------------------------------
@@ -21,12 +23,6 @@ export function splitPhraseList(value) {
 // a configurable threshold and only flags when the rate (not the raw count) is
 // high. Findings anchor on the FIRST offending occurrence in each section.
 // ---------------------------------------------------------------------------
-
-// Word count of a section's prose (for per-1000-word density). Cheap word
-// tokenization — apostrophes kept inside words so contractions count once.
-export function countWords(text) {
-  return (String(text || '').match(/[A-Za-z][A-Za-z']*/g) || []).length;
-}
 
 // Map a section to its issue label/number once (used by every prose-tic check).
 export function sectionIssue(s) {
@@ -49,7 +45,9 @@ export function runDensityCheck(ctx, opts) {
   for (const s of sections) {
     if (findings.length >= max) break;
     const text = s?.content || '';
-    const words = countWords(text);
+    // Letter-word count — the denominator every prose-analysis rate shares (see
+    // tokenizeWords), not lib/textUtils' whitespace count.
+    const words = tokenizeWords(text).length;
     if (words === 0) continue;
     const hits = opts.scan(text, cfg);
     if (!hits.length) continue;

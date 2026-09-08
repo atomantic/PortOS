@@ -19,14 +19,28 @@ Every `checkIntervalMinutes` (default 30, bounded 5–720) the runner:
    have headroom above `reservePercent` in *every* window on the card, and that have
    not spent `maxDispatchesPerWindow` for that window (`-1`, the default, means
    no cap — see below). Ties break on `priority` (lower wins).
-4. Runs the **first enabled, unspent job in that family's ordered plan that
-   reports pending work** — at most one dispatch per cycle.
-5. Charges the window in `data/cos/quota-burn-dispatches.json` and appends the
-   outcome (including skips, with reasons) to `data/cos/quota-burn-runs.json`.
+4. Runs the **first enabled, available, unspent step in that family's ordered
+   plan that reports pending work** — at most one dispatch per cycle. The step
+   is dispatched through the referenced task's own invocation path, so the run
+   is indistinguishable from the same task started by hand.
+5. Accounts for it **when the work is accepted, not when it is asked for**, and
+   appends the outcome (including skips, with reasons) to
+   `data/cos/quota-burn-runs.json`. The two synchronous lanes — a programmatic
+   handler, which runs inline, and a custom app job, which `addTask` queues in
+   the same call — are accepted on return and charge
+   `data/cos/quota-burn-dispatches.json` immediately. A built-in task goes out as
+   an on-demand REQUEST an engine may still refuse, so it takes a reservation in
+   `data/cos/quota-burn-pending.json` instead: the reservation counts against
+   `maxDispatchesPerWindow` and blocks a second burn of the same step, and the
+   next cycle joins the request to the task it produced (by the
+   `quotaBurnRequestId` stamped on that task) to charge it exactly once — or
+   releases it uncharged if nothing was generated. See "Charging exactly once"
+   below.
 
 Everything fails closed: an unknown reset time, an unsupported provider, a
 quota-read error, a card that declares itself unburnable (`burnable: false`, e.g.
-the Image Gen card), or a family with no enabled jobs all mean "do not dispatch".
+the Image Gen card), a family with no enabled steps, or a step whose referenced
+task is gone or switched off all mean "do not dispatch".
 
 ## Which window a family burns against
 
@@ -104,20 +118,121 @@ usage-limit failure, `server/services/quotaBurnDenials.js` blocks that family in
   a burn. An analyzer `usage-limit` verdict is trusted only when it came from a
   structured provider marker, not a loose keyword sweep over the agent's own
   narration.
-- **Bypassable by a forced run** (the ▶ on a job row), which is how a user
+- **Bypassable by a forced run** (the ▶ on a step row), which is how a user
   retries a block they believe is stale.
 
-## Burn jobs
+## Burn steps
 
-A family's plan is an **ordered list** — that ordering is the configuration ("do
-the missing bible images first, then fall through to agent work"). Each job has
-its own type, optional model/provider pin, and type-specific params.
+A family's plan is an **ordered list of steps**, and that ordering is the
+configuration ("do the missing bible images first, then fall through to agent
+work"). A step does not *contain* work. It **references** a scheduled task the
+user already owns, and layers per-invocation overrides on it:
 
-| Job type | What it does |
+```jsonc
+{
+  "id": "job-abc",
+  "enabled": true,
+  "label": "Nightly UX sweep",          // optional; defaults to the task's own name
+  "taskRef": { "kind": "builtin", "taskType": "ux", "appId": "example-app" },
+  "overrides": { "providerId": null, "model": "opus", "effort": null,
+                 "params": { "fileIssues": true } },
+  "runOnce": false
+}
+```
+
+Two reference kinds, discriminated on `kind` (`server/lib/quotaBurnTaskRef.js`):
+
+| `kind` | Points at | Target |
+| --- | --- | --- |
+| `builtin` | A PortOS scheduled task TYPE (`ux`, `security`, `repo-sync`, `universe-bible-images`, …) as configured in **CoS → Schedule** | `appId` names the managed app, when the type acts on one |
+| `custom` | An app **custom scheduled job** (**CoS → System Tasks**), by id | None — the job record owns its own app scope, so a second copy here could disagree with it |
+
+There is no burn-only automation catalog and no burn-only prompt editor. This is
+the point of the model: work is defined **once**, in Scheduled Tasks, and Quota
+Burn decides *when* a family's expiring quota gets spent on it.
+
+### Adding a burn action
+
+1. Create (or find) the work in **CoS → Schedule** (a built-in task type) or
+   **CoS → System Tasks** (a custom job). New burn-only work should be an
+   **on-demand** scheduled task — no interval, so it costs nothing until
+   something asks for it. The page links straight there ("Create an on-demand
+   scheduled task").
+2. On **Dev Tools → Quota Burn**, expand a family and pick it from **Add a step**.
+   The picker is searchable and grouped into *PortOS scheduled tasks* and
+   *App custom tasks*; it matches on the task name, its description, and the apps
+   it can target.
+3. Pick a target app if the task acts on one, then set any per-invocation
+   overrides. The row states the **effective** settings and audit mode before you
+   save or run.
+
+Nothing here writes back to the task, and **removing a step never deletes the
+scheduled task it referenced** — only the step's own order, name, overrides and
+run-once state go away.
+
+### Inheritance and overrides
+
+`overrides` is layered over the referenced task's SAVED settings by
+`effectiveSettings` (`server/services/quotaBurnInvoke.js`), mirrored on the
+client by `effectiveQuotaBurnSettings` (`client/src/lib/quotaBurnTasks.js`):
+
+| Field | Unset (`null`) | Set |
+| --- | --- | --- |
+| `providerId` | Inherits the task's pin, else the family's own resolution | Pins the binary — rejected at save time if it belongs to another quota family |
+| `model` / `effort` | Inherits the task's saved pin | Pins for this burn only |
+| `params` | Inherits the task's whole `taskMetadata` | **Merged key by key** over it, so overriding one run parameter does not blank the rest |
+
+The join is on **presence, not truthiness**: an override the user clears
+normalizes to `null` and goes back to inheriting. That is also why the editor
+sends the `overrides` bag and omits the top-level `model`/`providerId`/`effort`/
+`params` compat mirrors the GET still returns — `normalizeQuotaBurnJob` resolves
+them by presence, so echoing a stale mirror back would silently restore a pin the
+user had just cleared (`quotaBurnStepPayload`).
+
+For an **audit** task type the overrides include the **audit mode** —
+`params.fileIssues`, the same `file issues only` ⇄ `do the work` switch the
+Schedule page shows. The row names the effective mode (and which half it came
+from) before anything runs, because that is the difference between a window spent
+filing issues and a window spent landing code. A **programmatic** task's run
+parameters are per-type and live on the task itself; the row renders them
+read-only with a link to edit them where they belong.
+
+### Eligibility — what a step may point at
+
+The picker only offers, and the runner only dispatches, work a burn can actually
+invoke. `getQuotaBurnTaskCatalog` builds the verdict server-side; the client
+mirrors the same rules so a dead end never appears as a choice:
+
+| Rule | Why |
 | --- | --- |
-| `agent-prompt` | Queues a CoS agent in a named managed app with a custom prompt. Visible in the CoS queue and Active Agents like any other task. |
-| `universe-bible-describe` | **Programmatic** — no agent. Sends one headless expand prompt per under-described bible entry, pinned to the burning family's own CLI/TUI provider. |
-| `universe-bible-images` | **Programmatic** — no agent. Enqueues renders for universe bible entries whose `imageRefs[]` is empty. Render backend defaults to the burning family's own image mode, so a codex burn spends codex's image quota. |
+| A built-in type whose `invocation.userInvokable` is false is **excluded** | It is not something a user (or a burn) starts |
+| A custom job of type `shell` or `script` is **excluded** (`isBurnEligibleCustomJob`) | It runs a command or a built-in handler and spends no provider quota, which is the only thing a burn is for |
+| A custom job below the `yolo` autonomy level is **refused at dispatch** | It needs an approval an unattended burn cannot give |
+| A **disabled** task or job is offered, with the reason | It is one click from fixed on the page the row links to |
+| A type that requires a managed app is targeted from the apps that **enabled** it | The availability resolver reports `wrong-scope` for any other app |
+| An install-wide or programmatic type takes **no** app | The schema rejects a request from either that names one |
+
+A step that stops being invocable is **retained, never deleted** — its label,
+order, overrides and run-once state are the user's, and a task that comes back
+should find its step exactly as it left it. `resolveQuotaBurnStepAvailability`
+stamps `{ code, reason }` onto the config the page reads (derived per read, never
+persisted — it goes stale the moment a task is re-enabled), and the row renders
+that reason **with no run affordance at all**: offering a ▶ whose only outcome is
+a decline is worse than offering nothing. The codes are `legacy-unmigrated`,
+`unknown-task`, `dangling-job`, `disabled`, `missing-app`, `wrong-scope`, and
+`incompatible`.
+
+### The programmatic bible tasks
+
+`universe-bible-describe` and `universe-bible-images` are ordinary **on-demand
+scheduled tasks** that PortOS executes itself (`server/services/scheduledHandlers/`)
+— no agent, no CoS task, no spawn slot. They appear in CoS → Schedule with their
+own settings and a Run Now button, and a burn step and a manual run go through
+the same handler. They are never clock-due: a fresh install spends nothing on
+them until someone presses Run or adds one to a burn plan. Passing the burning
+`family` is what pins the provider / render backend to the subscription being
+drained; a manual run has no family and resolves the way any other scheduled task
+does.
 
 ### Describe before you render
 
@@ -127,7 +242,7 @@ generic figure that has to be thrown away — and it has already spent the image
 quota. Ordering the two describe→images in the family's rotation walks the
 backlog into shape first, then renders from something worth rendering.
 
-The job's `depth` param picks what "described" means, per
+The task's `depth` parameter picks what "described" means, per
 `server/lib/universeBibleCompleteness.js`:
 
 - **`core`** — the entry is unusable without these: a character's
@@ -137,7 +252,8 @@ The job's `depth` param picks what "described" means, per
   character-sheet expand prompt fills: the visual set (silhouette, posture,
   palette, props, expressions, hand gestures, wardrobes), the novelist set
   (likes, mannerisms, relationships, skills), and the Ghost → Wound → Lie → Want
-  → Need framework with its arc type and sliders. `full` is the default because
+  → Need framework with its arc type, sliders, and the optional psychology
+  profile (theory of control + survival / connection / status drives). `full` is the default because
   the job exists for the sheet — a cast member with a one-line description still
   renders inconsistently from panel to panel.
 
@@ -151,9 +267,9 @@ Locked entries are never picked, and every attempted entry is stamped into the
 shared in-flight ledger for its 6-hour TTL. Why picks are ranked by blank
 *fraction* rather than raw gap count, and why the stamp covers entries the model
 declined to fill, are argued at the code site
-(`server/services/quotaBurnJobs/universeBibleDescribe.js`).
+(`server/services/scheduledHandlers/universeBibleDescribe.js`).
 
-The image job's opt-in `requireDescribed` is the other half of the pairing: with
+The image task's opt-in `requireDescribed` is the other half of the pairing: with
 it on, canon entries with no `core` description are held out of the render
 backlog until the describe job has been through them. It defaults **off**, so an
 existing plan keeps rendering exactly the backlog it rendered yesterday.
@@ -161,12 +277,12 @@ existing plan keeps rendering exactly the backlog it rendered yesterday.
 ### Repeating vs one-shot work (`runOnce`)
 
 A plan is a **rotation**: the walk resumes after the family's last dispatch
-(`rotatePlanAfter`), so an N-job plan cycles through all N and then starts the
+(`rotatePlanAfter`), so an N-step plan cycles through all N and then starts the
 next lap, spending the window until a gate closes. That is right for standing
 work — an audit dimension is worth re-running as the code moves — and wrong for
 work that only needs doing once, which was simply re-done every lap.
 
-Each job therefore carries a **`runOnce`** flag (default `false`, so every plan
+Each step therefore carries a **`runOnce`** flag (default `false`, so every plan
 written before it keeps repeating):
 
 | `runOnce` | Behavior |
@@ -181,14 +297,14 @@ accord instead of looping.
 - **The ledger is `data/cos/quota-burn-completions.json`**, `<familyId>:<jobId>`
   → the ISO instant it ran, capped (newest kept) at **twice** the keys a
   maxed-out plan can hold — derived from `QUOTA_BURN_FAMILIES` and
-  `jobsPerFamily.max`, so pruning can only evict a job already deleted from the
+  `jobsPerFamily.max`, so pruning can only evict a step already deleted from the
   plan, never a live one. It is a
   separate file rather than a flag on the job because a config PUT **replaces**
   a family's `jobs` array — that is how every reorder and edit saves — so a flag
   on the job would be reset by an unrelated edit, and by the client's optimistic
   copy of the plan, which never sees the runner's write. The run log can't answer
-  it either: it is a capped UI feed, so a job that ran last month has aged out.
-- **Recorded only on a real dispatch.** A job that declines (`dispatched: false`)
+  it either: it is a capped UI feed, so a step that ran last month has aged out.
+- **Recorded only on a real dispatch.** A step that declines (`dispatched: false`)
   is not spent — a misconfigured step must stay retryable.
 - **A forced ▶ run bypasses the gate AND still records.** `charge: false` is about
   the *window's automatic budget*; `runOnce` is a statement about the *work*, and
@@ -196,7 +312,7 @@ accord instead of looping.
 - **An unreadable ledger fails CLOSED** — `getQuotaBurnCompletions` returns
   `null` (not `{}`) for a failed read, so the cycle reports `run-once ledger
   unreadable` rather than treating "nothing has run" as fact and re-dispatching
-  every one-shot job. `writeLedger` refuses to write over an unread ledger for
+  every one-shot step. `writeLedger` refuses to write over an unread ledger for
   the same reason: an empty write erases the completions that survived. Same
   posture, and the same `readJSONFileStrict` shape, as `quotaBurnDenials.js`.
 - **A finished plan stops costing a quota scrape.** `familyHasRunnableJobs(family,
@@ -209,66 +325,61 @@ accord instead of looping.
   predicate** rather than an optional argument on `familyIsConfigured`: array
   callbacks pass the index as the second argument, so an overloaded arity turns
   `some(familyIsConfigured)` silently wrong.
-- **Re-arm** puts steps back in the rotation: the ↺ on a job row for one step,
+- **Re-arm** puts steps back in the rotation: the ↺ on a step row for one step,
   **Re-arm all** on the plan header for the family. `POST /api/quota-burn/rearm`
   with `{ familyId, jobId? }`; a `familyId` is required, since a bare "clear
   everything" would silently re-queue every one-shot job on the install. It
   dispatches nothing — the next cycle still faces every gate.
 
-Adding a job type is three edits: a `QUOTA_BURN_JOB_TYPE` entry + catalog row in
-`server/lib/quotaBurnConfig.js`, a module in `server/services/quotaBurnJobs/`, and
-one line in that directory's `JOB_MODULES`. The config page builds its form from
-the catalog, so no client change is needed unless the job introduces a param kind
-the form doesn't render yet.
+### Adding a NEW kind of burn action (code)
 
-Each job module exports `countPending` (side-effect free — the page calls it on
-every load) and `run` (the only thing that may spend quota). `countPending` may
-return an opaque `context` that the runner hands straight to `run`, so a probe
-that scanned every universe bible to produce its count doesn't make `run` repeat
-the scan; `run` must still work without it, because the force path calls it with
-no probe. A job that declines reports `dispatched: false` with a reason and is
-**not** charged against the window's cap.
+There is no `QUOTA_BURN_JOB_TYPE` to extend any more — `QUOTA_BURN_JOB_CATALOG`
+and `quotaBurnPresets.js` are frozen compatibility inputs, and nothing new
+belongs in them. A new burn action ships as a **scheduled task**, and Quota Burn
+picks it up for free:
 
-### Prompt presets
+- **Agent work** — add the task type (or let the user create a custom job in
+  System Tasks). If it should be configurable to *file issues* vs *do the work*,
+  add it to `AUDIT_DEFINITIONS` in `server/lib/auditCatalog.js`. See
+  `docs/ARCHITECTURE.md` → "Adding CoS Task Types".
+- **Work PortOS performs itself** — register the module in
+  `SCHEDULED_HANDLER_MODULES`, add its task type to
+  `PROGRAMMATIC_SCHEDULED_TASK_TYPES` + `DEFAULT_TASK_INTERVALS` in
+  `server/services/taskScheduleRegistry.js` (enabled, `ON_DEMAND`, no interval),
+  and allow-list its params in `sanitizeTaskMetadata`. The task's saved
+  `taskMetadata` is the params bag; a burn step passes its own overrides plus
+  the burning `family`, which is what pins the provider/render backend to that
+  subscription.
 
-`agent-prompt` jobs can be seeded from `QUOTA_BURN_PROMPT_PRESETS`
-(`server/lib/quotaBurnPresets.js`), served in the config catalog and applied from
-either **Add a preset job** on a family card or **Start from a preset** on a job
-row. Each preset is one narrow audit dimension — the single-focus form of
-`/do:better --issues` — that reads real code, files decision-complete GitHub
-issues, and changes nothing:
+No client change is needed either way: the picker reads the same catalogs the
+Schedule and System Tasks pages do.
 
-| Preset | Focus |
-| --- | --- |
-| UX issues | Interaction friction: unconfirmed destructive controls, invisible save state, unexplained disabled buttons, lost edits, dead ends |
-| Accessibility issues | Keyboard paths, labels, focus management, live-region state, contrast |
-| Mobile & responsive issues | Overflow, touch targets, hover-only information, drawer/modal behavior at small widths |
-| Error & empty-state issues | Swallowed failures, doubled/missing toasts, absent-vs-empty conflation, stale UI, unsaved-work loss |
-| Performance issues | Per-item I/O, repeated scans, unbounded growth, render storms, timers, leaks |
-| Test coverage gaps | Untested guards on irreversible/expensive paths, fixes landed without regression tests, false-green mocking |
-| Dead code & duplication | Unreferenced exports, re-implemented helpers, copy-paste drift (never cross-version compatibility code) |
-| Data & upgrade-safety issues | Missing migrations/seeds, schema-parity drift, version gates, destructive defaults |
-| Docs drift | Doc claims the code contradicts, stale commands, undocumented surfaces |
-| Security issues | Real exposure under the documented threat model — findings that contradict it are noise |
-| API & route contracts | Unvalidated inputs, client/server drift, wrong status/envelope, missing `asyncHandler`, loose schemas |
-| React lifecycle & state | Missing effect teardowns, stale closures, unmounted state updates, derived-state anti-patterns |
-| Logging & observability | Silent catch blocks, log noise on hot paths, errors logged without context, uninstrumented pipelines |
-| Copy & text clarity | Internal jargon in labels, ambiguous action verbs, dead-end error text, broken pluralization |
+A programmatic handler exports `countPending` (side-effect free — the page calls
+it on every load, so listing or probing must spend nothing) and `run` (the only
+thing that may spend quota). `countPending` may return an opaque `context` that
+the runner hands straight to `run`, so a probe that scanned every universe bible
+to produce its count doesn't make `run` repeat the scan; `run` must still work
+without it, because the force path calls it with no probe. A step that declines
+reports `dispatched: false` with a reason and is **not** charged against the
+window's cap.
 
-Presets are **templates**: picking one COPIES its prompt into the job's own
-`params.prompt`, and nothing on disk points back at the preset id. So a contract
-revision reaches configured jobs only through a migration — and the shape of
-that migration matters. Every rendered prompt is two halves split by the
-`## How to run this audit` line: the **mission** above it (what to audit, one
-per preset, essentially stable) and the **contract** below it (how to audit,
-shared, and the half that keeps being revised). `upgradeStoredAuditPrompt`
-matches on the mission and replaces the contract, so a job seeded several
-revisions ago still upgrades; it refuses when the stored contract has lost the
-sentences every shipped render carried, which is how a user's own procedure is
-recognized and left alone. Copy migration 305 for the next contract edit —
-**not** migration 294, whose byte-for-byte rule matched nothing older than one
-revision and silently stranded every real job on a prompt that predated the
-dispatch-label guidance entirely.
+### Audits — where the wording lives now
+
+The audit dimensions a burn window is usually spent on (UX, accessibility,
+mobile/responsive, error & empty states, performance, test coverage, dead code,
+data & upgrade safety, docs drift, security, API & route contracts, React
+lifecycle, logging, copy clarity) are **scheduled task types**, defined once in
+`AUDIT_DEFINITIONS` (`server/lib/auditCatalog.js`) with their prompts in
+`DEFAULT_TASK_PROMPTS`. A burn step references one and picks its **audit mode**
+per invocation; the wording is edited in CoS → Schedule, where every other
+consumer of that task reads it.
+
+`QUOTA_BURN_PROMPT_PRESETS` (`server/lib/quotaBurnPresets.js`) is what that
+replaced: a burn-only table of prompt templates whose text was **copied** into a
+step's `params.prompt`, with nothing on disk pointing back at the preset id. It
+is retained as a **compatibility input only** — a plan written before the
+reference model still loads, and it is the source the migration reads. Nothing
+new belongs in it, and the config page no longer serves or renders it.
 
 Each audit prompt spends **roughly the first two thirds of the window on
 research**: trace each candidate end to end, read the tests and `git log` around
@@ -276,20 +387,24 @@ it, name the path that actually reaches the failure, and decide the fix (files,
 tests, and the rejected alternative) before filing. The cap stays at 5 issues
 with two or three as the target — depth over volume.
 
-Filing carries a **required** label contract: exactly one `model:` and exactly
-one `effort:` label on every issue, chosen as independent axes from the code the
-agent just read (`MANDATORY_DISPATCH_HINT_GUIDANCE` in `server/lib/dispatchLabels.js`).
-Contributor labels (`good first issue`, `help wanted`) stay optional, missing
-labels are created lazily, category labels (`plan`, `ux`, `bug`, `tests`,
-`area:*`, …) are preserved, and the agent reads each new issue's labels back to
-repair any that did not stick.
+Filing carries a **required** label contract for quota-burn audits,
+`reference-watch`, and `repo-study`: exactly one `model:` and exactly one
+`effort:` label on every issue, chosen as independent axes from the code the
+agent just read (`MANDATORY_DISPATCH_HINT_GUIDANCE` in
+`server/lib/dispatchLabels.js`). Contributor labels (`good first issue`, `help
+wanted`) stay optional, missing labels are created lazily, category labels
+(`plan`, `ux`, `bug`, `tests`, `area:*`, …) are preserved, and the agent reads
+each new issue's labels back to repair any that did not stick.
+
 ### The "lands no code" postures
 
-An `agent-prompt` job has two of them, and they are not the same thing:
+An agent task has two of them, and they are not the same thing. Both are saved
+`taskMetadata` on the scheduled task; a burn step can override them per
+invocation like any other run parameter:
 
 | Param | Means | Use when |
 | --- | --- | --- |
-| `noCodeOutput` | The deliverable is what the agent **does during the run** — files an issue, calls an endpoint. It needs no branch and no isolation because it writes nothing, so it runs in the app's own checkout on whatever branch that is. | The audit presets |
+| `noCodeOutput` | The deliverable is what the agent **does during the run** — files an issue, calls an endpoint. It needs no branch and no isolation because it writes nothing, so it runs in the app's own checkout on whatever branch that is. | The audit task types |
 | `discardWorktree` | The job **does** want a scratch checkout (it builds, runs tests, edits to reason) but nothing in it may land: the worktree is removed without merging. | A job that must run a build/test cycle |
 
 Either one forces `openPR`/`simplify` off in the runner (both presuppose a diff
@@ -299,7 +414,7 @@ sets `worktreeChangesExpected: false`, so a run that correctly changed nothing
 isn't failed by the idle-complete gate. Both default to `false`, so a job meant
 to land code is unaffected.
 
-The audit presets take the **first** posture: `useWorktree: false` +
+The audit task types take the **first** posture: `useWorktree: false` +
 `noCodeOutput: true` + `openPR: false` + `simplify: false`. Isolating a
 read-only audit would be worse, not better — `useWorktree: true` with
 `openPR: false` is the **auto-merge** posture (`agentWorktreeCleanup.js` merges
@@ -313,54 +428,173 @@ covered the Creative Director agents, which run in the same shape.)
 
 The tradeoff: an audit runs in the user's working copy, so its prompt is
 explicit that it must leave the tree and the branch exactly as it found them.
-A job that genuinely needs to build or test should tick `discardWorktree`
+A task that genuinely needs to build or test should tick `discardWorktree`
 instead.
 
-Every numeric bound (windows, reserve, caps, entry limits) lives in
+Every numeric bound (windows, reserve, caps, field lengths) lives in
 `QUOTA_BURN_BOUNDS` in `server/lib/quotaBurnConfig.js`, read by the normalizer
-(which clamps an older on-disk plan), the Zod schemas (which reject a bad
-request), and the catalog descriptors the client renders as `min`/`max`.
+(which clamps an older on-disk plan) and by the Zod schemas (which reject a bad
+request), so raising a cap in one place cannot 400 a plan the other would accept.
+
+## Charging exactly once
+
+A burn's accounting hangs off **acceptance**, never off "we asked". The
+distinction only exists because one of the three invocation lanes is
+asynchronous:
+
+| Lane | Accepted when | Accounting |
+| --- | --- | --- |
+| Programmatic handler | it returns — PortOS did the work inline | charged immediately |
+| Custom app job | `addTask` returns a persisted, non-duplicate task | charged immediately |
+| Built-in scheduled task | an on-demand engine generates the task, later | **reserved**, then settled |
+
+A built-in step goes out as an on-demand request. One of the two engines
+(`cos.js#spawnDequeuePriority0OnDemand`, `cosTaskGenerator.js#spawnPriority0OnDemand`)
+drains it on a later cycle and may refuse it outright — improvement switched off,
+the task type disabled since queuing, a managed app that has gone away, a
+generator that produced nothing, an identical twin already queued. Charging at
+the request would spend the window (and retire a `runOnce` step) for work that
+never started: the same undercount #3179 fixed one hop further down.
+
+So the runner takes a **reservation** in `data/cos/quota-burn-pending.json`
+instead, keyed `<familyId>::<stepId>`, carrying the terms the dispatch was made
+under (which window to charge, whether it charges at all, whether the step is
+`runOnce`) and the request id. While it is held:
+
+- it counts against `maxDispatchesPerWindow` exactly as a charge would, so the
+  cap is honest for the whole in-flight window and the page's `N/M used` does not
+  under-report;
+- the step is skipped by any later cycle, so a duplicate scheduled or burn
+  invocation cannot queue the same work twice.
+
+Every cycle then settles what the last one asked for (`quotaBurnAcceptance.js`),
+before deciding what to ask for next. A reservation whose request is still on the
+schedule is left alone. One whose request has drained is **joined to the task the
+engine produced**, by the `quotaBurnRequestId` that request stamped onto it
+(`lib/quotaBurnOrigin.js`):
+
+- **a task exists** → charge the window once, mark a `runOnce` step spent, patch
+  the run-log row in place with the accepted task id, release the reservation;
+- **no task exists** → release the reservation, charge nothing, and say so on the
+  run-log row.
+
+Because the join runs off persisted state — the reservation, the request and the
+task are all on disk — a restart mid-flight reaches the same verdict a reconcile
+a second later would have. The charge is claimed on the reservation *before* the
+ledger write it authorizes, so a process killed between the two cannot charge
+twice on the next pass. And an ordinary clock-driven run of the very same
+scheduled task changes nothing here: it carries no burn provenance, so no
+reservation ever names it, and neither the cap nor the step's one-shot state
+moves.
+
+Reads fail closed. An unreadable reservation file skips the cycle (reading it as
+"nothing pending" would re-queue a step already in flight and re-open its cap
+slot), and an unreadable schedule or task queue defers every reservation rather
+than calling a running burn refused. The status page reads reservations but never
+settles one — a probe read performs no ledger write.
 
 ## Manual runs
 
 - **Evaluate now** runs a full cycle immediately, ignoring the master switch but
   respecting every quota gate.
 - **Burn now** on a family card scopes that cycle to one family.
-- The ▶ on a job row **forces** that one job past the window/reserve/cap gates.
+- The ▶ on a step row **forces** that one step past the window/reserve/cap gates.
   It goes through the same selection, so the run still reports the family's real
   remaining percentage and reset time — it is only marked `charge: false`, so it
   never eats the family's automatic budget. It **arms on first click** and
   dispatches on the confirm: the page has no Save button, so a spend-now control
-  sitting among the row's small icons was being hit as if it were one.
+  sitting among the row's small icons was being hit as if it were one. It is
+  **absent entirely** on an unavailable step (the server would decline the
+  dispatch, so a button whose only outcome is a toast is worse than the reason the
+  row already states), and disabled while an edit is unsaved — every run control
+  reads server-side config, so a run fired between the keystroke and the PUT would
+  burn with the previous settings.
 
 ## Storage
 
-Six files under `data/cos/`, all machine-local and intentionally **not federated**: the plan (`quota-burn.json`), the per-window dispatch ledger (`quota-burn-dispatches.json`), the run log (`quota-burn-runs.json`), the in-flight set (`quota-burn-inflight.json` — entries a job enqueued whose renders have not landed yet, so the next cycle does not re-queue them; 6-hour TTL), the denial ledger (`quota-burn-denials.json` — per-family blocks from an observed provider refusal, cleared by the next successful burn or a 5-hour TTL), and the `run once` completion ledger (`quota-burn-completions.json` — which one-shot steps have had their dispatch, cleared by Re-arm). They are not federated: quota belongs to a
+Seven files under `data/cos/`, all machine-local and intentionally **not federated**: the plan (`quota-burn.json` — ordered steps, each a scheduled-task reference plus its overrides; the referenced tasks themselves live in `data/cos/task-schedule.json` and the app job store, and a burn never writes to either), the per-window dispatch ledger (`quota-burn-dispatches.json`), the run log (`quota-burn-runs.json`), the in-flight set (`quota-burn-inflight.json` — entries a job enqueued whose renders have not landed yet, so the next cycle does not re-queue them; 6-hour TTL), the denial ledger (`quota-burn-denials.json` — per-family blocks from an observed provider refusal, cleared by the next successful burn or a 5-hour TTL), the `run once` completion ledger (`quota-burn-completions.json` — which one-shot steps have had their dispatch, cleared by Re-arm), and the pending-acceptance reservations (`quota-burn-pending.json` — `<familyId>::<stepId>` → the request a burn is waiting on, released when it is accepted or refused; 6-hour TTL). None of them ships a `data.reference/` seed, because an absent file already means "nothing recorded". They are not federated: quota belongs to a
 particular machine and provider account, and the "which managed app" targets
 differ per machine.
 
-## Migration from the per-app task type
+## Migration
 
-Before this, quota-burn was a `quota-burn` entry in each managed app's
-`taskTypeOverrides`, which meant two enabled apps ran two independent loops
-racing for the same window budget. Migration `221-quota-burn-global-config.js`
-folds those overrides into the single plan (each app's family prompt becomes an
-`agent-prompt` job pointing back at that app) and removes the dead task type from
-`data/apps.json`. Do not re-add `quota-burn` to `TASK_TYPES`.
+**From the per-app task type.** Before the install-level loop, quota-burn was a
+`quota-burn` entry in each managed app's `taskTypeOverrides`, which meant two
+enabled apps ran two independent loops racing for the same window budget.
+Migration `221-quota-burn-global-config.js` folds those overrides into the single
+plan and removes the dead task type from `data/apps.json`. Do not re-add
+`quota-burn` to `TASK_TYPES`.
+
+**From copied prompts to task references.** A plan written before the reference
+model stores a `jobType` and a free-form `params` bag instead of a `taskRef`.
+Those steps still **load** — an install upgrading across the reference model must
+not lose its plan — and `normalizeQuotaBurnJob` marks each one
+`legacy-unmigrated` rather than guessing which scheduled task its copied prompt
+meant. Guessing at normalization time would either strand the user's edits or
+silently duplicate an automation, which is why the conversion is a migration
+rather than a read-time inference.
+
+Migration `359-quota-burn-task-references.js` performs it, over the one decision
+in `lib/quotaBurnLegacyConversion.js`:
+
+- A prompt that is still a **recognized, unmodified shipped preset** becomes a
+  reference to the scheduled audit it was cloned from (`auditCatalog.js`), with
+  `fileIssues: true` pinned **explicitly** — every burn preset was an issues-only
+  audit, and a scheduled default that says otherwise (or changes later) must not
+  turn it into code-writing work.
+- The two **programmatic** types become references to the scheduled handlers that
+  already implement them, run params intact.
+- Anything **customized, unrecognized, or without a target app** becomes an
+  on-demand **custom scheduled task** holding the user's exact prompt and
+  workflow settings, which the step then references. Recognition is
+  `matchStoredAuditPreset` — migration 305's mission-half rule — never a label
+  and never a partial match: when in doubt the conversion keeps the text, because
+  a preserved prompt is recoverable and a discarded one is not.
+
+Step ids, order, labels, disabled state and `runOnce` survive untouched, so the
+completion ledger, the dispatch ledger and the reservation keys all still resolve.
+A converted built-in reference only becomes **runnable** once its target app has
+that scheduled task enabled — the shared availability ladder decides that, and the
+migration deliberately does not enable a task type on the user's behalf. The
+pre-conversion plan is parked at `data/cos/quota-burn.pre-359.json`.
+
+Until a plan is converted, its steps keep their place, order and name while
+rendering `legacy-unmigrated` and no run affordance — picking a task from the
+row's own picker converts one by hand at any time.
+
+Conversion is idempotent and interrupt-safe: a step that already carries a
+`taskRef` is skipped, and a custom conversion addresses its task by a
+deterministic `job-burn-<family>-<step>` id, so a re-run or a resumed run reuses
+the task it created rather than minting a duplicate automation. The same service
+runs on the PUT path, so a body from an older client is converted before it
+reaches disk instead of being persisted as a step the runner can only refuse.
 
 ## Code map
 
 | File | Role |
 | --- | --- |
-| `server/lib/quotaBurnConfig.js` | Plan shape, job-type catalog, total normalization |
-| `server/lib/universeBibleCompleteness.js` | What "described" means per kind + depth — the field vocabulary the describe job scans with |
-| `server/lib/quotaBurnPresets.js` | Ready-made single-focus audit prompts for `agent-prompt` jobs |
+| `server/lib/quotaBurnTaskRef.js` | The step→scheduled-task reference model, its overrides bag, and the availability resolver |
+| `server/lib/quotaBurnConfig.js` | Plan shape, bounds, total normalization (plus the FROZEN legacy job-type catalog) |
+| `server/lib/quotaBurnValidation.js` | The strict PUT schemas — reference shape, target scope, and out-of-family provider pins |
+| `server/lib/quotaBurnOrigin.js` | Burn provenance on an on-demand request, and the metadata both on-demand engines stamp from it |
+| `server/lib/taskTargetScope.js` | Which task types act on one app, install-wide, or are programmatic — read by the resolver and the schema |
+| `server/lib/auditCatalog.js` | The audit task types and their file-issues-vs-do-the-work contract |
+| `server/lib/quotaBurnPresets.js` | FROZEN legacy prompt presets — a compatibility input, plus `matchStoredAuditPreset`, the recognition rule migration 359 converts on |
+| `server/lib/quotaBurnLegacyConversion.js` | The ONE legacy-step → reference decision, shared by migration 359 and the PUT compat path |
+| `server/lib/universeBibleCompleteness.js` | What "described" means per kind + depth — the field vocabulary the describe task scans with |
 | `server/lib/quotaWindows.js` | Classifies a window by period — target (broadest) vs limiting (narrowest) |
-| `server/services/quotaBurnStore.js` | `data/cos/quota-burn.json` + the run log |
+| `server/services/quotaBurnInvoke.js` | The shared invocation path: builds the task catalog, resolves a step, layers its overrides, enforces the schedule's own gates, and dispatches |
+| `server/services/quotaBurnAcceptance.js` | Reservations for an asynchronous acceptance, and the settlement that charges each accepted burn exactly once |
+| `server/services/quotaBurnStore.js` | `data/cos/quota-burn.json`, the run log, and the pending-acceptance reservations |
 | `server/services/quotaBurn.js` | `evaluateFamily` — the one gate ladder both selection and the page's skip reasons read — plus the dispatch ledger |
 | `server/services/quotaBurnCompletions.js` | The `run once` completion ledger and its re-arm |
 | `server/services/quotaBurnDenials.js` | The observed-refusal ledger and its `agent:completed` subscriber |
-| `server/services/quotaBurnJobs/` | The job registry and its modules |
-| `server/services/quotaBurnRunner.js` | The loop, the cycle, and the status feed |
-| `server/routes/quotaBurn.js` | `/api/quota-burn` |
+| `server/services/quotaBurnRunner.js` | The loop, the cycle, and the status feed (which stamps availability onto the config the page reads) |
+| `server/services/scheduledHandlers/` | The programmatic handlers (universe bible descriptions/images) — shared by Scheduled Tasks and Quota Burn |
+| `server/services/quotaBurnConversion.js` | The runtime adapter for that decision: creates the custom task and rewrites the step on a legacy PUT |
+| `server/routes/quotaBurn.js` | `/api/quota-burn` — plan, status, apps/providers catalog, manual runs, re-arm |
+| `client/src/lib/quotaBurnTasks.js` | The client's view of the shared task catalog: grouping, search, reference keys, effective settings, and the PUT payload |
+| `client/src/lib/quotaBurnPatch.js` | The optimistic config merge (mirrors `saveQuotaBurnConfig`) and the dispatch-cap sentinel |
 | `client/src/pages/QuotaBurn.jsx` | The config page |
+| `client/src/components/quotaBurn/TaskRefPicker.jsx` | The searchable, grouped scheduled-task picker |
+| `client/src/components/quotaBurn/StepSettings.jsx` | Per-invocation overrides + the effective settings and audit mode |

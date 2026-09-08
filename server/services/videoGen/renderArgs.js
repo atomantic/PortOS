@@ -13,6 +13,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import {
   isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
 } from '../../lib/videoReferenceModes.js';
+import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 import { extendLatentFrames } from '../../lib/videoContinuity.js';
 import { videoLoraLayoutIssue } from '../../lib/safetensors.js';
 import { formatLoraEffect, loraEffectIssue } from '../../lib/loraEffect.js';
@@ -52,8 +53,11 @@ import {
   FASTVIDEO_REPO_DIR,
   FASTVIDEO_MLX_CHECKPOINT_DIR,
   FASTVIDEO_PROMPT_CACHE_DIR,
+  LTX25_VENV_PYTHON,
+  LTX25_UPSCALE_HELPER_SCRIPT,
   LTX25_CUDA_VENV_PYTHON,
   LTX25_CUDA_HELPER_SCRIPT,
+  LTX25_CUDA_UPSCALE_HELPER_SCRIPT,
   WAN22_CUDA_VENV_PYTHON,
   WAN22_CUDA_HELPER_SCRIPT,
   BYOV_RUNTIME_INFO,
@@ -330,7 +334,7 @@ export const ltx25TextEncoderArgs = (textEncoder) => {
   return args;
 };
 
-const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile }) => {
+const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, streamingMode }) => {
   assertByovRuntimeInstalled(model.runtime);
   // Map PortOS UI modes to the helper's subcommand. Native extend on ltx2
   // routes to ExtendPipeline.extend_from_video — conditions on the entire
@@ -454,6 +458,14 @@ const buildLtx2Args = ({ model, ltxModelPath, prompt, negativePrompt, width, hei
   // (the same mechanism the upstream `ltx-2-mlx generate --lora` CLI uses).
   if (Array.isArray(loras) && loras.length > 0) {
     args.push('--user-loras', JSON.stringify(loras.map((l) => ({ path: l.path, strength: l.strength }))));
+  }
+  // Block-streaming request (#6499). Emitted ONLY when it is NOT the default —
+  // 'auto' (absence) is the bridge's own default, so an unswapped render's
+  // argv stays byte-identical to one from before this setting existed. The
+  // bridge, not this builder, decides whether the resolved MODE's pinned
+  // pipeline can honor it — see scripts/generate_ltx2.py#resolve_streaming_policy.
+  if (!isDefaultVideoStreamingMode(streamingMode)) {
+    args.push('--streaming-mode', streamingMode);
   }
   // Two-stage T2V experiment passes an explicit stage-2 step count; omitted
   // otherwise so the pipeline keeps its own default.
@@ -959,6 +971,110 @@ const buildLtx25CudaArgs = ({ model, prompt, negativePrompt, width, height, numF
   return { bin: LTX25_CUDA_VENV_PYTHON, args };
 };
 
+// Which helper script + interpreter carries a generative upscale on each BYOV
+// runtime. Keyed by runtime id (NOT platform) so the caller's resolved runtime
+// is the single decision — `upscalePlan.ltxUpscaleRuntimeId()` already made it.
+const LTX_UPSCALE_RUNNERS = Object.freeze({
+  ltx25: { bin: LTX25_VENV_PYTHON, script: LTX25_UPSCALE_HELPER_SCRIPT },
+  ltx25_cuda: { bin: LTX25_CUDA_VENV_PYTHON, script: LTX25_CUDA_UPSCALE_HELPER_SCRIPT },
+});
+
+/**
+ * Argv for the generative 2× video upscale (#6511).
+ *
+ * The pass is an IC-LoRA render whose single reference is the clip being
+ * upscaled, so it reuses the IC flag alphabet (`--ic-lora-path`,
+ * `--ic-reference`, `--ic-min-references`, `--ic-max-references`) rather than
+ * inventing a second one. The bounds are passed EXPLICITLY for the same reason
+ * `icLoraArgs` passes them: the weight registry is the single source of truth
+ * across both languages, and `run_ic_lora` requires them — a Python-side
+ * default would be a second table free to drift from `icLoraWeights.js`.
+ *
+ * There is deliberately no model id here. The base LTX-2.5 checkpoint is the
+ * runner's own pinned dependency (#6512 / #6513), not a user-selectable render
+ * model, so naming one would invite an upscale conditioned on a checkpoint the
+ * adapter was never trained against. `baseModelPath` is that pinned checkpoint
+ * already RESOLVED to a local snapshot by the dispatch — a located dependency,
+ * not a choice — because the runner must never resolve it itself: every LTX
+ * pipeline's loader falls back to `snapshot_download` for a path it cannot
+ * stat, which for a ~68 GB pack is an unannounced pull mid-render.
+ *
+ * `width`/`height`/`numFrames` are the ALIGNED target the caller already padded
+ * its source up to, so this builder asserts the grid rather than re-deriving it.
+ */
+export const buildLtxUpscaleArgs = ({
+  runtime, sourceVideoPath, baseModelPath, icLoraWeightPath, icMinReferences, icMaxReferences,
+  width, height, numFrames, fps, seed, outputPath,
+}) => {
+  const runner = LTX_UPSCALE_RUNNERS[runtime];
+  if (!runner) {
+    throw new ServerError(
+      `No generative upscale runner exists for runtime "${runtime || 'unknown'}".`,
+      { status: 400, code: 'UPSCALE_RUNTIME_UNSUPPORTED' },
+    );
+  }
+  assertByovRuntimeInstalled(runtime);
+  if (!baseModelPath) {
+    throw new ServerError(
+      'The LTX-2.5 model pack this backend renders against is not cached — download or repair it in Video Gen first.',
+      { status: 400, code: 'UPSCALE_BASE_MODEL_UNRESOLVED' },
+    );
+  }
+  if (!icLoraWeightPath) {
+    throw new ServerError(
+      'The Pixel Spatial Upscaler weight is not downloaded — download it from the model panel first.',
+      { status: 400, code: 'IC_LORA_WEIGHT_UNRESOLVED' },
+    );
+  }
+  if (!sourceVideoPath || !existsSync(sourceVideoPath)) {
+    throw new ServerError(
+      `Upscale source clip not found on disk: ${sourceVideoPath || '(missing)'}`,
+      { status: 400, code: 'IC_LORA_REFERENCE_MISSING' },
+    );
+  }
+  // The bounds ride in the job params so a persisted/replayed job stays
+  // self-describing. A job written before they did — or hand-edited out of
+  // media-jobs.json — must fail rather than silently borrow the helper's
+  // default, which is the exact drift this contract exists to prevent.
+  const bound = (value, flag) => {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 1) {
+      throw new ServerError(
+        `Generative upscale requires an explicit ${flag} from the weight registry; got ${value}.`,
+        { status: 400, code: 'IC_LORA_REFERENCE_BOUNDS_MISSING' },
+      );
+    }
+    return String(n);
+  };
+  const positive = (value, flag) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new ServerError(
+        `Generative upscale requires a positive ${flag}; got ${value}.`,
+        { status: 400, code: 'UPSCALE_TARGET_INVALID' },
+      );
+    }
+    return String(n);
+  };
+  return {
+    bin: runner.bin,
+    args: [
+      runner.script,
+      '--model', baseModelPath,
+      '--ic-lora-path', icLoraWeightPath,
+      '--ic-reference', sourceVideoPath,
+      '--ic-min-references', bound(icMinReferences, '--ic-min-references'),
+      '--ic-max-references', bound(icMaxReferences, '--ic-max-references'),
+      '--width', positive(width, 'width'),
+      '--height', positive(height, 'height'),
+      '--num-frames', positive(numFrames, 'frame count'),
+      '--fps', positive(fps, 'frame rate'),
+      '--seed', String(Number(seed) >>> 0),
+      '--output', outputPath,
+    ],
+  };
+};
+
 export const buildMiniMaxH3Ref2vaArgs = ({
   model, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps,
   steps, seed, sourceImagePath, audioFilePath, audioStartSec, mode, tiling,
@@ -1010,7 +1126,12 @@ export const buildMiniMaxH3Ref2vaArgs = ({
   return { bin: process.execPath, args };
 };
 
-export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, ffmpegPath, ffprobePath }) => {
+export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, streamingMode, ffmpegPath, ffprobePath }) => {
+  // Generative upscale (#6511) declines FIRST. It is not a text/image render:
+  // it carries no video model, no prompt and no reference mode, so every guard
+  // below would either dereference a model it was never given or reject it for
+  // lacking a conditioning contract it does not have.
+  if (upscale) return buildLtxUpscaleArgs({ ...upscale, outputPath });
   // Reference-mode promise (#4874) — checked HERE rather than inside
   // buildLtx2Args because every runtime reaches this function and only one can
   // honor a loose reference. A wan22/mlx_video/H3 render that fell through to its
@@ -1028,7 +1149,7 @@ export const buildArgs = ({ pythonPath, modelId, model, wanModelPath, wanRequire
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (isLtx2FamilyRuntime(model.runtime)) {
-    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile });
+    return buildLtx2Args({ model, ltxModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, disableAudio, outputPath, previewDir, textEncoderRepo, textEncoder, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, streamingMode });
   }
   // IC-LoRA remix modes are an LTX-2 primitive (ICLoraPipeline) — no other
   // runtime has an equivalent. The route guards this too, but a non-route

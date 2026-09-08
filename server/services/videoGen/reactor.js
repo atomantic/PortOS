@@ -8,7 +8,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
-import { finalizeGeneratedVideo } from './generateVideoHelpers.js';
+import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { getSettings } from '../settings.js';
 import {
@@ -175,8 +175,7 @@ function captureClip(entry, input, pythonPath, job, jobId) {
           if (!failure && message.type === 'error' && /^[a-z]+$/.test(message.phase) && /^[A-Za-z]+$/.test(message.errorType)) failure = new Error(`Reactor ${message.phase} failed (${message.errorType})`);
           if (message.type === 'status') {
             if (typeof message.message === 'string' && /^Captured [0-9.]+ of [0-9.]+ frames; audio=(True|False)$/.test(message.message)) console.log(`🎬 ${message.message}`);
-            broadcastSse(job, { type: 'status', message: 'Reactor session rendering…' });
-            videoGenEvents.emit('activity', { generationId: jobId });
+            emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.RENDER, 'Reactor session rendering…');
           }
         } catch {
           stop('Reactor renderer returned malformed output');
@@ -243,7 +242,7 @@ export async function generateVideo({
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}] reactor (${REACTOR_MODEL_ID}): ${prompt.slice(0, 60)}…`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
-  broadcastSse(job, { type: 'status', message: 'Preparing Reactor runtime…' });
+  emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Preparing Reactor runtime…');
 
   runReactorVideo(job, jobId, {
     apiKey, ...request, sourceImagePath, outputPath, filename, meta,
@@ -280,8 +279,7 @@ async function runReactorVideo(job, jobId, {
     });
     entry.stop = null;
     if (entry.aborted) return finalizeCanceled(job, jobId);
-    videoGenEvents.emit('activity', { generationId: jobId });
-    broadcastSse(job, { type: 'status', message: 'Minting reactor.inc session…' });
+    emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Minting reactor.inc session…');
     const { jwt } = await mintReactorToken(apiKey);
     if (entry.aborted) return finalizeCanceled(job, jobId);
     const result = await captureClip(entry, {

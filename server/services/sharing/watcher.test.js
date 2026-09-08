@@ -1,163 +1,141 @@
-/**
- * Tests for queueBacklog coalescing in server/services/sharing/watcher.js
- *
- * The coalescing contract: a flood of concurrent queueBacklog(bucketId) calls
- * must collapse to at most one in-flight scan + one queued follow-up. When the
- * in-flight finishes, the queued run executes. All calls that arrive while a
- * scan is running share the same queued Promise, so processBacklog is never
- * called more than twice regardless of flood size.
- *
- * Testing strategy: mock importer.processBacklog with a controlled promise so
- * we can pause and resume the in-flight scan and count calls precisely.
- */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { posix, win32 } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock chokidar so attaching a watcher doesn't require real fs events.
-vi.mock('chokidar', () => ({
-  watch: vi.fn(() => ({
-    on: vi.fn().mockReturnThis(),
-    close: vi.fn().mockResolvedValue(undefined),
-  })),
-}));
-
-// Mock all the collaborators watcher.js pulls in.
+vi.mock('chokidar', () => ({ watch: vi.fn() }));
 vi.mock('./importer.js', () => ({
-  processManifest: vi.fn().mockResolvedValue(undefined),
-  processBacklog: vi.fn(),
-  handleUnshare: vi.fn().mockResolvedValue(undefined),
-  sharingEvents: { emit: vi.fn(), on: vi.fn() },
+  processManifest: vi.fn(), processBacklog: vi.fn(), handleUnshare: vi.fn(),
+  sharingEvents: { emit: vi.fn() },
 }));
-
 vi.mock('./buckets.js', () => ({
-  getBucket: vi.fn(),
-  listBuckets: vi.fn().mockResolvedValue([]),
+  getBucket: vi.fn(), listBuckets: vi.fn().mockResolvedValue([]),
   ensureBucketLayout: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock('./manifest.js', () => ({ isManifestPruning: vi.fn(), pruneBucketManifests: vi.fn() }));
+vi.mock('../instances.js', () => ({ getInstanceId: vi.fn() }));
 
-vi.mock('./manifest.js', () => ({
-  isManifestPruning: vi.fn().mockReturnValue(false),
-  pruneBucketManifests: vi.fn().mockResolvedValue(undefined),
-}));
+import { watch } from 'chokidar';
+import { processBacklog, processManifest, handleUnshare } from './importer.js';
+import { getBucket } from './buckets.js';
+import { isManifestPruning } from './manifest.js';
 
-vi.mock('../instances.js', () => ({
-  getInstanceId: vi.fn().mockResolvedValue('test-instance'),
-  getPeers: vi.fn().mockResolvedValue([]),
-}));
-
-import { processBacklog } from './importer.js';
-import {
-  __queueBacklogForTests as queueBacklog,
-  __backlogQueuesForTests as backlogQueues,
-} from './watcher.js';
-
-// Helper: create a deferred Promise so we can control when processBacklog resolves.
+let shutdown;
 function deferred() {
-  let resolve, reject;
-  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+// Deliver a real attached listener's event and expose its completion to the test.
+const deliver = (watcher, event, path) => Promise.all(watcher.listeners(event).map(listener => listener(path)));
+
+async function attach(paths = posix, root = '/example/bucket') {
+  vi.doMock('path', () => ({ join: paths.join, basename: paths.basename, sep: paths.sep }));
+  getBucket.mockImplementation(async id => ({ id, name: 'Example bucket', path: root }));
+  const module = await import('./watcher.js');
+  shutdown = module.shutdownAllWatchers;
+  return { watcher: await module.attachWatcher('bucket-example'), attachWatcher: module.attachWatcher, root, paths };
 }
 
-describe('watcher — queueBacklog coalescing', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    // Clear any residual queue state from other tests.
-    backlogQueues.clear();
-  });
+beforeEach(() => {
+  vi.resetModules();
+  vi.clearAllMocks();
+  watch.mockImplementation(() => Object.assign(new EventEmitter(), { close: vi.fn().mockResolvedValue(undefined) }));
+  processBacklog.mockReset().mockResolvedValue(undefined);
+  processManifest.mockReset().mockResolvedValue(undefined);
+  handleUnshare.mockReset().mockResolvedValue(undefined);
+  isManifestPruning.mockReset().mockReturnValue(false);
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+});
+afterEach(async () => {
+  await shutdown?.();
+  shutdown = null;
+  vi.doUnmock('path');
+  vi.restoreAllMocks();
+});
 
-  afterEach(() => {
-    backlogQueues.clear();
-  });
-
-  it('calls processBacklog once when there is no in-flight scan', async () => {
-    processBacklog.mockResolvedValue(undefined);
-
-    await queueBacklog('bucket-1');
-
-    expect(processBacklog).toHaveBeenCalledTimes(1);
-    expect(processBacklog).toHaveBeenCalledWith('bucket-1');
-    // Queue slot is cleaned up after the run.
-    expect(backlogQueues.has('bucket-1')).toBe(false);
-  });
-
-  it('coalesces a flood of calls to at most two processBacklog invocations', async () => {
-    // First scan is in-flight — hold it with a deferred.
-    const d = deferred();
-    processBacklog.mockReturnValueOnce(d.promise).mockResolvedValue(undefined);
-
-    // Fire the first call (in-flight).
-    const p1 = queueBacklog('bucket-flood');
-    // Fire many more calls while the first scan is still running.
-    const p2 = queueBacklog('bucket-flood');
-    const p3 = queueBacklog('bucket-flood');
-    const p4 = queueBacklog('bucket-flood');
-    const p5 = queueBacklog('bucket-flood');
-
-    // While in-flight, processBacklog should have been called exactly once.
-    expect(processBacklog).toHaveBeenCalledTimes(1);
-
-    // Release the first scan.
-    d.resolve();
-    await Promise.all([p1, p2, p3, p4, p5]);
-
-    // After the in-flight scan completes, exactly one queued follow-up should
-    // have fired — total calls is 2 (in-flight + one queued).
+describe.each([
+  ['POSIX', posix, '/example/bucket'],
+  ['Windows', win32, 'C:\\example\\bucket'],
+])('share-bucket watcher on %s', (_label, paths, root) => {
+  it('retries late assets and records, while dispatching only manifests for import and unshare', async () => {
+    const { watcher } = await attach(paths, root);
+    const asset = paths.join(root, 'assets', 'blobs', 'example-blob');
+    const record = paths.join(root, 'records', 'universes', 'example.json');
+    const manifest = paths.join(root, 'manifests', 'example-manifest.json');
+    await deliver(watcher, 'add', asset);
+    await deliver(watcher, 'change', record);
     expect(processBacklog).toHaveBeenCalledTimes(2);
-    // Queue is fully drained.
-    expect(backlogQueues.has('bucket-flood')).toBe(false);
-  });
-
-  it('all queued calls receive the same Promise (coalescing, not duplication)', async () => {
-    const d = deferred();
-    processBacklog.mockReturnValueOnce(d.promise).mockResolvedValue(undefined);
-
-    // Start first in-flight call.
-    queueBacklog('bucket-coalesce');
-    // All subsequent calls while in-flight must return the SAME Promise.
-    const q1 = queueBacklog('bucket-coalesce');
-    const q2 = queueBacklog('bucket-coalesce');
-    const q3 = queueBacklog('bucket-coalesce');
-
-    // q1, q2, q3 are the queued promises — they must be the same reference.
-    expect(q1).toBe(q2);
-    expect(q2).toBe(q3);
-
-    d.resolve();
-    await Promise.all([q1, q2, q3]);
-  });
-
-  it('uses separate queue slots for different bucket ids', async () => {
-    processBacklog.mockResolvedValue(undefined);
-
-    await Promise.all([
-      queueBacklog('bucket-A'),
-      queueBacklog('bucket-B'),
+    expect(processManifest).not.toHaveBeenCalled();
+    await deliver(watcher, 'add', manifest);
+    await deliver(watcher, 'change', manifest);
+    expect(processManifest.mock.calls).toEqual([
+      ['bucket-example', 'example-manifest.json'], ['bucket-example', 'example-manifest.json'],
     ]);
-
-    // Each bucket is handled independently.
-    expect(processBacklog).toHaveBeenCalledWith('bucket-A');
-    expect(processBacklog).toHaveBeenCalledWith('bucket-B');
-    // Both queue slots are cleaned up.
-    expect(backlogQueues.has('bucket-A')).toBe(false);
-    expect(backlogQueues.has('bucket-B')).toBe(false);
+    await deliver(watcher, 'unlink', asset);
+    await deliver(watcher, 'unlink', record);
+    await deliver(watcher, 'unlink', paths.join(root, 'manifests-old', 'example.json'));
+    expect(handleUnshare).not.toHaveBeenCalled();
+    await deliver(watcher, 'unlink', manifest);
+    expect(handleUnshare).toHaveBeenCalledExactlyOnceWith('bucket-example', 'example-manifest.json');
+    isManifestPruning.mockReturnValue(true);
+    await deliver(watcher, 'unlink', manifest);
+    expect(handleUnshare).toHaveBeenCalledTimes(1);
   });
+});
 
-  it('continues to accept new scans after the queue drains', async () => {
-    processBacklog.mockResolvedValue(undefined);
-
-    await queueBacklog('bucket-seq');
+describe('share-bucket watcher backlog lifecycle', () => {
+  it('coalesces each burst without overlapping or losing events during a follow-up scan', async () => {
+    const { watcher, paths, root } = await attach();
+    const first = deferred();
+    const second = deferred();
+    const secondStarted = deferred();
+    let active = 0;
+    let peak = 0;
+    const scan = async pending => {
+      active++;
+      peak = Math.max(peak, active);
+      await pending;
+      active--;
+    };
+    processBacklog
+      .mockImplementationOnce(() => scan(first.promise))
+      .mockImplementationOnce(() => { secondStarted.resolve(); return scan(second.promise); })
+      .mockImplementation(() => scan(Promise.resolve()));
+    const event = () => deliver(watcher, 'add', paths.join(root, 'assets', 'blobs', 'example-blob'));
+    const initial = event();
+    const burst = [event(), event(), event()];
     expect(processBacklog).toHaveBeenCalledTimes(1);
-    expect(backlogQueues.has('bucket-seq')).toBe(false);
-
-    // A second call after draining should start a fresh in-flight scan.
-    await queueBacklog('bucket-seq');
-    expect(processBacklog).toHaveBeenCalledTimes(2);
+    first.resolve();
+    await secondStarted.promise;
+    const late = event();
+    const scansWhileFollowupRuns = processBacklog.mock.calls.length;
+    second.resolve();
+    await Promise.all([initial, ...burst, late]);
+    expect(scansWhileFollowupRuns).toBe(2);
+    expect(peak).toBe(1);
+    expect(processBacklog).toHaveBeenCalledTimes(3);
+    await event();
+    expect(processBacklog).toHaveBeenCalledTimes(4);
   });
 
-  it('swallows processBacklog errors without unhandled rejection', async () => {
-    processBacklog.mockRejectedValue(new Error('scan failed'));
-
-    // Should not throw — errors are caught inside queueBacklog.
-    await expect(queueBacklog('bucket-err')).resolves.toBeUndefined();
-    expect(backlogQueues.has('bucket-err')).toBe(false);
+  it('recovers from a failed scan and lets a different bucket make progress', async () => {
+    const { watcher, attachWatcher, paths, root } = await attach();
+    const other = await attachWatcher('bucket-other');
+    const blocked = deferred();
+    processBacklog
+      .mockImplementationOnce(() => blocked.promise.then(() => { throw new Error('Example scan failure'); }))
+      .mockResolvedValue(undefined);
+    const path = paths.join(root, 'records', 'example.json');
+    const pending = deliver(watcher, 'change', path);
+    const trailing = deliver(watcher, 'change', path);
+    await deliver(other, 'change', path);
+    expect(processBacklog.mock.calls.map(([id]) => id)).toEqual(['bucket-example', 'bucket-other']);
+    blocked.resolve();
+    await Promise.all([pending, trailing]);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Example scan failure'));
+    expect(processBacklog.mock.calls.map(([id]) => id)).toEqual(['bucket-example', 'bucket-other', 'bucket-example']);
+    await deliver(watcher, 'change', path);
+    expect(processBacklog).toHaveBeenCalledTimes(4);
   });
 });

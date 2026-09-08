@@ -26,9 +26,24 @@ export * from './sleep.js';
 export * from './urlNormalize.js';
 export * from './platform.js';
 export * from './navWorkingSet.js';
-export * from './providers.js';
 export * from './systemCapabilities.js';
 export * from './layeredIntelligenceReasons.js';
+
+// === AI providers ===
+// `providers.js` is the compatibility facade over the nine modules below (see
+// its header for the map); every file is listed so the drift test can hold each
+// one to its own README row.
+export * from './localModelHeuristics.js';
+export * from './providerAssignments.js';
+export * from './providerContextWindows.js';
+export * from './providerEndpoints.js';
+export * from './providerGateways.js';
+export * from './providerHarnesses.js';
+export * from './providerModels.js';
+export * from './providerReadiness.js';
+export * from './providerSelection.js';
+export * from './providerTypes.js';
+export * from './providers.js';
 
 // === Module loading / resilience ===
 export { lazyWithReload } from './lazyWithReload.js';

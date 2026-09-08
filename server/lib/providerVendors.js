@@ -370,12 +370,10 @@ function opencodeCliArgs(baseArgs, { model, provider }) {
  * Three conditions, each closing a different way the stage would otherwise be
  * offered and then fail — or, worse, appear to succeed:
  *
- *   - **an Ollama namespace.** `validatePublicReviewModel` can only probe an
- *     Ollama catalog for the authoritative "no `tools` capability" answer, and
- *     rejects every other local runtime with `public-review-runtime-unsupported`.
- *     Offering MTPLX / llama.cpp / vLLM / SGLang here would put a permanently
- *     blocking choice in the picker. (A hosted gateway is excluded by
- *     `localRuntimeNamespace` before that.)
+ *   - **an Ollama or LM Studio namespace.** Private assessments verify installed
+ *     weights on either runtime. Public-review model validation independently
+ *     keeps its stricter Ollama-only capability probe. Other local runtimes
+ *     have no maintained assessment recipe.
  *   - **only local endpoints.** The enforcement rides in
  *     `OPENCODE_CONFIG_CONTENT`, which `cliChildEnv.js` keeps through the
  *     public-review env allowlist under the SAME `opencodeConfigIsLocalOnly`
@@ -390,7 +388,7 @@ function opencodeCliArgs(baseArgs, { model, provider }) {
 const matchOpencodeBinary = (provider) => isDirectBinaryProvider(provider) && isOpencodeCommand(provider?.command);
 
 const isLocalOpencodeProvider = (provider) => matchOpencodeBinary(provider)
-  && localRuntimeNamespace(provider) === 'ollama'
+  && ['ollama', 'lmstudio'].includes(localRuntimeNamespace(provider))
   && opencodeProviderIsLocalOnly(provider);
 
 /**

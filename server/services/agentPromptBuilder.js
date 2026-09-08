@@ -47,6 +47,7 @@ import {
   claimReviewersCsv,
   inlinePrLifecycleSection,
   isPrBranchWorktree,
+  portosMergesBranchOnExit,
   worktreeCommitGuidance,
 } from './promptSections/completion.js';
 import { buildLocalReviewLoopSection, buildReviewLoopFollowUpSection, isMergeOnlyFollowUp, prepareLocalReviewLoopBody, prepareSandboxedReviewLoopBody } from './promptSections/reviewLifecycle.js';
@@ -299,11 +300,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // `settings.codeReview.reviewers`). Threaded as the `normalizeReviewers`
   // fallback so a task that pins no `reviewers` (e.g. every app-improve /
   // self-improvement scheduled task) resolves to the configured default
-  // instead of the hardcoded `copilot` — which stalls the review loop on
-  // installs without GitHub Copilot review enabled (issue #2507). Unset →
-  // `['copilot']` (getCodeReviewDefaults returns the copilot fallback), so
-  // behavior is unchanged when nothing is configured. A settings read error
-  // degrades to the hardcoded default inside normalizeReviewers.
+  // instead of a hardcoded reviewer. Unset → [] (getCodeReviewDefaults keeps
+  // code review opt-in), so a fresh install does not silently start a review
+  // loop. A settings read error likewise leaves the reviewer list empty.
   //
   // Resolved BEFORE the slashdo section below, which prunes the reviewer
   // variants a run can't reach out of the command body (#3110).
@@ -335,7 +334,8 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // leave-open, JIRA, or a merge gate with no reviewer to invoke — doesn't pay
   // for the read and the staging write. The reviewer-list term matters too: the
   // section only inlines the recipe when a SPAWNABLE CLI reviewer resolves, so a
-  // copilot-only or username-only list (the default install) would otherwise
+  // copilot-only or username-only list (including an unconfigured install)
+  // would otherwise
   // read + `atomicWrite` 56KB and then render nothing from it.
   const isInlineNeedingRecipes = inlinePrLifecycleSection(task, {
     providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
@@ -417,6 +417,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const whenDone = task.metadata?.whenDone === 'commit-push' ? 'commit-push' : 'leave-uncommitted';
   const claimFlow = isClaimFlowTask(task, isTruthyMetaFn);
+  // Worktree with no PR: PortOS merges the branch back on exit, so every
+  // commit/push instruction below is commit-only (see portosMergesBranchOnExit).
+  const portosMergesBranch = portosMergesBranchOnExit({ worktreeInfo, willOpenPR });
   const prCompletion = resolvePrCompletion(task.metadata);
   // A discard (reasoning-only) worktree: the agent reasons in it but it's thrown
   // away on exit with no commit/merge/PR (see agentWorktreeCleanup.js). Suppresses
@@ -489,11 +492,11 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // Discard tasks don't commit, so the simplify-before-commit step is moot.
   const simplifySection = simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
 ## Simplify Step
-After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
+After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : portosMergesBranch ? 'commit your changes (do NOT push — PortOS merges this branch back into the source checkout after you exit; a pushed copy would only be left behind on origin)' : 'commit and push using `/do:push`'}.
 ` : '';
 
   // Resolve the user's ordered reviewer list + flags (task metadata wins; else the
-  // install's configured Code Review Defaults; else `[copilot]`). Declared up here
+  // install's configured Code Review Defaults; else `[]`). Declared up here
   // so the TUI completion block can thread `--review-with …` into `/do:pr`.
   // Thread the install's Code Review Defaults as the fallback for ALL five
   // reviewer fields (not just `reviewers`) with task-over-default precedence —
@@ -527,7 +530,9 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // sentinel is the done signal — PortOS finalizes via the watcher and kills
   // the session, so the prompt does NOT ask the agent to `/quit` (it's a UI
   // command the agent can't invoke). See `buildTuiCompletionSection` below.)
-  const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
+  // `null` under the auto-merge posture: there is no command to run — the step
+  // is a plain commit (buildCompletionGuidelineBullet renders that case).
+  const tuiCompletionCommand = willOpenPR ? '/do:pr' : portosMergesBranch ? null : '/do:push';
   const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
   // A discard task's completion is the sentinel-only contract (no push/PR/merge),
   // and this applies to every provider type — so it wins over the isTui fork and
@@ -549,7 +554,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
         ? buildClaimFlowCompletionSection({ isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) })
       : isTui
         ? buildTuiCompletionSection({
-            willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess,
+            willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, portosMergesBranch,
             // Unreachable today — every `tui`/`cli` provider returns early at the
             // LIGHT_CONTEXT gate above, so `isTui` is always false on this path
             // (same situation as buildCompletionGuidelineBullet's `isTui` arm).
@@ -748,6 +753,8 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
     ? 'Follow the claim workflow prompt above; it owns its worktree, PR/MR, review, merge or human-handoff, and cleanup. Do not stop after committing.'
   : isReviewLoopFollowUp
     ? 'Follow the follow-up section above — push any fixes you make to the PR branch; a run that needed no fix makes no commit and that is a success, not a miss'
+    : portosMergesBranch
+    ? `Commit your changes (see ${isTui ? 'Completion Workflow above' : 'Git Hygiene below'}) — do NOT push, PortOS merges this branch back on exit`
     : isTui
     ? `Commit, push, and ${willOpenPR ? 'open the PR (see Completion Workflow above)' : 'push the branch (see Completion Workflow above)'}`
     : worktreeInfo && willOpenPR
@@ -788,8 +795,10 @@ ${toolFreeReasoning
     ? `- **Follow the claim workflow prompt above.** It owns the claim worktree and the full PR/MR lifecycle; do not stop after committing or hand push/PR/merge/cleanup back to PortOS.`
   : isReviewLoopFollowUp
     ? `- **Push fixes straight to the PR branch you are on** (the follow-up section above is the procedure). Stage specific files, use a \`fix:\` prefix, no Co-Authored-By annotations. Do NOT open a new PR.`
-  : isTui && tuiSlashdoFree
+  : isTui && !canRunSlashCommands
     ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations, then write the completion sentinel. PortOS will handle the branch after it closes the session.`
+    : portosMergesBranch
+    ? `- **Commit only — do NOT push.** Stage specific files (no \`git add -A\`), use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations. PortOS merges this branch back into the source checkout after you exit and deletes it, so do NOT run \`git push\` or \`/do:push\` yourself — a pushed copy would only be left behind on origin.`
     : isTui
     ? `- **Use \`${tuiCompletionCommand}\` to ${willOpenPR ? 'commit, push, and open the PR' : 'commit and push the branch'}** — see the Completion Workflow section above. Stage specific files (no \`git add -A\`), use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations.`
     : worktreeInfo && willOpenPR
@@ -855,6 +864,9 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   task = reconcileSplitContext(task);
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const claimFlow = isClaimFlowTask(task, isTruthyMetaFn);
+  // Worktree with no PR: PortOS merges the branch back on exit, so the commit
+  // guidance and completion workflow are commit-only (portosMergesBranchOnExit).
+  const portosMergesBranch = portosMergesBranchOnExit({ worktreeInfo, willOpenPR });
   const prCompletion = resolvePrCompletion(task.metadata);
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
   const isReadOnly = isTruthyMetaFn(task.metadata?.readOnly);
@@ -872,7 +884,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else
   // the install's configured Code Review Defaults threaded from buildAgentPrompt;
-  // else `[copilot]`). Flows as `/do:pr --review-with a,b,c [--review-stop-on-*]
+  // else `[]`). Flows as `/do:pr --review-with a,b,c [--review-stop-on-*]
   // [--reviewer-applies]`. All five fields fall back to the defaults with
   // task-over-default precedence (see the matching block in buildAgentPrompt and
   // resolveReviewLoopOptions) — not just the reviewer list.
@@ -1085,7 +1097,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     }
   } else if (isTui) {
     contractSections.push(buildTuiCompletionSection({
-      willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, slashdoFree: tuiSlashdoFree, ownsPrWorkflow,
+      willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, slashdoFree: tuiSlashdoFree, ownsPrWorkflow, portosMergesBranch,
       sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
       branchName: worktreeInfo?.branchName || null,
       baseBranch: worktreeInfo?.baseBranch || null,

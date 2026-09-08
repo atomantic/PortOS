@@ -1,7 +1,7 @@
 /**
  * Shared field primitives for the Quota Burn config surface.
  *
- * `FamilyCard`, `JobRow`, `JobParamField` and `PresetPicker` all render the same
+ * `FamilyCard`, `JobRow`, `StepSettings` and `TaskRefPicker` all render the same
  * dark label+control pair. Keeping the class string and the number field in one
  * place means a styling change is one edit rather than four — before this, the
  * identical Tailwind string was declared or inlined at four sites and had

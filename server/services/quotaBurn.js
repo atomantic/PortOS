@@ -8,7 +8,7 @@
  *
  * This module owns the SELECTION half (which family, which window, is the
  * window's dispatch cap spent) and nothing else. The plan lives in
- * `quotaBurnStore.js`, the jobs in `quotaBurnJobs/`, and the loop that ties
+ * `quotaBurnStore.js`, the shared invocation path in `quotaBurnInvoke.js`, and the loop that ties
  * them together in `quotaBurnRunner.js`.
  *
  * Everything here fails CLOSED: an unknown reset time, an unsupported provider,
@@ -83,6 +83,32 @@ export async function recordQuotaBurnDispatch(key, { now = Date.now() } = {}) {
     await atomicWrite(LEDGER_FILE(), next);
     return next;
   });
+}
+
+/**
+ * The ledger the gate ladder should actually read: what this window has been
+ * CHARGED, plus every burn that has been requested and not yet accepted.
+ *
+ * A reference burn's acceptance is asynchronous (`quotaBurnAcceptance.js`), so
+ * without this the cap would read one short for the whole in-flight window —
+ * long enough for the next cycle, or the completion continuation, to walk past
+ * `maxDispatchesPerWindow` and spend quota the plan had already committed. A
+ * reservation whose charge has been CLAIMED (`chargedAt`) is skipped: the ledger
+ * write it authorized already counts it, and counting both is the double
+ * accounting the reservation exists to prevent.
+ *
+ * Pure, and non-destructive: `reservations` of `null` (unreadable) returns the
+ * ledger untouched, and it is the caller that decides whether an unreadable
+ * reservation file may run a cycle at all.
+ */
+export function withPendingDispatches(ledger, reservations) {
+  if (!isPlainObject(reservations)) return ledger;
+  const next = { ...ledger };
+  for (const record of Object.values(reservations)) {
+    if (!record?.charge || !record.dispatchKey || record.chargedAt) continue;
+    next[record.dispatchKey] = Number(next[record.dispatchKey] || 0) + 1;
+  }
+  return next;
 }
 
 /**

@@ -515,6 +515,7 @@ export default function GitTab({ appId, appName, repoPath }) {
         appId={appId}
         appName={appName}
         refreshKey={sourceRefreshKey}
+        hasLocalChanges={Boolean(gitInfo?.status?.files?.length)}
         onUpdated={() => loadGitData({ includeRemote: true })}
       />
 

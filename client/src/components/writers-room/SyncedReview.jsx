@@ -1,12 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, Clapperboard, FileText, Image as ImageIcon, Link2, Loader2, RefreshCw, X,
+  AlertTriangle, Clapperboard, FileText, Image as ImageIcon, Link2, Loader2, RefreshCw, Sparkles, Users, X,
 } from 'lucide-react';
-import { getWritersRoomSyncedReview } from '../../services/apiWritersRoom';
+import {
+  getWritersRoomSyncedReview,
+  proposeWritersRoomCharacterAugmentation,
+  applyWritersRoomCharacterAugmentation,
+} from '../../services/apiWritersRoom';
 import { timeAgo } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
+import useCharacterAugmentation from '../../hooks/useCharacterAugmentation';
+import AugmentPreview from '../castIntegrity/AugmentPreview';
+import {
+  DEPTH_META,
+  FINDING_KIND_META,
+  REVIEW_STATUS_META,
+  findingIsRepairable,
+  humanizeIntegrityField,
+} from '../../lib/characterIntegrity';
 
-// Phase 4 synchronized review: prose ↔ script ↔ media in three sync'd panes.
+// Phase 4 synchronized review: prose ↔ script ↔ media ↔ cast in sync'd panes.
 // Selecting any item highlights — and scrolls to — what it maps to in the
 // other panes. The mapping + provenance is assembled server-side
 // (GET /synced-review); see services/writersRoom/syncedReview.js.
@@ -15,9 +28,25 @@ const PANES = [
   { key: 'prose', label: 'Prose', icon: FileText },
   { key: 'script', label: 'Script', icon: Clapperboard },
   { key: 'media', label: 'Media', icon: ImageIcon },
+  { key: 'cast', label: 'Cast', icon: Users },
 ];
 
 const imgUrl = (ref) => `/data/images/${ref}`;
+
+// The cast block a payload without one reads as. A work whose server predates
+// the cast pane, or whose bible is empty, must render the same shape as a
+// populated one rather than crashing a pane on a missing key.
+const EMPTY_CAST = Object.freeze({
+  available: false,
+  findings: [],
+  coverage: [],
+  castCount: 0,
+  reviewedCount: 0,
+  semanticReviewedCount: 0,
+  passed: false,
+  staging: Object.freeze({ available: false, stale: false, stagedCount: 0, unstagedCount: 0, unmatchedNames: [] }),
+});
+const castOf = (data) => data?.cast || EMPTY_CAST;
 
 // Scroll a pane's scroll container so the element tagged with `data-sync-id`
 // lands near the top, WITHOUT scrolling the whole window (manual scrollTop
@@ -39,24 +68,37 @@ function computeHighlights(data, selection) {
   const proseIds = new Set();
   const sceneIds = new Set();
   const mediaSceneIds = new Set(); // media items are keyed by their source sceneId
-  if (!data || !selection) return { proseIds, sceneIds, mediaSceneIds };
+  const castIds = new Set();
+  const highlights = { proseIds, sceneIds, mediaSceneIds, castIds };
+  if (!data || !selection) return highlights;
+  const sceneCast = (id) => (data.script.scenes.find((s) => s.id === id)?.castCharacterIds || []);
   if (selection.type === 'prose') {
     proseIds.add(selection.id);
     const seg = data.prose.segments.find((s) => s.id === selection.id);
     (seg?.scriptSceneIds || []).forEach((id) => sceneIds.add(id));
     (seg?.media || []).forEach((m) => mediaSceneIds.add(m.sceneId));
+    (seg?.castCharacterIds || []).forEach((id) => castIds.add(id));
   } else if (selection.type === 'script') {
     sceneIds.add(selection.id);
     const sc = data.script.scenes.find((s) => s.id === selection.id);
     (sc?.proseSegmentIds || []).forEach((id) => proseIds.add(id));
+    (sc?.castCharacterIds || []).forEach((id) => castIds.add(id));
     if (sc?.media) mediaSceneIds.add(selection.id);
   } else if (selection.type === 'media') {
     mediaSceneIds.add(selection.id);
     const item = data.media.items.find((m) => m.sceneId === selection.id);
     (item?.proseSegmentIds || []).forEach((id) => proseIds.add(id));
-    if (item && !item.orphan) sceneIds.add(selection.id);
+    if (item && !item.orphan) {
+      sceneIds.add(selection.id);
+      sceneCast(selection.id).forEach((id) => castIds.add(id));
+    }
+  } else if (selection.type === 'cast') {
+    castIds.add(selection.id);
+    const row = castOf(data).coverage.find((c) => c.characterId === selection.id);
+    (row?.scriptSceneIds || []).forEach((id) => sceneIds.add(id));
+    (row?.proseSegmentIds || []).forEach((id) => proseIds.add(id));
   }
-  return { proseIds, sceneIds, mediaSceneIds };
+  return highlights;
 }
 
 // The id the selection anchors on within `paneType`, or null when the selection
@@ -97,6 +139,7 @@ export default function SyncedReview({ work }) {
   const proseRef = useRef(null);
   const scriptRef = useRef(null);
   const mediaRef = useRef(null);
+  const castRef = useRef(null);
 
   // Derived (not stored) so disabling the active pane on desktop can't leave the
   // narrow layout pointing at a pane that is no longer rendered.
@@ -120,10 +163,39 @@ export default function SyncedReview({ work }) {
     refresh();
   }, [refresh]);
 
-  const { proseIds, sceneIds, mediaSceneIds } = useMemo(
+  const { proseIds, sceneIds, mediaSceneIds, castIds } = useMemo(
     () => computeHighlights(data, selection),
     [data, selection],
   );
+  const cast = castOf(data);
+  // Findings grouped by character so a coverage row renders its own evidence.
+  const findingsByCharacter = useMemo(() => {
+    const map = new Map();
+    for (const finding of cast.findings) {
+      const own = map.get(finding.characterId) || [];
+      own.push(finding);
+      map.set(finding.characterId, own);
+    }
+    return map;
+  }, [cast]);
+  const castGapCount = cast.coverage.filter((row) => row.findingCount > 0).length;
+
+  // Selective augmentation over the per-work bible (#6417). Same contract the
+  // Universe cast panel uses — the pane only supplies the work-scoped requests.
+  // `refresh` after an apply rather than patching the cast block in place: the
+  // findings, the depth ruling and the staging join are all DERIVED from the
+  // record that just changed, so a local patch would leave three of them stale.
+  const augment = useCharacterAugmentation({
+    propose: useCallback(
+      (characterId, fields) => proposeWritersRoomCharacterAugmentation(work.id, characterId, { fields }, { silent: true }),
+      [work.id],
+    ),
+    apply: useCallback(
+      (characterId, body) => applyWritersRoomCharacterAugmentation(work.id, characterId, body, { silent: true }),
+      [work.id],
+    ),
+    onApplied: refresh,
+  });
 
   // Resolve prose segment ids → headings for provenance labels.
   const segHeading = useMemo(() => {
@@ -141,7 +213,8 @@ export default function SyncedReview({ work }) {
     if (selection.type !== 'prose' && proseIds.size) scrollPaneTo(proseRef.current, [...proseIds][0]);
     if (selection.type !== 'script' && sceneIds.size) scrollPaneTo(scriptRef.current, [...sceneIds][0]);
     if (selection.type !== 'media' && mediaSceneIds.size) scrollPaneTo(mediaRef.current, [...mediaSceneIds][0]);
-  }, [selection, data, proseIds, sceneIds, mediaSceneIds, activePane]);
+    if (selection.type !== 'cast' && castIds.size) scrollPaneTo(castRef.current, [...castIds][0]);
+  }, [selection, data, proseIds, sceneIds, mediaSceneIds, castIds, activePane]);
 
   const select = useCallback((type, id) => {
     setSelection((prev) => (prev && prev.type === type && prev.id === id ? null : { type, id }));
@@ -169,7 +242,9 @@ export default function SyncedReview({ work }) {
 
   const hasSelection = !!selection;
   const visibleCount = [...visible].length;
-  const colClass = visibleCount === 1 ? 'lg:grid-cols-1' : visibleCount === 2 ? 'lg:grid-cols-2' : 'lg:grid-cols-3';
+  const colClass = visibleCount === 1 ? 'lg:grid-cols-1'
+    : visibleCount === 2 ? 'lg:grid-cols-2'
+      : visibleCount === 3 ? 'lg:grid-cols-3' : 'lg:grid-cols-4';
   // Every pane renders; below `lg` all but the active one are display:none.
   const paneClass = (key) => `${key === activePane ? '' : 'hidden'} lg:block`;
 
@@ -236,6 +311,23 @@ export default function SyncedReview({ work }) {
             </button>
           ))}
         </div>
+
+        {cast.available && (
+          <button
+            type="button"
+            onClick={() => showPane('cast')}
+            className={`flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border ${
+              castGapCount > 0
+                ? 'text-port-warning border-port-warning/40 hover:bg-port-warning/10'
+                : 'text-gray-400 border-port-border hover:text-gray-200'
+            }`}
+            title={castGapCount > 0
+              ? `${castGapCount} of ${cast.castCount} characters have unauthored framework fields — open the Cast pane.`
+              : 'Every framework field is authored — which is not the same as the cast holding together. No model has read it. Open the Cast pane.'}
+          >
+            <Users size={10} /> {castGapCount > 0 ? `${castGapCount} cast gap${castGapCount === 1 ? '' : 's'}` : 'cast fields filled'}
+          </button>
+        )}
 
         {data.script.stale && (
           <span className="flex items-center gap-1 text-[10px] text-port-warning border border-port-warning/40 rounded px-1.5 py-0.5" title="The draft changed after this script was generated — re-run Adapt to refresh the mapping.">
@@ -309,6 +401,19 @@ export default function SyncedReview({ work }) {
               hasSelection={hasSelection}
               segHeading={segHeading}
               onSelect={(sceneId) => select('media', sceneId)}
+            />
+          )}
+          {visible.has('cast') && (
+            <CastPane
+              className={paneClass('cast')}
+              containerRef={castRef}
+              cast={cast}
+              findingsByCharacter={findingsByCharacter}
+              castIds={castIds}
+              selectedId={selectedIdFor(selection, 'cast')}
+              hasSelection={hasSelection}
+              onSelect={(id) => select('cast', id)}
+              augment={augment}
             />
           )}
         </div>
@@ -450,6 +555,145 @@ function MediaPane({ containerRef, className, items, mediaSceneIds, selectedId, 
               </button>
             );
           })}
+        </div>
+      )}
+    </ScrollPane>
+  );
+}
+
+// ---- Cast pane ----
+//
+// The author-knowledge half of the review, kept visibly apart from the cold
+// read beside it (see services/writersRoom/syncedReview.js):
+//   - **Findings** are measured against the AUTHORED bible only. A character
+//     the prose stages vividly still reports every unauthored field — an
+//     interior that lives only in the author's head is the defect, not the fix.
+//   - **Staged in** is what the script extraction saw, labelled as such. It
+//     never closes a finding, and an unstaged character is reported as a fact
+//     rather than flagged: writing someone who stays offstage is a choice.
+//   - **Named only in the script** lists cold-read names with no bible entry.
+//     They are not findings — there is no record to hang a field path on.
+//
+// Nothing here calls a provider, and the deterministic sweep alone never reads
+// as a clean pass: the footer says so explicitly rather than leaving a cast
+// with no gaps looking reviewed.
+const BADGE_CLASS = 'inline-flex items-center px-1 py-0.5 rounded border text-[9px] uppercase tracking-wider';
+const KIND_TONE = { amber: 'text-amber-300 border-amber-500/40', rose: 'text-rose-300 border-rose-500/40' };
+
+function CastPane({ containerRef, className, cast, findingsByCharacter, castIds, selectedId, hasSelection, onSelect, augment }) {
+  const { staging } = cast;
+  const { preview, accepted, applying, proposing, toggleField, discard, runPropose, runApply } = augment;
+  return (
+    <ScrollPane containerRef={containerRef} className={className} paneKey="cast" icon={Users} label="Cast" count={cast.castCount}>
+      {!cast.available ? (
+        <div className="p-4 text-[11px] text-gray-500 text-center">
+          No characters in this work’s bible yet — add them from the Cast panel, or run “Characters” to extract them from the draft.
+        </div>
+      ) : (
+        <div className="p-3 space-y-2">
+          {cast.coverage.map((row) => {
+            const state = cardState(row.characterId === selectedId, castIds.has(row.characterId), hasSelection);
+            const depth = DEPTH_META[row.depth] || DEPTH_META.full;
+            const status = REVIEW_STATUS_META[row.status] || REVIEW_STATUS_META['not-reviewed'];
+            const findings = findingsByCharacter.get(row.characterId) || [];
+            // Only `missing` / `underspecified` can be machine-repaired: a
+            // `contradictory` finding needs the author, because nothing here can
+            // know which of two disagreeing fields is the wrong one.
+            const repairable = findings.filter(findingIsRepairable);
+            return (
+              <div key={row.characterId} className="space-y-1">
+                <button
+                  data-sync-id={row.characterId}
+                  aria-pressed={state === 'selected'}
+                  onClick={() => onSelect(row.characterId)}
+                  className={`w-full text-left rounded border px-3 py-2 transition-all ${CARD_CLASS[state]}`}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-[11px] font-medium text-gray-200 truncate">{row.characterName || row.characterId}</span>
+                    <span className="flex items-center gap-1 shrink-0">
+                      <span className={`${BADGE_CLASS} text-gray-400 border-port-border`} title={depth.hint}>{depth.label}</span>
+                      <span
+                        className={`${BADGE_CLASS} ${row.findingCount ? KIND_TONE.amber : 'text-gray-400 border-port-border'}`}
+                        title={row.findingCount ? `${row.findingCount} unauthored field(s)` : 'Nothing unauthored at this depth.'}
+                      >
+                        {status.label}
+                      </span>
+                    </span>
+                  </div>
+  
+                  <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                    {row.staged ? (
+                      <span className="flex items-center gap-0.5 text-[9px] text-gray-400 bg-port-card border border-port-border rounded px-1 py-0.5">
+                        <Clapperboard size={8} /> staged in {row.scriptSceneIds.length}
+                      </span>
+                    ) : (
+                      <span className="text-[9px] text-gray-600 italic" title={staging.available
+                        ? 'No extracted scene names this character. Offstage is a choice, not a defect.'
+                        : 'No script yet — run “Adapt” before reading anything into this.'}>
+                        {staging.available ? 'not staged in the script' : 'staging unknown'}
+                      </span>
+                    )}
+                  </div>
+  
+                  {findings.length > 0 && (
+                    <ul className="space-y-1">
+                      {findings.map((f) => {
+                        const meta = FINDING_KIND_META[f.kind];
+                        return (
+                          <li key={f.id} className="text-[10px] text-gray-400 leading-snug">
+                            <span className={`${BADGE_CLASS} mr-1 ${KIND_TONE[meta?.tone] || 'text-gray-400 border-port-border'}`} title={meta?.hint}>
+                              {meta?.label || f.kind}
+                            </span>
+                            <span className="font-mono text-gray-300">{humanizeIntegrityField(f.field)}</span>
+                            {f.evidence && <span className="text-gray-500"> — {f.evidence}</span>}
+                            {f.suggestion && <span className="text-gray-500 italic"> {f.suggestion}</span>}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </button>
+                {repairable.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => runPropose(row.characterId, row.characterName, repairable.map((f) => f.field))}
+                    disabled={proposing}
+                    title="Ask the configured model for a sharper version of these fields. Writes nothing — you tick what to keep."
+                    className="inline-flex items-center gap-1 rounded border border-port-accent/40 bg-port-accent/10 px-2 py-1 text-[10px] text-port-accent hover:bg-port-accent/20 disabled:opacity-40"
+                  >
+                    {proposing ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
+                    Sharpen {repairable.length} field{repairable.length === 1 ? '' : 's'}
+                  </button>
+                )}
+                {preview?.characterId === row.characterId && (
+                  <AugmentPreview
+                    preview={preview}
+                    accepted={accepted}
+                    applying={applying}
+                    onToggleField={toggleField}
+                    onDiscard={discard}
+                    onApply={runApply}
+                    idPrefix="wr-augment"
+                  />
+                )}
+              </div>
+            );
+          })}
+
+          {staging.unmatchedNames.length > 0 && (
+            <div className="rounded border border-port-border bg-port-card/40 px-3 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Named only in the script</div>
+              <div className="text-[10px] text-gray-400">{staging.unmatchedNames.join(', ')}</div>
+              <div className="text-[9px] text-gray-600 mt-1">
+                The scene extraction found these on the page but the bible has no entry for them. Add them to the Cast panel if they matter.
+              </div>
+            </div>
+          )}
+
+          <p className="text-[9px] text-gray-600 leading-snug pt-1">
+            Deterministic pass only — no model has read this cast, so nothing here is a clean bill of health.
+            {staging.stale && ' The draft changed after this script was generated, so the “staged in” counts are out of date.'}
+          </p>
         </div>
       )}
     </ScrollPane>

@@ -14,173 +14,32 @@ import { normalizeSlugline } from './scenePrompt.js';
 import { PATHS, resolveImageRef } from './fileUtils.js';
 import { isPlainObject } from './objects.js';
 import { shortCanonPrimaryField } from './canonPrompt.js';
-import { trimTo } from './textUtils.js';
+import { trimTo, trimToClause } from './textUtils.js';
+import { BIBLE_LIMITS } from './bibleLimits.js';
+import {
+  CHARACTER_ARC_TYPES,
+  CHARACTER_SLIDER_AXES,
+  PSYCHOLOGY_ASSESSMENTS,
+  PSYCHOLOGY_DRIVE_AXES,
+  RELATIONSHIP_LINK_TYPES,
+} from './characterFramework.js';
+import { sanitizeCharacterEvolution } from './characterEvolution.js';
 
 // Re-export so callers (writers-room domain files) can import a single
 // canonical normalizer when they need to match places by slugline.
 export { normalizeSlugline };
-export { trimTo };
+// `trimTo` and the boundary-aware `trimToClause` both live in the
+// dependency-free `textUtils.js` so the pure story-model leaves the browser
+// bundle shares (`characterFramework.js`, `characterEvolution.js`) can cap
+// prose without importing this module's `crypto` / `fileUtils`. Re-exported
+// here because every existing sanitizer reaches for them through storyBible.
+export { trimTo, trimToClause };
 
-export const BIBLE_LIMITS = Object.freeze({
-  NAME_MAX: 200,
-  ROLE_MAX: 200,
-  ALIAS_MAX: 100,
-  ALIASES_PER_ENTRY_MAX: 12,
-  PHYSICAL_DESCRIPTION_MAX: 2000,
-  PERSONALITY_MAX: 2000,
-  BACKGROUND_MAX: 2000,
-  NOTES_MAX: 4000,
-  IMAGE_REF_MAX: 500,
-  IMAGE_REFS_PER_ENTRY_MAX: 12,
-  // Extended character identity (novelist + graphic-novelist needs). All
-  // optional; sanitizer trims missing/blank to empty string. These flow into
-  // the bible-extraction prompt + the universe-character-expand LLM call.
-  PRONOUNS_MAX: 60,
-  AGE_MAX: 80,
-  CORE_THEME_MAX: 500,
-  SPEECH_ACCENT_MAX: 500,
-  // Written speech-pattern: cadence, sentence-structure, lexical tics, vocal
-  // habits — *not* the regional accent (that lives in SPEECH_ACCENT_MAX).
-  // Roomier than accent because writers tend to describe rhythm + vocabulary
-  // + idiom in one paragraph.
-  SPEECH_PATTERN_MAX: 1000,
-  VISUAL_NOTES_MAX: 1000,
-  SILHOUETTE_NOTES_MAX: 2000,
-  POSTURE_NOTES_MAX: 1000,
-  SPECIAL_TRAITS_MAX: 2000,
-  VISUAL_IDENTITY_MAX: 1000,
-  MOTIVATIONS_MAX: 2000,
-  // Character framework (CWQE Phase 10, #2175). The Ghost → Wound → Lie →
-  // Want → Need chain + Three Sliders + declared arc type. All OPTIONAL so
-  // every pre-existing character round-trips unchanged (absent vs empty rule).
-  // The checkable-test discipline (state the Lie in one sentence; Truth is its
-  // direct opposite; Ghost causally explains the Lie) lives in the prompt, not
-  // the sanitizer — these caps just bound each field's length.
-  GHOST_MAX: 1000,
-  WOUND_MAX: 1000,
-  LIE_MAX: 600,
-  WANT_MAX: 600,
-  NEED_MAX: 600,
-  // Secrets the character keeps (≥2 encouraged in the prompt). Short prose
-  // items, capped per-item and per-character like other string lists.
-  SECRET_MAX: 600,
-  SECRETS_PER_CHARACTER_MAX: 12,
-  // Three Sliders — proactivity / likability / competence on a 1–10 scale.
-  // Stored as integers; a value outside the range (or a non-integer) collapses
-  // to null (unset). Rule (prompt-enforced, not sanitizer-enforced): HIGH on ≥2,
-  // or HIGH on one with clear growth; all-low = boring, all-high = Mary Sue.
-  SLIDER_MIN: 1,
-  SLIDER_MAX: 10,
-  LIKES_MAX: 1500,
-  DISLIKES_MAX: 1500,
-  MANNERISMS_MAX: 1500,
-  RELATIONSHIPS_MAX: 2000,
-  // Structured character-to-character relationship links (#1287). The legacy
-  // prose `relationships` field above stays; `relationshipLinks[]` is additive.
-  // `description` is per-link prose; `opposition` captures a binary-tension
-  // axis (hunter/prey, winner/loser…) the reader watches to see reverse.
-  RELATIONSHIP_TARGET_ID_MAX: 64,
-  RELATIONSHIP_TYPE_MAX: 60,
-  RELATIONSHIP_DESCRIPTION_MAX: 1000,
-  RELATIONSHIP_OPPOSITION_AXIS_MAX: 60,
-  RELATIONSHIP_OPPOSITION_ROLE_MAX: 120,
-  RELATIONSHIP_OPPOSITION_NOTE_MAX: 600,
-  RELATIONSHIP_LINKS_PER_CHARACTER_MAX: 40,
-  SKILLS_MAX: 2000,
-  // Flexible stats list — open key/value so non-humans aren't forced into
-  // human anatomy ("Number of eyes: 8", "Form: spectral vapor", etc).
-  STAT_LABEL_MAX: 80,
-  STAT_VALUE_MAX: 200,
-  STATS_PER_CHARACTER_MAX: 30,
-  // Color palette: named hex swatches with role hints ("amber #f59e0b — skin").
-  COLOR_NAME_MAX: 80,
-  COLOR_HEX_MAX: 10,
-  COLOR_ROLE_MAX: 120,
-  COLORS_PER_PALETTE_MAX: 12,
-  // Props (graphic-novelist reference): per-prop name + purpose + materials.
-  PROP_NAME_MAX: 120,
-  PROP_PURPOSE_MAX: 400,
-  PROP_MATERIALS_MAX: 200,
-  PROP_NOTES_MAX: 600,
-  PROPS_PER_CHARACTER_MAX: 12,
-  // Expressions + hand gestures: named visual cues for reference-sheet panels.
-  EXPRESSION_NAME_MAX: 80,
-  EXPRESSION_DESC_MAX: 400,
-  EXPRESSIONS_PER_CHARACTER_MAX: 16,
-  GESTURE_NAME_MAX: 80,
-  GESTURE_DESC_MAX: 300,
-  GESTURES_PER_CHARACTER_MAX: 12,
-  // Wardrobes per character — A2 in the AnyFilm gap analysis. Each entry
-  // is an outfit/styling variant; first one is the visual default.
-  WARDROBE_NAME_MAX: 120,
-  WARDROBE_DESCRIPTION_MAX: 800,
-  WARDROBES_PER_CHARACTER_MAX: 10,
-  EVIDENCE_ITEM_MAX: 500,
-  EVIDENCE_PER_ENTRY_MAX: 20,
-  // Places
-  SLUGLINE_MAX: 200,
-  PALETTE_MAX: 200,
-  ERA_MAX: 200,
-  WEATHER_MAX: 200,
-  RECURRING_DETAILS_MAX: 1000,
-  PLACE_DESCRIPTION_MAX: 2000,
-  // Objects
-  OBJECT_DESCRIPTION_MAX: 2000,
-  SIGNIFICANCE_MAX: 1000,
-  // Structured object↔character attachment links (#1288). The legacy prose
-  // `significance` field above stays; `attachments[]` is additive. Each link
-  // ties an object to ONE character and captures the emotion/significance/origin
-  // of that bond plus a `role` archetype. `characterId` caps match the canon id
-  // format; the prose fields are roomy because writers describe backstory at
-  // length, but tighter than NOTES so a runaway extraction stays bounded.
-  ATTACHMENT_CHARACTER_ID_MAX: 64,
-  ATTACHMENT_EMOTION_MAX: 120,
-  ATTACHMENT_SIGNIFICANCE_MAX: 1000,
-  ATTACHMENT_ORIGIN_MAX: 1000,
-  ATTACHMENTS_PER_OBJECT_MAX: 40,
-  // Per-bible cap (universal — protects against runaway extraction)
-  ENTRIES_PER_BIBLE_MAX: 200,
-  PROMPT_MAX: 2000,
-  TAG_MAX: 60,
-  TAGS_PER_ENTRY_MAX: 12,
-  SOURCE_SERIES_ID_MAX: 64,
-  // Catalog backlink: when an embedded bible entry is promoted to the
-  // creative-ingredients catalog (server/services/catalogDB.js), this carries
-  // the catalog row id so edits stay synchronized. Cap matches the catalog's
-  // own id format ('cat-<prefix>-<uuid>') — generous so future id schemes fit.
-  INGREDIENT_ID_MAX: 64,
-  // Voice id namespace: `engine:voiceName` (e.g. `kokoro:af_heart`,
-  // `piper:en_GB-northern_english_male`). Caps generously since 3rd-party
-  // providers (ElevenLabs) use uuid-shaped voice ids.
-  VOICE_ID_MAX: 200,
-  // Versioned, portable voice-production intent (#5378). This records only
-  // creative direction and an approval decision; local profiles, providers,
-  // recordings, and training artifacts deliberately have no slot here.
-  VOICE_CANON_VERSION_MAX: 100000,
-  VOICE_CANON_DESCRIPTION_MAX: 1200,
-  VOICE_CANON_DELIVERY_MAX: 1200,
-  VOICE_CANON_RANGE_ITEM_MAX: 240,
-  VOICE_CANON_RANGE_MAX: 12,
-  VOICE_CANON_AVOID_ITEM_MAX: 240,
-  VOICE_CANON_AVOID_MAX: 12,
-  VOICE_CANON_PRONUNCIATION_TERM_MAX: 160,
-  VOICE_CANON_PRONUNCIATION_VALUE_MAX: 240,
-  VOICE_CANON_PRONUNCIATIONS_MAX: 24,
-  // Approved identity-pack assets are a curated view over imageRefs[], not a
-  // second image store. Only an existing managed reference can be assigned.
-  IDENTITY_PACK_ASSETS_MAX: 24,
-  IDENTITY_PACK_AVOID_ITEM_MAX: 240,
-  IDENTITY_PACK_AVOID_MAX: 12,
-  // Reveal-gated canon (#2178): `surfaceDescriptor` is the pre-reveal
-  // stand-in — what the world looks like BEFORE the spoiler is due ("the
-  // locked east wing" vs "the wing where the heir is imprisoned"). Roomy
-  // like a place description so a full surface-level paragraph fits.
-  SURFACE_DESCRIPTOR_MAX: 2000,
-  // Upper bound for the issue number a canon fact is revealed in. A generous
-  // cap that comfortably exceeds any real series length while still rejecting
-  // a hallucinated/overflowed integer.
-  REVEAL_ISSUE_MAX: 100000,
-});
+// The canon field caps live in a pure leaf (`bibleLimits.js`) so the browser
+// bundle and `catalogTypes.js` can read them without this module's `crypto` /
+// `fileUtils` imports. Re-exported here because every sanitizer caller reaches
+// for `BIBLE_LIMITS` through `storyBible.js`.
+export { BIBLE_LIMITS };
 
 // Portable production posture only. Performer identity, contracts, source
 // recordings, provider ids, and local artifact paths must never enter a
@@ -224,15 +83,14 @@ export const BIBLE_KIND = Object.freeze({
 });
 
 // Structured relationship-link taxonomy (#1287). `type` is the dynamic
-// between two characters; `custom` lets the writer name one the list misses
-// (the free-text `description` carries the specifics). `opposition.axis`
-// tags a binary-force tension (hunter/prey, winner/loser…) the reader tracks
-// to see whether the roles ever reverse. Both default to `custom` on an
-// unrecognized value rather than dropping the link, so a legacy/peer payload
-// with a future type still round-trips (its prose description is preserved).
-export const RELATIONSHIP_LINK_TYPES = Object.freeze([
-  'ally', 'antagonist', 'rival', 'mentor', 'love-interest', 'family', 'custom',
-]);
+// between two characters and lives in the pure `characterFramework.js` leaf so
+// the browser bundle can render the picker; re-exported here for the existing
+// server-side callers. `opposition.axis` tags a binary-force tension
+// (hunter/prey, winner/loser…) the reader tracks to see whether the roles ever
+// reverse. Both default to `custom` on an unrecognized value rather than
+// dropping the link, so a legacy/peer payload with a future type still
+// round-trips (its prose description is preserved).
+export { RELATIONSHIP_LINK_TYPES };
 export const RELATIONSHIP_OPPOSITION_AXES = Object.freeze([
   'winner/loser', 'smart/dumb', 'hunter/prey', 'predator/prey', 'custom',
 ]);
@@ -257,12 +115,28 @@ export const PLACE_TIME_OF_DAY = Object.freeze(['dawn', 'day', 'dusk', 'night'])
 const PLACE_INT_EXT_SET = new Set(PLACE_INT_EXT);
 const PLACE_TIME_OF_DAY_SET = new Set(PLACE_TIME_OF_DAY);
 
-// Declared character arc type (CWQE Phase 10, #2175). A positive arc overcomes
-// the Lie and embraces the Truth; a negative arc is consumed by the Lie; a flat
-// arc holds a truth the character already knows and changes the world around
-// them instead. Unset (null) keeps the field absent for every pre-#2175 record.
-export const CHARACTER_ARC_TYPES = Object.freeze(['positive', 'negative', 'flat']);
+// Declared character arc type (CWQE Phase 10, #2175). Defined in the pure
+// `characterFramework.js` leaf alongside the rest of the narrative-framework
+// field list (so the browser bundle can read it without this module's crypto /
+// fileUtils imports) and re-exported here, where every existing caller looks
+// for it.
+export { CHARACTER_ARC_TYPES };
 const CHARACTER_ARC_TYPE_SET = new Set(CHARACTER_ARC_TYPES);
+
+// Character psychology (#6414). An OPTIONAL layer over the existing framework:
+// Ghost/Wound stay the origin history, Want/Need stay the conscious pursuit and
+// the internal alternative, and the Lie stays an optional JUDGMENT about a
+// belief. `theoryOfControl` is something else — the character's operating rule
+// ('if I stay useful, nobody leaves'), stated without calling it false. The two
+// are related but never asserted identical, and the Need may qualify a belief
+// rather than be its literal opposite.
+//
+// The three drives are the pressures the theory is built to manage. `status`
+// means PERCEIVED VALUE TO A GROUP — not wealth, not dominance. Both lists live
+// in the pure `characterFramework.js` leaf (the cast editors need them in the
+// browser bundle) and are re-exported here for every existing server caller.
+export { PSYCHOLOGY_DRIVE_AXES, PSYCHOLOGY_ASSESSMENTS };
+const PSYCHOLOGY_ASSESSMENT_SET = new Set(PSYCHOLOGY_ASSESSMENTS);
 
 const trimEnum = (raw, allowed) => {
   if (typeof raw !== 'string') return null;
@@ -296,7 +170,7 @@ export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 // `existing<X>Json` prompt variable (bibleExtractor) and into the script
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'ghost', 'wound', 'lie', 'want', 'need', 'arcType', 'sliders', 'secrets', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
+  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'ghost', 'wound', 'lie', 'want', 'need', 'psychology', 'arcType', 'sliders', 'secrets', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
   [BIBLE_KIND.PLACE]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
   [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
@@ -329,77 +203,9 @@ const DEFAULT_ID_PREFIX = Object.freeze({
 });
 
 // Shared string predicate retained here for the story-bible domain. `trimTo`
-// now lives in dependency-free textUtils and is re-exported above so existing
-// story-bible consumers keep the same public contract.
+// and `trimToClause` now live in dependency-free textUtils and are re-exported
+// above so existing story-bible consumers keep the same public contract.
 export const isStr = (v) => typeof v === 'string';
-
-// Smallest share of the budget a sentence-boundary cut may keep. A cut that
-// lands above this wins over a mid-sentence clip; below it, gutting the record
-// costs more than the ragged edge does.
-//
-// This was 0.6, which rejected a valid sentence break at 53% of a field's budget
-// and fell through to a nearly-at-cap whole-word fragment. The next verification
-// round then flagged the sanitizer-authored incomplete sentence, and every
-// over-cap replacement reproduced it. A single-sentence field (logline, ending
-// hook) is the common case: its first terminator is often its ONLY one, so a
-// floor near the top of the budget rejects the clean cut it was meant to prefer.
-const SENTENCE_CUT_FLOOR = 0.3;
-
-// A sentence terminator that actually ENDS a sentence: `.`/`!`/`?` plus any
-// closing quote or bracket, and then either whitespace or the end of the window.
-// Requiring that lookahead is what keeps "Dr. Vey" and "3.5" from reading as
-// breaks; allowing `$` is what lets a terminator sitting flush against the
-// budget edge count, which `lastIndexOf('. ')` missed because it demanded a
-// trailing space that the slice had already cut off.
-const SENTENCE_END_RE = /[.!?]["'’”)\]]*(?=\s|$)/g;
-const COMMON_ABBREVIATION_RE = /\b(?:dr|etc|jr|mr|mrs|ms|prof|sr|st|vs)\.$/i;
-
-// A clause boundary — the weaker cut used when a short field holds no sentence
-// terminator at all. Short caps (a 200-char transition label) routinely hold one
-// long clause-chained sentence, where the whole-word fallback leaves a dangling
-// half-clause ("...escrows the proceeds with no repayment lien, no") that reads
-// as an authoring gap to the next verify round. Because it is weaker than a
-// sentence break, it has to keep more of the field to be worth taking.
-const CLAUSE_END_RE = /[,;:—–]/g;
-const CLAUSE_CUT_FLOOR = 0.6;
-
-// Boundary-aware cap for PROSE fields (loglines, synopses, ending hooks). A hard
-// `slice(0, max)` clips mid-word ("...tracing the brand and"), which downstream
-// verify passes flag as "truncated mid-sentence" — and because a resolver then
-// regenerates an over-cap value that gets re-clipped the same way, the
-// verify→resolve loop never converges. When the text fits, it's returned
-// untouched. When it must be clipped, back off to the last sentence terminator
-// (. ! ?) within the budget, provided that cut keeps at least
-// SENTENCE_CUT_FLOOR of it; failing that, to the last clause boundary (, ; : —)
-// keeping at least CLAUSE_CUT_FLOOR; and failing that (a single clause running
-// past the cap, or a break so early that honoring it would gut the field) to the
-// last whitespace boundary so the result still ends on a whole word. Never
-// returns more than `max` chars.
-export function trimToClause(v, max) {
-  if (!isStr(v)) return '';
-  const s = v.trim();
-  if (s.length <= max) return s;
-  const window = s.slice(0, max);
-  // Prefer the last real sentence terminator in the window. `end` is the cut
-  // point (exclusive) so trailing quotes/brackets ride along with the period.
-  let end = -1;
-  SENTENCE_END_RE.lastIndex = 0;
-  for (let m = SENTENCE_END_RE.exec(window); m; m = SENTENCE_END_RE.exec(window)) {
-    if (m[0][0] === '.' && COMMON_ABBREVIATION_RE.test(window.slice(0, m.index + 1))) continue;
-    end = m.index + m[0].length;
-  }
-  if (end >= Math.floor(max * SENTENCE_CUT_FLOOR)) return window.slice(0, end).trim();
-  // No usable sentence break — back off to the last clause boundary instead, so
-  // the result ends on a complete clause rather than mid-thought. The mark itself
-  // is dropped (cut is exclusive) so the value never ends on a hanging comma.
-  let clause = -1;
-  CLAUSE_END_RE.lastIndex = 0;
-  for (let m = CLAUSE_END_RE.exec(window); m; m = CLAUSE_END_RE.exec(window)) clause = m.index;
-  if (clause >= Math.floor(max * CLAUSE_CUT_FLOOR)) return window.slice(0, clause).trim();
-  // Not even a usable clause break — clip on the last whole word instead of mid-word.
-  const space = window.lastIndexOf(' ');
-  return (space > 0 ? window.slice(0, space) : window).trim();
-}
 
 // Walk a raw array through a per-item sanitizer, dropping rejected entries
 // (falsy return from `sanitizer`) and capping the output at `cap`. Three
@@ -560,6 +366,48 @@ function sanitizeVoiceCanon(raw) {
   };
 }
 
+/**
+ * Optional structured psychology profile (#6414). Returns null when nothing is
+ * authored so a pre-#6414 character round-trips with no `psychology` key at
+ * all — which is also how an explicit CLEAR works: a PATCH carrying
+ * `psychology: null` (or an all-blank object) drops the field rather than
+ * persisting an empty husk that would read as 'assessed'.
+ *
+ * `drives` is always materialized with all three axes so a partial fill has a
+ * stable slot to write into; the whole object still collapses to null when
+ * every leaf is blank.
+ */
+function sanitizeCharacterPsychology(raw) {
+  if (!isPlainObject(raw)) return null;
+  const rawDrives = isPlainObject(raw.drives) ? raw.drives : {};
+  const drives = {};
+  let anyDrive = false;
+  for (const axis of PSYCHOLOGY_DRIVE_AXES) {
+    const row = isPlainObject(rawDrives[axis]) ? rawDrives[axis] : {};
+    const desire = trimTo(row.desire, BIBLE_LIMITS.PSYCHOLOGY_DRIVE_FIELD_MAX);
+    const fear = trimTo(row.fear, BIBLE_LIMITS.PSYCHOLOGY_DRIVE_FIELD_MAX);
+    if (desire || fear) anyDrive = true;
+    drives[axis] = { desire, fear };
+  }
+  const out = {
+    theoryOfControl: trimTo(raw.theoryOfControl, BIBLE_LIMITS.THEORY_OF_CONTROL_MAX),
+    strategy: trimTo(raw.strategy, BIBLE_LIMITS.PSYCHOLOGY_STRATEGY_MAX),
+    protectiveBenefit: trimTo(raw.protectiveBenefit, BIBLE_LIMITS.PSYCHOLOGY_PROTECTION_MAX),
+    presentCost: trimTo(raw.presentCost, BIBLE_LIMITS.PSYCHOLOGY_COST_MAX),
+    // Anticipated, not realized: what would test the theory and what it could
+    // become. The delivered progression belongs to an authored arc.
+    testingPressure: trimTo(raw.testingPressure, BIBLE_LIMITS.PSYCHOLOGY_PRESSURE_MAX),
+    candidateChange: trimTo(raw.candidateChange, BIBLE_LIMITS.PSYCHOLOGY_CHANGE_MAX),
+    assessment: trimEnum(raw.assessment, PSYCHOLOGY_ASSESSMENT_SET),
+    assessmentNote: trimTo(raw.assessmentNote, BIBLE_LIMITS.PSYCHOLOGY_NOTE_MAX),
+    drives,
+  };
+  const anyText = out.theoryOfControl || out.strategy || out.protectiveBenefit
+    || out.presentCost || out.testingPressure || out.candidateChange
+    || out.assessmentNote;
+  return anyText || anyDrive || out.assessment ? out : null;
+}
+
 function sanitizeIdentityPack(raw, imageRefs) {
   if (!isPlainObject(raw)) return null;
   const seen = new Set();
@@ -607,13 +455,30 @@ export function characterIdentityPackReadiness(character) {
   };
 }
 
+// Additive character fields an older peer's sanitizer cannot represent, keyed
+// by the `universes` wire version that introduced each one. A sender AT or
+// ABOVE that version omitting the field means the author cleared it; a sender
+// BELOW it omitted the field only because its code has no slot for it.
+const ADDITIVE_CHARACTER_FIELD_VERSIONS = Object.freeze({
+  // v10 — portable production canon (#5378).
+  voiceCanon: 10,
+  identityPack: 10,
+  // v11 — optional structured psychology profile (#6414).
+  psychology: 11,
+});
+
 /**
- * Preserve v10 character production fields when an older peer wins LWW with
- * a character shape that could not represent them. A v10-aware sender's
- * omission is an intentional clear and must pass through unchanged.
+ * Preserve additive character fields when an older peer wins LWW with a
+ * character shape that could not represent them. Each field is restored ONLY
+ * from a sender behind the version that introduced it — a version-aware
+ * sender's omission is an intentional clear and must pass through unchanged.
  */
-export function preserveLegacyCharacterProductionPackages(remoteCharacters, localCharacters, senderUniversesVersion) {
-  if ((Number(senderUniversesVersion) || 0) >= 10
+export function preserveLegacyCharacterFields(remoteCharacters, localCharacters, senderUniversesVersion) {
+  const sender = Number(senderUniversesVersion) || 0;
+  const unrepresentable = Object.entries(ADDITIVE_CHARACTER_FIELD_VERSIONS)
+    .filter(([, since]) => sender < since)
+    .map(([field]) => field);
+  if (unrepresentable.length === 0
     || !Array.isArray(remoteCharacters)
     || !Array.isArray(localCharacters)) return remoteCharacters;
   const localById = new Map(
@@ -622,11 +487,11 @@ export function preserveLegacyCharacterProductionPackages(remoteCharacters, loca
   return remoteCharacters.map((character) => {
     const localCharacter = localById.get(character?.id);
     if (!localCharacter) return character;
-    return {
-      ...character,
-      ...(!character.voiceCanon && localCharacter.voiceCanon ? { voiceCanon: localCharacter.voiceCanon } : {}),
-      ...(!character.identityPack && localCharacter.identityPack ? { identityPack: localCharacter.identityPack } : {}),
-    };
+    const restored = {};
+    for (const field of unrepresentable) {
+      if (!character?.[field] && localCharacter[field]) restored[field] = localCharacter[field];
+    }
+    return Object.keys(restored).length ? { ...character, ...restored } : character;
   });
 }
 
@@ -988,11 +853,7 @@ function ensureSlider(raw) {
 // round-trip never strips it — mirrors the reveal-gating always-present pattern.
 function sanitizeCharacterSliders(raw) {
   const src = raw && typeof raw === 'object' ? raw : {};
-  return {
-    proactivity: ensureSlider(src.proactivity),
-    likability: ensureSlider(src.likability),
-    competence: ensureSlider(src.competence),
-  };
+  return Object.fromEntries(CHARACTER_SLIDER_AXES.map((axis) => [axis, ensureSlider(src[axis])]));
 }
 
 // Shared canon extras applied to every kind. Persists explicit `locked: true`
@@ -1085,6 +946,8 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
   const imageRefs = cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX);
   const voiceCanon = sanitizeVoiceCanon(raw.voiceCanon);
   const identityPack = sanitizeIdentityPack(raw.identityPack, imageRefs);
+  const psychology = sanitizeCharacterPsychology(raw.psychology);
+  const evolution = sanitizeCharacterEvolution(raw.evolution);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -1126,6 +989,21 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     lie: trimTo(raw.lie, BIBLE_LIMITS.LIE_MAX),
     want: trimTo(raw.want, BIBLE_LIMITS.WANT_MAX),
     need: trimTo(raw.need, BIBLE_LIMITS.NEED_MAX),
+    // Optional structured psychology (#6414). Layered on the chain above, not
+    // a replacement for it: Ghost/Wound remain the origin history and
+    // Want/Need the conscious pursuit + internal alternative. Absent (no key)
+    // on every record that has not been assessed, so legacy characters stay
+    // valid and visibly unfilled rather than silently inheriting a profile.
+    ...(psychology ? { psychology } : {}),
+    // Optional five-stage evolution lens (#6440), STORY-SCOPED (#6445). What
+    // ONE story does to the baseline above: the belief it puts under test, the
+    // pressure, the choice, and what that choice causes. Absent (no key) until
+    // a writer authors it, so every pre-lens character round-trips unchanged.
+    // Reached today by the per-work Writers Room cast bible, whose records live
+    // under data/writers-room/works/<workId>/ and are therefore already scoped
+    // to one manuscript — the universe cast has no editor for it, which is what
+    // keeps a story's realized change from overwriting world-level identity.
+    ...(evolution ? { evolution } : {}),
     // Declared arc type — null (unset) unless it's one of the three known
     // values, so a legacy record with no arc type stays absent.
     arcType: trimEnum(raw.arcType, CHARACTER_ARC_TYPE_SET),
@@ -1502,6 +1380,10 @@ const MERGE_CONFIG = Object.freeze({
       'stats', 'colorPalette', 'props', 'expressions', 'handGestures',
       // Character framework (CWQE Phase 10, #2175) — fill only when blank.
       'ghost', 'wound', 'lie', 'want', 'need', 'arcType', 'secrets',
+      // Optional psychology profile (#6414). Whole-object granularity, like
+      // `wardrobes`: the extractor may author one on a character that has none,
+      // and never touches a profile the writer has already started.
+      'psychology',
     ],
     keyFields: [
       { field: 'name', normalize: normalizeBibleName },

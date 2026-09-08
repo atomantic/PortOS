@@ -5,14 +5,9 @@
 // timing, and blocked-step triage. These helpers keep that presentation logic
 // pure + unit-tested so the component stays a thin renderer. No React, no I/O.
 
-// Client mirror of the server's directive `goal` cap
-// (server/lib/creativeDirectorValidation.js). It has to clear what the commission
-// scheduler composes from a maxed-out brief, because the Plan tab loads a
-// commission-spawned project's directive into the composer for editing — a
-// `maxLength` below the schema's would silently drop the tail of that goal on
-// save and re-plan against the mutilated brief. Parity is asserted in
-// server/lib/creativeDirectorValidation.mirror.test.js.
-export const CREATIVE_DIRECTOR_GOAL_MAX = 32000;
+// The directive `goal` cap is the server's own (server/lib/creativeBriefLimits.js),
+// used as the composer's `maxLength`.
+export { CREATIVE_DIRECTOR_GOAL_MAX } from '../../../server/lib/creativeBriefLimits.js';
 
 // The deliverable checklist offered by the directive composer. Free-form on the
 // wire (the planner reads the labels as intent); this is the curated menu the UI

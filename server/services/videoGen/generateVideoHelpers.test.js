@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { writeFileSync, rmSync } from 'fs';
+import { writeFileSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { EventEmitter } from 'events';
-import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, bufferChildExit, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
+import { makeVideoGenLineHandler, isWatchdogSuccess, finalizeGeneratedVideo, parseByteProgress, formatBytes, formatDownloadMessage, describeSignalDeath, formatRuntimeFingerprint, describeRenderConditioning, isPromptEncodingMetalWatchdog, planPromptEncodingRetry, DEFAULT_GEMMA_MAX_LENGTH, RETRY_GEMMA_MAX_LENGTH, bufferChildExit, isNativeTeardownAbort, verifyPostCompletionOutputs, POST_COMPLETION_ABORT_RUNTIME, RENDER_INPUTS_VERSION, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 
 describe('parseByteProgress', () => {
   it('parses single byte value (e.g., "2.5G")', () => {
@@ -103,7 +103,13 @@ vi.mock('./events.js', () => ({
 }));
 // generateVideoHelpers also imports ffmpeg + fs at module top; stub ffmpeg so
 // the import graph stays light (finalize isn't exercised in this file).
-vi.mock('../../lib/ffmpeg.js', () => ({ generateThumbnail: vi.fn(), optimizeForStreaming: vi.fn() }));
+const probeMock = vi.hoisted(() => ({ frames: vi.fn(async () => null), duration: vi.fn(async () => null) }));
+vi.mock('../../lib/ffmpeg.js', () => ({
+  generateThumbnail: vi.fn(),
+  optimizeForStreaming: vi.fn(),
+  probeFrameCount: probeMock.frames,
+  probeVideoDuration: probeMock.duration,
+}));
 
 const PYTHON_NOISE_RE = /^(Loading|Fetching|tokenizer|Some weights)/;
 
@@ -662,5 +668,158 @@ describe('bufferChildExit', () => {
     const proc = new EventEmitter();
     bufferChildExit(proc);
     expect(() => proc.emit('error', new Error('abandoned'))).not.toThrow();
+  });
+});
+
+
+// The cloud lanes used to broadcast their status lines on the provider job's
+// own SSE stream ONLY. The Video Gen page listens to the media-job queue, which
+// relays videoGenEvents — so it saw no status frame at all between "Starting
+// render…" and completion, and its step list had no phase to advance on.
+describe('emitCloudRenderStatus', () => {
+  it('publishes the phase on the provider SSE stream and on videoGenEvents', () => {
+    emitted.length = 0;
+    sse.mockClear();
+    const job = { clients: [], status: 'running' };
+
+    emitCloudRenderStatus(job, 'job-1', CLOUD_RENDER_PHASE.RENDER, 'Reactor session rendering…');
+
+    expect(sse).toHaveBeenCalledWith(job, { type: 'status', message: 'Reactor session rendering…', phase: 'render' });
+    expect(emitted).toEqual([
+      { type: 'activity', payload: { generationId: 'job-1' } },
+      { type: 'status', payload: { generationId: 'job-1', message: 'Reactor session rendering…', phase: 'render' } },
+    ]);
+  });
+
+  // grok narrates on every stdout chunk and fal re-reports the same poll status
+  // every couple of seconds. The heartbeat has to land each time (it is what
+  // the idle watchdog reads); the unchanged line does not.
+  it('repeats the heartbeat but not an unchanged line', () => {
+    emitted.length = 0;
+    sse.mockClear();
+    const job = { clients: [], status: 'running' };
+
+    emitCloudRenderStatus(job, 'job-2', CLOUD_RENDER_PHASE.RENDER, 'Running…');
+    emitCloudRenderStatus(job, 'job-2', CLOUD_RENDER_PHASE.RENDER, 'Running…');
+    emitCloudRenderStatus(job, 'job-2', CLOUD_RENDER_PHASE.FETCH, 'Downloading video…');
+
+    expect(emitted.filter((e) => e.type === 'activity')).toHaveLength(3);
+    expect(emitted.filter((e) => e.type === 'status').map((e) => e.payload.phase)).toEqual(['render', 'fetch']);
+    expect(sse).toHaveBeenCalledTimes(2);
+  });
+});
+
+// The gates on the post-completion teardown recovery (#6501). The recovery
+// itself is asserted end to end in local.test.js; these pin the two things that
+// suite cannot reach cheaply — the host/runtime gate (every other runtime and
+// every non-macOS host must keep its current outcome, and CI runs on Windows)
+// and the frame/duration tolerance that separates "the muxer rounded" from
+// "the file is truncated".
+describe('isNativeTeardownAbort', () => {
+  const ABORT = { runtime: POST_COMPLETION_ABORT_RUNTIME, signal: 'SIGABRT', childKilled: false, platform: 'darwin' };
+
+  it('recognizes the H3 MLX teardown abort', () => {
+    expect(isNativeTeardownAbort(ABORT)).toBe(true);
+  });
+
+  it.each([
+    ['a non-macOS host, where MLX does not run', { platform: 'win32' }],
+    ['the CUDA sibling runtime', { runtime: 'minimax_h3_cuda' }],
+    ['the native Ref2VA runtime', { runtime: 'minimax_h3_ref2va' }],
+    ['another local runtime entirely', { runtime: 'ltx2' }],
+    ['a child PortOS killed on purpose', { childKilled: true }],
+    ['an OOM/watchdog SIGKILL', { signal: 'SIGKILL' }],
+    ['a native crash that can equally land mid-render', { signal: 'SIGSEGV' }],
+    ['an ordinary exit with no signal at all', { signal: null }],
+  ])('refuses %s', (_label, override) => {
+    expect(isNativeTeardownAbort({ ...ABORT, ...override })).toBe(false);
+  });
+
+  it('refuses an empty call rather than defaulting open', () => {
+    expect(isNativeTeardownAbort()).toBe(false);
+  });
+});
+
+describe('verifyPostCompletionOutputs', () => {
+  const dir = join(tmpdir(), `portos-teardown-${Date.now()}`);
+  const outputPath = join(dir, 'clip.mp4');
+  const EXPECTED_FRAMES = 124;
+  const FPS = 24;
+  let startedAtMs;
+
+  const verify = () => verifyPostCompletionOutputs({
+    outputPaths: [outputPath],
+    completedOutputs: new Set([outputPath]),
+    startedAtMs,
+    expectedFrames: EXPECTED_FRAMES,
+    fps: FPS,
+  });
+
+  beforeEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    startedAtMs = Date.now();
+    writeFileSync(outputPath, 'mp4-bytes', { flag: 'w' });
+    probeMock.frames.mockResolvedValue(EXPECTED_FRAMES);
+    probeMock.duration.mockResolvedValue(EXPECTED_FRAMES / FPS);
+  });
+
+  it('accepts an exact match', async () => {
+    await expect(verify()).resolves.toEqual({ ok: true });
+  });
+
+  // The muxer can round a stream's reported length, and a clip carrying audio
+  // is not exactly frames/fps long. Neither is a truncated file.
+  it.each([
+    ['a frame count two off the request', { frames: EXPECTED_FRAMES - 2 }, true],
+    ['a duration a hair under the request', { duration: (EXPECTED_FRAMES / FPS) - 0.2 }, true],
+    ['a clip missing a third of its frames', { frames: 80 }, false],
+    ['a clip cut to a couple of seconds', { duration: 2 }, false],
+  ])('%s', async (_label, override, ok) => {
+    if (override.frames != null) probeMock.frames.mockResolvedValue(override.frames);
+    if (override.duration != null) probeMock.duration.mockResolvedValue(override.duration);
+    expect((await verify()).ok).toBe(ok);
+  });
+
+  // Sentinel discipline: a probe that could not answer is "unknown", never
+  // "consistent" — a host with no ffprobe must not auto-recover every abort.
+  it.each([
+    ['the frame probe', () => probeMock.frames.mockResolvedValue(null)],
+    ['the duration probe', () => probeMock.duration.mockResolvedValue(null)],
+  ])('refuses when %s could not answer', async (_label, breakProbe) => {
+    breakProbe();
+    expect((await verify()).ok).toBe(false);
+  });
+
+  it('refuses when the render start was never stamped', async () => {
+    startedAtMs = null;
+    const verdict = await verify();
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/start time/i);
+  });
+
+  it('refuses an output the child never reported by name', async () => {
+    const verdict = await verifyPostCompletionOutputs({
+      outputPaths: [outputPath],
+      completedOutputs: new Set([join(dir, 'someone-elses.mp4')]),
+      startedAtMs,
+      expectedFrames: EXPECTED_FRAMES,
+      fps: FPS,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/never reported complete/i);
+  });
+
+  it('refuses a batch where only some outputs are present', async () => {
+    const second = join(dir, 'clip-2.mp4');
+    const verdict = await verifyPostCompletionOutputs({
+      outputPaths: [outputPath, second],
+      completedOutputs: new Set([outputPath, second]),
+      startedAtMs,
+      expectedFrames: EXPECTED_FRAMES,
+      fps: FPS,
+    });
+    expect(verdict.ok).toBe(false);
+    expect(verdict.reason).toMatch(/output 2\/2 is not on disk/);
   });
 });

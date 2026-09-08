@@ -3,10 +3,11 @@
  * quota which would otherwise expire unused.
  *
  * The loop lives in PortOS, not on any managed app: one schedule, one set of
- * per-provider-family windows, and an ordered burn plan per family. Individual
- * jobs decide what the quota goes to — an agent in a named managed app, or a
- * programmatic PortOS job like rendering the universe bible entries that have
- * no image yet.
+ * per-provider-family windows, and an ordered burn plan per family. A plan step
+ * REFERENCES a scheduled task the user already owns (CoS → Schedule, or a System
+ * Tasks custom job) and layers per-invocation overrides on it — so this page is a
+ * picker over the shared automation catalog, never a second copy of it. New work
+ * is created in Scheduled Tasks and then added here.
  *
  * The master switch is the consent gate for the whole feature (AGENTS.md's AI
  * provider policy): with it off nothing here contacts a provider, and the page
@@ -24,6 +25,7 @@ import { NumberField } from '../components/quotaBurn/fields';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { mergeQuotaBurnPatch } from '../lib/quotaBurnPatch';
+import { buildQuotaBurnTaskCatalog, flattenTaskCatalog } from '../lib/quotaBurnTasks';
 import { safeReadJsonSession, safeRemoveSession, safeWriteJsonSession } from '../lib/safeStorage';
 import { coalesce } from '../utils/coalesce';
 import { timeAgo } from '../utils/formatters';
@@ -37,7 +39,11 @@ export const SAVE_DEBOUNCE_MS = 500;
 // is a 10-20s PTY spawn, so this is a handful of polls, not a busy loop.
 export const PENDING_POLL_MS = 4000;
 
-const EMPTY_CATALOG = { jobTypes: [], apps: [], universes: [], imageModes: [], providers: [] };
+// What the burn's OWN catalog endpoint still supplies: the managed apps a step
+// can target and the providers a per-invocation pin may name. The work itself is
+// no longer in here — a step references a scheduled task, and those come from the
+// same two reads the CoS Schedule and System Tasks pages make.
+const EMPTY_CATALOG = { apps: [], providers: [] };
 
 // Where a patch the server never accepted waits for the next visit. Session
 // scope, not local: this is a crash buffer for the current tab, and a patch
@@ -59,16 +65,14 @@ const readStashedPatch = () => {
 // two need opposite handling of the error state, and both are falsy.
 const READ_FAILED = Symbol('quota-burn-read-failed');
 
-// A catalog the server answered with, but which is missing the job types the
-// form needs, is indistinguishable from a failed fetch as far as the page is
-// concerned — both leave every dropdown empty — so normalize to the same shape
-// and let the caller decide which message to show. Each list is validated
-// rather than merely defaulted: a spread alone lets an explicit `null` through
-// (a partial payload, an older peer), and every consumer of this object reads
-// `.length` on it.
+// A catalog the server answered with, but whose lists are missing, is
+// indistinguishable from a failed fetch as far as the page is concerned — both
+// leave every dropdown empty — so normalize to the same shape and let the caller
+// decide which message to show. Each list is validated rather than merely
+// defaulted: a spread alone lets an explicit `null` through (a partial payload,
+// an older peer), and every consumer of this object reads `.length` on it.
 const normalizeCatalog = (data) => ({
   ...EMPTY_CATALOG,
-  ...(data || {}),
   ...Object.fromEntries(Object.keys(EMPTY_CATALOG).map((key) => [
     key, Array.isArray(data?.[key]) ? data[key] : [],
   ])),
@@ -83,6 +87,11 @@ export default function QuotaBurn() {
   const [config, setConfig] = useState(null);
   const [status, setStatus] = useState(null);
   const [catalog, setCatalog] = useState(EMPTY_CATALOG);
+  // The SHARED scheduled-task catalog, grouped for the picker. It comes from the
+  // same two endpoints CoS → Schedule and System Tasks render, so a burn step can
+  // only ever point at work that exists there — the whole reason this page no
+  // longer has an automation editor of its own.
+  const [taskGroups, setTaskGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   // Distinct from `loading`: a manual re-read is reported ON the button that
   // asked for it, never by replacing the page with a spinner.
@@ -93,11 +102,10 @@ export default function QuotaBurn() {
   // it has no plan" — one is retryable and names a cause, the other doesn't.
   const [loadError, setLoadError] = useState(null);
   // Same `null` = never failed / string = the cause convention as `loadError`,
-  // for the SECOND read this page makes. The catalog fetch used to be swallowed
-  // outright, which is what left the preset picker missing, "Add job" disabled,
-  // and every job row's dropdown empty with nothing on screen saying why — and
-  // editing a step against an empty job-type list submits `jobType: ""`, which
-  // the strict PUT schema 400s into a stalled save.
+  // for the catalog reads. They used to be swallowed outright, which is what left
+  // every picker on the page empty with nothing on screen saying why — and a step
+  // saved against an empty catalog carries a reference to nothing, which the
+  // strict PUT schema 400s into a stalled save.
   const [catalogError, setCatalogError] = useState(null);
   // Reported ON the retry button, like `refreshing` — the plan stays rendered.
   const [catalogRetrying, setCatalogRetrying] = useState(false);
@@ -184,26 +192,37 @@ export default function QuotaBurn() {
     if (editSeqRef.current === seq && !pendingRef.current && !savingRef.current) setConfig(data.config);
   }, []);
 
-  // The catalog is the page's second read and fails independently of the plan:
-  // the plan can render perfectly while every choice the form offers is empty.
-  // `silent: true` for the same reason as `load` — the failure is rendered by
-  // the family card's own banner, not the request helper's toast.
+  // Everything the pickers offer, in one pass: the burn's own catalog (apps +
+  // providers) plus the SHARED scheduled-task catalog the steps reference.
   const loadCatalog = useCallback(async () => {
-    let failure = null;
-    const data = await api.getQuotaBurnCatalog({ silent: true })
-      .catch((err) => {
-        failure = err?.message || 'The request failed.';
-        return READ_FAILED;
-      });
-    if (data === READ_FAILED) {
-      setCatalogError(failure);
-      return;
-    }
-    const next = normalizeCatalog(data);
+    const failures = [];
+    const read = (promise) => promise.catch((err) => {
+      failures.push(err?.message || 'The request failed.');
+      return READ_FAILED;
+    });
+    // Three independent reads, all failing independently of the plan: the plan
+    // renders perfectly while every choice the form offers is empty. `silent`
+    // for the same reason as `load` — the failure is rendered by the family
+    // card's own banner, not the request helper's toast.
+    const [burnCatalog, schedule, jobs] = await Promise.all([
+      read(api.getQuotaBurnCatalog({ silent: true })),
+      read(api.getCosSchedule({ silent: true })),
+      read(api.getCosJobs({ silent: true })),
+    ]);
+    const next = normalizeCatalog(burnCatalog === READ_FAILED ? null : burnCatalog);
     setCatalog(next);
-    // A 200 carrying no job types is a different failure with the same symptom
-    // — say so rather than reporting success into an empty form.
-    setCatalogError(next.jobTypes.length ? null : 'The server returned no job types.');
+    const groups = buildQuotaBurnTaskCatalog({
+      schedule: schedule === READ_FAILED ? null : schedule,
+      jobs: jobs === READ_FAILED ? [] : (jobs?.jobs || []),
+      apps: next.apps,
+    });
+    setTaskGroups(groups);
+    // A 200 carrying no scheduled task a burn may invoke is a different failure
+    // with the same symptom — say so rather than reporting success into an empty
+    // picker.
+    setCatalogError(failures.length
+      ? failures.join(' ')
+      : flattenTaskCatalog(groups).length ? null : 'The server returned no scheduled tasks a burn can run.');
   }, []);
 
   useEffect(() => {
@@ -505,10 +524,10 @@ export default function QuotaBurn() {
         </div>
         <p className="text-xs text-gray-400">
           One loop for this install, but each provider family burns independently: every family whose window is inside its reset
-          horizon, above its reserve, and under its dispatch cap (unlimited by default) runs the first job in its plan that has work waiting — one job
-          per family per cycle. A plan is a rotation: steps repeat lap after lap until a gate closes, unless you mark one
-          “Run once” — one-shot work then drops out after its dispatch until you re-arm it. Turning this on is explicit
-          consent to spend those subscriptions on a schedule.
+          horizon, above its reserve, and under its dispatch cap (unlimited by default) runs the first step in its plan that has work waiting — one step
+          per family per cycle. Each step runs an existing scheduled task; removing a step never deletes that task. A plan is a rotation: steps
+          repeat lap after lap until a gate closes, unless you mark one “Run once” — one-shot work then drops out after its dispatch until you
+          re-arm it. Turning this on is explicit consent to spend those subscriptions on a schedule.
         </p>
         {lastRun && (
           <p className="text-[11px] text-gray-500">
@@ -525,6 +544,7 @@ export default function QuotaBurn() {
             config={family}
             status={(status?.families || []).find((row) => row.id === familyId)}
             catalog={catalog}
+            taskGroups={taskGroups}
             catalogError={catalogError}
             catalogRetrying={catalogRetrying}
             onRetryCatalog={retryCatalog}

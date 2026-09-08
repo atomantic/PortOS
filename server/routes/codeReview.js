@@ -40,7 +40,7 @@ const localReviewRequestSchema = z.object({
 })
 
 // GET /api/code-review/defaults — resolved global defaults (settings.codeReview
-// + hardcoded fallback). The Code Reviewers settings page reads this to render the
+// + an empty opt-in fallback). The Code Reviewers settings page reads this to render the
 // initial state; TaskAddForm + ScheduleTab read it to seed new reviewer lists.
 // `installed` (per-CLI-reviewer boolean, TTL-probed) rides alongside so a
 // picker can flag a configured reviewer whose binary isn't on this machine

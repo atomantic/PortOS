@@ -19,12 +19,24 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { normalizeRenderPinValue } from '../../lib/renderTargets.js';
 import {
+  cloudPromptRequired,
+  IMAGE_GEN_PROVIDER_CAPABILITIES,
+  maxInputImages,
+} from '../../lib/imageGenCapabilities.js';
+import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
   CLOUD_IMAGE_GEN_MODES,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
   IMAGE_GEN_MODE,
   QUEUEABLE_IMAGE_MODES,
 } from './modes.js';
+
+// The pure capability half of the specs below, plus the two predicates that
+// read it, live in the dependency-free `lib/imageGenCapabilities.js` leaf so
+// the client shares them instead of re-typing them. Re-exported here because
+// every existing caller (inputImages, prepareParams, the providers,
+// fableLoom/production) imports them from this module.
+export { cloudPromptRequired, maxInputImages };
 
 /**
  * Per-provider knowledge, keyed by mode:
@@ -35,24 +47,10 @@ import {
  *                   Codex's `model` carries the effective (defaulted) id so the
  *                   queue row reports what actually renders; the provider
  *                   re-applies the same default, so rendering is unchanged.
- *  - `supportsModelOverride` — whether a per-render `cloudModel` may replace the
- *                   saved default for one queue item. Grok is `false`: its
- *                   `image_gen` tool runs on a fixed xAI backend with no model
- *                   knob at all, so accepting an override there would be a lie.
- *  - `maxInputImages` — how many input images (init image + reference images,
- *                   combined) the provider's image tool accepts, or `null` when
- *                   its schema declares no maximum (PortOS's own form ceiling —
- *                   MAX_REFERENCE_IMAGES in routes/imageGen.js — is then the
- *                   only bound, expressed once where it is defined rather than
- *                   restated here as a fake capability). Probed from the live
- *                   tool schemas on 2026-08-09 — do NOT raise one on a
- *                   provider's word, re-probe the schema. Applied in exactly one
- *                   place: `resolveInputImages` (inputImages.js).
- *  - `promptRequiredWithInputImage` — whether the provider still needs a text
- *                   prompt when the render already carries an input image.
- *                   `false` for the tools where the attached image is the whole
- *                   instruction; `true` where the tool schema lists the prompt
- *                   as required.
+ *  - the pure capability flags — `supportsModelOverride`, `maxInputImages`,
+ *                   `promptRequiredWithInputImage` — are spread in from
+ *                   IMAGE_GEN_PROVIDER_CAPABILITIES (lib/imageGenCapabilities.js),
+ *                   which documents what each one means and how it was probed.
  *
  * `modelId`/`params` both take `(config, override)` where `override` is the
  * per-render model id (or a falsy value when the render inherits the saved
@@ -60,12 +58,9 @@ import {
  */
 export const CLOUD_PROVIDER_SPECS = Object.freeze({
   [IMAGE_GEN_MODE.CODEX]: Object.freeze({
+    ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.CODEX],
     label: 'Codex Imagegen',
     errorCode: 'CODEX_IMAGEGEN_DISABLED',
-    supportsModelOverride: true,
-    // `image_gen.referenced_image_paths` is a string[] with no declared maximum.
-    maxInputImages: null,
-    promptRequiredWithInputImage: false,
     modelId: (c, override) => override || c.model || CODEX_IMAGEGEN_DEFAULT_MODEL,
     params: (c, override) => ({
       codexPath: c.codexPath,
@@ -74,25 +69,16 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
     }),
   }),
   [IMAGE_GEN_MODE.GROK]: Object.freeze({
+    ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.GROK],
     label: 'Grok Imagegen',
     errorCode: 'GROK_IMAGEGEN_DISABLED',
-    // Grok's image tools run on xAI's fixed image backend — no model knob.
-    supportsModelOverride: false,
-    // `image_edit.image` is a string[] with no declared maximum — like codex.
-    maxInputImages: null,
-    promptRequiredWithInputImage: false,
     modelId: () => 'grok-imagegen',
     params: (g) => ({ grokPath: g.grokPath, aspectRatio: g.aspectRatio }),
   }),
   [IMAGE_GEN_MODE.AGY]: Object.freeze({
+    ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.AGY],
     label: 'Agy Imagegen',
     errorCode: 'AGY_IMAGEGEN_DISABLED',
-    supportsModelOverride: true,
-    // `generate_image.ImagePaths`: "you cannot pass in more than 3 images".
-    maxInputImages: 3,
-    // …and `Prompt` is in that tool's `required` list, so an image-only agy
-    // render has nothing to send.
-    promptRequiredWithInputImage: true,
     // The concrete cheap-tier pin (not the ANTIGRAVITY_CONFIGURED_DEFAULT
     // sentinel, which resolves to "no --model" and lets agy pick a possibly
     // reasoning-heavy session default) — see AGY_IMAGEGEN_DEFAULT_MODEL.
@@ -153,28 +139,6 @@ export function resolveCloudProviderConfig(settings, mode, overrides = {}) {
     connectionReason: `${spec.label} is disabled in settings`,
   };
 }
-
-/**
- * How many input images (init image + reference images, combined) `mode`'s
- * image tool accepts. `null` for a non-cloud mode: the local runner's ceiling
- * is the form's own slot count, and external takes none at all (it never
- * reaches here — `isEditCapableMode` rejects it first).
- */
-export const maxInputImages = (mode) => CLOUD_PROVIDER_SPECS[mode]?.maxInputImages ?? null;
-
-/**
- * Does a cloud-CLI render need a text prompt, given whether it carries an input
- * image? Text-to-image always does; with an input image it depends on whether
- * the provider's tool lists the prompt as required (`promptRequiredWithInputImage`).
- * Non-cloud modes return `false` — local and external both accept an empty
- * prompt. Rejecting up front keeps the failure a 400 instead of a queued job
- * that dies asynchronously.
- */
-export const cloudPromptRequired = (mode, hasInputImage) => {
-  const spec = CLOUD_PROVIDER_SPECS[mode];
-  if (!spec) return false;
-  return !hasInputImage || spec.promptRequiredWithInputImage === true;
-};
 
 /**
  * Can the queue-backed surfaces render in `mode` right now? Cloud CLIs need

@@ -39,6 +39,8 @@ export const INVESTIGATION_TASK_DELIVERY = Object.freeze({
 // nobody watching it, and that reason is gone the moment a human clicked the
 // button. They are here to look at the fix, so let them.
 export const CLIENT_INVESTIGATION_DELIVERY = Object.freeze({
+  // Verification may establish that the reported finding is already resolved.
+  noChangeSuccess: true,
   useWorktree: true,
   openPR: true,
   prCompletion: PR_COMPLETIONS.REVIEW_THEN_MERGE,

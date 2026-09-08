@@ -1,3 +1,4 @@
+vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})), updateSettingsWith: vi.fn() }));
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import express from 'express';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -87,6 +88,19 @@ it('imports an observation when reasoning pricing is its only known metric', asy
   expect(response.status).toBe(200);
   const stored = (await request(app).get('/comparison')).body.observations.find(item => item.id === row.id);
   expect(stored).toEqual(row);
+});
+
+// The comparison page skips its key prompt on this flag, so presence has to be
+// reported — and the key itself must never ride along with it.
+it('reports Artificial Analysis key presence without exposing the key', async () => {
+  const { getSettings } = await import('../services/settings.js');
+  delete process.env.ARTIFICIAL_ANALYSIS_API_KEY;
+  expect((await request(app).get('/comparison')).body.artificialAnalysisKeyConfigured).toBe(false);
+
+  getSettings.mockResolvedValueOnce({ secrets: { artificialAnalysis: { apiKey: 'mock-stored-key' } } });
+  const configured = (await request(app).get('/comparison')).body;
+  expect(configured.artificialAnalysisKeyConfigured).toBe(true);
+  expect(JSON.stringify(configured)).not.toContain('mock-stored-key');
 });
 
 it('rejects sync-aa when no API key is provided and syncs successfully when mocked', async () => {

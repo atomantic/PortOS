@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
-import { Bot, Cpu, Gauge, Network, Package } from 'lucide-react';
+import { Bot, Cpu, Gauge, Link2, Network, Package } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
@@ -21,6 +21,8 @@ import ProviderForm from '../components/providers/ProviderForm';
 import CollapsibleSection from '../components/ui/CollapsibleSection';
 import FleetProviderSetup from '../components/providers/FleetProviderSetup';
 import FleetHostSetup from '../components/providers/FleetHostSetup';
+import LocalPersistentMindSetupCard from '../components/settings/LocalPersistentMindSetupCard.jsx';
+import ProviderConnections from '../components/providers/ProviderConnections';
 
 // The two local apps an API provider can front. Their installer lives on the
 // Models → LLMs page (it starts the service too), so the provider card
@@ -196,11 +198,24 @@ export default function AIProviders() {
   // create route shadow its editor.
   const navigate = useNavigate();
   const location = useLocation();
-  const { providerId: editingProviderId } = useParams();
+  const { providerId: editingProviderId, connectionId, harnessId } = useParams();
   const creatingProvider = location.pathname.replace(/\/+$/, '').endsWith('/ai/new');
   const fleetSetupOpen = location.pathname.replace(/\/+$/, '').endsWith('/ai/fleet');
   const closeForm = useCallback(() => navigate('/ai'), [navigate]);
   const openForm = useCallback((target) => navigate(target ? `/ai/edit/${target.id}` : '/ai/new'), [navigate]);
+
+  // Backend connection management (#6369). Open state and the selected
+  // connection are both route segments, so `/ai/connections/<id>` and the
+  // harness-scoped `/ai/harnesses/<harness>/connections/<id>` are shareable and
+  // reachable from ⌘K and voice — same rule as the provider editor above.
+  const connectionsOpen = /\/ai(?:\/harnesses\/[^/]+)?\/connections(?:\/|$)/.test(
+    `${location.pathname.replace(/\/+$/, '')}`,
+  );
+  const connectionsBase = harnessId ? `/ai/harnesses/${harnessId}/connections` : '/ai/connections';
+  const selectConnection = useCallback(
+    (id) => navigate(id ? `${connectionsBase}/${id}` : connectionsBase, { replace: true }),
+    [navigate, connectionsBase],
+  );
 
   useEffect(() => {
     loadData();
@@ -243,8 +258,17 @@ export default function AIProviders() {
     };
   }, [activeRun]);
 
+  // `setLoading(true)` swaps the entire list for the page skeleton, which
+  // unmounts the scroll container and drops the user back at the top. That is
+  // right for the first load and wrong for every reload that follows a click on
+  // a card — after enabling, deleting, or saving a provider several screens
+  // down, the card you just acted on scrolled out from under you. So the
+  // skeleton is shown only while there is nothing to keep on screen; a reload
+  // over an already-rendered list refreshes in place and holds the scroll
+  // position. The `loadError` path still swaps in the error state, because there
+  // genuinely is nothing left to show.
   const loadData = async () => {
-    setLoading(true);
+    setLoading(providers.length === 0);
     setLoadError(false);
     let providersFailed = false;
     const [providersData, appsData, statusData, orchestrationProfilesData] = await Promise.all([
@@ -449,13 +473,36 @@ export default function AIProviders() {
     loadReadiness();
   };
 
+  // Applied to the clicked card in place. `loadData()` here instead flipped
+  // `loading` back on, swapping the whole page for the skeleton and dropping the
+  // user at the top of the list — a card several screens down was unreachable
+  // after refreshing it.
+  //
+  // Only the two fields a refresh writes are taken from the response: the record
+  // it returns is a bare `presentProvider`, so replacing the whole entry would
+  // drop the fields only the LIST endpoint adds (`executionModes`,
+  // `prerequisitesMet`, the codex account) and un-group a unified card. Those
+  // two fields fan out to every mode in the group server-side
+  // (`sharedModeUpdates`), so they are applied to the siblings here too rather
+  // than leaving them showing the pre-refresh catalog until the next poll.
+  // `modelContextWindows` is copied even when absent — a refresh that pruned it
+  // must not leave the stale map behind.
   const handleRefreshModels = async (id) => {
     setRefreshing(prev => ({ ...prev, [id]: true }));
     try {
       const result = await api.refreshProviderModels(id, { silent: true });
       if (result) {
         toast.success(`Models refreshed for ${result.name}`);
-        loadData();
+        setProviders(current => {
+          const refreshed = current.find(p => p.id === result.id);
+          const group = new Set([result.id, ...(refreshed?.executionModes || []).map(mode => mode.id)]);
+          return current.map(p => (group.has(p.id)
+            ? { ...p, models: result.models, modelContextWindows: result.modelContextWindows }
+            : p));
+        });
+        // The catalog a card just learned is graded by the readiness checklist,
+        // which the server computes from the stored record.
+        loadReadiness();
       } else {
         toast.error('Failed to refresh models - provider may not support this feature');
       }
@@ -525,6 +572,15 @@ export default function AIProviders() {
     setProviders((current) => [...current, created]);
     toast.success(`${created.name} is connected to the fleet GPU host`);
     return created;
+  };
+
+  // Repoints an existing provider at a fleet host in place, rather than
+  // leaving the user to create a duplicate and manually delete the old one.
+  const handleUpdateFleetProvider = async (id, patch) => {
+    const updated = await api.updateProvider(id, patch);
+    setProviders((current) => current.map((entry) => (entry.id === id ? updated : entry)));
+    toast.success(`${updated.name} is connected to the fleet GPU host`);
+    return updated;
   };
 
   const handleAddAllSamples = async () => {
@@ -622,8 +678,13 @@ export default function AIProviders() {
     };
     // The hardware veto is decided first: what this machine cannot run never
     // reaches the readiness buckets, so a card lands in exactly one section.
-    const runnable = providers.filter(isProviderHardwareCompatible);
-    const unrunnable = providers.filter(p => !isProviderHardwareCompatible(p));
+    const cards = providers.filter(provider => {
+      const modes = provider.executionModes || [{ id: provider.id }];
+      const representative = modes.find(mode => mode.id === activeProviderId) || modes[0];
+      return provider.id === representative.id;
+    });
+    const runnable = cards.filter(isProviderHardwareCompatible);
+    const unrunnable = cards.filter(p => !isProviderHardwareCompatible(p));
     return {
       providersById: byId,
       runtimeByProviderId: runtimeById,
@@ -677,6 +738,8 @@ export default function AIProviders() {
     { id: 'orchestration-profiles', label: 'Orchestration profiles', icon: Cpu, to: '/settings/orchestration' },
     { id: 'compare-models', label: 'Compare local models', icon: Gauge, to: '/models/performance' },
     { id: 'fleet-setup', label: 'Fleet setup', icon: Network, to: '/ai/fleet' },
+    // One backend, edited once, for every harness pointed at it (#6369).
+    { id: 'backend-connections', label: 'Backend connections', icon: Link2, to: '/ai/connections' },
     {
       id: 'load-samples',
       label: loadingSamples ? 'Loading samples…' : 'Load Samples',
@@ -714,6 +777,7 @@ export default function AIProviders() {
 
       <div className="flex-1 overflow-auto p-4 space-y-6">
 
+      <LocalPersistentMindSetupCard compact onApplied={loadData} />
       <FleetHostSetup compact providers={providers} />
 
       {/* Sample Providers Panel */}
@@ -985,6 +1049,8 @@ export default function AIProviders() {
                       status={statuses[provider.id]}
                       isDefault={provider.id === activeProviderId}
                       providersById={providersById}
+                      activeProviderId={activeProviderId}
+                      statuses={statuses}
                       runnerAllowedCommands={runnerAllowedCommands}
                       testResult={testResults[provider.id]}
                       refreshing={Boolean(refreshing[provider.id])}
@@ -1063,11 +1129,23 @@ export default function AIProviders() {
         flushMs={250}
         description={`Installing ${installingRuntime?.label} from ${installingRuntime?.method === 'script' ? "the vendor's official install script" : 'its global npm package'}.`}
       />
+      {connectionsOpen && (
+        <ProviderConnections
+          open
+          connectionId={connectionId || null}
+          harnessId={harnessId || null}
+          onClose={closeForm}
+          onSelectConnection={selectConnection}
+          onGraphChanged={loadData}
+        />
+      )}
       {fleetSetupOpen && (
         <FleetProviderSetup
           peers={fleetPeers}
+          providers={providers}
           onClose={closeForm}
           onCreate={handleCreateFleetProvider}
+          onUpdate={handleUpdateFleetProvider}
           onConfigured={loadData}
         />
       )}

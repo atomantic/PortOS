@@ -1,25 +1,47 @@
 /**
- * One burn job inside a family's ordered plan: its type, its per-job model, its
- * type-specific params, and the controls that move/remove/run it.
+ * One burn step inside a family's ordered plan: the scheduled task it points at,
+ * the app it targets, its per-invocation overrides, and the controls that
+ * move/remove/run it.
  *
- * Order is meaningful — the runner takes the FIRST enabled job with pending
- * work — so the move controls are part of the configuration, not a convenience.
+ * A step is a REFERENCE, never a copy — removing it here deletes nothing in
+ * Scheduled Tasks, and editing the work itself happens there. Order is
+ * meaningful (the runner takes the first enabled step with pending work), so the
+ * move controls are part of the configuration rather than a convenience.
  */
 
 import { useEffect, useState } from 'react';
-import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, Play, RotateCcw, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, Play, RotateCcw, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
-import InlineConfirmRow from '../ui/InlineConfirmRow';
-import JobParamField from './JobParamField';
-import PresetPicker from './PresetPicker';
-import EffortSelect from '../cos/EffortSelect';
-import { applyQuotaBurnPreset, quotaBurnJobIsSpent } from '../../lib/quotaBurnPatch';
+import StepSettings from './StepSettings';
+import TaskRefPicker from './TaskRefPicker';
+import { quotaBurnJobIsSpent } from '../../lib/quotaBurnPatch';
+import { findTaskEntry, stepFromTaskEntry, taskEntryNeedsApp, taskRefKey } from '../../lib/quotaBurnTasks';
 import { timeAgo } from '../../utils/formatters';
-import { commandBasename, effortAwareModelOptions, effortLevelsForProvider, effortSurvivingModel } from '../../utils/providers';
+import { commandBasename } from '../../utils/providers';
 import { inputClass } from './fields';
 
+/**
+ * The CLI/TUI providers that spend THIS family's subscription.
+ *
+ * A burn draws down one family's window, so a pin naming another family's binary
+ * is never what the user meant — and the server rejects it. Local-model backends
+ * are excluded outright: they have no subscription quota to burn.
+ */
+function providersForFamily(providers, familyId) {
+  return (providers || []).filter((provider) =>
+    provider?.enabled !== false
+    && provider?.ollamaBacked !== true && provider?.lmstudioBacked !== true
+    && provider?.mtplxBacked !== true
+    && provider?.llamaBacked !== true && provider?.vllmBacked !== true
+    && provider?.sglangBacked !== true
+    && (provider?.type === 'cli' || provider?.type === 'tui')
+    && (commandBasename(provider?.command) === familyId
+      || String(provider?.id || '').toLowerCase().includes(familyId || '')
+      || (familyId === 'agy' && String(provider?.id || '').toLowerCase().includes('antigravity'))));
+}
+
 export default function JobRow({
-  job, index, total, catalog, pending, ranAt, actionsBusy,
+  job, index, total, catalog, taskGroups, pending, ranAt, actionsBusy,
   familyId,
   expanded = false, onToggleExpand,
   onChange, onMove, onRemove, onRun, onRearm,
@@ -28,79 +50,51 @@ export default function JobRow({
   const isExpanded = onToggleExpand !== undefined ? expanded : localExpanded;
   const toggleExpand = onToggleExpand || (() => setLocalExpanded((prev) => !prev));
 
-  // Two-click arm on delete (the repo's inline-confirm convention). A job holds
-  // the family's whole free-text work prompt and nothing else stores it — a
-  // stray click on the trash icon would drop it from the persisted plan with no
-  // undo.
+  // Two-click arm on delete (the repo's inline-confirm convention). It removes
+  // the step from the plan — its order, name, overrides and run-once state — and
+  // there is no undo. The referenced scheduled task is untouched either way.
   const [armed, setArmed] = useState(false);
   // Run is armed for the same reason: it force-dispatches past the window,
   // reserve, and cap gates and spends real subscription quota. The icon sits in
   // a row of small controls on a page whose edits save on change, so a stray
   // click reads as "save" — it must not be a one-click spend.
   const [runArmed, setRunArmed] = useState(false);
-  // A preset overwrites the work prompt. Held rather than applied immediately
-  // when there is already prompt text, so picking one never silently discards a
-  // prompt the user wrote by hand.
-  const [pendingPreset, setPendingPreset] = useState(null);
   // Disarm the run confirm the moment the page has unsaved (or stalled) edits.
   // The confirm asks "spend now?" about the SAVED plan, so an edit invalidates
   // the question — and the alternative (leaving the pair on screen with both
   // buttons disabled, since `busy` disables Cancel too) strands an armed
   // confirm the user cannot dismiss when a save has stopped retrying.
   useEffect(() => { if (actionsBusy) setRunArmed(false); }, [actionsBusy]);
-  const spec = catalog.jobTypes.find((type) => type.id === job.jobType);
+
+  const entry = findTaskEntry(taskGroups, job.taskRef);
   const idPrefix = `burn-job-${job.id}`;
   const spent = quotaBurnJobIsSpent(job, ranAt);
+  // Derived server-side from the live catalog on every read: a reference whose
+  // task was deleted, disabled, or pointed at an app it may not target keeps its
+  // place in the plan and states WHY it cannot run, rather than disappearing.
+  const unavailable = job.unavailable || null;
   const actionButtonClass = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center';
-  const setParam = (key, value) => onChange({ ...job, params: { ...job.params, [key]: value } });
-  const promptText = String(job.params?.prompt || '').trim();
-  const hasPromptText = Boolean(promptText);
-  // Which preset this row currently IS, derived rather than stored: a preset is
-  // copied into `params.prompt` and nothing on disk points back at its id, so
-  // matching the text is the only claim that stays true after an edit. The
-  // picker shows the preset while the prompt is verbatim and reverts to its
-  // placeholder as soon as the user changes a word.
-  const matchedPreset = (catalog.presets || [])
-    .find((preset) => promptText && String(preset.params?.prompt || '').trim() === promptText);
-  const applyPreset = (preset) => { setPendingPreset(null); onChange(applyQuotaBurnPreset(job, preset)); };
-  const optionsFor = (descriptor) => ({
-    app: catalog.apps,
-    universe: catalog.universes,
-    imageMode: catalog.imageModes,
-  })[descriptor.kind];
+  const providers = providersForFamily(catalog.providers, familyId);
+  const summary = entry?.label || job.taskRef?.taskType || job.taskRef?.jobId || job.jobType || 'unreferenced step';
+  const targetApps = (catalog.apps || []).filter((app) => (entry?.appIds || []).includes(app.id));
+  // The app's NAME in the collapsed summary, falling back to its id: a plan is
+  // read at a glance, and a raw id is the one thing on that line the user never
+  // chose.
+  const targetName = job.taskRef?.appId
+    ? (catalog.apps || []).find((app) => app.id === job.taskRef.appId)?.name || job.taskRef.appId
+    : null;
 
-  // Resolve the provider for this family/job to provide model options and effort support
-  const familyProviders = (catalog.providers || []).filter((provider) =>
-    provider?.enabled !== false &&
-    provider?.ollamaBacked !== true && provider?.lmstudioBacked !== true &&
-    provider?.mtplxBacked !== true &&
-    provider?.llamaBacked !== true && provider?.vllmBacked !== true &&
-    provider?.sglangBacked !== true &&
-    (provider?.type === 'cli' || provider?.type === 'tui') &&
-    (commandBasename(provider?.command) === familyId ||
-     String(provider?.id || '').toLowerCase().includes(familyId || '') ||
-     (familyId === 'agy' && String(provider?.id || '').toLowerCase().includes('antigravity')))
-  );
-
-  const selectedProvider = (job.providerId && familyProviders.find((p) => p.id === job.providerId))
-    || (job.providerId && (catalog.providers || []).find((p) => p.id === job.providerId))
-    || familyProviders.find((p) => p.type === (job.jobType === 'agent-prompt' ? 'tui' : 'cli'))
-    || familyProviders[0]
-    || null;
-
-  const availableModels = selectedProvider ? effortAwareModelOptions(selectedProvider, job.model) : [];
-  const effortLevels = selectedProvider ? effortLevelsForProvider(selectedProvider, job.model) : null;
-  const showEffort = Boolean(effortLevels && effortLevels.length > 0);
-
-  const handleModelChange = (modelVal) => {
-    const nextModel = modelVal || null;
-    let nextEffort = job.effort || null;
-    if (job.effort && selectedProvider) {
-      const surviving = effortSurvivingModel(selectedProvider, nextModel, job.effort);
-      nextEffort = surviving || null;
-    }
-    onChange({ ...job, model: nextModel, effort: nextEffort });
-  };
+  // Switching the referenced task rebuilds the reference (and re-targets it),
+  // but KEEPS the step's own choices — its name, order, run-once flag and
+  // overrides are the user's, not the task's.
+  const pickTask = (picked) => onChange({
+    ...job,
+    ...stepFromTaskEntry(picked, { id: job.id }),
+    enabled: job.enabled !== false,
+    label: job.label || '',
+    runOnce: job.runOnce === true,
+    overrides: job.overrides || {},
+  });
 
   return (
     // `bg-port-bg`, not `bg-port-bg/40`: a step sits INSIDE the family card, so
@@ -128,15 +122,16 @@ export default function JobRow({
         <input
           className={`${inputClass} flex-1 min-w-40 mt-0`}
           value={job.label || ''}
-          placeholder={spec ? `Step name (defaults to “${spec.label}”)` : 'Step name'}
+          placeholder={`Step name (defaults to “${summary}”)`}
           aria-label={`Name for step ${index + 1}`}
           onChange={(event) => onChange({ ...job, label: event.target.value })}
         />
         {!isExpanded && (
           <span className="text-xs text-gray-400 truncate max-w-xs">
-            {spec?.label || job.jobType}
-            {job.model ? ` · ${job.model}` : ''}
-            {job.effort ? ` · ${job.effort}` : ''}
+            {summary}
+            {targetName ? ` · ${targetName}` : ''}
+            {job.overrides?.model ? ` · ${job.overrides.model}` : ''}
+            {job.overrides?.effort ? ` · ${job.overrides.effort}` : ''}
             {job.runOnce ? ' · run once' : ''}
           </span>
         )}
@@ -144,7 +139,11 @@ export default function JobRow({
           <div className="flex items-center gap-1">
             <button type="button" className={`${actionButtonClass} text-gray-400 hover:text-white disabled:opacity-30`} disabled={index === 0} onClick={() => onMove(index, -1)} aria-label={`Move step ${index + 1} earlier`}><ArrowUp size={14} /></button>
             <button type="button" className={`${actionButtonClass} text-gray-400 hover:text-white disabled:opacity-30`} disabled={index === total - 1} onClick={() => onMove(index, 1)} aria-label={`Move step ${index + 1} later`}><ArrowDown size={14} /></button>
-            {runArmed ? (
+            {/* An unavailable step has NO run affordance at all — not a disabled
+                one. The server would decline the dispatch, so offering the
+                button (even greyed) invites a click whose only outcome is a
+                toast; the reason below is the actionable thing. */}
+            {unavailable ? null : runArmed ? (
               // `warning`, not `error`: forcing a run is expensive-but-safe, and
               // it must not look identical to the delete confirm beside it.
               <ConfirmButtonPair
@@ -159,14 +158,14 @@ export default function JobRow({
                 onCancel={() => setRunArmed(false)}
               />
             ) : (
-              <button type="button" className={`${actionButtonClass} text-port-accent hover:text-white disabled:opacity-30`} disabled={actionsBusy} onClick={() => { setArmed(false); setRunArmed(true); }} aria-label={`Run step ${index + 1} now`} title="Run this job now, ignoring the reset window (asks to confirm)"><Play size={14} /></button>
+              <button type="button" className={`${actionButtonClass} text-port-accent hover:text-white disabled:opacity-30`} disabled={actionsBusy} onClick={() => { setArmed(false); setRunArmed(true); }} aria-label={`Run step ${index + 1} now`} title={actionsBusy ? 'Saving your changes…' : 'Run this job now, ignoring the reset window (asks to confirm)'}><Play size={14} /></button>
             )}
           </div>
           <div className="ml-2 border-l border-port-border/50 pl-2">
             {armed ? (
               <ConfirmButtonPair
-                prompt="Discards its prompt."
-                confirmText="Delete"
+                prompt="Removes the step, not the task."
+                confirmText="Remove"
                 confirmIcon={Trash2}
                 cancelText="Cancel"
                 ariaLabel={`Confirm removing step ${index + 1}`}
@@ -181,61 +180,63 @@ export default function JobRow({
         </div>
       </div>
 
+      {/* Stated whether or not the row is expanded: an unrunnable step is the
+          reason a whole family stops burning, and it must not be hidden behind a
+          chevron. */}
+      {unavailable && (
+        <p role="status" className="flex flex-wrap items-start gap-1 text-[11px] text-amber-300">
+          <AlertTriangle size={12} className="mt-0.5 shrink-0" aria-hidden="true" />
+          <span className="break-words">
+            Cannot run — {unavailable.reason || unavailable.code}. Pick another scheduled task below, or fix it in Scheduled Tasks.
+          </span>
+        </p>
+      )}
+
       {isExpanded && (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label htmlFor={`${idPrefix}-type`} className="block text-xs text-gray-400">
-              Job type
-              <select
-                id={`${idPrefix}-type`}
-                className={inputClass}
-                value={job.jobType}
-                // Params are CARRIED, not cleared. Each job type reads only its own
-                // keys (the server's normalizer keeps any scalar), so a stray click
-                // through the type picker no longer silently destroys a long work
-                // prompt — switching back restores it.
-                onChange={(event) => onChange({ ...job, jobType: event.target.value })}
-              >
-                {catalog.jobTypes.map((type) => <option key={type.id} value={type.id}>{type.label}</option>)}
-              </select>
-            </label>
-            <label htmlFor={`${idPrefix}-model`} className="block text-xs text-gray-400">
-              Model (optional)
-              <select
-                id={`${idPrefix}-model`}
-                className={inputClass}
-                value={job.model || ''}
-                onChange={(event) => handleModelChange(event.target.value)}
-              >
-                <option value="">Default model</option>
-                {availableModels.map((m) => {
-                  const val = typeof m === 'string' ? m : m.id;
-                  const lbl = typeof m === 'string' ? m : (m.name || m.id);
-                  return <option key={val} value={val}>{lbl}</option>;
-                })}
-                {job.model && !availableModels.some((m) => (typeof m === 'string' ? m : m.id) === job.model) && (
-                  <option value={job.model}>{job.model}</option>
-                )}
-              </select>
-            </label>
-            {showEffort && (
-              <label htmlFor={`${idPrefix}-effort`} className="block text-xs text-gray-400">
-                Thinking effort (optional)
-                <EffortSelect
-                  id={`${idPrefix}-effort`}
-                  provider={selectedProvider}
-                  model={job.model}
-                  value={job.effort || ''}
-                  onChange={(effort) => onChange({ ...job, effort: effort || null })}
+            <TaskRefPicker
+              id={`${idPrefix}-task`}
+              label="Scheduled task"
+              groups={taskGroups}
+              value={taskRefKey(job.taskRef)}
+              onPick={pickTask}
+              hint="Burn steps run work you already defined in Scheduled Tasks or System Tasks — they never edit it."
+            />
+            {/* Only a type that acts on ONE managed app gets a target: an
+                install-wide type sweeps every app in one dispatch, and a
+                programmatic type acts on PortOS's own records — the server
+                rejects a request from either that names an app. */}
+            {entry && taskEntryNeedsApp(entry) && (
+              <label htmlFor={`${idPrefix}-app`} className="block text-xs text-gray-400">
+                Target app
+                <select
+                  id={`${idPrefix}-app`}
                   className={inputClass}
-                />
+                  value={job.taskRef?.appId || ''}
+                  onChange={(event) => onChange({
+                    ...job,
+                    taskRef: { ...job.taskRef, appId: event.target.value || null },
+                  })}
+                >
+                  <option value="">Select an app…</option>
+                  {targetApps.map((app) => <option key={app.id} value={app.id}>{app.name}</option>)}
+                </select>
+                {targetApps.length === 0 && (
+                  <span className="mt-1 block text-[11px] text-amber-300">
+                    No managed app has this task enabled — turn it on in the app’s Automation tab first.
+                  </span>
+                )}
               </label>
             )}
-            {/* The repeat/one-shot choice. The plan is a rotation the runner walks
-                lap after lap while the window still has quota, which is right for a
-                standing audit and wrong for work that only needs doing once — that
-                was simply re-done every lap. */}
-            <div className="text-xs text-gray-400">
+            {entry && !taskEntryNeedsApp(entry) && (
+              <p className="self-end text-[11px] text-gray-500">
+                {entry.programmatic
+                  ? 'PortOS runs this task itself, against its own records — there is no app to target.'
+                  : 'Runs install-wide: one dispatch sweeps every managed app.'}
+              </p>
+            )}
+            <div className="text-xs text-gray-400 sm:col-span-2">
               <div className="flex items-center gap-2 mt-1">
                 <input
                   id={`${idPrefix}-run-once`}
@@ -251,47 +252,17 @@ export default function JobRow({
                   : 'Repeats every lap of the plan while the window still has quota.'}
               </p>
             </div>
-            <PresetPicker
-              id={`${idPrefix}-preset`}
-              label="Start from a preset (optional)"
-              presets={catalog.presets}
-              // Deliberately NOT filtered to this row's current job type. Filtering
-              // hid the control entirely on a non-agent row, so converting an
-              // existing step into an audit meant deleting and re-adding it — and
-              // the conversion is safe: params carry across the type switch and
-              // existing prompt text is confirmed before it is replaced.
-              hint="Fills the work prompt below with a ready-made single-focus audit that files issues and changes no code."
-              value={matchedPreset?.id || ''}
-              // Re-picking the preset the row already matches is a no-op, so it
-              // needs no "replace your text?" confirm — the text IS the preset's.
-              onPick={(preset) => (hasPromptText && preset.id !== matchedPreset?.id
-                ? setPendingPreset(preset)
-                : applyPreset(preset))}
-            />
-            {(spec?.params || []).map((descriptor) => (
-              <JobParamField
-                key={descriptor.key}
-                descriptor={descriptor}
-                value={job.params?.[descriptor.key]}
-                options={optionsFor(descriptor)}
-                idPrefix={idPrefix}
-                onChange={setParam}
-              />
-            ))}
           </div>
 
-          {pendingPreset && (
-            <InlineConfirmRow
-              tone="warning"
-              question={`Replace this step's work prompt with the “${pendingPreset.label}” preset? Your current text is discarded.`}
-              confirmText="Replace"
-              cancelText="Keep mine"
-              onConfirm={() => applyPreset(pendingPreset)}
-              onCancel={() => setPendingPreset(null)}
-            />
-          )}
+          <StepSettings
+            job={job}
+            entry={entry}
+            providers={providers}
+            idPrefix={idPrefix}
+            onChange={onChange}
+          />
 
-          {spec?.description && <p className="text-[11px] text-gray-500">{spec.description}</p>}
+          {entry?.description && <p className="text-[11px] text-gray-500">{entry.description}</p>}
         </>
       )}
 

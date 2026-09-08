@@ -1,3 +1,4 @@
+vi.mock('../instances.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
 /**
  * Postgres-backed round-trip for the Creative Director DB store.
  *
@@ -71,6 +72,49 @@ describe.skipIf(!runDb)('projectsDB round-trip', () => {
       await query(`DELETE FROM creative_director_projects WHERE id = $1`, [id]).catch(() => {});
     }
     await close();
+  });
+
+  it('persists owner review mutations and reloads duplicate actions without another change', async () => {
+    const p = await db.createProject({ ...CREATE_INPUT, workspace: 'video', targetDurationSeconds: 60 });
+    created.push(p.id);
+    const next = await db.mutateVideoProject(p.id, current => ({ project: { ...current,
+      videoReview: { feedback: [{ stage: 'script-shot-plan', action: 'feedback', rating: 'up', revision: 'example-revision' }] },
+    }, result: true }));
+    expect(next.result).toBe(true);
+    expect((await db.getProject(p.id)).videoReview.feedback[0].rating).toBe('up');
+    const duplicate = await db.mutateVideoProject(p.id, current => ({ project: current, result: false, skipPersist: true }));
+    expect(duplicate.result).toBe(false);
+    expect(duplicate.project.videoOwnerInstanceId).toBe('example-owner');
+  });
+
+  it('persists Video draft preferences and prevents removing the workspace barrier', async () => {
+    const p = await db.createProject({
+      name: 'Example short', workspace: 'video', modelId: '', aspectRatio: '16:9',
+      quality: 'draft', targetDurationSeconds: 60,
+    });
+    created.push(p.id);
+    expect(p.videoDraft.checkpoints).toEqual(['script-shot-plan', 'references', 'rough-cut', 'final-cut']);
+    const videoDraft = {
+      ...p.videoDraft, durationRange: { min: 60, max: 180 },
+      sources: [{ kind: 'universe', id: 'example-universe', revision: 'r1' }],
+      audio: { providerId: 'example-audio', model: 'example-model' },
+    };
+    await db.updateProject(p.id, { userStory: 'Example brief', videoDraft });
+    expect(await db.getProject(p.id)).toMatchObject({
+      id: p.id, workspace: 'video', status: 'draft', userStory: 'Example brief', videoDraft,
+    });
+    await expect(db.updateProject(p.id, { workspace: undefined })).rejects.toThrow('workspace cannot be changed');
+  });
+
+  it('round-trips and clears cognitive effort through create and patch', async () => {
+    const pin = { providerId: 'example-agent', model: 'example-model', effort: 'high' };
+    const p = await db.createProject({ ...CREATE_INPUT, modelOverrides: { plan: pin } });
+    created.push(p.id);
+    expect((await db.getProject(p.id)).modelOverrides.plan).toEqual(pin);
+    await db.updateProject(p.id, { modelOverrides: { plan: { ...pin, effort: null } } });
+    expect((await db.getProject(p.id)).modelOverrides.plan).toEqual({ providerId: pin.providerId, model: pin.model });
+    await db.updateProject(p.id, { modelOverrides: {} });
+    expect((await db.getProject(p.id)).modelOverrides).toEqual({});
   });
 
   it('creates, reads back, and lists a project (lossless shape)', async () => {

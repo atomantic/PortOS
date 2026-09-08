@@ -18,17 +18,23 @@
 // names are the canonical PortOS-wide schemas.
 export * from './appDeployFlags.js';
 export * from './apiContractSchemas.js';
+export * from './autonomousJobTask.js';
 export * from './asyncApiSpec.js';
 export * from './avatarVariants.js';
+export * from './avatarStyles.js';
 export * as agentValidation from './agentValidation.js';
 export * as agentContextValidation from './agentContextValidation.js';
 export * as appleHealthValidation from './appleHealthValidation.js';
 export * as brainValidation from './brainValidation.js';
 export * as catalogValidation from './catalogValidation.js';
+export * as characterAugmentValidation from './characterAugmentValidation.js';
+export * as characterEvolutionValidation from './characterEvolutionValidation.js';
 export * as cosValidation from './cosValidation.js';
 export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
 export * as creativeDirectorValidation from './creativeDirectorValidation.js';
+// The brief/goal caps both schemas above and the browser forms share, as a pure leaf.
+export * from './creativeBriefLimits.js';
 export * as digitalTwinValidation from './digitalTwinValidation.js';
 export * as eidoverseValidation from './eidoverseValidation.js';
 export * as fableLoomValidation from './fableLoomValidation.js';
@@ -109,6 +115,19 @@ export * from './storyBuilderIntegrity.js';
 export * from './storyBuilderSteps.js';
 export * from './streamLines.js';
 export * from './taskDataInputCatalog.js';
+// The canon field caps storyBible.js sanitizes against, as a pure leaf.
+export * from './bibleLimits.js';
+// The optional five-stage character evolution lens, as a pure leaf.
+export * from './characterEvolution.js';
+export * from './characterEvolutionCoverage.js';
+// The narrative-character framework field list, as a pure leaf — storyBible.js
+// re-exports CHARACTER_ARC_TYPES from here, so keep this flat export ahead of
+// the namespaced storyBible below.
+export * from './characterFramework.js';
+export * from './characterIntegrity.js';
+// The cast-integrity vocabulary characterIntegrity.js reports in, as a pure leaf.
+export * from './characterIntegrityVocabulary.js';
+export * from './castIntegrityPrompt.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';
@@ -128,6 +147,7 @@ export * from './ansiStrip.js';
 // barrel's duplicate-identifier collision check.
 export * as antigravity from './antigravity.js';
 export * as childProcess from './childProcess.js';
+export * from './callerModePolicy.js';
 export * from './cliChildEnv.js';
 export * from './agentExecutionProfiles.js';
 export * from './localEndpoint.js';
@@ -167,6 +187,7 @@ export * from './videoSpeedProfiles.js';
 export * from './videoModeProfiles.js';
 export * from './videoDurationProfiles.js';
 export * from './videoReferenceModes.js';
+export * from './videoStreamingMode.js';
 export * from './videoTextEncoders.js';
 export * from './promptFencing.js';
 export * from './promptPartials.js';
@@ -186,8 +207,11 @@ export * from './providerTranscriptUsage.js';
 // duplicate-identifier collision check.
 export * as reviewerConfig from './reviewerConfig.js';
 export * from './quotaBurnConfig.js';
+export * from './quotaBurnLegacyConversion.js';
+export * from './quotaBurnOrigin.js';
 export * from './quotaBurnPresets.js';
 export * from './auditCatalog.js';
+export * from './quotaBurnTaskRef.js';
 export * from './quotaBurnValidation.js';
 export * from './quotaReset.js';
 export * from './quotaWindows.js';
@@ -234,8 +258,10 @@ export * as fileUtils from './fileUtils.js';
 export * from './fileWriteQueue.js';
 export * from './forgeIssueState.js';
 export * from './portosEnv.js';
+export * from './portosRootPlaceholder.js';
 export * from './homePath.js';
 export * from './jsonIo.js';
+export * from './settingsStore.js';
 export * from './mimeTypes.js';
 export * from './pathContainment.js';
 export * from './paths.js';
@@ -268,9 +294,14 @@ export * from './persistentMind.js';
 export * from './persistentMindCapabilities.js';
 export * from './persistentMindTrajectory.js';
 export * from './persistentMindProfile.js';
+export * from './persistentMindMemory.js';
 export * from './persistentMindPrompt.js';
+export * from './persistentMindPlaybook.js';
+export * from './mindLocalContextClamp.js';
 export * from './persistentMindPublic.js';
 export * from './persistentMindThinkingPresets.js';
+export * from './persistentMindChosenName.js';
+export * from './persistentMindUsageLimit.js';
 export * from './agentScratchPaths.js';
 export * from './agentSentinel.js';
 export * from './bareUrl.js';
@@ -306,6 +337,7 @@ export * from './pythonSetup.js';
 export * from './vttTranscript.js';
 export * as youtubeIngestFormat from './youtubeIngestFormat.js';
 export * from './youtubeUrl.js';
+export * from './youtubeUrlAssert.js';
 export * from './ytdlp.js';
 
 // === Networking ===
@@ -321,6 +353,7 @@ export * from './httpsState.js';
 export * from './isSafeHref.js';
 export * from './networkExposure.js';
 export * from './peerHttpClient.js';
+export * from './peerProbeDiagnostics.js';
 export * from './peerSelfHost.js';
 export * from './peerUrl.js';
 export * from './pinterestFeed.js';
@@ -330,6 +363,8 @@ export * from './sharingOrigin.js';
 export * from './syncIntegrity.js';
 export * from './syncWire.js';
 export * from './tailscale.js';
+export * from './tailcatAddress.js';
+export * from './tailcatVersion.js';
 
 // === Search & indexing ===
 export * from './bm25.js';
@@ -349,6 +384,7 @@ export * from './taskBlockCategories.js';
 export * from './taskRequeue.js';
 export * from './taskRetryHold.js';
 export * from './taskTargetBranch.js';
+export * from './taskTargetScope.js';
 export * from './taxonomyTally.js';
 export * from './worktreeOwnership.js';
 export * from './xmlEntities.js';
@@ -360,6 +396,7 @@ export * from './songCraftRef.js';
 // === Domain utilities ===
 export * from './appIdentity.js';
 export * from './appResolver.js';
+export * from './autonomousJobIntervals.js';
 export * from './capabilityMap.js';
 export * from './chiptuneRender.js';
 export * from './chiptuneScore.js';
@@ -367,6 +404,7 @@ export * from './civitai.js';
 export * from './huggingfaceLora.js';
 export * from './huggingfaceModel.js';
 export * from './localLlmCatalog.js';
+export * from './localPersistentMindRecommendation.js';
 export * from './modelAbuseGuard.js';
 export * from './localLlmDisk.js';
 export * from './specDecodePresets.js';
@@ -398,6 +436,14 @@ export * from './providerFamilies.js';
 export * from './fleetQuotas.js';
 export * from './harnessOutput.js';
 export * from './providerGateways.js';
+export * from './providerHarnesses.js';
+export * from './providerContextWindows.js';
+export * from './providerConnections.js';
+export * from './providerGraphPreview.js';
+export * from './providerGraphRecords.js';
+export * from './providerModelAliases.js';
+export * from './providerRouteRecipes.js';
+export * from './providerRouteSettings.js';
 export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
 export * from './postAdaptive.js';
@@ -417,6 +463,7 @@ export * from './renderSlot.js';
 export * from './renderTargets.js';
 export * from './renderTiming.js';
 export * from './generationModes.js';
+export * from './imageGenCapabilities.js';
 export * from './spriteVocabulary.js';
 export * from './spriteChromaKey.js';
 export * from './spriteAnimationTracks.js';
@@ -441,6 +488,7 @@ export * from './pgTools.js';
 export * from './platform.js';
 export * from './systemCapabilities.js';
 export * from './ports.js';
+export * from './portosUrls.js';
 export * from './signalCrypto.js';
 export * from './timezone.js';
 export * from './tribeCadence.js';
@@ -450,6 +498,7 @@ export * from './viteAllowedHosts.js';
 // === General utilities ===
 export * from './apiAccessPolicy.js';
 export * from './apiCatalog.js';
+export * from './apiRouteGraph.js';
 export * from './socketEventCatalog.js';
 export * from './sourceScan.js';
 export * from './apiOperationContracts.js';
@@ -509,6 +558,7 @@ export * from './userActionTypes.js';
 export * from './uuid.js';
 export * from './versionUtils.js';
 export * from './workTracker.js';
+export * from './eidoverseProxyRoutes.js';
 export * from './workspaceRoots.js';
 export * from './zodCompat.js';
 
@@ -528,3 +578,14 @@ export * from './eidoverseCitySurface.js';
 export * from './fableLoomShots.js';
 export * from './eidoverseIslandLandscape.js';
 export * from './pi.js';
+
+export * from './localModelSafety.js';
+
+export * from './privateSecurityPolicy.js';
+
+export * from './privateSecuritySandbox.js';
+
+export * from './requestOrigin.js';
+export * from './cosFederationPolicy.js';
+export * from './creativeDirectorVideoReview.js';
+export * from './creativeDirectorVideoCompiler.js';

@@ -184,10 +184,9 @@ describe('Settings routes — instance feature participation', () => {
       enabled: false,
       setup: expect.objectContaining({ installed: false }),
     }));
-    // GSD remains enabled by default so existing app planning tabs stay
-    // available unless the install explicitly opts out.
-    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: true }));
-    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'openclaw', enabled: true }));
+    // GSD and OpenClaw ship disabled by default; the install opts in.
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: false }));
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'openclaw', enabled: false }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'health', enabled: true }));
   });
 
@@ -787,3 +786,35 @@ describe('Settings routes — orchestration profiles (#5992)', () => {
   });
 });
 
+
+it('accepts only registered private keys and never returns the submitted secret', async () => {
+  const { getCredentialInventory } = await import('../services/credentialInventory.js');
+  getCredentialInventory.mockResolvedValue({ credentials: [{ id: 'artificial-analysis', configured: true, source: 'settings', editable: true }] });
+  const app = buildApp();
+  const result = await request(app).put('/api/settings/credentials/artificial-analysis').send({ value: 'example-private-key' });
+  expect(result.status).toBe(200);
+  expect(result.body).toMatchObject({ configured: true });
+  expect(JSON.stringify(result.body)).not.toContain('example-private-key');
+  expect(store.secrets.artificialAnalysis.apiKey).toBe('example-private-key');
+  const publicSettings = await request(app).get('/api/settings');
+  expect(JSON.stringify(publicSettings.body)).not.toContain('example-private-key');
+  expect((await request(app).put('/api/settings/credentials/auth').send({ value: 'example' })).status).toBe(400);
+  expect((await request(app).put('/api/settings/credentials/civitai').send({ value: {}, extra: true })).status).toBe(400);
+  await request(app).put('/api/settings/credentials/artificial-analysis').send({ value: '' });
+  expect(store.secrets.artificialAnalysis.apiKey).toBe('');
+});
+
+describe('Settings routes — optional networking preference', () => {
+  beforeEach(() => { store = {}; vi.clearAllMocks(); });
+  it('persists all supported choices and rejects invalid preferences without replacing the saved choice', async () => {
+    for (const networkSetupPreference of ['tailscale', 'tailcat', 'none']) {
+      const saved = await request(buildApp()).put('/api/settings').send({ networkSetupPreference });
+      expect(saved.status).toBe(200);
+      const loaded = await request(buildApp()).get('/api/settings');
+      expect(loaded.body.networkSetupPreference).toBe(networkSetupPreference);
+    }
+    const invalid = await request(buildApp()).put('/api/settings').send({ networkSetupPreference: 'invalid' });
+    expect(invalid.status).toBe(400);
+    expect(store.networkSetupPreference).toBe('none');
+  });
+});

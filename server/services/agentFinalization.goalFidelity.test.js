@@ -82,6 +82,9 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
 
 import { finalizeAgent } from './agentFinalization.js';
 import { cosEvents } from './cosEvents.js';
+import { completeAgentRun } from './agentRunTracking.js';
+import { resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
+import { getTaskOutputHook, isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
 import { GOAL_FIDELITY_CATEGORY, GOAL_FIDELITY_HOLD_EVENT } from '../lib/goalFidelity.js';
 
 const verdict = (overrides = {}) => ({
@@ -94,6 +97,61 @@ const verdict = (overrides = {}) => ({
   unrequested: [],
   evidence: 'the suite was run',
   ...overrides,
+});
+
+describe('finalizeAgent — private report delivery', () => {
+  const finishPrivate = () => finalize({
+    task: { id: 'private-task', taskType: 'internal', metadata: { analysisType: 'private-security-assessment' } },
+    workspacePath: null,
+    runId: 'private-run',
+    outputBuffer: 'synthetic private evidence',
+  });
+
+  beforeEach(() => {
+    resolveTaskHookType.mockReturnValue('private-security-assessment');
+    isProgrammaticIoTaskType.mockReturnValue(true);
+    resolveFailedTaskUpdate.mockResolvedValue({ status: 'blocked' });
+  });
+
+  it('records success only after the report hook accepts delivery', async () => {
+    getTaskOutputHook.mockResolvedValue(async () => ({ accepted: true, reportId: 'report-example' }));
+    expect(await finishPrivate()).toMatchObject({ success: true });
+    expect(completion()).toMatchObject({ success: true, validationPassed: true });
+    expect(updateTaskMock).toHaveBeenCalledWith('private-task', { status: 'completed' }, 'internal');
+    expect(completeAgentRun).toHaveBeenCalledWith('private-run', 'Private security assessment: see the local Review Hub report.', 0, 1000, null, null);
+    expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing hook', null],
+    ['missing acceptance', async () => ({})],
+    ['invalid report', async () => ({ accepted: false, permanent: true, reason: 'private-security-report-missing-or-invalid' })],
+    ['report storage failure', async () => { throw new Error('synthetic storage unavailable'); }],
+  ])('blocks an exit-zero private run on %s and records the same failed run verdict', async (_label, hook) => {
+    getTaskOutputHook.mockResolvedValue(hook);
+    expect(await finishPrivate()).toMatchObject({ success: false });
+    expect(completion()).toMatchObject({ success: false, validationPassed: false });
+    expect(updateTaskMock).toHaveBeenCalledWith('private-task', { status: 'blocked' }, 'internal');
+    expect(completeAgentRun).toHaveBeenCalledWith('private-run', 'Private security assessment report was not verified; inspect the local assessment archive.', 0, 1000, expect.any(Object), false);
+  });
+
+  it('fails closed when report delivery outlives the completion timeout', async () => {
+    vi.useFakeTimers();
+    let settle;
+    getTaskOutputHook.mockResolvedValue(() => new Promise(resolve => { settle = resolve; }));
+    try {
+      const finished = finishPrivate();
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(await finished).toMatchObject({ success: false });
+      expect(updateTaskMock).toHaveBeenCalledWith('private-task', { status: 'blocked' }, 'internal');
+      expect(completeAgentRun.mock.calls[0][5]).toBe(false);
+      settle({ accepted: true, reportId: 'late-report' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(updateTaskMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 const finalize = (overrides = {}) => finalizeAgent({
@@ -115,6 +173,13 @@ const completion = () => completeAgentMock.mock.calls[0][1];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getTaskOutputHook.mockResolvedValue(null);
+  isProgrammaticIoTaskType.mockReturnValue(false);
+  resolveTaskHookType.mockImplementation(task => task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null);
+  resolveFailedTaskUpdate.mockImplementation(async (_task, analysis) => ({
+    status: 'pending',
+    metadata: { lastErrorCategory: analysis?.category || null },
+  }));
   getGoalFidelityConfigMock.mockResolvedValue({ enabled: true, backend: 'ollama', model: 'example-model', effort: null });
   runWindowDiffMock.mockResolvedValue({ diff: 'diff --git a/a.js b/a.js', base: 'abc', truncated: false, reason: null });
   runLocalGoalFidelityReviewMock.mockResolvedValue(verdict());
@@ -128,6 +193,27 @@ describe('finalizeAgent — goal-fidelity gate', () => {
     expect(args.objective).not.toContain('done');
     expect(args.diff).toBe('diff --git a/a.js b/a.js');
     expect(args.backend).toBe('ollama');
+  });
+
+  it.each([
+    { swarmCount: 3, analysisType: 'claim-issue' },
+    { swarmCount: '3', analysisType: 'claim-issue-gitlab' },
+    { analysisType: 'branch-reconcile' },
+  ])('skips coordinator review before reading a diff or calling a model: %j', async metadata => {
+    runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink' }));
+    await finalize({ task: { id: 'task-1', taskType: 'internal', description: 'Complete the batch', metadata } });
+    expect(completion()).toMatchObject({ success: true });
+    expect(completion().goalFidelity).toBeUndefined();
+    expect(runWindowDiffMock).not.toHaveBeenCalled();
+    expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+    expect(cosEvents.emit).not.toHaveBeenCalledWith(GOAL_FIDELITY_HOLD_EVENT, expect.anything());
+    expect(updateTaskMock).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'internal');
+  });
+
+  it.each([0, 1, undefined])('still judges single-issue claims with swarmCount %s', async swarmCount => {
+    await finalize({ task: { id: 'task-1', description: 'Fix the uploader', metadata: { analysisType: 'claim-issue', swarmCount } } });
+    expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledOnce();
+    expect(completion().goalFidelity).toMatchObject({ verdict: 'ship' });
   });
 
   it('records a passing verdict without disturbing the run — absence is what means "never judged"', async () => {

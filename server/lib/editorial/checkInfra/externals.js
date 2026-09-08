@@ -10,7 +10,7 @@
 import { z } from 'zod';
 import { estimateTokens } from '../../contextBudget.js';
 import { CREATIVE_LATITUDE_TOKENS } from '../../creativeLatitude.js';
-import { renderCharacterArcsForPrompt } from '../../seriesCharacterArc.js';
+import { renderCharacterArcsForPrompt, renderCharacterEvolutionsForPrompt } from '../../seriesCharacterArc.js';
 import { parseComicScript } from '../../comicScriptParser.js';
 import {
   analyzeComicLettering,
@@ -29,6 +29,7 @@ import {
   findPassiveVoice,
   filterPassiveVoice,
   findGestures,
+  tokenizeWords,
 } from '../proseTics.js';
 import {
   findWordEchoes,
@@ -107,8 +108,10 @@ export {
   paragraphLengthUniformity,
   parseComicScript,
   renderCharacterArcsForPrompt,
+  renderCharacterEvolutionsForPrompt,
   splitScenes,
   summarizeStoryboardShots,
+  tokenizeWords,
   transitionOpenerRatio,
   canonHasRevealGated,
   revealGatedCanonRows,

@@ -18,6 +18,14 @@ vi.mock('./huggingFaceRepoCache.js', () => ({
   writeCachedRepoModel: vi.fn(async () => {})
 }))
 
+// `getHfToken()` reads a stored token from settings before falling back to the
+// env vars this file stubs — without this mock, a dev machine with a real HF
+// token saved in Settings silently outranks `vi.stubEnv`, corrupting the
+// Authorization header the auth-gated-repo tests assert on.
+vi.mock('./settings.js', () => ({
+  getSettings: vi.fn(async () => ({}))
+}))
+
 const response = (body, ok = true) => ({
   ok,
   status: ok ? 200 : 500,
@@ -635,6 +643,8 @@ describe('huggingFaceCatalog', () => {
         [(u) => u.includes('blobs=true'), mlxBlobs(repo, {
           'model-00001-of-00002.safetensors': 9_000_000_000,
           'model-00002-of-00002.safetensors': 9_000_000_000,
+          '8-bit/model.safetensors': 30_000_000_000,
+          'mtp/model.safetensors': 2_000_000_000,
         })],
       ]))
 

@@ -89,3 +89,120 @@ export const getFleetLlmHost = (options) => request('/providers/fleet-host', opt
 export const revealFleetLlmHostKey = (options) => request('/providers/fleet-host/key', { method: 'POST', ...options });
 export const getFleetPeerHosts = (options) => request('/providers/fleet-peer-hosts', options);
 export const revealFleetPeerHostKey = (peerId, options) => request(`/providers/fleet-peer-hosts/${encodeURIComponent(peerId)}/key`, { method: 'POST', ...options });
+
+// --- provider connection graph management (#6369) ----------------------------
+// The MANAGEMENT surface, separate from the flat `/providers` execution list
+// above. Every response here is credential-free: a connection reports whether
+// it `hasCredentials`, never the secret, and no projection snapshot is exposed.
+
+/**
+ * Whether a failed management call means "this server has no management API"
+ * rather than "the call failed".
+ *
+ * Only two answers count, and both are the server saying so explicitly: a 404
+ * (an older build with no such route) and the graph's own
+ * `PROVIDER_GRAPH_UNAVAILABLE` 503. A timeout, a 500 or an offline server is
+ * NOT an unsupported server — treating it as one would quietly downgrade a
+ * working install to the legacy view and hide a real outage.
+ */
+export const isManagementUnsupported = (error) =>
+  error?.status === 404 || error?.code === 'PROVIDER_GRAPH_UNAVAILABLE';
+
+/** The durable graph: connections, harness bindings and executable routes. */
+export const getProviderManagementGraph = (options) => request('/providers/management', options);
+
+/**
+ * Create a new backend. Nothing is probed and no route is minted — a
+ * connection with no binding is a legitimate row you then attach a harness to.
+ */
+export const createProviderConnection = (body, options) => request('/providers/connections', {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+/**
+ * Add a harness to an existing backend, minting one executable route per
+ * requested mode from that harness's command recipe.
+ *
+ * Every minted route arrives DISABLED with no model pins: creating a route is a
+ * management act, and granting it execution stays a separate, explicit edit on
+ * the route editor.
+ */
+export const createProviderBinding = (body, options) => request('/providers/bindings', {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+/** What linking this binding onto another connection would change. Read-only. */
+export const previewProviderBindingLink = (bindingId, body, options) => request(
+  `/providers/bindings/${encodeURIComponent(bindingId)}/link/preview`,
+  { method: 'POST', body: JSON.stringify(body), ...options },
+);
+
+/** Apply a reviewed link. Every revision named in `body` is re-checked server-side. */
+export const linkProviderBinding = (bindingId, body, options) => request(
+  `/providers/bindings/${encodeURIComponent(bindingId)}/link`,
+  { method: 'POST', body: JSON.stringify(body), ...options },
+);
+
+/** Give this binding its own copy of the connection it shares. Route ids are kept. */
+export const unlinkProviderBinding = (bindingId, body, options) => request(
+  `/providers/bindings/${encodeURIComponent(bindingId)}/unlink`,
+  { method: 'POST', body: JSON.stringify(body ?? {}), ...options },
+);
+
+/**
+ * Edit one shared backend. `expectedRevision` is required; a 409
+ * `PROVIDER_GRAPH_STALE_REVISION` means the row moved and the edit must be
+ * re-made against a fresh read. Omit a credential key to preserve it, send
+ * `null` to clear it — never send back the redacted placeholder.
+ */
+export const updateProviderConnection = (connectionId, body, options) => request(
+  `/providers/connections/${encodeURIComponent(connectionId)}`,
+  { method: 'PATCH', body: JSON.stringify(body), ...options },
+);
+
+/** Probe the shared model catalog once for every harness on this connection. */
+export const refreshProviderConnectionModels = (connectionId, options) => request(
+  `/providers/connections/${encodeURIComponent(connectionId)}/refresh-models`,
+  { method: 'POST', ...options },
+);
+
+/** Edit a binding's label and the subset of the shared catalog it offers. */
+export const updateProviderBinding = (bindingId, body, options) => request(
+  `/providers/bindings/${encodeURIComponent(bindingId)}`,
+  { method: 'PATCH', body: JSON.stringify(body), ...options },
+);
+
+/** Delete a connection no binding uses. Refused with a 409 while one still does. */
+export const deleteProviderConnection = (connectionId, options) => request(
+  `/providers/connections/${encodeURIComponent(connectionId)}`,
+  { method: 'DELETE', ...options },
+);
+
+/**
+ * Edit ONE route's mode overrides — args, timeout, effort, model pins.
+ *
+ * `expectedRevision` is the route's `settingsRevision` from the management
+ * graph, a fingerprint of the values on disk: a 409 means somebody (or the
+ * route editor in another tab) changed them and the edit must be re-made
+ * against a fresh read. Connection-owned values and the `enabled` flag are not
+ * reachable here — those stay on the connection and the route editor.
+ */
+export const updateProviderRouteSettings = (providerId, body, options) => request(
+  `/providers/routes/${encodeURIComponent(providerId)}`,
+  { method: 'PATCH', body: JSON.stringify(body), ...options },
+);
+
+/**
+ * Edit ONE route's hand-authored canonical→executable model aliases.
+ *
+ * The correction surface for a `modelMap` a refresh could only fill with the
+ * aliases it could verify. `null` for a key removes that override and is the
+ * only thing that does — a refresh rewrites what it observed in a separate
+ * column, so a correction survives it. `expectedRevision` is the route's
+ * `modelAliasRevision` from the management graph; a 409 means the aliases moved
+ * and the edit must be re-made against a fresh read.
+ */
+export const updateProviderRouteModelAliases = (providerId, body, options) => request(
+  `/providers/routes/${encodeURIComponent(providerId)}/model-aliases`,
+  { method: 'PATCH', body: JSON.stringify(body), ...options },
+);

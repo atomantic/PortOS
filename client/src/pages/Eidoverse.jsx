@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
-  ExternalLink,
+  ArrowLeft,
+  Maximize2,
   Orbit,
   RotateCcw,
   Settings,
   SlidersHorizontal,
   Tags,
 } from 'lucide-react';
-import { Link } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import PageHeader from '../components/PageHeader';
 import BrailleSpinner from '../components/BrailleSpinner';
 import useEidoverseFrame from '../hooks/useEidoverseFrame';
@@ -48,21 +49,25 @@ const FRESH_WORLD_VISIBLE_CHECKPOINTS = new Set([
 const failedStart = (result) => Object.values(result?.results || {})
   .find((entry) => entry?.success === false);
 
-// Prefer the PortOS-owned bridge whenever its scheme matches this page's. The
-// bridge answers the renderer's `/embed-config` with this page's origin, which
-// is the only thing that arms the frame bridge — a direct `:uiPort` load leaves
-// the renderer with no trusted parent and it never replies to the handshake.
-// An HTTP page in front of an HTTPS-only bridge is the one case that still goes
-// direct: the shared certificate covers the MagicDNS name, so an iframe pointed
-// at `https://localhost:5563` would fail on the certificate instead. There the
-// scene renders and the handshake stays dormant, as the contract intends.
+// Prefer the same-origin `/eidoverse-host/` path on the PortOS UI host+port.
+// A single-port tailcat forward (e.g. 127.0.0.1:15555 → remote :5555) only
+// tunnels :5555, so a dedicated :5563 iframe URL is unreachable from the
+// laptop; absolute `/ws` and `/version` fetches from the iframe also need to
+// hit that same origin (the main server reverse-proxies them while the host
+// is active). The path mount answers `/embed-config` with this page's full
+// origin (including a non-5555 forward port), which arms the frame handshake.
+//
+// Escape hatch: an HTTP page in front of an HTTPS-only host certificate still
+// cannot load `https://…/eidoverse-host/` when the cert does not cover the
+// hostname in use (loopback mirror / some Vite setups). There we keep the
+// direct `:uiPort` load — scene renders, handshake stays dormant.
 export const hostUrlFor = (host, setup, location = window.location, identity = null) => {
   if (location.protocol === 'https:' && host.protocol !== 'https') {
     throw new Error('PortOS is using HTTPS, but the Eidoverse host could not load the shared certificate.');
   }
-  const baseUrl = location.protocol === 'https:' || host.protocol === 'http'
-    ? `${host.protocol}://${location.hostname}:${host.port}/`
-    : `http://${location.hostname}:${setup.uiPort}/`;
+  const baseUrl = location.protocol === 'http:' && host.protocol === 'https'
+    ? `http://${location.hostname}:${setup.uiPort}/`
+    : `${location.protocol}//${location.host}/eidoverse-host/`;
   if (!identity) return baseUrl;
 
   const url = new URL(baseUrl);
@@ -165,6 +170,10 @@ function reconcileResetAliases(current, submitted, after, reset, sources) {
 }
 
 export default function Eidoverse() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { pathname } = location;
+  const solo = pathname.replace(/\/+$/, '') === '/eidoverse/solo';
   const requestGeneration = useRef(0);
   const configDraftRevision = useRef(0);
   const savedDraftRevision = useRef(0);
@@ -179,6 +188,7 @@ export default function Eidoverse() {
   const [worldState, setWorldState] = useState(null);
   const [worldName, setWorldName] = useState('');
   const [humanName, setHumanName] = useState('');
+  const [cosId, setCosId] = useState('portos-cos');
   const [recipeDraft, setRecipeDraft] = useState(null);
   const [assetOverridesDraft, setAssetOverridesDraft] = useState({});
   const [labelAliasesDraft, setLabelAliasesDraft] = useState({});
@@ -189,8 +199,28 @@ export default function Eidoverse() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [iframeReady, setIframeReady] = useState(false);
 
+  const markConfigDirty = useCallback(() => {
+    configDraftRevision.current += 1;
+    setDraftDirty(true);
+    setConfigStatus((current) => current === 'saving' ? current : '');
+  }, []);
+
+  const stageIdentityRename = useCallback((name) => {
+    markConfigDirty();
+    setHumanName(name);
+    setSettingsOpen(true);
+    const search = new URLSearchParams(location.search);
+    search.set('eidoverseTab', 'experience');
+    navigate({ pathname: location.pathname, search: search.toString() }, { replace: true });
+  }, [location.pathname, location.search, markConfigDirty, navigate]);
+
   const travelRef = useRef(null);
-  const frame = useEidoverseFrame(hostUrl, worldState?.projection?.lastSummary?.objects, (peerId) => travelRef.current?.(peerId));
+  const frame = useEidoverseFrame(
+    hostUrl,
+    worldState?.projection?.lastSummary?.objects,
+    (peerId) => travelRef.current?.(peerId),
+    stageIdentityRename,
+  );
 
   const applyWorldResponse = useCallback((updated, { replaceDraft = true } = {}) => {
     setWorldState((current) => current
@@ -202,6 +232,7 @@ export default function Eidoverse() {
       setLabelAliasesDraft(updated?.design?.labelAliases || {});
       if (updated?.world) setWorldName(updated.world);
       if (updated?.identity?.name || updated?.human?.name) setHumanName(updated.identity?.name || updated.human.name);
+      if (updated?.cos?.id) setCosId(updated.cos.id);
       savedDraftRevision.current = configDraftRevision.current;
       setDraftDirty(false);
     }
@@ -350,12 +381,6 @@ export default function Eidoverse() {
     };
   }, [prepare]);
 
-  const markConfigDirty = useCallback(() => {
-    configDraftRevision.current += 1;
-    setDraftDirty(true);
-    setConfigStatus((current) => current === 'saving' ? current : '');
-  }, []);
-
   const mutateRecipe = useCallback((mutator) => {
     markConfigDirty();
     setRecipeDraft((current) => current ? mutator(current) : current);
@@ -388,6 +413,7 @@ export default function Eidoverse() {
     const updated = await updateEidoverseWorldConfig({
       world: worldName.trim(),
       humanName: humanName.trim() || null,
+      cosId: cosId.trim() || 'portos-cos',
       recipe: recipeDraft,
       assetOverrides: assetOverridesDraft,
       labelAliases: labelAliasesDraft,
@@ -405,7 +431,7 @@ export default function Eidoverse() {
       : hostUrl;
     if (nextHostUrl !== hostUrl) setHostUrl(nextHostUrl);
     else void runProjection().catch(() => {});
-  }, [applyWorldResponse, assetOverridesDraft, labelAliasesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, setupState, worldName]);
+  }, [applyWorldResponse, assetOverridesDraft, cosId, labelAliasesDraft, hostInfo, hostUrl, humanName, recipeDraft, runProjection, setupState, worldName]);
 
   const runConfigAction = useCallback(async (payload) => {
     const submittedRevision = configDraftRevision.current;
@@ -502,19 +528,17 @@ export default function Eidoverse() {
           </button>
         </>
       )}
-      {hostUrl && (
-        <a
-          href={hostUrl}
-          target="_blank"
-          rel="noreferrer"
+      {hostUrl && !solo && (
+        <Link
+          to="/eidoverse/solo"
           aria-label="Open Eidoverse without PortOS controls"
-          title="Open Eidoverse in a separate tab without the PortOS page frame"
+          title="Open Eidoverse fullscreen inside PortOS (same iframe path as this page)"
           className="inline-flex min-h-[40px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-1.5 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white"
         >
-          <ExternalLink size={15} aria-hidden="true" />
+          <Maximize2 size={15} aria-hidden="true" />
           <span className="hidden md:inline">Open Eidoverse alone</span>
           <span className="md:hidden">World only</span>
-        </a>
+        </Link>
       )}
       {appId && (
         <Link
@@ -536,26 +560,8 @@ export default function Eidoverse() {
     && !FRESH_WORLD_VISIBLE_CHECKPOINTS.has(reconciliation.checkpoint);
   const showLoadingCurtain = !iframeReady || freshWorldLighting;
 
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-port-bg">
-      <EidoverseTravel travelRef={travelRef} beforeDeparture={frame.leaveWorld} enabled={Boolean(hostUrl)} objects={worldState?.projection?.lastSummary?.objects || []}
-        onDestinationsChange={() => {
-          if (projectionStatus === 'running' || draftDirty) return false;
-          if (worldState?.recipe?.includes?.peers !== false) void runProjection().catch(() => {});
-          return true;
-        }} />
-      <PageHeader
-        icon={Orbit}
-        title="Eidoverse Worlds"
-        subtitle="PortOS rendered as a living systems garden"
-        actions={actions}
-        className="bg-port-bg"
-      />
-
-      {appId && phase !== 'setup' && (
-        <EidoverseUpdateBanner appId={appId} onUpdated={prepare} />
-      )}
-
+  const frameStage = (
+    <>
       {phase === 'ready' && (
         <main className="relative min-h-0 flex-1 overflow-hidden bg-port-bg">
           <iframe
@@ -575,7 +581,7 @@ export default function Eidoverse() {
           )}
 
           {projectionError && (
-            <div className="port-media-overlay-strong pointer-events-auto absolute inset-x-3 top-3 z-10 mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-port-error/50 p-3 text-sm text-port-error shadow-xl" role="status">
+            <div className={`port-media-overlay-strong pointer-events-auto absolute inset-x-3 z-10 mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-port-error/50 p-3 text-sm text-port-error shadow-xl ${solo ? 'bottom-3' : 'top-3'}`} role="status">
               <AlertTriangle className="mt-0.5 shrink-0" size={17} aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <p>{projectionError}</p>
@@ -583,7 +589,6 @@ export default function Eidoverse() {
               </div>
             </div>
           )}
-
         </main>
       )}
 
@@ -621,34 +626,90 @@ export default function Eidoverse() {
           </section>
         </div>
       )}
+    </>
+  );
 
-      <EidoverseWorldDrawer
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        worldState={worldState}
-        worldName={worldName}
-        setWorldName={setWorldName}
-        humanName={humanName}
-        setHumanName={setHumanName}
-        recipeDraft={recipeDraft}
-        assetOverridesDraft={assetOverridesDraft}
-        labelAliasesDraft={labelAliasesDraft}
-        mutateLabelAlias={mutateLabelAlias}
-        frameConnection={frame.connection}
-        labelVisibility={frame.labelVisibility}
-        onLabelVisibilityChange={frame.changeLabelVisibility}
-        appId={appId}
-        mutateRecipe={mutateRecipe}
-        mutateAssetOverride={mutateAssetOverride}
-        markDirty={markConfigDirty}
-        configStatus={configStatus}
-        projectionStatus={projectionStatus}
-        dirty={draftDirty}
-        onSave={saveWorldConfig}
-        onProject={() => { if (!draftDirty) void runProjection().catch(() => {}); }}
-        onReset={(scope, districtId) => { void runConfigAction({ reset: { scope, ...(districtId ? { districtId } : {}) } }); }}
-        onRefreshAssets={() => { if (!draftDirty) void runConfigAction({ refreshAssets: true }); }}
+  const worldDrawer = (
+    <EidoverseWorldDrawer
+      open={settingsOpen}
+      onClose={() => setSettingsOpen(false)}
+      worldState={worldState}
+      worldName={worldName}
+      setWorldName={setWorldName}
+      humanName={humanName}
+      setHumanName={setHumanName}
+      cosId={cosId}
+      setCosId={setCosId}
+      suggestedCosId={worldState?.suggestedCosId || null}
+      recipeDraft={recipeDraft}
+      assetOverridesDraft={assetOverridesDraft}
+      labelAliasesDraft={labelAliasesDraft}
+      mutateLabelAlias={mutateLabelAlias}
+      frameConnection={frame.connection}
+      labelVisibility={frame.labelVisibility}
+      onLabelVisibilityChange={frame.changeLabelVisibility}
+      appId={appId}
+      mutateRecipe={mutateRecipe}
+      mutateAssetOverride={mutateAssetOverride}
+      markDirty={markConfigDirty}
+      configStatus={configStatus}
+      projectionStatus={projectionStatus}
+      dirty={draftDirty}
+      onSave={saveWorldConfig}
+      onProject={() => { if (!draftDirty) void runProjection().catch(() => {}); }}
+      onReset={(scope, districtId) => { void runConfigAction({ reset: { scope, ...(districtId ? { districtId } : {}) } }); }}
+      onRefreshAssets={() => { if (!draftDirty) void runConfigAction({ refreshAssets: true }); }}
+    />
+  );
+
+  // Chromeless world-only surface: same hostUrl iframe as the embedded page,
+  // without a top-level navigation to /eidoverse-host/ (Safari stuck-splash).
+  if (solo) {
+    return (
+      <div className="flex h-dvh flex-col bg-port-bg text-white">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-port-border px-4 py-3">
+          <div>
+            <h1 className="font-semibold">Eidoverse · world only</h1>
+            <p className="text-sm text-gray-400">Fullscreen inside PortOS · same renderer path as the Eidoverse page</p>
+          </div>
+          <Link
+            to="/eidoverse"
+            aria-label="Back to Eidoverse controls"
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 transition-colors hover:border-port-accent hover:text-white"
+          >
+            <ArrowLeft size={15} aria-hidden="true" />
+            Controls
+          </Link>
+        </header>
+        {frameStage}
+        {worldDrawer}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-port-bg">
+      <EidoverseTravel travelRef={travelRef} beforeDeparture={frame.leaveWorld} enabled={Boolean(hostUrl)} objects={worldState?.projection?.lastSummary?.objects || []}
+        onDestinationsChange={() => {
+          if (projectionStatus === 'running' || draftDirty) return false;
+          if (worldState?.recipe?.includes?.peers !== false) void runProjection().catch(() => {});
+          return true;
+        }} />
+      <PageHeader
+        icon={Orbit}
+        title="Eidoverse Worlds"
+        subtitle="PortOS rendered as a living systems garden"
+        actions={actions}
+        className="bg-port-bg"
       />
+
+      {appId && phase !== 'setup' && (
+        <EidoverseUpdateBanner appId={appId} onUpdated={prepare} />
+      )}
+
+      {frameStage}
+
+      {worldDrawer}
     </div>
   );
 }

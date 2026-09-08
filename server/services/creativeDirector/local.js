@@ -143,7 +143,7 @@ export async function setTreatment(id, treatmentInput) {
   // than in one route handler (#1938) so every setTreatment path (the agent
   // `/:id/treatment` PATCH, episodeVideo, liveDirector) honors the opt-in
   // instead of the flag silently no-op'ing for treatments that land another way.
-  if (next?.generateFirstPass) {
+  if (next?.generateFirstPass && next.workspace !== 'video') {
     enqueueFirstPassSceneFrames(next)
       .catch((e) => console.log(`⚠️ CD first-pass scene frames failed: ${e.message}`));
   }
@@ -151,6 +151,8 @@ export async function setTreatment(id, treatmentInput) {
 }
 
 export async function setPlan(id, planInput) {
+  const { assertVideoSourcesAvailable } = await import('./videoSources.js');
+  await assertVideoSourcesAvailable(await getProject(id));
   const next = await (await selectBackend()).setPlan(id, planInput);
   emitRecordUpdated('creativeDirectorProject', id);
   return next;
@@ -184,4 +186,11 @@ export async function recordRun(id, runEntry) {
 
 export async function updateRun(id, runId, patch) {
   return (await selectBackend()).updateRun(id, runId, patch);
+}
+
+/** Atomic Video owner/review mutations share the owning backend's write boundary. */
+export async function mutateVideoProject(id, mutate) {
+  const result = await (await selectBackend()).mutateVideoProject(id, mutate);
+  emitRecordUpdated('creativeDirectorProject', id);
+  return result;
 }

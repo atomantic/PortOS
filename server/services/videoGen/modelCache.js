@@ -13,7 +13,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../../lib/mediaModels.js';
-import { IC_LORA_MODE_VALUES, icLoraSpecForMode, icLoraRepos } from '../../lib/icLoraWeights.js';
+import { IC_LORA_WEIGHT_KEYS, icLoraSpecByKey, icLoraRepos } from '../../lib/icLoraWeights.js';
 import { downloadableVideoTextEncoders, downloadableVideoTextEncoder } from '../../lib/videoTextEncoders.js';
 import { downloadableVideoDraftDecoders } from '../../lib/videoDraftDecoders.js';
 import {
@@ -159,13 +159,17 @@ export const modelCacheStatus = async (model, cache = null) => {
   };
 };
 
-// Mode → IC-LoRA spec, keyed by the PortOS remix mode ('ic-control', …) the
-// client also puts in the render payload.
-export const icLoraSpecFromParam = (mode) => {
-  const spec = icLoraSpecForMode(mode);
+// Weight key → IC-LoRA spec, for the download/verify/repair endpoints. Keyed by
+// `icLoraWeightKey`: the PortOS remix mode ('ic-control', …) the client also puts
+// in the render payload, or the registry id for a weight that is provisioned but
+// is not a remix mode (the LTX-2.5 upscale adapter). This is the PROVISIONING
+// lookup, so it deliberately spans the whole registry — the render path uses
+// icLoraSpecForMode, which resolves remix modes only.
+export const icLoraSpecFromParam = (key) => {
+  const spec = icLoraSpecByKey(key);
   if (!spec) {
     throw new ServerError(
-      `Unknown IC-LoRA remix mode: ${mode} (expected one of ${IC_LORA_MODE_VALUES.join(', ')})`,
+      `Unknown IC-LoRA weight: ${key} (expected one of ${IC_LORA_WEIGHT_KEYS.join(', ')})`,
       { status: 404, code: 'IC_LORA_UNKNOWN_MODE' },
     );
   }

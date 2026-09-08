@@ -21,10 +21,10 @@
  *                   offered by the session picker (see the client's
  *                   `POST_UNSUPPORTED_DRILL_TYPES`).
  *
- * Mirrored to the client in `client/src/components/meatspace/post/constants.js`
- * (`POST_TOPICS`), where the UI-only fields — icon, color, time budget — are
- * layered on. `server/lib/postTopics.mirror.test.js` asserts the two lists match,
- * the same mirroring convention `canonPrompt.js` and `MEMORY_DRILL_TYPES` use.
+ * A pure leaf: `client/src/components/meatspace/post/constants.js` re-exports
+ * the registry and the enablement predicates, and layers the UI-only fields —
+ * icon, color, time budget — on top in its `TOPIC_UI`. Import no Node built-in
+ * here.
  *
  * Enablement convention — **absent = enabled**, matching the existing per-drill
  * `drillTypes` convention: only an explicit `false` disables. That is what keeps

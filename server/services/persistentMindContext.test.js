@@ -11,6 +11,7 @@ const mock = vi.hoisted(() => ({
     peekMemory: vi.fn(),
     createMemory: vi.fn(async (input) => ({ id: 'memory-automatic-1', ...input })),
     deleteMemory: vi.fn(async (id) => ({ success: true, id })),
+    updateMemory: vi.fn(),
   },
 }));
 
@@ -37,6 +38,10 @@ const {
   archivePersistentMindMemories,
   clearPersistentMindRollups,
   createPersistentMindMemoryFromCandidate,
+  createPersistentMindMemory,
+  readPersistentMindMemories,
+  updatePersistentMindMemory,
+  protectPersistentMindMemory,
   preparePersistentMindContext,
   promotePersistentMindMemory,
   readPersistentMindRollups,
@@ -64,10 +69,11 @@ beforeEach(() => {
   mkdirSync(CONTEXT_DIR, { recursive: true });
   mock.history = [];
   mock.appendMindEvent.mockClear();
-  mock.memoryApi.getMemories.mockClear();
-  mock.memoryApi.peekMemory.mockClear();
+  mock.memoryApi.getMemories.mockReset().mockResolvedValue({ memories: [] });
+  mock.memoryApi.peekMemory.mockReset();
+  mock.memoryApi.updateMemory.mockReset();
   mock.memoryApi.createMemory.mockClear();
-  mock.memoryApi.deleteMemory.mockClear();
+  mock.memoryApi.deleteMemory.mockReset().mockImplementation(async (id) => ({ success: true, id }));
 });
 
 afterAll(() => rmSync(CONTEXT_DIR, { recursive: true, force: true }));
@@ -270,6 +276,48 @@ describe('persistent mind rollups', () => {
 });
 
 describe('persistent mind memory cleanup', () => {
+  it('preserves protected pages, archives later ordinary memories, and keeps identity in rebuilt context', async () => {
+    const records = new Map(Array.from({ length: 102 }, (_, index) => {
+      const memory = { id: `memory-${index}`, sourceAgentId: 'cos-persistent-mind', status: 'active',
+        content: index === 0 ? 'My chosen name is Aster.' : `Retained knowledge ${index}`,
+        tags: [index === 0 ? 'mind:core-identity' : 'mind:important'], importance: index === 0 ? 0 : 0.1 };
+      return [memory.id, memory];
+    }));
+    records.set('ordinary', { id: 'ordinary', sourceAgentId: 'cos-persistent-mind', status: 'active', content: 'Stale detail.', tags: [], importance: 1 });
+    mock.memoryApi.getMemories.mockImplementation(async ({ offset = 0, limit = 100, tags, sortBy }) => ({
+      memories: [...records.values()].filter((memory) => memory.status === 'active' && (!tags || tags.some((tag) => memory.tags.includes(tag)))).sort((a, b) => sortBy === 'importance' ? b.importance - a.importance : 0).slice(offset, offset + limit),
+    }));
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => structuredClone(records.get(id)));
+    mock.memoryApi.deleteMemory.mockImplementation(async (id) => { records.get(id).status = 'archived'; });
+
+    await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 1, preserved: 102 });
+    expect(mock.memoryApi.deleteMemory).toHaveBeenCalledTimes(1);
+    expect(mock.memoryApi.deleteMemory).toHaveBeenCalledWith('ordinary', false);
+    await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 0, preserved: 102 });
+    const memories = await readPersistentMindMemories();
+    expect(memories[0]).toMatchObject({ id: 'memory-0', protection: 'core-identity' });
+    const context = await preparePersistentMindContext({ memories });
+    expect(context.text).toContain('My chosen name is Aster.');
+    expect(context.text).toContain('protected=core-identity');
+    expect(context.text).not.toContain('Stale detail.');
+  });
+
+  it('persists explicit protection, preserves it through legacy edits, and limits mind changes to owned protection', async () => {
+    const memory = { id: 'identity', status: 'active', sourceAgentId: 'cos-persistent-mind', content: 'My chosen name is Aster.', tags: [] };
+    mock.memoryApi.peekMemory.mockImplementation(async (id) => id === memory.id ? structuredClone(memory) : { ...memory, sourceAgentId: 'other-agent' });
+    mock.memoryApi.updateMemory.mockImplementation(async (_id, updates) => Object.assign(memory, updates));
+    await expect(protectPersistentMindMemory({ memoryId: 'identity', protection: 'core-identity' })).resolves.toMatchObject({ success: true });
+    await updatePersistentMindMemory('identity', { content: 'I use the name Aster.', tags: ['name'] });
+    expect(memory.tags).toEqual(['name', 'mind:core-identity']);
+    await expect(protectPersistentMindMemory({ memoryId: 'identity', protection: 'important' })).resolves.toMatchObject({ protection: 'core-identity' });
+    expect(() => protectPersistentMindMemory({ memoryId: 'identity', protection: 'standard' })).toThrow();
+    await expect(protectPersistentMindMemory({ memoryId: 'foreign', protection: 'important' })).resolves.toMatchObject({ success: false });
+    await updatePersistentMindMemory('identity', { protection: 'standard' });
+    expect(memory.tags).toEqual(['name']);
+    await createPersistentMindMemory({ content: 'An enduring commitment.', protection: 'important', tags: ['commitment'] });
+    expect(mock.memoryApi.createMemory).toHaveBeenLastCalledWith(expect.objectContaining({ tags: ['commitment', 'mind:important'] }));
+  });
+
   it('archives active memories owned by the mind without hard-deleting them', async () => {
     mock.memoryApi.getMemories
       .mockResolvedValueOnce({ memories: [{ id: 'memory-owned' }, { id: 'memory-foreign' }] })
@@ -278,7 +326,7 @@ describe('persistent mind memory cleanup', () => {
       .mockResolvedValueOnce({ id: 'memory-owned', status: 'active', sourceAgentId: 'cos-persistent-mind' })
       .mockResolvedValueOnce({ id: 'memory-foreign', status: 'active', sourceAgentId: 'other-agent' });
 
-    await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 1 });
+    await expect(archivePersistentMindMemories()).resolves.toEqual({ archived: 1, preserved: 0 });
     expect(mock.memoryApi.deleteMemory).toHaveBeenCalledWith('memory-owned', false);
     expect(mock.memoryApi.deleteMemory).not.toHaveBeenCalledWith('memory-foreign', expect.anything());
   });
@@ -294,6 +342,7 @@ describe('trajectory annotations and Brain promotion', () => {
       type: 'fact',
       category: 'other',
       tags: ['durable', 'durable'],
+      protection: 'core-identity',
       memoryApi: mock.memoryApi,
     });
 
@@ -303,7 +352,7 @@ describe('trajectory annotations and Brain promotion', () => {
       summary: 'Automatic fact',
       type: 'fact',
       category: 'other',
-      tags: ['durable'],
+      tags: ['durable', 'mind:core-identity'],
       sourceTaskId: 'turn-automatic',
       sourceAgentId: 'cos-persistent-mind',
       status: 'active',

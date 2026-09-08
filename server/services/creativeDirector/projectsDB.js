@@ -32,7 +32,12 @@ export async function listProjectsByCommissionId(commissionId) {
 }
 
 export async function createProject(input) {
-  return store.createProject(input, async ({ id }) => {
+  const seeded = { ...input };
+  if (input.workspace === 'video') {
+    const { ensureInstanceId } = await import('../instances.js');
+    seeded.videoOwnerInstanceId = await ensureInstanceId();
+  }
+  return store.createProject(seeded, async ({ id }) => {
     const collection = await createCollection({
       name: `Creative Director: ${input.name}`,
       description: `Auto-created for project ${id}`,
@@ -43,7 +48,11 @@ export async function createProject(input) {
 }
 
 export async function setTreatment(id, treatmentInput) {
-  const { project } = await withLockedProject(id, (current) => ({ project: logic.applyTreatment(current, treatmentInput) }));
+  const { assertVideoSourcesAvailable } = await import('./videoSources.js');
+  const { project } = await withLockedProject(id, async (current) => {
+    const sourceRevisions = await assertVideoSourcesAvailable(current);
+    return { project: logic.applyTreatment(current, treatmentInput, sourceRevisions) };
+  });
   return project;
 }
 
@@ -82,4 +91,8 @@ export async function updateRun(id, runId, patch) {
     return { project, result: updated, skipPersist: updated === null };
   }, { allowMissing: true });
   return outcome.__missing ? null : outcome.result;
+}
+
+export async function mutateVideoProject(id, mutate) {
+  return withLockedProject(id, mutate);
 }

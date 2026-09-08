@@ -46,15 +46,13 @@ export const INSTANCE_FEATURES = Object.freeze([
     id: 'gsd',
     label: 'GSD',
     description: 'Get Stuff Done project planning and progress tracking for managed apps.',
-    defaultEnabled: true,
+    defaultEnabled: false,
   }),
   Object.freeze({
     id: 'openclaw',
     label: 'OpenClaw',
     description: 'Operator chat with a configured OpenClaw runtime.',
-    // Preserve the existing behavior for installs that already configured
-    // OpenClaw; an explicit Settings > Features toggle remains authoritative.
-    defaultEnabled: true,
+    defaultEnabled: false,
   }),
   Object.freeze({
     id: 'health',

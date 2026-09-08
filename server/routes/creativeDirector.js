@@ -14,6 +14,8 @@ import {
   creativeDirectorProjectCreateSchema,
   creativeDirectorProjectUpdateSchema,
   creativeDirectorTreatmentSchema,
+  creativeDirectorVideoReviewActionSchema,
+  creativeDirectorVideoStartSchema,
   creativeDirectorPlanSchema,
   creativeDirectorPlanStepActionSchema,
   creativeDirectorDirectiveSchema,
@@ -44,6 +46,14 @@ import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.j
 import { stopProject } from '../services/creativeDirector/stopProject.js';
 
 const router = Router();
+
+function assertVideoDispatchAvailable(project) {
+  if (project?.workspace === 'video') {
+    throw new ServerError('Video production is waiting for revision-specific approval support. Save the brief and model choices; Start will be available when dispatch gates are installed.', {
+      status: 409, code: 'VIDEO_DISPATCH_UNAVAILABLE',
+    });
+  }
+}
 
 // Backward-compatible by default: returns the full projects array. When a client
 // passes `limit`/`offset`, the response becomes the bounded
@@ -120,6 +130,25 @@ router.get('/:id', asyncHandler(async (req, res) => {
   res.json(req.query.slim === '1' ? slimProject(p) : p);
 }));
 
+router.get('/:id/sources', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  if (project.workspace !== 'video') throw new ServerError('Source checks require a Video project', { status: 400, code: 'INVALID_STATE' });
+  const { getVideoSourceStatus } = await import('../services/creativeDirector/videoSources.js');
+  res.json(await getVideoSourceStatus(project));
+}));
+
+router.get('/:id/review', asyncHandler(async (req, res) => {
+  const { getVideoReview } = await import('../services/creativeDirector/videoReview.js');
+  res.json(await getVideoReview(req.params.id));
+}));
+
+router.post('/:id/review', asyncHandler(async (req, res) => {
+  const input = validateRequest(creativeDirectorVideoReviewActionSchema, req.body);
+  const { reviewVideo } = await import('../services/creativeDirector/videoReview.js');
+  res.json(await reviewVideo(req.params.id, input));
+}));
+
 router.post('/', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorProjectCreateSchema, req.body);
   const project = await createProject(data);
@@ -138,6 +167,14 @@ router.post('/auto-cast/suggest', asyncHandler(async (req, res) => {
 
 router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorProjectUpdateSchema, req.body);
+  const draftFields = ['videoDraft', 'aspectRatio', 'quality', 'modelId', 'targetDurationSeconds', 'renderBackend'];
+  if (draftFields.some((key) => key in data)) {
+    const project = await getProject(req.params.id);
+    if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+    if (project.workspace !== 'video' || project.status !== 'draft') {
+      throw new ServerError('Production settings can only be edited on a Video draft', { status: 409, code: 'INVALID_STATE' });
+    }
+  }
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
 }));
@@ -177,6 +214,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // treatment as they land. The response carries `composing` so the UI can tell
 // the user the director took over.
 router.post('/:id/auto-cast', asyncHandler(async (req, res) => {
+  assertVideoDispatchAvailable(await getProject(req.params.id));
   const { brief, types, limit, compose, generateFirstPass, generateFirstPassMusicBed } = validateRequest(creativeDirectorAutoCastApplySchema, req.body);
   // Scene reference frames (#1867) depend on a treatment existing, which may
   // land well after THIS request — either because `compose` kicks it off
@@ -282,6 +320,7 @@ router.post('/:id/directive', asyncHandler(async (req, res) => {
   const directive = validateRequest(creativeDirectorDirectiveSchema, req.body);
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  assertVideoDispatchAvailable(project);
   const parked = project.status === 'paused' || project.status === 'failed';
   const updated = await updateProject(req.params.id, {
     directive,
@@ -302,6 +341,7 @@ router.post('/:id/directive', asyncHandler(async (req, res) => {
 router.post('/:id/replan', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  assertVideoDispatchAvailable(project);
   if (!project.directive) throw new ServerError('Project has no directive to re-plan', { status: 400, code: 'NO_DIRECTIVE' });
   const updated = await updateProject(req.params.id, { plan: null, status: 'planning', failureReason: null });
   const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
@@ -321,6 +361,7 @@ router.post('/:id/plan/step/:stepId', asyncHandler(async (req, res) => {
   const { action } = validateRequest(creativeDirectorPlanStepActionSchema, req.body);
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  assertVideoDispatchAvailable(project);
   const step = (project.plan?.steps || []).find((s) => s.stepId === req.params.stepId);
   if (!step) throw new ServerError('Plan step not found', { status: 404, code: 'NOT_FOUND' });
   const patch = action === 'skip'
@@ -341,6 +382,10 @@ router.post('/:id/plan/step/:stepId', asyncHandler(async (req, res) => {
 // Agent-callable: update a single scene's status / evaluation / retry count.
 router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorSceneUpdateSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (project?.workspace === 'video' && data.expectedWorkRevision === undefined) {
+    throw new ServerError('Include the displayed shot work revision with this update.', { status: 409, code: 'VIDEO_WORK_STALE' });
+  }
   const updated = await updateScene(req.params.id, req.params.sceneId, data);
   if (data.status === 'accepted' || data.status === 'failed') {
     // Fire-and-forget — agent or user just settled a scene; nudge the
@@ -360,9 +405,19 @@ router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
 // the orchestrator can retry them, and the project status flips back to
 // planning/rendering. This matches the PR's "you can resume from the UI"
 // promise — without it, a single failed scene would leave Start a no-op.
+router.get('/:id/execution', asyncHandler(async (req, res) => {
+  const { getVideoExecutionPreview } = await import('../services/creativeDirector/videoExecution.js');
+  res.json(await getVideoExecutionPreview(req.params.id));
+}));
+
 router.post('/:id/start', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  if (project.workspace === 'video') {
+    const input = validateRequest(creativeDirectorVideoStartSchema, req.body);
+    const { startVideoExecution } = await import('../services/creativeDirector/videoExecution.js');
+    return res.json(await startVideoExecution(project.id, input));
+  }
   if (project.status === 'failed') {
     // Reset every failed scene back to pending so the orchestrator picks
     // them up. Without this, a single failed scene would leave Start a no-op.
@@ -391,6 +446,11 @@ router.post('/:id/start', asyncHandler(async (req, res) => {
 // work. The currently running render (if any) keeps going to completion —
 // canceling that is a separate gesture (POST /api/media-jobs/:id/cancel).
 router.post('/:id/pause', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (project?.workspace === 'video') {
+    await stopProject(project.id, { reason: 'Paused by the user.' });
+    return res.json(await getProject(project.id));
+  }
   const updated = await updateProject(req.params.id, { status: 'paused' });
   res.json(updated);
 }));
@@ -408,6 +468,11 @@ router.post('/smoke-test', asyncHandler(async (_req, res) => {
 router.post('/:id/resume', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  if (project.workspace === 'video') {
+    const input = validateRequest(creativeDirectorVideoStartSchema, req.body);
+    const { startVideoExecution } = await import('../services/creativeDirector/videoExecution.js');
+    return res.json(await startVideoExecution(project.id, input));
+  }
   if (project.status !== 'paused') {
     throw new ServerError('Project is not paused', { status: 400, code: 'INVALID_STATE' });
   }

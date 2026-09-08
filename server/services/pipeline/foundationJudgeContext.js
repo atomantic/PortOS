@@ -7,9 +7,13 @@
 
 import { createHash } from 'crypto';
 import { composeStyleNotes } from '../../lib/styleGuide.js';
+import { countWords } from '../../lib/textUtils.js';
 import { renderCharacterArcsForPrompt } from '../../lib/seriesCharacterArc.js';
 import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 import { isBlankString, isBlankArray } from '../universeCharacterExpand.js';
+import { PSYCHOLOGY_DRIVE_AXES } from '../../lib/storyBible.js';
+import { buildCastIntegrityReport } from '../../lib/characterIntegrity.js';
+import { renderCastIntegrity } from '../../lib/castIntegrityPrompt.js';
 
 // The character-framework subset the character dimension scores (Ghost → Wound →
 // Lie → Want → Need chain + secrets + arc fields). Shared by the hash projection
@@ -30,11 +34,36 @@ export const VISUAL_FOUNDATION_STRING_FIELDS = Object.freeze([
 ]);
 export const VISUAL_FOUNDATION_LIST_FIELDS = Object.freeze(['colorPalette']);
 
+// The optional psychology profile (#6414). Projected ONLY when the character
+// actually carries one: including an empty husk would change the foundation
+// hash of every pre-#6414 character on this install and invalidate their
+// scores for a field nobody has authored yet.
+export function pickPsychologyFields(c) {
+  const p = c?.psychology;
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
+  return {
+    theoryOfControl: p.theoryOfControl || '',
+    strategy: p.strategy || '',
+    protectiveBenefit: p.protectiveBenefit || '',
+    presentCost: p.presentCost || '',
+    testingPressure: p.testingPressure || '',
+    candidateChange: p.candidateChange || '',
+    assessment: p.assessment || '',
+    assessmentNote: p.assessmentNote || '',
+    drives: Object.fromEntries(PSYCHOLOGY_DRIVE_AXES.map((axis) => [axis, {
+      desire: p.drives?.[axis]?.desire || '',
+      fear: p.drives?.[axis]?.fear || '',
+    }])),
+  };
+}
+
 export function pickFrameworkFields(c) {
   const out = {};
   for (const f of FRAMEWORK_STRING_FIELDS) out[f] = c?.[f] || '';
   out.arcType = c?.arcType || '';
   out.secrets = Array.isArray(c?.secrets) ? c.secrets : [];
+  const psychology = pickPsychologyFields(c);
+  if (psychology) out.psychology = psychology;
   return out;
 }
 
@@ -143,6 +172,42 @@ export function countFoundationCharacterBlanks(characters, series, issues = []) 
   return rankFoundationCharacters(targets, series, issues)
     .reduce((total, { blanks }) => total + blanks, 0);
 }
+
+// ---------- cast integrity (#6415) ----------
+
+/**
+ * Deterministic cast-integrity gaps across the cast a `character` repair may
+ * WRITE — the shared contract scoped to this series' repairable roster.
+ *
+ * `countFoundationCharacterBlanks` above answers "how many named fields are
+ * empty" and holds every character to the SAME field list. That is the wrong
+ * question for two of this cast: a declared minor role does not owe the story a
+ * Ghost, and a character whose interior the author explicitly ruled out with a
+ * note is finished, not thin. `buildCastIntegrityReport` computes that depth
+ * per character and only reports the gaps the depth actually asks for — so the
+ * judge can be told which requirements are binding instead of scoring every
+ * spear-carrier as an incomplete lead.
+ *
+ * It is also the only deterministic view that reaches the psychology profile
+ * (#6414): none of the blank-counted field sets include `psychology`, so a
+ * repair that authors a theory of control and six drive leaves currently
+ * registers as literally zero measurable progress.
+ *
+ * Zero provider calls — safe on every judge round, exactly like the blank count.
+ *
+ * It measures the same repairable roster `countFoundationCharacterBlanks` does,
+ * so the two objective signals disagree only about what they count, never who.
+ */
+export function countSeriesCastIntegrityFindings(characters, series, issues = []) {
+  return buildCastIntegrityReport(
+    repairableSeriesFoundationCharacters(characters, series, issues),
+  ).findings.length;
+}
+
+// The prompt-facing render of the report above lives in lib/castIntegrityPrompt.js
+// so the FableLoom editor renders the SAME block from the SAME depth notes.
+// Re-exported here because the judge context is where its callers look for it.
+export { renderCastIntegrity };
 
 // ---------- input hashing (fast-pass / staleness) ----------
 
@@ -260,7 +325,28 @@ export function renderCharacterLine(c, { core = false } = {}) {
     ...VISUAL_FOUNDATION_STRING_FIELDS.map((field) => `${field}: ${visualString(field)}`),
     ...VISUAL_FOUNDATION_LIST_FIELDS.map((field) => `${field}: ${visualList(field)}`),
   ].join(' | ');
-  return `- ${core ? '[CORE] ' : ''}**${c?.name || 'Unnamed'}**${role} — dramatic framework: ${framework} | profile: ${profile} | arcType: ${c?.arcType || '—'} | secrets: ${secrets || '—'} | visual foundation: ${visual}`;
+  // Optional psychology profile (#6414). Appended only when authored — an
+  // 'unassessed' marker on every legacy character would add a line of noise per
+  // cast member to a prompt this module works hard to keep inside its budget.
+  const psychology = pickPsychologyFields(c);
+  const drives = psychology
+    ? PSYCHOLOGY_DRIVE_AXES
+      .map((axis) => `${axis} desire: ${concise(psychology.drives[axis].desire, 120)}, fear: ${concise(psychology.drives[axis].fear, 120)}`)
+      .join(' | ')
+    : '';
+  const ruling = psychology?.assessment
+    ? ` | assessment: ${psychology.assessment} (${concise(psychology.assessmentNote, 200)})`
+    : '';
+  const control = psychology
+    ? [
+      `theory: ${concise(psychology.theoryOfControl, 240)}`,
+      `strategy: ${concise(psychology.strategy, 240)}`,
+      `protects: ${concise(psychology.protectiveBenefit, 200)}`,
+      `costs: ${concise(psychology.presentCost, 200)}`,
+      `drives: ${drives}`,
+    ].join(' | ')
+    : '';
+  return `- ${core ? '[CORE] ' : ''}**${c?.name || 'Unnamed'}**${role} — dramatic framework: ${framework} | profile: ${profile} | arcType: ${c?.arcType || '—'} | secrets: ${secrets || '—'}${control ? ` | control: ${control}` : ''}${ruling} | visual foundation: ${visual}`;
 }
 
 const joinedLength = (lines) => lines.reduce((total, line) => total + line.length + 1, 0);
@@ -325,7 +411,7 @@ export function renderArc(series, issues = [], { maxChars = Infinity, includeArc
       .filter((issue) => issue?.seasonId === season.id)
       .map((issue) => {
         const synopsis = issue?.stages?.idea?.input || '(no synopsis)';
-        const words = synopsis === '(no synopsis)' ? 0 : synopsis.trim().split(/\s+/).filter(Boolean).length;
+        const words = synopsis === '(no synopsis)' ? 0 : countWords(synopsis);
         const metadata = [
           issue.arcRole ? `role=${issue.arcRole}` : 'role=unset',
           issue.lengthProfile ? `length=${issue.lengthProfile}` : 'length=unset',
@@ -430,6 +516,12 @@ export function buildFoundationContext({ series, universe, canon, issues = [], c
     ? seriesCharacters.map((character) => renderCharacterLine(character, { core: true })).join('\n')
     : '(no canon characters)';
   const sectionMax = Math.max(1_000, Math.floor(contentMax / 3));
+  // The cast's third of the budget is split between the full roster render and
+  // the deterministic integrity block. The block gets the smaller share because
+  // it summarizes material the roster already shows in full — its unique
+  // contribution is the depth ruling per character, which is one short clause.
+  const integrityMax = Math.max(400, Math.floor(sectionMax / 4));
+  const rosterMax = Math.max(600, sectionMax - integrityMax);
   const world = renderWorldFoundation(universe, { maxChars: sectionMax });
   // Character quality lives in the choices between start and end, not merely
   // the endpoints. Reuse the canonical authored-arc renderer here so the judge
@@ -437,8 +529,8 @@ export function buildFoundationContext({ series, universe, canon, issues = [], c
   // repair prompt keeps the legacy compact summary because it already receives
   // the full `series.characterArcs` JSON separately.
   const arcText = renderArc(series, issues, { includeArcTransitions: true });
-  const roster = characterRoster.length > sectionMax
-    ? `${characterRoster.slice(0, sectionMax)}\n\n[character roster truncated for judging]`
+  const roster = characterRoster.length > rosterMax
+    ? `${characterRoster.slice(0, rosterMax)}\n\n[character roster truncated for judging]`
     : characterRoster;
   const arcContext = arcText.length > sectionMax
     ? `${arcText.slice(0, sectionMax)}\n\n[series plan truncated for judging]`
@@ -452,6 +544,13 @@ export function buildFoundationContext({ series, universe, canon, issues = [], c
     },
     worldEntitiesSummary: world,
     characterRoster: roster,
+    // Deterministic, model-free, and measured off the SAME roster the render
+    // above walks — so the depth rulings the judge is told are binding always
+    // name characters it can actually see.
+    castIntegrity: renderCastIntegrity(
+      buildCastIntegrityReport(seriesCharacters),
+      { maxChars: integrityMax },
+    ),
     characterCount: seriesCharacters.length,
     arc: arcContext,
   };

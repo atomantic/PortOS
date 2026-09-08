@@ -20,6 +20,8 @@ const api = vi.hoisted(() => ({
   getSampleProviders: vi.fn(),
   createProvider: vi.fn(),
   updateProvider: vi.fn(),
+  refreshProviderModels: vi.fn(),
+  setActiveProvider: vi.fn().mockResolvedValue({}),
   getOrchestrationProfiles: vi.fn().mockResolvedValue({ profiles: [] }),
   createRun: vi.fn().mockResolvedValue({ runId: 'run-1' }),
   stopRun: vi.fn().mockResolvedValue({}),
@@ -120,6 +122,42 @@ describe('AIProviders page load error handling', () => {
     api.getProviderReadiness.mockResolvedValue({ readiness: {} });
     api.getCodexAccount.mockImplementation(() => new Promise(() => {}));
     localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: null } };
+  });
+
+  it('renders one CLI/TUI card with one install check, explicit default modes and a TUI shell link', async () => {
+    const executionModes = [{ id: 'example', type: 'cli' }, { id: 'example-tui', type: 'tui' }];
+    api.getProviders.mockResolvedValue({ activeProvider: 'example', providers: [
+      { id: 'example', name: 'Example CLI', type: 'cli', command: 'opencode', enabled: true, models: ['model-a'], executionModes },
+      { id: 'example-tui', name: 'Example TUI', type: 'tui', command: 'opencode', enabled: true, models: ['model-a'], tuiCommandLine: 'opencode', executionModes },
+      { id: 'example-api', name: 'Example API', type: 'api', endpoint: 'http://192.0.2.10:11434', enabled: true, models: ['remote-model'] },
+    ] });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: { opencode: missingRuntime } });
+    renderPage();
+    expect(await screen.findByRole('heading', { name: 'Example', exact: true })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Example API' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Install OpenCode CLI/ })).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Launch in Shell' })).toHaveAttribute('href', '/shell?provider=example-tui');
+    expect(screen.getByRole('button', { name: 'CLI default' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Set TUI default' }));
+    await waitFor(() => expect(api.setActiveProvider).toHaveBeenCalledWith('example-tui'));
+    expect(await screen.findByRole('button', { name: 'TUI default' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Set CLI default' }));
+    await waitFor(() => expect(api.setActiveProvider).toHaveBeenLastCalledWith('example'));
+  });
+
+  it('gates the CLI default on transport consent but leaves the TUI default selectable', async () => {
+    const executionModes = [{ id: 'codex', type: 'cli' }, { id: 'codex-tui', type: 'tui' }];
+    api.getCodexAccount.mockResolvedValue({ readiness: { status: 'ready' } });
+    api.getCodexModels.mockResolvedValue({ models: null });
+    api.getProviders.mockResolvedValue({ activeProvider: null, providers: [
+      { id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', enabled: true, textTransportEnabled: true, executionModes },
+      { id: 'codex-tui', name: 'Codex TUI', type: 'tui', command: 'codex', enabled: true, textTransportEnabled: false, executionModes },
+    ] });
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Set CLI default' })).toBeEnabled());
+    expect(screen.getByRole('button', { name: 'Set TUI default' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Set TUI default' }));
+    await waitFor(() => expect(api.setActiveProvider).toHaveBeenCalledWith('codex-tui'));
   });
 
   it('offers an install button on the card of a provider whose CLI is missing', async () => {
@@ -1830,5 +1868,100 @@ describe('AIProviders orchestration profiles', () => {
         expect.anything()
       );
     });
+  });
+});
+
+// A refresh used to end in `loadData()`, which flips the page's `loading` flag
+// back on — the whole list is replaced by the skeleton and the browser lands at
+// the top, so the card the user clicked (often several screens down) scrolls out
+// from under them. The card has to update in place instead.
+describe('AIProviders model refresh', () => {
+  const executionModes = [{ id: 'opencode-mtplx', type: 'cli' }, { id: 'opencode-mtplx-tui', type: 'tui' }];
+
+  const mtplxProviders = () => ({
+    activeProvider: null,
+    providers: [
+      {
+        id: 'opencode-mtplx', name: 'OpenCode MTPLX', type: 'cli', command: 'opencode', enabled: true,
+        models: ['mtplx-served'], canRefreshModels: true, executionModes,
+      },
+      {
+        id: 'opencode-mtplx-tui', name: 'OpenCode MTPLX TUI', type: 'tui', command: 'opencode', enabled: true,
+        models: ['mtplx-served'], canRefreshModels: true, executionModes,
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.getApps.mockResolvedValue([]);
+    api.getProviderStatuses.mockResolvedValue({ providers: {} });
+    api.getProviderRuntimes.mockResolvedValue({ runtimes: {} });
+    api.getProviderReadiness.mockResolvedValue({ readiness: {} });
+    api.getCodexAccount.mockImplementation(() => new Promise(() => {}));
+    api.getProviders.mockResolvedValue(mtplxProviders());
+    localModels.value = { ctxById: {}, installed: { ollama: null, lmstudio: null } };
+  });
+
+  it('applies the refreshed catalog to the clicked card without reloading the page', async () => {
+    api.refreshProviderModels.mockResolvedValue({
+      id: 'opencode-mtplx', name: 'OpenCode MTPLX', type: 'cli', command: 'opencode', enabled: true,
+      models: ['mtplx-served', 'wang-yang/Ornith-1.0-35B-MTPLX'], canRefreshModels: true,
+    });
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Models refreshed for OpenCode MTPLX'));
+    expect(await screen.findByText(/Models: mtplx-served, wang-yang\/Ornith-1\.0-35B-MTPLX/)).toBeInTheDocument();
+    // One load, from the initial mount — the refresh must not re-fetch the whole
+    // page, which is what unmounted the list and reset the scroll position.
+    expect(api.getProviders).toHaveBeenCalledTimes(1);
+    // The unified card keeps its grouping: replacing the entry wholesale with
+    // the bare record the refresh route returns would drop `executionModes` and
+    // split one card into two.
+    expect(screen.getAllByRole('button', { name: 'Refresh Models' })).toHaveLength(1);
+  });
+
+  it('keeps the stored catalog when the refresh is unsupported', async () => {
+    api.refreshProviderModels.mockResolvedValue(null);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh Models' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(screen.getByText(/Models: mtplx-served$/)).toBeInTheDocument();
+  });
+
+  // The root cause under the refresh button, which the other four reload paths
+  // on this page share: `loadData` flipped `loading` on unconditionally, so ANY
+  // reload after a click swapped the whole list for the page skeleton and
+  // returned the user to the top. The skeleton belongs to the first load only.
+  it('reloads after enabling a provider without swapping the list for the skeleton', async () => {
+    api.updateProvider.mockResolvedValue({});
+    // The reload is held OPEN so the assertions run while it is in flight — that
+    // window is the whole bug, and after it resolves the skeleton is gone again
+    // whether or not it ever appeared.
+    let releaseReload;
+    api.getProviders
+      .mockResolvedValueOnce(mtplxProviders())
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseReload = resolve; }));
+
+    renderPage();
+    // The first load DOES show the skeleton — there is nothing else to show, and
+    // this is what keeps the assertion below from passing vacuously.
+    expect(screen.getByLabelText('Loading providers')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable' }));
+
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
+    expect(screen.queryByLabelText('Loading providers')).toBeNull();
+    // ...and the card the user just clicked is still the thing on screen.
+    expect(screen.getByRole('heading', { name: 'OpenCode MTPLX' })).toBeInTheDocument();
+
+    releaseReload({
+      ...mtplxProviders(),
+      providers: mtplxProviders().providers.map(p => ({ ...p, enabled: false })),
+    });
+    expect(await screen.findByRole('button', { name: 'Enable' })).toBeInTheDocument();
   });
 });

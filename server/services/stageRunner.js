@@ -20,11 +20,16 @@ import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, is
 import { stripCodeFences } from '../lib/llmText.js';
 import { extractCodexAssistant } from '../lib/codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { commandBasename, isCodexProvider } from '../lib/providerModels.js';
 import { buildPrompt, getStage } from './promptService.js';
 import { stagePinsIgnored } from '../lib/stagePinPolicy.js';
+import {
+  DEFAULT_LARGE_CONTEXT_WINDOW,
+  knownModelContextWindow,
+  knownProviderContextWindow,
+  catalogModelContextWindow,
+} from '../lib/providerContextWindows.js';
 import { createRun, patchRunMetadata } from './runner.js';
-import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from '../lib/aiToolkit/constants.js';
+import { resolveProviderModelTier, MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from '../lib/aiToolkit/constants.js';
 
 // Stage configs name a model by tier (PromptManager UI). Map each tier name
 // to the provider's per-tier model field; an unset tier falls through to
@@ -34,6 +39,9 @@ const TIER_TO_MODEL_KEY = Object.freeze({
   quick: 'lightModel',
   coding: 'mediumModel',
   heavy: 'heavyModel',
+  ultra: 'ultraModel',
+  light: 'lightModel',
+  medium: 'mediumModel',
 });
 
 const isTierName = (m) => typeof m === 'string' && m in TIER_TO_MODEL_KEY;
@@ -110,7 +118,7 @@ function normalizeTimeout(raw) {
 export function resolveModel(provider, modelHint) {
   if (!modelHint) return providerFallbackModel(provider);
   if (isTierName(modelHint)) {
-    return provider[TIER_TO_MODEL_KEY[modelHint]] || providerFallbackModel(provider);
+    return resolveProviderModelTier(provider, modelHint) || provider[TIER_TO_MODEL_KEY[modelHint]] || providerFallbackModel(provider);
   }
   return modelHint;
 }
@@ -168,55 +176,6 @@ export function resolveEffortHint(stage, options = {}) {
   return options.effortOverride || stage?.effort || options.effortDefault || null;
 }
 
-// A conservative-large window ASSUMED for frontier CLI / cloud-API providers
-// that haven't declared one. 128K is below every current frontier model's real
-// ceiling (Claude/GPT/Gemini are ≥128K, often ~1M), so it means "a typical
-// whole manuscript fits in one call" without over-promising. It is a floor to
-// escape, not a cap to honor: refreshing the provider's models records each
-// model's real window (`modelContextWindows`), and an explicit `contextWindow`
-// overrides both.
-export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
-export const CODEX_CONTEXT_WINDOW = 1_000_000;
-export const GEMINI_CONTEXT_WINDOW = 1_048_576;
-export const GROK_CONTEXT_WINDOW = 256_000;
-export const KIMI_CONTEXT_WINDOW = 256_000;
-
-// Keep in sync with client/src/utils/providers.js.
-const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
-  [/gpt[-_.:/]?5\.5(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
-  [/gpt[-_.:/]?5\.4[-_.:/]?mini(?:[-_.:/]|\b)/i, 400_000],
-  [/gpt[-_.:/]?5\.4(?![-_.:/]?(?:mini|nano))(?:[-_.:/]|\b)/i, CODEX_CONTEXT_WINDOW],
-  [/claude[-_.:/]?fable[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?mythos[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?opus[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?opus[-_.:/]?4[-_.:/]?8/i, 1_000_000],
-  [/claude[-_.:/]?sonnet[-_.:/]?5(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?sonnet[-_.:/]?4[-_.:/]?6(?:[-_.:/]|\b)/i, 1_000_000],
-  [/claude[-_.:/]?sonnet[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
-  [/claude[-_.:/]?haiku[-_.:/]?4(?:[-_.:/]|\b)/i, 200_000],
-  [/gemini[-_.:/]?2\.5[-_.:/]?pro(?:[-_.:/]|\b)/i, GEMINI_CONTEXT_WINDOW],
-]);
-
-export function knownModelContextWindow(model) {
-  if (typeof model !== 'string' || !model.trim()) return null;
-  const found = KNOWN_MODEL_CONTEXT_WINDOWS.find(([pattern]) => pattern.test(model));
-  return found ? found[1] : null;
-}
-
-export function knownProviderContextWindow(provider) {
-  if (provider?.type !== 'cli' && provider?.type !== 'tui') return null;
-  const id = String(provider?.id || '').toLowerCase();
-  // Normalize to the basename so a path-configured command (/opt/homebrew/bin/grok)
-  // resolves the same vendor window as a bare `grok` on PATH — matching how the
-  // arg-builder predicates (isOpencodeCommand/isGrokCommand) key on commandBasename.
-  const command = commandBasename(provider?.command);
-  if (isCodexProvider(provider)) return CODEX_CONTEXT_WINDOW;
-  if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
-  if (id === 'grok-cli' || id === 'grok-tui' || command === 'grok') return GROK_CONTEXT_WINDOW;
-  if (id === 'kimi-cli' || id === 'kimi-tui' || command === 'kimi') return KIMI_CONTEXT_WINDOW;
-  return null;
-}
-
 // The local-backend concurrency gate (cap concurrent in-flight calls per local
 // endpoint so N parallel stage calls don't thrash one GPU's VRAM) lives in
 // promptRunner.js — the actual execution layer — so it covers the initially
@@ -237,29 +196,14 @@ const isLikelyLargeContextProvider = (provider) => {
   return false;
 };
 
-/**
- * The window this provider's own `/models` catalog reported for this model, or
- * `null` when the catalog never mentioned it. Populated by model refresh (see
- * aiToolkit/internal/modelCatalog.js), so it is the serving side's declaration
- * rather than a guess — which is why it outranks the hand-maintained regex
- * table below. Mirror of `catalogModelContextWindow` in
- * client/src/utils/providers.js.
- */
-export function catalogModelContextWindow(provider, model) {
-  const windows = provider?.modelContextWindows;
-  if (!windows || typeof windows !== 'object') return null;
-  if (typeof model !== 'string' || !model) return null;
-  const tokens = Number(windows[model]);
-  return Number.isFinite(tokens) && tokens > 0 ? tokens : null;
-}
-
 // Planning-time context window for a provider/model: an explicit
 // `contextWindow` wins, else the window the provider's own catalog reported for
 // this model, else a known model window for the resolved model, else a known
 // provider-level window for configured-default process providers, else the
 // Ollama per-request `numCtx`, else a large default for frontier providers,
 // else null (the budgeter applies a conservative floor for unknown local
-// backends).
+// backends). The rungs themselves live in lib/providerContextWindows.js, the
+// pure leaf the browser's provider-card meter shares.
 export function effectiveContextWindow(provider, model) {
   if (Number(provider?.contextWindow) > 0) return Number(provider.contextWindow);
   const catalogWindow = catalogModelContextWindow(provider, model);

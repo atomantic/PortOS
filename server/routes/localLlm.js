@@ -41,6 +41,7 @@ import {
   localLlmMtplxRemoveSchema,
   localLlmSpecModelDownloadSchema,
   localLlmDownloadPreflightSchema,
+  localPersistentMindSetupApplySchema,
 } from '../lib/validation.js'
 import {
   getLlamaServerStatus,
@@ -55,7 +56,7 @@ import { SLOTSTREAM_APP, getSlotstreamServerStatus, startSlotstreamServer, stopS
 import { cancelSlotstreamModelDownload, downloadSlotstreamModel, previewSlotstreamDownload } from '../services/slotstreamModelManager.js'
 import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel } from '../services/mtplxModelManager.js'
 import { saveProcessList } from '../services/pm2.js'
-import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload } from '../services/specDecodeModels.js'
+import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload, removeSpecDecodeModel } from '../services/specDecodeModels.js'
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
 import { resetProviderReadinessCache } from '../services/providerReadiness.js'
 import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
@@ -81,6 +82,10 @@ import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.
 import { getCapabilityTestReport, getCapabilityTestResult, runCapabilityTest } from '../services/modelCapabilityTests.js'
 import { deleteResult as deleteCapabilityTestResult } from '../services/modelCapabilityTestStore.js'
 import { listUserModels } from '../services/audioModels.js'
+import {
+  describeLocalPersistentMindSetup,
+  applyLocalPersistentMindSetup,
+} from '../services/localPersistentMindSetup.js'
 import { ENGINES } from '../services/pipeline/musicGen.js'
 import { abortSignalFromResponse } from '../lib/requestAbort.js'
 import { awaitWritableDrain } from '../lib/streamBackpressure.js'
@@ -101,6 +106,30 @@ const emitter = (req) => {
   const io = req.app.get('io')
   return (event, message, extra) => io?.emit('localLlm:progress', { event, message, ...extra })
 }
+
+
+// GET /api/local-llm/persistent-mind-setup — Grok-box / CPU-only free local
+// Persistent Mind checklist (Ollama + Qwen2.5 7B Instruct). Applicable hosts
+// only; curated GPU coding hosts get applicable:false.
+router.get('/persistent-mind-setup', asyncHandler(async (_req, res) => {
+  res.json(await describeLocalPersistentMindSetup())
+}))
+
+// POST /api/local-llm/persistent-mind-setup/apply — enable the ollama provider
+// and optionally pin the Persistent Mind profile. Never installs Ollama or
+// pulls weights (those stay on install-backend / install / ollama-service).
+router.post('/persistent-mind-setup/apply', asyncHandler(async (req, res) => {
+  const body = validateRequest(localPersistentMindSetupApplySchema, req.body || {})
+  const result = await applyLocalPersistentMindSetup(body)
+  if (!result.success) {
+    throw new ServerError(result.error || 'Could not apply local Persistent Mind setup', {
+      status: 400,
+      context: { applicable: result.status?.applicable === true },
+    })
+  }
+  resetProviderReadinessCache()
+  res.json(result)
+}))
 
 // GET /api/local-llm/status — both backends + active marker
 router.get('/status', asyncHandler(async (req, res) => {
@@ -751,6 +780,17 @@ router.post('/llama-server/download-model/cancel', asyncHandler(async (req, res)
   const { presetId, role } = validateRequest(localLlmSpecModelDownloadSchema, req.body)
   const cancelled = cancelSpecDecodeModelDownload({ presetId, role })
   res.json({ success: true, cancelled })
+}))
+
+// POST /api/local-llm/llama-server/download-model/remove — delete an already
+// downloaded preset GGUF to free disk space for a method the user has decided
+// not to use. removeSpecDecodeModel refuses on its own while llama-server is
+// running that exact file, so unloading can't unlink weights out from under
+// an active launch.
+router.post('/llama-server/download-model/remove', asyncHandler(async (req, res) => {
+  const { presetId, role } = validateRequest(localLlmSpecModelDownloadSchema, req.body)
+  const result = await removeSpecDecodeModel({ presetId, role })
+  res.json(result)
 }))
 
 // Each of the three actions below changes exactly what the provider-readiness

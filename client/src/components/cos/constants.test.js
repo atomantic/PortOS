@@ -20,8 +20,11 @@ import {
   healthIssueTone,
   fresherHealth,
   providerPinPatch,
-  hasProviderPin
+  hasProviderPin,
+  providerPinDivergesFromSchedule,
+  TABS
 } from './constants';
+import { expectPageNavTabs } from '../../test/pageNavTabAssertions.js';
 
 // These mirror the server's domainBudgets/domainAutonomy helpers so the UI's
 // "is a cap set?" / "what mode?" view never disagrees with enforcement.
@@ -333,6 +336,28 @@ describe('hasProviderPin', () => {
   });
 });
 
+describe('providerPinDivergesFromSchedule', () => {
+  it('is true only when both sides name a provider AND they differ', () => {
+    expect(providerPinDivergesFromSchedule(
+      { providerId: 'claude-ollama-tui' }, { providerId: 'fleet-gpu---opencode-tui' }
+    )).toBe(true);
+  });
+
+  it('is false when the app pin matches the schedule pin', () => {
+    expect(providerPinDivergesFromSchedule({ providerId: 'claude-cli' }, { providerId: 'claude-cli' })).toBe(false);
+  });
+
+  it('is false when the app has no pin of its own', () => {
+    expect(providerPinDivergesFromSchedule({}, { providerId: 'claude-cli' })).toBe(false);
+    expect(providerPinDivergesFromSchedule(undefined, { providerId: 'claude-cli' })).toBe(false);
+  });
+
+  it('is false when the schedule has no pin to diverge from', () => {
+    expect(providerPinDivergesFromSchedule({ providerId: 'claude-cli' }, {})).toBe(false);
+    expect(providerPinDivergesFromSchedule({ providerId: 'claude-cli' }, undefined)).toBe(false);
+  });
+});
+
 // @vitest-environment node
 
 // REVIEWER_OPTIONS is UI copy DERIVED from the roster in `lib/reviewerPins.js`,
@@ -350,5 +375,20 @@ describe('REVIEWER_OPTIONS derivation', () => {
       expect(option.label, option.value).toBeTruthy();
       expect(option.description, option.value).toBeTruthy();
     }
+  });
+});
+
+// CoS derives its tab bar from the nav manifest's `tabGroup: 'cos'` (#6383) —
+// this pins the id/label/order the page means to render, and that every manifest
+// tab has a presentation entry (icon) in constants.js, which would otherwise
+// only surface as a thrown import-time error.
+describe('CoS TABS ↔ nav manifest', () => {
+  it('renders the cos tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(TABS, [
+      'briefing:Briefing', 'tasks:Tasks', 'agents:Agents', 'jobs:System Tasks',
+      'runs:Runs', 'run-events:Run Events', 'schedule:Schedule', 'workflow:Timeline',
+      'digest:Digest', 'gsd:GSD', 'productivity:Productivity', 'learning:Learning',
+      'memory:Memory', 'mind:Mind', 'health:Health', 'config:Config',
+    ]);
   });
 });

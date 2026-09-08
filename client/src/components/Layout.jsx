@@ -160,7 +160,6 @@ function ThemeModeToggle({ className = '' }) {
     </button>
   );
 }
-import * as api from '../services/api';
 
 // `NAV_COMMANDS` owns every structural field shared with the sidebar. This map
 // intentionally contains presentation only: giving a manifest path an icon is
@@ -230,6 +229,7 @@ export const NAV_PRESENTATION = {
   '/catalog': { icon: Sparkles },
   '/creative-commission': { icon: CalendarClock },
   '/creative-director': { icon: Clapperboard },
+  '/video': { icon: Clapperboard },
   '/pipeline/editorial-checks': { icon: ListChecks },
   '/fableloom': { icon: Waypoints },
   '/game': { icon: Gamepad2 },
@@ -587,6 +587,7 @@ const FULL_WIDTH_PATH_PREFIXES = [
   // so they need the bare full-width main — same as when they lived
   // under the /media tabs.
   '/creative-director',
+  '/video',
   '/brain',
   '/digital-twin',
   '/feature-agents',
@@ -758,25 +759,20 @@ export default function Layout() {
   const pipelineSeries = useSidebarSeries();
   const universes = useSidebarUniverses();
 
-  // Fetch the palette nav manifest once on mount so manifest-only paths
-  // (e.g. /wiki/log, /goals/tree) can be resolved in the Pinned/Recent sections
-  // even though they are not sidebar leaves.
-  const [manifestNav, setManifestNav] = useState([]);
-  useEffect(() => {
-    api.getPaletteManifest({ silent: true })
-      .then((data) => setManifestNav(Array.isArray(data?.nav) ? data.nav : []))
-      .catch((err) => console.warn(`⚠️ Layout: palette manifest fetch failed: ${err?.message || err}`));
-  }, []);
-
-  // Manifest-only paths still honour the feature gate, so a row pinned before the
-  // user disabled its feature stops resolving into Pinned/Recent too.
+  // Manifest-only paths (e.g. /wiki/log, /goals/tree) have no sidebar leaf, so
+  // they resolve out of the statically imported manifest that already backs
+  // `commandByPath`. Reading the bundle instead of re-fetching `/palette/manifest`
+  // is what lets a Pinned/Recent row for one of those paths render on the FIRST
+  // paint rather than popping in once a request lands (and keeps it rendering on
+  // an install where that request fails). They still honour the feature gate, so
+  // a row pinned before the user disabled its feature stops resolving too.
   const manifestEntryByPath = useMemo(() => {
     const map = new Map();
-    filterNavByFeatures(manifestNav, isFeatureEnabled).forEach((c) => {
-      if (c?.path && !map.has(c.path)) map.set(c.path, { path: c.path, label: c.label, icon: Navigation });
+    filterNavByFeatures([...commandByPath.values()], isFeatureEnabled).forEach((c) => {
+      map.set(c.path, { path: c.path, label: c.label, icon: Navigation });
     });
     return map;
-  }, [manifestNav, isFeatureEnabled]);
+  }, [isFeatureEnabled]);
 
   useEffect(() => {
     safeWriteStorage(SIDEBAR_KEY, String(collapsed));
@@ -881,11 +877,11 @@ export default function Layout() {
     (path) => {
       const direct = navEntryByPath.get(path) || manifestEntryByPath.get(path);
       if (direct) return direct;
-      const current = migrateLegacyNavPath(path, manifestNav);
+      const current = migrateLegacyNavPath(path, NAV_COMMANDS);
       if (current === path) return null;
       return navEntryByPath.get(current) || manifestEntryByPath.get(current) || null;
     },
-    [navEntryByPath, manifestEntryByPath, manifestNav],
+    [navEntryByPath, manifestEntryByPath],
   );
 
   const { pinned, recent, pin, unpin, isPinned } = useNavWorkingSet(resolveNavEntry);

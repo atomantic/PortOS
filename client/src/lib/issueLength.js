@@ -1,47 +1,24 @@
 /**
- * Client-side mirror of `server/lib/issueLength.js` — kept in lock-step
- * with the server table. The client only needs the labels + headline
- * numbers (pages / minutes) for the header dropdown; the full prose-word
- * / beat-count derivation lives server-side where the prompts render.
+ * The Length Profile picker's client-side helpers, over the issue-length
+ * vocabulary in `server/lib/issueLength.js`.
+ *
+ * The profile table and the custom-override bounds are re-exported from the
+ * server leaf rather than copied: the same profile drives the picker chip and
+ * the server-side target computation, so a bound changed on one side cannot
+ * leave the form offering a value the server clamps. `clampInt` and
+ * `summarizeLengthProfile` are client-only form/display helpers with no server
+ * twin (the server's private clamp has a different empty-input contract).
  */
+import { DEFAULT_LENGTH_PROFILE, LENGTH_PROFILES } from '../../../server/lib/issueLength.js';
 
-export const LENGTH_PROFILES = Object.freeze({
-  teaser: Object.freeze({
-    label: 'Teaser',
-    description: 'Short promo issue / web teaser.',
-    pageTarget: 8,
-    minutesTarget: 10,
-  }),
-  standard: Object.freeze({
-    label: 'Standard',
-    description: 'Standard floppy / half-hour episode (default).',
-    pageTarget: 22,
-    minutesTarget: 24,
-  }),
-  extended: Object.freeze({
-    label: 'Extended',
-    description: 'Premiere / longer special.',
-    pageTarget: 32,
-    minutesTarget: 36,
-  }),
-  finale: Object.freeze({
-    label: 'Finale',
-    description: 'Season / series finale or annual.',
-    pageTarget: 44,
-    minutesTarget: 48,
-  }),
-});
-
-export const DEFAULT_LENGTH_PROFILE = 'standard';
-
-// Working bounds for custom overrides — mirrored from `server/lib/issueLength.js`
-// (CUSTOM_PAGE_MIN / CUSTOM_PAGE_MAX / CUSTOM_MINUTE_MIN / CUSTOM_MINUTE_MAX).
-// The client cannot import from the server, so these values are duplicated here
-// manually. If you change the range on the server side, update this file too.
-export const CUSTOM_PAGE_MIN = 4;
-export const CUSTOM_PAGE_MAX = 120;
-export const CUSTOM_MINUTE_MIN = 4;
-export const CUSTOM_MINUTE_MAX = 240;
+export {
+  CUSTOM_MINUTE_MAX,
+  CUSTOM_MINUTE_MIN,
+  CUSTOM_PAGE_MAX,
+  CUSTOM_PAGE_MIN,
+  DEFAULT_LENGTH_PROFILE,
+  LENGTH_PROFILES,
+} from '../../../server/lib/issueLength.js';
 
 // Clamp + round + fallback. Returns `null` for non-finite input so callers
 // can distinguish "user cleared the field" from "user typed nonsense".

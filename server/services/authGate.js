@@ -73,7 +73,10 @@ export const authGate = async (req, res, next) => {
     }));
     return;
   }
-  const path = req.path;
+  // Express mounts match case-insensitively. Use the same casing for every
+  // authorization check, including public exceptions, without rewriting the
+  // request URL: downstream record IDs and asset filenames may be case-sensitive.
+  const path = req.path.toLowerCase();
   if (isPublicPath(path)) return next();
   // Per-API public exemptions. When the user has marked an API exposed +
   // passwordless in Settings (`apiAccess.<id>`), re-open ONLY its declared

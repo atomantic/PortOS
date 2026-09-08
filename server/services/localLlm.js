@@ -1,3 +1,4 @@
+import { localModelSafety } from '../lib/localModelSafety.js';
 /**
  * Local LLM orchestration — unifies the Ollama and LM Studio backends behind
  * one shape so the UI can list / search / install / delete models, move models
@@ -30,6 +31,7 @@ import { createWriteStream } from 'fs'
 import { rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { fileURLToPath } from 'url'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
 import { ensureDir, pathExists, sleep } from '../lib/fileUtils.js'
@@ -227,7 +229,7 @@ export async function installBackend(backend, onProgress = () => {}) {
   // Linux Ollama: official install script.
   if (process.platform === 'linux') {
     emit('Installing Ollama via the official install script…')
-    const r = await runStreaming('bash', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], emit, BACKEND_INSTALL_TIMEOUT_MS)
+    const r = await runStreaming('bash', [fileURLToPath(new URL('../../scripts/install-ollama.sh', import.meta.url))], emit, BACKEND_INSTALL_TIMEOUT_MS)
     if (!r.success) return { success: false, error: `Ollama install failed: ${r.error}. ${downloadHint}` }
     console.log('⬇️ Installed Ollama (linux script)')
     return { success: true, backend }
@@ -477,7 +479,7 @@ export async function upgradeBackend(backend, onProgress = () => {}) {
   // Linux Ollama: the official install script is also the upgrade path.
   if (process.platform === 'linux' && backend === 'ollama') {
     emit('Upgrading Ollama via the official install script…')
-    const r = await runStreaming('bash', ['-c', 'curl -fsSL https://ollama.com/install.sh | sh'], emit, BACKEND_INSTALL_TIMEOUT_MS)
+    const r = await runStreaming('bash', [fileURLToPath(new URL('../../scripts/install-ollama.sh', import.meta.url))], emit, BACKEND_INSTALL_TIMEOUT_MS)
     if (!r.success) {
       console.error(`⚠️ Ollama upgrade (linux script) failed: ${r.error}`)
       return { success: false, error: `Ollama upgrade failed: ${r.error}. ${downloadHint}` }
@@ -593,7 +595,7 @@ function lmStudioBadgeCapabilities(m) {
 function annotateInstalledModel(backend, rawModel, normalizedModel, capabilities) {
   const catalogEntry = getCatalog(backend, [rawModel.id]).find((entry) => entry.installed)
   return withHardwareCompatibility(
-    normalizedModel,
+    { ...normalizedModel, ...localModelSafety(catalogEntry?.repository || rawModel.id) },
     capabilities,
     catalogEntry?.hardwareRequirements || rawModel.hardwareRequirements,
   )

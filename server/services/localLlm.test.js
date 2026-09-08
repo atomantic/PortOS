@@ -649,6 +649,18 @@ describe('localLlm', () => {
   });
 
   describe('installBackend', () => {
+    it.each(['installBackend', 'upgradeBackend'])('%s uses the shared Linux prerequisite installer', async (action) => {
+      const restorePlatform = pinPlatform('linux');
+      cp.spawn = vi.fn(() => fakeChild());
+      try {
+        expect(await svc[action]('ollama')).toMatchObject({ success: true, backend: 'ollama' });
+        expect(cp.spawn.mock.calls[0][0]).toBe('bash');
+        expect(cp.spawn.mock.calls[0][1]).toEqual([expect.stringContaining(path.join('scripts', 'install-ollama.sh'))]);
+      } finally {
+        restorePlatform();
+      }
+    });
+
     it('rejects an unknown backend', async () => {
       expect((await svc.installBackend('nope')).success).toBe(false);
     });

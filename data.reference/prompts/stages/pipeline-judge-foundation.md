@@ -26,6 +26,28 @@ You are a **harsh, critical developmental editor** judging whether a story's FOU
 ### Characters ({{characterCount}}) — framework completeness
 {{characterRoster}}
 
+### Cast integrity — deterministic depth rulings
+{{castIntegrity}}
+
+The block above is a model-free pass over the same cast, and its **depth ruling
+per character is binding on your `character` score**:
+
+- `explained` — the author has ruled the interior out (unknown / not-applicable)
+  and said why. That is a finished assessment, not a gap. Do not score it as one
+  and do not ask for more.
+- `light` — a declared minor role or a flat arc. Judge only the conscious
+  pursuit (motivations, want). Never demand a Ghost, a wound, a trauma, or a
+  redemption from one of these.
+- `full` — the whole framework is fair to expect.
+
+A filled field is not integrity: a `full`-depth character whose stated control
+belief does not predict its own described behavior, whose survival, connection
+and status drives are one sentiment restated three times, or whose Lie is simply
+its theory of control reworded, is a **character** gap even though nothing is
+blank. Name that in `gap` with the field it lives in. Conversely, never
+manufacture damage to fill a slot — an absence the author explained is not a
+deficiency.
+
 ### Structure — the series arc & volumes
 ~~~~~~~~~~~~~~~~
 {{arc}}

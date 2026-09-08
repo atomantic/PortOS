@@ -1,3 +1,4 @@
+import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 /**
  * Agent CLI Spawning
  *
@@ -21,9 +22,8 @@ import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
+import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
-import { normalizeReviewers } from '../lib/validation.js';
-import { resolveReviewLoopOptions } from './codeReview.js';
 import { safeJSONParse, PATHS, writeFileGuarded } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { isKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
@@ -40,8 +40,8 @@ import { resolveForgeTokenEnv } from './git.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
-import { prClaimWasVerified, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
-import { canTypeSlashCommands, agentOwnsPrWorkflow } from '../lib/slashdoInvocation.js';
+import { prClaimWasVerified } from '../lib/prDisposition.js';
+import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
 import { doneSentinelPath } from '../lib/agentSentinel.js';
 import { isHostShuttingDown, shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
@@ -329,15 +329,10 @@ export async function getClaudeSettingsEnv() {
 
 /**
  * Spawn agent directly (fallback when runner not available).
- * `cleanupWorktreeFn` and `isTruthyMetaFn` are passed in rather than
- * imported directly. The agentLifecycle.js ↔ agentCliSpawning.js import
- * graph is bidirectional (agentLifecycle calls `spawnDirectly`, this file
- * calls `finalizeAgent`) and ES module hoisting handles it for top-level
- * function references — but importing `cleanupAgentWorktree` /
- * `isTruthyMeta` at module top level would force their `agentLifecycle`
- * and `subAgentSpawner` modules to initialize before this one, racing
- * the cycle in ways that surfaced as `undefined` reads on cold start.
- * Passing them via the options object defers the lookup to call time.
+ * `isTruthyMetaFn` is the lifecycle's shared metadata predicate, passed in by
+ * the caller and threaded on to `finalizeAgent`. Completion cleanup is not
+ * injected: `runSpawnerCompletionCleanup` is imported at top level, since
+ * nothing in its static closure reaches this module or agentLifecycle.js.
  */
 export async function spawnDirectly({
   agentId,
@@ -351,8 +346,8 @@ export async function spawnDirectly({
   agentDir,
   executionId,
   laneName,
-  cleanupWorktreeFn,
   isTruthyMetaFn,
+  ownsPrWorkflow,
   safetyProfile = null,
 }) {
   const fullCommand = `${cliConfig.command} ${cliConfig.args.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
@@ -418,13 +413,35 @@ export async function spawnDirectly({
   // /dev/stdin` via stdin (POSIX) / temp file (Windows); every other provider via
   // stdin (writePromptToStdin=true).
   const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(cliConfig.command, cliConfig.args, prompt);
-  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
+  const preparedSpawn = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
+  const isolatedSpawn = isPrivateSecurityTask(task)
+    ? await import('../lib/privateSecuritySandbox.js')
+      .then(({ preparePrivateSecuritySpawn }) => preparePrivateSecuritySpawn({ ...preparedSpawn, env: childEnv, cwd, provider }))
+      .catch(async () => {
+        // No child exists yet, so no error/close listener can finish this run.
+        // Keep sandbox paths out of shared diagnostics and fail closed locally.
+        const message = 'Private assessment could not prepare its isolated local harness. Verify the CLI and macOS sandbox, then retry.';
+        cleanupPromptFile();
+        releaseAgentLane({ agentId, success: false, exitCode: 1, executionId, laneName, errorExecutionMessage: message });
+        await finalizeAgent({
+          agentId, task, runId, providerId: provider.id, success: false, exitCode: 1,
+          duration: 0, outputBuffer: '', workspacePath, prExpected: false,
+          error: message, completionReason: 'spawn-error',
+          errorAnalysis: { category: 'actionable', error: message, suggestedFix: message },
+          isTruthyMetaFn,
+        });
+        cosEvents.emit('agent:error', { agentId, taskId: task.id, error: message });
+        return null;
+      })
+    : { ...preparedSpawn, env: childEnv };
+  if (!isolatedSpawn) return null;
+  const { command: spawnCommand, args: spawnArgs } = isolatedSpawn;
 
   const claudeProcess = spawn(spawnCommand, spawnArgs, {
     cwd,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: childEnv
+    env: isolatedSpawn.env
   });
 
   // Every child listener is registered HERE, in the same tick as spawn(), into
@@ -556,7 +573,10 @@ export async function spawnDirectly({
   // load+save each time. The batcher coalesces a ~250ms window; the close/error
   // handlers `await outputBatcher.flush()` so the final lines persist before
   // the agent is finalized. (output.txt is written separately below.)
-  const outputBatcher = createAgentOutputBatcher(agentId);
+  // Findings stay in the local transcript/report, never the shared agent stream.
+  const outputBatcher = isPrivateSecurityTask(task)
+    ? { push() {}, async flush() {} }
+    : createAgentOutputBatcher(agentId);
   if (ollamaContext?.warning) outputBatcher.push(ollamaContext.warning);
   if (ollamaContext?.applied) outputBatcher.push(`🪟 Reloaded Ollama at a ${ollamaContext.contextLength}-token context window`);
 
@@ -730,7 +750,7 @@ export async function spawnDirectly({
       await drainTranscriptWrites();
       await outputBatcher.flush();
       await completeAgent(agentId, { success: false, error: err.message });
-      await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
+      await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
       unregisterSpawnedAgent(claudeProcess.pid);
       activeAgents.delete(agentId);
     } catch (handlerErr) {
@@ -833,7 +853,7 @@ export async function spawnDirectly({
     // portos-server's descendants). Abandon rather than finalize, for the same
     // reasons as the TUI path (#3202): finalizing would charge the task's
     // failure budget — and possibly file an investigation task — for a fault the
-    // agent didn't have, and its cleanup hands the worktree to `cleanupWorktreeFn`,
+    // agent didn't have, and its cleanup hands the worktree to `cleanupAgentWorktree`,
     // which removes a clean tree, discarding the state a resume needs. Leaving
     // the record `running` is what lets the next boot's orphan sweep see this
     // agent in the host-shutdown marker and requeue it as interrupted.
@@ -874,39 +894,35 @@ export async function spawnDirectly({
 
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
-    const errorAnalysis = finalSuccess ? null : (immediateFallbackAnalysis || analyzeAgentFailure(analysisBuffer, task, model));
+    const errorAnalysis = finalSuccess || isPrivateSecurityTask(task) ? null : (immediateFallbackAnalysis || analyzeAgentFailure(analysisBuffer, task, model));
 
     // Every CLI agent that is a real coding harness drives its own push → PR →
     // review → merge (#3733): a slashdo-capable Claude runs `/simplify` +
     // `/do:pr`, codex/grok/agy/OpenCode run the plain `git`/`gh` equivalent from
     // the same prompt (see buildCliCompletionSection in agentPromptBuilder.js).
-    // Mirror that here so PortOS doesn't double-fire push+PR creation.
-    const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
-    const directLeanMode = isOllamaClaudeProvider(provider);
-    const directAgentOwnsPR = directOpenPR && agentOwnsPrWorkflow({
-      providerType: PROVIDER_TYPES.CLI,
-      leanMode: directLeanMode,
-    });
-    // PR-claim verification (#3358) stays on the SLASH-command predicate: it runs
-    // BEFORE the cleanup below, and cleanup now backstops a harness that skipped
-    // its own PR step — failing the run here for a PR that is about to exist
-    // would turn a recovered handoff into a false needs-attention.
-    const directPrClaimExpected = directOpenPR && canTypeSlashCommands({
+    // Resolved from the live provider descriptor — the same reading the TUI
+    // path takes up front — so PortOS doesn't double-fire push+PR creation; see
+    // `resolvePrOwnership` for why finalize's `prClaimExpected` and cleanup's
+    // `agentOwnsPR` are two predicates (#3358).
+    const prOwnership = resolvePrOwnership({
+      task,
+      isTruthyMeta: isTruthyMetaFn,
+      persisted: ownsPrWorkflow,
       providerId: provider?.id,
       providerCommand: provider?.command,
-      leanMode: directLeanMode,
+      leanMode: isOllamaClaudeProvider(provider),
     });
     // Whether finalize's check ACTUALLY produced a forge answer (filled in from
     // its return below) — not the same question as whether one was expected.
     // Finalize substitutes `{ok:true}` for a user-terminated run and for a check
     // that threw, and a throw from finalize skips the assignment entirely; in all
     // three cases nothing was verified, so cleanup must ask rather than stand down.
-    let directPrClaimVerified = false;
+    let prClaimVerified = false;
     let noChangesToShip = false;
 
-    // try/finally so a throw from finalizeAgent still runs the local
-    // cleanup (worktree, pid unregister, activeAgents delete). Mirrors the
-    // TUI path's pattern.
+    // try/finally so a throw from finalizeAgent still runs the local cleanup
+    // (the shared completion dispatch, pid unregister, activeAgents delete).
+    // Mirrors the TUI path's pattern.
     // See the TUI path: a PR-claim downgrade must reach cleanup, or a run that
     // opened no PR is cleaned up as a success and loses its retry state (#3358).
     let cleanupSuccess = finalSuccess;
@@ -926,60 +942,27 @@ export async function spawnDirectly({
         error: finalError || undefined,
         completionReason: terminatedByUser ? 'user-terminated' : undefined,
         workspacePath: cwd,
-        prExpected: directPrClaimExpected,
+        prExpected: prOwnership.prClaimExpected,
         // The run window the commit criterion is evaluated against (#3637).
         startedAt: agentData?.startedAt ?? null,
       });
       if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
-      directPrClaimVerified = prClaimWasVerified(finalized?.prVerdict);
+      prClaimVerified = prClaimWasVerified(finalized?.prVerdict);
       noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
     } finally {
-      // Advance a staged pipeline exactly as the runner/TUI path does through
-      // runAgentCompletionCleanup. This path only ever ran finalize + worktree
-      // cleanup, so a stage that spawned directly — every public-review stage,
-      // any cli-typed provider — completed without queuing its successor: the
-      // pr-reviewer Eligibility Gate recorded its decision and the pipeline
-      // simply stopped. Before the worktree goes, since a stage precondition
-      // may read it. Lazy import for the same module-cycle reason as
-      // cleanupWorktreeFn; sanctioned try/catch — this is a child 'close'
-      // handler, not a request.
-      if (task?.metadata?.pipeline) {
-        try {
-          const { handlePipelineProgression } = await import('./agentCompletionCleanup.js');
-          await handlePipelineProgression(task, agentId, cleanupSuccess);
-        } catch (err) {
-          console.error(`❌ Pipeline progression failed for ${agentId}: ${err.message}`);
-        }
-      }
-      const directPrCompletion = resolvePrCompletion(task.metadata);
-      const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
-      const reviewOptions = await resolveReviewLoopOptions(task.metadata, { normalize: normalizeReviewers, isTruthyMeta: isTruthyMetaFn });
-      await cleanupWorktreeFn(agentId, cleanupSuccess, {
-        prCreation: resolvePrCreation({
-          taskOpenPR: directOpenPR,
-          agentOwnsPr: directAgentOwnsPR,
-          prClaimVerified: directPrClaimVerified,
-          noChangesToShip,
-        }),
-        prCompletion: directPrCompletion,
-        ...reviewOptions,
-        skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
-        description: task.description,
-        agentOutput: outputBuffer,
-        originalTask: task
-      }).catch(err => console.error(`❌ CLI worktree cleanup failed for ${agentId}: ${err.message}`));
-
-      // Release the retry hold: flip the failed task back to `pending` carrying a
-      // pointer at whatever the run left behind — the branch (or whole worktree)
-      // `cleanupWorktreeFn` just preserved because the run failed with commits on
-      // it. Without the pointer the retry starts clean and redoes work already
-      // sitting on disk (#3368); without the hold that release replaces, the retry
-      // could be dequeued before the pointer landed (#3373). Imported lazily for the
-      // same reason `cleanupWorktreeFn` is injected: pulling the cleanup graph in at
-      // module top level races this file's own init in the agentLifecycle cycle.
-      await import('./agentWorktreeCleanup.js')
-        .then(({ releaseRetryHold }) => releaseRetryHold({ agentId, task, success: cleanupSuccess }))
-        .catch(err => console.error(`❌ CLI retry-hold release failed for ${agentId}: ${err.message}`));
+      // Pipeline progression → worktree cleanup with the PR disposition →
+      // retry-hold release, in the one owner both in-process spawners share.
+      // Caught so a throw there cannot skip the in-memory teardown below — this
+      // is a child 'close' handler, outside any request lifecycle.
+      await runSpawnerCompletionCleanup({
+        agentId,
+        task,
+        success: cleanupSuccess,
+        prOwnership,
+        prClaimVerified,
+        noChangesToShip,
+        outputBuffer,
+      }).catch(err => console.error(`❌ CLI completion cleanup failed for ${agentId}: ${err.message}`));
 
       unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
       activeAgents.delete(agentId);
@@ -1022,7 +1005,7 @@ export async function spawnDirectly({
           console.error(`❌ Agent ${agentId} completeAgent failed during recovery: ${completeErr.message}`);
         }
         try {
-          await completeAgentRun(runId, outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
+          await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
         } catch (runErr) {
           console.error(`❌ Agent ${agentId} completeAgentRun failed during recovery: ${runErr.message}`);
         }

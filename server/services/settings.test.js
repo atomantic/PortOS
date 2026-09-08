@@ -1,3 +1,8 @@
+// Store I/O is covered through real persisted settings in privateKeyStore.test.js.
+vi.mock('./privateKeyStore.js', () => ({
+  hydratePrivateKeys: vi.fn(async settings => settings),
+  persistPrivateKeys: vi.fn(async settings => settings),
+}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // settings.js persists via the shared atomicWrite helper and reads via

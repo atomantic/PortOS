@@ -1,3 +1,5 @@
+import { shuffle } from './arrayUtils.js';
+
 /**
  * Deterministic day-based rotation for POST practice selection (issue #5319).
  *
@@ -6,12 +8,12 @@
  * Elements from the memory tier, digit-span from the heuristic tiers. These
  * helpers replace that fixed order with a rotation keyed by the local day, so
  * the choice varies across days while staying repeatable for the same day and
- * the same inputs (no randomness — the daily routine must be reproducible).
+ * the same inputs. The daily mix uses seeded randomness to stay reproducible.
  *
- * Pure, dependency-free, and MIRRORED to `client/src/lib/postRotation.js` so the
- * server's recommendation tiers and the client's Quick-session domain picks
- * rotate identically. Keep the two files in sync — `postRotation.mirror.test.js`
- * fails when their code diverges.
+ * Pure and dependency-free: `client/src/lib/postRotation.js` re-exports it, so
+ * the server's recommendation tiers and the client's Quick-session domain picks
+ * rotate identically because they run the same code. Import no Node built-in
+ * here, and nothing outside `server/lib`.
  */
 
 /**
@@ -86,4 +88,15 @@ export function orderByRecencyRotation(candidates, { dayKey = null, isRecent = (
     start = end;
   }
   return out.map(entry => entry.candidate);
+}
+
+/** Stable pseudorandom daily order; selection does not move after each answer. */
+export function shuffleForDay(candidates, dayKey) {
+  let seed = dayOrdinal(dayKey) ?? 0;
+  return shuffle(candidates, () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let value = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    value ^= value + Math.imul(value ^ (value >>> 7), 61 | value);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  });
 }

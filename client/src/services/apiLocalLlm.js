@@ -197,6 +197,16 @@ export const cancelSpecDecodeModelDownload = (presetId, role, options) =>
     ...options,
   });
 
+// Delete an already-downloaded preset GGUF to reclaim disk space for a method
+// the user no longer wants — the unload/cleanup counterpart to the download
+// above. Refused server-side while llama-server is running that exact file.
+export const removeSpecDecodeModel = (presetId, role, options) =>
+  request('/local-llm/llama-server/download-model/remove', {
+    method: 'POST',
+    body: JSON.stringify({ presetId, role }),
+    ...options,
+  });
+
 // Set the default backend (which one PortOS routes local runs to) — does not move models.
 export const switchLocalLlmBackend = (to) =>
   request('/local-llm/switch', { method: 'POST', body: JSON.stringify({ to }) });
@@ -381,3 +391,14 @@ export const getModelCapabilityTestResult = (backend, modelId, testId, options) 
 // stored verdict describes weights that are no longer installed.
 export const deleteModelCapabilityTest = (backend, modelId, testId, options) =>
   request('/local-llm/capability-tests/delete', { method: 'POST', body: JSON.stringify({ backend, modelId, testId }), ...options });
+
+// Grok-box / CPU-only free Persistent Mind checklist (Ollama + Qwen2.5 7B).
+export const getLocalPersistentMindSetup = (options) =>
+  request('/local-llm/persistent-mind-setup', options);
+
+export const applyLocalPersistentMindSetup = (body = {}, options = {}) =>
+  request('/local-llm/persistent-mind-setup/apply', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    ...options,
+  });

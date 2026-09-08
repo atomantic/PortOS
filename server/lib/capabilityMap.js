@@ -225,7 +225,7 @@ export function networkRow(net = {}) {
         tailscaleHost: net.setup.dnsName || net?.cert?.tailscaleHost || null,
         nextStepId: net.setup.nextStep?.id || null,
       },
-      setupRequired: true,
+      setupRequired: false,
       setupComplete: complete,
     });
   }
@@ -237,7 +237,7 @@ export function networkRow(net = {}) {
       status: UNCONFIGURED,
       configured: false,
       summary: 'HTTP only · Tailscale not detected',
-      setupRequired: true,
+      setupRequired: false,
       setupComplete: false,
     });
   }
@@ -249,7 +249,7 @@ export function networkRow(net = {}) {
       tailscale ? `Tailscale: ${tailscaleHost}` : 'Tailscale not detected',
     ].join(' · '),
     detail: { https, tailscaleHost },
-    setupRequired: true,
+    setupRequired: false,
     setupComplete: https && tailscale,
   });
 }

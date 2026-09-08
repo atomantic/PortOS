@@ -57,6 +57,7 @@ import VideoGenGallery from '../components/videoGen/VideoGenGallery';
 import EpisodeComposer from '../components/videoGen/EpisodeComposer';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import MediaPreview from '../components/media/MediaPreview';
+import VideoUpscaleDrawer from '../components/media/VideoUpscaleDrawer';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import UniverseStylePicker from '../components/media/UniverseStylePicker';
 import PromptEnhancer from '../components/media/PromptEnhancer';
@@ -85,7 +86,6 @@ import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTar
 import {
   getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden,
-  upscaleVideo,
   patchSettingsSlice,
   getActiveVideoJob,
   getSettings,
@@ -228,6 +228,7 @@ export default function VideoGen() {
 
     speedProfileId, setSpeedProfileId,
     draftDecode, setDraftDecode,
+    streamingMode, setStreamingMode,
     batchSize, setBatchSize,
     seed, setSeed, handleRandomSeed, tiling, setTiling,
     textEncoderId, setTextEncoderId, textEncoderOptions,
@@ -319,6 +320,16 @@ export default function VideoGen() {
   const canSleepDisplay = !!currentModel?.sleepsDisplayDuringRender
     && !remoteTarget.isRemote && !isGrok && !isFal && !isReactor;
   const rendersSleepDisplay = canSleepDisplay && displaySleepEnabled;
+
+  // Does an external provider API own this render? Its weights, sampler and
+  // encoder are all on the far side of an HTTP call, so the local STAGE: ladder
+  // (download weights → load model → encode → sample → mux) describes work this
+  // machine never does and no marker ever lands on — which left the status card
+  // pinned on "Loading model" for the whole render. The status card swaps in the
+  // short submit / render / fetch ladder instead. A federated PEER is
+  // deliberately excluded: it really does load the weights and run the sampler,
+  // it just does so out of view.
+  const rendersOffMachine = isGrok || isFal || isReactor;
 
   // Every gallery-image slot on this page (both frame panels, each multi-keyframe
   // row, each IC-LoRA reference row) opens the SAME GalleryImagePicker modal the
@@ -421,23 +432,16 @@ export default function VideoGen() {
     });
     if (result) toast.success(nextHidden ? 'Video hidden' : 'Video unhidden');
   }, []);
-  // Keep the single-flight guard outside render state so the handler remains
-  // stable for memoized cards while ffmpeg processes one upscale at a time.
-  const upscalingRef = useRef(false);
-  const handleUpscaleHistory = useCallback(async (item) => {
-    const raw = item?.raw || item;
-    if (upscalingRef.current) return;
-    upscalingRef.current = true;
-    toast.loading('Upscaling 2× — typically 10-30s…');
-    const result = await upscaleVideo(raw.id, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Upscale failed');
-      return null;
-    });
-    upscalingRef.current = false;
-    if (result?.video) {
-      setHistory((h) => [result.video, ...h]);
-      toast.success('Upscaled 2×');
-    }
+  // The button opens a method-picker drawer (#6510) instead of upscaling
+  // directly — the drawer owns the plan fetch, the disclosure, and the actual
+  // submit; this page just supplies which item is open and how to fold the
+  // finished entry into local state.
+  const [upscaleItem, setUpscaleItem] = useState(null);
+  const handleUpscaleHistory = useCallback((item) => {
+    setUpscaleItem(item?.raw || item);
+  }, []);
+  const handleUpscaled = useCallback((video) => {
+    setHistory((h) => [video, ...h]);
   }, []);
 
   // Remix a prior render: hand all its params back into the form (the hook
@@ -1772,6 +1776,7 @@ export default function VideoGen() {
               speedProfileId={speedProfileId} onSpeedProfileChange={setSpeedProfileId}
               draftDecode={draftDecode} onDraftDecodeChange={setDraftDecode}
               draftDecodeLocked={deliveryModelSelected}
+              streamingMode={streamingMode} onStreamingModeChange={setStreamingMode}
               imageStrength={imageStrength} onImageStrengthChange={setImageStrength}
               i2vReferenceMode={i2vReferenceMode} onI2vReferenceModeChange={setI2vReferenceMode}
               effectiveImageStrength={effectiveImageStrength}
@@ -1899,6 +1904,7 @@ export default function VideoGen() {
         error={error}
         startedAt={renderStartedAt}
         sleepsDisplay={rendersSleepDisplay}
+        remote={rendersOffMachine}
       />
 
       <MediaJobsQueue kind="video" />
@@ -1936,6 +1942,12 @@ export default function VideoGen() {
         open={!!galleryPicker}
         onClose={() => setGalleryPicker(null)}
         onSelect={handleGalleryPick}
+      />
+
+      <VideoUpscaleDrawer
+        item={upscaleItem}
+        onClose={() => setUpscaleItem(null)}
+        onUpscaled={handleUpscaled}
       />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings" size="lg">

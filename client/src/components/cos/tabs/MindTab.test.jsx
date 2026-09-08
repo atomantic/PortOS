@@ -245,6 +245,34 @@ describe('MindTab', () => {
     expect(screen.queryByText('Showing recent history')).not.toBeInTheDocument();
   });
 
+  it('opens settings from the header and drafts a repair while showing explicit recheck progress', async () => {
+    const user = userEvent.setup();
+    const diagnostics = {
+      capturedAt: '2026-09-05T12:00:00Z', readiness: 'blocked',
+      workspaces: [{ appId: 'example-app', appName: 'Example App', readiness: 'blocked', preflight: {
+        workspaces: [{ id: 'root', dependencies: { status: 'installed' }, engines: { packageManager: { name: 'npm', required: '>=12.0.0', actual: '11.0.0', status: 'incompatible' } } }],
+        warnings: [{ code: 'workspace-engines-unavailable', check: 'engines', message: 'Engine mismatch.' }],
+      } }],
+    };
+    api.getPersistentMindVisibility.mockResolvedValue(diagnostics);
+    renderTab();
+    await user.click(await screen.findByRole('button', { name: 'Settings', exact: true }));
+    expect(await screen.findByRole('heading', { name: 'AI profile' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close mind workspace' }));
+    await user.click(screen.getByRole('button', { name: 'Environment details' }));
+    expect(await screen.findByText('11.0.0')).toBeInTheDocument();
+    let finishRefresh;
+    api.getPersistentMindVisibility.mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }));
+    await user.click(screen.getByRole('button', { name: 'Recheck workspaces' }));
+    expect(screen.getByRole('button', { name: 'Checking…' })).toBeDisabled();
+    expect(api.getPersistentMindVisibility).toHaveBeenLastCalledWith({ refresh: true, silent: true });
+    await act(async () => finishRefresh(diagnostics));
+    expect(screen.getByRole('button', { name: 'Recheck workspaces' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Draft repair request' }));
+    expect(screen.getByPlaceholderText('Message Persistent Mind').value).toContain('app ID: example-app');
+    expect(api.sendPersistentMindMessage).not.toHaveBeenCalled();
+  });
+
   it('puts the AI profile controls before start and starts only after the profile save finishes', async () => {
     const user = userEvent.setup();
     let finishSave;
@@ -332,7 +360,7 @@ describe('MindTab', () => {
     await user.click(taskAccess);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 7, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 8, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(screen.getAllByText(/code review then merge/i).length).toBeGreaterThan(0);
@@ -601,6 +629,53 @@ describe('MindTab', () => {
     expect(screen.getByRole('tab', { name: 'Memories' })).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByRole('heading', { name: 'Curated memories' })).toBeInTheDocument();
     expect(screen.getByText('Delivery preference')).toBeInTheDocument();
+  });
+
+  it('lets the user protect a memory and makes bulk cleanup retention explicit', async () => {
+    const user = userEvent.setup();
+    const memory = { id: 'identity', content: 'My chosen name is Aster.', summary: 'Chosen name', type: 'fact', category: 'other', tags: [], importance: 0.5, protection: 'standard' };
+    api.getPersistentMindContext.mockImplementation(async () => ({ memories: [{ ...memory }], rollups: [], preview: {} }));
+    api.updatePersistentMindMemory.mockImplementation(async (_id, updates) => { Object.assign(memory, updates); return { success: true, memory }; });
+    renderTab('/cos/mind?panel=memories');
+    await user.click(await screen.findByText('Chosen name'));
+    const editor = screen.getByText('Chosen name').closest('details');
+    await user.selectOptions(within(editor).getByLabelText('Cleanup protection'), 'core-identity');
+    await user.click(within(editor).getByRole('button', { name: 'Save memory' }));
+    await waitFor(() => expect(api.updatePersistentMindMemory).toHaveBeenCalledWith('identity', expect.objectContaining({ protection: 'core-identity' }), { silent: true }));
+    expect(await screen.findByText('Core identity · Protected')).toBeInTheDocument();
+    await user.selectOptions(within(editor).getByLabelText('Cleanup protection'), 'standard');
+    expect(screen.getByText(/Saving as Standard removes protection/)).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Cleanup' }));
+    expect(screen.getByText('Core identity and important memories survive cleanup')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review memory protection' })).toHaveAttribute('href', '/cos/mind?panel=memories');
+  });
+
+  it('preserves newly applied protection when saving content from an older memory snapshot', async () => {
+    const user = userEvent.setup();
+    const memory = { id: 'identity', content: 'Use the name Aster.', summary: 'Chosen name', type: 'fact', category: 'other', tags: [], importance: 0.5, protection: 'standard' };
+    api.getPersistentMindContext.mockImplementation(async () => ({ memories: [{ ...memory }], rollups: [], preview: {} }));
+    api.updatePersistentMindMemory.mockImplementation(async (_id, updates) => { Object.assign(memory, updates); return { success: true, memory: { ...memory } }; });
+    renderTab('/cos/mind?panel=memories');
+    await user.click(await screen.findByText('Chosen name'));
+    const editor = screen.getByText('Chosen name').closest('details');
+    // The mind protects the record after the editor loaded its older snapshot.
+    memory.protection = 'core-identity';
+    await user.type(within(editor).getByLabelText('Content'), ' Keep this preference.');
+    await user.click(within(editor).getByRole('button', { name: 'Save memory' }));
+    await waitFor(() => expect(api.updatePersistentMindMemory).toHaveBeenCalledTimes(1));
+    expect(api.updatePersistentMindMemory.mock.calls[0][1]).not.toHaveProperty('protection');
+    expect(memory.protection).toBe('core-identity');
+    await waitFor(() => expect(within(editor).getByLabelText('Cleanup protection')).toHaveValue('core-identity'));
+    // A deliberate removal remains available, but is not replayed by later edits.
+    await user.selectOptions(within(editor).getByLabelText('Cleanup protection'), 'standard');
+    await user.click(within(editor).getByRole('button', { name: 'Save memory' }));
+    await waitFor(() => expect(memory.protection).toBe('standard'));
+    await waitFor(() => expect(within(editor).getByRole('button', { name: 'Save memory' })).toBeEnabled());
+    memory.protection = 'important';
+    await user.click(within(editor).getByRole('button', { name: 'Save memory' }));
+    await waitFor(() => expect(api.updatePersistentMindMemory).toHaveBeenCalledTimes(3));
+    expect(api.updatePersistentMindMemory.mock.calls[2][1]).not.toHaveProperty('protection');
+    expect(memory.protection).toBe('important');
   });
 
   it('retains unsaved context drafts across workspace panels and ignores accidental dismissal', async () => {

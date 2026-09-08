@@ -66,6 +66,20 @@ beforeEach(() => {
 });
 
 describe('buildCosTasksPayload', () => {
+  it('never federates private assessment tasks or their source inventory', async () => {
+    vi.mocked(getCosTasks).mockResolvedValue({ tasks: [task('private', 'pending', { metadata: {
+      analysisType: 'private-security-assessment', privateSecurityScope: { files: ['auth.js'] },
+    } })] });
+    expect((await buildCosTasksPayload()).tasks).toEqual([]);
+  });
+
+  it('excludes machine-local Video prompts from both task files', async () => {
+    const video = task('video', 'pending', { metadata: { machineLocal: true, context: 'Example source canon' } });
+    vi.mocked(getUserTasks).mockResolvedValue({ tasks: [video] });
+    vi.mocked(getCosTasks).mockResolvedValue({ tasks: [{ ...video, metadata: { ...video.metadata, machineLocal: 'true' } }, task('ordinary')] });
+    expect((await buildCosTasksPayload()).tasks.map(t => t.id)).toEqual(['ordinary']);
+  });
+
   it('unions user + internal tasks with a taskType discriminator and a deterministic listHash', async () => {
     vi.mocked(getUserTasks).mockResolvedValue({ tasks: [task('task-a', 'pending')] });
     vi.mocked(getCosTasks).mockResolvedValue({ tasks: [task('sys-b', 'in_progress', { metadata: { claimedBy: 'i1' } })] });
@@ -135,6 +149,7 @@ describe('syncCosTasksFromPeer', () => {
 
   it('merges both task files, splitting entries by taskType', async () => {
     const tasks = [
+      { id: 'local-video', taskType: 'internal', status: 'pending', priority: 'MEDIUM', description: 'Example video', metadata: { machineLocal: true, context: 'Example source canon' } },
       { id: 'task-a', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'd' },
       { id: 'sys-b', taskType: 'internal', status: 'in_progress', priority: 'HIGH', description: 'd', metadata: { claimedBy: 'peer-1' } },
     ];

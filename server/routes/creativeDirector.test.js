@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
+vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn(async () => ({ id: 'example-universe', name: 'Example universe' })) }));
+vi.mock('../services/pipeline/series.js', () => ({ getSeries: vi.fn(async () => ({ id: 'example-series' })) }));
+vi.mock('../services/catalogDB/ingredients.js', () => ({ getIngredient: vi.fn(async () => ({ id: 'example-catalog' })) }));
+vi.mock('../services/tracks/index.js', () => ({ getTrack: vi.fn(async () => ({ id: 'example-music' })) }));
+vi.mock('../services/voice/profiles.js', () => ({ getVoiceProfile: vi.fn(async () => ({ id: 'example-voice', inference: { checkpointPath: '/fake/private/voice' } })) }));
+import { getUniverse } from '../services/universeBuilder/crud.js';
+import { getSeries } from '../services/pipeline/series.js';
+
 vi.mock('../services/creativeDirector/local.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'cd-1', name: 'A' }]),
   getProjectsByIds: vi.fn(async () => []),
@@ -67,6 +75,10 @@ import * as firstPass from '../services/creativeDirector/firstPassGen.js';
 import * as firstPassMusicBed from '../services/creativeDirector/firstPassMusicGen.js';
 import * as creativeTools from '../services/creative/toolRegistry.js';
 import { CREATIVE_DIRECTOR_IDS_BATCH_MAX } from '../lib/creativeDirectorValidation.js';
+vi.mock('../services/creativeDirector/videoReview.js', () => ({ reviewVideo: vi.fn(async () => ({ checkpoints: [], feedback: [] })), getVideoReview: vi.fn(async () => ({ checkpoints: [], canReview: true })) }));
+import { reviewVideo } from '../services/creativeDirector/videoReview.js';
+vi.mock('../services/creativeDirector/videoExecution.js', () => ({ getVideoExecutionPreview: vi.fn(async () => ({ canStart: true })), startVideoExecution: vi.fn(async () => ({ status: 'planning' })) }));
+const { getVideoExecutionPreview, startVideoExecution } = await import('../services/creativeDirector/videoExecution.js');
 import creativeDirectorRoutes from './creativeDirector.js';
 
 describe('creativeDirector routes', () => {
@@ -77,6 +89,111 @@ describe('creativeDirector routes', () => {
     app.use(express.json());
     app.use('/api/creative-director', creativeDirectorRoutes);
     vi.clearAllMocks();
+  });
+
+  it('previews choices, validates explicit Start limits, and cancels owned work on Video Pause', async () => {
+    cdService.getProject.mockResolvedValue({ id: 'cd-video', workspace: 'video', status: 'draft' });
+    expect((await request(app).get('/api/creative-director/cd-video/execution')).body.canStart).toBe(true);
+    expect(getVideoExecutionPreview).toHaveBeenCalledWith('cd-video');
+    const input = { configurationRevision: 'a'.repeat(32), limits: { maxClips: 2 } };
+    expect((await request(app).post('/api/creative-director/cd-video/start').send({ ...input, limits: { maxClips: 0 } })).status).toBe(400);
+    expect(startVideoExecution).not.toHaveBeenCalled();
+    expect((await request(app).post('/api/creative-director/cd-video/start').send(input)).status).toBe(200);
+    expect(startVideoExecution).toHaveBeenCalledWith('cd-video', expect.objectContaining({ configurationRevision: input.configurationRevision, limits: expect.objectContaining({ maxClips: 2 }) }));
+    await request(app).post('/api/creative-director/cd-video/pause').send({});
+    expect(stop.stopProject).toHaveBeenCalledWith('cd-video', { reason: 'Paused by the user.' });
+  });
+
+  it('validates review revisions and feedback before the owner mutation', async () => {
+    const invalid = await request(app).post('/api/creative-director/cd-video/review').send({ action: 'feedback', stage: 'script-shot-plan', revision: 'a'.repeat(32) });
+    expect(invalid.status).toBe(400);
+    expect(reviewVideo).not.toHaveBeenCalled();
+    const input = { action: 'feedback', stage: 'script-shot-plan', revision: 'a'.repeat(32), rating: 'up' };
+    expect((await request(app).post('/api/creative-director/cd-video/review').send(input)).status).toBe(200);
+    expect(reviewVideo).toHaveBeenCalledWith('cd-video', input);
+  });
+
+  it('requires the displayed shot work revision for Video evaluation callbacks', async () => {
+    cdService.getProject.mockResolvedValue({ id: 'cd-video', workspace: 'video' });
+    const res = await request(app).patch('/api/creative-director/cd-video/scene/example-shot').send({ status: 'accepted' });
+    expect(res.status).toBe(409);
+    expect(cdService.updateScene).not.toHaveBeenCalled();
+  });
+
+
+  describe('Video drafts', () => {
+    it('checks draft and saved sources without exporting source records or rewriting revisions', async () => {
+      const sources = ['universe', 'series', 'catalog', 'music', 'voice'].map(kind => ({ kind, id: `example-${kind}`, revision: 'recorded-revision' }));
+      const project = { id: 'cd-video', workspace: 'video', videoDraft: { sources }, treatment: { artifact: { references: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, revision: 'older-revision' })) } } };
+      cdService.getProject.mockResolvedValueOnce(project);
+      const res = await request(app).get('/api/creative-director/cd-video/sources');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        draft: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, available: true, currentRevision: null, revisionChanged: null })),
+        artifact: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, revision: 'older-revision', available: true, currentRevision: null, revisionChanged: null })),
+      });
+      expect(getUniverse).toHaveBeenCalledTimes(1);
+      expect(cdService.updateProject).not.toHaveBeenCalled();
+      expect(project.treatment.artifact.references[0].revision).toBe('older-revision');
+    });
+
+    it('reports deleted sources but treats failed lookups as unknown instead of missing', async () => {
+      const project = { workspace: 'video', videoDraft: { sources: [{ kind: 'series', id: 'example-series' }] } };
+      cdService.getProject.mockResolvedValue(project);
+      getSeries.mockRejectedValueOnce(Object.assign(new Error('Missing series'), { code: 'PIPELINE_SERIES_NOT_FOUND' }));
+      const missing = await request(app).get('/api/creative-director/cd-video/sources');
+      expect(missing.status).toBe(200);
+      expect(missing.body.draft[0].available).toBe(false);
+      getSeries.mockRejectedValueOnce(new Error('Store unavailable'));
+      const failed = await request(app).get('/api/creative-director/cd-video/sources');
+      expect(failed.status).toBe(500);
+      expect(failed.body.draft).toBeUndefined();
+      cdService.getProject.mockResolvedValueOnce(null);
+      expect((await request(app).get('/api/creative-director/missing/sources')).status).toBe(404);
+    });
+
+    const draft = {
+      name: 'Example short', workspace: 'video', modelId: '',
+      aspectRatio: '16:9', quality: 'draft', targetDurationSeconds: 60,
+      videoDraft: { durationRange: { min: 60, max: 180 } },
+    };
+
+    it('creates and saves a brief without starting provider work, and rejects malformed ranges', async () => {
+      cdService.createProject.mockResolvedValueOnce({ ...draft, id: 'cd-video', status: 'draft' });
+      expect((await request(app).post('/api/creative-director').send(draft)).status).toBe(201);
+      expect(cdService.createProject).toHaveBeenCalledWith(expect.objectContaining({
+        videoDraft: expect.objectContaining({ reviewPolicy: 'review', checkpoints: ['script-shot-plan', 'references', 'rough-cut', 'final-cut'] }),
+      }));
+      cdService.getProject.mockResolvedValueOnce({ ...draft, id: 'cd-video', status: 'draft' });
+      expect((await request(app).patch('/api/creative-director/cd-video').send({
+        userStory: 'A quiet journey', videoDraft: draft.videoDraft,
+      })).status).toBe(200);
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+      expect(firstPass.enqueueFirstPassPortraits).not.toHaveBeenCalled();
+      expect(firstPassMusicBed.enqueueFirstPassMusicBed).not.toHaveBeenCalled();
+      expect((await request(app).post('/api/creative-director').send({
+        ...draft, videoDraft: { durationRange: { min: 180, max: 60 } },
+      })).status).toBe(400);
+      expect((await request(app).post('/api/creative-director').send({
+        ...draft, workspace: undefined, videoDraft: undefined,
+      })).status).toBe(400);
+    });
+
+    it('refuses legacy execution entry points before they mutate or enqueue a Video draft', async () => {
+      cdService.getProject.mockResolvedValue({ ...draft, id: 'cd-video', status: 'draft' });
+      for (const [action, body] of [
+        ['start', {}], ['resume', {}], ['replan', {}],
+        ['directive', { goal: 'Example goal' }],
+        ['auto-cast', { compose: true, generateFirstPass: true }],
+        ['plan/step/example', { action: 'retry' }],
+      ]) {
+        expect((await request(app).post('/api/creative-director/cd-video/' + action).send(body)).status).toBe(['start', 'resume'].includes(action) ? 400 : 409);
+      }
+      expect(cdService.updateProject).not.toHaveBeenCalled();
+      expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+      cdService.getProject.mockReset();
+    });
   });
 
   describe('stop', () => {
@@ -291,6 +408,16 @@ describe('creativeDirector routes', () => {
       const r = await request(app).patch('/api/creative-director/cd-1/treatment').send(treatmentBody);
       expect(r.status).toBe(200);
       expect(cdService.setTreatment).toHaveBeenCalled();
+    });
+    it('accepts a script but strips caller-supplied artifact metadata and rejects oversized scripts', async () => {
+      cdService.setTreatment.mockResolvedValue({ id: 'cd-1' });
+      const body = { ...treatmentBody, script: 'The cat enters.', artifact: { revision: 100 } };
+      expect((await request(app).patch('/api/creative-director/cd-1/treatment').send(body)).status).toBe(200);
+      expect(cdService.setTreatment.mock.lastCall[1].script).toBe(body.script);
+      expect(cdService.setTreatment.mock.lastCall[1]).not.toHaveProperty('artifact');
+      cdService.setTreatment.mockClear();
+      expect((await request(app).patch('/api/creative-director/cd-1/treatment').send({ ...body, script: 'x'.repeat(50001) })).status).toBe(400);
+      expect(cdService.setTreatment).not.toHaveBeenCalled();
     });
     // First-pass scene-frame seeding now fires from `setTreatment` itself
     // (the domain write, #1938) rather than this route, so its behavior is
@@ -702,6 +829,41 @@ describe('creativeDirector routes', () => {
 
   describe('PATCH /:id/plan — stepId grammar (#2773)', () => {
     const validStep = { stepId: 'create-series', toolName: 'pipeline_createSeries', args: { name: 'Nova' }, dependsOn: [] };
+
+    // Each case catches a different graph defect that otherwise reaches the
+    // executor as ambiguous identity or a permanently unrunnable consumer.
+    it.each([
+      ['duplicate identity', [{ stepId: 'a' }, { stepId: 'a' }], 'Duplicate step ID'],
+      ['missing producer', [{ stepId: 'a', dependsOn: ['missing'] }], 'Unknown dependency'],
+      ['self dependency', [{ stepId: 'a', dependsOn: ['a'] }], 'Dependency cycle'],
+      ['cycle behind a runnable root', [
+        { stepId: 'root' }, { stepId: 'a', dependsOn: ['root', 'b'] }, { stepId: 'b', dependsOn: ['a'] },
+      ], 'Dependency cycle'],
+    ])('rejects %s before saving or dispatching', async (_name, steps, message) => {
+      const planAdvance = await import('../services/creativeDirector/planAdvance.js');
+      const r = await request(app).patch('/api/creative-director/cd-1/plan')
+        .send({ steps: steps.map(step => ({ ...validStep, ...step })) });
+      expect(r.status).toBe(400);
+      expect(JSON.stringify(r.body)).toContain(message);
+      expect(cdService.setPlan).not.toHaveBeenCalled();
+      expect(planAdvance.advanceAfterPlanStepSettled).not.toHaveBeenCalled();
+    });
+
+    it('accepts forward and shared dependencies without reordering the authored plan', async () => {
+      const planAdvance = await import('../services/creativeDirector/planAdvance.js');
+      const steps = [
+        { ...validStep, stepId: 'cut', dependsOn: ['left', 'right'] },
+        { ...validStep, stepId: 'left', dependsOn: ['source'] },
+        { ...validStep, stepId: 'right', dependsOn: ['source'] },
+        { ...validStep, stepId: 'source' },
+      ];
+      cdService.getProject.mockResolvedValue({ id: 'cd-1' });
+      cdService.setPlan.mockResolvedValue({ id: 'cd-1', plan: { steps } });
+      const r = await request(app).patch('/api/creative-director/cd-1/plan').send({ steps });
+      expect(r.status).toBe(200);
+      expect(cdService.setPlan).toHaveBeenCalledWith('cd-1', { steps });
+      expect(planAdvance.advanceAfterPlanStepSettled).toHaveBeenCalledWith('cd-1');
+    });
 
     it('accepts a word/hyphen stepId', async () => {
       cdService.getProject.mockResolvedValue({ id: 'cd-1', directive: { goal: 'x', constraints: {} } });

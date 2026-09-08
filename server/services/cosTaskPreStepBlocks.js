@@ -29,6 +29,7 @@ import { emitLog } from './cosEvents.js';
 import { getActiveApps } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
+import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../lib/dispatchLabels.js';
 import {
   appendReviewerEffortBlock,
   buildLocalReviewerInstructions,
@@ -176,6 +177,9 @@ const SWARM_FORGE = {
  * body from any other cause — bounded at 2 rewrites plus one re-derive, because
  * Phase C blocks on every agent finishing, so an agent looping on a body it can
  * never satisfy would stall the whole batch's merge queue.
+ *
+ * Phase B carries `DISPATCH_HINT_FANOUT_GUIDANCE` because the orchestrator is the
+ * only actor in this flow that gets to CHOOSE how an agent runs.
  */
 export function resolveSwarmBlock(promptTaskType, count) {
   const n = Number.isInteger(count) ? count : 0;
@@ -194,9 +198,14 @@ export function resolveSwarmBlock(promptTaskType, count) {
 ## Phase A — Partition the batch (ONCE, up front)
 1. Run Phase 1's candidate scan + in-flight filter (below) to build the eligible-issue queue (oldest-first, honoring the author filter).
 2. From that queue pick up to ${n} issues that are **mutually independent** — no shared files/subsystems likely to collide on merge, no parent/child or dependency links; prefer issues that touch disjoint areas. **Under-fill is fine:** if fewer than ${n} independent issues exist, run a smaller swarm and say so. **If only ONE is eligible, just run the single-issue flow below and say so** — a one-agent swarm is pure overhead.
+3. **Keep each picked issue's \`model:\` / \`effort:\` labels.** Phase 1's listing already returns \`labels\` — carry them alongside the issue number, because they are what you route that issue's agent with in Phase B.
 
 ## Phase B — Fan out (one subagent per picked issue)
 For EACH picked issue, spawn a subagent that runs the single-issue **Phases 2–6 below** for that one issue — claim (own \`claim/issue-<num>\` worktree + assignee + \`in-progress\` label) → verify → implement → run the LOCAL reviewers before anything is opened → changelog → open the ${pr} → run the ${pr}-side review gate ({reviewers}) — **but with NO merge and NO Phase 7 cleanup** (the orchestrator owns those; each agent opens its ${pr} the equivalent of \`--no-merge\`). Because each agent claims through the normal Phase 2 assignee marker + race read-back, two agents can never ship the same issue.
+
+**Dispatch each agent at ITS issue's recommended model and effort.** You are the orchestrator: choosing how each fan-out agent runs is your call, and a labeled issue already carries that answer. Name the model and effort you used for each issue in your final summary, so a mis-routed backlog is visible rather than silent.
+
+${DISPATCH_HINT_FANOUT_GUIDANCE}
 
 **Each fan-out agent gets its OWN scratch subdirectory — the scratchpad root is off-limits.** Every agent in this run shares one session scratchpad path, and every agent runs these byte-identical instructions, so left to themselves two agents pick the same obvious filename (\`pr-body.md\`) and silently clobber each other — last writer wins, the command still exits 0, and the wrong text lands on the wrong ${pr}. So: **each fan-out agent writes ALL temp files under \`<scratchpad>/issue-<num>/\` (its own issue number), and NEVER writes to the scratchpad root** (the root stays the orchestrator's). That covers ${pr} body drafts, review notes, diff dumps, test output — every scratch artifact, not just the body file. Create the directory before first use (\`mkdir -p\`). Filenames inside it may be as obvious as you like; the directory is what makes them unique. **If your environment gives you no scratchpad path at all**, use \`$(mktemp -d)/issue-<num>\` instead — never a path inside the source repo or inside your worktree, where it would show up as untracked cruft or get swept into a commit.
 
@@ -430,10 +439,11 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
   metadata.perpetual = true;
   const supersededBlock = formatSupersededForPrompt(result.superseded || []);
   const block = [
-    formatInFlightForPrompt(actionable, {
+    await formatInFlightForPrompt(actionable, {
       defaultBranch: result.defaultBranch,
       actions,
-      branchesPerAgent: metadata.branchesPerAgent
+      branchesPerAgent: metadata.branchesPerAgent,
+      repoPath: app.repoPath
     }),
     supersededBlock
   ].filter(Boolean).join('\n');
@@ -771,11 +781,11 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
 export async function buildImprovementTaskDescription({ promptTemplate, app, promptTaskType, metadata, blocks }) {
   // Resolve the `{reviewers}` the agent is told to run. When the task itself
   // didn't pin reviewers, fall back to the user's PortOS Code Review Defaults
-  // (Settings → Code Reviewers) rather than the hardcoded `copilot` —
+  // (Settings → Code Reviewers) rather than a hardcoded reviewer —
   // otherwise scheduled tasks like claim-issue, whose prompt drives the review
-  // loop directly, would always tell the agent to use Copilot regardless of the
-  // user's configured reviewers. Settings I/O failures degrade to the hardcoded
-  // default inside normalizeReviewers, so a read error never blocks dispatch.
+  // loop directly, would otherwise ignore the user's configured reviewers.
+  // Settings I/O failures leave the reviewer list empty, so a read error never
+  // silently enables a review.
   //
   // One resolver for the whole bundle (list + usernames + `~opt` set + the three
   // keyed pins). Local-LLM reviewers stay in the operative list; their service

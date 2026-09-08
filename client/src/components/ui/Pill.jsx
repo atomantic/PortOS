@@ -16,6 +16,15 @@
 //              never emit a `border-…` color with no `border` width).
 //   mono     — adds font-mono (host / scheme badges).
 // Any extra props (`title`, …) pass through to the span.
+//
+// A caller's own unprefixed display utility replaces the default `inline-flex`.
+// Tailwind v4 emits display utilities alphabetically, so `.inline-flex` lands
+// after `.hidden` in the stylesheet and outranks it at equal specificity: a
+// `hidden sm:inline-flex` className used to leave the badge visible at every
+// width, with the responsive variant it was paired with doing nothing.
+// Responsive variants ride in a media query that already outranks the base
+// layer, so they must NOT count as an override here.
+const OWN_DISPLAY = /(?:^|\s)(?:hidden|block|inline|inline-block|flex|inline-flex|grid|inline-grid|contents)(?:\s|$)/;
 
 const TONES = {
   accent: 'text-port-accent bg-port-accent/10 border-port-accent/20',
@@ -48,7 +57,8 @@ export default function Pill({
   // with no width to paint it.
   const color = bordered ? toneClass : toneClass.replace(/\bborder-\S+/g, '');
   const cls = [
-    'inline-flex items-center gap-1 rounded',
+    OWN_DISPLAY.test(className) ? '' : 'inline-flex',
+    'items-center gap-1 rounded',
     sz.text,
     sz.padding,
     bordered ? 'border' : '',

@@ -28,6 +28,7 @@ vi.mock('../../../services/api', () => ({
   getAppPullRequests: vi.fn(),
   resolveAppPullRequest: vi.fn(),
   reviewAppPullRequest: vi.fn(),
+  getProviders: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
@@ -92,6 +93,7 @@ beforeEach(() => {
     reviewAction: { taskId: null, status: 'pending' },
     duplicate: false,
   });
+  api.getProviders.mockResolvedValue({ activeProvider: '', providers: [] });
 });
 
 afterEach(() => {
@@ -114,12 +116,54 @@ describe('PullRequestsTab', () => {
     expect(screen.getByText('acme/widget')).toBeInTheDocument();
   });
 
+  it('sends the page-level provider/model/effort pin along with a resolve action', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'claude', name: 'Claude', type: 'cli', enabled: true,
+        models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
+      }],
+    });
+    await renderTab();
+
+    await screen.findByText('Fix the save path');
+    fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'claude' } });
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-5' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Resolve & merge/ }));
+
+    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined },
+    ));
+  });
+
+  it('carries the same provider/model pin into a PR review run', async () => {
+    api.getProviders.mockResolvedValue({
+      providers: [{
+        id: 'claude', name: 'Claude', type: 'cli', enabled: true,
+        models: ['claude-opus-5', 'claude-sonnet-5'], defaultModel: 'claude-sonnet-5',
+      }],
+    });
+    await renderTab();
+
+    await screen.findByText('Fix the save path');
+    fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 'claude' } });
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'claude-opus-5' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /PR review/ }));
+
+    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { provider: 'claude', model: 'claude-opus-5', effort: undefined },
+    ));
+  });
+
   it('queues a review-loop resolve action and shows its task state', async () => {
     await renderTab();
 
     fireEvent.click(await screen.findByRole('button', { name: /Resolve & merge/ }));
 
-    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith('app-1', 17));
+    await waitFor(() => expect(api.resolveAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+    ));
     expect(await screen.findByRole('link', { name: /Queued/ })).toBeInTheDocument();
   });
 
@@ -238,7 +282,9 @@ describe('PullRequestsTab', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /PR review/ }));
 
-    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith('app-1', 17));
+    await waitFor(() => expect(api.reviewAppPullRequest).toHaveBeenCalledWith(
+      'app-1', 17, { provider: undefined, model: undefined, effort: undefined },
+    ));
     expect(await screen.findByRole('link', { name: /PR review: Queued/ })).toBeInTheDocument();
     // The resolve action is a separate lane and must stay offered.
     expect(screen.getByRole('button', { name: /Resolve & merge/ })).toBeInTheDocument();

@@ -15,7 +15,7 @@ import useProviderModels from '../../../hooks/useProviderModels';
 import useClaimReviewers from '../../../hooks/useClaimReviewers';
 import ClaimReviewerSource from '../ClaimReviewerSource';
 import { chipColors } from '../../../lib/chipContrast';
-import { isProcessProvider } from '../../../utils/providers';
+import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 
@@ -91,12 +91,6 @@ function parseRunKey(key) {
   const at = key.indexOf(':');
   return { action: key.slice(0, at), issueNumber: key.slice(at + 1) };
 }
-
-// Module-scoped so `useProviderModels` sees a stable predicate — an inline
-// arrow would be a new identity every render, re-firing the hook's fetch
-// effect forever. Matches SlashDoRunDrawer's filter: only CODING providers
-// (CLI/TUI agents with a file-writing harness) can run a `/do:next` claim.
-const enabledProcessProviderFilter = (p) => Boolean(p?.enabled) && isProcessProvider(p);
 
 // `in-progress` is the forge label a `/do:next` claim stamps on an issue it is
 // actively working (server/services/issueReconcile.js#IN_PROGRESS_LABEL), and

@@ -110,6 +110,13 @@ export function parseVisionVerdict(text) {
  *   when nothing suitable is configured (caller falls back to the agent).
  */
 export async function resolveVisionEvalTarget(project) {
+  if (project?.workspace === 'video' && project.videoExecution?.choices) {
+    const choice = project.videoExecution.choices.evaluation;
+    if (choice.type !== 'api') return null;
+    const provider = await getProviderById(choice.providerId);
+    if (!provider || provider.type !== 'api' || provider.enabled === false) throw new Error('The reviewed evaluation provider is unavailable. Change Models or Settings and Resume.');
+    return { provider, model: choice.model };
+  }
   // An API provider is usable only if it exists and is enabled — vision runs
   // through the api-only chat path, so a CLI/TUI provider can't serve it.
   const usableApiProvider = async (id) => {
@@ -210,6 +217,7 @@ export async function evaluateSceneWithVision(project, scene) {
       source: 'cd-scene-evaluate',
       screenshots: frames,
       timeout: VISION_EVAL_TIMEOUT_MS,
+      ...(project.workspace === 'video' ? { allowFallback: false } : {}),
     });
 
     // Guard against a silent fallback to a non-API provider (which would drop the
@@ -288,7 +296,7 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
   };
 
   if (verdict.accepted) {
-    await updateScene(project.id, scene.sceneId, { status: 'accepted', evaluation });
+    await updateScene(project.id, scene.sceneId, { ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}), status: 'accepted', evaluation });
     if (project.collectionId && scene.renderedJobId) {
       await addItem(project.collectionId, { kind: 'video', ref: scene.renderedJobId })
         .catch((err) => {
@@ -302,16 +310,16 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
     return advance();
   }
 
-  if (retryCount < CD_MAX_SCENE_RETRIES) {
+  if (retryCount < (project.workspace === 'video' ? project.videoExecution?.limits?.maxRetries ?? 0 : CD_MAX_SCENE_RETRIES)) {
     const patch = { status: 'pending', retryCount: retryCount + 1, evaluation };
     if (verdict.refinedPrompt && verdict.refinedPrompt.trim()) patch.prompt = verdict.refinedPrompt.trim();
     if (verdict.imageStrength !== undefined) patch.imageStrength = verdict.imageStrength;
-    await updateScene(project.id, scene.sceneId, patch);
+    await updateScene(project.id, scene.sceneId, { ...patch, ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}) });
     console.log(`🔁 CD scene ${scene.sceneId} rejected by vision — retry ${patch.retryCount}/${CD_MAX_SCENE_RETRIES}`);
     return advance();
   }
 
-  await updateScene(project.id, scene.sceneId, { status: 'failed', evaluation });
+  await updateScene(project.id, scene.sceneId, { ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}), status: 'failed', evaluation });
   console.log(`⛔ CD scene ${scene.sceneId} failed by vision — retries exhausted`);
   return advance();
 }
@@ -340,6 +348,29 @@ export async function dispatchSceneEvaluation(project, scene) {
   }
   inflightSceneEval.add(lockKey);
   try {
+    if (project.workspace === 'video') {
+      const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+      if (!await videoReviewAllowsDispatch(project.id, [])) return null;
+      const { getProject } = await import('./local.js');
+      const { effectiveVideoProject, reserveVideoAttempt, settleVideoAttempt, assertVideoAttemptDispatch, pauseVideoExecution } = await import('./videoExecution.js');
+      project = effectiveVideoProject(await getProject(project.id));
+      const currentScene = project.treatment?.scenes?.find(value => value.sceneId === scene.sceneId);
+      if (!currentScene || (currentScene.workRevision || 0) !== (scene.workRevision || 0)) return null;
+      if (project.videoExecution.choices.evaluation.type === 'agent') return enqueueEvaluateTask(project, currentScene);
+      const attempt = await reserveVideoAttempt(project.id, { kind: 'evaluation', expectedProductionRevision: project.videoWorkRevision || 0, key: `evaluation:${scene.sceneId}`, sceneId: scene.sceneId, workRevision: scene.workRevision || 0 });
+      if (!attempt) return null;
+      try {
+        await assertVideoAttemptDispatch(project.id, attempt.id);
+        const result = await evaluateSceneWithVision(project, currentScene);
+        if (!result.ok) throw new Error(result.reason || 'The reviewed vision evaluator is unavailable.');
+        await settleVideoAttempt(project.id, attempt.id, { status: 'completed' });
+        return await applySceneVerdict(project, currentScene, result.verdict, result.llm, result.runId);
+      } catch (error) {
+        await settleVideoAttempt(project.id, attempt.id, { status: 'failed' });
+        if (error.code !== 'VIDEO_WORK_STALE') await pauseVideoExecution(project.id, `Evaluation stopped: ${error.message}. Review Models and Resume.`);
+        return null;
+      }
+    }
     return await runSceneEvaluation(project, scene);
   } finally {
     inflightSceneEval.delete(lockKey);
@@ -360,12 +391,13 @@ async function runSceneEvaluation(project, scene) {
       await applySceneVerdict(project, scene, result.verdict, result.llm, result.runId);
       return { via: 'vision', verdict: result.verdict, llm: result.llm };
     } catch (err) {
+      if (err.code === 'VIDEO_WORK_STALE') return null;
       // Verdict came back but persisting/advancing threw. Don't re-run on the
       // agent — that could double-apply the verdict (and re-add to the
       // collection). Best-effort mark the scene failed so the orchestrator can
       // recover, and never throw (this runs outside the request lifecycle).
       console.error(`❌ CD applySceneVerdict failed for scene ${scene.sceneId}: ${err.message}`);
-      await updateScene(project.id, scene.sceneId, {
+      await updateScene(project.id, scene.sceneId, { ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}),
         status: 'failed',
         evaluation: {
           accepted: false,

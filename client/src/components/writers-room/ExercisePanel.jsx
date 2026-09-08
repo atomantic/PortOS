@@ -8,7 +8,8 @@ import {
   discardWritersRoomExercise,
   promoteWritersRoomExercise,
 } from '../../services/apiWritersRoom';
-import { countWords, formatCountdown } from '../../utils/formatters';
+import { formatCountdown } from '../../utils/formatters';
+import { countWords } from '../../lib/textUtils';
 import { FormField } from '../ui/FormField';
 import useMounted from '../../hooks/useMounted';
 

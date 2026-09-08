@@ -31,8 +31,12 @@ import {
   syncArtificialAnalysis,
 } from '../../services/apiModelComparison';
 import Modal from '../ui/Modal';
+import toast from '../ui/Toast';
 import ComparisonResearch from './ComparisonResearch';
 import { EFFORT_LADDER, withEstimatedCosts } from '../../lib/effortCostEstimate';
+import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
+
+const SETTINGS_STORAGE_KEY = 'portos-model-comparison-settings';
 
 const COLORS = [
   '#2563eb', // blue (GPT-5.6 Sol)
@@ -76,6 +80,15 @@ const EFFORT_ORDER = {
   reasoning: EFFORT_LADDER.length + 1,
 };
 
+const AXES = {
+  cost: { label: 'Cost per task (USD)', short: 'cost per task', money: true, prefer: 'lower' },
+  quality: { label: 'Benchmark score', short: 'index score', prefer: 'higher' },
+  tokensPerSecond: { label: 'Speed (tokens/s)', short: 'speed', prefer: 'higher' },
+  responseSeconds: { label: 'Response time (seconds)', short: 'response time', prefer: 'lower' },
+  inputPerMillion: { label: 'Input price (USD / 1M tokens)', short: 'input price', money: true, prefer: 'lower' },
+  outputPerMillion: { label: 'Output price (USD / 1M tokens)', short: 'output price', money: true, prefer: 'lower' },
+};
+
 const STALE_MS = 30 * 86400000;
 
 function getModelDisplayName(row) {
@@ -99,15 +112,34 @@ export default function ModelComparison() {
   const [syncError, setSyncError] = useState('');
   const [syncing, setSyncing] = useState(false);
 
+  // Restore the last-viewed settings from localStorage when the page is opened
+  // with no query string (a bookmark-free visit), so filters/zoom/scale persist
+  // across sessions instead of resetting every time. An explicit URL (a shared
+  // link, browser back/forward) always wins over the stored snapshot.
+  useEffect(() => {
+    if (params.toString() !== '') return;
+    const stored = safeReadStorage(SETTINGS_STORAGE_KEY);
+    if (!stored) return;
+    setParams(new URLSearchParams(stored), { replace: true });
+    // Restore once, on mount only — subsequent param changes are the user
+    // driving the page, not something to overwrite from storage again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const query = params.toString();
+    if (query) safeWriteStorage(SETTINGS_STORAGE_KEY, query);
+  }, [params]);
+
   const xMinParam = params.get('xMin');
   const xMaxParam = params.get('xMax');
   const yMinParam = params.get('yMin');
   const yMaxParam = params.get('yMax');
 
-  const parsedXMin = xMinParam !== null && xMinParam !== '' && !Number.isNaN(Number(xMinParam)) ? Number(xMinParam) : null;
-  const parsedXMax = xMaxParam !== null && xMaxParam !== '' && !Number.isNaN(Number(xMaxParam)) ? Number(xMaxParam) : null;
-  const parsedYMin = yMinParam !== null && yMinParam !== '' && !Number.isNaN(Number(yMinParam)) ? Number(yMinParam) : null;
-  const parsedYMax = yMaxParam !== null && yMaxParam !== '' && !Number.isNaN(Number(yMaxParam)) ? Number(yMaxParam) : null;
+  const parsedXMin = xMinParam !== null && xMinParam !== '' && Number.isFinite(Number(xMinParam)) ? Number(xMinParam) : null;
+  const parsedXMax = xMaxParam !== null && xMaxParam !== '' && Number.isFinite(Number(xMaxParam)) ? Number(xMaxParam) : null;
+  const parsedYMin = yMinParam !== null && yMinParam !== '' && Number.isFinite(Number(yMinParam)) ? Number(yMinParam) : null;
+  const parsedYMax = yMaxParam !== null && yMaxParam !== '' && Number.isFinite(Number(yMaxParam)) ? Number(yMaxParam) : null;
 
   const isZoomed = parsedXMin !== null || parsedXMax !== null || parsedYMin !== null || parsedYMax !== null;
 
@@ -140,7 +172,11 @@ export default function ModelComparison() {
   }, [catalog, showEstimates]);
   // Models the user's own providers can dispatch. Everything else in the index
   // is available behind "All models" but is not what the page opens on.
-  const availableSet = useMemo(() => new Set(catalog?.availableModels || []), [catalog]);
+  const availableSet = useMemo(() => new Set([
+    ...(catalog?.availableModels || []),
+    // Keep executable endpoint IDs as well as normalized public model references.
+    ...(catalog?.inventory || []).flatMap(provider => provider.models.flatMap(({ model }) => model.startsWith('opencode/') ? [model, model.slice('opencode/'.length)] : [model])),
+  ]), [catalog]);
 
   useEffect(() => {
     let active = true;
@@ -244,25 +280,51 @@ export default function ModelComparison() {
   };
 
   const handleSyncAA = () => {
-    if (!syncKey.trim()) {
-      setSyncError('Please enter an Artificial Analysis API key.');
-      return;
-    }
     setSyncing(true);
     setSyncError('');
     setSyncStatus('Connecting to Artificial Analysis and syncing models…');
-    syncArtificialAnalysis({ apiKey: syncKey.trim() }, { silent: true })
+    syncArtificialAnalysis({ ...(syncKey.trim() ? { apiKey: syncKey.trim() } : {}) }, { silent: true })
       .then(res => {
-        setSyncStatus(`Sync successful! Updated ${res.observations} models (${res.total} total).`);
+        // The sync is done and the catalog is reloading behind it — the dialog
+        // has nothing left to ask for, so it closes itself and the result is
+        // reported as a toast instead of stranding the user on a dead modal.
+        setSyncKey('');
+        setSyncStatus('');
+        setSyncModalOpen(false);
+        toast.success(`Sync successful! Updated ${res.observations} models (${res.total} total).`);
         refreshView();
       })
       .catch(err => {
+        // A failed sync keeps the dialog open: a rejected key is re-entered here.
+        setSyncModalOpen(true);
         setSyncError(err.message || 'Sync failed.');
         setSyncStatus('');
       })
       .finally(() => {
         setSyncing(false);
       });
+  };
+
+  // Dismissing the prompt discards the typed key. Without this it survives in
+  // state, and the next click of a button that no longer opens the dialog would
+  // silently sync — and re-save — the key the user just backed out of.
+  const closeSyncModal = () => {
+    setSyncModalOpen(false);
+    setSyncKey('');
+    setSyncError('');
+    setSyncStatus('');
+  };
+
+  // A configured key makes the dialog a pure speed bump — sync straight away and
+  // only prompt when there is nothing stored to sync with.
+  const startSyncAA = () => {
+    if (catalog?.artificialAnalysisKeyConfigured) {
+      handleSyncAA();
+      return;
+    }
+    setSyncError('');
+    setSyncStatus('');
+    setSyncModalOpen(true);
   };
 
   if (!catalog) {
@@ -285,14 +347,20 @@ export default function ModelComparison() {
   const benchmarks = [...new Set(catalog.observations.map(row => row.benchmark))].sort();
   const benchmark = benchmarks.includes(params.get('benchmark'))
     ? params.get('benchmark')
-    : benchmarks.at(-1);
+    : [...new Set(catalog.observations.filter(row => row.quality).map(row => row.benchmark))].sort().at(-1) || benchmarks.at(-1);
   const mode = params.get('cost') === 'scenario' ? 'scenario' : 'benchmark';
   const showLines = params.get('lines') !== '0';
   const lineStyle = params.get('lineStyle') || 'dotted';
   const showLabels = params.get('labels') === '1' || !params.has('labels');
+  const xAxis = Object.hasOwn(AXES, params.get('xAxis')) ? params.get('xAxis') : 'cost';
+  const yAxis = Object.hasOwn(AXES, params.get('yAxis')) ? params.get('yAxis') : 'quality';
+  // Clear (not force-linear) scale on an axis change so the cost-axis log
+  // default below still applies — forcing 'linear' here permanently
+  // overrode that default the moment a user picked "Cost per task".
+  const changeAxis = (key, value) => changeParams({ [key]: value, xMin: null, xMax: null, yMin: null, yMax: null, scale: null });
   // Cost spans four orders of magnitude across the catalog, so a linear axis
   // stacks every affordable model on the y-axis. Log is the readable default.
-  const scale = params.get('scale') === 'linear' ? 'linear' : 'log';
+  const scale = params.get('scale') === 'log' || (!params.has('scale') && xAxis === 'cost') ? 'log' : 'linear';
   const showAllModels = params.get('allModels') === '1' || availableSet.size === 0;
   const stretch = Math.min(4, Math.max(1, parseFloat(params.get('stretch')) || 1));
   const chartHeight = Math.min(1000, Math.max(380, parseInt(params.get('height'), 10) || 480));
@@ -332,7 +400,7 @@ export default function ModelComparison() {
   };
   const visible = scoped.filter(
     row =>
-      row.benchmark === benchmark &&
+      (row.benchmark === benchmark || row.benchmark === 'Unbenchmarked (pricing only)') &&
       !hidden.provider.has(row.provider) &&
       !hidden.model.has(row.model) &&
       !hidden.effort.has(row.effort)
@@ -355,16 +423,18 @@ export default function ModelComparison() {
     return {
       ...row,
       displayName,
-      x: cost,
-      y: row.quality?.value,
+      cost,
+      x: xAxis === 'cost' ? cost : row[xAxis]?.value,
+      y: yAxis === 'cost' ? cost : row[yAxis]?.value,
       costEstimated: mode === 'benchmark' && row.costEstimated === true,
+      chartCostEstimated: mode === 'benchmark' && (xAxis === 'cost' || yAxis === 'cost') && row.costEstimated === true,
       label: `${row.model} (${row.effort})${row.responseSeconds ? ` · ${row.responseSeconds.value}s` : ''}`,
     };
   });
 
   const plotted = rows.filter(row => Number.isFinite(row.x) && Number.isFinite(row.y) && (scale !== 'log' || row.x > 0));
 
-  const xs = plotted.map(r => r.x).filter(x => Number.isFinite(x) && x > 0);
+  const xs = plotted.map(r => r.x).filter(x => Number.isFinite(x) && (scale !== 'log' || x > 0));
   const ys = plotted.map(r => r.y).filter(y => Number.isFinite(y));
   const dataBounds = {
     xMin: xs.length ? Math.min(...xs) : 0.01,
@@ -464,7 +534,7 @@ export default function ModelComparison() {
 
   const handleFitVisible = () => {
     if (!plotted.length) return;
-    const xs = plotted.map(r => r.x).filter(x => Number.isFinite(x) && x > 0);
+    const xs = plotted.map(r => r.x).filter(x => Number.isFinite(x) && (scale !== 'log' || x > 0));
     const ys = plotted.map(r => r.y).filter(y => Number.isFinite(y));
     if (!xs.length || !ys.length) return;
 
@@ -480,7 +550,7 @@ export default function ModelComparison() {
       fitXMax = Number((maxX * 1.1).toPrecision(2));
     } else {
       fitXMin = Math.max(0, Number((minX * 0.9).toFixed(3)));
-      fitXMax = Number((maxX * 1.05).toFixed(3));
+      fitXMax = Math.max(fitXMin + 0.001, Number((maxX * 1.05).toFixed(3)));
     }
     const fitYMin = Math.max(0, Math.floor(minY - 2));
     const fitYMax = Math.ceil(maxY + 2);
@@ -521,7 +591,7 @@ export default function ModelComparison() {
   let estimatedCount = 0;
   const multiEffortModelCounts = new Map();
   for (const row of plotted) {
-    if (row.costEstimated) estimatedCount += 1;
+    if (row.chartCostEstimated) estimatedCount += 1;
     multiEffortModelCounts.set(row.model, (multiEffortModelCounts.get(row.model) || 0) + 1);
   }
   const reasoningCurveModels = [...multiEffortModelCounts.entries()]
@@ -566,11 +636,12 @@ export default function ModelComparison() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-port-card border border-port-border rounded-lg hover:border-port-accent transition-colors"
-            onClick={() => setSyncModalOpen(true)}
+            className="inline-flex items-center gap-2 px-3 py-1.5 text-xs bg-port-card border border-port-border rounded-lg hover:border-port-accent disabled:opacity-50 transition-colors"
+            onClick={startSyncAA}
+            disabled={syncing}
           >
-            <CloudDownload size={14} aria-hidden="true" className="text-port-accent-text" />
-            Sync from Artificial Analysis
+            <CloudDownload size={14} aria-hidden="true" className={`text-port-accent-text ${syncing ? 'animate-pulse' : ''}`} />
+            {syncing ? 'Syncing…' : 'Sync from Artificial Analysis'}
           </button>
           <button
             type="button"
@@ -601,7 +672,7 @@ export default function ModelComparison() {
           are the caller's. Without them the dialog renders transparent. */}
       <Modal
         open={syncModalOpen}
-        onClose={() => setSyncModalOpen(false)}
+        onClose={closeSyncModal}
         size="sm"
         ariaLabelledBy="aa-sync-title"
       >
@@ -611,7 +682,10 @@ export default function ModelComparison() {
           </h3>
           <p className="text-xs text-port-text-muted leading-relaxed">
             Fetch the latest benchmark evaluations, pricing, response times, and reasoning effort measurements from the
-            Artificial Analysis Free API.
+            Artificial Analysis Free API. {catalog.artificialAnalysisKeyConfigured
+              ? 'The saved key did not work — enter a replacement below.'
+              : 'This install has no key yet, so enter one below.'} A key entered here is saved privately after
+            authentication succeeds, and later syncs run without asking. Manage it in Settings → Credentials.
           </p>
           <div className="space-y-1.5">
             <label htmlFor="aa-api-key" className="text-xs font-medium text-port-text-muted">
@@ -620,7 +694,7 @@ export default function ModelComparison() {
             <input
               id="aa-api-key"
               type="password"
-              placeholder="aa_..."
+              placeholder="aa-…"
               aria-label="Artificial Analysis API Key"
               className="w-full bg-port-bg text-port-text border border-port-border rounded-lg p-2.5 text-sm font-mono"
               value={syncKey}
@@ -634,7 +708,7 @@ export default function ModelComparison() {
             <button
               type="button"
               className="px-3 py-1.5 text-sm border border-port-border rounded-lg hover:bg-port-bg"
-              onClick={() => setSyncModalOpen(false)}
+              onClick={closeSyncModal}
               disabled={syncing}
             >
               Cancel
@@ -643,13 +717,25 @@ export default function ModelComparison() {
               type="button"
               className="px-4 py-1.5 text-sm bg-port-accent text-port-on-accent rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
               onClick={handleSyncAA}
-              disabled={syncing || !syncKey.trim()}
+              disabled={syncing || (!syncKey.trim() && !catalog.artificialAnalysisKeyConfigured)}
             >
               {syncing ? 'Syncing…' : 'Start Sync'}
             </button>
           </div>
         </div>
       </Modal>
+
+      <div className="flex flex-wrap gap-4">
+        {[["xAxis", "X axis", xAxis], ["yAxis", "Y axis", yAxis]].map(([key, label, value]) => (
+          <label key={key} htmlFor={`comparison-${key}`} className="text-sm">
+            {label}
+            <select id={`comparison-${key}`} value={value} onChange={event => changeAxis(key, event.target.value)}
+              className="block max-w-full mt-1 bg-port-bg border border-port-border rounded px-2 py-2">
+              {Object.entries(AXES).map(([id, axis]) => <option key={id} value={id}>{axis.label}</option>)}
+            </select>
+          </label>
+        ))}
+      </div>
 
       {/* Primary Chart Controls Bar */}
       <div className="flex flex-wrap gap-4 items-end bg-port-card border border-port-border rounded-2xl p-4">
@@ -681,12 +767,12 @@ export default function ModelComparison() {
         </label>
 
         <label className="min-w-0 max-w-full text-xs font-medium text-port-text-muted space-y-2" htmlFor="comparison-scale">
-          Cost scale<br />
+          X-axis scale<br />
           <select
             id="comparison-scale"
             className="bg-port-bg text-port-text border border-port-border rounded-lg p-2.5 text-sm max-w-full mt-2"
             value={scale}
-            onChange={e => changeParam('scale', e.target.value)}
+            onChange={e => changeParams({ scale: e.target.value, xMin: null, xMax: null, yMin: null, yMax: null })}
           >
             <option value="linear">Linear scale</option>
             <option value="log">Logarithmic scale</option>
@@ -797,20 +883,20 @@ export default function ModelComparison() {
         <div className="px-4 sm:px-6 pt-5 pb-4 border-b border-port-border space-y-3">
           <div className="flex flex-wrap justify-between items-start gap-3">
             <div>
-              <h3 className="font-semibold text-lg tracking-tight">Quality vs. cost</h3>
+              <h3 className="font-semibold text-lg tracking-tight">{AXES[yAxis].label} vs. {AXES[xAxis].label}</h3>
               <p className="text-xs text-port-text-muted mt-0.5">{benchmark}</p>
             </div>
             <div className="flex items-center gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-full bg-port-bg border border-port-border px-3 py-1 text-xs text-port-text-muted">
                 <ArrowUpRight size={14} aria-hidden="true" className="-rotate-90 text-port-accent-text" />
-                Prefer higher scores, lower cost
+                Prefer {AXES[xAxis].prefer} X, {AXES[yAxis].prefer} Y
               </span>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-port-text-muted">
             <span aria-live="polite">
-              {plotted.length} plotted{isZoomed ? ` (${visibleInZoomCount} in zoom)` : ''} · {rows.length - plotted.length} missing quality or cost
+              {plotted.length} plotted{isZoomed ? ` (${visibleInZoomCount} in zoom)` : ''} · {rows.length - plotted.length} missing selected metrics or outside log scale
               {reasoningCurveModels.length > 0 ? ` · ${reasoningCurveModels.length} reasoning curves` : ''}
               {estimatedCount > 0 ? ` · ${estimatedCount} estimated cost` : ''}
             </span>
@@ -1035,28 +1121,28 @@ export default function ModelComparison() {
             >
               {/* Cost X Axis Bounds */}
               <div className="flex items-center gap-1.5">
-                <span className="font-medium text-port-text">Cost (USD):</span>
+                <span className="font-medium text-port-text">{AXES[xAxis].label}:</span>
                 <label className="flex items-center gap-1 text-port-text-muted">
-                  <span>Min $</span>
+                  <span>Min</span>
                   <input
                     type="number"
                     step="any"
                     min={scale === 'log' ? '0.0001' : '0'}
                     placeholder="Auto"
-                    aria-label="Minimum cost per task"
+                    aria-label={`Minimum ${AXES[xAxis].short}`}
                     value={inputXMin}
                     onChange={e => setInputXMin(e.target.value)}
                     className="w-20 px-2 py-1 bg-port-bg border border-port-border rounded text-port-text text-xs font-mono"
                   />
                 </label>
                 <label className="flex items-center gap-1 text-port-text-muted">
-                  <span>Max $</span>
+                  <span>Max</span>
                   <input
                     type="number"
                     step="any"
                     min="0"
                     placeholder="Auto"
-                    aria-label="Maximum cost per task"
+                    aria-label={`Maximum ${AXES[xAxis].short}`}
                     value={inputXMax}
                     onChange={e => setInputXMax(e.target.value)}
                     className="w-20 px-2 py-1 bg-port-bg border border-port-border rounded text-port-text text-xs font-mono"
@@ -1066,14 +1152,14 @@ export default function ModelComparison() {
 
               {/* Quality Y Axis Bounds */}
               <div className="flex items-center gap-1.5">
-                <span className="font-medium text-port-text">Score (Index):</span>
+                <span className="font-medium text-port-text">{AXES[yAxis].label}:</span>
                 <label className="flex items-center gap-1 text-port-text-muted">
                   <span>Min</span>
                   <input
                     type="number"
                     step="any"
                     placeholder="Auto"
-                    aria-label="Minimum index score"
+                    aria-label={`Minimum ${AXES[yAxis].short}`}
                     value={inputYMin}
                     onChange={e => setInputYMin(e.target.value)}
                     className="w-16 px-2 py-1 bg-port-bg border border-port-border rounded text-port-text text-xs font-mono"
@@ -1085,7 +1171,7 @@ export default function ModelComparison() {
                     type="number"
                     step="any"
                     placeholder="Auto"
-                    aria-label="Maximum index score"
+                    aria-label={`Maximum ${AXES[yAxis].short}`}
                     value={inputYMax}
                     onChange={e => setInputYMax(e.target.value)}
                     className="w-16 px-2 py-1 bg-port-bg border border-port-border rounded text-port-text text-xs font-mono"
@@ -1145,7 +1231,7 @@ export default function ModelComparison() {
                 stretch > 1 ? (isDragging ? 'cursor-grabbing select-none' : 'cursor-grab') : ''
               }`}
               role="img"
-              aria-label={`Quality versus ${mode === 'benchmark' ? 'benchmark' : 'estimated'} cost per task. Exact values and source links are in the table below.`}
+              aria-label={`${AXES[yAxis].label} versus ${AXES[xAxis].label}. Exact values and source links are in the table below.`}
             >
               <div
                 style={{
@@ -1163,7 +1249,7 @@ export default function ModelComparison() {
                       axisLine={{ stroke: 'rgb(var(--port-border))' }}
                       type="number"
                       dataKey="x"
-                      name="USD / task"
+                      name={AXES[xAxis].label}
                       scale={scale === 'log' ? 'log' : 'linear'}
                       domain={
                         isZoomed
@@ -1180,9 +1266,9 @@ export default function ModelComparison() {
                             : [0, 'auto']
                       }
                       allowDataOverflow={isZoomed}
-                      tickFormatter={value => `$${value < 0.01 ? value.toFixed(3) : value < 1 ? value.toFixed(2) : value.toFixed(1)}`}
+                      tickFormatter={value => `${AXES[xAxis].money ? '$' : ''}${Number(value.toPrecision(4))}`}
                       label={{
-                        value: `Cost per task (USD) — ${scale.toUpperCase()} SCALE${isZoomed ? ' (ZOOMED)' : ''}`,
+                        value: `${AXES[xAxis].label} — ${scale.toUpperCase()} SCALE${isZoomed ? ' (ZOOMED)' : ''}`,
                         position: 'bottom',
                         fill: 'rgb(var(--port-text-muted))',
                         fontSize: 12,
@@ -1195,7 +1281,7 @@ export default function ModelComparison() {
                       axisLine={{ stroke: 'rgb(var(--port-border))' }}
                       type="number"
                       dataKey="y"
-                      name="Benchmark score"
+                      name={AXES[yAxis].label}
                       domain={
                         isZoomed
                           ? [
@@ -1207,7 +1293,7 @@ export default function ModelComparison() {
                       allowDataOverflow={isZoomed}
                       width={55}
                       label={{
-                        value: 'Artificial Analysis Intelligence Index',
+                        value: AXES[yAxis].label,
                         angle: -90,
                         position: 'insideLeft',
                         fill: 'rgb(var(--port-text-muted))',
@@ -1241,11 +1327,11 @@ export default function ModelComparison() {
                               </div>
                               <div>
                                 USD / task:{' '}
-                                <span className="text-port-text font-semibold">${item.x?.toFixed(4)}</span>
+                                <span className="text-port-text font-semibold">{Number.isFinite(item.cost) ? `$${item.cost.toFixed(4)}` : 'Unknown'}</span>
                                 {item.costEstimated && <span className="text-port-text-muted"> est.</span>}
                               </div>
                               <div>
-                                Index Score: <span className="text-port-accent-text font-bold">{item.y}</span>
+                                Benchmark score: <span className="text-port-accent-text font-bold">{item.quality?.value ?? 'Unknown'}</span>
                               </div>
                               {item.responseSeconds && (
                                 <div>
@@ -1256,6 +1342,9 @@ export default function ModelComparison() {
                                 <div>
                                   Speed: <span className="text-port-text font-medium">{item.tokensPerSecond.value} t/s</span>
                                 </div>
+                              )}
+                              {item.outputPerMillion && (
+                                <div>Out: <span className="text-port-text font-medium">${item.outputPerMillion.value}/1M</span></div>
                               )}
                               {item.inputPerMillion && (
                                 <div>
@@ -1304,9 +1393,9 @@ export default function ModelComparison() {
                                 cx={cx}
                                 cy={cy}
                                 r={5}
-                                fill={payload?.costEstimated ? 'rgb(var(--port-card))' : fill}
-                                stroke={payload?.costEstimated ? fill : 'rgb(var(--port-card))'}
-                                strokeWidth={payload?.costEstimated ? 2 : 1.5}
+                                fill={payload?.chartCostEstimated ? 'rgb(var(--port-card))' : fill}
+                                stroke={payload?.chartCostEstimated ? fill : 'rgb(var(--port-card))'}
+                                strokeWidth={payload?.chartCostEstimated ? 2 : 1.5}
                               />
                             </g>
                           )}
@@ -1359,6 +1448,7 @@ export default function ModelComparison() {
           </p>
         )}
         <p className="text-xs leading-relaxed text-port-text-muted border-t border-port-border px-4 sm:px-6 py-4">
+          Missing values stay in the evidence table. Log X excludes zero values, including free pricing; choose linear to include them. Higher speed is better; lower response time is better.
           Response-time labels reflect measured source workloads, independent of the intelligence evaluation. Connected lines
           link the same model family across reasoning efforts (ordered from low to max). Hollow markers are estimated costs:
           Artificial Analysis publishes cost per task for only one effort of most models, so the remaining efforts are scaled
@@ -1407,6 +1497,7 @@ export default function ModelComparison() {
                   'Provider / model / effort',
                   'Quality',
                   'USD / task',
+                  'Input / output USD per 1M',
                   'Scenario total',
                   'Response / speed',
                   'Quota',
@@ -1428,12 +1519,13 @@ export default function ModelComparison() {
                     <p>
                       {row.billing} · {row.configuration}
                     </p>
-                    <p className="text-port-text-muted">{row.notes}</p>
+                    <p className="text-port-text-muted">{row.benchmark} · {row.notes}</p>
                   </td>
-                  <td className="p-3">{row.y ?? 'Unknown'}</td>
-                  <td className="p-3">{Number.isFinite(row.x) ? `$${row.x.toFixed(4)}` : 'Unknown'}</td>
+                  <td className="p-3">{row.quality?.value ?? 'Unknown'}</td>
+                  <td className="p-3">{Number.isFinite(row.cost) ? `$${row.cost.toFixed(4)}` : 'Unknown'}{row.costEstimated ? ' (estimated)' : ''}</td>
+                  <td className="p-3">{row.inputPerMillion ? `$${row.inputPerMillion.value}` : 'Unknown'} / {row.outputPerMillion ? `$${row.outputPerMillion.value}` : 'Unknown'}</td>
                   <td className="p-3">
-                    {mode === 'scenario' && Number.isFinite(row.x) ? `$${(row.x * scenario.tasks).toFixed(2)}` : '—'}
+                    {mode === 'scenario' && Number.isFinite(row.cost) ? `$${(row.cost * scenario.tasks).toFixed(2)}` : '—'}
                   </td>
                   <td className="p-3">
                     {row.responseSeconds ? `${row.responseSeconds.value}s E2E` : 'E2E unknown'}

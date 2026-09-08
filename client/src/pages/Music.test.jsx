@@ -11,7 +11,8 @@ vi.mock('../components/music/AlbumsManager', () => ({ default: () => <div data-t
 vi.mock('../components/music/TracksManager', () => ({ default: () => <div data-testid="tracks-manager" /> }));
 vi.mock('../components/music/MusicDesigner', () => ({ default: () => <div data-testid="music-designer" /> }));
 
-import Music from './Music.jsx';
+import Music, { TABS } from './Music.jsx';
+import { expectPageNavTabs } from '../test/pageNavTabAssertions.js';
 
 // Sibling readout of the current route, rendered alongside the page so a
 // redirect's resulting pathname is directly observable (mirrors the
@@ -64,5 +65,19 @@ describe('<Music>', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/music/tracks');
     expect(screen.getByTestId('tracks-manager')).toBeInTheDocument();
     expect(screen.queryByTestId('artists-manager')).toBeNull();
+  });
+});
+
+// Music derives its tab bar from the nav manifest's `tabGroup: 'music'` (#6383)
+// — this pins the id/label/order the page means to render, and that every
+// manifest tab has a presentation entry (icon) in Music.jsx, which would
+// otherwise only surface as a thrown import-time error. The short labels come
+// from the manifest's `tabLabel`; ⌘K and voice still show "Music Designer",
+// "Music Artists", … so they don't collide with the Create-section pages.
+describe('Music TABS ↔ nav manifest', () => {
+  it('renders the music tabGroup in page order with a presentation entry each', () => {
+    expectPageNavTabs(TABS, [
+      'generate:Generate', 'artists:Artists', 'albums:Albums', 'tracks:Tracks',
+    ]);
   });
 });

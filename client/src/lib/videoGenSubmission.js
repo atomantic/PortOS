@@ -15,6 +15,7 @@ import {
   DEFAULT_DRAFT_DECODE_ID,
   resolveDraftDecodeForModel,
 } from './videoGenParams.js';
+import { isDefaultVideoStreamingMode } from './videoStreamingMode.js';
 
 // The form owns state transitions and validation. This module owns the three
 // request contracts the video route accepts: Grok, federated, and local.
@@ -50,7 +51,7 @@ export function buildVideoGenSubmission({
   prompt, negativePrompt, stylePreset, selectedUniverse,
   width, height, mode, sourceImageFile, sourceImageUpload,
   numFrames, fps, steps, guidanceScale, seed, batchSize = 1,
-  currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode,
+  currentModel, models, modelId, tiling, textEncoderId, speedProfileId, draftDecode, streamingMode,
   disableAudio, noMusic, imageStrength, i2vReferenceMode,
   keyframesActive, keyframes, loraFamily, selectedLoras,
   lastImageFile, lastImageUpload, extendFromVideoId, audioFile,
@@ -176,6 +177,15 @@ export function buildVideoGenSubmission({
     draftDecode: resolveDraftDecodeForModel(draftDecode, currentModel, models) === DEFAULT_DRAFT_DECODE_ID
       ? undefined
       : draftDecode,
+    // Block-streaming request (#6499). Sent only when it is both a real
+    // choice (this model's runtime is LTX-2/2.5 MLX — every other runtime
+    // ignores the flag by construction, so sending it there would just be a
+    // stale value the server logs and drops) and a non-default one — a
+    // model switch away from LTX2 or back to Auto both leave the payload
+    // absent, so an unswapped render stays byte-identical.
+    streamingMode: (isLtx2FamilyRuntime(currentModel?.runtime) && !isDefaultVideoStreamingMode(streamingMode))
+      ? streamingMode
+      : undefined,
     disableAudio: effectiveDisableAudio ? 'true' : 'false',
     // Only meaningful on a runtime the GPU-watchdog mitigation applies to —
     // absent otherwise so an unrelated model's render never carries a stale

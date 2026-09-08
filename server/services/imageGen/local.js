@@ -41,7 +41,7 @@ import { parseByteProgress, formatDownloadMessage } from '../videoGen/generateVi
 const IS_WIN = process.platform === 'win32';
 
 import { getImageModels, isFlux2, isErnie, isHiDream, isQwen } from '../../lib/mediaModels.js';
-import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
+import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
@@ -574,7 +574,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   if (!model) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
-      `Image model "${modelId}" is unavailable on this machine: ${model.hardwareCompatibility.reasons.join(' · ')}`,
+      hardwareUnavailableReason(`Image model "${modelId}"`, model.hardwareCompatibility),
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }

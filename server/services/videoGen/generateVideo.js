@@ -26,7 +26,7 @@ import {
 import { videoGenEvents } from './events.js';
 import { broadcastSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
-import { isHardwareCompatible } from '../../lib/systemCapabilities.js';
+import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { resolveVideoModelSelection } from './modelSelection.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { inspectModelCache, findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
@@ -76,6 +76,7 @@ import {
   draftDecodeDeclineReason,
   resolveVideoDraftDecoder,
 } from '../../lib/videoDraftDecoders.js';
+import { isDefaultVideoStreamingMode } from '../../lib/videoStreamingMode.js';
 // Re-export the extracted runtime + history surface so existing deep imports
 // (`from '../videoGen/local.js'`) keep resolving every symbol they used to.
 export * from './runtimes.js';
@@ -152,7 +153,7 @@ export const listVideoModels = () => getVideoModels().map(decorateVideoModel);
 
 export const defaultVideoModelId = (capabilities) => getDefaultVideoModelId(capabilities);
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, visualConditioning = null, hidden = false, displaySleep = null, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId, width = null, height = null, numFrames = null, fps = 24, steps, guidanceScale, seed, batchSize = 1, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, audioStartSec = null, mode = null, imageStrength = null, i2vReferenceMode = null, loras = null, icReferencePaths = null, icStrength = null, icAttentionStrength = null, icSkipStage2 = false, textEncoderId = null, speedProfileId = null, draftDecode = null, streamingMode = null, visualConditioning = null, hidden = false, displaySleep = null, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
@@ -166,7 +167,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   validateVideoBatch({ batchSize, seed }, model);
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
-      `Video model "${modelId}" is unavailable on this machine: ${model.hardwareCompatibility.reasons.join(' · ')}`,
+      hardwareUnavailableReason(`Video model "${modelId}"`, model.hardwareCompatibility),
       { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' },
     );
   }
@@ -772,6 +773,13 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // declined request never sets it, a record can never claim a draft decode
     // the render did not perform.
     ...(draftDecoder ? { draftDecode: draftDecoder.id } : {}),
+    // Block-streaming request (#6499). Recorded as the REQUESTED mode, same
+    // convention as speedProfileId/draftDecode above — 'auto' and absence are
+    // the same request, so a quality-default render's history row stays
+    // byte-identical to one from before this setting existed. What the
+    // bridge ACTUALLY did (active/reason/peakMb) is stamped separately by
+    // finalizeGeneratedVideo from the child's STREAMPOLICY: report.
+    ...(isDefaultVideoStreamingMode(streamingMode) ? {} : { streamingMode }),
     // IC-LoRA remix settings, stamped so the lightbox Remix flow can round-trip
     // them. The reference clip is recorded by BASENAME (not the absolute
     // staging path) — history is user-facing and a durable upload path is both
@@ -872,6 +880,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       icSkipStage2,
       speedProfile,
       draftDecoder,
+      streamingMode,
       ffmpegPath: ffmpeg,
       ffprobePath: ffprobe,
     }));

@@ -58,4 +58,7 @@ export const SERVER_OWNED_PREFIXES = [
   { prefix: '/data', spaPaths: ['/data'] },
   { prefix: '/api', spaPaths: [] },
   { prefix: '/sdapi', spaPaths: [] },
+  // Same-origin Eidoverse iframe mount (reverse-proxied to :8940 while the
+  // host is active). No client router paths live under this prefix.
+  { prefix: '/eidoverse-host', spaPaths: [] },
 ];

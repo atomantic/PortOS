@@ -100,6 +100,15 @@ def heartbeat(stage: "str | Callable[[], str]", interval: float = 20.0):
         t.join(timeout=interval + 1)
 
 
+# The LTX-2.5 MLX q8 pack's dev-layout files. The distilled model ships either
+# pre-fused (`transformer-distilled.safetensors`) or as the dev transformer
+# plus this 450-step distilled LoRA; both the render bridge
+# (`generate_ltx2.py`) and the upscale runner (`upscale_ltx25.py`) resolve the
+# same pair, so a re-pin of the adapter is one edit rather than two.
+LTX25_DEV_TRANSFORMER_FILENAME = "transformer-dev.safetensors"
+LTX25_DISTILLED_LORA_FILENAME = "ltx-2.5-22b-distilled-lora-450.safetensors"
+
+
 def parse_user_loras(raw: "str | None") -> "list[tuple[str, float]]":
     """Parse a `--user-loras` JSON string into a list of (path, strength) tuples.
 

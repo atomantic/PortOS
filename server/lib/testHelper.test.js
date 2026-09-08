@@ -123,8 +123,15 @@ describe('platform-pin guard', () => {
   it('the helper still owns the only pin, and still documents the hazard', () => {
     // Both halves of the consolidation: the mechanism lives here, and the
     // warning that motivated centralizing it stays attached to it.
+    //
+    // Matched with `OWNS_A_PIN`, not `HAND_ROLLED_PIN`: the helper now shares one
+    // descriptor-swap body between `pinPlatform` and `pinArch`, so the property
+    // name is a parameter rather than a literal. `HAND_ROLLED_PIN` stays keyed to
+    // the literal spelling because that is what it must catch in OTHER files —
+    // this assertion only has to prove the mechanism still lives here.
+    const OWNS_A_PIN = /defineProperty\s*\(\s*process\s*,/;
     const source = readFileSync(join(REPO_ROOT, HELPER), 'utf8');
-    expect(HAND_ROLLED_PIN.test(source)).toBe(true);
+    expect(OWNS_A_PIN.test(source)).toBe(true);
     expect(source).toMatch(/native addon/);
   });
 });

@@ -313,6 +313,10 @@ async function enqueuePlannerOnce(project) {
 export async function advanceAfterPlanStepSettled(projectId) {
   const project = await getProject(projectId).catch(() => null);
   if (!project) return;
+  if (project.workspace === 'video') {
+    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+    if (!await videoReviewAllowsDispatch(projectId, [])) return;
+  }
   if (project.status === 'paused' || project.status === 'failed') return;
   // Legacy video project — the scene loop owns it; never plan-advance it.
   if (!project.directive) return;
@@ -343,6 +347,10 @@ export async function advanceAfterPlanStepSettled(projectId) {
       return handlePlanStepFailure(projectId, action.steps[0]);
     case 'empty':
     case 'complete': {
+      if (project.workspace === 'video') {
+        const { runStitch } = await import('./stitchRunner.js');
+        return runStitch(projectId);
+      }
       // Promote the plan's produced video so the CD overview has an artifact to
       // show. Unlike the legacy scene/stitch flow (stitchRunner sets
       // finalVideoId), the directive-plan flow historically only flipped status
@@ -368,6 +376,11 @@ export async function advanceAfterPlanStepSettled(projectId) {
 }
 
 async function runPlanStep(project, step) {
+  step = { ...step, expectedProductionRevision: project.workspace === 'video' ? project.videoWorkRevision || 0 : undefined };
+  if (project.workspace === 'video') {
+    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+    if (!await videoReviewAllowsDispatch(project.id, ['script-shot-plan', 'references'])) return;
+  }
   const projectId = project.id;
   const key = `${projectId}:${step.stepId}`;
   if (inflightPlanStep.has(key)) return;
@@ -381,7 +394,7 @@ async function runPlanStep(project, step) {
   let run;
   try {
     if (project.status !== 'rendering') await updateProject(projectId, { status: 'rendering' });
-    await updatePlanStep(projectId, step.stepId, { status: 'running', startedAt: nowISO() });
+    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'running', startedAt: nowISO() });
     run = await recordRun(projectId, {
       kind: 'plan-step', stepId: step.stepId, toolName: step.toolName, status: 'running',
     });
@@ -400,7 +413,7 @@ async function runPlanStep(project, step) {
   if (resolved.error) {
     await finishRun(projectId, run?.runId, 'failed', resolved.error);
     const bumped = (step.retryCount || 0) + 1;
-    await updatePlanStep(projectId, step.stepId, { status: 'failed', retryCount: bumped, result: { error: resolved.error } });
+    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'failed', retryCount: bumped, result: { error: resolved.error } });
     console.log(`❌ CD plan ${projectId}: step "${step.stepId}" ${resolved.error}`);
     return handlePlanStepFailure(projectId, { ...step, retryCount: bumped });
   }
@@ -411,6 +424,7 @@ async function runPlanStep(project, step) {
   const targetAbility = project.directive?.constraints?.targetAbility;
   const dispatch = await dispatchCreativeTool(resolvedStep.toolName, resolvedStep.args, {
     projectId,
+    ...(project.workspace === 'video' ? { videoStepId: step.stepId } : {}),
     ...(targetAbility ? { targetAbility } : {}),
   })
     .catch((err) => ({ ok: false, threw: true, error: err.message }));
@@ -424,7 +438,7 @@ async function settlePlanStepDispatch(projectId, step, runId, dispatch) {
   if (!dispatch || (dispatch.ok !== true && !dispatch.threw)) {
     const reason = dispatch?.reason || 'rejected';
     await finishRun(projectId, runId, 'failed', reason);
-    await updatePlanStep(projectId, step.stepId, { status: 'blocked', result: { reason } });
+    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'blocked', result: { reason } });
     return pausePlanWithResidual(
       projectId,
       `Step "${step.stepId}" (${step.toolName}) rejected by the creative gate: ${reason}`,
@@ -435,20 +449,20 @@ async function settlePlanStepDispatch(projectId, step, runId, dispatch) {
     const error = dispatch.error || 'tool error';
     await finishRun(projectId, runId, 'failed', error);
     const bumped = (step.retryCount || 0) + 1;
-    await updatePlanStep(projectId, step.stepId, { status: 'failed', retryCount: bumped, result: { error } });
+    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'failed', retryCount: bumped, result: { error } });
     return handlePlanStepFailure(projectId, { ...step, retryCount: bumped });
   }
   // dry-run — the whole plan is walked as a preview (no side effects executed).
   if (dispatch.planned || dispatch.mode === 'dry-run') {
     await finishRun(projectId, runId, 'completed');
-    await updatePlanStep(projectId, step.stepId, { status: 'done', result: { planned: true } });
+    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'done', result: { planned: true } });
     return advanceAfterPlanStepSettled(projectId);
   }
   // Long-running (media render / job): stay `running` until the underlying job
   // settles; a completion event re-fires the loop.
   if (dispatch.longRunning) {
     const jobId = dispatch.result?.jobId;
-    if (jobId) return armPlanJobListener(projectId, step.stepId, jobId, runId);
+    if (jobId) return armPlanJobListener(projectId, step.stepId, jobId, runId, step.expectedProductionRevision);
     // Series Autopilot returns a run handle (`runId`), not a media jobId — settle
     // this step off the in-process autopilot event bus (CDO Phase 3, #2185): the
     // step stays `running` until the underlying autopilot run reaches a terminal
@@ -457,18 +471,18 @@ async function settlePlanStepDispatch(projectId, step, runId, dispatch) {
     // attached to a live run instead of double-starting — we observe it the same.
     const seriesId = step.args?.seriesId;
     if (step.toolName === AUTOPILOT_TOOL_NAME && seriesId && dispatch.result?.runId) {
-      return armAutopilotListener(projectId, step.stepId, seriesId, runId, dispatch.result);
+      return armAutopilotListener(projectId, step.stepId, seriesId, runId, dispatch.result, step.expectedProductionRevision);
     }
     // A long-running tool with no observable handle at all — mark done on start so
     // the plan makes progress; the underlying work continues on its own.
     console.log(`⚠️ CD plan ${projectId}: step "${step.stepId}" (${step.toolName}) is long-running with no observable handle — marking done on start`);
     await finishRun(projectId, runId, 'completed');
-    await updatePlanStep(projectId, step.stepId, { status: 'done', result: summarizeResult(dispatch.result) });
+    await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'done', result: summarizeResult(dispatch.result) });
     return advanceAfterPlanStepSettled(projectId);
   }
   // Synchronous success (free / llm non-long-running).
   await finishRun(projectId, runId, 'completed');
-  await updatePlanStep(projectId, step.stepId, { status: 'done', result: summarizeResult(dispatch.result) });
+  await updatePlanStep(projectId, step.stepId, { ...(step.expectedProductionRevision === undefined ? {} : { expectedProductionRevision: step.expectedProductionRevision }), status: 'done', result: summarizeResult(dispatch.result) });
   console.log(`✅ CD plan ${projectId}: step "${step.stepId}" done`);
   return advanceAfterPlanStepSettled(projectId);
 }
@@ -478,9 +492,12 @@ async function settlePlanStepDispatch(projectId, step, runId, dispatch) {
 // times, then the project pauses with residuals for human review.
 async function handlePlanStepFailure(projectId, step) {
   const project = await getProject(projectId).catch(() => null);
+  if (project?.workspace === 'video' && (project.videoExecution?.attempts || []).some(attempt => attempt.status === 'uncertain')) {
+    return pausePlanWithResidual(projectId, 'A Video submission is uncertain. Reconcile its job before retrying.');
+  }
   if (!project || project.status === 'paused' || project.status === 'failed') return;
   const rounds = project.plan?.replanRounds || 0;
-  if (rounds < MAX_REPLAN_ROUNDS && !inflightPlanner.has(projectId)) {
+  if (rounds < (project.workspace === 'video' ? project.videoExecution?.limits?.maxReplans ?? 0 : MAX_REPLAN_ROUNDS) && !inflightPlanner.has(projectId)) {
     // MAX_REPLAN_ROUNDS alone cannot bound this path: `replanRounds` is bumped by
     // applyPlan, so a planner that never PATCHes leaves it at the same value and
     // this branch would re-fire forever (#4146). The empty-run gate is what
@@ -504,7 +521,7 @@ async function handlePlanStepFailure(projectId, step) {
 // media job carries its own per-job idle watchdog (mediaJobQueue/index.js) that
 // unconditionally forces a 'completed'/'failed'/'canceled' emit within a bounded
 // window regardless of job kind, so this listener can never wait forever.
-function armPlanJobListener(projectId, stepId, jobId, runId) {
+function armPlanJobListener(projectId, stepId, jobId, runId, expectedProductionRevision) {
   const key = `${projectId}:${stepId}`;
   let fired = false;
   const teardown = () => {
@@ -522,10 +539,10 @@ function armPlanJobListener(projectId, stepId, jobId, runId) {
     (async () => {
       await finishRun(projectId, runId, success ? 'completed' : 'failed', success ? undefined : `job ${job.status}`);
       if (success) {
-        await updatePlanStep(projectId, stepId, { status: 'done', result: { jobId } });
+        await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'done', result: { jobId } });
         await advanceAfterPlanStepSettled(projectId);
       } else {
-        await updatePlanStep(projectId, stepId, { status: 'failed', result: { jobId, jobStatus: job.status } });
+        await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'failed', result: { jobId, jobStatus: job.status } });
         await handlePlanStepFailure(projectId, { stepId, toolName: '(long-running job)', retryCount: 0 });
       }
     })().catch((e) => console.log(`⚠️ CD plan ${projectId} job settle for ${stepId} failed: ${e.message}`));
@@ -561,11 +578,11 @@ function summarizeAutopilotResult(payload) {
 //   - error               → step `failed`, route through bounded re-plan.
 // Runs off the event bus / a marker read — outside any request lifecycle — so it
 // must never throw out (the caller wraps it, but keep it self-contained).
-async function settleAutopilotStep(projectId, stepId, runId, payload) {
+async function settleAutopilotStep(projectId, stepId, runId, payload, expectedProductionRevision) {
   const type = payload?.type;
   if (type === 'complete') {
     await finishRun(projectId, runId, 'completed');
-    await updatePlanStep(projectId, stepId, { status: 'done', result: summarizeAutopilotResult(payload) });
+    await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'done', result: summarizeAutopilotResult(payload) });
     console.log(`✅ CD plan ${projectId}: autopilot step "${stepId}" complete`);
     return advanceAfterPlanStepSettled(projectId);
   }
@@ -576,7 +593,7 @@ async function settleAutopilotStep(projectId, stepId, runId, payload) {
     // BLOCKED, not failed — a pause is a human-review gate. The advance loop sees
     // the blocked step and pauses the whole plan with the reason; it is never
     // silently retried around (the autopilot pause contract).
-    await updatePlanStep(projectId, stepId, {
+    await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }),
       status: 'blocked',
       result: { reason, residualFindings: payload?.residualFindings || [], pauseKind: payload?.pauseKind || null },
     });
@@ -586,7 +603,7 @@ async function settleAutopilotStep(projectId, stepId, runId, payload) {
   // error frame.
   const error = payload?.error || 'autopilot run error';
   await finishRun(projectId, runId, 'failed', error);
-  await updatePlanStep(projectId, stepId, { status: 'failed', result: { error } });
+  await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'failed', result: { error } });
   return handlePlanStepFailure(projectId, { stepId, toolName: '(series autopilot)', retryCount: 0 });
 }
 
@@ -628,7 +645,7 @@ const AUTOPILOT_LISTENER_IDLE_MS = 45 * 60 * 1000;
 // the plan step on the first terminal frame. Idempotent teardown (reuses the
 // shared planJobCleanups map so __resetPlanInflightState drops it too). Closes the
 // already-terminal race via the persisted marker, mirroring armPlanJobListener.
-function armAutopilotListener(projectId, stepId, seriesId, runId, apResult) {
+function armAutopilotListener(projectId, stepId, seriesId, runId, apResult, expectedProductionRevision) {
   const key = `${projectId}:${stepId}`;
   let fired = false;
   let idleTimer;
@@ -647,7 +664,7 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult) {
       // Runs outside the request lifecycle (in-process event bus) — never throw out.
       (async () => {
         await finishRun(projectId, runId, 'failed', `autopilot run stalled — no activity for ${Math.round(AUTOPILOT_LISTENER_IDLE_MS / 60000)}m`);
-        await updatePlanStep(projectId, stepId, { status: 'failed', result: { error: 'autopilot run stalled (idle backstop)' } });
+        await updatePlanStep(projectId, stepId, { ...(expectedProductionRevision === undefined ? {} : { expectedProductionRevision }), status: 'failed', result: { error: 'autopilot run stalled (idle backstop)' } });
         await handlePlanStepFailure(projectId, { stepId, toolName: '(series autopilot)', retryCount: 0 });
       })().catch((e) => console.log(`⚠️ CD plan ${projectId} autopilot idle-backstop settle for ${stepId} failed: ${e.message}`));
     }, AUTOPILOT_LISTENER_IDLE_MS);
@@ -663,7 +680,7 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult) {
     }
     fired = true;
     teardown();
-    settleAutopilotStep(projectId, stepId, runId, payload)
+    settleAutopilotStep(projectId, stepId, runId, payload, expectedProductionRevision)
       .catch((e) => console.log(`⚠️ CD plan ${projectId} autopilot settle for ${stepId} failed: ${e.message}`));
   }
   autopilotEvents.on(seriesId, handler);
@@ -679,7 +696,7 @@ function armAutopilotListener(projectId, stepId, seriesId, runId, apResult) {
       if (marker && !fired) {
         fired = true;
         teardown();
-        await settleAutopilotStep(projectId, stepId, runId, marker);
+        await settleAutopilotStep(projectId, stepId, runId, marker, expectedProductionRevision);
       }
     })().catch((e) => console.log(`⚠️ CD plan ${projectId} autopilot marker settle for ${stepId} failed: ${e.message}`));
   }

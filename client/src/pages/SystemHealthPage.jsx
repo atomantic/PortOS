@@ -1,16 +1,19 @@
 import { useEffect, useState, useRef } from 'react';
 import { Link, Navigate, NavLink, useParams } from 'react-router';
-import { Activity, AlertTriangle, CheckCircle, XCircle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, Zap } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle, XCircle, HardDrive, Cpu, Database, ListOrdered, RefreshCw, ServerCog, X, Zap } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useHealthWarningDismiss } from '../hooks/useHealthWarningDismiss.jsx';
 import { useSystemResourceReport } from '../hooks/useSystemResourceReport.js';
 import StoragePanel from '../components/system-resources/StoragePanel.jsx';
 import QueuesPanel from '../components/system-resources/QueuesPanel.jsx';
 import MediaCapacityPanel from '../components/system-resources/MediaCapacityPanel.jsx';
 import BuildStampPanel from '../components/system-resources/BuildStampPanel.jsx';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 const HEALTH_STYLE = {
   healthy: { color: 'text-port-success', bg: 'bg-port-success/10', icon: CheckCircle, label: 'Healthy' },
@@ -51,14 +54,21 @@ function barTone(pct, warn, critical) {
   return 'bg-port-success';
 }
 
-// The downloaded-model inventory used to be a fourth tab here. It answered the
-// same question Models → Status answers, in a different section, so it folded
-// into that page (#4728); /system-resources/models redirects there.
-export const RESOURCE_TABS = [
-  { id: 'overview', label: 'Overview', icon: Activity },
-  { id: 'storage', label: 'Storage', icon: HardDrive },
-  { id: 'queues', label: 'Queues', icon: ListOrdered },
-];
+// Icon per tab id. The manifest (`tabGroup: 'system-resources'`) owns
+// id/label/order — this page owns only how each tab looks; the short page-local
+// labels (vs the manifest's "System Resources Overview"/"Storage Report"/
+// "Active Queues", which need the qualifier to be unambiguous in ⌘K) come from
+// the manifest's `tabLabel`. The downloaded-model inventory used to be a fourth
+// tab here. It answered the same question Models → Status answers, in a
+// different section, so it folded into that page (#4728);
+// /system-resources/models redirects there. Throws at import time on drift.
+const TAB_PRESENTATION = {
+  overview: { icon: Activity },
+  storage: { icon: HardDrive },
+  queues: { icon: ListOrdered },
+};
+
+export const RESOURCE_TABS = buildPageNavTabs(getPageNavTabs('system-resources'), TAB_PRESENTATION, 'System Resources');
 
 export default function SystemResourcesPage() {
   const { tab = 'overview' } = useParams();
@@ -123,6 +133,7 @@ function SystemHealthOverview() {
     () => api.getSystemHealth({ silent: true }),
     15_000,
   );
+  const { dismissingType, handleDismissWarning } = useHealthWarningDismiss(refetch);
 
   const handleRefresh = async () => {
     if (refreshing) return;
@@ -224,7 +235,25 @@ function SystemHealthOverview() {
             {health.warnings.map((w, i) => {
               const remedy = REMEDIATION[w.type];
               return (
-                <Banner key={`${w.type || 'warning'}-${i}`} tone="warning" size="md" icon={AlertTriangle} align="start">
+                <Banner
+                  key={`${w.type || 'warning'}-${i}`}
+                  tone="warning"
+                  size="md"
+                  icon={AlertTriangle}
+                  align="start"
+                  actions={(
+                    <button
+                      type="button"
+                      onClick={() => handleDismissWarning(w)}
+                      disabled={dismissingType === w.type}
+                      className="inline-flex min-h-[28px] min-w-[28px] items-center justify-center rounded text-port-warning/70 transition-colors hover:bg-port-warning/20 hover:text-port-warning disabled:cursor-not-allowed disabled:opacity-50"
+                      title="Dismiss as resolved"
+                      aria-label={`Dismiss warning: ${w.message}`}
+                    >
+                      <X size={14} aria-hidden="true" />
+                    </button>
+                  )}
+                >
                   <div>{w.message}</div>
                   {remedy && (
                     <Link to={remedy.to} className="inline-block mt-1 font-medium underline underline-offset-2 hover:no-underline">

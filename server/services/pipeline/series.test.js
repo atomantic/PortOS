@@ -743,6 +743,36 @@ describe('pipeline series service', () => {
       const cleared = await svc.updateSeries(s.id, { characterArcs: [] });
       expect(cleared.characterArcs).toEqual([]);
     });
+
+    it('persists an authored five-stage evolution lens, and clears it on its own (#6440)', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      const authored = await svc.updateSeries(s.id, {
+        characterArcs: [{
+          characterName: 'Mara',
+          want: 'revenge',
+          evolution: {
+            outcome: 'partial-open',
+            outcomeNote: 'she gets most of the way there',
+            stages: [
+              { stageId: 'control-strategy-failing', testedBelief: 'winning is safety' },
+              { stageId: 'commitment-to-change', characterChoice: 'asks for help', evidence: { atIssue: 5 } },
+            ],
+          },
+        }],
+      });
+      const fresh = await svc.getSeries(s.id);
+      expect(fresh.characterArcs[0].evolution).toEqual(authored.characterArcs[0].evolution);
+      expect(fresh.characterArcs[0].evolution.stages.map((st) => st.stageId))
+        .toEqual(['control-strategy-failing', 'commitment-to-change']);
+
+      // Dropping the lens leaves the rest of the arc intact — it is a lens over
+      // the arc, never a gate on it.
+      const cleared = await svc.updateSeries(s.id, {
+        characterArcs: [{ characterName: 'Mara', want: 'revenge' }],
+      });
+      expect(cleared.characterArcs[0].evolution).toBeUndefined();
+      expect(cleared.characterArcs[0].want).toBe('revenge');
+    });
   });
 
   // Issue #1361 — a behind/legacy peer pushes a newer series payload that simply

@@ -1,9 +1,11 @@
 import { z } from 'zod';
-import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES, PLAN_STEP_STATUSES } from './creativeDirectorPresets.js';
+import { EFFORT_LEVELS } from './providerModels.js';
+import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES, PLAN_STEP_STATUSES, VIDEO_REVIEW_CHECKPOINTS } from './creativeDirectorPresets.js';
 import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
 import { BIBLE_LIMITS } from './storyBible.js';
 import { emptyToUndefined } from './zodCompat.js';
 import { csvIdsParam } from './sharedSchemas.js';
+import { CREATIVE_DIRECTOR_GOAL_MAX } from './creativeBriefLimits.js';
 
 // =============================================================================
 // CREATIVE DIRECTOR + CREATE-SUITE IMPORTER SCHEMAS
@@ -18,9 +20,9 @@ import { csvIdsParam } from './sharedSchemas.js';
 export const creativeDirectorAspectRatioSchema = z.enum(ASPECT_RATIOS);
 export const creativeDirectorQualitySchema = z.enum(QUALITIES);
 
-// Top-level project create. modelId is required because each LTX variant
-// has a different speed/VRAM/quality profile and the project locks it at
-// creation. targetDurationSeconds is capped at 600 (10 min) per the v1 plan
+// Legacy projects require a model at creation. Inert Video drafts may leave
+// it unset and edit production settings before dispatch is supported.
+// targetDurationSeconds is capped at 600 (10 min) per the v1 plan
 // — much beyond that and the agent's treatment quality drifts hard.
 // Strict basename: rejects path separators and the exact `.`/`..` segments.
 // Used for both startingImageFile (project create) and sourceImageFile
@@ -50,12 +52,6 @@ export const creativeDirectorCastMemberSchema = z.object({
   role: z.string().max(64).optional(),
   summary: z.string().max(500).optional(),
 });
-
-// Kept clear of the commission scheduler's MAX_DIRECTIVE_GOAL_LEN, so a goal it
-// composes from a maxed-out commission brief also validates on the HTTP path.
-// That ordering is asserted in services/creativeCommissions/directive.test.js —
-// this module can't import the service to derive it.
-export const CREATIVE_DIRECTOR_GOAL_MAX = 32000;
 
 // Production directive (CDO Phase 2, #2184) — the brief the planner agent turns
 // into a plan. `goal` is the free-text intent ("produce a 6-issue noir comic in
@@ -95,6 +91,7 @@ export const creativeDirectorDirectiveSchema = z.object({
 export const creativeDirectorStagePinSchema = z.object({
   providerId: z.string().max(120).nullable().optional(),
   model: z.string().max(200).nullable().optional(),
+  effort: z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).nullable().optional()),
 }).strict();
 
 export const creativeDirectorModelOverridesSchema = z.object({
@@ -127,11 +124,51 @@ export const creativeDirectorRenderBackendSchema = z.object({
   video: creativeDirectorRenderPinSchema.optional(),
 }).strict();
 
+export const creativeDirectorVideoLimitsSchema = z.object({
+  maxClips: z.number().int().min(1).max(200).default(60),
+  maxRetries: z.number().int().min(0).max(3).default(1),
+  maxReplans: z.number().int().min(0).max(5).default(2),
+  maxAudioJobs: z.number().int().min(0).max(4).default(1),
+  maxAgentCalls: z.number().int().min(1).max(500).default(100),
+  spendCapUsd: z.number().positive().max(10000).nullable().default(null),
+}).strict();
+export const creativeDirectorVideoStartSchema = z.object({
+  configurationRevision: z.string().regex(/^[a-f0-9]{32}$/),
+  limits: creativeDirectorVideoLimitsSchema,
+  retryAttemptIds: z.array(z.string().uuid()).max(200).default([]),
+}).strict();
+
+// Additive workspace metadata. Absence keeps pre-Video execution semantics.
+export const creativeDirectorVideoDraftSchema = z.object({
+  durationRange: z.object({
+    min: z.number().int().min(5).max(600),
+    max: z.number().int().min(5).max(600),
+  }).strict().refine(({ min, max }) => min <= max, 'Minimum duration must not exceed maximum'),
+  sources: z.array(z.object({
+    kind: z.enum(['universe', 'series', 'catalog', 'music', 'voice']),
+    id: z.string().trim().min(1).max(120),
+    revision: z.string().max(120).optional(),
+  }).strict()).max(50).default([]),
+  transition: z.enum(['cut', 'fade']).default('cut'),
+  audio: z.object({
+    mode: z.enum(['silent', 'native', 'imported', 'generated']).default('native'),
+    trackId: z.string().max(120).optional(),
+    prompt: z.string().trim().max(1000).optional(),
+    providerId: z.string().max(120).optional(),
+    model: z.string().max(200).optional(),
+  }).strict().default({}),
+  reviewPolicy: z.enum(['review', 'autonomous']).default('review'),
+  checkpoints: z.array(z.enum(VIDEO_REVIEW_CHECKPOINTS))
+    .max(VIDEO_REVIEW_CHECKPOINTS.length).default([...VIDEO_REVIEW_CHECKPOINTS]),
+}).strict();
+
 export const creativeDirectorProjectCreateSchema = z.object({
+  workspace: z.literal('video').optional(),
+  videoDraft: creativeDirectorVideoDraftSchema.optional(),
   name: z.string().min(1).max(200),
   aspectRatio: creativeDirectorAspectRatioSchema,
   quality: creativeDirectorQualitySchema,
-  modelId: z.string().min(1).max(64),
+  modelId: z.string().max(64),
   targetDurationSeconds: z.number().int().min(5).max(600),
   styleSpec: z.string().max(5000).default(''),
   startingImageFile: safeBasename.nullable().optional(),
@@ -164,6 +201,10 @@ export const creativeDirectorProjectCreateSchema = z.object({
   // Optional per-project image/video RENDER-backend pin (#3135). Absent → each
   // enqueued media job resolves the install-wide default.
   renderBackend: creativeDirectorRenderBackendSchema.nullable().optional(),
+}).refine((v) => v.workspace === 'video' || v.modelId.length > 0, {
+  message: 'Model is required', path: ['modelId'],
+}).refine((v) => !v.videoDraft || v.workspace === 'video', {
+  message: 'Video draft requires the Video workspace', path: ['videoDraft'],
 });
 
 // Autonomous auto-cast (#1810). `types` narrows the catalog search to a set of
@@ -212,6 +253,12 @@ export const creativeDirectorAutoCastApplySchema = z.object({
 // point a CD project at an unrelated user timeline project, which the
 // next stitch would silently overwrite via updateTimelineProject.
 export const creativeDirectorProjectUpdateSchema = z.object({
+  videoDraft: creativeDirectorVideoDraftSchema.optional(),
+  aspectRatio: creativeDirectorAspectRatioSchema.optional(),
+  quality: creativeDirectorQualitySchema.optional(),
+  modelId: z.string().max(64).optional(),
+  targetDurationSeconds: z.number().int().min(5).max(600).optional(),
+  renderBackend: creativeDirectorRenderBackendSchema.nullable().optional(),
   name: z.string().min(1).max(200).optional(),
   styleSpec: z.string().max(5000).optional(),
   userStory: z.string().max(10000).nullable().optional(),
@@ -284,11 +331,16 @@ export const creativeDirectorSceneSchema = z.object({
 export const creativeDirectorTreatmentSchema = z.object({
   logline: z.string().min(1).max(500),
   synopsis: z.string().min(1).max(5000),
+  // Optional standalone script; artifact IDs/revisions/timing are server-owned.
+  script: z.string().trim().min(1).max(50000).optional(),
+  sourceContextRevision: z.string().regex(/^[a-f0-9]{32}$/).optional(),
+  productionRevision: z.number().int().min(0).optional(),
   scenes: z.array(creativeDirectorSceneSchema).min(1).max(120),
 });
 
 // Used by the agent when finishing a scene render.
 export const creativeDirectorSceneUpdateSchema = z.object({
+  expectedWorkRevision: z.number().int().min(0).optional(),
   // Full SCENE_STATUSES — the evaluator agent flips a scene back to 'pending'
   // (with an updated prompt + bumped retryCount) to request a re-render; see
   // creativeDirectorPrompts.js and completionHook.js's advanceAfterSceneSettled.
@@ -344,8 +396,46 @@ export const creativeDirectorPlanStepSchema = z.object({
 }).strict();
 
 export const creativeDirectorPlanSchema = z.object({
+  sourceContextRevision: z.string().regex(/^[a-f0-9]{32}$/).optional(),
+  productionRevision: z.number().int().min(0).optional(),
   steps: z.array(creativeDirectorPlanStepSchema).min(1).max(60),
-}).strict();
+}).strict().superRefine(({ steps }, ctx) => {
+  // Validate the whole graph before any adapter persists it or the route
+  // nudges dispatch. IDs are also result-reference keys, so duplicate IDs
+  // cannot be resolved by choosing the first/last occurrence.
+  const byId = new Map();
+  let invalid = false;
+  const report = (index, field, message) => {
+    invalid = true;
+    ctx.addIssue({ code: 'custom', path: ['steps', index, field], message });
+  };
+  steps.forEach((step, index) => {
+    if (byId.has(step.stepId)) report(index, 'stepId', `Duplicate step ID: ${step.stepId}`);
+    byId.set(step.stepId, step);
+  });
+  steps.forEach((step, index) => {
+    for (const dependency of step.dependsOn) {
+      if (!byId.has(dependency)) report(index, 'dependsOn', `Unknown dependency: ${dependency}`);
+    }
+  });
+  if (invalid) return;
+
+  // Plans are bounded to 60 steps. Walking ancestors permits forward edges
+  // and shared dependencies while rejecting self-links and longer cycles.
+  const visiting = new Set();
+  const visited = new Set();
+  const hasCycle = (id) => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    if (byId.get(id).dependsOn.some(hasCycle)) return true;
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  const cycleIndex = steps.findIndex((step) => hasCycle(step.stepId));
+  if (cycleIndex !== -1) report(cycleIndex, 'dependsOn', 'Dependency cycle: remove the circular dependency chain');
+});
 
 // Blocked-step triage actions (CDO Phase 4, #2186). The studio UI's Plan tab
 // dispatches one of these against a single plan step:
@@ -529,3 +619,18 @@ export const importerCommitSchema = z.object({
   // Defaults to false to preserve the additive merge behavior.
   replaceMode: z.boolean().optional().default(false),
 }).strict();
+
+export const creativeDirectorVideoReviewActionSchema = z.object({
+  action: z.enum(['approve', 'request-revision', 'feedback']),
+  stage: z.enum(VIDEO_REVIEW_CHECKPOINTS),
+  revision: z.string().regex(/^[a-f0-9]{32}$/),
+  note: z.string().trim().max(5000).optional(),
+  rating: z.enum(['up', 'down']).optional(),
+  sceneId: z.string().min(1).max(64).optional(),
+  stepId: z.string().min(1).max(64).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.sceneId && value.stepId) ctx.addIssue({ code: 'custom', message: 'Choose a shot or a plan step, not both' });
+  if (value.action !== 'request-revision' && (value.sceneId || value.stepId)) ctx.addIssue({ code: 'custom', message: 'Only revision requests can target a shot or step' });
+  if (value.action === 'feedback' && !value.rating) ctx.addIssue({ code: 'custom', path: ['rating'], message: 'Choose thumbs up or down' });
+  if (value.action === 'request-revision' && !value.note) ctx.addIssue({ code: 'custom', path: ['note'], message: 'Describe the requested revision' });
+});

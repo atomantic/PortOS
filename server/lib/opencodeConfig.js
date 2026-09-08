@@ -163,7 +163,7 @@ export function toBareModelIds(models, providerKey = 'ollama') {
  * through the chat template (`chat_template_kwargs.enable_thinking`). A hosted
  * gateway fronts cloud models that own their reasoning switch upstream, so it
  * gets no toggle at all and the editor hides the checkbox for it. MIRROR of
- * `generationControlsFor` in `client/src/utils/providers.js`; keep in lockstep.
+ * `generationControlsFor` in `client/src/utils/providerModels.js`; keep in lockstep.
  *
  * A missing entry is not a missing checkbox — `buildAgentGeneration` bails on it
  * and drops temperature / topP / reasoningEffort along with the toggle, which is
@@ -194,7 +194,7 @@ const THINKING_STYLE = {
   sglang: 'chatTemplate',
   // Every hosted gateway fronts cloud models that own their reasoning switch
   // upstream, so none of them gets a toggle — the editor hides the checkbox for
-  // them (`generationControlsFor` in client/src/utils/providers.js).
+  // them (`generationControlsFor` in client/src/utils/providerModels.js).
   ...Object.fromEntries(PROVIDER_GATEWAY_IDS.map((id) => [id, null])),
 };
 

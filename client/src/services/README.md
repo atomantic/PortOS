@@ -53,7 +53,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiPorts.js` | Port scan/detect wrappers (no current UI callers; module kept for the catalog). |
 | `apiHarnesses.js` | Coding-agent harness (CLI/TUI) inventory for Models → Harnesses: installed vs latest version, the providers riding on each, and the model-catalog refresh. Install/update/remove is an SSE stream driven by `RuntimeInstallModal`, not a call here. |
 | `apiModelComparison.js` | Sourced model comparison catalog, provider discovery and validated observation import. |
-| `apiProviders.js` | AI provider configuration, plus provider-runtime (CLI) install readiness for the per-card Install buttons, and the Codex / ChatGPT-subscription account calls (`getCodexAccount`, `startCodexLogin`, `cancelCodexLogin`, `codexLogout`) — sign-in STATE only, never a token. |
+| `apiProviders.js` | AI provider configuration, plus provider-runtime (CLI) install readiness for the per-card Install buttons, and the Codex / ChatGPT-subscription account calls (`getCodexAccount`, `startCodexLogin`, `cancelCodexLogin`, `codexLogout`) — sign-in STATE only, never a token. Also the connection-graph management calls, including `createProviderConnection` / `createProviderBinding`, which add a backend and mint its (disabled) executable routes. |
 | `apiPrompts.js` | Prompt Manager: stage templates, variables, and job-skill templates (providers list reuses `apiProviders.getProviders`). |
 | `apiReferenceRepos.js` | Per-app reference-repo registry. |
 | `apiReview.js` | Review hub. |
@@ -65,7 +65,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiSchedules.js` | Automation schedules. |
 | `apiQuotaBurn.js` | Quota Burn plan + live status, the job-type catalog its config form renders, and manual runs (`getQuotaBurn`/`getQuotaBurnCatalog`/`saveQuotaBurn`/`runQuotaBurn`), plus `rearmQuotaBurn` to put spent `run once` steps back into the rotation. |
 | `apiRapidReader.js` | Rapid Reader's optional author-hosted Accelerando loader and machine-local shelf API. |
-| `apiSystem.js` | System info (CPU/memory/ports/alerts/active processing and local hardware capabilities) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts` for the subscription-vs-API savings comparison, `updateUsageFleetBilling` to exclude an API-billed federated instance from Across Instances totals). Also `getCredentialInventory` (`GET /settings/credentials`) — presence and source of each PortOS credential, never a value. |
+| `apiSystem.js` | System info (CPU/memory/ports/alerts/active processing and local hardware capabilities) + D&D-style character sheet getter, plus the usage cost report and explicit historical reconciliation (`getUsage`, `getProviderUsage`, `getUsageBackfillStatus`/`startUsageBackfill`, `updateSubscriptionCosts` for the subscription-vs-API savings comparison, `updateUsageFleetBilling` to exclude an API-billed federated instance from Across Instances totals). Also `saveCredential` (write-only integration key save/clear) and `getCredentialInventory` (`GET /settings/credentials`) — presence and source of each PortOS credential, never a value. |
 | `apiAuth.js` | Optional login password — status, login, set/clear password. |
 | `apiLoops.js` | Scheduled loops. |
 

@@ -7,11 +7,14 @@ const updateSceneMock = vi.fn(async () => ({}));
 const updatePlanStepMock = vi.fn(async () => ({}));
 vi.mock('./local.js', () => ({
   getProject: (...a) => getProjectMock(...a),
+  mutateVideoProject: async (_id, mutate) => { const result = mutate(await getProjectMock(_id)); getProjectMock.mockResolvedValue(result.project); return result; },
   updateProject: (...a) => updateProjectMock(...a),
   updateRun: (...a) => updateRunMock(...a),
   updateScene: (...a) => updateSceneMock(...a),
   updatePlanStep: (...a) => updatePlanStepMock(...a),
 }));
+
+vi.mock('../instances.js', () => ({ getInstanceId: async () => 'example-owner' }));
 
 const getActiveAgentsMock = vi.fn(() => []);
 const killAgentMock = vi.fn(async () => ({ success: true }));
@@ -234,4 +237,23 @@ describe('stopProject', () => {
     expect(updateTaskMock).not.toHaveBeenCalled();
     expect(updateRunMock).toHaveBeenCalledWith('cd-1', 'r1', expect.objectContaining({ status: 'failed' }));
   });
+});
+
+it('revokes Video authorization before canceling jobs and retains completed clips', async () => {
+  getProjectMock.mockResolvedValue(project({ workspace: 'video', videoOwnerInstanceId: 'example-owner', videoWorkRevision: 2,
+    videoExecution: { authorized: true, attempts: [{ id: 'agent-attempt', kind: 'treatment', status: 'running' }] },
+    treatment: { scenes: [{ sceneId: 'pending-shot', status: 'rendering', renderedJobId: 'pending-job', workRevision: 3 }, { sceneId: 'done-shot', status: 'evaluating', renderedJobId: 'done-job', workRevision: 1 }] },
+  }));
+  listJobsMock.mockReturnValue([{ id: 'pending-job', status: 'running', owner: 'cd:cd-1:pending-shot' }, { id: 'unrelated-job', status: 'running', owner: 'other' }]);
+  cancelJobMock.mockImplementationOnce(async () => {
+    const saved = await getProjectMock('cd-1');
+    expect(saved.status).toBe('paused');
+    expect(saved.videoExecution.authorized).toBe(false);
+    expect(saved.videoWorkRevision).toBe(3);
+    expect(saved.treatment.scenes[0].workRevision).toBe(4);
+  });
+  await stopProject('cd-1');
+  expect(cancelJobMock).toHaveBeenCalledExactlyOnceWith('pending-job');
+  expect(updateSceneMock).toHaveBeenCalledExactlyOnceWith('cd-1', 'pending-shot', { status: 'pending', renderedJobId: null });
+  expect((await getProjectMock('cd-1')).videoExecution.attempts[0].status).toBe('failed');
 });

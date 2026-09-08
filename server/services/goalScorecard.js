@@ -27,6 +27,7 @@
 
 import { join } from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { createSettingsStore } from '../lib/settingsStore.js';
 import { todayInTimezone, localDayRangeUtc } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { localDayKey, listEvents } from './humanActivity.js';
@@ -380,24 +381,16 @@ export function formatScorecardDigestLine(scorecard) {
 
 // ─── Settings / rules I/O ────────────────────────────────────────────────────
 
-export async function getSettings() {
-  await ensureDir(INSIGHTS_DIR);
-  // Strict (#4115): `updateSettings` is `getSettings → merge → atomicWrite`, so a
-  // swallowed unreadable file writes DEFAULT_SETTINGS over the user's configured
-  // provider/model/week-start on the next settings PATCH.
-  const loaded = await readJSONFile(SETTINGS_FILE, null, { strict: true });
-  return loaded ? { ...DEFAULT_SETTINGS, ...loaded } : { ...DEFAULT_SETTINGS };
-}
+// Strict read + serialized PATCH live in the store (#4115): a swallowed
+// unreadable file would otherwise write DEFAULT_SETTINGS over the user's
+// configured provider/model/week-start on the next settings PATCH.
+const settingsStore = createSettingsStore(SETTINGS_FILE, DEFAULT_SETTINGS);
 
+export const getSettings = settingsStore.get;
+
+// Only client-settable keys are honored; managed fields never come from a PUT.
 export async function updateSettings(partial = {}) {
-  const current = await getSettings();
-  const next = { ...current };
-  for (const key of CLIENT_SETTABLE) {
-    if (partial[key] !== undefined) next[key] = partial[key];
-  }
-  await ensureDir(INSIGHTS_DIR);
-  await atomicWrite(SETTINGS_FILE, next);
-  return next;
+  return settingsStore.update(Object.fromEntries(CLIENT_SETTABLE.map((key) => [key, partial[key]])));
 }
 
 // User-editable per-goal mapping overrides. Shape: { [goalId]: { keywords?,

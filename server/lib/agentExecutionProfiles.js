@@ -1,3 +1,4 @@
+import { PRIVATE_SECURITY_EXECUTION_PROFILE } from './privateSecurityPolicy.js';
 /**
  * Named execution postures shared by the agent spawners and their environment
  * builders. Keep this leaf free of provider/runtime imports so adding a
@@ -37,6 +38,7 @@ export const PUBLIC_REVIEW_POSTURES = Object.freeze([
 ]);
 
 const PROFILE_POSTURES = Object.freeze({
+  [PRIVATE_SECURITY_EXECUTION_PROFILE]: PUBLIC_REVIEW_NO_TOOL_POSTURE,
   [PUBLIC_REVIEW_EXECUTION_PROFILE]: PUBLIC_REVIEW_NO_TOOL_POSTURE,
   [PUBLIC_REVIEW_GATE_EXECUTION_PROFILE]: PUBLIC_REVIEW_NO_TOOL_POSTURE,
   [PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE]: PUBLIC_REVIEW_ACTIONS_POSTURE,

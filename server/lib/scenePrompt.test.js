@@ -1,7 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
 import {
   normalizeSlugline,
   normCharKey,
@@ -12,11 +9,6 @@ import {
   buildScenePrompt,
   __testing,
 } from './scenePrompt.js';
-import { compareDeclaration } from './mirrorParity.js';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const SERVER_COPY = join(here, 'scenePrompt.js');
-const CLIENT_COPY = join(here, '../../client/src/lib/scenePrompt.js');
 
 describe('scenePrompt — normalizeSlugline', () => {
   it('collapses em/en/hyphen + punctuation + spaces so equivalent sluglines match', () => {
@@ -314,32 +306,4 @@ describe('scenePrompt — buildScenePrompt wardrobe appearances', () => {
     expect(out).toContain('Aria: tall, dark hair');
     expect(out).not.toContain('Wearing:');
   });
-});
-
-describe('scenePrompt — server/client mirror parity', () => {
-  const server = readFileSync(SERVER_COPY, 'utf8');
-  const client = readFileSync(CLIENT_COPY, 'utf8');
-  const mirroredDeclarations = [
-    'PROMPT_MAX',
-    'normalizeSlugline',
-    'normCharKey',
-    'buildCharByKey',
-    'matchSceneCharacters',
-    'matchCharactersInText',
-    'buildPlaceByKey',
-    'matchScenePlace',
-    'matchEntriesByCandidates',
-    'matchPlacesInText',
-    'matchObjectsInText',
-    'appendWardrobe',
-    'buildScenePrompt',
-  ];
-
-  for (const name of mirroredDeclarations) {
-    it(`keeps ${name} identical`, () => {
-      const { clientDecl, serverNorm, clientNorm } = compareDeclaration(server, client, name);
-      expect(clientDecl, `client/src/lib/scenePrompt.js is missing ${name}`).not.toBeNull();
-      expect(clientNorm).toBe(serverNorm);
-    });
-  }
 });

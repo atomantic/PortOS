@@ -11,7 +11,8 @@ export const PROVIDER_TYPES = Object.freeze({
 export const MODEL_TIERS = {
   LIGHT: 'light',
   MEDIUM: 'medium',
-  HEAVY: 'heavy'
+  HEAVY: 'heavy',
+  ULTRA: 'ultra'
 };
 
 export const RUN_TYPES = {
@@ -53,3 +54,12 @@ export const PROVIDER_STATUS_REASONS = {
 
 export const DEFAULT_USAGE_LIMIT_WAIT = 24 * 60 * 60 * 1000;
 export const DEFAULT_RATE_LIMIT_WAIT = 5 * 60 * 1000;
+
+/** Resolve a capability request against one provider, preserving legacy defaults. */
+export function resolveProviderModelTier(provider, tier) {
+  if (!Object.values(MODEL_TIERS).includes(tier)) return null;
+  return provider[`${tier}Model`]
+    || (tier === 'ultra' ? provider.heavyModel : null)
+    || provider.defaultModel
+    || null;
+}

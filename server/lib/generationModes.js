@@ -59,7 +59,7 @@ export const CLOUD_VIDEO_GEN_MODES = Object.freeze([
  * semantic modes included) serializes on the local accelerator.
  *
  * Kept here rather than in mediaJobQueue so a light consumer — sanitizeJob, a
- * route handler, a client mirror's counterpart test — can classify a job
+ * route handler, the client's re-export — can classify a job
  * without importing the queue.
  */
 export const MEDIA_JOB_EXECUTION_LANES = Object.freeze(['gpu', 'cloud', 'remote']);

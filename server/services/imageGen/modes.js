@@ -9,7 +9,8 @@
  * `IMAGE_GEN_MODES` is the alphabet for Zod / OpenAI tool-spec enums.
  * Single source of truth: derive the array from `Object.values(...)`.
  *
- * The backend alphabets live in `lib/generationModes.js`, below both validation
+ * The backend alphabets live in `lib/generationModes.js` and the per-backend
+ * capability literals in `lib/imageGenCapabilities.js`, both below validation
  * and this service module. They are re-exported here so existing generation
  * callers keep the same service-local import path.
  */
@@ -18,9 +19,33 @@ import { ServerError } from '../../lib/errorHandler.js';
 import {
   CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES,
 } from '../../lib/generationModes.js';
+import {
+  AGY_ASPECT_RATIOS,
+  AGY_IMAGEGEN_DEFAULT_MODEL,
+  AGY_IMAGEGEN_IMAGE_MODEL,
+  CODEX_IMAGEGEN_DEFAULT_EFFORT,
+  CODEX_IMAGEGEN_DEFAULT_MODEL,
+  EDIT_INCAPABLE_IMAGE_MODES,
+  isEditCapableMode,
+} from '../../lib/imageGenCapabilities.js';
 
 export {
   CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES,
+};
+
+// The per-backend capability literals live in `lib/imageGenCapabilities.js`,
+// a dependency-free leaf the browser bundle can import — this module cannot be,
+// because `editIncapableModeError` below needs `ServerError` and through it
+// Node's `events`. Re-exported here so every existing service-local import site
+// keeps its path.
+export {
+  AGY_ASPECT_RATIOS,
+  AGY_IMAGEGEN_DEFAULT_MODEL,
+  AGY_IMAGEGEN_IMAGE_MODEL,
+  CODEX_IMAGEGEN_DEFAULT_EFFORT,
+  CODEX_IMAGEGEN_DEFAULT_MODEL,
+  EDIT_INCAPABLE_IMAGE_MODES,
+  isEditCapableMode,
 };
 
 // The provider-side image tool each cloud CLI is directed to call. Single
@@ -59,24 +84,6 @@ export const visualReferenceRole = (count) => (count === 1
  */
 export const enabledCloudImageModes = (settings) =>
   CLOUD_IMAGE_GEN_MODES.filter((mode) => settings?.imageGen?.[mode]?.enabled === true);
-
-// Backends that cannot take an input image at all (#3243). Every *queueable*
-// backend now can: local (mflux/diffusers `--image-path` + FLUX.2 references),
-// codex (`image_gen.referenced_image_paths`), grok (`image_edit.image`) and agy
-// (`generate_image.ImagePaths`) all accept an init image and/or reference
-// images — see `maxInputImages` on CLOUD_PROVIDER_SPECS (cloudProviderConfig.js)
-// for the probed per-backend limits. Agy
-// was listed here until its tool schema was probed directly and turned out to
-// document ImagePaths as "images to use in generation… edit, combine, or use as
-// references".
-//
-// The external SD-API backend is the one that genuinely has no input-image
-// wiring in this codebase, so it inherits the slot. This is the SINGLE source
-// for the fact — a future edit-incapable backend belongs here and nowhere else.
-export const EDIT_INCAPABLE_IMAGE_MODES = Object.freeze([IMAGE_GEN_MODE.EXTERNAL]);
-
-/** Can `mode` accept an input image (i2i / edit / reference)? */
-export const isEditCapableMode = (mode) => !EDIT_INCAPABLE_IMAGE_MODES.includes(mode);
 
 /**
  * Human-facing backend names — the server half of the client's MODE_LABELS
@@ -128,63 +135,6 @@ export const describeFidelity = (strength) => {
   if (n <= 0.7) return 'use the attached image as a strong reference while refining art and detail';
   return 'use the attached image as a loose reference; you may reinterpret freely';
 };
-
-// Shipped defaults for the Codex imagegen backend. Codex's built-in image_gen
-// tool otherwise runs whatever model its logged-in session defaults to — often
-// the heaviest, most expensive tier — at default reasoning effort. Pin the cheap
-// `gpt-5.6-luna` model at `low` reasoning effort so every media-pipeline render
-// pays the light path by default. Applied as a code-level default (not a
-// settings migration) so it reaches every install and federated peer with no
-// per-install bookkeeping; an explicit `imageGen.codex.model` / `.effort` in
-// Settings still wins. Effort is one of providerModels' CODEX_EFFORT_LEVELS.
-export const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-5.6-luna';
-export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
-
-// The Agy mirror of the Codex pin above (#3231). An unpinned agy render used to
-// resolve to the ANTIGRAVITY_CONFIGURED_DEFAULT sentinel, which resolveCliModel
-// maps to null — no `--model` flag at all — so agy ran the session on whatever
-// its own config selected, potentially a reasoning-heavy tier
-// (claude-opus-4-6-thinking) just to relay one generate_image tool call. The
-// driving agent does no creative work on the image, so the cheapest flash tier
-// that reliably issues the tool call is the correct shipped default
-// (empirically verified to complete a render). Agy bakes the effort ladder into
-// the model id (-low/-medium/-high), so there is no separate effort pin. Same
-// code-level-default rationale as Codex: reaches every install and peer with no
-// migration; an explicit `imageGen.agy.model` in Settings still wins. If this
-// tier ever proves flaky at issuing generate_image, escalate exactly one rung
-// (gemini-3.5-flash-medium) and record why here.
-export const AGY_IMAGEGEN_DEFAULT_MODEL = 'gemini-3.5-flash-low';
-
-// The image model behind agy's generate_image tool — fixed server-side by
-// Antigravity and NOT selectable by PortOS. Re-probed 2026-07-30 against agy
-// 1.1.8 and still closed; the decisive evidence is now the tool's own schema,
-// dumped from a live session:
-//
-//   { Prompt, ImageName, AspectRatio, ImagePaths, toolAction, toolSummary }
-//
-// There is no model parameter, so the driving agent has nothing to route a
-// model choice through. `agy --model imagen-3-fast` selects the AGENT/session
-// model and rejects image-model ids ("invalid model selection"). A prompt
-// directive naming a model is worse than a no-op: three runs directing
-// imagen-3-fast / gemini-3.5-flash / gemini-2.0-flash all produced identical
-// 1376×768 output from the same backend, and the directive text got
-// concatenated into the tool's `Prompt` ("…spider web (macro lens) using the
-// imagen-3-fast model"), polluting the image prompt itself.
-//
-// Beware: agy CONFIDENTLY names whichever model you asked for when questioned
-// afterward — it reported "gemini-2.0-flash" for a render that came out at
-// Imagen's 16:9 geometry. Do not re-probe on its word; probe the pixels.
-// Exported so sidecars can record the image model that actually rendered
-// (distinct from the agent/session model above) without a second copy.
-export const AGY_IMAGEGEN_IMAGE_MODEL = 'imagen-3.0-generate-002';
-
-// Aspect ratios agy's generate_image tool accepts via its `AspectRatio`
-// parameter — verbatim from the tool schema above. This IS a real knob: a run
-// that names no ratio renders at the tool's documented '1:1' default (measured
-// 1024×1024) no matter what pixel dimensions the prompt asks for, so a PortOS
-// render requesting a wide comic page silently came back square before the
-// directive below started naming a ratio.
-export const AGY_ASPECT_RATIOS = Object.freeze(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9']);
 
 /**
  * Map a pixel width/height onto the closest ratio in `ratios` ('W:H' strings).

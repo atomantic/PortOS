@@ -1,3 +1,4 @@
+import { getSettings, updateSettingsWith } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { modelComparisonImportSchema } from '../lib/validation.js';
 import { importModelComparison } from './modelComparison.js';
@@ -189,8 +190,7 @@ export async function fetchAllArtificialAnalysisModels(apiKey) {
       headers: { 'x-api-key': apiKey },
     });
     if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      throw new ServerError(`Artificial Analysis API failed (${res.status}): ${errText || res.statusText}`, { status: res.status === 401 || res.status === 403 ? 401 : 502 });
+      throw new ServerError(`Artificial Analysis API failed (${res.status}): ${res.statusText || 'request rejected'}`, { status: res.status === 401 || res.status === 403 ? 401 : 502 });
     }
     const json = await res.json();
     if (!json.data || !Array.isArray(json.data)) break;
@@ -201,12 +201,26 @@ export async function fetchAllArtificialAnalysisModels(apiKey) {
   return allModels;
 }
 
+// Presence only — never the value. The comparison page reads this to decide
+// whether the Sync button prompts for a key or just syncs with the stored one.
+export async function hasArtificialAnalysisKey() {
+  return Boolean(await resolveArtificialAnalysisKey());
+}
+
+async function resolveArtificialAnalysisKey(apiKey) {
+  const settings = await getSettings();
+  return apiKey?.trim() || settings.secrets?.artificialAnalysis?.apiKey || process.env.ARTIFICIAL_ANALYSIS_API_KEY || '';
+}
+
 export async function syncArtificialAnalysisCatalog({ apiKey } = {}) {
-  const key = apiKey || process.env.ARTIFICIAL_ANALYSIS_API_KEY;
+  const key = await resolveArtificialAnalysisKey(apiKey);
   if (!key) {
     throw new ServerError('No Artificial Analysis API key provided or configured in ARTIFICIAL_ANALYSIS_API_KEY', { status: 400 });
   }
   const rawModels = await fetchAllArtificialAnalysisModels(key);
+  if (apiKey?.trim()) await updateSettingsWith(current => ({
+    ...current, secrets: { ...current.secrets, artificialAnalysis: { apiKey: apiKey.trim() } },
+  }));
   const observations = transformAAModelsToObservations(rawModels);
   const validated = modelComparisonImportSchema.parse({
     schemaVersion: 1,

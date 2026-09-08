@@ -25,6 +25,36 @@ Semantic memory system for the Chief of Staff that stores facts, learnings, obse
 8. **Real-time Updates**: WebSocket events for memory changes
 9. **Graph Visualization**: D3.js relationship graph (planned)
 
+## Persistent Mind memory protection
+
+Persistent Mind memories have an explicit cleanup protection level, separate from
+numerical importance: `standard`, `important`, or `core-identity`. The Memories
+panel lets the user set it when creating or editing a memory. Existing records
+remain standard until explicitly marked; no identity is inferred from private
+conversation history during installation or startup.
+
+Protected memories remain active through manual and self-triggered mind cleanup,
+background decay, expiration, and duplicate consolidation. Cleanup reports both
+archived and preserved counts. Clearing history still removes facts stored only
+in that history, so save lasting identity and knowledge as protected memories
+first. Protected memories take priority in the bounded context; protection is a
+retention policy, not a grant of authority or an unlimited context budget.
+
+The mind can emit `protection` in a memory candidate. With its existing
+`manageMind` grant it can call `mind.protect-memory` using an existing owned
+memory ID. That tool only adds protection; it cannot remove protection or demote
+core identity. Only an explicit user edit to Standard makes a protected memory
+eligible for bulk cleanup again. Direct record deletion in Brain remains a
+separate user action.
+
+Storage uses the existing `tags` field: `mind:core-identity` and `mind:important`.
+Both PostgreSQL and the test-only file backend already round-trip tags, so no new
+record format, seed, migration, or federation surface is introduced. The Mind API
+projects those tags as `protection`; older clients editing ordinary tags preserve
+the protection unless they explicitly supply a new protection level. The cleanup
+guards require this version of PortOS; downgrading to an older build cannot
+provide these retention guarantees.
+
 ## Memory Schema
 
 ```javascript

@@ -41,6 +41,9 @@ import { recommendStructure, describeStructure } from '../lib/seasonStructure';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import { useArcCanvasSync } from '../hooks/useArcCanvasSync';
 import RecordRenderPinRow from '../components/imageGen/RecordRenderPinRow';
+import CharacterEvolutionLens from '../components/character/CharacterEvolutionLens';
+import { EVOLUTION_STAGES, isDeclaredEvolution } from '../lib/characterEvolution.js';
+import { CHARACTER_ARC_LIMITS, TRANSITION_KINDS, TRANSITION_KIND_LABELS } from '../../../server/lib/seriesCharacterArc.js';
 
 const PIPELINE_SIDEBAR_KEY = 'portos-pipeline-series-sidebar-collapsed';
 
@@ -457,7 +460,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
 
       <FactReferenceSection series={series} patchSeries={patchSeries} />
 
-      <CharacterArcsSection series={series} patchSeries={patchSeries} />
+      <CharacterArcsSection series={series} universes={universes} patchSeries={patchSeries} />
 
       <div className="block">
         <div className="flex items-center justify-between mb-1">
@@ -814,35 +817,6 @@ function VoiceCandidateCard({ candidate, filedAs, onFileExemplar, onFileAntiExem
   );
 }
 
-// Per-field caps for the character-arc editor — mirror CHARACTER_ARC_LIMITS in
-// server/lib/seriesCharacterArc.js, which the PATCH route enforces with Zod.
-//
-// These are not cosmetic. `updateSeries` replaces `characterArcs` wholesale, so
-// the Save button sends the entire arc list on every save; one over-long field
-// fails Zod and the server rejects the WHOLE series PATCH — name, logline,
-// premise, style guide and all — not just the offending arc. Without a
-// `maxLength` the field that bricks every subsequent save is invisible in the
-// UI, so cap at the input instead of discovering it in a rejected save.
-const ARC_LIMITS = {
-  CHARACTER_NAME_MAX: 200,
-  WANT_MAX: 1000,
-  NEED_MAX: 1000,
-  START_STATE_MAX: 1000,
-  END_STATE_MAX: 1000,
-  TRANSITION_LABEL_MAX: 200,
-  ISSUE_MAX: 9999,
-};
-
-// The change-beat kinds the arc.transitions editorial check recognizes — mirror
-// TRANSITION_KINDS in server/lib/seriesCharacterArc.js.
-const TRANSITION_KIND_OPTIONS = [
-  ['decision', 'Decision'],
-  ['realization', 'Realization'],
-  ['point-of-no-return', 'Point of no return'],
-  ['relapse', 'Relapse'],
-  ['sacrifice', 'Sacrifice'],
-];
-
 // Fact-checking opt-in + author fact reference (#1588). When the series is flagged
 // fact-critical AND a non-empty reference is supplied, the gated research.fact-accuracy
 // editorial check reconciles the prose against these documented real-world facts.
@@ -894,8 +868,17 @@ function FactReferenceSection({ series, patchSeries }) {
 // permissive — a freshly-added blank arc simply doesn't persist until named. The
 // arc.transitions editorial check reconciles its detected change moments against
 // what's authored here and flags characters with no transition scenes (flat arcs).
-function CharacterArcsSection({ series, patchSeries }) {
+//
+// Every input is capped at the server's CHARACTER_ARC_LIMITS, the table the PATCH
+// route enforces with Zod. Not cosmetic: Save re-sends the whole arc list, so one
+// over-long field rejects the ENTIRE series PATCH — name, logline, premise, style
+// guide and all — and without a `maxLength` the field that bricks every
+// subsequent save is invisible in the UI.
+function CharacterArcsSection({ series, universes, patchSeries }) {
   const arcs = Array.isArray(series.characterArcs) ? series.characterArcs : [];
+  // The linked universe's cast, for the read-only psychology baseline beside
+  // each lens. Absent when no universe is linked — the lens still authors fine.
+  const cast = universes?.find((u) => u.id === series.universeId)?.characters || [];
   const setArcs = (next) => patchSeries({ characterArcs: next });
   const setArc = (i, patch) => setArcs(arcs.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
   const addArc = () => setArcs([...arcs, { characterName: '', want: '', need: '', startState: '', endState: '', transitions: [] }]);
@@ -950,7 +933,7 @@ function CharacterArcsSection({ series, patchSeries }) {
                   value={arc.characterName || ''}
                   onChange={(e) => setArc(i, { characterName: e.target.value })}
                   placeholder="Character name"
-                  maxLength={ARC_LIMITS.CHARACTER_NAME_MAX}
+                  maxLength={CHARACTER_ARC_LIMITS.CHARACTER_NAME_MAX}
                   className={`${inputCls} font-medium`}
                 />
                 <button
@@ -963,10 +946,10 @@ function CharacterArcsSection({ series, patchSeries }) {
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-2">
-                <input aria-label="Want" value={arc.want || ''} onChange={(e) => setArc(i, { want: e.target.value })} placeholder="Wants (external goal)" maxLength={ARC_LIMITS.WANT_MAX} className={inputCls} />
-                <input aria-label="Need" value={arc.need || ''} onChange={(e) => setArc(i, { need: e.target.value })} placeholder="Needs (internal lesson)" maxLength={ARC_LIMITS.NEED_MAX} className={inputCls} />
-                <input aria-label="Start state" value={arc.startState || ''} onChange={(e) => setArc(i, { startState: e.target.value })} placeholder="Starts as…" maxLength={ARC_LIMITS.START_STATE_MAX} className={inputCls} />
-                <input aria-label="End state" value={arc.endState || ''} onChange={(e) => setArc(i, { endState: e.target.value })} placeholder="Ends as…" maxLength={ARC_LIMITS.END_STATE_MAX} className={inputCls} />
+                <input aria-label="Want" value={arc.want || ''} onChange={(e) => setArc(i, { want: e.target.value })} placeholder="Wants (external goal)" maxLength={CHARACTER_ARC_LIMITS.WANT_MAX} className={inputCls} />
+                <input aria-label="Need" value={arc.need || ''} onChange={(e) => setArc(i, { need: e.target.value })} placeholder="Needs (internal lesson)" maxLength={CHARACTER_ARC_LIMITS.NEED_MAX} className={inputCls} />
+                <input aria-label="Start state" value={arc.startState || ''} onChange={(e) => setArc(i, { startState: e.target.value })} placeholder="Starts as…" maxLength={CHARACTER_ARC_LIMITS.START_STATE_MAX} className={inputCls} />
+                <input aria-label="End state" value={arc.endState || ''} onChange={(e) => setArc(i, { endState: e.target.value })} placeholder="Ends as…" maxLength={CHARACTER_ARC_LIMITS.END_STATE_MAX} className={inputCls} />
               </div>
 
               <div className="mt-2">
@@ -989,21 +972,21 @@ function CharacterArcsSection({ series, patchSeries }) {
                         onChange={(e) => setTransition(i, j, { kind: e.target.value })}
                         className="px-1.5 py-1 bg-port-bg border border-port-border rounded text-white text-xs shrink-0"
                       >
-                        {TRANSITION_KIND_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                        {TRANSITION_KINDS.map((kind) => <option key={kind} value={kind}>{TRANSITION_KIND_LABELS[kind]}</option>)}
                       </select>
                       <input
                         aria-label="Transition label"
                         value={t.label || ''}
                         onChange={(e) => setTransition(i, j, { label: e.target.value })}
                         placeholder="What changes"
-                        maxLength={ARC_LIMITS.TRANSITION_LABEL_MAX}
+                        maxLength={CHARACTER_ARC_LIMITS.TRANSITION_LABEL_MAX}
                         className="flex-1 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
                       />
                       <input
                         aria-label="At issue"
                         type="number"
                         min={0}
-                        max={ARC_LIMITS.ISSUE_MAX}
+                        max={CHARACTER_ARC_LIMITS.ISSUE_MAX}
                         value={Number.isFinite(t.atIssue) ? t.atIssue : ''}
                         onChange={(e) => {
                           const n = parseInt(e.target.value, 10);
@@ -1014,7 +997,7 @@ function CharacterArcsSection({ series, patchSeries }) {
                           // unclamped 99999 would sail through to the PATCH and
                           // fail the ISSUE_MAX Zod cap, taking the whole series
                           // save down with it.
-                          const clamped = Math.min(Math.max(n, 0), ARC_LIMITS.ISSUE_MAX);
+                          const clamped = Math.min(Math.max(n, 0), CHARACTER_ARC_LIMITS.ISSUE_MAX);
                           setTransition(i, j, { atIssue: Number.isFinite(n) ? clamped : null });
                         }}
                         placeholder="#"
@@ -1032,6 +1015,30 @@ function CharacterArcsSection({ series, patchSeries }) {
                   ))}
                 </div>
               </div>
+
+              <details className="mt-2">
+                <summary className="min-h-[32px] cursor-pointer text-[10px] uppercase tracking-wider text-gray-600">
+                  Evolution lens
+                  <span className="ml-2 normal-case tracking-normal text-[11px] text-gray-500">
+                    {isDeclaredEvolution(arc.evolution) ? arc.evolution.outcome : 'not declared'}
+                    {' · '}{arc.evolution?.stages?.length || 0}/{EVOLUTION_STAGES.length} stages
+                  </span>
+                </summary>
+                <div className="pt-2">
+                  <CharacterEvolutionLens
+                    idPrefix={`arc-${i}`}
+                    host="pipelineSeries"
+                    evolution={arc.evolution || null}
+                    anchors={{
+                      transitions: transitions
+                        .filter((t) => t.id)
+                        .map((t) => ({ id: t.id, label: t.label || t.kind || t.id })),
+                    }}
+                    psychology={cast.find((c) => c.id === arc.characterId)?.psychology}
+                    onChange={(evolution) => setArc(i, { evolution })}
+                  />
+                </div>
+              </details>
             </div>
           );
         })}

@@ -9,10 +9,12 @@
  *     generation/fallback run — the cause of the nomic-embed-text fallback bug)
  *   - localLlm.getStatus (recommend a best-fit editorial model)
  *
- * The client mirrors `isEmbeddingModel` + `isVisionModel` + `isToolUseModel`
- * in client/src/utils/providers.js — keep the regexes in lockstep (the
- * aiToolkit/lib dirs can't be imported there). `localModelHeuristics.mirror.test.js`
- * enforces that, by what each pattern matches rather than by its text.
+ * Pure and dependency-free, so the browser imports it too:
+ * client/src/utils/localModelHeuristics.js re-exports `isEmbeddingModel` +
+ * `isVisionModel` + `isToolUseModel` from here rather than inlining the regexes.
+ * The one remaining copy is `TOOL_USE_RE` in server/lib/aiToolkit/providers.js
+ * (the vendored toolkit may not import out of its own directory);
+ * `localModelHeuristics.mirror.test.js` fails when that copy drifts.
  */
 
 // Embedding-only models — never valid for chat/generation. The bge/nomic/e5/gte
@@ -171,9 +173,9 @@ export function isVisionModel(model) {
 // NOT matched (tool use landed in 3.1); neither is Gemma 3 (tools landed in
 // Gemma 4), so the gemma rule is anchored to the family AND the version.
 //
-// MIRRORED in client/src/utils/providers.js (isToolUseModel) and inlined in
-// server/lib/aiToolkit/providers.js (TOOL_USE_RE) — keep all three in lockstep;
-// `localModelHeuristics.mirror.test.js` fails when any of them drifts.
+// Inlined in server/lib/aiToolkit/providers.js (TOOL_USE_RE) — keep the two in
+// lockstep; `localModelHeuristics.mirror.test.js` fails when they drift. The
+// client re-exports `isToolUseModel` from this file, so it needs no copy.
 const TOOL_USE_RE = new RegExp([
   'qwen',
   'llama-?3\\.[1-9]', 'llama-?4',

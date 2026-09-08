@@ -10,7 +10,7 @@ const ALLOWED_SCREENSHOT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', 
 // Reasoning-effort values accepted by the effort-capable CLI providers. Keep
 // this local because the vendored toolkit must remain self-contained; the
 // runtime mirror lives in server/lib/providerModels.js and the UI mirror lives
-// in client/src/utils/providers.js.
+// in client/src/utils/providerModels.js.
 const PROVIDER_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 const providerEffort = z.preprocess(
@@ -96,6 +96,7 @@ export const providerSchema = z.object({
   lightModel: z.string().nullable().optional(),
   mediumModel: z.string().nullable().optional(),
   heavyModel: z.string().nullable().optional(),
+  ultraModel: z.string().nullable().optional(),
   fallbackProvider: z.string().nullable().optional(),
   // Model to run on the fallback provider. The UI sends '' when no model is
   // pinned (fall back to the fallback provider's own default), so allow empty.

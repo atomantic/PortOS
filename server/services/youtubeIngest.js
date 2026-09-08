@@ -50,9 +50,11 @@ import { safeChildProcessOptions } from '../lib/processEnv.js';
 import { attachSseClient as attachSse, broadcastSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { vttToPlainText } from '../lib/vttTranscript.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { createSettingsStore } from '../lib/settingsStore.js';
 import { downloadAudioToTempMp3 } from './ytdlpAudioImport.js';
 import { downloadVideoIntoLibrary } from './videoDownload.js';
-import { assertYoutubeVideoUrl, YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
+import { YOUTUBE_VIDEO_URL_RE } from '../lib/youtubeUrl.js';
+import { assertYoutubeVideoUrl } from '../lib/youtubeUrlAssert.js';
 // The pure half of the ingest — yt-dlp metadata normalization, the Obsidian
 // note body, the CoS agent prompt, and the index's Obsidian-pointer rule — lives
 // in lib/ so it is unit-testable without this module's spawn/store graph (#6015).
@@ -113,17 +115,12 @@ const DEFAULT_SETTINGS = {
 
 // ─── Settings ──────────────────────────────────────────────────────────────
 
-export async function getSettings() {
-  await ensureDir(PATHS.brain);
-  const loaded = await readJSONFile(SETTINGS_FILE, null);
-  return loaded ? { ...DEFAULT_SETTINGS, ...loaded } : { ...DEFAULT_SETTINGS };
-}
+// Strict read + serialized PATCH live in the store (#4115): a corrupt file
+// rejects instead of reading as DEFAULT_SETTINGS and being overwritten.
+const settingsStore = createSettingsStore(SETTINGS_FILE, DEFAULT_SETTINGS);
 
-export async function updateSettings(partial) {
-  const next = { ...(await getSettings()), ...partial };
-  await atomicWrite(SETTINGS_FILE, next);
-  return next;
-}
+export const getSettings = settingsStore.get;
+export const updateSettings = settingsStore.update;
 
 /**
  * Which Obsidian vault transcripts go to: the explicit setting when present,
@@ -392,6 +389,7 @@ export async function startYoutubeIngest({
   ingestAudio = false,
   note = '',
   agentPrompt = '',
+  targetAppId, providerId, model, effort, workMode = 'issues',
   tags = [],
   priority,
 } = {}) {
@@ -401,6 +399,22 @@ export async function startYoutubeIngest({
       status: 400,
       code: 'NOTHING_TO_INGEST',
     });
+  }
+
+  // Resolve explicit agent routing before starting downloads, so stale app
+  // selections fail visibly and never silently dispatch into PortOS.
+  let analysisApp = null;
+  let filing = null;
+  if (String(agentPrompt || '').trim()) {
+    const { getAppById, PORTOS_APP_ID } = await import('./apps.js');
+    analysisApp = await getAppById(targetAppId || PORTOS_APP_ID);
+    if (!analysisApp?.repoPath || analysisApp.archived) {
+      throw new ServerError('Selected analysis app is unavailable', { status: 400, code: 'APP_NOT_FOUND' });
+    }
+    if (workMode === 'issues') {
+      const { resolveTrackerFilingBlock } = await import('../lib/workTracker.js');
+      filing = await resolveTrackerFilingBlock(analysisApp, 'youtube-analysis');
+    }
   }
 
   const ytDlp = await findYtDlp();
@@ -622,14 +636,22 @@ export async function startYoutubeIngest({
         stage('queueing');
         const task = await addTask({
           description: `Review ingested YouTube content: ${meta.title} [${meta.videoId}]`,
+          app: analysisApp.id,
+          ...(providerId ? { provider: providerId } : {}),
+          ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
+          ...(filing ? { workTracker: filing.workTracker, worktreeChangesExpected: filing.worktreeChangesExpected } : {}),
           context: buildAgentTaskContext({
             meta, url, agentPrompt: prompt, transcriptPath, notePath: landed.obsidian?.path, tags: cleanTags,
             hasTranscript: !!transcriptPath,
+            appName: analysisApp.name, workMode,
+            trackerInstructions: filing?.trackerInstructions
+              .replace(/\{appName\}/g, () => analysisApp.name)
+              .replace(/\{repoPath\}/g, () => analysisApp.repoPath),
           }),
           priority: priority || settings.taskPriority,
-          // Analysis + issue-filing, not a code change: no worktree, no PR.
-          useWorktree: false,
-          openPR: false,
+          useWorktree: workMode === 'implement',
+          openPR: workMode === 'implement',
           simplify: false,
           reviewLoop: false,
         }, 'user').catch((err) => {

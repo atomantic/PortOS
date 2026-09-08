@@ -7,6 +7,8 @@ import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import { useValidTab } from '../hooks/useValidTab';
 import useUrlParams from '../hooks/useUrlParams';
+import { getPageNavTabs } from '../../../server/lib/navManifest.js';
+import { buildPageNavTabs } from '../lib/pageNavTabs.js';
 
 import AgendaTab from '../components/calendar/AgendaTab';
 import DayView from '../components/calendar/DayView';
@@ -17,18 +19,22 @@ import ReviewTab from '../components/calendar/ReviewTab';
 import CalendarLifetimeTab from '../components/meatspace/tabs/CalendarTab';
 import SyncTab from '../components/calendar/SyncTab';
 
-// Exported so the nav-manifest tab-coverage guard (server/lib/navManifest.test.js)
-// can assert each tab round-trips to a NAV_COMMANDS path.
-export const TABS = [
-  { id: 'agenda', label: 'Agenda', icon: CalendarDays },
-  { id: 'day', label: 'Day', icon: CalendarIcon },
-  { id: 'week', label: 'Week', icon: Columns },
-  { id: 'month', label: 'Month', icon: LayoutGrid },
-  { id: 'lifetime', label: 'Lifetime', icon: Clock },
-  { id: 'review', label: 'Review', icon: ClipboardList },
-  { id: 'sync', label: 'Sync', icon: RefreshCw },
-  { id: 'config', label: 'Config', icon: Settings }
-];
+// Icon (and any other presentation-only detail) per tab id. The manifest
+// (`tabGroup: 'calendar'`) owns id/label/order — this page owns only how each
+// tab looks. Throws at import time if the manifest and this map drift, so a
+// new manifest tab can't ship silently unreachable from this page's tab bar.
+const TAB_PRESENTATION = {
+  agenda: { icon: CalendarDays },
+  day: { icon: CalendarIcon },
+  week: { icon: Columns },
+  month: { icon: LayoutGrid },
+  lifetime: { icon: Clock },
+  review: { icon: ClipboardList },
+  sync: { icon: RefreshCw },
+  config: { icon: Settings },
+};
+
+export const TABS = buildPageNavTabs(getPageNavTabs('calendar'), TAB_PRESENTATION, 'Calendar');
 
 export default function Calendar() {
   const navigate = useNavigate();

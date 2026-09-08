@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  youtubeIngestSchema,
   destinationEnum,
   manualDestinationEnum,
   classifierOutputSchema,
@@ -1026,5 +1027,16 @@ describe('brainValidation.js', () => {
       expect(cleared.success).toBe(true);
       expect(cleared.data.links).toEqual([]);
     });
+  });
+});
+
+describe('YouTube analysis request contract', () => {
+  it('preserves app and execution pins while accepting legacy capture requests', () => {
+    const url = 'https://youtu.be/oCnxnaVg0bY';
+    expect(youtubeIngestSchema.parse({ url })).toEqual({ url });
+    const request = { url, targetAppId: 'example', providerId: 'codex', model: 'example-model', effort: 'high', workMode: 'implement' };
+    expect(youtubeIngestSchema.parse(request)).toEqual(request);
+    expect(youtubeIngestSchema.safeParse({ url, workMode: 'unknown' }).success).toBe(false);
+    expect(youtubeIngestSchema.safeParse({ url, effort: 'unknown' }).success).toBe(false);
   });
 });

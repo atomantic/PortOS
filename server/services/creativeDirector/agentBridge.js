@@ -44,7 +44,11 @@ import { DELIVERABLE_KINDS, deliverableMark } from './deliverableGate.js';
 // Only adds a pin when one is set, preserving the system-default behavior for
 // existing installations. A commission lookup failure falls through rather than
 // stalling the dispatch.
-async function getStageAssignment(kind, project) {
+export async function getStageAssignment(kind, project) {
+  if (project.workspace === 'video' && project.videoExecution?.choices) {
+    const choice = project.videoExecution.choices[kind === 'evaluate' ? 'evaluation' : kind];
+    return { provider: choice.providerId, providerId: choice.providerId, model: choice.model, ...(choice.effort ? { effort: choice.effort } : {}) };
+  }
   // Scene evaluation is a direct vision API call (apiProviderTypes) resolved
   // separately, NOT a CoS agent pin — injecting its api-type provider into the
   // agent task metadata would trip the harness-boundary guard. Never pin it
@@ -76,6 +80,7 @@ async function getStageAssignment(kind, project) {
   return {
     ...(assignment.providerId ? { provider: assignment.providerId, providerId: assignment.providerId } : {}),
     ...(assignment.model ? { model: assignment.model } : {}),
+    ...(assignment.effort ? { effort: assignment.effort } : {}),
   };
 }
 
@@ -83,6 +88,19 @@ async function buildTaskRecord(project, kind, scene, context) {
   const taskId = `cd-${project.id}-${kind}-${Date.now().toString(36)}`;
   const runId = randomUUID();
   const assignment = await getStageAssignment(kind, project);
+  let attempt;
+  if (project.workspace === 'video') {
+    const { reserveVideoAttempt, assertVideoAttemptDispatch } = await import('./videoExecution.js');
+    const audio = project.videoExecution?.choices?.audio || project.videoDraft?.audio || { mode: 'native' };
+    context = `${context}\n\nSaved Video audio contract: ${JSON.stringify(audio)}. Soundtracks are assembled separately; do not enqueue audio or assume the video renderer supplies dialogue or lip sync. Plan visual storytelling to fit this audio choice. Shot joins: ${project.videoDraft?.transition || 'cut'}; joins do not overlap or shorten the saved shot timing.`;
+    attempt = await reserveVideoAttempt(project.id, { kind, expectedProductionRevision: project.videoWorkRevision || 0, key: `${kind}:${scene?.sceneId || 'project'}`, ...(scene ? { sceneId: scene.sceneId, workRevision: scene.workRevision || 0 } : {}) });
+    if (!attempt) return null;
+    await assertVideoAttemptDispatch(project.id, attempt.id).catch(async error => {
+      const { settleVideoAttempt } = await import('./videoExecution.js');
+      await settleVideoAttempt(project.id, attempt.id, { status: 'failed' });
+      throw error;
+    });
+  }
   return {
     id: taskId,
     runId,
@@ -93,8 +111,10 @@ async function buildTaskRecord(project, kind, scene, context) {
       priorityValue: 2,
       description: buildDescription(project, kind, scene),
       metadata: {
+        ...(project.workspace === 'video' ? { machineLocal: true, videoProduction: { projectId: project.id, attemptId: attempt.id, kind } } : {}),
         creativeDirector: {
           projectId: project.id,
+          ...(project.workspace === 'video' ? { productionRevision: project.videoWorkRevision || 0 } : {}),
           kind,
           sceneId: scene?.sceneId || null,
           runId,
@@ -138,7 +158,26 @@ function buildDescription(project, kind, scene) {
   return `Creative Director — ${kind} for "${project.name}" ${tag}`;
 }
 
-async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
+async function persistAndEmit(built, project, kind, sceneId) {
+  const marker = built.record.metadata.videoProduction;
+  try {
+    const result = await persistAndEmitTask(built, project, kind, sceneId);
+    if (marker && result?.metadata?.videoProduction?.attemptId !== marker.attemptId) {
+      const { settleVideoAttempt } = await import('./videoExecution.js');
+      await settleVideoAttempt(project.id, marker.attemptId, { status: 'failed', duplicateTaskId: result?.id });
+    }
+    return result;
+  } catch (error) {
+    if (marker) {
+      const { settleVideoAttempt, pauseVideoExecution } = await import('./videoExecution.js');
+      await settleVideoAttempt(project.id, marker.attemptId, { status: 'failed' });
+      await pauseVideoExecution(project.id, `Agent enqueue stopped: ${error.message}. Review and Resume.`);
+    }
+    throw error;
+  }
+}
+
+async function persistAndEmitTask({ id, runId, record }, project, kind, sceneId) {
   // Persist FIRST and resolve the effective task before recording the run or
   // emitting `task:ready`. CD descriptions are deterministic per project+kind,
   // so addTask's dedup (which also matches blocked tasks, #2614) can return an
@@ -190,15 +229,25 @@ async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
     status: 'running',
     ...(DELIVERABLE_KINDS.has(kind) ? { deliverableMark: deliverableMark(project, kind) } : {}),
   }).catch((err) => console.log(`⚠️ CD recordRun(running) failed: ${err.message}`));
+  if (project.workspace === 'video') {
+    const { settleVideoAttempt } = await import('./videoExecution.js');
+    await settleVideoAttempt(project.id, record.metadata.videoProduction.attemptId, { status: 'running', taskId: effective.id });
+  }
   cosEvents.emit('task:ready', effective);
   console.log(`📤 CD task enqueued: ${effective.id} (${kind}${sceneId ? ` for ${sceneId}` : ''} on ${project.id})`);
   return effective;
 }
 
 export async function enqueueTreatmentTask(project) {
+  const { prepareVideoPlanningProject } = await import('./videoSources.js');
+  project = await prepareVideoPlanningProject(project);
+  if (project.workspace === 'video') {
+    const { effectiveVideoProject } = await import('./videoExecution.js');
+    project = effectiveVideoProject(project);
+  }
   const context = await buildTreatmentPrompt(project);
   const built = await buildTaskRecord(project, 'treatment', null, context);
-  return persistAndEmit(built, project, 'treatment', null);
+  return built ? persistAndEmit(built, project, 'treatment', null) : null;
 }
 
 // CDO Phase 2 (#2184) — the planner. Mirrors enqueueTreatmentTask: an internal
@@ -208,15 +257,21 @@ export async function enqueueTreatmentTask(project) {
 // builder never imports the registry. Malformed plan output retries like the
 // treatment stage — the agent reads the 4xx error body and re-PATCHes.
 export async function enqueuePlanTask(project) {
+  const { prepareVideoPlanningProject } = await import('./videoSources.js');
+  project = await prepareVideoPlanningProject(project);
+  if (project.workspace === 'video') {
+    const { effectiveVideoProject } = await import('./videoExecution.js');
+    project = effectiveVideoProject(project);
+  }
   const targetAbility = project?.directive?.constraints?.targetAbility || null;
-  const context = await buildPlanPrompt(project, { toolSpecs: getToolSpecs({ targetAbility }) });
+  const context = await buildPlanPrompt(project, { toolSpecs: getToolSpecs({ targetAbility }).filter(tool => project.workspace !== 'video' || tool.function?.name === 'media_enqueueVideoJob').map(tool => project.workspace === 'video' ? { ...tool, function: { ...tool.function, description: `${tool.function.description} Each step renders exactly one clip; set params.durationSeconds between 1 and 10. Match the saved timed shot plan. Do not batch or chain clips.` } } : tool) });
   const built = await buildTaskRecord(project, 'plan', null, context);
-  return persistAndEmit(built, project, 'plan', null);
+  return built ? persistAndEmit(built, project, 'plan', null) : null;
 }
 
 export async function enqueueEvaluateTask(project, scene) {
   if (!scene) throw new Error('enqueueEvaluateTask: scene is required');
   const context = await buildEvaluatePrompt(project, scene);
   const built = await buildTaskRecord(project, 'evaluate', scene, context);
-  return persistAndEmit(built, project, 'evaluate', scene.sceneId);
+  return built ? persistAndEmit(built, project, 'evaluate', scene.sceneId) : null;
 }

@@ -184,7 +184,7 @@ describe('persistent mind routes', () => {
         thinkingInterface: 'text',
         wakeIntervalMinutes: 30,
       },
-      capabilities: { schemaVersion: 7, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      capabilities: { schemaVersion: 8, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       harness: { type: 'api', recommendation: 'recommended' },
       imageCapability: { status: 'unknown' },
       autonomyMode: 'execute',
@@ -278,8 +278,8 @@ describe('persistent mind routes', () => {
         expect.objectContaining({ name: 'eidoverse.status', granted: false, input_schema: expect.any(Object) }),
         expect.objectContaining({ name: 'cos.create-task', granted: true }),
       ]),
-      schemaVersion: 7,
-      capabilities: { schemaVersion: 7, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
+      schemaVersion: 8,
+      capabilities: { schemaVersion: 8, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] },
       boundaries: expect.arrayContaining([expect.stringMatching(/arbitrary shell/i)]),
       tools: expect.arrayContaining([
         expect.objectContaining({ id: 'cos.create-task', capability: 'createTasks', granted: true, defaultEnabled: false }),
@@ -366,6 +366,15 @@ describe('persistent mind routes', () => {
     expect(updated.status).toBe(200);
     expect(mocks.updatePersistentMindMemory).toHaveBeenCalledWith('memory-1', { content: 'An edited fact' });
     expect((await put('/mind/memories/memory-1', {})).status).toBe(400);
+  });
+
+  it('validates protection on memory create and edit without changing legacy defaults', async () => {
+    expect((await post('/mind/memories', { content: 'An enduring identity.', protection: 'core-identity' })).status).toBe(201);
+    expect(mocks.createPersistentMindMemory).toHaveBeenLastCalledWith(expect.objectContaining({ protection: 'core-identity' }));
+    expect((await put('/mind/memories/memory-1', { protection: 'important' })).status).toBe(200);
+    expect(mocks.updatePersistentMindMemory).toHaveBeenLastCalledWith('memory-1', { protection: 'important' });
+    expect((await put('/mind/memories/memory-1', { protection: 'standard' })).status).toBe(200);
+    expect((await put('/mind/memories/memory-1', { protection: 'invalid' })).status).toBe(400);
   });
 
   it('returns not found when an edited memory is not owned by this mind', async () => {

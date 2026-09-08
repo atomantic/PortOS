@@ -1,7 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   UNKNOWN_LICENSE_LABEL,
   buildProvenance,
@@ -176,14 +173,5 @@ describe('buildProvenanceSource', () => {
   it('rejects unknown kinds and empty ids', () => {
     expect(buildProvenanceSource({ kind: 'runtime', id: 'x' })).toBeNull();
     expect(buildProvenanceSource({ kind: 'model', id: '' })).toBeNull();
-  });
-});
-
-describe('client mirror', () => {
-  it('stays byte-for-byte with client/src/lib/assetProvenance.js', () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const server = readFileSync(join(here, 'assetProvenance.js'), 'utf8');
-    const client = readFileSync(join(here, '../../client/src/lib/assetProvenance.js'), 'utf8');
-    expect(client).toBe(server);
   });
 });

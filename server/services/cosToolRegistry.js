@@ -23,6 +23,7 @@ import {
   eidoverseWorldSaySchema,
   eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
 } from '../lib/validation.js';
+import { persistentMindProtectMemorySchema } from '../lib/persistentMindMemory.js';
 import { persistentMindThinkingRequestSchema } from '../lib/persistentMindThinkingPresets.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from '../lib/userActionTypes.js';
 import { dispatchTool, getToolSpecs, getToolSpecsForIntent } from './voice/tools.js';
@@ -128,7 +129,7 @@ const mindCleanupTool = Object.freeze({
   version: COS_TOOL_SCHEMA_VERSION,
   providerName: 'mind_cleanup',
   aliases: ['mind_cleanup'],
-  description: 'Clean Persistent Mind-owned memories, trajectory history, or derived context when stale information is no longer useful.',
+  description: 'Archive only unprotected Persistent Mind-owned memories, or clear trajectory history and derived context. Core identity and important memories always survive. Protect critical knowledge using mind.protect-memory before cleanup.',
   input_schema: zodToOpenApiSchema(persistentMindCleanupRequestSchema),
   output_schema: objectOutputSchema,
   policy: {
@@ -140,6 +141,22 @@ const mindCleanupTool = Object.freeze({
     confirmation: 'capability-grant',
   },
   adapter: { kind: 'persistent-mind-maintenance' },
+});
+
+const mindProtectMemoryTool = Object.freeze({
+  type: 'portos_tool',
+  name: 'mind.protect-memory',
+  version: COS_TOOL_SCHEMA_VERSION,
+  providerName: 'mind_protect_memory',
+  aliases: ['mind_protect_memory'],
+  description: 'Protect an existing active mind-owned memory as core identity or important knowledge before cleanup. Use its id from curated context. Cannot remove protection or demote core identity. Protected memories survive both manual and self-triggered bulk cleanup.',
+  input_schema: zodToOpenApiSchema(persistentMindProtectMemorySchema),
+  output_schema: objectOutputSchema,
+  policy: {
+    scopes: ['mind'], requiredCapabilities: ['manageMind'], sideEffect: 'write',
+    idempotent: true, async: false, confirmation: 'capability-grant',
+  },
+  adapter: { kind: 'persistent-mind-memory-protection' },
 });
 
 // One mind turn must not be able to dump the whole ledger into context — the
@@ -279,7 +296,34 @@ const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].
   policy: { scopes: ['mind'], requiredCapabilities: ['chooseThinkingPreset'], sideEffect: index ? 'write' : 'read', idempotent: true, async: false, confirmation: 'capability-grant' },
   adapter: { kind: index ? 'thinking-request' : 'thinking-catalog' },
 }));
-const toolCatalog = (intent) => [...thinkingTools, taskTool, mindCleanupTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
+const localContextTools = (() => {
+  // Lazy schema import keeps the registry load light when Zod trees grow.
+  const adjustSchema = z.object({
+    numCtx: z.number().int().min(512).max(131072),
+    reason: z.string().trim().min(1).max(240),
+  }).strict();
+  return [
+    {
+      type: 'portos_tool', name: 'mind.local-context', version: COS_TOOL_SCHEMA_VERSION,
+      providerName: providerToolName('mind.local-context'), aliases: [],
+      description: 'Inspect this mind\'s local API provider numCtx and the RAM/GPU safety ceiling for adjustments.',
+      input_schema: zodToOpenApiSchema(z.object({}).strict()),
+      output_schema: objectOutputSchema,
+      policy: { scopes: ['mind'], requiredCapabilities: ['adjustLocalContext'], sideEffect: 'read', idempotent: true, async: false, confirmation: 'capability-grant' },
+      adapter: { kind: 'local-context-catalog' },
+    },
+    {
+      type: 'portos_tool', name: 'mind.adjust-local-context', version: COS_TOOL_SCHEMA_VERSION,
+      providerName: providerToolName('mind.adjust-local-context'), aliases: [],
+      description: 'Adjust this mind\'s own local API provider numCtx within host safety clamps. Refused when it would risk OOMing PortOS.',
+      input_schema: zodToOpenApiSchema(adjustSchema),
+      output_schema: objectOutputSchema,
+      policy: { scopes: ['mind'], requiredCapabilities: ['adjustLocalContext'], sideEffect: 'write', idempotent: true, async: false, confirmation: 'capability-grant' },
+      adapter: { kind: 'local-context-adjust' },
+    },
+  ];
+})();
+const toolCatalog = (intent) => [...thinkingTools, ...localContextTools, taskTool, mindCleanupTool, mindProtectMemoryTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
@@ -288,6 +332,7 @@ const normalizeToolCapabilities = (raw) => ({
   createTasks: raw?.createTasks === true,
   manageMind: raw?.manageMind === true,
   chooseThinkingPreset: raw?.chooseThinkingPreset === true,
+  adjustLocalContext: raw?.adjustLocalContext === true,
 });
 
 const publicTool = (tool, { scope, capabilities }) => ({
@@ -411,8 +456,18 @@ const executeAdapter = async (tool, args, context) => {
       ? getPersistentMindThinkingRequestCatalog()
       : requestPersistentMindThinkingPreset(args, context);
   }
+  if (tool.adapter.kind.startsWith('local-context-')) {
+    const { getPersistentMindLocalContextCatalog, adjustPersistentMindLocalContext } = await import('./persistentMindLocalContext.js');
+    return tool.adapter.kind === 'local-context-catalog'
+      ? getPersistentMindLocalContextCatalog()
+      : adjustPersistentMindLocalContext(args, context);
+  }
   if (tool.adapter.kind === 'voice-tool') {
     return dispatchTool(tool.adapter.legacyName, args, { sideEffects: [], signal: context.signal });
+  }
+  if (tool.adapter.kind === 'persistent-mind-memory-protection') {
+    const { protectPersistentMindMemory } = await import('./persistentMindContext.js');
+    return protectPersistentMindMemory(args);
   }
   if (tool.adapter.kind === 'persistent-mind-maintenance') {
     return cleanupPersistentMind({

@@ -20,6 +20,8 @@ const btnClass = 'flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounde
 const CATEGORY_LABELS = {
   general: 'General purpose',
   coding: 'Coding & agents',
+  security: 'Security specialists',
+  'security-uncensored': 'Security · Uncensored / abliterated',
   reasoning: 'Reasoning & analysis',
   vision: 'Image Analysis',
   chat: 'Chat & voice',
@@ -29,7 +31,7 @@ const CATEGORY_LABELS = {
   lightweight: 'Small & Fast',
   multilingual: 'Multilingual'
 };
-const CATEGORY_ORDER = ['general', 'coding', 'writing', 'reasoning', 'vision', 'chat', 'lightweight', 'multilingual', 'embedding', 'audio'];
+const CATEGORY_ORDER = ['general', 'coding', 'security', 'security-uncensored', 'writing', 'reasoning', 'vision', 'chat', 'lightweight', 'multilingual', 'embedding', 'audio'];
 const categoryLabel = (id) => CATEGORY_LABELS[id] || id;
 const primaryCategoryFor = (model) => model?.category || 'general';
 const recommendationCategoriesFor = (model) => {
@@ -604,7 +606,7 @@ export default function LocalLlmLibraryView() {
                             {FORMAT_META[m.format].label}
                           </span>
                         )}
-                        {isAgentRecommendedModel(m.capabilities) && (
+                        {!m.reducedSafeguards && m.publisherReview !== 'unreviewed' && isAgentRecommendedModel(m.capabilities) && (
                           <span
                             title="Recommended for agent & CoS tasks — has native tool calling plus coding strength, so it can actually drive multi-step agent work (unlike chat-only or tool-less models)."
                             className="ml-1.5 align-middle inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded border border-port-accent/50 text-port-accent"
@@ -617,6 +619,25 @@ export default function LocalLlmLibraryView() {
                       <div className="text-xs text-gray-500 mt-0.5">{m.description}</div>
                       {m.featured?.description && (
                         <div className="text-xs text-port-accent mt-1">{m.featured.description}</div>
+                      )}
+                      {m.reducedSafeguards && (
+                        <p className="flex items-start gap-1.5 text-xs text-port-warning mt-2" role="note">
+                          <AlertTriangle size={15} className="shrink-0" aria-hidden="true" />
+                          {m.warning || 'Uncensored / abliterated: run carefully in a sandbox without secrets or publishing tools.'}
+                        </p>
+                      )}
+                      {m.publisherReview && (
+                        <p className="text-[11px] text-gray-400 mt-1">
+                          {m.publisherReview === 'reviewed-build' ? 'Publisher provenance checked' : m.publisherReview === 'established-publisher' ? 'Established publisher' : 'Publisher not reviewed — discovery result, not a recommendation'}
+                          {' · Popularity is not a malware-free guarantee.'}
+                        </p>
+                      )}
+                      {m.provenance && (
+                        <p className="text-[11px] text-gray-400 mt-1">
+                          Reviewed {m.provenance.checkedAt}: {m.provenance.likes.toLocaleString()} likes · {m.provenance.downloads.toLocaleString()} monthly downloads · {m.provenance.followers.toLocaleString()} publisher followers.{' '}
+                          <a className="text-port-accent hover:underline" href={`https://huggingface.co/${m.provenance.repository}/tree/${m.provenance.revision}`} target="_blank" rel="noopener noreferrer">Reviewed revision</a>
+                          {' · Installer uses the publisher’s current release; this is a dated review, not an immutable install pin.'}
+                        </p>
                       )}
                       {m.note && <div className="text-[11px] text-port-warning/90 mt-0.5">{m.note}</div>}
                       {hasVariantPicker && (

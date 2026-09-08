@@ -15,7 +15,7 @@ import {
 } from '../arcPlanner.js';
 import {
   judgeFoundation, applyFoundationFix, establishCharacterFoundation, foundationGateStatus, foundationFixTarget,
-  residualFindings, snapshotFoundationState, restoreFoundationState, readFoundationCharacterBlanks,
+  residualFindings, snapshotFoundationState, restoreFoundationState, readFoundationCharacterProgress,
   DEFAULT_FOUNDATION_THRESHOLD,
 } from '../foundationJudge.js';
 import * as volumeBeatsRunner from '../volumeBeatsRunner.js';
@@ -929,16 +929,24 @@ async function runFoundationRounds(seriesId, record, { bank }) {
         { location: dimension, problem: afterDimension.gap || '' },
       );
       // A character repair's work is objectively measurable without asking an
-      // LLM: count the blank framework/visual fields across the repairable cast
-      // before and after. A judge that renders or reads the cast wrongly can
-      // report a tied score over a foundation it can no longer see — that cost
-      // a complete five-sheet character design pass on 2026-08-11, discarded
-      // because the judge prompt showed each authored field as the bare word
-      // `ready`. Filled fields are a fact on disk, so they outrank a tie.
-      const blanksAfter = pendingRepair.characterBlanksBefore === null
+      // LLM. A judge that renders or reads the cast wrongly can report a tied
+      // score over a foundation it can no longer see — that cost a complete
+      // five-sheet character design pass on 2026-08-11, discarded because the
+      // judge prompt showed each authored field as the bare word `ready`.
+      //
+      // Two independent facts on disk outrank that tie, and EITHER one earns
+      // the repair, because neither covers the other's ground: blank named
+      // fields (framework/profile/visual) miss the psychology profile entirely,
+      // and cast-integrity gaps (#6415) miss the visual sheets. A repair that
+      // authored a lead's theory of control and its six drives moved only the
+      // second; the 2026-08-11 design pass moved only the first.
+      const progressAfter = pendingRepair.characterProgressBefore === null
         ? null
-        : await readFoundationCharacterBlanks(seriesId).catch(() => null);
-      const objectivelyFilled = blanksAfter !== null && blanksAfter < pendingRepair.characterBlanksBefore;
+        : await readFoundationCharacterProgress(seriesId).catch(() => null);
+      const progressBefore = pendingRepair.characterProgressBefore;
+      const objectivelyFilled = progressAfter !== null
+        && (progressAfter.blanks < progressBefore.blanks
+          || progressAfter.integrityFindings < progressBefore.integrityFindings);
       // A tie can represent a deeper newly exposed layer, but only when the
       // aggregate did not regress. A strictly improved target is accepted even
       // if it makes another latent dimension judgeable.
@@ -1092,8 +1100,8 @@ async function runFoundationRounds(seriesId, record, { bank }) {
     // Measured off the checkpoint's own cast so the before/after pair differs
     // only in character content — null for every other dimension, which is what
     // switches the objective check off.
-    const characterBlanksBefore = weak.dimension === 'character'
-      ? await readFoundationCharacterBlanks(seriesId, repairSnapshot?.universe?.characters).catch(() => null)
+    const characterProgressBefore = weak.dimension === 'character'
+      ? await readFoundationCharacterProgress(seriesId, repairSnapshot?.universe?.characters).catch(() => null)
       : null;
     let fix;
     const repairRunIds = [];
@@ -1192,7 +1200,7 @@ async function runFoundationRounds(seriesId, record, { bank }) {
       judge: snap,
       snapshot: repairSnapshot,
       runIds: retainedRepairRunIds,
-      characterBlanksBefore,
+      characterProgressBefore,
     };
     changed = true;
   }

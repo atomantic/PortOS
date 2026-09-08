@@ -1,3 +1,4 @@
+import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 /**
  * Static task-type registry.
  *
@@ -13,7 +14,19 @@ import {
 } from '../lib/agentExecutionProfiles.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
 
+// Programmatic handler types + target-scope vocabulary live in
+// `lib/taskTargetScope.js` (see that file for why); re-exported here because
+// the on-demand request gate, the global generator, and the schedule UI have
+// always read them off the registry.
+import {
+  isProgrammaticScheduledTaskType,
+  PROGRAMMATIC_SCHEDULED_TASK_TYPES,
+} from '../lib/taskTargetScope.js';
+
+export { isProgrammaticScheduledTaskType, PROGRAMMATIC_SCHEDULED_TASK_TYPES };
+
 export const SELF_IMPROVEMENT_TASK_TYPES = [
+  PRIVATE_SECURITY_TASK_TYPE,
   'model-comparison-refresh',
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'branch-reconcile', 'issue-reconcile', 'console-errors', 'dependency-updates', 'documentation',
@@ -120,6 +133,16 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // buildTaskInput hook renders the prompt. See taskTypeHooks.js +
   // autonomousJobs/layeredIntelligenceHooks.js.
   'layered-intelligence',
+  // The two PROGRAMMATIC handlers (services/scheduledHandlers/) — the only
+  // scheduled types PortOS executes ITSELF, with no agent, no CoS task, and no
+  // spawn slot. They fill blank universe-bible sheets and render the entries
+  // that have no image, using the same domain services the Universe Builder's
+  // own buttons call. Install-wide (a universe is not a managed app's repo —
+  // see `requiresInstallWideTarget`) and ON_DEMAND with no interval, so they are
+  // never clock-due and a fresh install spends nothing until the user runs one.
+  // Quota Burn reaches the SAME handlers through `quotaBurnInvoke.js`; there
+  // is one implementation, not two.
+  ...PROGRAMMATIC_SCHEDULED_TASK_TYPES,
   // NOTE: `quota-burn` used to live here as a per-app perpetual task type. It is
   // now ONE install-level loop (services/quotaBurnRunner.js) configured on the
   // Quota Burn page — the burn plan is machine-local, and its jobs name which
@@ -197,29 +220,20 @@ export const PERPETUAL_DRAIN_DISPATCH_CAP = 5;
 export const DEFAULT_BRANCHES_PER_AGENT = 3;
 
 /**
- * Task types whose "Run Now" with NO app is the REAL run — they sweep every
- * managed app in one dispatch rather than acting on one. Surfaced per task on
- * `getScheduleStatus()` so the schedule UI can offer an "All apps" entry
- * instead of forcing every run through the app picker (which would make the
- * install-wide lane unreachable on any install that has apps).
+ * Target scope for a task type — which app (if any) a run must name.
+ *
+ * The vocabulary itself lives in `lib/taskTargetScope.js` so the quota-burn
+ * reference schemas can reach it: `server/lib` may not import upward into
+ * `server/services` (`lib/layering.test.js`). Re-exported here because the
+ * on-demand request gate, the global generator, and the schedule UI have always
+ * read it off the registry, and splitting that import would gain nothing.
  */
-export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review', 'model-comparison-refresh']);
-
-// Task types that only make sense when pointed at a managed app. Keeping this
-// alongside the install-wide registry gives both the on-demand request gate
-// and the global generator one target-scope contract; neither has to infer
-// scope from a task name or from which generator happened to receive a call.
-export const MANAGED_APP_TARGET_TASK_TYPES = new Set(['pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile']);
-
-export function requiresManagedAppTarget(taskType) {
-  return MANAGED_APP_TARGET_TASK_TYPES.has(taskType);
-}
-
-// Unlike repo-sync, model research has no meaningful per-app variant: its
-// catalog and API live in the PortOS install, never another app's checkout.
-export function requiresInstallWideTarget(taskType) {
-  return taskType === 'model-comparison-refresh';
-}
+export {
+  INSTALL_WIDE_TASK_TYPES,
+  MANAGED_APP_TARGET_TASK_TYPES,
+  requiresInstallWideTarget,
+  requiresManagedAppTarget,
+} from '../lib/taskTargetScope.js';
 
 // The pr-reviewer pipeline is a trust boundary, not three interchangeable
 // prompt tabs. Keep the shipped role/profile pairing in one place so the
@@ -273,6 +287,7 @@ export const createPrReviewerDefaultStages = () => ([
 // is code-owned and makes the task invisible and non-runnable while that
 // install-wide feature is disabled.
 export const DEFAULT_TASK_INTERVALS = {
+  [PRIVATE_SECURITY_TASK_TYPE]: { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { ...PRIVATE_SECURITY_DELIVERY } },
   'model-comparison-refresh': { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { ...NON_COMMITTING_COORDINATOR_METADATA } },
   'security':            { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'code-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
@@ -481,7 +496,23 @@ export const DEFAULT_TASK_INTERVALS = {
   // agent runs in a worktree that is discarded without a commit/merge/PR
   // (discardWorktree), so it can't land code — its `.agent-done` payload is the
   // only sanctioned output (consumed by the processTaskOutput hook).
-  'layered-intelligence': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: false, discardWorktree: true } }
+  'layered-intelligence': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: false, discardWorktree: true } },
+  // The two PROGRAMMATIC handlers. No `prompt` (PortOS performs the work itself
+  // — there is no template to render and no DEFAULT_TASK_PROMPTS entry), and no
+  // agent posture keys, because no agent, worktree, or PR is ever involved.
+  //
+  // `taskMetadata` here is the handler's PARAMS bag, mirroring the catalog row
+  // Quota Burn renders its job form from (`QUOTA_BURN_JOB_CATALOG` in
+  // lib/quotaBurnConfig.js) so the two doors advertise the same defaults —
+  // taskScheduleRegistry.programmatic.test.js fails when they drift. A param
+  // whose catalog default is null is OMITTED rather than stored as null:
+  // "unset" means the handler resolves it (the image job falls through to the
+  // universe-bible render-target ladder), which is not the same as a value.
+  //
+  // ON_DEMAND with NO interval and NO cron: enabled so the user can press Run
+  // Now, never clock-due, so a fresh install spends nothing until they do.
+  'universe-bible-describe': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', depth: 'full', maxEntries: 10 } },
+  'universe-bible-images':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { universeId: 'all', scope: 'all', maxEntries: 10, requireDescribed: false } }
 };
 
 // Agent-options that a task manages internally — UI locks the toggle, and
@@ -591,6 +622,7 @@ export function enforceBranchReconcileBatch(taskType, config) {
 export const TASK_TYPE_DESCRIPTIONS = {
   'ui-bugs': 'Find UI bugs — file issues or implement fixes',
   'mobile-responsive': 'Mobile/responsive audit — file issues or implement fixes',
+  [PRIVATE_SECURITY_TASK_TYPE]: 'Private security assessment — sandboxed local model, report and remediation only; no issues or PRs',
   'security': 'Security audit — file issues or implement fixes',
   'code-quality': 'Code quality — file issues or implement fixes',
   'console-errors': 'Console errors — file issues or implement fixes',
@@ -630,7 +662,9 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',
   'plan-feature': "Brainstorm one feature and file its decision-complete plan to the app's work tracker (no code)",
   'user-action-review': 'Review the operator-action log for repeated manual work and propose automations — file issues (default) or queue CoS tasks',
-  'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code"
+  'layered-intelligence': "Use app goals + performance metrics to file at most one deduplicated improvement issue; inspect read-only context and file a visibility gap when evidence is insufficient — no code",
+  'universe-bible-describe': 'Fill in blank universe bible sheets — one expand prompt per entry, emptiest first. No agent',
+  'universe-bible-images': 'Render images for universe bible entries that have none yet. No agent — PortOS enqueues the renders itself'
 };
 
 export function getTaskTypeDescription(taskType) {
@@ -647,6 +681,7 @@ export function getTaskTypeDescription(taskType) {
  * real execution shape without changing prompt-version migration state.
  */
 export const TASK_TYPE_PROMPT_INFO = Object.freeze({
+  [PRIVATE_SECURITY_TASK_TYPE]: Object.freeze({ mode: 'runtime-generated', description: 'Private assessment of committed source and remediation guidance. Requires a pinned local Ollama or LM Studio CLI provider/model and macOS Seatbelt; tools, remote networking and publishing are disabled. Reports appear in the local Review Hub. No issues or PRs.' }),
   'pr-reviewer': Object.freeze({
     mode: 'runtime-generated',
     description: 'Runs a model-abuse screen, a tool-free eligibility gate, and an optional tool-free code review; the server validates every requested GitHub action.'
@@ -658,6 +693,17 @@ export const TASK_TYPE_PROMPT_INFO = Object.freeze({
   'layered-intelligence': Object.freeze({
     mode: 'runtime-generated',
     description: 'Generated for each run from the app\'s configured goals, metrics, and repository context.'
+  }),
+  // `programmatic` is NOT `runtime-generated`: there is no prompt at all for the
+  // user to read or a hook to render. PortOS performs the work itself, so the
+  // UI shows the settings that bound it instead of a prompt editor.
+  'universe-bible-describe': Object.freeze({
+    mode: 'programmatic',
+    description: 'PortOS sends one bible-expand prompt per entry itself — no agent and no prompt template. Scope, depth, and the per-run entry cap are the settings that bound it.'
+  }),
+  'universe-bible-images': Object.freeze({
+    mode: 'programmatic',
+    description: 'PortOS compiles the missing entries\' render prompts and enqueues them on the media job queue itself — no agent and no prompt template.'
   })
 });
 

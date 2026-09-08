@@ -6,7 +6,7 @@
  * The contract: a project picks an aspectRatio + quality + modelId once;
  * every scene render uses these. Tweaking is intentionally not allowed
  * mid-project — segment-to-segment continuity needs identical resolution
- * and frame budgets.
+ * and frame budgets. Inert Video drafts can edit these before production.
  */
 
 // Width/height pairs are 64-aligned (videoGen rounds down to multiples of
@@ -126,3 +126,7 @@ export function presetToRenderParams({ aspectRatio, quality, durationSeconds }) 
     numFrames,
   };
 }
+
+// Shared by the Video draft form and wire defaults; saved policy is inert until
+// revision-specific dispatch support is available.
+export const VIDEO_REVIEW_CHECKPOINTS = Object.freeze(['script-shot-plan', 'references', 'rough-cut', 'final-cut']);

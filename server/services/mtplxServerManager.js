@@ -46,6 +46,8 @@ import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } from './pm2.js';
 
 export { MTPLX_APP };
+// Compatibility export; provider cache discovery owns no daemon lifecycle state.
+export { mtplxCachedModelIds } from './localCachedModels.js';
 
 const PROBE_TIMEOUT_MS = 1500;
 /**
@@ -994,13 +996,19 @@ export function isMtplxProvider(provider) {
   if (!isLocalInstanceEndpoint(provider.endpoint)) return false;
   // `localRuntimeKind`, not `localBackendForProvider` — the latter only ever
   // answers 'ollama'/'lmstudio' (it maps those two catalog ports), so it reports
-  // every MTPLX provider as having no local backend at all. The authoritative
-  // signal is the `mtplxBacked` marker the spawner itself keys on.
+  // every MTPLX provider as having no local backend at all. This one call now
+  // covers both marker-backed wrappers (`mtplxBacked`) and the shipped bare API
+  // record (`id === 'mtplx'`) — #6466 collapsed the two hand-rolled checks that
+  // used to live here into `localRuntimeKind` itself.
   if (localRuntimeKind(provider) === 'mtplx') return true;
   // ...and an endpoint-only provider aimed at the port THIS daemon is serving.
   // Deliberately compared against the live launch config rather than treating
   // :8000 as "must be MTPLX" — 8000 is a generic port, and claiming any local
-  // server on it would lazily start MTPLX for someone else's API.
+  // server on it would lazily start MTPLX for someone else's API. This arm
+  // stays here rather than moving into `localRuntimeKind`: it needs the
+  // MANAGED daemon's live port, which only this module tracks, and reading it
+  // from `localProviderRuntime.js` (a side-effect-free module every readiness
+  // check imports) would be a circular import back to this one.
   const managedPort = currentConfig?.port;
   return Boolean(managedPort) && localEndpointPort(provider.endpoint) === managedPort;
 }

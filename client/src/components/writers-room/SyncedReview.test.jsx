@@ -3,9 +3,15 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // Mock the API so the component renders a deterministic synced-review payload.
 const getWritersRoomSyncedReview = vi.fn();
+const proposeAugment = vi.fn();
+const applyAugment = vi.fn();
 vi.mock('../../services/apiWritersRoom', () => ({
   getWritersRoomSyncedReview: (...args) => getWritersRoomSyncedReview(...args),
+  proposeWritersRoomCharacterAugmentation: (...args) => proposeAugment(...args),
+  applyWritersRoomCharacterAugmentation: (...args) => applyAugment(...args),
 }));
+const toastMock = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn() }));
+vi.mock('../ui/Toast', () => ({ default: toastMock }));
 
 import SyncedReview from './SyncedReview';
 
@@ -36,6 +42,10 @@ function payload(overrides = {}) {
 
 beforeEach(() => {
   getWritersRoomSyncedReview.mockReset();
+  proposeAugment.mockReset();
+  applyAugment.mockReset();
+  toastMock.error.mockReset();
+  toastMock.success.mockReset();
 });
 
 const work = { id: 'wr-work-1', title: 'Test' };
@@ -200,5 +210,174 @@ describe('SyncedReview', () => {
     }));
     render(<SyncedReview work={work} />);
     expect(await screen.findByText(/run .*Adapt/i)).toBeTruthy();
+  });
+});
+
+// ---- cast pane (#6415 / #6417) ----
+
+function castPayload(overrides = {}) {
+  const base = payload();
+  return payload({
+    prose: {
+      segments: base.prose.segments.map((seg, i) => ({ ...seg, castCharacterIds: i === 0 ? ['wr-char-hero'] : [] })),
+    },
+    script: { ...base.script, scenes: base.script.scenes.map((sc) => ({ ...sc, castCharacterIds: ['wr-char-hero'] })) },
+    cast: {
+      available: true,
+      castCount: 2,
+      reviewedCount: 2,
+      semanticReviewedCount: 0,
+      passed: false,
+      findings: [
+        {
+          id: 'wr-char-hero::missing::lie', characterId: 'wr-char-hero', characterName: 'Hero',
+          kind: 'missing', field: 'psychology.drives.status.fear', dimension: null,
+          evidence: 'The status drive has no fear.', suggestion: '',
+        },
+      ],
+      coverage: [
+        {
+          characterId: 'wr-char-hero', characterName: 'Hero', depth: 'full', status: 'findings',
+          findingCount: 1, semanticReviewed: false, staged: true,
+          scriptSceneIds: ['scene-01'], proseSegmentIds: ['seg-001'],
+        },
+        {
+          characterId: 'wr-char-aunt', characterName: 'Offstage Aunt', depth: 'light', status: 'passed',
+          findingCount: 0, semanticReviewed: false, staged: false,
+          scriptSceneIds: [], proseSegmentIds: [],
+        },
+      ],
+      staging: {
+        available: true, stale: false, stagedCount: 1, unstagedCount: 1,
+        unmatchedNames: ['The Ferryman'],
+      },
+      ...overrides,
+    },
+  });
+}
+
+describe('SyncedReview — cast pane', () => {
+  it('opens the cast pane from the toolbar gap chip and lists findings by field path', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload());
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    expect(await screen.findByText('Hero')).toBeTruthy();
+    expect(screen.getByText(/Psychology › Drives › Status › Fear/)).toBeTruthy();
+    expect(screen.getByText(/The status drive has no fear/)).toBeTruthy();
+  });
+
+  it('never presents the deterministic sweep as a clean bill of health', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload({ findings: [], coverage: [] }));
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/cast fields filled/));
+    expect(await screen.findByText(/no model has read this cast/i)).toBeTruthy();
+  });
+
+  it('keeps the cold read separate from author knowledge', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload());
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    // A script-only name is reported as such, never as a finding.
+    expect(await screen.findByText(/Named only in the script/)).toBeTruthy();
+    expect(screen.getByText('The Ferryman')).toBeTruthy();
+    // An unstaged authored character is a fact, not a defect.
+    expect(screen.getByText(/not staged in the script/)).toBeTruthy();
+    expect(screen.getByText('Offstage Aunt')).toBeTruthy();
+  });
+
+  it('cross-links a character to the scenes and prose segments that stage them', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload());
+    const { container } = render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    const card = (pane, syncId) => container.querySelector(`[data-pane="${pane}"] [data-sync-id="${syncId}"]`);
+    fireEvent.click(await screen.findByText('Hero'));
+    await waitFor(() => expect(card('cast', 'wr-char-hero').getAttribute('aria-pressed')).toBe('true'));
+    expect(card('script', 'scene-01').className).toMatch(/border-port-accent\/50/);
+    expect(card('prose', 'seg-001').className).toMatch(/border-port-accent\/50/);
+    // Selecting the prose segment highlights the character it stages.
+    fireEvent.click(card('prose', 'seg-001'));
+    await waitFor(() => expect(card('cast', 'wr-char-hero').className).toMatch(/border-port-accent\/50/));
+  });
+
+  // ---- selective augmentation (#6417) ----
+
+  it('sharpens only the ticked field, and only from an explicit click', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload());
+    proposeAugment.mockResolvedValue({
+      entry: { id: 'wr-char-hero', name: 'Hero' },
+      fingerprint: 'fp-1',
+      proposals: [
+        { field: 'psychology.drives.status.fear', before: '', after: 'Being thanked instead of hired.', rationale: 'names the moment' },
+        { field: 'lie', before: 'A generic belief.', after: 'A sharper belief.', rationale: '' },
+      ],
+    });
+    applyAugment.mockResolvedValue({ entry: { id: 'wr-char-hero' }, appliedFields: ['lie'], fingerprint: 'fp-2' });
+
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    // Opening the pane spends nothing.
+    expect(proposeAugment).not.toHaveBeenCalled();
+
+    fireEvent.click(await screen.findByText(/Sharpen 1 field/));
+    await waitFor(() => expect(screen.getByText(/tick what to keep/)).toBeTruthy());
+    expect(proposeAugment).toHaveBeenCalledWith(
+      'wr-work-1', 'wr-char-hero', { fields: ['psychology.drives.status.fear'] }, { silent: true },
+    );
+
+    // Nothing is accepted until the author ticks it.
+    const applyButton = screen.getByRole('button', { name: /Apply/ });
+    expect(applyButton.disabled).toBe(true);
+    fireEvent.click(screen.getByLabelText(/Lie/));
+    fireEvent.click(screen.getByRole('button', { name: /Apply/ }));
+
+    await waitFor(() => expect(applyAugment).toHaveBeenCalledWith(
+      'wr-work-1', 'wr-char-hero',
+      { fields: [{ field: 'lie', value: 'A sharper belief.' }], fingerprint: 'fp-1' },
+      { silent: true },
+    ));
+    // The findings, the depth ruling and the staging join are all derived from
+    // the record that just changed, so the pane re-reads rather than patching.
+    await waitFor(() => expect(getWritersRoomSyncedReview).toHaveBeenCalledTimes(2));
+  });
+
+  it('offers no repair for a contradictory finding — only the author can settle it', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload({
+      findings: [{
+        id: 'wr-char-hero::contradictory::lie', characterId: 'wr-char-hero', characterName: 'Hero',
+        kind: 'contradictory', field: 'lie', dimension: 'control-predicts-behavior',
+        evidence: 'The belief and the described behavior disagree.', suggestion: '',
+      }],
+      coverage: [{
+        characterId: 'wr-char-hero', characterName: 'Hero', depth: 'full', status: 'findings',
+        findingCount: 1, semanticReviewed: true, staged: true,
+        scriptSceneIds: ['scene-01'], proseSegmentIds: ['seg-001'],
+      }],
+    }));
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/1 cast gap/));
+    expect(await screen.findByText('Hero')).toBeTruthy();
+    expect(screen.queryByText(/Sharpen/)).toBeNull();
+  });
+
+  it('says staging is unknown rather than absent when no script has run', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(castPayload({
+      staging: { available: false, stale: false, stagedCount: 0, unstagedCount: 2, unmatchedNames: [] },
+      coverage: [{
+        characterId: 'wr-char-hero', characterName: 'Hero', depth: 'full', status: 'passed',
+        findingCount: 0, semanticReviewed: false, staged: false, scriptSceneIds: [], proseSegmentIds: [],
+      }],
+      findings: [],
+    }));
+    render(<SyncedReview work={work} />);
+    fireEvent.click(await screen.findByText(/cast fields filled/));
+    expect(await screen.findByText(/staging unknown/)).toBeTruthy();
+  });
+
+  it('hides the cast chip entirely for a work with no character bible', async () => {
+    getWritersRoomSyncedReview.mockResolvedValue(payload());
+    render(<SyncedReview work={work} />);
+    await screen.findByText('The hero wakes.');
+    expect(screen.queryByText(/cast gap/)).toBeNull();
+    expect(screen.queryByText(/cast fields filled/)).toBeNull();
   });
 });

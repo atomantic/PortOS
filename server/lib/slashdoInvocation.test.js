@@ -8,6 +8,7 @@ import {
   buildSlashdoSection,
   canTypeSlashCommands,
   resolveOwnsPrWorkflow,
+  resolvePrOwnership,
   isValidSlashdoCommand,
   parseExplicitReviewWith,
   resolveSlashdoInvocation,
@@ -452,5 +453,25 @@ describe('parseExplicitReviewWith', () => {
     expect(parseExplicitReviewWith(args)).toEqual({
       explicit: true, unresolved: true, reviewers: [], usernames: [],
     });
+  });
+});
+
+describe('resolvePrOwnership', () => {
+  const resolve = (overrides = {}) => resolvePrOwnership({
+    task: { metadata: { openPR: true } }, isTruthyMeta: Boolean,
+    providerId: 'codex', providerCommand: 'codex', ...overrides,
+  });
+
+  it('uses the prompt stamp while keeping claim verification tied to slash commands', () => {
+    expect(resolve({ persisted: true })).toEqual({ taskOpenPR: true, agentOwnsPR: true, prClaimExpected: false });
+    expect(resolve({ persisted: false, providerId: 'claude-code', providerCommand: 'claude' }))
+      .toEqual({ taskOpenPR: true, agentOwnsPR: false, prClaimExpected: true });
+    expect(resolve({ persisted: true, task: { metadata: { openPR: false } } }))
+      .toEqual({ taskOpenPR: false, agentOwnsPR: false, prClaimExpected: false });
+  });
+
+  it('falls back to the legacy slash-command gate without a stamp', () => {
+    expect(resolve().agentOwnsPR).toBe(false);
+    expect(resolve({ providerId: 'claude-code', providerCommand: 'claude' }).agentOwnsPR).toBe(true);
   });
 });

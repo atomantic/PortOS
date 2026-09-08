@@ -1324,3 +1324,352 @@ describe.skipIf(!pyBin)('generate_ltx2.py MLX allocator-cache policy', () => {
     });
   });
 });
+
+describe.skipIf(!pyBin)('generate_ltx2.py block streaming (#6499)', () => {
+  const GB = 1024 * 1024 * 1024;
+  const runJson = (body) => JSON.parse(runPython(`${importRunner}\n${body.join('\n')}`));
+
+  // Pipeline stand-ins for _accepts_kwarg's inspection. A bare **kwargs
+  // catch-all must NOT count as support — mirrors _accepts_kwarg's own
+  // contract (checked separately by that function's own tests above), so a
+  // real pin whose wrapper merely swallows the kwarg without forwarding it
+  // is not misreported as capable.
+  const STREAMING_PIPELINE = [
+    'class StreamingPipe:',
+    '    def __init__(self, model_dir, low_ram_streaming=False, **kw):',
+    '        self.model_dir = model_dir',
+  ];
+  const RESIDENT_ONLY_PIPELINE = [
+    'class ResidentOnlyPipe:',  // e.g. RetakePipeline at the pins this bridge targets
+    '    def __init__(self, model_dir, **kw):',
+    '        self.model_dir = model_dir',
+  ];
+
+  // ── resolve_streaming_policy: pure, no MLX/IO ───────────────────────────
+  it('resident always resolves inactive, whatever the pipeline supports', () => {
+    const result = runJson([
+      'import json',
+      `print(json.dumps({`,
+      `    "supported": runner.resolve_streaming_policy("resident", 8 * ${GB}, True),`,
+      `    "unsupported": runner.resolve_streaming_policy("resident", 8 * ${GB}, False),`,
+      `}))`,
+    ]);
+    expect(result.supported).toEqual({ requestedMode: 'resident', active: false, supports: true, reason: null });
+    expect(result.unsupported).toEqual({ requestedMode: 'resident', active: false, supports: false, reason: null });
+  });
+
+  it('an explicit stream request resolves active on a supported pipeline', () => {
+    const result = runJson([
+      'import json',
+      `print(json.dumps(runner.resolve_streaming_policy("stream", 8 * ${GB}, True)))`,
+    ]);
+    expect(result).toEqual({ requestedMode: 'stream', active: true, supports: true, reason: null });
+  });
+
+  it('an explicit stream request resolves inactive with a reason on an unsupported pipeline', () => {
+    const result = runJson([
+      'import json',
+      `print(json.dumps(runner.resolve_streaming_policy("stream", 8 * ${GB}, False)))`,
+    ]);
+    expect(result.active).toBe(false);
+    expect(result.supports).toBe(false);
+    expect(result.reason).toMatch(/no streaming parameter/);
+  });
+
+  it.each([
+    ['at the ceiling', 24 * GB, true],
+    ['well below the ceiling', 4 * GB, true],
+    ['just above the ceiling', 24 * GB + 1, false],
+    ['well above the ceiling', 128 * GB, false],
+  ])('auto on a supported pipeline resolves %s', (_label, bytes, expectedActive) => {
+    const result = runJson([
+      'import json',
+      `print(json.dumps(runner.resolve_streaming_policy("auto", ${bytes}, True)))`,
+    ]);
+    expect(result.requestedMode).toBe('auto');
+    expect(result.active).toBe(expectedActive);
+    expect(result.reason === null).toBe(expectedActive);
+  });
+
+  it('auto stays resident (not fatal) when physical memory is unknown', () => {
+    const result = runJson([
+      'import json',
+      'print(json.dumps(runner.resolve_streaming_policy("auto", None, True)))',
+    ]);
+    expect(result).toEqual({
+      requestedMode: 'auto', active: false, supports: true,
+      reason: 'physical memory unknown — remaining resident',
+    });
+  });
+
+  it('auto stays resident (not fatal) on an unsupported pipeline', () => {
+    const result = runJson([
+      'import json',
+      `print(json.dumps(runner.resolve_streaming_policy("auto", 8 * ${GB}, False)))`,
+    ]);
+    expect(result.active).toBe(false);
+    expect(result.reason).toMatch(/no streaming parameter/);
+  });
+
+  // ── configure_streaming_policy: installs the policy, refuses when needed ──
+  it('refuses an explicit stream request BEFORE any pipeline is constructed', () => {
+    const output = runPython(`${importRunner}\n${[
+      ...RESIDENT_ONLY_PIPELINE,
+      'from types import SimpleNamespace',
+      'runner.physical_memory_bytes = lambda: 8 * 1024 ** 3',
+      'args = SimpleNamespace(streaming_mode="stream")',
+      'try:',
+      '    runner.configure_streaming_policy(args, ResidentOnlyPipe, "extend")',
+      'except SystemExit as exc:',
+      '    print(str(exc))',
+      'else:',
+      '    raise AssertionError("an unsupportable stream request was accepted")',
+    ].join('\n')}`);
+    expect(output).toMatch(/--streaming-mode stream was requested/);
+    expect(output).toMatch(/extend pipeline/);
+    expect(output).toMatch(/before loading weights/);
+  });
+
+  it('degrades an auto request to resident with a STATUS explanation on an unsupported pipeline', () => {
+    const result = runJson([
+      ...RESIDENT_ONLY_PIPELINE,
+      'import contextlib, io, json',
+      'from types import SimpleNamespace',
+      'runner.physical_memory_bytes = lambda: 8 * 1024 ** 3',
+      'args = SimpleNamespace(streaming_mode="auto")',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    policy = runner.configure_streaming_policy(args, ResidentOnlyPipe, "extend")',
+      'print(json.dumps({"policy": policy, "stderr": err.getvalue()}))',
+    ]);
+    expect(result.policy.active).toBe(false);
+    expect(result.policy.supports).toBe(false);
+    expect(result.stderr).toMatch(/^STATUS:Block streaming not used:/);
+  });
+
+  it('reports an enabled STATUS line and installs the policy for the reassert path', () => {
+    const result = runJson([
+      ...STREAMING_PIPELINE,
+      'import contextlib, io, json',
+      'from types import SimpleNamespace',
+      `runner.physical_memory_bytes = lambda: 4 * ${GB}`,
+      'args = SimpleNamespace(streaming_mode="auto")',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    policy = runner.configure_streaming_policy(args, StreamingPipe, "one-stage")',
+      'print(json.dumps({"policy": policy, "stored": runner._STREAMING_POLICY, "stderr": err.getvalue()}))',
+    ]);
+    expect(result.policy).toEqual({ requestedMode: 'auto', active: true, supports: true, reason: null });
+    expect(result.stored).toEqual(result.policy);
+    expect(result.stderr.trim()).toBe('STATUS:Block streaming enabled — transformer blocks stream from disk');
+  });
+
+  it('a plain resident request installs the policy silently (no streaming STATUS noise)', () => {
+    const result = runJson([
+      ...STREAMING_PIPELINE,
+      'import contextlib, io, json',
+      'from types import SimpleNamespace',
+      'runner.physical_memory_bytes = lambda: None',
+      'args = SimpleNamespace(streaming_mode="resident")',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    policy = runner.configure_streaming_policy(args, StreamingPipe, "one-stage")',
+      'print(json.dumps({"policy": policy, "stderr": err.getvalue()}))',
+    ]);
+    expect(result.policy).toEqual({ requestedMode: 'resident', active: false, supports: true, reason: null });
+    expect(result.stderr.trim()).toBe('');
+  });
+
+  // ── reassert_mlx_cache_policy must not undo the streamer's zero-cache ────
+  it('keeps the allocator cache pinned at zero on every reassert while streaming', () => {
+    const result = runJson([
+      'import sys, types, json',
+      'CALLS = []',
+      'core = types.ModuleType("mlx.core")',
+      'core.set_cache_limit = lambda n: CALLS.append(n)',
+      'pkg = types.ModuleType("mlx")',
+      'pkg.core = core',
+      'sys.modules["mlx"] = pkg',
+      'sys.modules["mlx.core"] = core',
+      // A non-zero resident policy is still installed — reassert must NOT fall
+      // back to it while streaming is active, or the streamer's own
+      // BasePipeline.__init__ zero-cache policy is silently undone.
+      'runner._MLX_CACHE_POLICY = {"limitMb": 8192, "source": "derived"}',
+      'runner._STREAMING_POLICY = {"active": True}',
+      'runner.reassert_mlx_cache_policy()',
+      'runner.reassert_mlx_cache_policy()',
+      'print(json.dumps(CALLS))',
+    ]);
+    expect(result).toEqual([0, 0]);
+  });
+
+  it('reasserts the resident ceiling as before when streaming is not active', () => {
+    const result = runJson([
+      'import sys, types, json',
+      'CALLS = []',
+      'core = types.ModuleType("mlx.core")',
+      'core.set_cache_limit = lambda n: CALLS.append(n)',
+      'pkg = types.ModuleType("mlx")',
+      'pkg.core = core',
+      'sys.modules["mlx"] = pkg',
+      'sys.modules["mlx.core"] = core',
+      'runner._MLX_CACHE_POLICY = {"limitMb": 8192, "source": "derived"}',
+      'runner._STREAMING_POLICY = {"active": False}',
+      'runner.reassert_mlx_cache_policy()',
+      'print(json.dumps(CALLS))',
+    ]);
+    expect(result).toEqual([8192 * 1024 * 1024]);
+  });
+
+  // ── LoRA-adapter preflight — refuse before Stage 1, not at the Stage 1→2
+  // swap (#6499 acceptance: reject an unsupported streaming/LoRA combination
+  // before a costly render) ────────────────────────────────────────────────
+  it('is a no-op when streaming is not active, whatever the model dir holds', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import tempfile',
+      'from types import SimpleNamespace',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    pipe = SimpleNamespace(model_dir=temp, _distilled_lora="x.safetensors", _distilled_lora_strength=1.0)',
+      '    runner._refuse_if_streaming_distilled_adapter_missing(pipe, False)',
+      'print("ok")',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('ok');
+  });
+
+  it('refuses when streaming needs the pre-fused distilled transformer and none is present', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import tempfile',
+      'from types import SimpleNamespace',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    pipe = SimpleNamespace(model_dir=temp, _distilled_lora="x.safetensors", _distilled_lora_strength=1.0)',
+      '    try:',
+      '        runner._refuse_if_streaming_distilled_adapter_missing(pipe, True)',
+      '    except SystemExit as exc:',
+      '        print(str(exc))',
+      '    else:',
+      '        raise AssertionError("a missing pre-fused transformer was accepted")',
+    ].join('\n')}`);
+    expect(output).toMatch(/pre-fused transformer-distilled\*\.safetensors/);
+    expect(output).toMatch(/before Stage 1 renders/);
+  });
+
+  it('passes when the pre-fused distilled transformer is present at default strength', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import tempfile',
+      'from pathlib import Path',
+      'from types import SimpleNamespace',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    (Path(temp) / "transformer-distilled-1.1.safetensors").write_text("x")',
+      '    pipe = SimpleNamespace(model_dir=temp, _distilled_lora="x.safetensors", _distilled_lora_strength=1.0)',
+      '    runner._refuse_if_streaming_distilled_adapter_missing(pipe, True)',
+      'print("ok")',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('ok');
+  });
+
+  it('at a non-default LoRA strength, refuses when the distilled LoRA file is missing and passes when present', () => {
+    const output = runPython(`${importRunner}\n${[
+      'import tempfile',
+      'from pathlib import Path',
+      'from types import SimpleNamespace',
+      'with tempfile.TemporaryDirectory() as temp:',
+      '    pipe = SimpleNamespace(model_dir=temp, _distilled_lora="adapter.safetensors", _distilled_lora_strength=0.7)',
+      '    try:',
+      '        runner._refuse_if_streaming_distilled_adapter_missing(pipe, True)',
+      '    except SystemExit as exc:',
+      '        missing_msg = str(exc)',
+      '    else:',
+      '        raise AssertionError("a missing distilled LoRA was accepted")',
+      '    (Path(temp) / "adapter.safetensors").write_text("x")',
+      '    runner._refuse_if_streaming_distilled_adapter_missing(pipe, True)',
+      '    print(missing_msg)',
+    ].join('\n')}`);
+    expect(output).toMatch(/LoRA strength 0\.7/);
+    expect(output).toMatch(/before Stage 1 renders/);
+  });
+
+  // ── report_streaming_policy: the persisted record, incl. peak memory ────
+  it('reports nothing when no render ever resolved a streaming policy', () => {
+    const output = runPython(`${importRunner}\n${[
+      'runner._STREAMING_POLICY = {}',
+      'runner._STREAMING_PIPELINE_LABEL = None',
+      'runner.report_streaming_policy()',
+      'print("done")',
+    ].join('\n')}`);
+    expect(output.trim()).toBe('done');
+  });
+
+  // report_streaming_policy prints on the same STDERR channel as SPEEDPROFILE:
+  // / DRAFTDECODE: (see generateVideoHelpers.js), so these capture stderr the
+  // same way the "reports the effective policy" MLX-cache test above does.
+  it('reports the resident case with no peak-memory reading', () => {
+    const result = runJson([
+      'import contextlib, io, json',
+      'runner._STREAMING_POLICY = {"requestedMode": "auto", "active": False, "supports": True, "reason": "physical memory is above the 24 GiB auto-stream ceiling"}',
+      'runner._STREAMING_PIPELINE_LABEL = "one-stage"',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    runner.report_streaming_policy()',
+      'print(json.dumps({"stderr": err.getvalue()}))',
+    ]);
+    const report = JSON.parse(result.stderr.trim().replace(/^STREAMPOLICY:/, ''));
+    expect(report).toEqual({
+      pipeline: 'one-stage', requestedMode: 'auto', active: false, supports: true,
+      reason: 'physical memory is above the 24 GiB auto-stream ceiling',
+    });
+    expect(report.peakMb).toBeUndefined();
+  });
+
+  it('reports peak MLX memory when streaming was active — the number a smaller-hardware claim is backed by', () => {
+    const result = runJson([
+      'import sys, types, contextlib, io, json',
+      'core = types.ModuleType("mlx.core")',
+      'core.get_peak_memory = lambda: 512 * 1024 * 1024',
+      'pkg = types.ModuleType("mlx")',
+      'pkg.core = core',
+      'sys.modules["mlx"] = pkg',
+      'sys.modules["mlx.core"] = core',
+      'runner._STREAMING_POLICY = {"requestedMode": "stream", "active": True, "supports": True, "reason": None}',
+      'runner._STREAMING_PIPELINE_LABEL = "ic-lora"',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    runner.report_streaming_policy()',
+      'print(json.dumps({"stderr": err.getvalue()}))',
+    ]);
+    const report = JSON.parse(result.stderr.trim().replace(/^STREAMPOLICY:/, ''));
+    expect(report.pipeline).toBe('ic-lora');
+    expect(report.active).toBe(true);
+    expect(report.peakMb).toBe(512);
+  });
+
+  it('reports without a peak-memory reading when MLX is unavailable, rather than failing the report', () => {
+    const result = runJson([
+      'import sys, contextlib, io, json',
+      'sys.modules["mlx"] = None',
+      'sys.modules.pop("mlx.core", None)',
+      'runner._STREAMING_POLICY = {"requestedMode": "stream", "active": True, "supports": True, "reason": None}',
+      'runner._STREAMING_PIPELINE_LABEL = "ic-lora"',
+      'err = io.StringIO()',
+      'with contextlib.redirect_stderr(err):',
+      '    runner.report_streaming_policy()',
+      'print(json.dumps({"stderr": err.getvalue()}))',
+    ]);
+    const report = JSON.parse(result.stderr.trim().replace(/^STREAMPOLICY:/, ''));
+    expect(report.active).toBe(true);
+    expect(report.peakMb).toBeUndefined();
+  });
+
+  it('parses --streaming-mode and defaults it to auto', () => {
+    const out = runPython(`${importRunner}\n${[
+      'import sys',
+      'base = ["generate_ltx2.py", "--mode", "text", "--prompt", "p", "--output", "/tmp/o.mp4", "--model", "m"]',
+      'sys.argv = base',
+      'print(runner.parse_args().streaming_mode)',
+      'sys.argv = base + ["--streaming-mode", "stream"]',
+      'print(runner.parse_args().streaming_mode)',
+      'sys.argv = base + ["--streaming-mode", "resident"]',
+      'print(runner.parse_args().streaming_mode)',
+    ].join('\n')}`);
+    expect(out.trim().split(/\r?\n/).map((l) => l.trimEnd())).toEqual(['auto', 'stream', 'resident']);
+  });
+});
