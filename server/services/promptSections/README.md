@@ -4,7 +4,7 @@ Leaf modules used by `agentPromptBuilder.js`. The builder remains the public fac
 
 | Module | Responsibility |
 | --- | --- |
-| `appContext.js` | Managed-app workspace lookup and JIRA ticket helpers. |
+| `appContext.js` | JIRA ticket helpers; compatibility exports for read-only app lookup in `../agentAppWorkspace.js`. |
 | `completion.js` | Worktree, completion-workflow, and sentinel sections. |
 | `constants.js` | Constants shared across full and light prompt paths. |
 | `forge.js` | Forge CLI selection for generated workflow text. |
@@ -14,3 +14,10 @@ Leaf modules used by `agentPromptBuilder.js`. The builder remains the public fac
 | `reviewLifecycle.js` | Reviewer, CI-gate, and merge sections. |
 | `slashdo.js` | Slashdo invocation and procedure expansion. |
 | `taskContext.js` | Task, attachment, split-context, and compaction sections. |
+
+CoS dispatch/workspace code should import read-only app resolution from
+`../agentAppWorkspace.js`; it owns legacy registry-shape support, name/ID lookup,
+null-on-unresolved semantics, and home expansion without registry writes or AI
+dependencies. `apps.js#getAppById` is not interchangeable: its registry loader
+reconciles persisted defaults and its lookup is ID-only. Keep ticket generation
+here; preserve the builder and app-context exports for existing callers.

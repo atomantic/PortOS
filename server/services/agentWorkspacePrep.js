@@ -40,7 +40,8 @@ import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratc
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { resolveTaskForkHead } from '../lib/forkHead.js';
-import { getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
+import { getAppWorkspace, getAppDataForTask } from './agentAppWorkspace.js';
+import { createJiraTicketForTask } from './promptSections/appContext.js';
 import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investigationTasks.js';
 import { isNonCommittingCoordinatorTask } from './taskTypeHooks.js';
 
