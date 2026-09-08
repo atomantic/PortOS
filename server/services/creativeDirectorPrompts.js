@@ -51,6 +51,9 @@ function buildProjectView(project) {
     // bare project so the template's `{{#project.cast}}` section stays hidden.
     cast: Array.isArray(project.cast) ? project.cast : [],
     videoSourceContextJson: project.resolvedVideoSources ? JSON.stringify({ revision: project.videoPlanningContext?.revision, sources: project.resolvedVideoSources }) : '',
+    isVideo: project.workspace === 'video',
+    productionRevision: project.videoWorkRevision || 0,
+    videoRevisionRequests: JSON.stringify(project.videoReview?.revisionRequests || []),
     videoSourceContextRevision: project.videoPlanningContext?.revision || '',
   };
 }
@@ -227,6 +230,7 @@ function buildEvaluateView(project, scene) {
     apiUrl: PORTOS_API_URL,
     scene: {
       sceneId: scene.sceneId,
+      workRevision: scene.workRevision || 0,
       intent: scene.intent,
       promptJson: JSON.stringify(scene.prompt),
       renderedJobId,

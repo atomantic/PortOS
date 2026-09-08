@@ -38,6 +38,10 @@ export async function runStitch(projectId) {
     console.log(`⚠️ CD stitch: project ${projectId} not found`);
     return;
   }
+  if (project.workspace === 'video') {
+    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+    if (!await videoReviewAllowsDispatch(projectId, ['script-shot-plan', 'references'])) return;
+  }
   const clips = buildTimelineClips(project);
   if (!clips.length) {
     console.log(`⚠️ CD stitch: project ${projectId} has no accepted scenes — marking failed`);
@@ -117,6 +121,10 @@ export async function runStitch(projectId) {
     // Best-effort music-bed overlay (Phase 4d) — must not block the stitch.
     await maybeMuxPipelineAudio(project, finalEntry);
 
+    if (project.workspace === 'video') {
+      const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+      if (!await videoReviewAllowsDispatch(projectId, ['rough-cut', 'final-cut'])) return;
+    }
     await updateProject(projectId, {
       finalVideoId: finalEntry.id,
       status: 'complete',

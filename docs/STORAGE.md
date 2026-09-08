@@ -318,3 +318,16 @@ the artifact on treatment replacement. The Video dispatch barrier remains in
 force; this artifact does not certify backend compatibility or grant approval.
 
 Video planning tasks carry `metadata.machineLocal`, preserved on agent archives. CoS live task sync, archive manifests, direct archive downloads, and incoming task merges exclude them so resolved source context stays on the owning install.
+
+Video review decisions, revision counters, feedback and retained shot/plan versions
+live in the existing project JSONB. Checkpoints fingerprint their creative inputs
+and upstream artifacts, so runtime progress does not stale script approval while
+creative edits do. Feedback never grants permission to dispatch. Revision requests
+pause the production and invalidate the selected shot/step and its dependent work.
+
+New Video projects record the creating install as `videoOwnerInstanceId`. Synced
+copies are read-only replicas; `videoExecution` and the receiver-local replica flag
+never ride the wire. Owner records reject remote overwrites, and receivers never
+acquire local execution authorization from sync. Pre-owner Video drafts remain inert
+and can be recreated locally from their settings. Legacy generalized projects retain
+their prior sync/execution behavior. Project sync v8 gates these semantics.

@@ -64,9 +64,14 @@ export function resolveImageStrength({ explicit, isContinuation }) {
  * the evaluate task or schedule a retry.
  */
 export async function runSceneRender(project, scene) {
+  if (project.workspace === 'video') {
+    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+    if (!await videoReviewAllowsDispatch(project.id, ['script-shot-plan', 'references'])) return null;
+  }
   console.log(`🎞️  CD scene render starting: ${project.id} / ${scene.sceneId} (order ${scene.order}, attempt ${(scene.retryCount || 0) + 1}/${CD_MAX_SCENE_RETRIES + 1})`);
 
   await updateScene(project.id, scene.sceneId, {
+    ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}),
     status: 'rendering',
     renderedJobId: null,
   });
@@ -107,6 +112,7 @@ export async function runSceneRender(project, scene) {
       : '';
     console.log(`❌ CD scene ${scene.sceneId}: local video gen not configured (settings.imageGen.local.pythonPath missing)${detail}`);
     await updateScene(project.id, scene.sceneId, {
+      ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}),
       status: 'failed',
       evaluation: {
         accepted: false,
@@ -240,6 +246,7 @@ export async function runSceneRender(project, scene) {
   } catch (error) {
     console.error(`❌ CD scene ${scene.sceneId}: could not queue the render: ${error.message}`);
     await handleRenderFailed(project.id, scene.sceneId, error.message || 'could not queue the render', {
+      workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined,
       retry: error.code !== 'VIDEO_BACKEND_INPUT_UNSUPPORTED' && error.code !== 'VIDEO_BACKEND_UNSUPPORTED',
     });
     return null;
@@ -251,17 +258,19 @@ export async function runSceneRender(project, scene) {
   // cancelJob handlers — we MUST listen for all three or a user-initiated
   // cancel via the Render Queue UI would leave the scene stuck in
   // `rendering` forever and leak listeners.
-  const onCompleted = async (job) => {
+  const onCompleted = (job) => {
     if (job.id !== jobId) return;
     cleanup();
-    await handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack });
+    handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack, workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })
+      .catch(error => console.error(`❌ CD render completion failed: ${error.message}`));
   };
-  const onFailed = async (job) => {
+  const onFailed = (job) => {
     if (job.id !== jobId) return;
     cleanup();
-    await handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed');
+    handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed', { workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })
+      .catch(error => console.error(`❌ CD render failure handling failed: ${error.message}`));
   };
-  const onCanceled = async (job) => {
+  const onCanceled = (job) => {
     if (job.id !== jobId) return;
     cleanup();
     // Treat user-initiated cancel as a terminal stop for this scene — do
@@ -269,7 +278,8 @@ export async function runSceneRender(project, scene) {
     // CD_MAX_SCENE_RETRIES); the user explicitly stopped this. Mark the scene
     // failed and let the completionHook flag the project so the user can
     // resume from the UI.
-    await handleRenderCanceled(project.id, scene.sceneId);
+    handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined)
+      .catch(error => console.error(`❌ CD render cancellation handling failed: ${error.message}`));
   };
   function cleanup() {
     mediaJobEvents.off('completed', onCompleted);
@@ -288,7 +298,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
   const fresh = await getProject(projectId);
   if (!fresh) return;
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
-  if (!scene) return;
+  if (!scene || (opts.workRevision !== undefined && opts.workRevision !== (scene.workRevision || 0))) return;
   // autoAcceptScenes — smoke-test path that bypasses the cognitive evaluator.
   // Mark the scene accepted with a synthetic evaluation, drop the rendered
   // video into the project's collection, and let the orchestrator advance.
@@ -313,7 +323,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
       // stitch the surviving clips into a `complete` project and report the
       // smoke run as green even though i2v chaining is provably broken.
       // Fail the whole project so the smoke fixture goes red.
-      await updateScene(projectId, sceneId, {
+      await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
         status: 'failed',
         evaluation: {
           accepted: false,
@@ -332,7 +342,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     if (!playable.ok) {
       const reason = playable.reason || 'video file unplayable';
       console.log(`❌ CD auto-accept: video unplayable for ${jobId.slice(0, 8)}: ${reason} — failing smoke project directly (retrying would waste renders; a broken render must not produce a green smoke result).`);
-      await updateScene(projectId, sceneId, {
+      await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
         status: 'failed',
         evaluation: {
           accepted: false,
@@ -346,7 +356,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
       }).catch((e) => console.log(`⚠️ CD updateProject(failed) for ${projectId} failed: ${e.message}`));
       return;
     }
-    await updateScene(projectId, sceneId, {
+    await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
       status: 'accepted',
       renderedJobId: jobId,
       evaluation: {
@@ -373,7 +383,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
   // run in runs[]) and re-fires the evaluator — closing the loop without
   // wasting the rendered clip.
   const skipEvaluatorForPause = async (statusLabel, frames) => {
-    await updateScene(projectId, sceneId, {
+    await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
       status: 'evaluating',
       renderedJobId: jobId,
       evaluationFrames: frames,
@@ -403,7 +413,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     await skipEvaluatorForPause(postFrames.status, evaluationFrames);
     return;
   }
-  await updateScene(projectId, sceneId, {
+  await updateScene(projectId, sceneId, { ...(opts.workRevision === undefined ? {} : { expectedWorkRevision: opts.workRevision }),
     status: 'evaluating',
     renderedJobId: jobId,
     evaluationFrames,
@@ -423,9 +433,9 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
   await dispatchSceneEvaluation(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', evaluationFrames });
 }
 
-async function handleRenderCanceled(projectId, sceneId) {
+async function handleRenderCanceled(projectId, sceneId, workRevision) {
   console.log(`🛑 CD scene ${sceneId} render canceled by user`);
-  await updateScene(projectId, sceneId, {
+  await updateScene(projectId, sceneId, { ...(workRevision === undefined ? {} : { expectedWorkRevision: workRevision }),
     status: 'failed',
     evaluation: {
       accepted: false,
@@ -437,21 +447,21 @@ async function handleRenderCanceled(projectId, sceneId) {
   await advanceAfterSceneSettled(projectId);
 }
 
-async function handleRenderFailed(projectId, sceneId, errorMsg, { retry = true } = {}) {
+async function handleRenderFailed(projectId, sceneId, errorMsg, { retry = true, workRevision } = {}) {
   const fresh = await getProject(projectId);
   if (!fresh) return;
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
-  if (!scene) return;
+  if (!scene || (workRevision !== undefined && workRevision !== (scene.workRevision || 0))) return;
   const nextRetry = (scene.retryCount || 0) + 1;
   if (retry && nextRetry <= CD_MAX_SCENE_RETRIES) {
     console.log(`🔁 CD scene ${sceneId} render failed (${errorMsg}) — retry ${nextRetry}/${CD_MAX_SCENE_RETRIES}`);
-    await updateScene(projectId, sceneId, { status: 'pending', retryCount: nextRetry });
+    await updateScene(projectId, sceneId, { ...(workRevision === undefined ? {} : { expectedWorkRevision: workRevision }), status: 'pending', retryCount: nextRetry });
     const updated = { ...scene, retryCount: nextRetry };
     await runSceneRender(fresh, updated);
     return;
   }
   console.log(`❌ CD scene ${sceneId} render failed terminally: ${errorMsg}`);
-  await updateScene(projectId, sceneId, {
+  await updateScene(projectId, sceneId, { ...(workRevision === undefined ? {} : { expectedWorkRevision: workRevision }),
     status: 'failed',
     evaluation: {
       accepted: false,

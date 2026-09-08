@@ -75,6 +75,8 @@ import * as firstPass from '../services/creativeDirector/firstPassGen.js';
 import * as firstPassMusicBed from '../services/creativeDirector/firstPassMusicGen.js';
 import * as creativeTools from '../services/creative/toolRegistry.js';
 import { CREATIVE_DIRECTOR_IDS_BATCH_MAX } from '../lib/creativeDirectorValidation.js';
+vi.mock('../services/creativeDirector/videoReview.js', () => ({ reviewVideo: vi.fn(async () => ({ checkpoints: [], feedback: [] })), getVideoReview: vi.fn(async () => ({ checkpoints: [], canReview: true })) }));
+import { reviewVideo } from '../services/creativeDirector/videoReview.js';
 import creativeDirectorRoutes from './creativeDirector.js';
 
 describe('creativeDirector routes', () => {
@@ -86,6 +88,23 @@ describe('creativeDirector routes', () => {
     app.use('/api/creative-director', creativeDirectorRoutes);
     vi.clearAllMocks();
   });
+
+  it('validates review revisions and feedback before the owner mutation', async () => {
+    const invalid = await request(app).post('/api/creative-director/cd-video/review').send({ action: 'feedback', stage: 'script-shot-plan', revision: 'a'.repeat(32) });
+    expect(invalid.status).toBe(400);
+    expect(reviewVideo).not.toHaveBeenCalled();
+    const input = { action: 'feedback', stage: 'script-shot-plan', revision: 'a'.repeat(32), rating: 'up' };
+    expect((await request(app).post('/api/creative-director/cd-video/review').send(input)).status).toBe(200);
+    expect(reviewVideo).toHaveBeenCalledWith('cd-video', input);
+  });
+
+  it('requires the displayed shot work revision for Video evaluation callbacks', async () => {
+    cdService.getProject.mockResolvedValue({ id: 'cd-video', workspace: 'video' });
+    const res = await request(app).patch('/api/creative-director/cd-video/scene/example-shot').send({ status: 'accepted' });
+    expect(res.status).toBe(409);
+    expect(cdService.updateScene).not.toHaveBeenCalled();
+  });
+
 
   describe('Video drafts', () => {
     it('checks draft and saved sources without exporting source records or rewriting revisions', async () => {

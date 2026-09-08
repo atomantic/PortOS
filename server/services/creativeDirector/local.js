@@ -187,3 +187,10 @@ export async function recordRun(id, runEntry) {
 export async function updateRun(id, runId, patch) {
   return (await selectBackend()).updateRun(id, runId, patch);
 }
+
+/** Atomic Video owner/review mutations share the owning backend's write boundary. */
+export async function mutateVideoProject(id, mutate) {
+  const result = await (await selectBackend()).mutateVideoProject(id, mutate);
+  emitRecordUpdated('creativeDirectorProject', id);
+  return result;
+}

@@ -66,6 +66,7 @@ Content-Type: application/json
 **If the render is acceptable** (good enough — perfect is the enemy of done):
 ```json
 {
+{{#project.isVideo}}  "expectedWorkRevision": {{scene.workRevision}},{{/project.isVideo}}
   "status": "accepted",
   "evaluation": {
     "accepted": true,
@@ -88,6 +89,7 @@ Do NOT issue this POST for the retry or failed branches below — rejected rende
 **If the render misses the mark and retries are still available** (`retryCount < 3`): tweak the prompt and request a re-render. The server will run the new render and then send you back here for another evaluation. You may also adjust `imageStrength` (0.0–1.0) on i2v scenes — drop it (e.g. 0.85 → 0.6) when the seed image is dominating and the prompt isn't expressed; raise it (e.g. → 0.95) when continuation drifted too far from the prior scene. Omit `imageStrength` from the PATCH to leave it unchanged.
 ```json
 {
+{{#project.isVideo}}  "expectedWorkRevision": {{scene.workRevision}},{{/project.isVideo}}
   "status": "pending",
   "prompt": "<refined render prompt>",
   "retryCount": {{scene.nextRetryCount}},
@@ -103,6 +105,7 @@ Do NOT issue this POST for the retry or failed branches below — rejected rende
 **If retries are exhausted** (`retryCount >= 3`) and the render is still not acceptable, give up on this scene:
 ```json
 {
+{{#project.isVideo}}  "expectedWorkRevision": {{scene.workRevision}},{{/project.isVideo}}
   "status": "failed",
   "evaluation": {
     "accepted": false,

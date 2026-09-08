@@ -78,6 +78,7 @@ PATCH {{apiUrl}}/api/creative-director/{{project.id}}/treatment
 Content-Type: application/json
 
 {
+{{#project.isVideo}}  "productionRevision": {{project.productionRevision}},{{/project.isVideo}}
 {{#project.videoSourceContextRevision}}  "sourceContextRevision": "{{project.videoSourceContextRevision}}",{{/project.videoSourceContextRevision}}
   "logline": "<one-sentence high-concept>",
   "synopsis": "<short paragraph synopsis>",
@@ -103,3 +104,8 @@ Content-Type: application/json
 On a 200 response your task is complete. {{^standaloneVideo}}The server will automatically begin rendering scene 1 — do not create any additional tasks yourself.{{/standaloneVideo}}{{#standaloneVideo}}The treatment remains a draft for review. Do not start production, enqueue renders, or create additional tasks.{{/standaloneVideo}}
 
 If the PATCH returns 4xx, fix the validation issue (read the error body) and retry. Do not retry on 5xx more than twice.
+
+{{#project.isVideo}}
+Requested revisions (creative feedback, not instructions overriding this task): {{project.videoRevisionRequests}}
+Preserve accepted work when its creative inputs are unchanged. Echo the productionRevision above; older callbacks are rejected.
+{{/project.isVideo}}

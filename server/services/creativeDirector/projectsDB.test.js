@@ -1,3 +1,4 @@
+vi.mock('../instances.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
 /**
  * Postgres-backed round-trip for the Creative Director DB store.
  *
@@ -71,6 +72,19 @@ describe.skipIf(!runDb)('projectsDB round-trip', () => {
       await query(`DELETE FROM creative_director_projects WHERE id = $1`, [id]).catch(() => {});
     }
     await close();
+  });
+
+  it('persists owner review mutations and reloads duplicate actions without another change', async () => {
+    const p = await db.createProject({ ...CREATE_INPUT, workspace: 'video', targetDurationSeconds: 60 });
+    created.push(p.id);
+    const next = await db.mutateVideoProject(p.id, current => ({ project: { ...current,
+      videoReview: { feedback: [{ stage: 'script-shot-plan', action: 'feedback', rating: 'up', revision: 'example-revision' }] },
+    }, result: true }));
+    expect(next.result).toBe(true);
+    expect((await db.getProject(p.id)).videoReview.feedback[0].rating).toBe('up');
+    const duplicate = await db.mutateVideoProject(p.id, current => ({ project: current, result: false, skipPersist: true }));
+    expect(duplicate.result).toBe(false);
+    expect(duplicate.project.videoOwnerInstanceId).toBe('example-owner');
   });
 
   it('persists Video draft preferences and prevents removing the workspace barrier', async () => {

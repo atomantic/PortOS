@@ -24,6 +24,7 @@ const migrationsDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations'
 // sample-existence filter drops downstream — so its presence here documents
 // that the sweep itself is expected to carry it.
 const EXPECTED_STAGE_OLD = {
+  'cd-evaluate.md': ['c986613edbb595cece674403db0f069d'],
   'pipeline-idea-expansion.md': ['1ee44cf95851ff8debf18729ebcd40b4', '1f3c5d077a5ef9a4b610335d5e3edd9c', '41facefbc0c0549d456bef9111f95ab9', '49a208628290543ba2607a5ed48fdc8c', '93e9552c6662811e597a97296f3776a4', 'aee25112b2c596f643b17c559b772c22', 'b5c47c94ffc74637983c95761ab0c66c', 'c50f016639d41cd8244f5ff13429f997', 'd6fa86a435f978336661dcabca67258f'],
   'pipeline-prose.md': ['30ac30ec2b9d3e2a9eb869c181732cc6', '84523d531eeafa60959c65c553b2563f', 'bef1bc2767b78f585f2bd89f3d615130', 'bfea5aeeb471aae9749baee765b473a7', 'd1f8e3f1d214725b5aa67f309a81cd7d', '25e3d58c2741bd98acd5d08ba70d8a5e', '430d38ed2da59e0d4212e65edc499a74'],
   'writers-room-continue.md': ['93bfe80543ceca39842201a78b8393fa', '67663696c97ebaeb23de25f7410cfdd4'],
@@ -50,8 +51,8 @@ const EXPECTED_STAGE_OLD = {
   'pipeline-editorial-chekhov.md': ['bfacbf343ba2b9a3f6037bb45b94e1bb'],
   'pipeline-editorial-on-the-nose.md': ['48182b49149e6b5829fbed71b3ffc242'],
   'pipeline-tv-script.md': ['3f6fecc25573ed054b47db392250034a'],
-  'cd-treatment.md': ['1de973575a772db0544bbeda2ba5df77', '2ffa482e7bfb6fe8b7224505fedbf712', '16d0ef6a7fd2533719a846019122ebee', '95b7685690ecfee4f682b0293b790277', 'd940eadfb406ce584f0e244032f33382'],
-  'cd-plan.md': ['41a61590896d1327df2c6915557361de', '3ce871196a8fd04781b71b6780e89c86', '0768d6809645c2c1fe73cacae9740fe9', 'ef0d96f6ebde43af6c4579969d31cfb7'],
+  'cd-treatment.md': ['4da071646deff0001473502a7c4b5252', '1de973575a772db0544bbeda2ba5df77', '2ffa482e7bfb6fe8b7224505fedbf712', '16d0ef6a7fd2533719a846019122ebee', '95b7685690ecfee4f682b0293b790277', 'd940eadfb406ce584f0e244032f33382'],
+  'cd-plan.md': ['02354df62fe776704669d3ff06f346e4', '41a61590896d1327df2c6915557361de', '3ce871196a8fd04781b71b6780e89c86', '0768d6809645c2c1fe73cacae9740fe9', 'ef0d96f6ebde43af6c4579969d31cfb7'],
   'pipeline-series-generate.md': ['bc72731124a2bd6304362f4402c6305d', '21352c21ed6d4edb7a4b7c32704eff55'],
   'pipeline-character-foundation.md': ['f1c0b75a8161c0bc7f26752d148a5c1c', 'cda34127b40754ddbcc8544e3d82572b', 'd6c449c06de73a0868141c899b26e52c', '04419e382f3b46ed92bfaaa1d4f39e13', 'b7d2bac347e11171606f4c6acfcd32e1'],
   'pipeline-judge-foundation.md': ['74c0244e641dcf7a73e9c83123ebdee9', '4c0bd349ff4d329048c9f4ac068745d4', 'edf7850d0c724c63761bc9fb667227d9', '02a8e9215ba534b333f3a29f11f3ac4f', 'e44b6c50d741bbd21fc86f481684c410'],
@@ -77,6 +78,7 @@ const EXPECTED_STAGE_OLD = {
   'pipeline-editorial-climax-agency.md': ['1bca84f9a0b7cde84e20e43702a12ffa'],
 };
 const EXPECTED_STAGE_NEW = {
+  'cd-evaluate.md': 'a86de29e186581d3508662569c8acbf6',
   'pipeline-idea-expansion.md': 'a032e4a724251ed3e3495d33c4dbab8e',
   'pipeline-prose.md': '4cb3ef48309f3673570cf80e4d544b54',
   'writers-room-continue.md': '458dc5ff4732befc1fb90890bdc885c2',
@@ -103,8 +105,8 @@ const EXPECTED_STAGE_NEW = {
   'pipeline-editorial-chekhov.md': '1f8a1696b5e4f476051dc5b2e5737db9',
   'pipeline-editorial-on-the-nose.md': 'e5786fb019e5bf19c7aa6ed0c8b35cda',
   'pipeline-tv-script.md': '376f779f4687b598f1c92ca4e770fd5a',
-  'cd-treatment.md': '4da071646deff0001473502a7c4b5252',
-  'cd-plan.md': '02354df62fe776704669d3ff06f346e4',
+  'cd-treatment.md': '16c5ce4a199d8efbf80016424315beb6',
+  'cd-plan.md': '8dac4102dbbaee05f2f23f37c7e80782',
   'pipeline-series-generate.md': '136a21435aba2b2b212883750040b986',
   'pipeline-character-foundation.md': 'c606061954b23a9957c68dd068b54dc4',
   'pipeline-judge-foundation.md': '75714f0e41c77ff5c8b9623cb4fb0a25',

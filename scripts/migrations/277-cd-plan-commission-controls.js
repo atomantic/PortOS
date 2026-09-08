@@ -10,7 +10,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'cd-plan.md': '02354df62fe776704669d3ff06f346e4',
+  'cd-plan.md': '8dac4102dbbaee05f2f23f37c7e80782',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

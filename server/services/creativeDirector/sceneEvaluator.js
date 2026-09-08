@@ -288,7 +288,7 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
   };
 
   if (verdict.accepted) {
-    await updateScene(project.id, scene.sceneId, { status: 'accepted', evaluation });
+    await updateScene(project.id, scene.sceneId, { ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}), status: 'accepted', evaluation });
     if (project.collectionId && scene.renderedJobId) {
       await addItem(project.collectionId, { kind: 'video', ref: scene.renderedJobId })
         .catch((err) => {
@@ -306,12 +306,12 @@ export async function applySceneVerdict(project, scene, verdict, llm = null, run
     const patch = { status: 'pending', retryCount: retryCount + 1, evaluation };
     if (verdict.refinedPrompt && verdict.refinedPrompt.trim()) patch.prompt = verdict.refinedPrompt.trim();
     if (verdict.imageStrength !== undefined) patch.imageStrength = verdict.imageStrength;
-    await updateScene(project.id, scene.sceneId, patch);
+    await updateScene(project.id, scene.sceneId, { ...patch, ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}) });
     console.log(`🔁 CD scene ${scene.sceneId} rejected by vision — retry ${patch.retryCount}/${CD_MAX_SCENE_RETRIES}`);
     return advance();
   }
 
-  await updateScene(project.id, scene.sceneId, { status: 'failed', evaluation });
+  await updateScene(project.id, scene.sceneId, { ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}), status: 'failed', evaluation });
   console.log(`⛔ CD scene ${scene.sceneId} failed by vision — retries exhausted`);
   return advance();
 }
@@ -360,12 +360,13 @@ async function runSceneEvaluation(project, scene) {
       await applySceneVerdict(project, scene, result.verdict, result.llm, result.runId);
       return { via: 'vision', verdict: result.verdict, llm: result.llm };
     } catch (err) {
+      if (err.code === 'VIDEO_WORK_STALE') return null;
       // Verdict came back but persisting/advancing threw. Don't re-run on the
       // agent — that could double-apply the verdict (and re-add to the
       // collection). Best-effort mark the scene failed so the orchestrator can
       // recover, and never throw (this runs outside the request lifecycle).
       console.error(`❌ CD applySceneVerdict failed for scene ${scene.sceneId}: ${err.message}`);
-      await updateScene(project.id, scene.sceneId, {
+      await updateScene(project.id, scene.sceneId, { ...(project.workspace === 'video' ? { expectedWorkRevision: scene.workRevision || 0 } : {}),
         status: 'failed',
         evaluation: {
           accepted: false,

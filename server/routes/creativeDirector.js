@@ -14,6 +14,7 @@ import {
   creativeDirectorProjectCreateSchema,
   creativeDirectorProjectUpdateSchema,
   creativeDirectorTreatmentSchema,
+  creativeDirectorVideoReviewActionSchema,
   creativeDirectorPlanSchema,
   creativeDirectorPlanStepActionSchema,
   creativeDirectorDirectiveSchema,
@@ -134,6 +135,17 @@ router.get('/:id/sources', asyncHandler(async (req, res) => {
   if (project.workspace !== 'video') throw new ServerError('Source checks require a Video project', { status: 400, code: 'INVALID_STATE' });
   const { getVideoSourceStatus } = await import('../services/creativeDirector/videoSources.js');
   res.json(await getVideoSourceStatus(project));
+}));
+
+router.get('/:id/review', asyncHandler(async (req, res) => {
+  const { getVideoReview } = await import('../services/creativeDirector/videoReview.js');
+  res.json(await getVideoReview(req.params.id));
+}));
+
+router.post('/:id/review', asyncHandler(async (req, res) => {
+  const input = validateRequest(creativeDirectorVideoReviewActionSchema, req.body);
+  const { reviewVideo } = await import('../services/creativeDirector/videoReview.js');
+  res.json(await reviewVideo(req.params.id, input));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -369,6 +381,10 @@ router.post('/:id/plan/step/:stepId', asyncHandler(async (req, res) => {
 // Agent-callable: update a single scene's status / evaluation / retry count.
 router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorSceneUpdateSchema, req.body);
+  const project = await getProject(req.params.id);
+  if (project?.workspace === 'video' && data.expectedWorkRevision === undefined) {
+    throw new ServerError('Include the displayed shot work revision with this update.', { status: 409, code: 'VIDEO_WORK_STALE' });
+  }
   const updated = await updateScene(req.params.id, req.params.sceneId, data);
   if (data.status === 'accepted' || data.status === 'failed') {
     // Fire-and-forget — agent or user just settled a scene; nudge the
