@@ -18,10 +18,11 @@ vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
 }));
 vi.mock('./github.js', () => ({
+  execGh: vi.fn(),
   findPullRequestForBranch: vi.fn(async () => ({ status: 'found', number: 7, url: 'https://example.com/pr/7' })),
   ensureForgeReachable: vi.fn(async () => ({ ok: true, status: 'ok' })),
 }));
-vi.mock('./gitlab.js', () => ({ findMergeRequestForBranch: vi.fn() }));
+vi.mock('./gitlab.js', () => ({ findMergeRequestForBranch: vi.fn(), execGlab: vi.fn() }));
 vi.mock('./git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh' })) }));
 vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 vi.mock('../lib/primaryCheckoutGuard.js', async (importOriginal) => ({
@@ -80,6 +81,10 @@ vi.mock('./codeReview.js', async (importOriginal) => ({
   runLocalGoalFidelityReview: (...args) => runLocalGoalFidelityReviewMock(...args),
 }));
 
+import { execGit } from '../lib/execGit.js';
+import { execGh } from './github.js';
+import { execGlab } from './gitlab.js';
+import { resolveForgeForRepo } from './git.js';
 import { finalizeAgent } from './agentFinalization.js';
 import { cosEvents } from './cosEvents.js';
 import { completeAgentRun } from './agentRunTracking.js';
@@ -173,6 +178,9 @@ const completion = () => completeAgentMock.mock.calls[0][1];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  execGit.mockResolvedValue({ stdout: 'claim/issue-42', exitCode: 0 });
+  resolveForgeForRepo.mockResolvedValue({ cli: 'gh', env: { GH_TOKEN: 'synthetic-token' } });
+  execGh.mockResolvedValue(JSON.stringify({ number: 42, title: 'Retry the opening line', body: 'Retry transient synthesis failures and clear the pending opening after success.' }));
   getTaskOutputHook.mockResolvedValue(null);
   isProgrammaticIoTaskType.mockReturnValue(false);
   resolveTaskHookType.mockImplementation(task => task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null);
@@ -213,8 +221,37 @@ describe('finalizeAgent — goal-fidelity gate', () => {
   it.each([0, 1, undefined])('still judges single-issue claims with swarmCount %s', async swarmCount => {
     await finalize({ task: { id: 'task-1', description: 'Fix the uploader', metadata: { analysisType: 'claim-issue', swarmCount } } });
     expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledOnce();
+    expect(runLocalGoalFidelityReviewMock.mock.calls[0][0].objective).toContain('Retry transient synthesis failures');
+    expect(runLocalGoalFidelityReviewMock.mock.calls[0][0].objective).not.toContain('Fix the uploader');
+    expect(execGh).toHaveBeenCalledWith(['issue', 'view', '42', '--json', 'number,title,body'], 30000, { cwd: '/example/worktree', env: { GH_TOKEN: 'synthetic-token' } });
     expect(completion().goalFidelity).toMatchObject({ verdict: 'ship' });
   });
+
+  it('resolves GitLab requirements for a manually marked claim and still holds unrelated work', async () => {
+    resolveForgeForRepo.mockResolvedValue({ cli: 'glab' });
+    execGlab.mockResolvedValue(JSON.stringify({ iid: 42, title: 'Retry opening', description: 'Retry synthesis failures.' }));
+    runLocalGoalFidelityReviewMock.mockResolvedValue(verdict({ verdict: 'rethink', missing: ['Retry synthesis failures'] }));
+    await finalize({ task: { id: 'task-1', description: 'Claim and ship', metadata: { claimFlow: true } } });
+    expect(runLocalGoalFidelityReviewMock.mock.calls[0][0].objective).toContain('Retry synthesis failures.');
+    expect(completion().completionReason).toBe(GOAL_FIDELITY_CATEGORY);
+  });
+
+  it.each(['no branch', 'missing body', 'wrong issue', 'oversized body', 'forge unavailable', 'credentials unavailable'])(
+    'leaves a claim unjudged when requirements are unavailable: %s', async reason => {
+      if (reason === 'no branch') execGit.mockResolvedValue({ stdout: 'main', exitCode: 0 });
+      if (reason === 'missing body') execGh.mockResolvedValue('{}');
+      if (reason === 'wrong issue') execGh.mockResolvedValue(JSON.stringify({ number: 43, title: 'Other', body: 'Other requirements' }));
+      if (reason === 'oversized body') execGh.mockResolvedValue(JSON.stringify({ number: 42, title: 'Large', body: 'x'.repeat(8000) }));
+      if (reason === 'forge unavailable') execGh.mockRejectedValue(new Error('Unavailable'));
+      if (reason === 'credentials unavailable') resolveForgeForRepo.mockRejectedValue(new Error('Unavailable'));
+      await finalize({ task: { id: 'task-1', description: 'Claim an issue and ship a PR', metadata: { analysisType: 'claim-issue' } } });
+      expect(completion()).toMatchObject({ success: true });
+      expect(completion().goalFidelity).toBeUndefined();
+      expect(runLocalGoalFidelityReviewMock).not.toHaveBeenCalled();
+      expect(runWindowDiffMock).not.toHaveBeenCalled();
+      if (reason === 'credentials unavailable') expect(execGh).not.toHaveBeenCalled();
+    }
+  );
 
   it('records a passing verdict without disturbing the run — absence is what means "never judged"', async () => {
     await finalize();
