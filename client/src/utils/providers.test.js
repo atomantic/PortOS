@@ -1489,9 +1489,9 @@ describe('AI Assignments option helpers', () => {
   it('assignmentProviderOptions filters by providerTypes and flags disabled', () => {
     expect(assignmentProviderOptions({ providerTypes: ['api'] }, providers))
       .toEqual([
-        { id: 'vlm-x', name: 'VLM X (disabled)' },
-        { id: 'ollama', name: 'Ollama' },
-        { id: 'openai', name: 'OpenAI' },
+        { id: 'vlm-x', name: 'VLM X (disabled)', enabled: false },
+        { id: 'ollama', name: 'Ollama', enabled: true },
+        { id: 'openai', name: 'OpenAI', enabled: true },
       ]);
     // No providerTypes → all providers.
     expect(assignmentProviderOptions({}, providers).map((p) => p.id))
