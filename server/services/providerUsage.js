@@ -1,3 +1,4 @@
+import { isProcessProvider } from '../lib/providerTypes.js';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
 import { getAllProviders } from './providers.js';
@@ -520,7 +521,7 @@ export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
  * args are one-shot/headless flags that would break the interactive `/usage`.
  */
 function pickScrapeProvider(providers, binary) {
-  const cliTui = (providers || []).filter((p) => p?.type === 'cli' || p?.type === 'tui');
+  const cliTui = (providers || []).filter(isProcessProvider);
   const byBinary = (list) => list.find((p) => commandBasename(p.command) === binary) || list[0];
   const tui = cliTui.filter((p) => p.type === 'tui');
   const cli = cliTui.filter((p) => p.type === 'cli');

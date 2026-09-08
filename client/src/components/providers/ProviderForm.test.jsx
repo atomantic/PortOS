@@ -92,4 +92,10 @@ describe('ProviderForm', () => {
     await waitFor(() => expect(api.createProvider).toHaveBeenCalledWith(expect.objectContaining({ ultraModel: 'frontier-model' })));
   });
 
+  it('explains the Claude credential path for a blank-command SGLang harness', () => {
+    renderForm({ provider: { id: 'example-local', name: 'Example Local', type: 'tui', command: '', sglangBacked: true } });
+    expect(screen.getByText('ANTHROPIC_AUTH_TOKEN')).toBeInTheDocument();
+    expect(screen.queryByText(/It rides both the spawned OpenCode provider/)).not.toBeInTheDocument();
+  });
+
 });

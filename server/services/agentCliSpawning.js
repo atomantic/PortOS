@@ -297,7 +297,7 @@ export const isClaudeCliProvider = (provider) =>
  * Antigravity, etc. that run in a PTY). Used by callers that need to branch
  * between headless CLI/API runs and TUI shell sessions.
  */
-export const isTuiProvider = (provider) => provider?.type === PROVIDER_TYPES.TUI;
+export { isTuiProvider } from '../lib/providerTypes.js';
 
 /**
  * Read env vars from ~/.claude/settings.json to inject into Claude CLI spawns.

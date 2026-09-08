@@ -1,4 +1,5 @@
-import { commandBasename, isClaudeCommand } from './providerModels.js';
+import { isClaudeHarnessProvider } from './providerTypes.js';
+import { commandBasename } from './providerModels.js';
 import { isGrokCommand } from './grok.js';
 
 /**
@@ -26,7 +27,7 @@ export const PROVIDER_FAMILIES = [
     id: 'claude',
     label: 'Claude Code',
     idPattern: /claude/i,
-    matches: (p) => (p.type === 'cli' || p.type === 'tui') && isClaudeCommand(p.command)
+    matches: isClaudeHarnessProvider
   },
   {
     id: 'codex',

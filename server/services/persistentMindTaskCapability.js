@@ -7,6 +7,7 @@
  * and outcome in the mind trajectory, and only then queues an internal task.
  */
 
+import { isProcessProvider } from '../lib/providerTypes.js';
 import {
   PERSISTENT_MIND_TASK_LIMITS,
   isPersistentMindTaskModelAllowed,
@@ -47,7 +48,7 @@ const appTrackerCache = new Map();
 
 const isRunnableApp = (app) => typeof app?.repoPath === 'string' && app.repoPath.trim().length > 0;
 const isRunnableAgentProvider = (provider) => provider?.enabled !== false
-  && (provider?.type === 'cli' || provider?.type === 'tui');
+  && isProcessProvider(provider);
 
 const boundedProviderCandidates = (providers) => providers
   .filter((provider) => isRunnableAgentProvider(provider)

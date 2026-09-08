@@ -1,5 +1,5 @@
 import {
-  AGENT_HARNESS_PROVIDER_TYPES,
+  isProcessProvider,
   effortAwareModelOptions,
   filterRunnableProviders,
   resolveEffectiveProvider,
@@ -14,7 +14,7 @@ import ProviderModelSelector from '../ProviderModelSelector.jsx';
 export const hasRunnableAgentProvider = (providers, providerId, activeProviderId) => {
   const selectableProviders = filterRunnableProviders(providers, providerId);
   const { provider } = resolveEffectiveProvider(selectableProviders, providerId, activeProviderId);
-  return AGENT_HARNESS_PROVIDER_TYPES.includes(provider?.type);
+  return isProcessProvider(provider);
 };
 
 /**
@@ -46,8 +46,8 @@ export default function AgentJobProviderFields({
   const effectiveProviderId = usingActive ? (activeProviderId || undefined) : undefined;
   const patchWithActiveProvider = (patch) =>
     data.providerId || !activeProviderId ? patch : { providerId: activeProviderId, ...patch };
-  const canInheritActiveProvider = AGENT_HARNESS_PROVIDER_TYPES.includes(
-    selectableProviders.find(provider => provider.id === activeProviderId)?.type
+  const canInheritActiveProvider = isProcessProvider(
+    selectableProviders.find(provider => provider.id === activeProviderId)
   );
 
   return (

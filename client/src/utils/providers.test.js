@@ -4,6 +4,7 @@
 // the 69 `utils/providers` importers notices. The declaring modules re-export
 // their shared tables from `server/lib`, so what is pinned here is the
 // client-side behaviour built on top of them.
+import * as serverProviderTypes from '../../../server/lib/providerTypes.js';
 import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
@@ -208,38 +209,39 @@ describe('effortLevelsForProvider', () => {
 // (server/lib/aiToolkit/internal/generationOptions.js) for HTTP runs.
 describe('generationControlsFor', () => {
   it.each([
-    ['OpenCode llama TUI', { id: 'opencode-llama-tui', command: 'opencode', llamaBacked: true }, { temperature: true, topP: true, thinking: true }],
-    ['OpenCode MTPLX', { id: 'opencode-mtplx', command: 'opencode', mtplxBacked: true }, { temperature: true, topP: true, thinking: true }],
+    ['OpenCode llama TUI', { id: 'opencode-llama-tui', type: 'tui', command: 'opencode', llamaBacked: true }, { temperature: true, topP: true, thinking: true }],
+    ['OpenCode MTPLX', { id: 'opencode-mtplx', type: 'tui', command: 'opencode', mtplxBacked: true }, { temperature: true, topP: true, thinking: true }],
     // vLLM routes the thinking toggle through the chat template like the other
     // two. Both sides were written before `vllmBacked` existed, so the editor
     // hid the whole block while the server discarded every control anyway
     // (#4765).
-    ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', command: 'opencode', vllmBacked: true }, { temperature: true, topP: true, thinking: true }],
+    ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', type: 'tui', command: 'opencode', vllmBacked: true }, { temperature: true, topP: true, thinking: true }],
     // SGLang takes the same chat-template thinking toggle, and shipped with the
     // controls wired from day one so it never repeated vLLM's hole.
-    ['OpenCode SGLang TUI', { id: 'opencode-sglang-tui', command: 'opencode', sglangBacked: true }, { temperature: true, topP: true, thinking: true }],
+    ['OpenCode SGLang TUI', { id: 'opencode-sglang-tui', type: 'tui', command: 'opencode', sglangBacked: true }, { temperature: true, topP: true, thinking: true }],
     // A Claude harness on Ollama is forwarded only MAX_THINKING_TOKENS
     // (server/lib/cliChildEnv.js) — it owns its own sampling.
-    ['Claude Ollama TUI', { id: 'claude-ollama-tui', command: 'claude', ollamaBacked: true }, { temperature: false, topP: false, thinking: true }],
+    ['Claude Ollama TUI', { id: 'claude-ollama-tui', type: 'tui', command: 'claude', ollamaBacked: true }, { temperature: false, topP: false, thinking: true }],
+    ['blank Claude command', { id: 'claude-ollama', type: 'tui', command: '', ollamaBacked: true }, { temperature: false, topP: false, thinking: true }],
     // ...but a Claude harness on ANY OTHER local backend gets no control at all.
     // MAX_THINKING_TOKENS is the harness's only thinking lever, and it means
     // "off" solely on Ollama; SGLang takes `chat_template_kwargs.enable_thinking`,
     // which the Anthropic wire cannot carry, so the toggle would pin a value
     // nothing reads. Sampling was never forwardable on a Claude harness either,
     // which would have left the block rendering one inert select.
-    ['Claude SGLang TUI', { id: 'claude-sglang-tui', command: 'claude', sglangBacked: true }, null],
+    ['Claude SGLang TUI', { id: 'claude-sglang-tui', type: 'tui', command: 'claude', sglangBacked: true }, null],
     // LM Studio forwards temperature/top_p like any OpenAI-compatible endpoint,
     // but reasoning is a property of the LOADED model instance there — no
     // per-request field carries it, so the toggle would pin a value nothing
     // reads (THINKING_STYLE.lmstudio is null on the server).
-    ['OpenCode LM Studio', { id: 'opencode-lmstudio', command: 'opencode', lmstudioBacked: true }, { temperature: true, topP: true, thinking: false }],
+    ['OpenCode LM Studio', { id: 'opencode-lmstudio', type: 'tui', command: 'opencode', lmstudioBacked: true }, { temperature: true, topP: true, thinking: false }],
     ['native Ollama API', { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' }, { temperature: true, topP: true, thinking: true }],
     // OrcaRouter proxies cloud models that own their own reasoning switch.
-    ['OpenCode OrcaRouter', { id: 'opencode-orcarouter', command: 'opencode', orcarouterBacked: true }, { temperature: true, topP: true, thinking: false }],
+    ['OpenCode OrcaRouter', { id: 'opencode-orcarouter', type: 'tui', command: 'opencode', orcarouterBacked: true }, { temperature: true, topP: true, thinking: false }],
     // Same posture for every gateway: upstream models own their reasoning switch.
-    ['OpenCode OpenRouter', { id: 'opencode-openrouter', command: 'opencode', gatewayBacked: 'openrouter' }, { temperature: true, topP: true, thinking: false }],
+    ['OpenCode OpenRouter', { id: 'opencode-openrouter', type: 'tui', command: 'opencode', gatewayBacked: 'openrouter' }, { temperature: true, topP: true, thinking: false }],
     ['cloud API provider', { id: 'anthropic', type: 'api', endpoint: 'https://api.anthropic.com/v1' }, null],
-    ['vendor CLI', { id: 'claude-code', command: 'claude' }, null],
+    ['vendor CLI', { id: 'claude-code', type: 'cli', command: 'claude' }, null],
   ])('%s', (_label, provider, expected) => {
     expect(generationControlsFor(provider)).toEqual(expected);
   });
@@ -570,7 +572,7 @@ describe('configuredDefaultIn', () => {
 // Every name the client module shares with a server leaf must be that leaf's
 // export, so a local declaration that shadows a server name fails here too.
 describe('providerTypes re-exports the server predicates', () => {
-  const shared = [serverProviderModels, serverOllamaBacked, serverToolkitConstants]
+  const shared = [serverProviderModels, serverProviderTypes, serverOllamaBacked, serverToolkitConstants]
     .flatMap((leaf) => Object.keys(leaf).filter((name) => name in providerTypes).map((name) => [name, leaf]));
 
   it('shares exactly the re-exported names with the server leaves', () => {
@@ -578,6 +580,9 @@ describe('providerTypes re-exports the server predicates', () => {
       'PROVIDER_TYPES',
       'commandBasename',
       'isAntigravityProvider',
+      'isApiProvider',
+      'isClaudeHarnessProvider',
+      'isCliProvider',
       'isCodexProvider',
       'isCodexSubscriptionProvider',
       'isCursorProvider',
@@ -585,8 +590,14 @@ describe('providerTypes re-exports the server predicates', () => {
       'isKimiProvider',
       'isOllamaBackedProvider',
       'isOpencodeLocalProvider',
+      'isProcessProvider',
+      'isTuiProvider',
       'localRuntimeNamespace',
     ]);
+  });
+
+  it('keeps the legacy Claude command alias on the type-gated server export', () => {
+    expect(providerTypes.isClaudeCommandProvider).toBe(serverProviderTypes.isClaudeHarnessProvider);
   });
 
   it.each(shared)('%s is the server export itself', (name, leaf) => {
