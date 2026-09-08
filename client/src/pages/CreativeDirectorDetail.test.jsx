@@ -165,6 +165,24 @@ describe('Video saved artifacts', () => {
     expect(screen.getByText('No tool plan saved.')).toBeInTheDocument();
   });
 
+  it('distinguishes changed, matching, and unknown source revisions without replacing saved labels', async () => {
+    const user = userEvent.setup();
+    cdApi.getCreativeDirectorSources.mockResolvedValueOnce({ draft: [], artifact: [
+      { referenceId: 'universe:example-universe', available: true, revisionChanged: true },
+      { referenceId: 'voice:example-voice', available: true, revisionChanged: null },
+    ] });
+    renderVideo();
+    expect(await screen.findByText(/Source changed since this artifact was saved/)).toBeInTheDocument();
+    expect(screen.getByText(/Source revision freshness unknown/)).toBeInTheDocument();
+    cdApi.getCreativeDirectorSources.mockResolvedValueOnce({ draft: [], artifact: [
+      { referenceId: 'universe:example-universe', available: true, revisionChanged: false },
+    ] });
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(await screen.findByText('Source revision stamp matches the saved artifact')).toBeInTheDocument();
+    expect(screen.getByText('Source revision: rev-4')).toBeInTheDocument();
+    expect(cdApi.startCreativeDirectorProject).not.toHaveBeenCalled();
+  });
+
   it('reports missing sources, links to repair, and retries failed checks without altering saved revisions', async () => {
     const user = userEvent.setup();
     cdApi.getCreativeDirectorSources.mockRejectedValueOnce(new Error('Unavailable'));

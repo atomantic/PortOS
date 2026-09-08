@@ -386,7 +386,7 @@ function validateVideoShot(project, scene, isFirst) {
 }
 
 /** Compile the existing treatment into a persisted Video artifact, without dispatch. */
-function compileVideoArtifact(project, treatment) {
+function compileVideoArtifact(project, treatment, sourceRevisions) {
   if (!treatment.script) {
     throw new ServerError('Video treatments require a production script. Add script text and resubmit the treatment.', {
       status: 400, code: 'VALIDATION_ERROR',
@@ -418,6 +418,7 @@ function compileVideoArtifact(project, treatment) {
   }
   const references = (project.videoDraft?.sources || []).map((source) => ({
     ...source, referenceId: `${source.kind}:${source.id}`,
+    ...(sourceRevisions ? { sourceRevision: sourceRevisions[`${source.kind}:${source.id}`] ?? null } : {}),
   }));
   if (new Set(references.map((ref) => ref.referenceId)).size !== references.length) {
     throw new ServerError('Video source references must have unique kind and id values', { status: 400, code: 'VALIDATION_ERROR' });
@@ -439,7 +440,7 @@ function compileVideoArtifact(project, treatment) {
  * each scene's runtime fields if the agent didn't supply them, and preserves
  * paused/failed status (otherwise flips the project to 'rendering').
  */
-export function applyTreatment(project, treatmentInput) {
+export function applyTreatment(project, treatmentInput, sourceRevisions) {
   const parsed = creativeDirectorTreatmentSchema.safeParse(treatmentInput);
   if (!parsed.success) {
     throw new ServerError(
@@ -455,7 +456,7 @@ export function applyTreatment(project, treatmentInput) {
     evaluation: s.evaluation ?? null,
   }));
   const treatment = { ...parsed.data, scenes };
-  if (project.workspace === 'video') treatment.artifact = compileVideoArtifact(project, treatment);
+  if (project.workspace === 'video') treatment.artifact = compileVideoArtifact(project, treatment, sourceRevisions);
   const nextStatus = (project.workspace === 'video' || project.status === 'paused' || project.status === 'failed')
     ? project.status
     : 'rendering';

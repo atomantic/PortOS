@@ -1,5 +1,6 @@
 /** Read-only, machine-local availability checks for Video draft/artifact sources. */
 import { creativeDirectorVideoDraftSchema } from '../../lib/creativeDirectorValidation.js';
+import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 const sourceSchema = creativeDirectorVideoDraftSchema.shape.sources.unwrap().element;
@@ -14,14 +15,22 @@ const readers = {
   voice: async (id) => (await import('../voice/profiles.js')).getVoiceProfile(id),
 };
 
-async function sourceAvailable(source) {
+async function readSourceStatus(source) {
   const record = await readers[source.kind](source.id).catch(error => {
     // These stores deliberately use different not-found contracts. An outage
     // must propagate: it is not evidence that a source was deleted.
     if (error.code === 'NOT_FOUND' || error.code === 'PIPELINE_SERIES_NOT_FOUND') return null;
     throw error;
   });
-  return Boolean(record && !record.deleted);
+  const available = Boolean(record && !record.deleted);
+  // Use the source store's own revision/update contract, never hash or export
+  // source content (especially local voice bindings). Missing metadata means
+  // unknown, not proof that an old source still matches.
+  const stamps = available ? Object.fromEntries(['revision', 'updatedAt']
+    .map(key => [key, record[key]])
+    .filter(([, value]) => (typeof value === 'string' && value.trim().length > 0)
+      || (typeof value === 'number' && Number.isFinite(value)))) : {};
+  return { available, currentRevision: Object.keys(stamps).length ? canonicalSnapshotChecksum(stamps) : null };
 }
 
 /** Checks both snapshots while retaining each snapshot's declared revision. */
@@ -30,8 +39,12 @@ export async function getVideoSourceStatus(project) {
   const check = async (references) => Promise.all(references.map(reference => {
     const source = sourceSchema.parse({ kind: reference.kind, id: reference.id, revision: reference.revision });
     const referenceId = `${source.kind}:${source.id}`;
-    if (!availability.has(referenceId)) availability.set(referenceId, sourceAvailable(source));
-    return availability.get(referenceId).then(available => ({ ...source, referenceId, available }));
+    if (!availability.has(referenceId)) availability.set(referenceId, readSourceStatus(source));
+    return availability.get(referenceId).then(status => ({
+      ...source, referenceId, ...status,
+      revisionChanged: typeof reference.sourceRevision === 'string' && status.currentRevision
+        ? reference.sourceRevision !== status.currentRevision : null,
+    }));
   }));
   const [draft, artifact] = await Promise.all([
     check(project.videoDraft?.sources || []),
@@ -42,7 +55,7 @@ export async function getVideoSourceStatus(project) {
 
 /** All public treatment/plan writers share this guard; draft edits stay repairable. */
 export async function assertVideoSourcesAvailable(project) {
-  if (project?.workspace !== 'video') return;
+  if (project?.workspace !== 'video') return undefined;
   const { draft } = await getVideoSourceStatus({ ...project, treatment: null });
   const missing = draft.filter(source => !source.available);
   if (missing.length) {
@@ -50,4 +63,5 @@ export async function assertVideoSourcesAvailable(project) {
       status: 409, code: 'VIDEO_SOURCE_MISSING',
     });
   }
+  return Object.fromEntries(draft.map(source => [source.referenceId, source.currentRevision]));
 }
