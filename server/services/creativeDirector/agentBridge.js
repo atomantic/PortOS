@@ -94,6 +94,7 @@ async function buildTaskRecord(project, kind, scene, context) {
       priorityValue: 2,
       description: buildDescription(project, kind, scene),
       metadata: {
+        ...(project.workspace === 'video' ? { machineLocal: true } : {}),
         creativeDirector: {
           projectId: project.id,
           kind,
@@ -197,6 +198,8 @@ async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
 }
 
 export async function enqueueTreatmentTask(project) {
+  const { prepareVideoPlanningProject } = await import('./videoSources.js');
+  project = await prepareVideoPlanningProject(project);
   const context = await buildTreatmentPrompt(project);
   const built = await buildTaskRecord(project, 'treatment', null, context);
   return persistAndEmit(built, project, 'treatment', null);
@@ -209,6 +212,8 @@ export async function enqueueTreatmentTask(project) {
 // builder never imports the registry. Malformed plan output retries like the
 // treatment stage — the agent reads the 4xx error body and re-PATCHes.
 export async function enqueuePlanTask(project) {
+  const { prepareVideoPlanningProject } = await import('./videoSources.js');
+  project = await prepareVideoPlanningProject(project);
   const targetAbility = project?.directive?.constraints?.targetAbility || null;
   const context = await buildPlanPrompt(project, { toolSpecs: getToolSpecs({ targetAbility }) });
   const built = await buildTaskRecord(project, 'plan', null, context);

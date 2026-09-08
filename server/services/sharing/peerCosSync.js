@@ -8,7 +8,7 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
+import { isMachineLocalCosTask } from '../../lib/cosFederationPolicy.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { readdir } from 'fs/promises';
@@ -100,7 +100,7 @@ export async function buildCosHistoryManifest() {
     for (const agentId of agentIds.sort()) {
       const agentDir = join(dateDir, agentId);
       const metadata = safeJSONParse(await tryReadFile(join(agentDir, 'metadata.json')), null);
-      if (!isPlainObject(metadata) || isPrivateSecurityTask(metadata)) continue;
+      if (!isPlainObject(metadata) || isMachineLocalCosTask(metadata)) continue;
       for (const file of COS_ARCHIVE_FILES) {
         const full = join(agentDir, file);
         if (!existsSync(full)) continue;
@@ -389,8 +389,8 @@ export async function buildCosTasksPayload() {
     mod.getCosTasks().catch(() => null),
   ]);
   let entries = [
-    ...((userRes?.tasks || []).filter((t) => !isPrivateSecurityTask(t)).map((t) => taskToWireEntry(t, 'user'))),
-    ...((cosRes?.tasks || []).filter((t) => !isPrivateSecurityTask(t)).map((t) => taskToWireEntry(t, 'internal'))),
+    ...((userRes?.tasks || []).filter((t) => !isMachineLocalCosTask(t)).map((t) => taskToWireEntry(t, 'user'))),
+    ...((cosRes?.tasks || []).filter((t) => !isMachineLocalCosTask(t)).map((t) => taskToWireEntry(t, 'internal'))),
   ];
   if (entries.length > COS_TASKS_ENTRY_CAP) {
     console.log(`⚠️ peerSync: cos-tasks payload hit the ${COS_TASKS_ENTRY_CAP}-entry cap — truncating (some tasks won't federate this tick)`);
@@ -427,6 +427,7 @@ async function mergeCosTasksFromPayload(tasks) {
   const user = [];
   const internal = [];
   for (const t of Array.isArray(tasks) ? tasks : []) {
+    if (isMachineLocalCosTask(t)) continue;
     if (t?.taskType === 'internal') internal.push(t);
     else if (t?.taskType === 'user') user.push(t);
   }

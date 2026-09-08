@@ -50,6 +50,8 @@ function buildProjectView(project) {
     // member: { ingredientId, name, type, role, summary? }. Empty array for a
     // bare project so the template's `{{#project.cast}}` section stays hidden.
     cast: Array.isArray(project.cast) ? project.cast : [],
+    videoSourceContextJson: project.resolvedVideoSources ? JSON.stringify({ revision: project.videoPlanningContext?.revision, sources: project.resolvedVideoSources }) : '',
+    videoSourceContextRevision: project.videoPlanningContext?.revision || '',
   };
 }
 

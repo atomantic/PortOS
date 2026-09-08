@@ -155,6 +155,24 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/LFM2.5-1.2B-Thinking-GGUF'
   },
   {
+    key: 'qwen2.5-7b-instruct',
+    name: 'Qwen2.5 7B Instruct',
+    category: 'general',
+    recommendedFor: ['chat', 'general', 'lightweight'],
+    featured: {
+      label: 'Grok-box Persistent Mind',
+      description: 'Default free local mind on CPU-only / ~16 GB hosts: tool-capable instruct build via Ollama. Keep Cursor / OpenCode Zen for coding.'
+    },
+    params: '7B',
+    size: '4.7 GB',
+    family: 'qwen',
+    description: 'Qwen2.5 7B Instruct (Q4) — the default free Persistent Mind on Grok Bot boxes and other CPU-only / no-GPU hosts. Tool-capable; pair with cloud CLIs for coding tasks.',
+    capabilities: ['chat', 'tools', 'multilingual'],
+    context: 131072,
+    ollama: 'qwen2.5:7b-instruct',
+    lmstudio: 'lmstudio-community/Qwen2.5-7B-Instruct-GGUF'
+  },
+  {
     key: 'qwen2.5-3b',
     name: 'Qwen2.5 3B',
     category: 'lightweight',

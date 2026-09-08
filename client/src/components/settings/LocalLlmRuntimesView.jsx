@@ -14,6 +14,7 @@ import RuntimeServersCard from './RuntimeServersCard.jsx';
 import MtplxServerCard from './MtplxServerCard.jsx';
 import SlotstreamServerCard from './SlotstreamServerCard.jsx';
 import HardwareLlmRecommendation from './HardwareLlmRecommendation.jsx';
+import LocalPersistentMindSetupCard from './LocalPersistentMindSetupCard.jsx';
 import LocalLlmBackendCard from './LocalLlmBackendCard.jsx';
 import DownloadPreflightConfirm from '../models/DownloadPreflightConfirm.jsx';
 import { LOCAL_LLM_BACKENDS as BACKENDS, localLlmBackendLabel as labelFor } from '../../lib/localLlmBackends.js';
@@ -647,6 +648,7 @@ export default function LocalLlmRuntimesView() {
   return (
     <section id="llm-management-panel-runtimes" role="tabpanel" aria-labelledby="tab-runtimes" className="space-y-4">
       <HardwareLlmRecommendation />
+      <LocalPersistentMindSetupCard />
       {/* One start/stop/install surface for every local server PortOS can run */}
       <RuntimeServersCard
         status={status}

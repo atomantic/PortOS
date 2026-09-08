@@ -391,3 +391,14 @@ export const getModelCapabilityTestResult = (backend, modelId, testId, options) 
 // stored verdict describes weights that are no longer installed.
 export const deleteModelCapabilityTest = (backend, modelId, testId, options) =>
   request('/local-llm/capability-tests/delete', { method: 'POST', body: JSON.stringify({ backend, modelId, testId }), ...options });
+
+// Grok-box / CPU-only free Persistent Mind checklist (Ollama + Qwen2.5 7B).
+export const getLocalPersistentMindSetup = (options) =>
+  request('/local-llm/persistent-mind-setup', options);
+
+export const applyLocalPersistentMindSetup = (body = {}, options = {}) =>
+  request('/local-llm/persistent-mind-setup/apply', {
+    method: 'POST',
+    body: JSON.stringify(body),
+    ...options,
+  });

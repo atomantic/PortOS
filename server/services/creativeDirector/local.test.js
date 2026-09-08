@@ -60,6 +60,25 @@ beforeEach(() => {
 });
 
 describe('setTreatment — first-pass scene frames (#1867/#1938)', () => {
+  it('rejects a treatment when sources changed after planning, then records the replanned fingerprint', async () => {
+    const { prepareVideoPlanningProject } = await import('./videoSources.js');
+    let project = { id: 'cd-video', workspace: 'video', status: 'draft', name: 'Example', targetDurationSeconds: 4, aspectRatio: '16:9', videoDraft: { sources: [{ kind: 'catalog', id: 'example-catalog' }] } };
+    mockReadJSONFile.mockImplementation(async () => [project]);
+    mockAtomicWrite.mockImplementation(async (path, data) => { if (path.endsWith('creative-director-projects.json')) project = data[0]; });
+    getIngredient.mockResolvedValue({ id: 'example-catalog', name: 'Example character', type: 'character', payload: { physicalDescription: 'A silver cloak' }, updatedAt: '2026-09-01T00:00:00Z' });
+    await prepareVideoPlanningProject(project);
+    const plannedRevision = project.videoPlanningContext.revision;
+    getIngredient.mockResolvedValue({ id: 'example-catalog', name: 'Example character', type: 'character', payload: { physicalDescription: 'A golden cloak' }, updatedAt: '2026-09-02T00:00:00Z' });
+    await expect(setTreatment(project.id, { ...VALID_TREATMENT, script: 'A traveler arrives.' })).rejects.toMatchObject({ code: 'VIDEO_SOURCE_CONTEXT_CHANGED' });
+    expect(project.treatment).toBeUndefined();
+    await prepareVideoPlanningProject(project);
+    expect(project.videoPlanningContext.revision).not.toBe(plannedRevision);
+    await expect(setTreatment(project.id, { ...VALID_TREATMENT, script: 'A traveler arrives.', sourceContextRevision: plannedRevision })).rejects.toMatchObject({ code: 'VIDEO_SOURCE_CONTEXT_CHANGED' });
+    const saved = await setTreatment(project.id, { ...VALID_TREATMENT, script: 'A traveler arrives.', sourceContextRevision: project.videoPlanningContext.revision });
+    expect(saved.treatment.artifact.sourceContextRevision).toBe(project.videoPlanningContext.revision);
+    expect(saved.treatment.artifact.references[0].sourceRevision).toBe(project.videoPlanningContext.references[0].sourceRevision);
+    expect(JSON.stringify(saved)).not.toContain('golden cloak');
+  });
   it('blocks both Video artifact writers on missing sources, then saves after source repair', async () => {
     const project = { id: 'cd-video', workspace: 'video', status: 'draft', name: 'Example', targetDurationSeconds: 120, aspectRatio: '16:9', videoDraft: { sources: [{ kind: 'catalog', id: 'example-catalog', revision: 'revision-1' }] } };
     mockReadJSONFile.mockResolvedValue([project]);
@@ -73,7 +92,7 @@ describe('setTreatment — first-pass scene frames (#1867/#1938)', () => {
     expect(mockAtomicWrite).not.toHaveBeenCalled();
     getIngredient.mockResolvedValue({ id: 'example-catalog', updatedAt: 'newer-source-revision' });
     const saved = await setTreatment(project.id, treatment);
-    expect(saved.treatment.artifact.references).toEqual([{ kind: 'catalog', id: 'example-catalog', referenceId: 'catalog:example-catalog', revision: 'revision-1' }]);
+    expect(saved.treatment.artifact.references).toEqual([{ kind: 'catalog', id: 'example-catalog', referenceId: 'catalog:example-catalog', revision: 'revision-1', sourceRevision: expect.any(String) }]);
     expect(saved.status).toBe('draft');
     await expect(setPlan(project.id, plan)).resolves.toMatchObject({ status: 'draft' });
     expect(firstPassGen.enqueueFirstPassSceneFrames).not.toHaveBeenCalled();

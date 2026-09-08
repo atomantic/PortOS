@@ -584,7 +584,12 @@ describe('spawnDetached', () => {
 
     const beats = async () => (await readFile(heartbeat, 'utf8').catch(() => '')).length;
     // Two powershell hops plus a Start-Process, so this is slower than the
-    // node-only fixtures above.
+    // node-only fixtures above. Heartbeat can land before Set-Content finishes
+    // writing grandchild-pid — wait for a parseable pid first (CI flake).
+    expect(await waitUntil(async () => {
+      const raw = await readFile(grandchildPidFile, 'utf8').catch(() => '');
+      return Number.parseInt(raw, 10) > 0;
+    }, { timeoutMs: 30000 })).toBe(true);
     expect(await waitUntil(async () => (await beats()) > 0, { timeoutMs: 30000 })).toBe(true);
     const grandchildPid = Number.parseInt(await readFile(grandchildPidFile, 'utf8'), 10);
     expect(grandchildPid).toBeGreaterThan(0);

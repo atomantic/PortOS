@@ -95,8 +95,8 @@ describe('creativeDirector routes', () => {
       const res = await request(app).get('/api/creative-director/cd-video/sources');
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
-        draft: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, available: true })),
-        artifact: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, revision: 'older-revision', available: true })),
+        draft: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, available: true, currentRevision: null, revisionChanged: null })),
+        artifact: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, revision: 'older-revision', available: true, currentRevision: null, revisionChanged: null })),
       });
       expect(getUniverse).toHaveBeenCalledTimes(1);
       expect(cdService.updateProject).not.toHaveBeenCalled();

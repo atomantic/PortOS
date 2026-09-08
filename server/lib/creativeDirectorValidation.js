@@ -315,6 +315,7 @@ export const creativeDirectorTreatmentSchema = z.object({
   synopsis: z.string().min(1).max(5000),
   // Optional standalone script; artifact IDs/revisions/timing are server-owned.
   script: z.string().trim().min(1).max(50000).optional(),
+  sourceContextRevision: z.string().regex(/^[a-f0-9]{32}$/).optional(),
   scenes: z.array(creativeDirectorSceneSchema).min(1).max(120),
 });
 
@@ -375,6 +376,7 @@ export const creativeDirectorPlanStepSchema = z.object({
 }).strict();
 
 export const creativeDirectorPlanSchema = z.object({
+  sourceContextRevision: z.string().regex(/^[a-f0-9]{32}$/).optional(),
   steps: z.array(creativeDirectorPlanStepSchema).min(1).max(60),
 }).strict().superRefine(({ steps }, ctx) => {
   // Validate the whole graph before any adapter persists it or the route

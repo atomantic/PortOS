@@ -404,6 +404,7 @@ export * from './civitai.js';
 export * from './huggingfaceLora.js';
 export * from './huggingfaceModel.js';
 export * from './localLlmCatalog.js';
+export * from './localPersistentMindRecommendation.js';
 export * from './modelAbuseGuard.js';
 export * from './localLlmDisk.js';
 export * from './specDecodePresets.js';
@@ -584,3 +585,4 @@ export * from './privateSecurityPolicy.js';
 export * from './privateSecuritySandbox.js';
 
 export * from './requestOrigin.js';
+export * from './cosFederationPolicy.js';
