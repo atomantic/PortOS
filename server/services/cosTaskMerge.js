@@ -78,6 +78,7 @@ import { isLeaseLive, getClaimOwner, CLAIM_METADATA_KEYS, parseTimestampMs } fro
 // here would form a circular import. taskParser has no cos-module deps.
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { isPostSpawnRequeue } from '../lib/taskRequeue.js';
+import { isTerminalTaskStatus } from '../lib/taskStatusTransition.js';
 
 // Lifecycle rank — higher wins the content tiebreak (rule 2). Each status has a
 // distinct rank so two DIFFERENT statuses never tie (full convergence); the only
@@ -100,7 +101,6 @@ import { isPostSpawnRequeue } from '../lib/taskRequeue.js';
 // stale `pending` copy, which must NOT revert a running task.
 const STATUS_RANK = Object.freeze({ completed: 5, blocked: 4, challenged: 3, in_progress: 2, pending: 1 });
 const statusRank = (status) => STATUS_RANK[status] || 0;
-const isTerminalStatus = (status) => status === 'completed' || status === 'blocked';
 
 // The metadata key carrying a task's content-edit timestamp (#1714). Stamped in
 // cosTaskStore's write paths on every content edit and used here as the
@@ -308,7 +308,7 @@ function mergeOne(local, remote, now) {
   // linger (mirrors cosTaskStore release-on-transition).
   const metadata = { ...(base.metadata || {}) };
   for (const key of CLAIM_METADATA_KEYS) delete metadata[key];
-  if (claim && !isTerminalStatus(base.status)) Object.assign(metadata, claim);
+  if (claim && !isTerminalTaskStatus(base.status)) Object.assign(metadata, claim);
 
   return { ...base, metadata };
 }

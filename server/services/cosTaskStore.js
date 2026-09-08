@@ -23,6 +23,7 @@ import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../lib/taskPauseHold.js';
 import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
+import { resolveTaskStatusTransition, isTerminalTaskStatus } from '../lib/taskStatusTransition.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
 import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { splitTaskPromptFields } from '../lib/cosTaskPrompt.js';
@@ -49,12 +50,6 @@ const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 // its own literal set is how they drifted. Re-exported at the address callers
 // already use.
 export { PAUSED_BLOCKED_CATEGORIES };
-
-// A task is terminal once it is completed or blocked — the same set cosTaskMerge's
-// release-on-transition uses. Consumed by the LI cross-peer verdict consume (#2779) to
-// spot a non-terminal→terminal ADOPTION (a failed hand-off blocks, a clean one completes;
-// both are legitimate execution outcomes worth recording).
-const isTerminalTaskStatus = (status) => status === 'completed' || status === 'blocked';
 
 // Fields an `updateTask` patch may carry directly (vs nested under `metadata`);
 // they're normalized into `metadata` on write. Listed once so the content-edit
@@ -433,6 +428,76 @@ async function preparePauseRelease(taskId, updates) {
   return { agentId, metadata: { ...pointer, ...(updates.metadata || {}) } };
 }
 
+/**
+ * Metadata a status transition RETIRES, as `[transition field, keys]` rows applied
+ * in order by `writeTaskUpdate`. One row per subsystem the transition releases —
+ * adding a lifecycle clear is a row here, not another hand-written predicate in the
+ * middle of the write.
+ *
+ * ORDER IS BEHAVIOR: the `leavesBlocked` row clears `blockedCategory`, and the
+ * resume-pointer drop below the loop reads that same key to decide whether the
+ * block was a PAUSE. A paused task flipped straight to `completed` is therefore no
+ * longer pause-categorized by the time the pointer is evaluated, and its spent
+ * pointer drops — pinned by cosTaskStore.test.js.
+ *
+ * The retry hold and the federation claim are two rows even though both key on
+ * `leavesInProgress`: they release different subsystems (#3373's cleanup handshake
+ * and #1563's cross-peer lease) and are separately documented at their sites. What
+ * they must never do again is drift, so they read the ONE descriptor field rather
+ * than each re-testing `updates.status !== 'in_progress'`.
+ */
+const TRANSITION_METADATA_CLEARS = Object.freeze([
+  // Leaving `blocked` by any door — a dedupe revive, an autopilot re-dispatch, an
+  // orphan-cooldown expiry, or a human unblocking it from the task list. Clearing
+  // only in `resumeAgent` left every one of those paths running a task that still
+  // advertised a live pause: the UI kept showing it parked, and `resumeAgent` on the
+  // still-paused agent record then read its own pause as spent and spawned a SECOND
+  // agent on a fresh task. The failure counters go too, or the revived task
+  // re-blocks on the budget it blocked with.
+  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]],
+  // A retry hold (#3373) only means anything while the task is `in_progress` waiting
+  // on a cleanup to resolve its resume pointer. Any other status the task reaches —
+  // terminal, or a requeue some other path performed — retires it, so drop the marker
+  // rather than leave a stale one for a late cleanup (or the orphan sweep) to act on.
+  ['leavesInProgress', [RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY]],
+  // Release the federation claim/lease (#1563). A claim only protects in-flight work;
+  // once the task completes, fails back to pending, or is blocked, it must become
+  // freely claimable by either peer — a stale lease blocks a legitimate retry (by this
+  // instance or its peer) for a full lease window.
+  ['leavesInProgress', CLAIM_METADATA_KEYS]
+]);
+
+/**
+ * Merge an `updateTask` patch's metadata onto the task's existing metadata, in the
+ * shape the store persists. Purely about the PATCH's shape — it answers nothing
+ * about the status transition, which `resolveTaskStatusTransition` owns.
+ *
+ * Legacy direct fields use ?? not ||, so an intentional clear to "" is preserved
+ * as "" rather than dropped: || maps every falsy value (incl. "") to undefined,
+ * which `writeTaskUpdate`'s cleanup pass then deletes, conflating "cleared" with
+ * "absent" (absent-vs-cleared, AGENTS.md). Only null becomes undefined (→ deleted);
+ * absent fields never enter the loop.
+ *
+ * The orchestration pins are re-normalized after that verbatim copy (#5992) so an
+ * update lands the same persisted shape `addTask` writes: a profile of empty role
+ * objects, or the default `direct` mode, is stored as absent rather than as an
+ * inert override. A null from the route still arrives here as `undefined` and is
+ * deleted by the cleanup pass — an explicit clear.
+ */
+function mergeUpdateMetadata(existingMetadata, updates) {
+  const merged = { ...existingMetadata, ...(updates.metadata || {}) };
+  for (const f of LEGACY_DIRECT_FIELDS) {
+    if (updates[f] !== undefined) merged[f] = updates[f] ?? undefined;
+  }
+  if (merged.orchestrationProfile !== undefined) {
+    merged.orchestrationProfile = normalizeOrchestrationProfile(merged.orchestrationProfile) ?? undefined;
+  }
+  if (merged.orchestrationMode !== undefined) {
+    merged.orchestrationMode = normalizeOrchestrationMode(merged.orchestrationMode) === 'orchestrated' ? 'orchestrated' : undefined;
+  }
+  return merged;
+}
+
 async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false }) {
   return withStateLock(async () => {
   const state = await loadState();
@@ -453,45 +518,22 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
     return { error: 'Task not found' };
   }
 
-  // Build updated metadata - merge existing with any new metadata
-  const updatedMetadata = {
-    ...tasks[taskIndex].metadata,
-    ...(updates.metadata || {})
-  };
-  // Handle legacy fields that may be passed directly in updates. Use ?? not ||
-  // so an intentional clear to "" is preserved as "" rather than dropped: || maps
-  // every falsy value (incl. "") to undefined, which the cleanup pass below then
-  // deletes, conflating "cleared" with "absent" (absent-vs-cleared, AGENTS.md).
-  // Only null becomes undefined (→ deleted); absent fields never enter this loop.
-  for (const f of LEGACY_DIRECT_FIELDS) {
-    if (updates[f] !== undefined) updatedMetadata[f] = updates[f] ?? undefined;
-  }
-  // Re-normalize the orchestration pins the loop above just copied in verbatim
-  // (#5992), so an update lands the same persisted shape `addTask` writes: a
-  // profile of empty role objects, or the default `direct` mode, is stored as
-  // absent rather than as an inert override. A null from the route still reaches
-  // here as `undefined` and is deleted by the cleanup pass — an explicit clear.
-  if (updatedMetadata.orchestrationProfile !== undefined) {
-    updatedMetadata.orchestrationProfile = normalizeOrchestrationProfile(updatedMetadata.orchestrationProfile) ?? undefined;
-  }
-  if (updatedMetadata.orchestrationMode !== undefined) {
-    updatedMetadata.orchestrationMode = normalizeOrchestrationMode(updatedMetadata.orchestrationMode) === 'orchestrated' ? 'orchestrated' : undefined;
-  }
+  const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);
 
-  // Clear blocked/failure metadata when transitioning out of blocked status.
-  //
-  // The PAUSE keys go with them (`PAUSE_METADATA_KEYS`, lib/taskPauseHold.js).
-  // `resumeAgent` is not the only way a paused task runs again — a dedupe revive, an
-  // autopilot re-dispatch, an orphan-cooldown expiry, or a human unblocking it from
-  // the task list all flip it back to `pending` through here. Clearing only in
-  // `resumeAgent` left every one of those paths running a task that still advertised
-  // a live pause: the UI kept showing it parked, and `resumeAgent` on the still-paused
-  // agent record then read its own pause as spent and spawned a SECOND agent on a
-  // fresh task. The clear belongs at the transition, not at one caller.
-  if (updates.status && updates.status !== 'blocked' && tasks[taskIndex].status === 'blocked') {
-    for (const key of ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]) {
-      delete updatedMetadata[key];
-    }
+  // Ask "what status transition is this?" ONCE. Every lifecycle rule below reads a
+  // field off this descriptor instead of re-deriving an answer from
+  // `(previousStatus, updates.status)` at its own site — which is how the retry-hold
+  // clear and the claim release ended up as the same predicate written twice, and
+  // how the requeue stamp and the emitted action came to key on the same edge from
+  // 52 lines apart while having to agree (#6620).
+  const previousStatus = tasks[taskIndex].status;
+  const transition = resolveTaskStatusTransition(previousStatus, updates.status);
+
+  // Retire the metadata this transition releases. Ordered — see the table's note on
+  // the `blockedCategory` clear feeding the resume-pointer check below.
+  for (const [field, keys] of TRANSITION_METADATA_CLEARS) {
+    if (!transition[field]) continue;
+    for (const key of keys) delete updatedMetadata[key];
   }
 
   // Drop the resume pointer once the task reaches a terminal state. `existingBranch`
@@ -513,37 +555,13 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
   // revives the task. Stripping the pointer in either case means the revived task
   // starts clean and abandons the worktree its dead agent left behind — which is
   // exactly the recovery this mechanism exists for.
-  if (isTerminalTaskStatus(updates.status) && !PAUSED_BLOCKED_CATEGORIES.has(updatedMetadata.blockedCategory)) {
+  if (transition.isTerminal && !PAUSED_BLOCKED_CATEGORIES.has(updatedMetadata.blockedCategory)) {
     // The shared predicate identifies only retry-owned `existingBranch` pointers.
     // Review-loop follow-ups own `reviewLoopPRBranch`, so their canonical target
     // remains intact even when a legacy duplicate is removed here.
     if (shouldStripTaskTargetBranch(updatedMetadata)) delete updatedMetadata.existingBranch;
     delete updatedMetadata.resumedFromAgentId;
     delete updatedMetadata.resumeWorktreePath;
-  }
-
-  // A retry hold (#3373) only means anything while the task is `in_progress`
-  // waiting on a cleanup to resolve its resume pointer. Any other status the task
-  // reaches — terminal, or a requeue that some other path performed — retires it,
-  // so drop the marker rather than leave a stale one for a late cleanup (or the
-  // orphan sweep) to act on. The release's own write passes these as undefined,
-  // which lands in the same place.
-  if (updates.status && updates.status !== 'in_progress') {
-    delete updatedMetadata[RETRY_HOLD_KEY];
-    delete updatedMetadata[RETRY_HOLD_SINCE_KEY];
-  }
-
-  // Release the federation claim/lease when a task leaves `in_progress` (issue
-  // #1563). A claim only protects in-flight work; once the task completes, fails
-  // back to pending, or is blocked, it must become freely claimable by either
-  // peer — leaving a stale lease behind would block a legitimate retry (by this
-  // instance or its peer) for a full lease window. The spawn's own
-  // in_progress update carries `status: 'in_progress'` and is exempt, and a
-  // lease-renewal heartbeat passes no `status` at all, so neither is stripped.
-  if (updates.status && updates.status !== 'in_progress') {
-    for (const key of CLAIM_METADATA_KEYS) {
-      delete updatedMetadata[key];
-    }
   }
 
   // Stamp the moment a RUNNING task is requeued (#3376). `in_progress → pending`
@@ -556,13 +574,13 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
   // other side's `lastSpawnedAt`, says the requeue came AFTER that spawn. Only the
   // real transition sets it, so a later edit carries it forward untouched, and the
   // next spawn clears it below.
-  if (updates.status === 'pending' && tasks[taskIndex].status === 'in_progress') {
+  if (transition.isRequeue) {
     updatedMetadata[REQUEUED_AT_KEY] = new Date(now).toISOString();
   }
   // A fresh spawn retires the marker — from here on THIS run's `lastSpawnedAt` is
   // what a future requeue must beat, and a leftover stamp from the previous cycle
   // would let a peer's pre-spawn `pending` copy win on a stale requeue.
-  if (updates.status === 'in_progress') delete updatedMetadata[REQUEUED_AT_KEY];
+  if (transition.entersInProgress) delete updatedMetadata[REQUEUED_AT_KEY];
 
   // Bump the content-edit stamp (#1714) on a genuine content change so the peer's
   // claim-aware merge can resolve a same-status edit by newest-edit-wins. Compared
@@ -590,7 +608,6 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
     metadata: updatedMetadata
   };
 
-  const previousStatus = tasks[taskIndex].status;
   tasks[taskIndex] = updatedTask;
 
   // Write back to file
@@ -598,26 +615,23 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
   const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
   await writeTaskFile(filePath, markdown);
 
-  // A blocked → pending flip is a revive: the task is newly spawnable, exactly
-  // like an approval. Emit a distinct action so cos.init's listener re-runs the
-  // dequeue (#2614) — the generic 'updated' action doesn't wake the scheduler,
-  // which left revived tasks stranded until an unrelated event or timer fired.
-  //
-  // An in_progress → pending flip is a requeue and needs the same wake (#3373):
-  // a failed run's retry is released from its hold by exactly this transition,
-  // and by then the `agent:completed` dequeue has long since run — without a
-  // signal the retry would idle until the next timer. Same for the orphan sweep's
-  // requeue, which previously depended on its caller remembering to evaluate.
-  const action = updatedTask.status === 'pending' && previousStatus === 'blocked'
-    ? 'unblocked'
-    : (updatedTask.status === 'pending' && previousStatus === 'in_progress' ? 'requeued' : 'updated');
+  // `transition.action` distinguishes the two flips that must WAKE the scheduler
+  // from an ordinary edit. A blocked → pending flip is a revive: the task is newly
+  // spawnable, exactly like an approval, and cos.init's listener re-runs the dequeue
+  // on it (#2614) — the generic 'updated' action doesn't, which left revived tasks
+  // stranded until an unrelated event or timer fired. An in_progress → pending flip
+  // is a requeue and needs the same wake (#3373): a failed run's retry is released
+  // from its hold by exactly this transition, and by then the `agent:completed`
+  // dequeue has long since run — without a signal the retry would idle until the
+  // next timer. Same for the orphan sweep's requeue, which previously depended on
+  // its caller remembering to evaluate.
   // `previousStatus` rides along so consumers can key on the TRANSITION rather
   // than re-deriving one from the level. `updateTask` on an already-terminal task
   // re-emits `updated` with the same status — an edit to a completed task's
   // description is enough — so a consumer that reacts to "reached completed"
   // (the investigation auto-retry; the voice completion line) needs the edge, not
   // `status === 'completed'`, which is true on every later write too.
-  const change = { type: taskType, action, task: updatedTask, previousStatus };
+  const change = { type: taskType, action: transition.action, task: updatedTask, previousStatus };
   if (suppressDequeue) change.suppressDequeue = true;
   cosEvents.emit('tasks:changed', change);
   return updatedTask;
