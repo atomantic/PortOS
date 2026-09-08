@@ -107,6 +107,25 @@ const audioByteLength = (audio) => {
   return 0;
 };
 
+// Reinterpret an incoming audio payload as Int16 samples WITHOUT aliasing a
+// misaligned backing store. A websocket frame's payload is a subarray of the
+// receiver's read buffer, so its byteOffset is routinely ODD — `ws` advances
+// the offset by each frame's payload plus its 2–14 byte header — and
+// `new Int16Array(buffer, byteOffset, …)` THROWS a RangeError on an odd
+// offset rather than failing soft. The caller's catch would swallow that and
+// the frame's audio would simply vanish from the endpointer, so copy the
+// bytes on the misaligned path instead; a 640-byte copy per 20 ms frame is
+// negligible next to STT. A trailing odd byte is truncated either way.
+const toInt16Samples = (audio) => {
+  if (!Buffer.isBuffer(audio) && !ArrayBuffer.isView(audio)) {
+    if (!(audio instanceof ArrayBuffer)) return new Int16Array(0);
+    return new Int16Array(audio, 0, Math.floor(audio.byteLength / 2));
+  }
+  const samples = Math.floor(audio.byteLength / 2);
+  if (audio.byteOffset % 2 === 0) return new Int16Array(audio.buffer, audio.byteOffset, samples);
+  return new Int16Array(audio.buffer.slice(audio.byteOffset, audio.byteOffset + samples * 2));
+};
+
 export const registerVoiceHandlers = (socket) => {
   const state = {
     history: [],
@@ -535,9 +554,7 @@ export const registerVoiceHandlers = (socket) => {
       const { pcm } = payload || {};
       const bytes = audioByteLength(pcm);
       if (!bytes || bytes > MAX_CALL_FRAME_BYTES) return;
-      const view = Buffer.isBuffer(pcm) || ArrayBuffer.isView(pcm)
-        ? new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2))
-        : new Int16Array(pcm);
+      const view = toInt16Samples(pcm);
 
       if (asCallHost) {
         const utterance = call.endpointer.push(view);
