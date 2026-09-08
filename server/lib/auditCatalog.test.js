@@ -170,6 +170,7 @@ describe('mode contracts + wrapper', () => {
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('filing ceiling, not a review limit or a quota');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('do not idle to fill time or exceed the run budget');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('any unreviewed inventory');
+    expect(FILE_ISSUES_MODE_CONTRACT).toContain('Zero or one issue is valid after a substantive review');
     expect(modeContractFor(true)).toBe(FILE_ISSUES_MODE_CONTRACT);
   });
 
