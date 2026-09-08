@@ -80,6 +80,9 @@ export default function VideoExecutionPanel({ project, onChange, basePath }) {
       </div>)}
       <button onClick={start} disabled={active || pending || !preview.canStart || !valid || uncertain.some(attempt => !retryAttemptIds.includes(attempt.id))} className="rounded bg-port-accent px-3 py-2 text-white disabled:opacity-40">{pending ? 'Starting…' : project.status === 'draft' ? 'Start production' : 'Resume production'}</button>
     </>}
-    <button className="text-sm underline" onClick={() => setReload(value => value + 1)} disabled={pending}>Refresh choices</button>
+    <div className="flex flex-col items-start gap-2 border-t border-port-border pt-3">
+      <button className="rounded border border-port-border px-3 py-2 text-sm disabled:opacity-40" aria-describedby="video-recheck-help" onClick={() => setReload(value => value + 1)} disabled={pending}>Recheck production setup</button>
+      <p id="video-recheck-help" className="text-xs text-port-text-muted">Use after changing models or provider settings to reload the selections above and check whether production is ready to start. Your limits stay as entered; this does not start production.</p>
+    </div>
   </section>;
 }
