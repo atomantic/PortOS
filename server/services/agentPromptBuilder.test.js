@@ -166,7 +166,7 @@ describe('composable skill template routing', () => {
     }))).toEqual(['simplify']);
   });
 
-  it.each(['analysisType', 'selfImprovementType'])(
+  it.each(['analysisType', 'taskAnalysisType', 'selfImprovementType'])(
     'prefers authoritative %s routing over broad description keywords',
     (metadataKey) => {
       expect(detectSkillTemplates(makeTask({
@@ -176,23 +176,24 @@ describe('composable skill template routing', () => {
     },
   );
 
-  // A registered audit type is authoritative about what it is, so it must never
-  // fall through to the description keyword matcher. That matcher cannot read
-  // an audit correctly: the security template claims the bare word "audit",
-  // which every audit prompt says about itself in its opening line, so eleven of
-  // nineteen audit types were being handed OWASP scoping guidance the operator
-  // never chose — copy, typing, api-contract, ux and the rest. Ordinary
-  // vocabulary misroutes the others just as easily: an audit that mentions
-  // duplication while explicitly ceding it to a sibling drew the dead-code
-  // template. The correct answer for an audit type with no template of its own
-  // is NO lifecycle template, not a guess.
-  it('never keyword-guesses a lifecycle template for a registered audit type', async () => {
-    const { AUDIT_TASK_TYPES } = await import('../lib/auditCatalog.js');
+  // Catch incidental lifecycle matches across every shipped scheduled prompt.
+  it('never keyword-guesses a lifecycle template for a registered scheduled type', async () => {
+    const { SELF_IMPROVEMENT_TASK_TYPES, DEFAULT_TASK_INTERVALS, TASK_TYPE_PROMPT_INFO } = await import('./taskScheduleRegistry.js');
+    expect([...SELF_IMPROVEMENT_TASK_TYPES].sort()).toEqual(Object.keys(DEFAULT_TASK_INTERVALS).sort());
     const SKILLED = { security: 'security-audit', 'mobile-responsive': 'mobile-responsive', documentation: 'documentation', 'data-safety': 'data-safety', simplify: 'simplify', 'module-hygiene': 'module-hygiene' };
 
-    for (const taskType of AUDIT_TASK_TYPES) {
+    for (const taskType of SELF_IMPROVEMENT_TASK_TYPES) {
       // The real dispatched body, which is what the matcher actually sees.
-      const description = DEFAULT_TASK_PROMPTS[taskType]
+      const prompt = DEFAULT_TASK_PROMPTS[taskType];
+      // Router, reviewer, hook-generated and programmatic lanes have no stored body.
+      if (!prompt) {
+        expect(
+          ['claim-work', 'code-reviewer-a', 'code-reviewer-b'].includes(taskType)
+          || ['runtime-generated', 'programmatic'].includes(TASK_TYPE_PROMPT_INFO[taskType]?.mode),
+          taskType,
+        ).toBe(true);
+      }
+      const description = (prompt || 'Audit security, touch files, remove dead code')
         .replaceAll('{appName}', 'Example App')
         .replaceAll('{repoPath}', '/workspace/example-app')
         .replace('{modeInstructions}', '## Mode: file issues, change nothing');
@@ -207,7 +208,7 @@ describe('composable skill template routing', () => {
       description: 'Fix the broken avatar upload crash',
     }))).toEqual(['bug-fix']);
     // An unregistered type falls through to keywords rather than resolving to
-    // no template, so a custom job is unaffected by the audit-type gate.
+    // no template, so a custom job is unaffected by the scheduled-type gate.
     expect(detectSkillTemplates(makeTask({
       description: 'Refactor the export pipeline',
       metadata: { analysisType: 'custom-app-job' },
