@@ -607,22 +607,68 @@ export function getAuditScheduleMetadata(taskType) {
   };
 }
 
-// Advisory phases for the SAME slice, not scheduler dependencies. Urgent bugs
-// outrank this sequence; re-measure after each merged change to avoid stale work.
+/**
+ * Shipped advisory run order for the audit types, named by SCHEDULED TASK TYPE.
+ *
+ * This is the default for each task's editable `suggestedAfter` array, layered
+ * at READ time by `getScheduleStatus` (services/taskSchedule.js) rather than
+ * seeded onto the stored rows — like `runGuidance` and `displayName` beside it,
+ * so an edit here reaches every existing install with no migration, while a
+ * user's stored list (an explicit `[]` included) still wins. It is ADVISORY:
+ * nothing in the scheduler reads it, and a task whose suggested predecessors
+ * haven't run still runs. The ENFORCED field is `runAfter`, which blocks
+ * dispatch until each named type has run since this task's last run.
+ *
+ * The prose it replaced ("After structural drift, remove dead code…") named the
+ * audits by their subject matter rather than by their task type, so a reader
+ * could not tell whether "structural drift" was another scheduled task or just
+ * a concept — which is the whole question the guidance exists to answer.
+ *
+ * Each entry lists only its IMMEDIATE predecessors; transitive order follows
+ * from the chain (better-cognitive-load comes after simplify because it comes
+ * after better-complexity, which comes after module-hygiene, which comes after
+ * simplify). Keeping the lists to one or two entries is deliberate — a list
+ * that restates the whole chain is unreadable and drifts on every edit.
+ *
+ * The safety audits (security, data-safety, better-runtime-safety,
+ * error-handling) and the broad code-quality triage seed EMPTY: they are the
+ * head of the order, and an exploitable defect outranks the sequence anyway.
+ */
+export const AUDIT_SUGGESTED_AFTER = Object.freeze({
+  // Broad triage first, then coverage, so the tests written next are aimed at
+  // the findings the triage surfaced.
+  'test-coverage': Object.freeze(['code-quality']),
+  'better-test-quality': Object.freeze(['test-coverage']),
+  // The restructuring ladder: consolidate sources of truth, delete what is
+  // dead, then draw module boundaries, then reduce what survives.
+  simplify: Object.freeze(['better-structural-drift']),
+  'module-hygiene': Object.freeze(['simplify']),
+  'better-dependency-freedom': Object.freeze(['module-hygiene']),
+  'better-complexity': Object.freeze(['module-hygiene']),
+  'better-cognitive-load': Object.freeze(['better-complexity']),
+  // Measure and describe the shape that survived the ladder.
+  performance: Object.freeze(['better-complexity']),
+  documentation: Object.freeze(['better-cognitive-load']),
+});
+
+// WHY each audit sits where it does in the order above — rationale only. The
+// sequence itself is AUDIT_SUGGESTED_AFTER, which names real task types; this
+// text must never be the only place an ordering relationship is recorded.
+// Urgent bugs outrank the sequence; re-measure after each merged change.
 export const AUDIT_RUN_GUIDANCE = Object.freeze({
-  'better-test-quality': 'For an audit batch, run after other findings to assess their coverage. Before implementing refactors, ensure tests detect regressions; recheck afterward.',
-  'test-coverage': 'Audit after other findings to identify missing boundary coverage. Add needed regression tests before implementing refactors; avoid duplicate assertions.',
-  security: 'Prioritize exploitable defects before cleanup, regardless of the suggested sequence.',
-  'data-safety': 'Fix data-loss and upgrade hazards before structural or complexity refactoring.',
-  'better-runtime-safety': 'Fix reachable runtime defects before refactoring; rerun after structural changes.',
-  'error-handling': 'Establish safe failure behavior before restructuring the same code.',
-  'better-structural-drift': 'Before module hygiene or complexity, consolidate sources of truth so later refactors target the surviving implementation.',
-  simplify: 'After structural drift, remove dead and duplicate code before reorganizing modules or reducing branches.',
-  'module-hygiene': 'After structural drift and dead-code cleanup, establish ownership and module boundaries before function-level complexity work.',
-  'better-dependency-freedom': 'After ownership is clear, remove unnecessary dependencies before polishing functions that may be replaced.',
-  'better-complexity': 'After structural drift, simplify, and module hygiene, remeasure surviving functions and reduce costly branching.',
-  'better-cognitive-load': 'After complexity work, review names, abstraction levels, and readability of the final shape.',
-  'code-quality': 'Use for broad triage first, then choose a focused audit; avoid overlapping fixes in the same slice.',
-  documentation: 'Refresh documentation after behavior and structure settle so it describes the final result.',
-  performance: 'Measure a real bottleneck before optimizing; remeasure after structural and complexity changes.',
+  'better-test-quality': 'Assesses whether the tests you have detect the regressions the other audits found — so refactors that follow have a safety net.',
+  'test-coverage': 'Adds the missing boundary coverage a refactor needs before it starts; avoid duplicating assertions a stronger test already makes.',
+  security: 'Head of the order — an exploitable defect is fixed before any cleanup, whatever else is queued.',
+  'data-safety': 'Head of the order — data-loss and upgrade hazards are fixed before code moves around them.',
+  'better-runtime-safety': 'Head of the order — reachable runtime defects are fixed first; rerun once structure settles.',
+  'error-handling': 'Head of the order — safe failure behavior is established before the same code is restructured.',
+  'better-structural-drift': 'Start of the restructuring ladder: consolidating sources of truth first means every later refactor targets the surviving implementation.',
+  simplify: 'Dead and duplicate code is removed before modules are reorganized, so the reorganization only moves live code.',
+  'module-hygiene': 'Ownership and module boundaries are settled before function-level work, so complexity is measured on the final layout.',
+  'better-dependency-freedom': 'Unnecessary dependencies go once ownership is clear, so no effort is spent polishing code a removal deletes.',
+  'better-complexity': 'Remeasures the functions that survived the ladder and reduces the costliest branching.',
+  'better-cognitive-load': 'Reviews names, abstraction levels, and readability of the shape everything else left behind.',
+  'code-quality': 'Broad triage that points at the focused audit worth running; avoid overlapping fixes in the same slice.',
+  documentation: 'Describes the final result, so it runs once behavior and structure have settled.',
+  performance: 'Measure a real bottleneck before optimizing, and remeasure after structural and complexity changes.',
 });

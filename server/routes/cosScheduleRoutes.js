@@ -11,6 +11,7 @@ import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagin
 import { promptSourceSchema, PROMPT_SOURCES } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
+import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
 
 const templateTaskSchema = z.object({
   name: z.string().min(1),
@@ -24,9 +25,16 @@ const templateTaskSchema = z.object({
 const scheduleLabelsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
   .transform(labels => [...new Set(labels.map(label => label.toLowerCase()))]);
 
+// Shape only — normalizeSuggestedAfter does the trimming, self-drop and dedupe
+// so the storage rules live with the field's own helper, not in the route.
+const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
+
 const router = Router();
 
 const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
+  // Advisory run order — which OTHER scheduled tasks a user should generally run
+  // first. Editable and unenforced; `runAfter` above is the enforced gate.
+  'suggestedAfter',
   // Perpetual (drain-until-done) recheck cadence: after a perpetual task drains
   // its backlog and parks, it re-probes its work-detector on this cadence.
   // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
@@ -37,9 +45,11 @@ const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpr
   'promptSource'];
 
 /**
- * Pick only defined values from body for schedule settings updates
+ * Pick only defined values from body for schedule settings updates. `taskType`
+ * is the row being written, so a field that must not name itself (the advisory
+ * `suggestedAfter`) can be cleaned here rather than again at the call site.
  */
-function pickScheduleSettings(body) {
+function pickScheduleSettings(body, taskType) {
   const settings = {};
   for (const key of SCHEDULE_FIELDS) {
     if (body[key] !== undefined) settings[key] = body[key];
@@ -133,6 +143,16 @@ function pickScheduleSettings(body) {
   if (settings.effort !== undefined && settings.effort !== null && !EFFORT_LEVELS.includes(settings.effort)) {
     throw new ServerError(`effort must be one of ${EFFORT_LEVELS.join(', ')} or null`, { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // Advisory ordering. `normalizeSuggestedAfter` owns the shape rules (self,
+  // blanks, duplicates, cap) and why an emptied list stays `[]` rather than
+  // becoming null the way `runAfter` does.
+  if (settings.suggestedAfter !== undefined) {
+    const parsed = suggestedAfterSchema.safeParse(settings.suggestedAfter ?? []);
+    if (!parsed.success) {
+      throw new ServerError(`suggestedAfter must be at most ${SUGGESTED_AFTER_MAX} task type strings, or null`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.suggestedAfter = normalizeSuggestedAfter(parsed.data, taskType);
+  }
   if (settings.runAfter !== undefined && settings.runAfter !== null) {
     if (!Array.isArray(settings.runAfter)) {
       throw new ServerError('runAfter must be an array of task type strings or null', { status: 400, code: 'VALIDATION_ERROR' });
@@ -171,7 +191,7 @@ router.get('/schedule/task/:taskType', asyncHandler(async (req, res) => {
 // PUT /api/cos/schedule/task/:taskType - Update interval for a task type (unified)
 router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const settings = pickScheduleSettings(req.body);
+  const settings = pickScheduleSettings(req.body, taskType);
   // Filter self-references from runAfter to prevent permanent blocking
   if (Array.isArray(settings.runAfter)) {
     settings.runAfter = settings.runAfter.filter(dep => dep !== taskType);

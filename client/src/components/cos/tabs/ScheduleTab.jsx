@@ -9,7 +9,7 @@ import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
 import TaskConfigDrawer from './schedule/TaskConfigDrawer';
-import { TASK_FILTERS, DEFAULT_FILTER_ID } from './schedule/scheduleConstants';
+import { TASK_FILTERS, DEFAULT_FILTER_ID, TASK_SORTS, DEFAULT_SORT_ID, suggestedOrderSteps } from './schedule/scheduleConstants';
 
 export function mergeUpdatedTaskInterval(schedule, taskType, interval) {
   if (!schedule) return schedule;
@@ -59,6 +59,17 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
     const params = new URLSearchParams(searchParams);
     if (next === DEFAULT_FILTER_ID) params.delete('filter');
     else params.set('filter', next);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  // Card ordering rides the URL like its neighbours in the same control row, so
+  // a link to "the schedule in run order" survives a reload and can be shared.
+  const sortParam = searchParams.get('sort');
+  const sort = TASK_SORTS.some(option => option.id === sortParam) ? sortParam : DEFAULT_SORT_ID;
+  const setSort = useCallback((next) => {
+    const params = new URLSearchParams(searchParams);
+    if (next === DEFAULT_SORT_ID) params.delete('sort');
+    else params.set('sort', next);
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -152,6 +163,9 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
   const tasks = schedule.tasks || schedule.appImprovement || schedule.selfImprovement || {};
   const allTaskTypes = Object.keys(tasks);
   const selectedConfig = selectedTask ? tasks[selectedTask] : null;
+  // The drawer's header shows the same advisory step the card does, so it is
+  // ranked from the same graph rather than from the one open task.
+  const selectedOrderStep = selectedTask ? suggestedOrderSteps(tasks)[selectedTask] : undefined;
 
   return (
     <CodeReviewDefaultsProvider>
@@ -215,6 +229,8 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
         label={label}
         onLabelChange={setLabel}
         onFilterChange={setFilter}
+        sort={sort}
+        onSortChange={setSort}
       />
 
       {schedule.lastUpdated && (
@@ -237,6 +253,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
         onUpdateOverride={handleUpdateOverride}
         onBulkToggleOverride={handleBulkToggleOverride}
         allTaskTypes={allTaskTypes}
+        orderStep={selectedOrderStep}
         improvementDisabled={improvementDisabled}
         dataInputCatalog={schedule.dataInputCatalog || []}
       />

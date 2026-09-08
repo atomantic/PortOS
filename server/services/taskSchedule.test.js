@@ -2353,8 +2353,12 @@ describe('taskSchedule', () => {
       expect(status.tasks.security).toMatchObject({ displayName: 'better-security', labels: ['backend'], description: 'Custom summary', enabled: false })
       expect(status.tasks.security.defaultLabels).toEqual(expect.arrayContaining(['slashdo', 'codebase-improvement', 'security']))
       expect(status.tasks['better-security']).toBeUndefined()
-      expect(status.tasks['module-hygiene'].runGuidance).toContain('before function-level complexity')
-      expect(status.tasks['better-complexity'].runGuidance).toContain('After structural drift')
+      // Ordering is carried by NAMED task types, not by the prose — the prose
+      // only says why. A reader of the old guidance couldn't tell whether
+      // "structural drift" was another scheduled task or just a concept.
+      expect(status.tasks['module-hygiene'].suggestedAfter).toEqual(['simplify'])
+      expect(status.tasks['better-complexity'].suggestedAfter).toEqual(['module-hygiene'])
+      expect(status.tasks['module-hygiene'].runGuidance).toContain('module boundaries')
       expect(status.tasks['claim-issue']).toMatchObject({ displayName: 'claim-issue', defaultLabels: [] })
     })
 
