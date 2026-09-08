@@ -54,9 +54,10 @@ const SIZES = {
 export default function CollapsibleSection({
   icon: Icon = null,
   label,
-  // Body id, wired to the header's `aria-controls`. Only worth passing when
-  // something outside the section addresses the body (a test, a caller's own
-  // label), but the ARIA link is free once it exists.
+  // Body id, wired to the header's `aria-controls` — but only while the body
+  // is actually in the DOM: a collapsed section that unmounts its body would
+  // otherwise point `aria-controls` at an id that does not exist, which is
+  // invalid ARIA rather than a helpful link.
   id,
   summary = '',
   defaultOpen = false,
@@ -96,7 +97,7 @@ export default function CollapsibleSection({
         type="button"
         aria-expanded={open}
         onClick={toggle}
-        aria-controls={id}
+        aria-controls={id && (open || keepMounted) ? id : undefined}
         className={`flex w-full items-center ${tone.button} ${buttonClassName}`.trim()}
       >
         <Chevron size={tone.iconSize} className="shrink-0" />
