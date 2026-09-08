@@ -153,7 +153,7 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
       {open && !disabled && createPortal(
         <div
           ref={popoverRef}
-          className="port-menu-surface fixed z-[100] max-h-64 overflow-y-auto border border-port-border rounded-lg shadow-lg"
+          className="port-opaque-surface fixed z-[100] max-h-64 overflow-y-auto border border-port-border rounded-lg shadow-lg"
           style={{
             left: menuStyle?.left ?? `${VIEWPORT_PADDING}px`,
             top: menuStyle?.top ?? `${VIEWPORT_PADDING}px`,

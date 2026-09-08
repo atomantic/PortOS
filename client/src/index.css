@@ -378,13 +378,15 @@ html[data-port-theme] .bg-port-card {
   background-color: rgb(var(--port-card) / var(--port-card-alpha)) !important;
 }
 
-/* Floating menus/popovers (e.g. the schedule "Run on App" picker) must stay
-   fully opaque even on translucent ("glass") card themes — otherwise the
-   content behind the free-floating menu bleeds through and the list becomes
-   unreadable. Unlike modals, these have no backdrop to sit on. Use the themed
-   card color with no alpha. */
-.port-menu-surface,
-html[data-port-theme] .port-menu-surface {
+/* Any surface with no dimmed backdrop behind it — a floating menu/popover
+   (e.g. the schedule "Run on App" picker) or a slide-over modal panel (the
+   shared `Drawer`) whose mobile width sits directly over the page it was
+   opened from — must stay fully opaque even on translucent ("glass") card
+   themes, or the arbitrary content behind it bleeds through and becomes
+   unreadable/illegible (WebKit especially). Use the themed card color with no
+   alpha. */
+.port-opaque-surface,
+html[data-port-theme] .port-opaque-surface {
   background-color: rgb(var(--port-card)) !important;
 }
 
@@ -923,8 +925,17 @@ html[data-port-theme] #root > .bg-port-bg {
   background: var(--port-app-backdrop) !important;
 }
 
-html[data-port-theme] aside.bg-port-card,
-html[data-port-theme] header.bg-port-card {
+/* Scoped to the app shell's OWN nav landmarks (`.port-app-sidebar` /
+   `.port-app-topbar` in Layout.jsx), not the bare `aside`/`header` tag — a
+   bare-tag selector here also matched every unrelated `<aside class="...
+   bg-port-card ...">` in the app, including the shared slide-over `Drawer`
+   panel (`components/Drawer.jsx`), silently swapping its opaque card fill for
+   the sidebar's translucent gradient + blur (tuned to sit against the
+   persistent app background, not to obscure a modal's arbitrary scrolled
+   content underneath). `Drawer.jsx`'s panel now carries `.port-opaque-surface`
+   (above) instead, the same fix as the analogous floating-menu case. */
+html[data-port-theme] .port-app-sidebar.bg-port-card,
+html[data-port-theme] .port-app-topbar.bg-port-card {
   background: var(--port-sidebar-bg) !important;
   backdrop-filter: var(--port-backdrop-filter);
 }
@@ -1342,7 +1353,7 @@ html[data-port-theme-mode="day"] .always-dark [class~="hover:text-slate-100"]:ho
 
 /* Solid variant for a small label sitting directly on photography, where even
    10% show-through takes its contrast from whatever pixels it lands on. Same
-   fill as `.port-menu-surface` (above) for the same reason — an opaque themed
+   fill as `.port-opaque-surface` (above) for the same reason — an opaque themed
    surface with arbitrary content behind it and no backdrop to sit on — but no
    `!important`, since these labels are not fighting a `bg-port-card/NN`. */
 .port-media-overlay-strong {
