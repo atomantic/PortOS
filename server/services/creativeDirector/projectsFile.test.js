@@ -37,6 +37,9 @@ vi.mock('../mediaCollections.js', () => ({
   createCollection: vi.fn(async () => ({ id: 'col-test' })),
 }));
 
+vi.mock('../universeBuilder/crud.js', () => ({ getUniverse: vi.fn(async () => ({ id: 'example-universe', updatedAt: '2026-09-01T00:00:00.000Z' })) }));
+import { getUniverse } from '../universeBuilder/crud.js';
+const { getVideoSourceStatus } = await import('./videoSources.js');
 const file = await import('./projectsFile.js');
 const cj = await import('../../lib/conflictJournal.js');
 
@@ -119,7 +122,7 @@ describe('Video treatment artifacts', () => {
     expect(saved.treatment.script).toBe(treatment.script);
     expect(saved.treatment.artifact).toMatchObject({
       scriptId: `script-${p.id}`, revision: 1, targetDurationSeconds: 120, stale: false,
-      references: [{ kind: 'universe', id: 'example-universe', revision: 'revision-1', referenceId: 'universe:example-universe' }],
+      references: [{ kind: 'universe', id: 'example-universe', revision: 'revision-1', referenceId: 'universe:example-universe', sourceRevision: expect.any(String) }],
     });
     expect(saved.treatment.artifact.shots).toEqual(Array.from({ length: 12 }, (_, i) => ({
       shotId: `shot-scene-${i}`, sceneId: `scene-${i}`, startSeconds: i * 10, endSeconds: (i + 1) * 10, durationSeconds: 10,
@@ -139,6 +142,13 @@ describe('Video treatment artifacts', () => {
     expect(edited.history.every(value => !('history' in value))).toBe(true);
     await file.updateScene(p.id, 'scene-0', { status: 'accepted' });
     expect((await file.getProject(p.id)).treatment.history).toEqual(edited.history);
+    const reference = revised.artifact.references[0];
+    expect((await getVideoSourceStatus(await file.getProject(p.id))).artifact[0].revisionChanged).toBe(false);
+    getUniverse.mockResolvedValueOnce({ id: 'example-universe', updatedAt: '2026-09-02T00:00:00.000Z' });
+    expect((await getVideoSourceStatus(await file.getProject(p.id))).artifact[0].revisionChanged).toBe(true);
+    expect((await file.getProject(p.id)).treatment.artifact.references[0]).toEqual(reference);
+    getUniverse.mockResolvedValueOnce({ id: 'example-universe' });
+    expect((await getVideoSourceStatus(await file.getProject(p.id))).artifact[0].revisionChanged).toBeNull();
   });
 
   it('rejects ambiguous scene identities, ordering and a mismatched duration without replacing the saved artifact', async () => {

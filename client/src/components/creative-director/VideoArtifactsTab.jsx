@@ -101,11 +101,12 @@ export default function VideoArtifactsTab({ project, basePath }) {
           </section>
           <section aria-labelledby="video-artifact-references" className="space-y-2">
             <h3 id="video-artifact-references" className="font-medium">Saved references ({artifact.references.length})</h3>
-            <p className="text-sm text-port-text-muted">References belong to this artifact revision. Availability is checked against this install and does not certify that source content matches its recorded revision.</p>
+            <p className="text-sm text-port-text-muted">References belong to this artifact revision. Source revision stamps are checked against this install. Older references or sources without revision metadata have unknown freshness.</p>
             {!artifact.references.length && <p className="text-sm">No attached sources in this revision.</p>}
             <ul className="space-y-2">
               {artifact.references.map(reference => {
-                const available = historical ? undefined : sourceState?.artifact.find(source => source.referenceId === reference.referenceId)?.available;
+                const status = historical ? undefined : sourceState?.artifact.find(source => source.referenceId === reference.referenceId);
+                const available = status?.available;
                 const sourcePath = reference.kind === 'universe' ? `/universes/${encodeURIComponent(reference.id)}`
                   : reference.kind === 'series' ? `/pipeline/series/${encodeURIComponent(reference.id)}` : null;
                 return <li key={reference.referenceId} className="bg-port-card border border-port-border rounded p-3 text-sm space-y-1 break-words">
@@ -116,6 +117,10 @@ export default function VideoArtifactsTab({ project, basePath }) {
                     {available === true ? 'Source available'
                       : available === false ? 'Source missing — repair the draft and save a revised treatment' : 'Source availability unknown'}
                   </p>
+                  {available && <p className={status?.revisionChanged ? 'text-port-warning' : 'text-port-text-muted'}>
+                    {status?.revisionChanged === true ? 'Source changed since this artifact was saved. Review the source and save a revised treatment before production.'
+                      : status?.revisionChanged === false ? 'Source revision stamp matches the saved artifact' : 'Source revision freshness unknown. Review the source before saving a revised treatment.'}
+                  </p>}
                   {sourcePath && <Link className="text-port-accent hover:underline" to={sourcePath}>Open {reference.kind}</Link>}
                 </li>;
               })}

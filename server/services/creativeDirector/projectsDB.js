@@ -43,7 +43,11 @@ export async function createProject(input) {
 }
 
 export async function setTreatment(id, treatmentInput) {
-  const { project } = await withLockedProject(id, (current) => ({ project: logic.applyTreatment(current, treatmentInput) }));
+  const { assertVideoSourcesAvailable } = await import('./videoSources.js');
+  const { project } = await withLockedProject(id, async (current) => {
+    const sourceRevisions = await assertVideoSourcesAvailable(current);
+    return { project: logic.applyTreatment(current, treatmentInput, sourceRevisions) };
+  });
   return project;
 }
 

@@ -40,7 +40,9 @@ export async function createProject(input) {
 
 export async function setTreatment(id, treatmentInput) {
   const { all, idx } = await loadAllAndIndex(id);
-  all[idx] = logic.applyTreatment(all[idx], treatmentInput);
+  const { assertVideoSourcesAvailable } = await import('./videoSources.js');
+  const sourceRevisions = await assertVideoSourcesAvailable(all[idx]);
+  all[idx] = logic.applyTreatment(all[idx], treatmentInput, sourceRevisions);
   await saveAll(all);
   return all[idx];
 }
