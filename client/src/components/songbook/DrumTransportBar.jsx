@@ -22,7 +22,7 @@
  * touch targets.
  */
 
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Repeat, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
 import { DRUM_KIT_LIST, resolveDrumKit } from '../../lib/drumKits.js';
 import { clampClickVolume, DEFAULT_CLICK_VOLUME } from '../../lib/drumPlayback.js';
@@ -32,7 +32,7 @@ import {
   CountInSelect, PercentButtons, PlayStopButton, TempoControls,
 } from './TransportControls.jsx';
 
-export default function DrumTransportBar({
+function DrumTransportBar({
   playing, onToggle, hasMusic = true,
   bpm, onBpmChange, onPercent, writtenTempo,
   countInBars, onCountInChange,
@@ -196,3 +196,8 @@ export default function DrumTransportBar({
     </div>
   );
 }
+
+// Every prop is a primitive or a stable hook callback apart from `pulse`, which
+// the host nulls while its card is collapsed — so a bar nobody can see costs no
+// reconciliation per beat.
+export default memo(DrumTransportBar);

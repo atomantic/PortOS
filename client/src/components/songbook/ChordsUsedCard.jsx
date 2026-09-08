@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import ChordDiagram from './ChordDiagram.jsx';
-import CollapsibleBar from './CollapsibleBar.jsx';
+import CollapsibleSection from '../ui/CollapsibleSection.jsx';
 import { sheetUsedChords } from '../../lib/chordShapes.js';
 
 /**
@@ -10,22 +10,22 @@ import { sheetUsedChords } from '../../lib/chordShapes.js';
  * It lived inside `<TabSheetView>` (a strip above the sheet) until it moved out
  * here so the viewer can pin it in the header band ABOVE the scroller: the
  * shapes you are reaching for are the thing you want on screen at bar 60, not
- * only at bar 1. Collapsible (and persisted by the host) because it is the
- * tallest of the header cards.
- *
- * The diagram row scrolls internally — a 12-chord song must not push the sheet
- * itself off a phone screen.
+ * only at bar 1. The host owns (and persists) the open flag.
  */
-export default function ChordsUsedCard({ text, instrument = 'guitar', open, onToggle }) {
+function ChordsUsedCard({ text, instrument, open, onToggle }) {
   const chords = useMemo(() => sheetUsedChords(text), [text]);
   if (chords.length === 0) return null;
   return (
-    <CollapsibleBar
+    <CollapsibleSection
       id="song-chords-used"
+      size="bar"
       label={`Chords used (${chords.length})`}
       summary={chords.join(' · ')}
       open={open}
-      onToggle={onToggle}
+      onOpenChange={onToggle}
+      className="shrink-0"
+      buttonClassName="border-b border-port-border bg-port-card/60 px-3"
+      // A 12-chord song must not push the sheet itself off a phone screen.
       bodyClassName="border-b border-port-border bg-port-card/40 px-3 py-2 max-h-[30vh] overflow-y-auto"
     >
       <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
@@ -36,6 +36,10 @@ export default function ChordsUsedCard({ text, instrument = 'guitar', open, onTo
           </div>
         ))}
       </div>
-    </CollapsibleBar>
+    </CollapsibleSection>
   );
 }
+
+// Every prop is a primitive or the host's stable toggle, so memo keeps the
+// diagrams out of the viewer's per-beat re-render.
+export default memo(ChordsUsedCard);

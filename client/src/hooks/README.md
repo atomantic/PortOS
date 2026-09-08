@@ -124,7 +124,6 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useLiveSuggest` | Post-typing debounce for an imperative panel trigger: `{ registerTrigger, scheduleSuggest }` re-arms one `debounceMs` timer per keystroke and fires the registered fn only while `enabled` and still mounted. | An editor that asks a sibling AI panel to suggest once the writer pauses (WorkEditor ↔ LiveContinuationPanel). |
 | `useLockToggle` | Optimistic-PATCH lock toggle. | New "lock this field/stage/arc" button — use this, do not re-implement. |
 | `usePersistedOptions` | Registry for "saved default + per-run override" form options: one spec row per option (`{ defaultValue, read, clamp, persistOnEdit }`) owns the state, per-field dirty flag, hydrate-if-untouched pass and edited-only override collection. Returns `{ values, edit, hydrate, collectOverrides, inputProps }`, all identity-stable and ref-backed so a caller's `useCallback` needs one dep instead of one per option. | Any panel where each option must load a saved default, persist edits, and send ONLY edited fields as per-run overrides (AutopilotPanel) — use this instead of hand-copying the state/editedRef/hydrate/collect scaffold per option. |
-| `usePersistedDisclosure` | Disclosure open/closed state persisted under a localStorage key (`'1'`/`'0'` via safeStorage); absent falls through to the caller's `defaultOpen` rather than reading as closed. Returns `[open, toggle]`. | A collapsible card whose open state should survive a remount/reload (the SongBook viewer's Audio / Play along / Chords used header cards). |
 | `usePopoverPosition` | Viewport-clamped `{ left, top, width }` for a fixed-position portal popover anchored to a trigger; re-measures on open and rAF-coalesced on capture-phase scroll/resize. Returns `{ triggerRef, popoverRef, style, reposition }`; pass `anchorRef` to follow a parent-owned trigger. | Any portal-into-`<body>` menu/popover placed relative to a button (ThemeSwitcher, CollectionPickerShell) — use this instead of re-rolling the measure/flip/clamp/reflow plumbing. |
 | `useScrollLock` | Body-scroll lock with ref-count. | Modals, drawers, lightboxes. |
 | `useSidebarResize` | Drag-to-resize split-pane width persisted to `localStorage`; returns `{ containerRef, width, maxWidth, onMouseDown, reset }` and caps the drag at `maxFraction` of the measured container. | A desktop sidebar/split pane with a draggable divider (WorkEditor's storyboard sidebar). |
@@ -144,7 +143,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
-| `useLocalStorageBool` | Boolean `useState` mirrored to `localStorage`. | Per-user UI preference toggle. |
+| `useLocalStorageBool` | Boolean `useState` mirrored to `localStorage`; returns `[value, setValue, toggle]`. | Per-user UI preference toggle, and any remembered disclosure (the SongBook viewer's Audio / Sheet controls / Chords used cards). |
 | `useNavWorkingSet` | Sidebar Pinned + Recent working set (localStorage MRU + pins); resolves stored paths to `{ path, label, icon }` rows via a `resolveNavEntry` arg. | Rendering the sidebar's Pinned/Recent sections. |
 
 ## Sidebar navigation data

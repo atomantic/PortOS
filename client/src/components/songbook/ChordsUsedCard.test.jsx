@@ -12,7 +12,7 @@ Nonsense lyric line
 // The card is a controlled disclosure — the viewer owns (and persists) the
 // open flag — so the tests drive it through a tiny host rather than reaching
 // into the component's internals.
-const Host = ({ text = SAMPLE, defaultOpen = true, instrument }) => {
+const Host = ({ text = SAMPLE, defaultOpen = true, instrument = 'guitar' }) => {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <ChordsUsedCard
@@ -41,11 +41,11 @@ describe('ChordsUsedCard', () => {
     render(<Host />);
     const toggle = screen.getByRole('button', { name: /Chords used/ });
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    // Collapsed: the body is hidden (kept mounted) and the summary names the
-    // chords, so a closed card still says what the song asks for.
+    // Collapsed: the diagrams are gone and the summary names the chords, so a
+    // closed card still says what the song asks for.
     fireEvent.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(document.getElementById('song-chords-used').hidden).toBe(true);
+    expect(document.getElementById('song-chords-used')).toBeNull();
     expect(toggle.textContent).toContain('C · G');
   });
 });

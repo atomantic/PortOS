@@ -72,7 +72,7 @@ import DrumTransportBar from '../components/songbook/DrumTransportBar';
 import ChordPreview from '../components/songbook/ChordPreview';
 import ChordTransportBar from '../components/songbook/ChordTransportBar';
 import ChordsUsedCard from '../components/songbook/ChordsUsedCard';
-import CollapsibleBar from '../components/songbook/CollapsibleBar';
+import CollapsibleSection from '../components/ui/CollapsibleSection';
 import PracticeLogger from '../components/songbook/PracticeLogger';
 import { SongLinkChips, SongLinksEditor } from '../components/songbook/SongLinks';
 import {
@@ -84,7 +84,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useDrawerTab from '../hooks/useDrawerTab';
 import useKeyboardShortcuts from '../hooks/useKeyboardShortcuts';
-import usePersistedDisclosure from '../hooks/usePersistedDisclosure';
+import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import useAutoscroll from '../hooks/useAutoscroll';
 import useDrumPlayer from '../hooks/useDrumPlayer';
 import useChordPlayer from '../hooks/useChordPlayer';
@@ -345,26 +345,23 @@ export default function SongBookViewer() {
   // unconditionally (hooks rule) — a drum chart, and a `plain` sheet (the
   // explicit opt-out of all notation UI, chord tokens included), parse to zero
   // chords and stand up no player.
-  const chord = useChordPlayer(
-    isDrum || contentFormat === 'plain' ? '' : renderedText,
-    { songId: id },
-  );
+  // Chord voicings, the chord play-along and the chords-used card are all the
+  // same question: does this sheet have chords to work with at all?
+  const chordUiEnabled = !isDrum && contentFormat !== 'plain';
+  const chord = useChordPlayer(chordUiEnabled ? renderedText : '', { songId: id });
 
   // --- Header cards. Each play-mode band above the sheet is a disclosure whose
   // state is remembered globally (a practice posture carries across songs, the
   // way font size does). Audio ships COLLAPSED: it is the tallest band and the
   // one you set once, so the sheet starts higher up a phone screen.
-  const [audioOpen, toggleAudio] = usePersistedDisclosure('songbook:audioOpen', false);
-  const [controlsOpen, toggleControls] = usePersistedDisclosure('songbook:controlsOpen', true);
-  const [chordsOpen, toggleChords] = usePersistedDisclosure('songbook:chordsOpen', true);
+  const [audioOpen, setAudioOpen, toggleAudio] = useLocalStorageBool('songbook:audioOpen', false);
+  const [controlsOpen, , toggleControls] = useLocalStorageBool('songbook:controlsOpen', true);
+  const [chordsOpen, , toggleChords] = useLocalStorageBool('songbook:chordsOpen', true);
 
   // What a collapsed card says about itself — the couple of values you would
   // otherwise have to open it to read.
   const transport = isDrum ? drum : chord;
-  const audioSummary = [
-    transport.playing ? 'playing' : null,
-    `${transport.bpm} BPM`,
-  ].filter(Boolean).join(' · ');
+  const audioSummary = `${transport.playing ? 'playing · ' : ''}${transport.bpm} BPM`;
   const controlsSummary = [
     playing ? 'scrolling' : null,
     transpose ? `${transpose > 0 ? '+' : ''}${transpose} semitones` : null,
@@ -406,8 +403,15 @@ export default function SongBookViewer() {
   // Play-mode shortcuts. A drum chart rebinds them onto the kit transport (space
   // play/stop, +/- BPM, [ ] loop ends, m mutes the click) since transpose/
   // scroll-speed don't apply.
+  // A shortcut that SOUNDS something opens the Audio card first: the card ships
+  // collapsed, and a kit starting with no transport on screen leaves the tempo,
+  // the kit and the loop unreachable by anyone who hasn't found the chevron.
+  const startTransport = (toggleTransport) => () => {
+    setAudioOpen(true);
+    toggleTransport();
+  };
   const drumShortcuts = {
-    ' ': drum.toggle,
+    ' ': startTransport(drum.toggle),
     m: () => drum.setClickEnabled(!drum.clickEnabled),
     '+': () => drum.setBpm(drum.bpm + 1),
     '=': () => drum.setBpm(drum.bpm + 1),
@@ -427,7 +431,7 @@ export default function SongBookViewer() {
     // The chord play-along gets `p`, not space: space already drives autoscroll
     // here, and the two are complementary (scroll the sheet while the backing
     // sounds) rather than rival meanings of "play".
-    p: chord.toggle,
+    p: startTransport(chord.toggle),
     // Only bound when the song HAS a target — otherwise the key would toast
     // "nothing to fit" at a user who never set one.
     ...(fitDurationSec != null ? { f: fitToSongDuration } : {}),
@@ -874,212 +878,215 @@ export default function SongBookViewer() {
               higher up the screen and the summary keeps tempo visible while
               it is closed. */}
           {(isDrum || chord.chordCount > 0) && (
-          <CollapsibleBar
-            id="song-audio-controls"
-            label="Audio"
-            summary={audioSummary}
-            open={audioOpen}
-            onToggle={toggleAudio}
-          >
-            {/* Drum play-along transport — its own bar above the shared controls,
-                so the kit's tempo/loop/click sit together rather than interleaved
-                with the sheet controls. */}
-            {isDrum && (
-              <DrumTransportBar
-                playing={drum.playing}
-                onToggle={drum.toggle}
-                hasMusic={drum.hasMusic}
-                bpm={drum.bpm}
-                onBpmChange={drum.setBpm}
-                onPercent={drum.setBpmPercent}
-                writtenTempo={drum.writtenTempo}
-                countInBars={drum.countInBars}
-                onCountInChange={drum.setCountInBars}
-                loopEnabled={drum.loopEnabled}
-                onLoopToggle={drum.setLoopEnabled}
-                loopFrom={drum.loopFrom}
-                loopTo={drum.loopTo}
-                onLoopRangeChange={drum.setLoopRange}
-                barCount={drum.barCount}
-                clickEnabled={drum.clickEnabled}
-                onClickToggle={drum.setClickEnabled}
-                clickVolume={drum.clickVolume}
-                onClickVolumeChange={drum.setClickVolume}
-                kitId={drum.kitId}
-                onKitChange={drum.setKitId}
-                beatsPerBar={drum.beatsPerBar}
-                pulse={drum.pulse}
-                currentBar={drum.currentBar}
-              />
-            )}
-
-            {/* Chord-sheet play-along transport (#4104) — the same slot one format
-                over, and only for a sheet that actually carries chords (a lyrics-
-                only or plain sheet has nothing to sound, so no bar appears). */}
-            {!isDrum && chord.chordCount > 0 && (
-              <ChordTransportBar
-                playing={chord.playing}
-                onToggle={chord.toggle}
-                hasChords={chord.hasChords}
-                bpm={chord.bpm}
-                onBpmChange={chord.setBpm}
-                onPercent={chord.setBpmPercent}
-                writtenTempo={chord.writtenTempo}
-                beatsPerBar={chord.beatsPerBar}
-                onBeatsPerBarChange={chord.setBeatsPerBar}
-                countInBars={chord.countInBars}
-                onCountInChange={chord.setCountInBars}
-                clickEnabled={chord.clickEnabled}
-                onClickToggle={chord.setClickEnabled}
-                chordCount={chord.chordCount}
-                pulse={chord.pulse}
-                // Play mode is the only host that binds a key for this transport.
-                keyHint="(p)"
-              />
-            )}
-          </CollapsibleBar>
+            <CollapsibleSection
+              id="song-audio-controls"
+              size="bar"
+              label="Audio"
+              summary={audioSummary}
+              open={audioOpen}
+              onOpenChange={toggleAudio}
+              className="shrink-0"
+              buttonClassName="border-b border-port-border bg-port-card/60 px-3"
+              // Kept mounted: a transport's own "More" disclosure (and the
+              // sound it is making) must survive a collapse.
+              keepMounted
+            >
+              {isDrum ? (
+                <DrumTransportBar
+                  playing={drum.playing}
+                  onToggle={drum.toggle}
+                  hasMusic={drum.hasMusic}
+                  bpm={drum.bpm}
+                  onBpmChange={drum.setBpm}
+                  onPercent={drum.setBpmPercent}
+                  writtenTempo={drum.writtenTempo}
+                  countInBars={drum.countInBars}
+                  onCountInChange={drum.setCountInBars}
+                  loopEnabled={drum.loopEnabled}
+                  onLoopToggle={drum.setLoopEnabled}
+                  loopFrom={drum.loopFrom}
+                  loopTo={drum.loopTo}
+                  onLoopRangeChange={drum.setLoopRange}
+                  barCount={drum.barCount}
+                  clickEnabled={drum.clickEnabled}
+                  onClickToggle={drum.setClickEnabled}
+                  clickVolume={drum.clickVolume}
+                  onClickVolumeChange={drum.setClickVolume}
+                  kitId={drum.kitId}
+                  onKitChange={drum.setKitId}
+                  beatsPerBar={drum.beatsPerBar}
+                  // The beat readout is the one prop that turns over per beat.
+                  // A collapsed card doesn't render it, so passing null there
+                  // lets the memoized bar skip reconciliation entirely.
+                  pulse={audioOpen ? drum.pulse : null}
+                  currentBar={drum.currentBar}
+                />
+              ) : (
+                <ChordTransportBar
+                  playing={chord.playing}
+                  onToggle={chord.toggle}
+                  hasChords={chord.hasChords}
+                  bpm={chord.bpm}
+                  onBpmChange={chord.setBpm}
+                  onPercent={chord.setBpmPercent}
+                  writtenTempo={chord.writtenTempo}
+                  beatsPerBar={chord.beatsPerBar}
+                  onBeatsPerBarChange={chord.setBeatsPerBar}
+                  countInBars={chord.countInBars}
+                  onCountInChange={chord.setCountInBars}
+                  clickEnabled={chord.clickEnabled}
+                  onClickToggle={chord.setClickEnabled}
+                  chordCount={chord.chordCount}
+                  pulse={audioOpen ? chord.pulse : null}
+                  // Play mode is the only host that binds a key for this transport.
+                  keyHint="(p)"
+                />
+              )}
+            </CollapsibleSection>
           )}
 
           {/* Sheet controls — what you drive the SHEET with (autoscroll,
               transpose, size, instrument view, stage). Open by default: this is
               the band you reach for mid-song. Named for the sheet, not "play
               along", which is the transport's own Play button one card up. */}
-          <CollapsibleBar
+          <CollapsibleSection
             id="song-sheet-controls"
+            size="bar"
             label="Sheet controls"
             summary={controlsSummary}
             open={controlsOpen}
-            onToggle={toggleControls}
+            onOpenChange={toggleControls}
+            className="shrink-0"
+            buttonClassName="border-b border-port-border bg-port-card/60 px-3"
+            bodyClassName="border-b border-port-border bg-port-card/60 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-2"
           >
-            <div className="border-b border-port-border bg-port-card/60 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-              {/* Autoscroll — a drum chart scrolls HORIZONTALLY under its own
-                  playhead (DrumSheetView), so a second vertical-scroll play button
-                  would be a rival transport with a rival meaning of "play". */}
-              {!isDrum && (
-                <div className="flex items-center gap-2">
+            {/* Autoscroll — a drum chart scrolls HORIZONTALLY under its own
+                playhead (DrumSheetView), so a second vertical-scroll play button
+                would be a rival transport with a rival meaning of "play". */}
+            {!isDrum && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggle}
+                  className={`${ctrlBtnClass} ${playing ? 'text-port-accent border-port-accent/50' : ''}`}
+                  aria-label={playing ? 'Pause autoscroll' : 'Play autoscroll'}
+                  title={playing ? 'Pause autoscroll (space)' : 'Play autoscroll (space)'}
+                >
+                  {playing ? <Pause size={18} /> : <Play size={18} />}
+                </button>
+                <label htmlFor="song-speed" className="sr-only">Autoscroll speed</label>
+                <input
+                  id="song-speed"
+                  type="range"
+                  min={SPEED_MIN}
+                  max={SPEED_MAX}
+                  value={pxPerSec}
+                  onChange={(e) => setPxPerSec(Number(e.target.value))}
+                  className="w-24 sm:w-32 accent-port-accent"
+                  title="Autoscroll speed (+/-)"
+                />
+                {/* Fit to duration — only for a song that carries a target run
+                    time (set in Edit). Solves the speed from the sheet as it is
+                    rendered right now, so re-fitting after a font-size or
+                    transpose change is a single click. */}
+                {fitDurationSec != null && (
                   <button
                     type="button"
-                    onClick={toggle}
-                    className={`${ctrlBtnClass} ${playing ? 'text-port-accent border-port-accent/50' : ''}`}
-                    aria-label={playing ? 'Pause autoscroll' : 'Play autoscroll'}
-                    title={playing ? 'Pause autoscroll (space)' : 'Play autoscroll (space)'}
+                    onClick={fitToSongDuration}
+                    className={`${ctrlBtnClass} gap-1.5 px-2 text-xs`}
+                    aria-label={`Fit autoscroll to ${formatDurationSec(fitDurationSec)}`}
+                    title={`Fit autoscroll to ${formatDurationSec(fitDurationSec)} (f)`}
                   >
-                    {playing ? <Pause size={18} /> : <Play size={18} />}
+                    <Timer size={16} />
+                    <span className="hidden sm:inline font-mono">{formatDurationSec(fitDurationSec)}</span>
                   </button>
-                  <label htmlFor="song-speed" className="sr-only">Autoscroll speed</label>
-                  <input
-                    id="song-speed"
-                    type="range"
-                    min={SPEED_MIN}
-                    max={SPEED_MAX}
-                    value={pxPerSec}
-                    onChange={(e) => setPxPerSec(Number(e.target.value))}
-                    className="w-24 sm:w-32 accent-port-accent"
-                    title="Autoscroll speed (+/-)"
-                  />
-                  {/* Fit to duration — only for a song that carries a target run
-                      time (set in Edit). Solves the speed from the sheet as it is
-                      rendered right now, so re-fitting after a font-size or
-                      transpose change is a single click. */}
-                  {fitDurationSec != null && (
-                    <button
-                      type="button"
-                      onClick={fitToSongDuration}
-                      className={`${ctrlBtnClass} gap-1.5 px-2 text-xs`}
-                      aria-label={`Fit autoscroll to ${formatDurationSec(fitDurationSec)}`}
-                      title={`Fit autoscroll to ${formatDurationSec(fitDurationSec)} (f)`}
-                    >
-                      <Timer size={16} />
-                      <span className="hidden sm:inline font-mono">{formatDurationSec(fitDurationSec)}</span>
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Transpose — meaningless on a kit grid, so hidden for drum charts */}
-              {!isDrum && (
-                <div className="flex items-center gap-1" role="group" aria-label="Transpose">
-                  <button type="button" onClick={() => setTranspose(transpose - 1)} className={ctrlBtnClass} aria-label={`Transpose down (currently ${transpose > 0 ? '+' : ''}${transpose} semitones)`} title="Transpose down ([)">
-                    <Minus size={16} />
-                  </button>
-                  <span className="min-w-[3.5rem] text-center text-sm text-gray-300 font-mono" title="Transpose (semitones)" role="status" aria-live="polite" aria-atomic="true">
-                    <span className="sr-only">Transpose </span>
-                    <span>{transpose > 0 ? `+${transpose}` : transpose}</span>
-                    <span className="sr-only"> semitones</span>
-                  </span>
-                  <button type="button" onClick={() => setTranspose(transpose + 1)} className={ctrlBtnClass} aria-label={`Transpose up (currently ${transpose > 0 ? '+' : ''}${transpose} semitones)`} title="Transpose up (])">
-                    <Plus size={16} />
-                  </button>
-                </div>
-              )}
-
-              {/* Font size — on a drum chart the same control zooms the kit grid
-                  (DrumSheetView scales the whole strip off fontSizeRem), so it's
-                  labelled for what it actually does there. */}
-              <div className="flex items-center gap-1" role="group" aria-label={isDrum ? 'Grid size' : 'Font size'}>
-                <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{isDrum ? `Grid size ${fontSize.toFixed(3)} rem` : `Font size ${fontSize.toFixed(3)} rem`}</span>
-                <button type="button" onClick={() => setFontSize(fontSize - FONT_STEP)} className={`${ctrlBtnClass} text-xs font-bold`} aria-label={`${isDrum ? 'Zoom out' : 'Smaller text'} (currently ${fontSize.toFixed(3)} rem)`}>
-                  A−
-                </button>
-                <button type="button" onClick={() => setFontSize(fontSize + FONT_STEP)} className={`${ctrlBtnClass} text-sm font-bold`} aria-label={`${isDrum ? 'Zoom in' : 'Larger text'} (currently ${fontSize.toFixed(3)} rem)`}>
-                  A+
-                </button>
-              </div>
-
-              {/* Instrument view (chord diagrams) — render-only, URL-backed. A drum
-                  chart has no chords to voice, so the picker hides. */}
-              {!isDrum && (
-                <TabPills
-                  variant="pills"
-                  size="sm"
-                  tabs={VIEW_TABS}
-                  activeTab={instrumentView}
-                  onChange={setInstrumentView}
-                  ariaLabel="Instrument view"
-                  mobileDropdown
-                  mobileSelectId="song-instrument-view"
-                />
-              )}
-
-              {/* Stage */}
-              <div>
-                <label htmlFor="song-stage" className="sr-only">Learning stage</label>
-                <select
-                  id="song-stage"
-                  value={song.stage || 'new'}
-                  onChange={(e) => onStageChange(e.target.value)}
-                  className={`text-xs rounded-full border px-2 py-2 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent ${stageClass}`}
-                >
-                  {SONG_STAGES.map((s) => <option key={s.id} value={s.id} className="bg-port-card text-white">{s.label}</option>)}
-                </select>
-              </div>
-
-              {/* Badges + source */}
-              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400 ml-auto">
-                {song.key && <span className="px-2 py-1 rounded-full bg-port-bg border border-port-border">Key {song.key}</span>}
-                {song.capo > 0 && <span className="px-2 py-1 rounded-full bg-port-bg border border-port-border">Capo {song.capo}</span>}
-                {song.tuning && <span className="px-2 py-1 rounded-full bg-port-bg border border-port-border">{song.tuning}</span>}
-                {isHttpUrl(song.sourceUrl) && (
-                  <a
-                    href={song.sourceUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 px-2 py-1 rounded-full bg-port-bg border border-port-border text-port-accent hover:border-port-accent/50"
-                  >
-                    <ExternalLink size={12} />
-                    Source
-                  </a>
                 )}
               </div>
+            )}
+
+            {/* Transpose — meaningless on a kit grid, so hidden for drum charts */}
+            {!isDrum && (
+              <div className="flex items-center gap-1" role="group" aria-label="Transpose">
+                <button type="button" onClick={() => setTranspose(transpose - 1)} className={ctrlBtnClass} aria-label={`Transpose down (currently ${transpose > 0 ? '+' : ''}${transpose} semitones)`} title="Transpose down ([)">
+                  <Minus size={16} />
+                </button>
+                <span className="min-w-[3.5rem] text-center text-sm text-gray-300 font-mono" title="Transpose (semitones)" role="status" aria-live="polite" aria-atomic="true">
+                  <span className="sr-only">Transpose </span>
+                  <span>{transpose > 0 ? `+${transpose}` : transpose}</span>
+                  <span className="sr-only"> semitones</span>
+                </span>
+                <button type="button" onClick={() => setTranspose(transpose + 1)} className={ctrlBtnClass} aria-label={`Transpose up (currently ${transpose > 0 ? '+' : ''}${transpose} semitones)`} title="Transpose up (])">
+                  <Plus size={16} />
+                </button>
+              </div>
+            )}
+
+            {/* Font size — on a drum chart the same control zooms the kit grid
+                (DrumSheetView scales the whole strip off fontSizeRem), so it's
+                labelled for what it actually does there. */}
+            <div className="flex items-center gap-1" role="group" aria-label={isDrum ? 'Grid size' : 'Font size'}>
+              <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{isDrum ? `Grid size ${fontSize.toFixed(3)} rem` : `Font size ${fontSize.toFixed(3)} rem`}</span>
+              <button type="button" onClick={() => setFontSize(fontSize - FONT_STEP)} className={`${ctrlBtnClass} text-xs font-bold`} aria-label={`${isDrum ? 'Zoom out' : 'Smaller text'} (currently ${fontSize.toFixed(3)} rem)`}>
+                A−
+              </button>
+              <button type="button" onClick={() => setFontSize(fontSize + FONT_STEP)} className={`${ctrlBtnClass} text-sm font-bold`} aria-label={`${isDrum ? 'Zoom in' : 'Larger text'} (currently ${fontSize.toFixed(3)} rem)`}>
+                A+
+              </button>
             </div>
-          </CollapsibleBar>
+
+            {/* Instrument view (chord diagrams) — render-only, URL-backed. A drum
+                chart has no chords to voice, so the picker hides. */}
+            {!isDrum && (
+              <TabPills
+                variant="pills"
+                size="sm"
+                tabs={VIEW_TABS}
+                activeTab={instrumentView}
+                onChange={setInstrumentView}
+                ariaLabel="Instrument view"
+                mobileDropdown
+                mobileSelectId="song-instrument-view"
+              />
+            )}
+
+            {/* Stage */}
+            <div>
+              <label htmlFor="song-stage" className="sr-only">Learning stage</label>
+              <select
+                id="song-stage"
+                value={song.stage || 'new'}
+                onChange={(e) => onStageChange(e.target.value)}
+                className={`text-xs rounded-full border px-2 py-2 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent ${stageClass}`}
+              >
+                {SONG_STAGES.map((s) => <option key={s.id} value={s.id} className="bg-port-card text-white">{s.label}</option>)}
+              </select>
+            </div>
+
+            {/* Badges + source */}
+            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400 ml-auto">
+              {song.key && <span className="px-2 py-1 rounded-full bg-port-bg border border-port-border">Key {song.key}</span>}
+              {song.capo > 0 && <span className="px-2 py-1 rounded-full bg-port-bg border border-port-border">Capo {song.capo}</span>}
+              {song.tuning && <span className="px-2 py-1 rounded-full bg-port-bg border border-port-border">{song.tuning}</span>}
+              {isHttpUrl(song.sourceUrl) && (
+                <a
+                  href={song.sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 px-2 py-1 rounded-full bg-port-bg border border-port-border text-port-accent hover:border-port-accent/50"
+                >
+                  <ExternalLink size={12} />
+                  Source
+                </a>
+              )}
+            </div>
+          </CollapsibleSection>
 
           {/* Chords used — pinned in the header band rather than scrolled away
               with the sheet: the shapes you are reaching for matter at bar 60,
               not only at bar 1. Follows the transposed text and the instrument
               view, and a `plain` sheet (the opt-out of all notation UI) and a
               drum chart have no chords to show. */}
-          {!isDrum && contentFormat !== 'plain' && (
+          {chordUiEnabled && (
             <ChordsUsedCard
               text={renderedText}
               instrument={instrumentView}

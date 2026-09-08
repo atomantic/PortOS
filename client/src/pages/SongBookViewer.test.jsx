@@ -517,8 +517,9 @@ K:  o - - - - - o -`;
     it('recomputes BPM from a percent-of-written button', async () => {
       api.getSong.mockResolvedValue(drumSong());
       renderPage();
-      expect(await screen.findByLabelText('Practice tempo (BPM)')).toBeTruthy();
+      await screen.findByRole('button', { name: /^Audio/ });
       openAudioCard();
+      expect(screen.getByLabelText('Practice tempo (BPM)')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: '50%' }));
       await waitFor(() => expect(screen.getByLabelText('Practice tempo (BPM)').value).toBe('48'));
       fireEvent.click(screen.getByRole('button', { name: '100%' }));

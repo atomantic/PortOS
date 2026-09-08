@@ -18,7 +18,7 @@
  * sits with setup rather than beside Play.
  */
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
 import { CHORD_BEATS_MIN, CHORD_BEATS_MAX } from '../../lib/chordPlayback.js';
 import { ctrlBtnClass, activeCtrlClass, smallSelectClass } from './constants.js';
@@ -32,7 +32,7 @@ const BEATS_OPTIONS = Array.from(
   (_, i) => CHORD_BEATS_MIN + i,
 );
 
-export default function ChordTransportBar({
+function ChordTransportBar({
   playing, onToggle, hasChords = true,
   bpm, onBpmChange, onPercent, writtenTempo,
   beatsPerBar, onBeatsPerBarChange,
@@ -125,3 +125,8 @@ export default function ChordTransportBar({
     </div>
   );
 }
+
+// Every prop is a primitive or a stable hook callback apart from `pulse`, which
+// the host nulls while its card is collapsed — so a bar nobody can see costs no
+// reconciliation per beat.
+export default memo(ChordTransportBar);

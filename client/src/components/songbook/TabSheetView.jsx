@@ -30,9 +30,6 @@ import { activeCtrlClass, ctrlBtnClass } from './constants.js';
  * because `text` arrives already transposed the diagrams follow the transposed
  * names for free. Tab staffs are guitar-specific, so non-guitar views collapse
  * each staff block to a one-line note with an inline "show" expand.
- * The "chords used" strip is NOT here: it moved out to
- * `<ChordsUsedCard>` so the viewer can pin it in the header band above the
- * scroller, where it stays visible past bar 1.
  *
  * Play-along support (issue #4104): `soundingChord` — `{ lineIndex, chordIndex }`
  * or null — lights the chord token the synth preview is currently sounding, the
@@ -376,8 +373,9 @@ function TabSheetView({
   );
 }
 
-// Props are all primitives (`format`/`instrumentView` included) apart from `soundingChord`, which the host memoizes and which only
-// changes when the sounding chord does (once a bar, not once a frame) — so memo
+// Props are all primitives (`format`/`instrumentView` included) apart from
+// `soundingChord`, which the host memoizes and which only changes when the
+// sounding chord does (once a bar, not once a frame) — so memo
 // makes re-renders of a host page (stage flips, autoscroll ticks) skip the full
 // sheet re-render.
 export default memo(TabSheetView);
