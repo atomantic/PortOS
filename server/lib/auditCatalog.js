@@ -570,12 +570,17 @@ export function applyAuditModeWrapper(promptTemplate, modeInstructions) {
  * each as its own schedulable, provider-pinnable task so a managed app can run
  * every category of self-improvement on its own cadence. Keys are the lens
  * slugs slashdo uses; values are the AUDIT_DEFINITIONS types that own that
- * lens's findings — the first entry is the primary owner.
+ * lens's findings, in no significant order — the relation is many-to-many both
+ * ways (`security` answers three lenses; `bugs-perf` has four owners), which
+ * is why this is a lens-keyed map rather than a field on each definition. A
+ * per-definition field could not answer the question the map exists for: did
+ * upstream add a lens that NOTHING here owns?
  *
- * auditCatalog.test.js checks this map two ways: every listed type is a real
- * audit type, and (when the submodule is checked out) every lens slashdo
- * declares has an entry here — so a lens added upstream cannot silently go
- * unscheduled.
+ * It is a parity record, not runtime wiring — nothing dereferences it at
+ * dispatch. auditCatalog.test.js is its consumer, and checks it two ways: every
+ * listed type is a real audit type, and (when the submodule is checked out)
+ * every lens slashdo declares has an entry here, so a lens added upstream
+ * cannot silently go unschedulable.
  */
 export const DO_BETTER_LENS_COVERAGE = Object.freeze({
   security: ['security'],

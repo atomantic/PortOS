@@ -182,7 +182,7 @@ import { RETIRED_CONSOLE_ERRORS_PROMPT } from './taskPromptDefaults/retiredPromp
 // — the posture guard below iterates it so the two can't drift apart.
 import { NON_COMMITTING_COORDINATOR_TASK_TYPES } from './taskTypeHooks.js'
 import { enforceManagedAgentOptions } from './taskScheduleRegistry.js'
-import { modeContractFor, auditDoWorkRequiresWorktree } from '../lib/auditCatalog.js'
+import { modeContractFor, auditDoWorkRequiresWorktree, AUDIT_TASK_TYPES } from '../lib/auditCatalog.js'
 
 import { loadState } from './cosState.js'
 
@@ -1895,40 +1895,37 @@ describe('taskSchedule', () => {
   })
 
   describe('audit file-issues types', () => {
-    it('registers data-safety, simplify, and module-hygiene as enabled on-demand file-issues audits', () => {
-      for (const taskType of ['data-safety', 'simplify', 'module-hygiene']) {
-        expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(taskType)
-        expect(TASK_TYPE_DESCRIPTIONS[taskType]).toBeTruthy()
-        const cfg = DEFAULT_TASK_INTERVALS[taskType]
-        expect(cfg.type).toBe(INTERVAL_TYPES.ON_DEMAND)
-        expect(cfg.enabled).toBe(true)
-        expect(cfg.taskMetadata.fileIssues).toBe(true)
-        expect(cfg.taskMetadata.useWorktree).toBe(false)
-        expect(cfg.taskMetadata.openPR).toBe(false)
-        expect(MANAGED_AGENT_OPTIONS[taskType]).toBeUndefined()
-      }
-      expect(DEFAULT_TASK_INTERVALS['module-hygiene'].dataInputs).toEqual([
-        'open-issues',
-        'open-pull-requests',
+    // Every file-issues-by-default lane, in ONE table: the posture is a single
+    // product decision ("an unattended scheduled run must not land code"), so
+    // asserting it in two places 20 lines apart just means a future flag gets
+    // added to one of them. `dataInputs` is the only column that varies — the
+    // lanes that preload open issues/PRs dedup against work already filed or in
+    // flight without spending the agent's own forge calls.
+    const NO_PRELOAD = undefined
+    const DEDUP_PRELOAD = ['open-issues', 'open-pull-requests']
+    const FILE_ISSUES_LANES = [
+      ['data-safety', NO_PRELOAD],
+      ['simplify', NO_PRELOAD],
+      ['module-hygiene', DEDUP_PRELOAD],
+      // Derived, so a seventh better-* lane cannot be added without landing here.
+      ...[...AUDIT_TASK_TYPES]
+        .filter((taskType) => taskType.startsWith('better-'))
+        .map((taskType) => [taskType, DEDUP_PRELOAD]),
+    ]
+
+    it('covers every better-* lane, derived from the catalog rather than hand-listed', () => {
+      const lanes = FILE_ISSUES_LANES.map(([taskType]) => taskType).filter((t) => t.startsWith('better-'))
+      expect(lanes).toEqual([
+        'better-complexity',
+        'better-cognitive-load',
+        'better-structural-drift',
+        'better-runtime-safety',
+        'better-dependency-freedom',
+        'better-test-quality',
       ])
     })
 
-    // One scheduled lane per slashdo do:better audit lens. They ship file-issues
-    // by default because an unattended scheduled run must not land a refactor,
-    // and the four that restructure code require worktree isolation the moment
-    // the user flips them to implement — a mechanical rewrite of a hot function,
-    // a consolidation of two sources of truth, or a dependency swap is exactly
-    // the edit that must never happen in the operator's live checkout.
-    const BETTER_LANES = [
-      'better-complexity',
-      'better-cognitive-load',
-      'better-structural-drift',
-      'better-runtime-safety',
-      'better-dependency-freedom',
-      'better-test-quality',
-    ]
-
-    it.each(BETTER_LANES)('registers %s as an enabled on-demand file-issues audit', (taskType) => {
+    it.each(FILE_ISSUES_LANES)('registers %s as an enabled on-demand file-issues audit', (taskType, dataInputs) => {
       expect(SELF_IMPROVEMENT_TASK_TYPES).toContain(taskType)
       expect(TASK_TYPE_DESCRIPTIONS[taskType]).toBeTruthy()
       expect(DEFAULT_TASK_PROMPTS[taskType]).toBeTruthy()
@@ -1938,16 +1935,15 @@ describe('taskSchedule', () => {
       expect(cfg.taskMetadata.fileIssues).toBe(true)
       expect(cfg.taskMetadata.useWorktree).toBe(false)
       expect(cfg.taskMetadata.openPR).toBe(false)
-      // Dedup against work already filed or in flight, without spending the
-      // agent's own forge calls — the shape module-hygiene established.
-      expect(cfg.dataInputs).toEqual(['open-issues', 'open-pull-requests'])
+      expect(cfg.dataInputs).toEqual(dataInputs)
       // The file-issues posture is enforced at dispatch, so the user can still
       // flip the toggle and implement.
       expect(MANAGED_AGENT_OPTIONS[taskType]).toBeUndefined()
     })
 
     it('requires worktree isolation for the lanes whose remediation restructures code', () => {
-      const isolated = BETTER_LANES.filter((t) => auditDoWorkRequiresWorktree(t))
+      const isolated = [...AUDIT_TASK_TYPES]
+        .filter((t) => t.startsWith('better-') && auditDoWorkRequiresWorktree(t))
       expect(isolated).toEqual([
         'better-complexity',
         'better-cognitive-load',

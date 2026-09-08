@@ -207,13 +207,27 @@ describe('getAuditFilingPreset', () => {
 // and it only means anything if both halves are checked: that every type it
 // names is real, and that every lens upstream declares is actually named.
 describe('DO_BETTER_LENS_COVERAGE', () => {
-  it('names only registered audit types, primary owner first', () => {
+  it('names only registered audit types, without duplicates', () => {
     for (const [lens, owners] of Object.entries(DO_BETTER_LENS_COVERAGE)) {
-      expect(Array.isArray(owners) && owners.length, lens).toBeTruthy();
+      expect(Array.isArray(owners), lens).toBe(true);
+      expect(owners.length, lens).toBeGreaterThan(0);
       for (const owner of owners) {
         expect(AUDIT_TASK_TYPES.has(owner), `${lens} -> ${owner}`).toBe(true);
       }
       expect(new Set(owners).size, `${lens} lists a duplicate owner`).toBe(owners.length);
+    }
+  });
+
+  // The seeded schedule row ALWAYS sets taskMetadata.fileIssues, so for a
+  // scheduled dispatch the catalog default is never actually consulted — which
+  // means the two can disagree and nothing would notice until someone read the
+  // catalog and believed it. They encode one product decision; pin them equal.
+  it('agrees with the seeded schedule row on every audit default', async () => {
+    const { DEFAULT_TASK_INTERVALS } = await import('../services/taskScheduleRegistry.js');
+    for (const taskType of AUDIT_TASK_TYPES) {
+      const seeded = DEFAULT_TASK_INTERVALS[taskType]?.taskMetadata?.fileIssues;
+      if (seeded === undefined) continue; // not seeded with an explicit posture
+      expect(seeded, taskType).toBe(defaultFileIssuesFor(taskType));
     }
   });
 
@@ -229,7 +243,12 @@ describe('DO_BETTER_LENS_COVERAGE', () => {
   // unschedulable — exactly the gap these task types were added to close.
   it('covers every lens the bundled do:better command declares', async () => {
     const { existsSync, readFileSync } = await import('fs');
-    const auditRef = new URL('../../lib/slashdo/lib/better-audit.md', import.meta.url);
+    const { join } = await import('path');
+    const { PATHS } = await import('./paths.js');
+    // Anchored on PATHS.slashdo rather than a relative URL: a missing file here
+    // SKIPS outside CI, so a path that silently goes stale disables the guard
+    // instead of failing it — the exact failure this test exists to prevent.
+    const auditRef = join(PATHS.slashdo, 'lib', 'better-audit.md');
     if (!existsSync(auditRef)) {
       requireSlashdoSubmoduleInCi(false);
       return;
