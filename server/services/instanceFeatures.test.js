@@ -67,7 +67,9 @@ import {
   getInstanceFeatures,
   isInstanceFeatureEnabled,
   resolveInstanceFeatures,
+  resolveInstanceFeatureGroups,
   updateInstanceFeature,
+  updateInstanceFeatureGroup,
   updateEidoverseWorldsSource,
 } from './instanceFeatures.js';
 
@@ -304,13 +306,151 @@ describe('instance features', () => {
     mock.datadogConfigured = true;
 
     const { features } = await getInstanceFeatures();
-    expect(Object.fromEntries(features.map((f) => [f.id, f.enabled])))
-      .toEqual({ post: true, datadog: true, jira: false, eidoverse: false, gsd: false, openclaw: false, health: true, rigging: false, facetime: false });
+    expect(Object.fromEntries(features.map((f) => [f.id, f.enabled]))).toEqual({
+      post: true, datadog: true, jira: false, eidoverse: false, gsd: false, openclaw: false, health: true,
+      rigging: false, facetime: false, imessage: true, signal: true, x: true, 'stacker-news': true, beeper: false,
+    });
   });
 
   it('rejects an unknown feature id', async () => {
     await expect(updateInstanceFeature('nope', true)).rejects.toMatchObject({ status: 404 });
     expect(await isInstanceFeatureEnabled('nope')).toBe(false);
+  });
+
+  // #40 — Comms feature group: FaceTime Audio, iMessage and Signal bucketed
+  // under a `comms` group toggle with per-feature tri-state overrides. Nested
+  // inside this describe (rather than a sibling) so it inherits the shared
+  // `beforeEach` that resets `mock.settings` between tests.
+  describe('instance feature groups (#40)', () => {
+  it('parity: an install with no stored group state resolves exactly as before this change', async () => {
+    // No instanceFeatureGroups key at all — the shape every existing install has
+    // today. iMessage and Signal must resolve enabled with no settings write.
+    const { features, groups } = await getInstanceFeatures();
+    expect(byId(features, 'imessage')).toMatchObject({ enabled: true, source: 'default' });
+    expect(byId(features, 'signal')).toMatchObject({ enabled: true, source: 'default' });
+    expect(byId(features, 'x')).toMatchObject({ enabled: true, source: 'default' });
+    expect(byId(features, 'stacker-news')).toMatchObject({ enabled: true, source: 'default' });
+    expect(await isInstanceFeatureEnabled('imessage')).toBe(true);
+    expect(await isInstanceFeatureEnabled('signal')).toBe(true);
+    expect(await isInstanceFeatureEnabled('x')).toBe(true);
+    expect(await isInstanceFeatureEnabled('stacker-news')).toBe(true);
+    // FaceTime Audio keeps answering to its own detector exactly as before
+    // grouping existed — a group with no stored state never overrides it. This
+    // suite doesn't mock voice/facetimeBridge.js, so the source depends on
+    // whatever the real probe finds on the machine running the test.
+    expect(['auto', 'default', 'detect-failed']).toContain(byId(features, 'facetime').source);
+
+    expect(byId(groups, 'comms')).toMatchObject({ id: 'comms', enabled: true });
+  });
+
+  it('lists every registered group, defaulting to enabled', async () => {
+    expect(resolveInstanceFeatureGroups({})).toEqual([
+      { id: 'comms', label: 'Comms', description: expect.any(String), enabled: true },
+    ]);
+  });
+
+  // Resolver truth table: group on/off × feature override inherit/on/off ×
+  // feature default true/false (imessage defaults true; facetime's detector
+  // answer is pinned via an explicit `detected` map — resolveInstanceFeatures
+  // is a pure function of its `detected` argument, so this doesn't depend on
+  // whatever the real facetimeBridge probe finds on the test machine).
+  describe('resolver truth table', () => {
+    const detected = { facetime: false };
+
+    it('group on, override inherit → feature default', () => {
+      const settings = {};
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'imessage')).toMatchObject({ enabled: true, source: 'default' });
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'facetime')).toMatchObject({ enabled: false, source: 'auto' });
+    });
+
+    it('group on, override on → on regardless of default', () => {
+      const settings = { instanceFeatures: { facetime: { enabled: true } } };
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'facetime')).toMatchObject({ enabled: true, source: 'explicit' });
+    });
+
+    it('group on, override off → off regardless of default', () => {
+      const settings = { instanceFeatures: { imessage: { enabled: false } } };
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'imessage')).toMatchObject({ enabled: false, source: 'explicit' });
+    });
+
+    it('group off, override inherit → off (hidden), for every default', () => {
+      const settings = { instanceFeatureGroups: { comms: { enabled: false } } };
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'imessage')).toMatchObject({ enabled: false, source: 'group-off' });
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'signal')).toMatchObject({ enabled: false, source: 'group-off' });
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'facetime')).toMatchObject({ enabled: false, source: 'group-off' });
+    });
+
+    it('group off, override on → the override wins, hands the feature back', () => {
+      const settings = {
+        instanceFeatureGroups: { comms: { enabled: false } },
+        instanceFeatures: { imessage: { enabled: true } },
+      };
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'imessage')).toMatchObject({ enabled: true, source: 'explicit' });
+      // A sibling with no override of its own stays hidden.
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'signal')).toMatchObject({ enabled: false, source: 'group-off' });
+    });
+
+    it('group off, override off → off (redundant with the group, still explicit)', () => {
+      const settings = {
+        instanceFeatureGroups: { comms: { enabled: false } },
+        instanceFeatures: { signal: { enabled: false } },
+      };
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'signal')).toMatchObject({ enabled: false, source: 'explicit' });
+    });
+
+    it('ungrouped features are unaffected by group state', () => {
+      const settings = { instanceFeatureGroups: { comms: { enabled: false } } };
+      expect(byId(resolveInstanceFeatures(settings, { detected }), 'post')).toMatchObject({ enabled: true, source: 'default' });
+    });
+  });
+
+  it('fails closed for a malformed group flag', () => {
+    const settings = { instanceFeatureGroups: { comms: { enabled: 'nope' } } };
+    expect(byId(resolveInstanceFeatures(settings), 'imessage')).toMatchObject({ enabled: false, source: 'group-off' });
+    expect(resolveInstanceFeatureGroups(settings)).toContainEqual(
+      expect.objectContaining({ id: 'comms', enabled: false }),
+    );
+  });
+
+  it('fails closed for every feature and every group when settings cannot be read', async () => {
+    mock.corrupt = true;
+    const { groups } = await getInstanceFeatures();
+    expect(byId(groups, 'comms')).toMatchObject({ enabled: false });
+  });
+
+  it('clears a per-feature override back to inherit rather than writing a third sentinel value', async () => {
+    mock.settings = { instanceFeatures: { facetime: { enabled: true } } };
+
+    const result = await updateInstanceFeature('facetime', null);
+
+    expect(mock.settings).toEqual({ instanceFeatures: {} });
+    // Storage is what this test pins; facetime's resolved source afterward
+    // depends on the real (unmocked) detector, asserted separately above.
+    expect(byId(result.features, 'facetime').source).not.toBe('explicit');
+  });
+
+  it('keeps a co-stored key when clearing just the enabled override', async () => {
+    // Not a real shape any grouped feature stores today, but the merge must not
+    // assume `enabled` is the only key ever co-stored under a feature id.
+    mock.settings = { instanceFeatures: { facetime: { enabled: true, note: 'keep' } } };
+
+    await updateInstanceFeature('facetime', null);
+
+    expect(mock.settings).toEqual({ instanceFeatures: { facetime: { note: 'keep' } } });
+  });
+
+  it('toggles a group and reports it back on both features and groups', async () => {
+    const result = await updateInstanceFeatureGroup('comms', false);
+
+    expect(mock.settings).toEqual({ instanceFeatureGroups: { comms: { enabled: false } } });
+    expect(byId(result.groups, 'comms')).toMatchObject({ enabled: false });
+    expect(byId(result.features, 'imessage')).toMatchObject({ enabled: false, source: 'group-off' });
+    expect(await isInstanceFeatureEnabled('imessage')).toBe(false);
+  });
+
+  it('rejects an unknown group id', async () => {
+    await expect(updateInstanceFeatureGroup('nope', false)).rejects.toMatchObject({ status: 404 });
+  });
   });
 
   it('records instance-feature.toggle with { id, enabled } and skips settings.update', async () => {

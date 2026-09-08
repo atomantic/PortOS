@@ -1,7 +1,7 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { parseGitHubUrl } from '../lib/repoUrl.js';
-import { INSTANCE_FEATURES, INSTANCE_FEATURE_IDS } from '../lib/instanceFeatureRegistry.js';
+import { INSTANCE_FEATURES, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUPS } from '../lib/instanceFeatureRegistry.js';
 import { isPlainObject } from '../lib/objects.js';
 import {
   assertEidoverseInstalled,
@@ -64,11 +64,15 @@ const DETECTORS = {
 };
 
 const FEATURE_BY_ID = new Map(INSTANCE_FEATURES.map((feature) => [feature.id, feature]));
+const GROUP_BY_ID = new Map(INSTANCE_FEATURE_GROUPS.map((group) => [group.id, group]));
 
 // The stored override for one feature: `true`/`false` when the user has toggled
 // it, `null` when they never have. `null` is the signal that detection (and then
 // `defaultEnabled`) decides — distinct from a stored `false`, which must keep
-// the feature off even once the integration is configured.
+// the feature off even once the integration is configured. Setting a grouped
+// feature's override back to "inherit" (updateInstanceFeature(id, null)) drops
+// the stored key entirely, so it reads `null` here exactly like a feature that
+// was never touched — no third sentinel value for this function to learn.
 const storedOverride = (feature, settings) => {
   const instanceFeatures = settings?.instanceFeatures;
   if (instanceFeatures === undefined) return null;
@@ -82,9 +86,34 @@ const storedOverride = (feature, settings) => {
   return typeof stored === 'boolean' ? stored : false;
 };
 
+// A feature group's own on/off flag (#40), default `true` — opt-out, not
+// opt-in — so registering a group never hides a feature an existing install
+// already saw with no settings write required. Malformed shapes fail toward
+// `false`, the same posture as storedOverride above: untrustworthy settings
+// must not be read as a confident "on".
+const storedGroupEnabled = (groupId, settings) => {
+  const groups = settings?.instanceFeatureGroups;
+  if (groups === undefined) return true;
+  if (!isPlainObject(groups)) return false;
+  if (!Object.prototype.hasOwnProperty.call(groups, groupId)) return true;
+
+  const groupSettings = groups[groupId];
+  if (!isPlainObject(groupSettings)) return false;
+  const stored = groupSettings.enabled;
+  if (stored === undefined) return true;
+  return typeof stored === 'boolean' ? stored : false;
+};
+
 const resolveOne = (feature, settings, detected) => {
   const override = storedOverride(feature, settings);
   if (override !== null) return { enabled: override, source: 'explicit' };
+
+  // No override: a grouped feature still answers to its group. Group OFF hides
+  // every member that hasn't overridden on (handled above); group ON — the
+  // default — hands the feature back to its own normal resolution below.
+  if (feature.group && !storedGroupEnabled(feature.group, settings)) {
+    return { enabled: false, source: 'group-off' };
+  }
 
   const configured = detected?.[feature.id];
   if (typeof configured === 'boolean') return { enabled: configured, source: 'auto' };
@@ -101,6 +130,17 @@ const resolveOne = (feature, settings, detected) => {
   }
   return { enabled: feature.defaultEnabled, source: 'default' };
 };
+
+// The resolved list Settings > Features renders for the group toggles
+// themselves — parallel to resolveInstanceFeatures below, but there is no
+// detection or `corrupt`-settings special case beyond storedGroupEnabled's own
+// fail-closed-on-malformed-shape handling.
+export const resolveInstanceFeatureGroups = (settings = {}) => (
+  INSTANCE_FEATURE_GROUPS.map((group) => ({
+    ...group,
+    enabled: storedGroupEnabled(group.id, settings),
+  }))
+);
 
 // One feature's detector: `true`/`false` when it answered, `null` when the
 // feature has no detector or the probe threw — so the caller falls back to
@@ -172,7 +212,14 @@ export async function getInstanceFeatures() {
     getSettingsWithStatus(),
     detectFeatureConfiguration(),
   ]);
-  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { corrupt, detected }), settings) };
+  const features = await attachSetupStatus(resolveInstanceFeatures(settings, { corrupt, detected }), settings);
+  // Corrupt settings already fail every feature closed above; mirror that for
+  // groups rather than reading storedGroupEnabled's absent-key default of
+  // `true` off of settings we know are untrustworthy.
+  const groups = corrupt
+    ? INSTANCE_FEATURE_GROUPS.map((group) => ({ ...group, enabled: false }))
+    : resolveInstanceFeatureGroups(settings);
+  return { features, groups };
 }
 
 export async function updateEidoverseWorldsRepo(worldsRepoUrl) {
@@ -208,6 +255,9 @@ export async function isInstanceFeatureEnabled(featureId) {
 
   const override = storedOverride(feature, settings);
   if (override !== null) return override;
+  // Same short-circuit as the override check above: a grouped feature whose
+  // group is off never needs the detector run either.
+  if (feature.group && !storedGroupEnabled(feature.group, settings)) return false;
   return resolveOne(feature, settings, { [featureId]: await runDetector(featureId) }).enabled;
 }
 
@@ -222,6 +272,22 @@ export async function updateInstanceFeature(featureId, enabled) {
   const settings = await updateSettingsWith((current) => {
     const instanceFeatures = isPlainObject(current.instanceFeatures) ? current.instanceFeatures : {};
     const currentFeature = isPlainObject(instanceFeatures[featureId]) ? instanceFeatures[featureId] : {};
+
+    // `enabled === null` is the tri-state override going back to "inherit":
+    // drop the stored `enabled` key (keeping any other co-stored key, e.g.
+    // eidoverse's worldsRepoUrl) rather than writing a third sentinel value, so
+    // storedOverride's existing "key absent" path picks it up unchanged.
+    if (enabled === null) {
+      const { enabled: _drop, ...rest } = currentFeature;
+      const nextInstanceFeatures = { ...instanceFeatures };
+      if (Object.keys(rest).length > 0) {
+        nextInstanceFeatures[featureId] = rest;
+      } else {
+        delete nextInstanceFeatures[featureId];
+      }
+      return { ...current, instanceFeatures: nextInstanceFeatures };
+    }
+
     return {
       ...current,
       instanceFeatures: {
@@ -248,5 +314,32 @@ export async function updateInstanceFeature(featureId, enabled) {
   }
 
   const detected = await detectFeatureConfiguration();
-  return { features: await attachSetupStatus(resolveInstanceFeatures(settings, { detected }), settings) };
+  return {
+    features: await attachSetupStatus(resolveInstanceFeatures(settings, { detected }), settings),
+    groups: resolveInstanceFeatureGroups(settings),
+  };
+}
+
+export async function updateInstanceFeatureGroup(groupId, enabled) {
+  if (!GROUP_BY_ID.has(groupId)) {
+    throw new ServerError(`Unknown instance feature group: ${groupId}`, { status: 404, code: 'NOT_FOUND' });
+  }
+
+  const settings = await updateSettingsWith((current) => {
+    const groups = isPlainObject(current.instanceFeatureGroups) ? current.instanceFeatureGroups : {};
+    const currentGroup = isPlainObject(groups[groupId]) ? groups[groupId] : {};
+    return {
+      ...current,
+      instanceFeatureGroups: {
+        ...groups,
+        [groupId]: { ...currentGroup, enabled },
+      },
+    };
+  });
+
+  const detected = await detectFeatureConfiguration();
+  return {
+    features: await attachSetupStatus(resolveInstanceFeatures(settings, { detected }), settings),
+    groups: resolveInstanceFeatureGroups(settings),
+  };
 }

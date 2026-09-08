@@ -118,4 +118,56 @@ describe('useInstanceFeatures', () => {
 
     expect(screen.getByTestId('a')).toHaveTextContent('on');
   });
+
+  // Feature GROUPS (#40) — only the Settings > Features tab reads `groups`, but
+  // the shared hook has to carry it alongside `features` for that consumer.
+  describe('feature groups (#40)', () => {
+    function GroupsProbe() {
+      const { groups } = useInstanceFeatures();
+      return <output data-testid="groups">{groups === null ? 'loading' : JSON.stringify(groups)}</output>;
+    }
+
+    it('carries the groups list from the same fetch as features', async () => {
+      mock.getInstanceFeatures.mockResolvedValue({
+        features: JIRA_OFF,
+        groups: [{ id: 'comms', label: 'Comms', enabled: true }],
+      });
+      render(<GroupsProbe />);
+      await act(async () => {});
+
+      expect(screen.getByTestId('groups')).toHaveTextContent('"id":"comms"');
+    });
+
+    it('keeps the previously known groups when a publisher only announces a plain feature change', async () => {
+      mock.getInstanceFeatures.mockResolvedValue({
+        features: JIRA_OFF,
+        groups: [{ id: 'comms', label: 'Comms', enabled: true }],
+      });
+      render(<GroupsProbe />);
+      await act(async () => {});
+
+      // No `groups` in this publish — the plain shape every existing caller sends.
+      act(() => publishInstanceFeatures(JIRA_ON, { featureId: 'jira', enabled: true }));
+
+      expect(screen.getByTestId('groups')).toHaveTextContent('"id":"comms"');
+    });
+
+    it('applies a freshly published groups list without refetching', async () => {
+      mock.getInstanceFeatures.mockResolvedValue({
+        features: JIRA_OFF,
+        groups: [{ id: 'comms', label: 'Comms', enabled: true }],
+      });
+      render(<GroupsProbe />);
+      await act(async () => {});
+
+      act(() => publishInstanceFeatures(JIRA_ON, {
+        featureId: 'jira',
+        enabled: true,
+        groups: [{ id: 'comms', label: 'Comms', enabled: false }],
+      }));
+
+      expect(screen.getByTestId('groups')).toHaveTextContent('"enabled":false');
+      expect(mock.getInstanceFeatures).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -4,7 +4,7 @@ import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
-import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS } from './instanceFeatureRegistry.js';
+import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } from './instanceFeatureRegistry.js';
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
@@ -975,7 +975,28 @@ export const instanceFeatureSettingsSchema = z.object(
 
 export const instanceFeatureIdSchema = z.enum([...INSTANCE_FEATURE_IDS]);
 
+// `enabled: null` is the tri-state override going back to "inherit" — it clears
+// the stored value rather than writing a third sentinel, so a grouped feature's
+// resolution falls through to its group's `enabled` flag (see resolveOne in
+// services/instanceFeatures.js). Every existing caller sends a real boolean;
+// only the grouped-feature override control in Settings > Features sends null.
 export const instanceFeatureUpdateSchema = z.object({
+  enabled: z.boolean().nullable(),
+}).strict();
+
+// Install-local feature GROUP participation flags. A group has no inherit
+// state of its own — just an on/off default-true toggle — so unlike
+// instanceFeatureUpdateSchema above this stays non-nullable.
+export const instanceFeatureGroupSettingsSchema = z.object(
+  Object.fromEntries(INSTANCE_FEATURE_GROUP_IDS.map((id) => [
+    id,
+    z.object({ enabled: z.boolean().optional() }).strict().optional(),
+  ]))
+).strict();
+
+export const instanceFeatureGroupIdSchema = z.enum([...INSTANCE_FEATURE_GROUP_IDS]);
+
+export const instanceFeatureGroupUpdateSchema = z.object({
   enabled: z.boolean(),
 }).strict();
 

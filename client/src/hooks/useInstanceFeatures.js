@@ -30,11 +30,19 @@ const loadInstanceFeatures = () => {
   if (!inFlight || inFlightGeneration !== generation) {
     const requested = generation;
     const request = api.getInstanceFeatures({ silent: true })
-      .then((data) => ({ features: Array.isArray(data?.features) ? data.features : [], error: null }))
+      .then((data) => ({
+        features: Array.isArray(data?.features) ? data.features : [],
+        // Feature GROUPS (#40) — Settings > Features is the only consumer that
+        // reads this; the sidebar, ⌘K, and voice keep reading `features[].enabled`
+        // exactly as before, since a grouped feature's `enabled` already carries
+        // its group's effect.
+        groups: Array.isArray(data?.groups) ? data.groups : [],
+        error: null,
+      }))
       .catch((error) => {
         // Fail OPEN: an unreadable feature list must not blank out navigation.
         console.warn(`⚠️ instance features fetch failed: ${error?.message || error}`);
-        return { features: null, error };
+        return { features: null, groups: null, error };
       })
       .then((result) => {
         if (inFlight === request) {
@@ -56,6 +64,7 @@ const loadInstanceFeatures = () => {
 /**
  * @returns {{
  *   features: Array|null,   // null while loading or after a failed fetch
+ *   groups: Array|null,     // feature GROUPS (#40) — null while loading or after a failed fetch
  *   error: Error|null,
  *   isFeatureEnabled: (featureId: string) => boolean,
  *   reload: () => Promise<void>,
@@ -66,9 +75,13 @@ const loadInstanceFeatures = () => {
  *               (an unknown gate must never erase a page)
  *   - loading → false, so a gated row appears once rather than flashing away
  *   - errored → true, so a server hiccup shows everything instead of hiding it
+ *
+ * `groups` is consumed by the Settings > Features tab only — every other
+ * consumer (sidebar, ⌘K, voice) keeps reading `features[].enabled`, which
+ * already carries a grouped feature's effective (group-aware) state.
  */
 export function useInstanceFeatures() {
-  const [state, setState] = useState(() => cached || { features: null, error: null });
+  const [state, setState] = useState(() => cached || { features: null, groups: null, error: null });
 
   useEffect(() => {
     let active = true;
@@ -78,9 +91,14 @@ export function useInstanceFeatures() {
 
     const onFeaturesChanged = (event) => {
       const features = event?.detail?.features;
+      const groups = event?.detail?.groups;
+      // A publisher that doesn't know about groups (e.g. a caller only
+      // announcing a `featureId`/`enabled` pair) must not wipe the groups this
+      // hook already knows — keep the previous value rather than resetting it.
+      const previousGroups = cached?.groups ?? null;
       generation += 1;
       if (Array.isArray(features)) {
-        cached = { features, error: null };
+        cached = { features, groups: Array.isArray(groups) ? groups : previousGroups, error: null };
         sync(cached);
         return;
       }
@@ -95,7 +113,7 @@ export function useInstanceFeatures() {
     };
   }, []);
 
-  const { features, error } = state;
+  const { features, groups, error } = state;
 
   const isFeatureEnabled = useCallback((featureId) => {
     if (!featureId) return true;
@@ -112,21 +130,28 @@ export function useInstanceFeatures() {
     generation += 1;
     cached = null;
     return loadInstanceFeatures().then((result) => {
-      if (result.features) publishInstanceFeatures(result.features);
+      if (result.features) publishInstanceFeatures(result.features, { groups: result.groups });
       else setState(result);
     });
   }, []);
 
-  return { features, error, isFeatureEnabled, reload };
+  return { features, groups, error, isFeatureEnabled, reload };
 }
 
 /**
  * Announce a feature change on the shared channel. Pass the server's fresh
  * `features` list so every listener applies it without a second round-trip.
+ * `groups` is optional — most publishers (a plain feature toggle) don't carry
+ * it, and listeners fall back to whatever groups they already have cached.
  */
-export const publishInstanceFeatures = (features, { featureId, enabled } = {}) => {
+export const publishInstanceFeatures = (features, { featureId, enabled, groups } = {}) => {
   window.dispatchEvent(new CustomEvent(INSTANCE_FEATURES_CHANGED, {
-    detail: { featureId, enabled, features: Array.isArray(features) ? features : undefined },
+    detail: {
+      featureId,
+      enabled,
+      features: Array.isArray(features) ? features : undefined,
+      groups: Array.isArray(groups) ? groups : undefined,
+    },
   }));
 };
 

@@ -7,7 +7,7 @@ import RiggingRuntimeCard from './RiggingRuntimeCard';
 import { useInstanceFeatures, publishInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import { isGitHubRepoUrl, parseGitHubUrl } from '../../lib/repoUrl.js';
 import { getPrimaryLaunchUrl } from '../../services/appUrls.js';
-import { installEidoverseFeature, updateEidoverseWorldsSource, updateInstanceFeature } from '../../services/api';
+import { installEidoverseFeature, updateEidoverseWorldsSource, updateInstanceFeature, updateInstanceFeatureGroup } from '../../services/api';
 
 // How the current value was decided, so a user who never touched the toggle can
 // see that the install picked it up from a configured integration rather than
@@ -18,6 +18,13 @@ const sourceHint = (feature) => {
     ? `Detected automatically — this install has ${feature.label} configured.`
     : `Detected automatically — no ${feature.label} instance is configured yet.`;
 };
+
+// A grouped feature's own tri-state override, inferred from the resolved
+// `source`/`enabled` the server already sends — no separate field needed.
+// `source === 'explicit'` is the only way an override is stored (see
+// resolveOne in server/services/instanceFeatures.js); anything else (`auto`,
+// `default`, `detect-failed`, `group-off`) means the feature is inheriting.
+const overrideOf = (feature) => (feature.source === 'explicit' ? (feature.enabled ? 'on' : 'off') : 'inherit');
 
 const normalizeGitHubRepo = (url) => {
   const parsed = parseGitHubUrl(url);
@@ -55,7 +62,7 @@ const SourceChoiceButton = ({ active, children, disabled = false, onClick }) => 
 );
 
 export function InstanceFeaturesTab() {
-  const { features, error, reload } = useInstanceFeatures();
+  const { features, groups, error, reload } = useInstanceFeatures();
   const [savingId, setSavingId] = useState(null);
   const [eidoverseRepoUrl, setEidoverseRepoUrl] = useState(null);
   const [updatingEidoverseSource, setUpdatingEidoverseSource] = useState(false);
@@ -74,7 +81,43 @@ export function InstanceFeaturesTab() {
       return null;
     });
 
-    if (result) publishInstanceFeatures(result.features, { featureId: feature.id, enabled });
+    if (result) publishInstanceFeatures(result.features, { featureId: feature.id, enabled, groups: result.groups });
+    setSavingId(null);
+  };
+
+  // A grouped feature's three-way control (#40): 'inherit' clears the stored
+  // override (enabled: null) rather than writing a boolean, so the feature goes
+  // back to answering its group/detector/default exactly as if never touched.
+  const handleOverrideChange = async (feature, nextOverride) => {
+    if (!feature?.id || savingId || overrideOf(feature) === nextOverride) return;
+    const enabled = nextOverride === 'inherit' ? null : nextOverride === 'on';
+    setSavingId(feature.id);
+
+    const result = await updateInstanceFeature(feature.id, enabled, { silent: true }).catch((err) => {
+      toast.error(err.message || `Could not update ${feature.label}`);
+      return null;
+    });
+
+    if (result) publishInstanceFeatures(result.features, { featureId: feature.id, enabled, groups: result.groups });
+    setSavingId(null);
+  };
+
+  // The group's own toggle (#40). Namespaced with a `group:` prefix in
+  // `savingId` only to keep single-flight saving state shared with the
+  // per-feature controls — group ids and feature ids never collide today, but
+  // this keeps that assumption from mattering.
+  const handleGroupToggle = async (group) => {
+    if (!group?.id || savingId) return;
+    const enabled = !group.enabled;
+    const savingKey = `group:${group.id}`;
+    setSavingId(savingKey);
+
+    const result = await updateInstanceFeatureGroup(group.id, enabled, { silent: true }).catch((err) => {
+      toast.error(err.message || `Could not update ${group.label}`);
+      return null;
+    });
+
+    if (result) publishInstanceFeatures(result.features, { groups: result.groups });
     setSavingId(null);
   };
 
@@ -140,6 +183,293 @@ export function InstanceFeaturesTab() {
 
   if (features === null) return <BrailleSpinner text="Loading instance features" />;
 
+  // Ungrouped features render unchanged, one card each. A grouped feature
+  // renders once, as part of its group's card, at the position of the first
+  // member the registry lists — so the overall order still follows the
+  // registry. When the group's own record isn't in `groups` (still loading,
+  // or a response that carries `features` but an empty/missing `groups`
+  // list), fall back to rendering each member as its own ungrouped card
+  // instead of a group row with nothing to key off — a feature must never
+  // vanish from the tab just because its group's metadata didn't load.
+  const groupsById = new Map((groups || []).map((group) => [group.id, group]));
+  const renderedGroupIds = new Set();
+  const rows = [];
+  for (const feature of features) {
+    if (feature.group && groupsById.has(feature.group)) {
+      if (renderedGroupIds.has(feature.group)) continue;
+      renderedGroupIds.add(feature.group);
+      rows.push({ kind: 'group', group: groupsById.get(feature.group), members: features.filter((f) => f.group === feature.group) });
+    } else {
+      rows.push({ kind: 'feature', feature });
+    }
+  }
+
+  const renderFeatureCard = (feature) => {
+    const hint = sourceHint(feature);
+    const isEidoverse = feature.id === 'eidoverse';
+    // Rigging's "configured" state is a machine-local runtime rather than a
+    // config file, so its row carries the probe's answer (installed/absent, the
+    // resolved interpreter, the module version, the install command).
+    const isRigging = feature.id === 'rigging';
+    const setup = isEidoverse ? feature.setup : null;
+    const needsInstall = isEidoverse && setup?.installed !== true;
+    const installing = savingId === feature.id;
+    const selectedRepoUrl = eidoverseRepoUrl ?? setup?.worldsRepoUrl ?? '';
+    const selectedRepo = parseGitHubUrl(selectedRepoUrl);
+    const selectedTransport = eidoverseTransport(selectedRepoUrl);
+    const selfOwner = setup?.sourceOwners?.self || null;
+    const upstreamOwner = setup?.sourceOwners?.upstream || 'anima-research';
+    const worldsBrowseUrl = githubBrowseUrl(setup?.worldsRepoUrl);
+    const repoIsValid = isGitHubRepoUrl(selectedRepoUrl);
+    const canInstall = repoIsValid && setup?.registryAvailable !== false;
+    const canUpdateSource = repoIsValid
+      && normalizeGitHubRepo(selectedRepoUrl) !== setup?.worldsRepoUrl
+      && setup?.registryAvailable !== false;
+    const launchUrl = setup?.appId && setup?.uiPort
+      ? getPrimaryLaunchUrl({ id: setup.appId, uiPort: setup.uiPort })
+      : null;
+    return (
+      <div
+        key={feature.id}
+        className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 bg-port-card border border-port-border rounded-lg p-4"
+      >
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-white">{feature.label}</h3>
+          <p className="text-sm text-gray-400 mt-1">{feature.description}</p>
+          <p className={`text-xs mt-2 ${feature.enabled ? 'text-port-success' : 'text-gray-500'}`}>
+            {needsInstall
+              ? (setup?.partial ? 'Installation needs to be resumed' : 'Not installed')
+              : (feature.enabled
+                ? 'Active on this instance'
+                : (isEidoverse ? 'Installed but disabled on this instance' : 'Not used on this instance'))}
+          </p>
+          {hint && !isRigging && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
+          {/* Rigging's own card states the runtime's status precisely; the
+              generic "no <label> instance is configured" hint would talk about
+              an integration this feature does not have. */}
+          {isRigging && <RiggingRuntimeCard />}
+          {isEidoverse && (
+            <div className="mt-3 space-y-1 text-xs text-gray-400">
+              {needsInstall && <p>
+                PortOS will install Bun if needed, clone your selected Worlds repository and the upstream video runtime as separate AGPL-3.0 repositories, install their dependencies, and register Worlds under Apps. It will not start the server automatically.
+              </p>}
+              <div className="pt-2">
+                <label className="block text-gray-300 mb-1" htmlFor="eidoverse-worlds-repo">
+                  Worlds GitHub repository
+                </label>
+                <span className="flex flex-wrap gap-2 mb-2">
+                  <span role="group" aria-label="Worlds repository owner" className="inline-flex gap-1 rounded-lg border border-port-border p-1">
+                    <SourceChoiceButton
+                      active={Boolean(selfOwner) && selectedRepo?.owner?.toLowerCase() === selfOwner.toLowerCase()}
+                      disabled={savingId !== null || !selfOwner}
+                      onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(selfOwner, selectedTransport))}
+                    >
+                      Self
+                    </SourceChoiceButton>
+                    <SourceChoiceButton
+                      active={selectedRepo?.owner?.toLowerCase() === upstreamOwner.toLowerCase()}
+                      disabled={savingId !== null}
+                      onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(upstreamOwner, selectedTransport))}
+                    >
+                      Upstream
+                    </SourceChoiceButton>
+                  </span>
+                  <span role="group" aria-label="Worlds repository protocol" className="inline-flex gap-1 rounded-lg border border-port-border p-1">
+                    <SourceChoiceButton
+                      active={selectedTransport === 'http'}
+                      disabled={savingId !== null || !selectedRepo}
+                      onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(selectedRepo.owner, 'http'))}
+                    >
+                      HTTP
+                    </SourceChoiceButton>
+                    <SourceChoiceButton
+                      active={selectedTransport === 'ssh'}
+                      disabled={savingId !== null || !selectedRepo}
+                      onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(selectedRepo.owner, 'ssh'))}
+                    >
+                      SSH
+                    </SourceChoiceButton>
+                  </span>
+                </span>
+                <input
+                  id="eidoverse-worlds-repo"
+                  type="text"
+                  required
+                  value={selectedRepoUrl}
+                  onChange={(event) => setEidoverseRepoUrl(event.target.value)}
+                  disabled={savingId !== null}
+                  aria-invalid={!repoIsValid}
+                  aria-describedby={!repoIsValid ? 'eidoverse-worlds-repo-error' : undefined}
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
+                  placeholder="https://github.com/example-owner/eidoverse-worlds"
+                />
+              </div>
+              {!repoIsValid && (
+                <p id="eidoverse-worlds-repo-error" role="alert" className="text-port-error">
+                  {selectedRepoUrl === ''
+                    ? 'Enter a GitHub repository URL.'
+                    : 'Enter a valid GitHub repository URL.'}
+                </p>
+              )}
+              <p>
+                {needsInstall
+                  ? 'Use your own fork if you want PortOS agents to prepare changes and PRs against it.'
+                  : 'Changing this updates the installed checkout’s Git origin in place. Local work, the managed-app path, and world data stay untouched.'}
+              </p>
+              {!needsInstall && (
+                <button
+                  type="button"
+                  onClick={() => handleEidoverseSourceUpdate(feature)}
+                  disabled={savingId !== null || !canUpdateSource}
+                  className="inline-flex items-center justify-center min-h-[44px] px-3 mt-2 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded transition-colors"
+                >
+                  {updatingEidoverseSource ? 'Updating source…' : 'Update source'}
+                </button>
+              )}
+              {needsInstall && <>
+                {setup?.bunAvailable === false && (
+                  <p className="text-port-warning">
+                    Bun is not installed. PortOS will install it automatically when you install and enable Eidoverse Worlds.
+                  </p>
+                )}
+                {setup?.registryAvailable === false && (
+                  <p className="text-port-error">The managed-app registry could not be read. Repair that before installing to avoid a duplicate app record.</p>
+                )}
+                {setup?.registryAvailable === false && (
+                  <button
+                    type="button"
+                    onClick={handleEidoverseRecheck}
+                    disabled={recheckingEidoverse}
+                    className="inline-flex items-center justify-center min-h-[44px] px-3 mt-2 text-sm bg-port-border hover:bg-port-border/70 disabled:opacity-50 text-white rounded transition-colors"
+                  >
+                    {recheckingEidoverse ? 'Rechecking…' : 'Recheck requirements'}
+                  </button>
+                )}
+              </>}
+            </div>
+          )}
+          {setup?.installed && (
+            <div className="flex flex-wrap items-center gap-3 mt-3 text-xs">
+              {worldsBrowseUrl && (
+                <a className="text-port-accent hover:text-white transition-colors" href={worldsBrowseUrl} target="_blank" rel="noreferrer">
+                  Worlds repository
+                </a>
+              )}
+              {setup.appId && (
+                <Link className="text-port-accent hover:text-white transition-colors" to={`/apps/${setup.appId}`}>
+                  Manage app
+                </Link>
+              )}
+              {feature.enabled && setup.runtimeStatus === 'online' && launchUrl && (
+                <a className="text-port-accent hover:text-white transition-colors" href={launchUrl} target="_blank" rel="noreferrer">
+                  Open world
+                </a>
+              )}
+              {feature.enabled && setup.runtimeStatus !== 'online' && (
+                <span className="text-gray-500">Start it from the managed app to enter the world.</span>
+              )}
+            </div>
+          )}
+        </div>
+        {needsInstall ? (
+          <button
+            type="button"
+            onClick={() => handleEidoverseInstall(feature)}
+            disabled={savingId !== null || !canInstall}
+            className="shrink-0 inline-flex items-center justify-center min-h-[44px] px-3 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded transition-colors"
+          >
+            {installing ? 'Installing…' : (setup?.partial ? 'Resume install' : 'Install & enable')}
+          </button>
+        ) : (
+          <ToggleSwitch
+            enabled={feature.enabled}
+            onChange={() => handleToggle(feature)}
+            disabled={savingId !== null}
+            ariaLabel={`${feature.enabled ? 'Disable' : 'Enable'} ${feature.label} on this instance`}
+            className="mt-1"
+          />
+        )}
+      </div>
+    );
+  };
+
+  // Settings > Features renders groups (#40): a group row with its own toggle,
+  // member rows beneath it showing effective state and a three-way override
+  // control. `group` can be undefined for one render if `groups` hasn't loaded
+  // yet even though `features` has (they load together in practice) — render
+  // nothing rather than crash on a lookup miss.
+  const renderGroupCard = (group, members) => {
+    if (!group) return null;
+    return (
+      <div key={`group-${group.id}`} className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-white">{group.label}</h3>
+            <p className="text-sm text-gray-400 mt-1">{group.description}</p>
+            <p className={`text-xs mt-2 ${group.enabled ? 'text-port-success' : 'text-gray-500'}`}>
+              {group.enabled
+                ? 'Group active — each member below follows its own state'
+                : 'Group off — members stay hidden unless individually overridden to On'}
+            </p>
+          </div>
+          <ToggleSwitch
+            enabled={group.enabled}
+            onChange={() => handleGroupToggle(group)}
+            disabled={savingId !== null}
+            ariaLabel={`${group.enabled ? 'Disable' : 'Enable'} the ${group.label} feature group`}
+            className="mt-1"
+          />
+        </div>
+        <div className="pl-4 border-l border-port-border space-y-3">
+          {members.map((feature) => {
+            const hint = sourceHint(feature);
+            const override = overrideOf(feature);
+            return (
+              <div key={feature.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="min-w-0">
+                  <h4 className="text-sm font-medium text-white">{feature.label}</h4>
+                  <p className="text-xs text-gray-400 mt-0.5">{feature.description}</p>
+                  <p className={`text-xs mt-1 ${feature.enabled ? 'text-port-success' : 'text-gray-500'}`}>
+                    {feature.enabled ? 'Active on this instance' : 'Not used on this instance'}
+                    {feature.source === 'group-off' && ' — hidden by the group toggle above'}
+                  </p>
+                  {hint && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
+                </div>
+                <div
+                  role="group"
+                  aria-label={`${feature.label} override`}
+                  className="inline-flex gap-1 rounded-lg border border-port-border p-1 shrink-0"
+                >
+                  <SourceChoiceButton
+                    active={override === 'inherit'}
+                    disabled={savingId !== null}
+                    onClick={() => handleOverrideChange(feature, 'inherit')}
+                  >
+                    Inherit
+                  </SourceChoiceButton>
+                  <SourceChoiceButton
+                    active={override === 'on'}
+                    disabled={savingId !== null}
+                    onClick={() => handleOverrideChange(feature, 'on')}
+                  >
+                    On
+                  </SourceChoiceButton>
+                  <SourceChoiceButton
+                    active={override === 'off'}
+                    disabled={savingId !== null}
+                    onClick={() => handleOverrideChange(feature, 'off')}
+                  >
+                    Off
+                  </SourceChoiceButton>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
@@ -150,194 +480,9 @@ export function InstanceFeaturesTab() {
       </div>
 
       <div className="space-y-3">
-        {features.map((feature) => {
-          const hint = sourceHint(feature);
-          const isEidoverse = feature.id === 'eidoverse';
-          // Rigging's "configured" state is a machine-local runtime rather than a
-          // config file, so its row carries the probe's answer (installed/absent, the
-          // resolved interpreter, the module version, the install command).
-          const isRigging = feature.id === 'rigging';
-          const setup = isEidoverse ? feature.setup : null;
-          const needsInstall = isEidoverse && setup?.installed !== true;
-          const installing = savingId === feature.id;
-          const selectedRepoUrl = eidoverseRepoUrl ?? setup?.worldsRepoUrl ?? '';
-          const selectedRepo = parseGitHubUrl(selectedRepoUrl);
-          const selectedTransport = eidoverseTransport(selectedRepoUrl);
-          const selfOwner = setup?.sourceOwners?.self || null;
-          const upstreamOwner = setup?.sourceOwners?.upstream || 'anima-research';
-          const worldsBrowseUrl = githubBrowseUrl(setup?.worldsRepoUrl);
-          const repoIsValid = isGitHubRepoUrl(selectedRepoUrl);
-          const canInstall = repoIsValid && setup?.registryAvailable !== false;
-          const canUpdateSource = repoIsValid
-            && normalizeGitHubRepo(selectedRepoUrl) !== setup?.worldsRepoUrl
-            && setup?.registryAvailable !== false;
-          const launchUrl = setup?.appId && setup?.uiPort
-            ? getPrimaryLaunchUrl({ id: setup.appId, uiPort: setup.uiPort })
-            : null;
-          return (
-            <div
-              key={feature.id}
-              className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 bg-port-card border border-port-border rounded-lg p-4"
-            >
-              <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-white">{feature.label}</h3>
-                <p className="text-sm text-gray-400 mt-1">{feature.description}</p>
-                <p className={`text-xs mt-2 ${feature.enabled ? 'text-port-success' : 'text-gray-500'}`}>
-                  {needsInstall
-                    ? (setup?.partial ? 'Installation needs to be resumed' : 'Not installed')
-                    : (feature.enabled
-                      ? 'Active on this instance'
-                      : (isEidoverse ? 'Installed but disabled on this instance' : 'Not used on this instance'))}
-                </p>
-                {hint && !isRigging && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
-                {/* Rigging's own card states the runtime's status precisely; the
-                    generic "no <label> instance is configured" hint would talk about
-                    an integration this feature does not have. */}
-                {isRigging && <RiggingRuntimeCard />}
-                {isEidoverse && (
-                  <div className="mt-3 space-y-1 text-xs text-gray-400">
-                    {needsInstall && <p>
-                      PortOS will install Bun if needed, clone your selected Worlds repository and the upstream video runtime as separate AGPL-3.0 repositories, install their dependencies, and register Worlds under Apps. It will not start the server automatically.
-                    </p>}
-                    <div className="pt-2">
-                      <label className="block text-gray-300 mb-1" htmlFor="eidoverse-worlds-repo">
-                        Worlds GitHub repository
-                      </label>
-                      <span className="flex flex-wrap gap-2 mb-2">
-                        <span role="group" aria-label="Worlds repository owner" className="inline-flex gap-1 rounded-lg border border-port-border p-1">
-                          <SourceChoiceButton
-                            active={Boolean(selfOwner) && selectedRepo?.owner?.toLowerCase() === selfOwner.toLowerCase()}
-                            disabled={savingId !== null || !selfOwner}
-                            onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(selfOwner, selectedTransport))}
-                          >
-                            Self
-                          </SourceChoiceButton>
-                          <SourceChoiceButton
-                            active={selectedRepo?.owner?.toLowerCase() === upstreamOwner.toLowerCase()}
-                            disabled={savingId !== null}
-                            onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(upstreamOwner, selectedTransport))}
-                          >
-                            Upstream
-                          </SourceChoiceButton>
-                        </span>
-                        <span role="group" aria-label="Worlds repository protocol" className="inline-flex gap-1 rounded-lg border border-port-border p-1">
-                          <SourceChoiceButton
-                            active={selectedTransport === 'http'}
-                            disabled={savingId !== null || !selectedRepo}
-                            onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(selectedRepo.owner, 'http'))}
-                          >
-                            HTTP
-                          </SourceChoiceButton>
-                          <SourceChoiceButton
-                            active={selectedTransport === 'ssh'}
-                            disabled={savingId !== null || !selectedRepo}
-                            onClick={() => setEidoverseRepoUrl(buildEidoverseRepoUrl(selectedRepo.owner, 'ssh'))}
-                          >
-                            SSH
-                          </SourceChoiceButton>
-                        </span>
-                      </span>
-                      <input
-                        id="eidoverse-worlds-repo"
-                        type="text"
-                        required
-                        value={selectedRepoUrl}
-                        onChange={(event) => setEidoverseRepoUrl(event.target.value)}
-                        disabled={savingId !== null}
-                        aria-invalid={!repoIsValid}
-                        aria-describedby={!repoIsValid ? 'eidoverse-worlds-repo-error' : undefined}
-                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
-                        placeholder="https://github.com/example-owner/eidoverse-worlds"
-                      />
-                    </div>
-                    {!repoIsValid && (
-                      <p id="eidoverse-worlds-repo-error" role="alert" className="text-port-error">
-                        {selectedRepoUrl === ''
-                          ? 'Enter a GitHub repository URL.'
-                          : 'Enter a valid GitHub repository URL.'}
-                      </p>
-                    )}
-                    <p>
-                      {needsInstall
-                        ? 'Use your own fork if you want PortOS agents to prepare changes and PRs against it.'
-                        : 'Changing this updates the installed checkout’s Git origin in place. Local work, the managed-app path, and world data stay untouched.'}
-                    </p>
-                    {!needsInstall && (
-                      <button
-                        type="button"
-                        onClick={() => handleEidoverseSourceUpdate(feature)}
-                        disabled={savingId !== null || !canUpdateSource}
-                        className="inline-flex items-center justify-center min-h-[44px] px-3 mt-2 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded transition-colors"
-                      >
-                        {updatingEidoverseSource ? 'Updating source…' : 'Update source'}
-                      </button>
-                    )}
-                    {needsInstall && <>
-                      {setup?.bunAvailable === false && (
-                        <p className="text-port-warning">
-                          Bun is not installed. PortOS will install it automatically when you install and enable Eidoverse Worlds.
-                        </p>
-                      )}
-                      {setup?.registryAvailable === false && (
-                        <p className="text-port-error">The managed-app registry could not be read. Repair that before installing to avoid a duplicate app record.</p>
-                      )}
-                      {setup?.registryAvailable === false && (
-                        <button
-                          type="button"
-                          onClick={handleEidoverseRecheck}
-                          disabled={recheckingEidoverse}
-                          className="inline-flex items-center justify-center min-h-[44px] px-3 mt-2 text-sm bg-port-border hover:bg-port-border/70 disabled:opacity-50 text-white rounded transition-colors"
-                        >
-                          {recheckingEidoverse ? 'Rechecking…' : 'Recheck requirements'}
-                        </button>
-                      )}
-                    </>}
-                  </div>
-                )}
-                {setup?.installed && (
-                  <div className="flex flex-wrap items-center gap-3 mt-3 text-xs">
-                    {worldsBrowseUrl && (
-                      <a className="text-port-accent hover:text-white transition-colors" href={worldsBrowseUrl} target="_blank" rel="noreferrer">
-                        Worlds repository
-                      </a>
-                    )}
-                    {setup.appId && (
-                      <Link className="text-port-accent hover:text-white transition-colors" to={`/apps/${setup.appId}`}>
-                        Manage app
-                      </Link>
-                    )}
-                    {feature.enabled && setup.runtimeStatus === 'online' && launchUrl && (
-                      <a className="text-port-accent hover:text-white transition-colors" href={launchUrl} target="_blank" rel="noreferrer">
-                        Open world
-                      </a>
-                    )}
-                    {feature.enabled && setup.runtimeStatus !== 'online' && (
-                      <span className="text-gray-500">Start it from the managed app to enter the world.</span>
-                    )}
-                  </div>
-                )}
-              </div>
-              {needsInstall ? (
-                <button
-                  type="button"
-                  onClick={() => handleEidoverseInstall(feature)}
-                  disabled={savingId !== null || !canInstall}
-                  className="shrink-0 inline-flex items-center justify-center min-h-[44px] px-3 text-sm bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded transition-colors"
-                >
-                  {installing ? 'Installing…' : (setup?.partial ? 'Resume install' : 'Install & enable')}
-                </button>
-              ) : (
-                <ToggleSwitch
-                  enabled={feature.enabled}
-                  onChange={() => handleToggle(feature)}
-                  disabled={savingId !== null}
-                  ariaLabel={`${feature.enabled ? 'Disable' : 'Enable'} ${feature.label} on this instance`}
-                  className="mt-1"
-                />
-              )}
-            </div>
-          );
-        })}
+        {rows.map((row) => (
+          row.kind === 'group' ? renderGroupCard(row.group, row.members) : renderFeatureCard(row.feature)
+        ))}
         {features.length === 0 && (
           <div className="bg-port-card border border-port-border rounded-lg p-4 text-sm text-gray-400">
             No optional features are registered for this version of PortOS.

@@ -148,16 +148,26 @@ const RAW_NAV_COMMANDS = [
 
   { id: 'nav.messages.inbox', path: '/messages/inbox', label: 'Inbox', section: 'Comms', tabGroup: 'messages', tabId: 'inbox', aliases: ['messages', 'comms', 'comms-inbox'], keywords: ['comms', 'email', 'inbox'] },
   { id: 'nav.messages.drafts', path: '/messages/drafts', label: 'Drafts', section: 'Comms', tabGroup: 'messages', tabId: 'drafts', aliases: ['drafts', 'comms-drafts'], keywords: ['comms'] },
-  { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', tabGroup: 'messages', tabId: 'imessage', previousPaths: ['/imessage'], aliases: ['imessage', 'i-message', 'apple-messages', 'comms-imessage'], keywords: ['comms', 'imessage', 'sms', 'text messages', 'chat.db', 'blocklist', 'spam'] },
-  { id: 'nav.messages.signal', path: '/messages/signal', label: 'Signal', section: 'Comms', tabGroup: 'messages', tabId: 'signal', previousPaths: ['/settings/signal'], aliases: ['signal', 'signal-desktop', 'comms-signal', 'signal-settings'], keywords: ['comms', 'signal', 'signal desktop', 'messages', 'sqlcipher', 'chat', 'tribe', 'timeline', 'encrypted', 'keychain'] },
+  // Comms feature group (#40): iMessage and Signal join the existing FaceTime
+  // Audio toggle under the `comms` group in instanceFeatureRegistry.js. The
+  // `<Route>` itself keeps resolving with the feature off, so bookmarks, direct
+  // links, and voice `ui_navigate` still land — only ⌘K/sidebar visibility gates.
+  // `feature` rides through `getPageNavTabs` onto the Messages tab strip, so the
+  // pill is gated by the same field the sidebar reads.
+  { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', tabGroup: 'messages', tabId: 'imessage', feature: 'imessage', previousPaths: ['/imessage'], aliases: ['imessage', 'i-message', 'apple-messages', 'comms-imessage'], keywords: ['comms', 'imessage', 'sms', 'text messages', 'chat.db', 'blocklist', 'spam'] },
+  { id: 'nav.messages.signal', path: '/messages/signal', label: 'Signal', section: 'Comms', tabGroup: 'messages', tabId: 'signal', feature: 'signal', previousPaths: ['/settings/signal'], aliases: ['signal', 'signal-desktop', 'comms-signal', 'signal-settings'], keywords: ['comms', 'signal', 'signal desktop', 'messages', 'sqlcipher', 'chat', 'tribe', 'timeline', 'encrypted', 'keychain'] },
   { id: 'nav.messages.contacts', path: '/messages/contacts', label: 'Contacts', section: 'Comms', tabGroup: 'messages', tabId: 'contacts', previousPaths: ['/settings/contacts'], aliases: ['contacts', 'address-book', 'comms-contacts', 'settings-contacts'], keywords: ['comms', 'contacts', 'address book', 'phone', 'email', 'tribe', 'imessage', 'names', 'resolve'] },
   // Ingestion config is a drawer over the iMessage manager (?settings=1), not a
   // Settings page — the settings-* aliases stay so "open iMessage settings" still lands.
-  { id: 'nav.messages.imessage-settings', path: '/messages/imessage?settings=1', label: 'iMessage Settings', section: 'Comms', aliases: ['settings-imessage', 'imessage-settings', 'imessage-sync'], keywords: ['imessage', 'sync', 'chat.db', 'sms', 'texts', 'tribe', 'timeline', 'full disk access'] },
+  { id: 'nav.messages.imessage-settings', path: '/messages/imessage?settings=1', label: 'iMessage Settings', section: 'Comms', feature: 'imessage', aliases: ['settings-imessage', 'imessage-settings', 'imessage-sync'], keywords: ['imessage', 'sync', 'chat.db', 'sms', 'texts', 'tribe', 'timeline', 'full disk access'] },
   { id: 'nav.messages.sync', path: '/messages/sync', label: 'Sync', section: 'Comms', tabGroup: 'messages', tabId: 'sync', aliases: ['messages-sync', 'comms-sync'], keywords: ['comms'] },
   { id: 'nav.messages.config', path: '/messages/config', label: 'Config', section: 'Comms', tabGroup: 'messages', tabId: 'config', aliases: ['messages-config', 'comms-config'], keywords: ['comms'] },
-  { id: 'nav.stacker-news', path: '/stacker-news', label: 'Stacker News', section: 'Comms', aliases: ['stacker-news', 'stacker', 'sn'], keywords: ['comms', 'community', 'territory', 'moderation', 'stewardship'] },
-  { id: 'nav.x', path: '/x', label: 'X', section: 'Comms', aliases: ['x', 'x-com', 'twitter', 'comms-x'], keywords: ['comms', 'social', 'reach', 'engagement', 'shadowban', 'diagnostics'] },
+  // X and Stacker News join the Comms feature group alongside iMessage,
+  // Signal, and Beeper — default ON, so an existing install sees no change;
+  // only ⌘K/sidebar visibility gates on the flag, the `<Route>` itself keeps
+  // resolving with the feature off.
+  { id: 'nav.stacker-news', path: '/stacker-news', label: 'Stacker News', section: 'Comms', feature: 'stacker-news', aliases: ['stacker-news', 'stacker', 'sn'], keywords: ['comms', 'community', 'territory', 'moderation', 'stewardship'] },
+  { id: 'nav.x', path: '/x', label: 'X', section: 'Comms', feature: 'x', aliases: ['x', 'x-com', 'twitter', 'comms-x'], keywords: ['comms', 'social', 'reach', 'engagement', 'shadowban', 'diagnostics'] },
   { id: 'nav.timeline', path: '/timeline', label: 'Timeline', section: 'Brain', aliases: ['activity-timeline', 'activity', 'my-day', 'life-log', 'life-timeline'], keywords: ['human activity', 'life log', 'timeline', 'messages', 'calendar', 'history', 'what did i do', 'daily', 'import', 'backfill', 'whatsapp', 'spotify', 'discord', 'youtube'] },
   { id: 'nav.tribe', path: '/tribe', label: 'Tribe', section: 'Brain', aliases: ['tribe', 'relationships', 'relationship-manager', 'people'], keywords: ['dunbar', 'friends', 'family', 'network', 'social graph', 'care cadence'] },
 

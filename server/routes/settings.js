@@ -12,7 +12,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { assertMediaRoutingConfig } from '../services/federatedMedia/routingPolicy.js';
-import { assertConfiguredEidoverseInstalled, getInstanceFeatures, updateEidoverseWorldsRepo, updateEidoverseWorldsSource, updateInstanceFeature } from '../services/instanceFeatures.js';
+import { assertConfiguredEidoverseInstalled, getInstanceFeatures, updateEidoverseWorldsRepo, updateEidoverseWorldsSource, updateInstanceFeature, updateInstanceFeatureGroup } from '../services/instanceFeatures.js';
 import { getCredentialInventory } from '../services/credentialInventory.js';
 import { installEidoverse } from '../services/eidoverse.js';
 import { ensureEidoverseHost } from '../services/eidoverseHost.js';
@@ -22,7 +22,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
+import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -222,10 +222,19 @@ router.post('/features/eidoverse/host', asyncHandler(async (_req, res) => {
 }));
 
 // PUT /api/settings/features/:featureId
+// `enabled` is nullable: null clears a grouped feature's override back to
+// "inherit" (see instanceFeatureUpdateSchema and updateInstanceFeature).
 router.put('/features/:featureId', asyncHandler(async (req, res) => {
   const featureId = validateRequest(instanceFeatureIdSchema, req.params.featureId);
   const { enabled } = validateRequest(instanceFeatureUpdateSchema, req.body || {});
   res.json(await updateInstanceFeature(featureId, enabled));
+}));
+
+// PUT /api/settings/features/groups/:groupId (#40)
+router.put('/features/groups/:groupId', asyncHandler(async (req, res) => {
+  const groupId = validateRequest(instanceFeatureGroupIdSchema, req.params.groupId);
+  const { enabled } = validateRequest(instanceFeatureGroupUpdateSchema, req.body || {});
+  res.json(await updateInstanceFeatureGroup(groupId, enabled));
 }));
 
 // PUT /api/settings/ai-assignments/:id
@@ -368,6 +377,11 @@ router.put('/', asyncHandler(async (req, res) => {
   }
   if (req.body?.instanceFeatures !== undefined) {
     validateRequest(instanceFeatureSettingsSchema, req.body.instanceFeatures);
+  }
+  // Instance feature GROUP participation (#40) — same shape guard as the
+  // per-feature slice above, keyed on the separate group id list.
+  if (req.body?.instanceFeatureGroups !== undefined) {
+    validateRequest(instanceFeatureGroupSettingsSchema, req.body.instanceFeatureGroups);
   }
   // Local MCP agent-context opt-in. Validate the whole strict slice so an
   // unknown scope/profile cannot silently broaden what the server exposes.
