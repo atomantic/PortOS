@@ -37,15 +37,16 @@ Your deliverable is tracker items, not code. The run must end with the same \`gi
 ## How to run this audit
 
 1. **Pick a bounded slice and say so first.** Do NOT attempt the whole repository. Choose one coherent area (a feature directory, a route group, a handful of related screens) — prefer one that recent audit issues have not already covered — and open your report by naming the slice in one line.
-2. **Read the actual code.** Every finding must cite \`path/to/file.js:LINE\` and describe a concrete, reproducible impact: a reachable runtime/data failure, a CI or release failure, or recurring manual churn demonstrated by repository history. Delete subjective style preferences and any finding whose consequence you cannot prove.
-3. **De-duplicate before filing.** Follow the Inventory step under "Where to record findings" above. If it is already filed, skip it; comment on the existing item only when you have genuinely new evidence.
-4. **File each surviving finding as its own item.** One problem per item — never a bundle. Cap yourself at 5. Bodies must be decision-complete:
+2. **Complete a substantive review before filing.** Spend most of the available run budget investigating and validating candidates, reserving time for de-duplication, filing, and the final report. Within the bounded slice, inventory at least three distinct relevant paths or components (or all of them if fewer exist), then inspect their callers, consumers, tests, and relevant history. Finding or filing the first issue is NOT a stopping condition: continue through the remaining inventory, including when the first candidate is a duplicate or rejected. Stop when the inventory is reviewed, the configured run budget is nearly exhausted, or a concrete blocker prevents further review; do not idle to fill time or exceed the run budget.
+3. **Read the actual code.** Every finding must cite \`path/to/file.js:LINE\` and describe a concrete, reproducible impact: a reachable runtime/data failure, a CI or release failure, or recurring manual churn demonstrated by repository history. Delete subjective style preferences and any finding whose consequence you cannot prove.
+4. **De-duplicate before filing.** Follow the Inventory step under "Where to record findings" above. If it is already filed, skip it; comment on the existing item only when you have genuinely new evidence.
+5. **File the highest-value surviving findings as separate items after the review.** One root cause per item — never split one problem to inflate the count. Cap yourself at 5 (or a lower mission-specific cap); this is a filing ceiling, not a review limit or a quota. Zero or one issue is valid after a substantive review. Bodies must be decision-complete:
    - **Problem** — what is wrong, with file:line references.
    - **Impact** — the observable consequence (runtime, data, CI/release, or recurring maintenance), not a code-smell label.
    - **Fix** — the approach you have DECIDED on, with the files it touches. If the only obstacle was a design choice, make the call and state it. Do not file a question.
    - **Acceptance criteria** — checkboxes another agent can verify cold.
-5. **Redact before you publish.** An issue is world-readable the moment it is filed. Never paste a secret, credential, token, hostname, IP address, absolute path containing a username, or any personal record into a title or body.
-6. **Report at the end**: the slice you audited, each item you filed, and anything you deliberately did not file and why.
+6. **Redact before you publish.** An issue is world-readable the moment it is filed. Never paste a secret, credential, token, hostname, IP address, absolute path containing a username, or any personal record into a title or body.
+7. **Report at the end**: the slice and paths reviewed, each item you filed, candidates you deliberately did not file and why, any unreviewed inventory, and the reason you stopped.
 
 Read this repository's \`AGENTS.md\` (and any nested per-directory ones covering the slice) before you start, and honor its conventions and its explicitly declared non-issues.`;
 
