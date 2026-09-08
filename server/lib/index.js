@@ -399,6 +399,7 @@ export * from './appIdentity.js';
 export * from './appResolver.js';
 export * from './autonomousJobIntervals.js';
 export * from './capabilityMap.js';
+export * from './claimFlowTaskTypes.js';
 export * from './chiptuneRender.js';
 export * from './chiptuneScore.js';
 export * from './civitai.js';

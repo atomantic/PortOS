@@ -62,6 +62,10 @@ import {
   FILE_ISSUES_DELIVERY_SETTINGS,
 } from '../lib/auditCatalog.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
+// The claim marker this stamps is separate from `openPR: false`, which is the
+// CoS provisioning posture that prevents a nested worktree. agentPromptBuilder.js
+// reads the same set back via isClaimFlowTask().
+import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { isReconcileDrainTaskType } from './taskScheduleConstants.js';
 import { isProgrammaticScheduledTaskType, requiresInstallWideTarget } from './taskScheduleRegistry.js';
@@ -114,14 +118,6 @@ export {
 // `buildSecurityScanPipelineOutput` was public here before the pr-reviewer
 // security preflight moved beside the rest of that pipeline's contract.
 export { buildSecurityScanPipelineOutput } from './prReviewerPipeline.js';
-
-// Claim prompts create and manage their own claim/<item> worktree and
-// push/PR/MR/review lifecycle. This marker is separate from `openPR: false`,
-// which is the CoS provisioning posture that prevents a nested worktree. Keep
-// the type list here as a backstop for old schedules that predate claimFlow.
-const CLAIM_FLOW_TASK_TYPES = new Set([
-  'plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work'
-]);
 
 /**
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
