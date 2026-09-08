@@ -322,6 +322,7 @@ export function normalizeQuotaBurnJob(raw, index = 0) {
     // Opt-IN, and absent reads as `false`, so every plan written before this
     // field existed keeps repeating exactly as it did. See `jobIsSpent`.
     runOnce: raw.runOnce === true,
+    ...(raw.drain === true ? { drain: true } : {}),
     // Compat mirrors of `overrides` for the shipped editor and the legacy
     // executor. Derived on every read (normalization is total), so they cannot
     // drift from the canonical bag the way two independently-written fields
@@ -366,6 +367,7 @@ export function normalizeQuotaBurnFamily(raw) {
     .filter(Boolean);
   return {
     enabled: value.enabled === true,
+    ...(value.sequence === true ? { sequence: true } : {}),
     resetWithinHours: clamp(BOUNDS.resetWithinHours, value.resetWithinHours),
     reservePercent: clamp(BOUNDS.reservePercent, value.reservePercent),
     maxDispatchesPerWindow: clampDispatchCap(value.maxDispatchesPerWindow),

@@ -355,6 +355,18 @@ export default function QuotaBurn() {
 
   const patchFamily = (familyId, patch) => save({ families: { [familyId]: patch } });
 
+  const startSequence = async (familyId, jobs) => {
+    setRunning(true);
+    const patch = { enabled: true, families: { [familyId]: { enabled: true, sequence: true, jobs } } };
+    const saved = await api.saveQuotaBurn(patch, { silent: true })
+      .catch(err => { toast.error(`Could not save sequence: ${err.message}`); return null; });
+    if (saved) {
+      setConfig(prev => mergeQuotaBurnPatch(prev, patch));
+      await run({ familyId }, 'Maintenance sequence');
+    }
+    setRunning(false);
+  };
+
   // Re-arm spends nothing — it only makes a spent `run once` step eligible again
   // — so it needs no confirm, and the response carries the fresh status so the
   // badges clear without a second round trip. `config` is deliberately NOT
@@ -552,6 +564,7 @@ export default function QuotaBurn() {
             actionsBusy={unsaved || running}
             onToggleExpand={(id) => navigate(expanded === id ? '/devtools/quota-burn' : `/devtools/quota-burn/${id}`)}
             onPatch={(patch) => patchFamily(familyId, patch)}
+            onStartSequence={startSequence}
             onRunFamily={(id) => run({ familyId: id, force: true }, 'Burn')}
             onRunJob={(id, job) => run({ familyId: id, jobId: job.id, force: true }, 'Job run')}
             onRearm={rearm}

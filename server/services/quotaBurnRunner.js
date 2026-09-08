@@ -57,15 +57,16 @@ import { applyQuotaBurnAvailability } from '../lib/quotaBurnTaskRef.js';
 import { windowLabelOf } from '../lib/quotaWindows.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
 import { cosEvents } from './cosEvents.js';
+import { nextQuotaBurnSequenceJob, completeQuotaBurnSequenceStep } from './quotaBurnSequence.js';
 
 const TICK_MS = 60_000;
 
 let tickTimer = null;
 let running = false;
 let lastRunAt = null;
-// Family ids whose completion continuation arrived while a cycle was running —
-// drained by `drainDeferredContinuations` when that cycle releases the guard.
-const deferredContinuations = new Set();
+// Completion continuations deferred while a cycle runs. Retain the completed
+// task id: its task record can still say in_progress when the event arrives.
+const deferredContinuations = new Map();
 
 /**
  * The jobs a cycle will consider, in plan order.
@@ -232,7 +233,7 @@ export async function runQuotaBurnCycle(options = {}) {
     // this feature exists to spend. Keyed by family, so several completions from
     // one family while it is mid-cycle collapse to the single re-evaluation they
     // amount to.
-    if (options.trigger === 'continuation' && options.familyId) deferredContinuations.add(options.familyId);
+    if (options.trigger === 'continuation' && options.familyId) deferredContinuations.set(options.familyId, options.ignoreTaskId || null);
     return { skipped: 'already-running' };
   }
   running = true;
@@ -261,14 +262,14 @@ export async function runQuotaBurnCycle(options = {}) {
  */
 async function drainDeferredContinuations() {
   while (deferredContinuations.size) {
-    const [familyId] = deferredContinuations;
+    const [[familyId, ignoreTaskId]] = deferredContinuations;
     deferredContinuations.delete(familyId);
-    await runQuotaBurnCycle({ trigger: 'continuation', familyId })
+    await runQuotaBurnCycle({ trigger: 'continuation', familyId, ignoreTaskId })
       .catch((err) => console.error(`❌ Quota-burn deferred continuation for ${familyId} failed: ${err.message}`));
   }
 }
 
-async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, force = false }) {
+async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, force = false, ignoreTaskId = null }) {
   const finish = async (entry) => {
     // Only a SCHEDULED cycle advances the interval clock. A manual "Evaluate
     // now" that reports "no burnable window" would otherwise push the next
@@ -414,8 +415,17 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
   // that passed the full gate ladder, and each entry spends a different
   // provider's window.
   for (const candidate of candidates) {
+    let selectedJobId = jobId;
+    if (candidate.family.sequence) {
+      const next = await nextQuotaBurnSequenceJob(candidate.family, { completions, reservations, catalog, ignoreTaskId });
+      if (!next.job || (jobId && jobId !== next.job.id)) {
+        attempts.push({ familyId: candidate.family.id, jobId: jobId || 'sequence', skipped: next.reason || 'an earlier sequence step must finish first' });
+        continue;
+      }
+      selectedJobId = next.job.id;
+    }
     const outcome = await dispatchFromCandidate(candidate, {
-      jobId, force, completions, catalog, reserved, afterJobId: cursors.get(candidate.family.id) || null,
+      jobId: selectedJobId, force, completions, catalog, reserved, afterJobId: cursors.get(candidate.family.id) || null,
     });
     attempts.push(...outcome.attempts.map((entry) => ({ familyId: candidate.family.id, ...entry })));
     if (!outcome.dispatched) continue;
@@ -434,7 +444,9 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
         stepId: outcome.job.id,
         dispatchKey: candidate.dispatchKey,
         charge: candidate.charge,
-        runOnce: outcome.job.runOnce === true,
+        // A strict sequence finishes on successful agent completion (or a drained
+        // claim backlog), not merely on the request being accepted.
+        runOnce: outcome.job.runOnce === true && !candidate.family.sequence,
         requestId,
       });
       // The request is already on the schedule and cannot be recalled, so this
@@ -450,7 +462,7 @@ async function evaluate({ trigger = 'scheduled', familyId = null, jobId = null, 
       // statement about the WORK ("this only needs doing once") — and the work
       // just happened, however it was triggered. The ▶ on the row stays the way
       // back, since a forced run bypasses this gate too.
-      if (outcome.job.runOnce) {
+      if (outcome.job.runOnce && !candidate.family.sequence) {
         await recordQuotaBurnJobCompletion(candidate.family.id, outcome.job.id)
           // A ledger failure must not fail a dispatch that already happened —
           // the worst case is the job running one extra time next cycle, which
@@ -679,7 +691,8 @@ function onBurnAgentCompleted(agent) {
   // continuation, so it degrades to a logged warning.
   return recordBurnAgentCompletion(agent)
     .catch((err) => console.error(`⚠️ Quota-burn denial ledger for ${familyId}: ${err.message}`))
-    .then(() => runQuotaBurnCycle({ trigger: 'continuation', familyId }))
+    .then(() => completeQuotaBurnSequenceStep(agent))
+    .then(() => runQuotaBurnCycle({ trigger: 'continuation', familyId, ignoreTaskId: agent?.result?.success ? agent?.taskId : null }))
     .catch((err) => console.error(`❌ Quota-burn continuation for ${familyId} failed: ${err.message}`));
 }
 

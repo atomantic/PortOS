@@ -38,6 +38,8 @@ const state = {
   settlement: { accepted: 0, refused: 0 },
 };
 
+vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.sequenceTasks || [] } })) }));
+
 vi.mock('./providerUsage.js', () => ({
   getProviderQuotas: vi.fn(async () => state.quotas),
 }));
@@ -141,6 +143,7 @@ const plan = (overrides = {}) => normalizeQuotaBurnConfig({
 });
 
 beforeEach(() => {
+  state.sequenceTasks = [];
   state.config = plan();
   state.quotas = [card('grok')];
   state.runs = [];
@@ -614,15 +617,19 @@ describe('completion continuation', () => {
       enabled: true,
       families: {
         claude: { enabled: true, resetWithinHours: 24, jobs: [{ id: 'c1', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }] },
-        agy: { enabled: true, resetWithinHours: 24, jobs: [{ id: 'a1', enabled: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }] },
+        agy: { enabled: true, sequence: true, resetWithinHours: 24, jobs: [
+          { id: 'a0', runOnce: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } },
+          { id: 'a1', runOnce: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } },
+        ] },
       },
     });
     state.quotas = [card('claude'), card('agy')];
     state.invokePending = { c1: { count: 1 }, a1: { count: 1 } };
+    state.sequenceTasks = [{ id: 'agy-finishing', status: 'in_progress', metadata: { quotaBurnFamily: 'agy' } }];
     // agy's agent finishes while claude's cycle is still mid-dispatch.
     invokeQuotaBurnStep.mockImplementationOnce(async ({ step, family, candidate }) => {
       state.invoked.push({ stepId: step.id, familyId: family.id, charge: candidate.charge });
-      await expect(__onBurnAgentCompleted({ metadata: { taskQuotaBurnFamily: 'agy' } }))
+      await expect(__onBurnAgentCompleted({ taskId: 'agy-finishing', result: { success: true }, metadata: { taskQuotaBurnFamily: 'agy', taskQuotaBurnStepId: 'a0' } }))
         .resolves.toEqual({ skipped: 'already-running' });
       return { dispatched: true, summary: `ran ${step.id}` };
     });
@@ -1015,4 +1022,24 @@ describe('charging the cap and the run-once ledger exactly once', () => {
     // It still SHOWS the reserved burn as used, because it is committed already.
     expect(status.families.find((family) => family.id === 'grok').dispatchesUsed).toBe(1);
   });
+});
+
+it('holds a strict sequence until acceptance and successful completion, then advances despite the rotation cursor', async () => {
+  state.config = plan({ families: { grok: { enabled: true, sequence: true, jobs: [
+    { id: 'audit', runOnce: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } },
+    { id: 'docs', runOnce: true, taskRef: { kind: 'builtin', taskType: 'docs', appId: 'app-1' } },
+  ] } } });
+  state.invokePending = { audit: { count: 1 }, docs: { count: 1 } };
+  state.invokeResult = { dispatched: true, awaiting: { requestId: 'demand-sequence' }, summary: 'Requested audit' };
+  expect((await runQuotaBurnCycle()).jobId).toBe('audit');
+  expect(state.reserved[0].runOnce).toBe(false);
+  expect(state.completed).toHaveLength(0);
+  state.reservations = { 'grok::audit': { familyId: 'grok', stepId: 'audit' } };
+  expect((await runQuotaBurnCycle()).dispatched).toBe(false);
+  state.reservations = {};
+  state.sequenceTasks = [{ id: 'task-audit', status: 'in_progress', metadata: { quotaBurnFamily: 'grok' } }];
+  expect((await runQuotaBurnCycle()).dispatched).toBe(false);
+  const outcome = await __onBurnAgentCompleted({ taskId: 'task-audit', result: { success: true }, metadata: { taskQuotaBurnFamily: 'grok', taskQuotaBurnStepId: 'audit' } });
+  expect(state.completions['grok:audit']).toBeTruthy();
+  expect(outcome.jobId).toBe('docs');
 });

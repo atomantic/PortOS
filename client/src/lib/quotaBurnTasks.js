@@ -218,6 +218,7 @@ export function quotaBurnStepPayload(job) {
       params: job.overrides?.params || {},
     },
     runOnce: job.runOnce === true,
+    ...(job.drain === true ? { drain: true } : {}),
   };
 }
 
@@ -250,3 +251,27 @@ export const taskSourceHref = (entry) => (entry?.kind === QUOTA_BURN_TASK_REF_KI
 
 /** Where a user goes to CREATE the on-demand scheduled task a new step would reference. */
 export const CREATE_TASK_HREF = '/cos/jobs';
+
+/** Default maintenance ladder, using the canonical scheduled-task identifiers. */
+export const MAINTENANCE_TASK_ORDER = Object.freeze([
+  'better-structural-drift', 'simplify', 'module-hygiene', 'better-complexity',
+  'performance', 'better-cognitive-load', 'documentation',
+]);
+export const MAINTENANCE_ORDER_GUIDANCE = 'better-structural-drift → simplify → module-hygiene → better-complexity → performance + better-cognitive-load → documentation';
+
+/** Populate references only; preserve the source tasks and their configured filters. */
+export function maintenanceSequence(groups, appId, idPrefix) {
+  const entries = flattenTaskCatalog(groups);
+  const types = MAINTENANCE_TASK_ORDER.flatMap((type, index) =>
+    index ? ['claim-issue', type] : [type]);
+  const picked = types.map(type => entries.find(entry => entry.taskType === type));
+  if (!appId || picked.some(entry => !entry || entry.blockedReason || !entry.appIds.includes(appId))) return null;
+  if (picked.find(entry => entry.taskType === 'claim-issue').config.perpetual !== true) return null;
+  return picked.map((entry, index) => ({
+    ...stepFromTaskEntry(entry, { id: `${idPrefix}-${index}`, appId }),
+    runOnce: true,
+    drain: entry.taskType === 'claim-issue',
+    overrides: { providerId: null, model: null, effort: null,
+      params: entry.taskType === 'claim-issue' ? {} : { fileIssues: entry.taskType !== 'documentation' } },
+  }));
+}

@@ -5,6 +5,7 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { formatDateTime, formatTimeOfDaySeconds, timeAgo } from '../../../utils/formatters';
 import Banner from '../../ui/Banner';
+import { MAINTENANCE_ORDER_GUIDANCE } from '../../../lib/quotaBurnTasks';
 import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults';
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
@@ -184,6 +185,11 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
           Refresh
         </button>
       </div>
+
+      <Banner size="md" title="Recommended maintenance order">
+        <p className="text-sm break-words">{MAINTENANCE_ORDER_GUIDANCE}</p>
+        <p className="text-xs mt-1">Resolve findings between audits, then document the resulting code. Quota Burn offers this sequence with perpetual claim-issue drains between steps.</p>
+      </Banner>
 
       {improvementDisabled && (
         <Banner size="md" icon={AlertCircle} title="Improvement is disabled">
