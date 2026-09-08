@@ -272,7 +272,18 @@ describe('deferred imports stay deferred (#6156)', () => {
 // `seriesCharacterArc.js`), the vocabulary leaf +24, less the five deleted
 // mirror suites — leaves with nothing behind them to defer, the tolerated shape,
 // not an eager edge. Restore the ~1.5k allowance.
-const MAX_STATIC_INSTANTIATIONS = 96900;
+//
+// #6590 is the same shape again: the image-gen capability literals the client
+// hand-copied (input-image caps, the prompt rule, the shipped default
+// models/effort, the aspect-ratio alphabets) moved out of three
+// `services/imageGen/*` modules — unreachable from the browser bundle because
+// they import `errorHandler.js` — into one dependency-free leaf,
+// `lib/imageGenCapabilities.js`. Measured 96,975 (+108 over main's 96,867): the
+// leaf is +1 in each of the 108 closures that already reached `imageGen/modes.js`,
+// and it pulls in nothing new (its only import, `generationModes.js`, was
+// already in every one of them). A leaf with nothing behind it to defer is the
+// tolerated shape. The allowance had drifted to ~30 again, so restore the ~1.5k.
+const MAX_STATIC_INSTANTIATIONS = 98500;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {

@@ -4,22 +4,23 @@
  * parity suite (`server/lib/renderTargets.parity.test.js`) and the server CI
  * job import this module directly, where client-only packages (lucide-react)
  * are not installed. Nothing here may import React, icons, or any package —
- * the only imports allowed are the two dependency-free server leaves below,
+ * the only imports allowed are the three dependency-free server leaves below,
  * the same way `Layout.jsx` reads `server/lib/navManifest.js`. Icon metadata
  * and settings-driven backend derivation stay in `imageGenBackends.js`, which
  * re-exports everything below so client consumers keep a single import site.
  *
- * The backend / render-target / execution-lane ALPHABETS are not copied here:
- * they are re-exported from `server/lib/generationModes.js` and
- * `server/lib/renderTargets.js`, so a backend added server-side reaches every
- * client picker and the Render Queue's lane grouping in the same commit. A
- * hand-copied alphabet is how fal.ai and Reactor video renders came to be
- * filed under "Local machine" (#6292). What remains a mirror is only what
- * lives in server SERVICE modules the browser bundle cannot load (per-provider
- * capability specs, shipped default models) — each is labeled below. The
- * parity suite binds `I2I_CAPABLE_MODES`, `MAX_INPUT_IMAGES` and
- * `cloudPromptRequired`; the shipped defaults and `GROK_ASPECT_RATIOS` are
- * unbound copies.
+ * NOTHING here is a hand-copied server fact. The backend / render-target /
+ * execution-lane ALPHABETS re-export from `server/lib/generationModes.js` and
+ * `server/lib/renderTargets.js`, and the per-backend CAPABILITY literals —
+ * input-image caps, the prompt rule, model-override support, the shipped
+ * default models/effort, the aspect-ratio alphabets — from
+ * `server/lib/imageGenCapabilities.js` (#6590). So a backend added or re-probed
+ * server-side reaches every client picker in the same commit. A hand-copied
+ * alphabet is how fal.ai and Reactor video renders came to be filed under
+ * "Local machine" (#6292), and the shipped defaults were free to drift
+ * silently until the capability leaf existed. What stays local to this module
+ * is only what the CLIENT owns: display labels, the Settings row list, and the
+ * form's own slot/strength predicates.
  */
 
 import {
@@ -36,38 +37,58 @@ import {
   RENDER_TARGET_BACKEND_AUTO,
   normalizeRenderPinValue,
 } from '../../../server/lib/renderTargets.js';
+import {
+  AGY_IMAGEGEN_DEFAULT_MODEL,
+  AGY_IMAGEGEN_IMAGE_MODEL,
+  CODEX_IMAGEGEN_DEFAULT_EFFORT,
+  CODEX_IMAGEGEN_DEFAULT_MODEL,
+  GROK_ASPECT_RATIOS,
+  I2I_CAPABLE_MODES,
+  MODEL_OVERRIDE_CAPABLE_MODES,
+  cloudPromptRequired,
+  maxInputImages,
+  supportsCloudModelOverride,
+} from '../../../server/lib/imageGenCapabilities.js';
 
 export {
+  // Shipped per-backend defaults, so a UI that displays "the model/effort a job
+  // used" resolves an absent value to what actually renders rather than to a
+  // blank or to the CLI's own default (which stopped being true when the pins
+  // shipped).
+  AGY_IMAGEGEN_DEFAULT_MODEL,
+  // The image model behind agy's generate_image tool — fixed by Antigravity and
+  // NOT selectable by PortOS, surfaced read-only in Settings so the
+  // agent-model field can't be mistaken for an image-model picker.
+  AGY_IMAGEGEN_IMAGE_MODEL,
   CLOUD_IMAGE_GEN_MODES,
+  CODEX_IMAGEGEN_DEFAULT_EFFORT,
+  CODEX_IMAGEGEN_DEFAULT_MODEL,
+  // The ratios grok's image tools accept — the Settings default-ratio picker.
+  GROK_ASPECT_RATIOS,
+  // Backends that support image-to-image, ordered best-first: what the i2i-only
+  // pickers filter through and what `pickI2iMode` walks.
+  I2I_CAPABLE_MODES,
   IMAGE_GEN_MODE,
+  // Cloud CLIs that accept a per-render model override. Use
+  // `supportsCloudModelOverride` at branch sites rather than a hand-rolled
+  // `mode === CODEX || mode === AGY` disjunction.
+  MODEL_OVERRIDE_CAPABLE_MODES,
   RENDER_TARGET,
   RENDER_TARGET_BACKEND_AUTO,
   // The backend alphabet for the video pin controls and the install-wide
   // `settings.videoGen.mode` pin, under the name the pickers already use.
   VIDEO_GEN_MODES as VIDEO_RENDER_MODES,
+  // Text-to-image always needs a prompt; with an input image it depends on
+  // whether the backend's tool lists the prompt as required. Gating the
+  // Generate button on the server's own predicate keeps the button from
+  // enabling a render `prepareParams` then 400s.
+  cloudPromptRequired,
+  // How many input images (init image + reference slots, combined) a backend's
+  // tool accepts — null when its schema declares no maximum.
+  maxInputImages,
   normalizeRenderPinValue,
+  supportsCloudModelOverride,
 };
-
-// Shipped default Codex reasoning-effort level — the client mirror of the
-// server's CODEX_IMAGEGEN_DEFAULT_EFFORT (server/services/imageGen/modes.js).
-// A Codex job with no explicit effort renders at this level, so any UI that
-// displays or pre-fills "the effort a job used" must resolve an absent value to
-// this default rather than showing a blank.
-export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
-
-// Client mirror of the server's AGY_IMAGEGEN_DEFAULT_MODEL
-// (server/services/imageGen/modes.js, #3231) — the cheap-tier agent/session
-// model an unpinned agy render runs on. Any UI naming "the model an agy job
-// used" must resolve an absent value to this, not to "agy's own default"
-// (which stopped being true when the pin shipped).
-export const AGY_IMAGEGEN_DEFAULT_MODEL = 'gemini-3.5-flash-low';
-
-// Client mirror of AGY_IMAGEGEN_IMAGE_MODEL — the image model behind agy's
-// generate_image tool, fixed server-side by Antigravity and NOT selectable by
-// PortOS (all three channels probed and closed — see the server constant's
-// comment). Surfaced read-only in Settings so the agent-model field can't be
-// mistaken for an image-model picker.
-export const AGY_IMAGEGEN_IMAGE_MODEL = 'imagen-3.0-generate-002';
 
 // The Settings → Image Gen → Defaults rows for the server's render-target
 // alphabet (`RENDER_TARGET`, #3231) — the surfaces whose default backend +
@@ -96,11 +117,6 @@ export const RENDER_TARGET_OPTIONS = Object.freeze([
 // local accelerator.
 export const isCloudVideoMode = (mode) => CLOUD_VIDEO_GEN_MODES.includes(mode);
 
-// Client mirror of the server's GROK_ASPECT_RATIOS (imageGen/grok.js) — the
-// aspect ratios grok's image_gen/image_edit tools accept, offered as the
-// default-ratio picker in Settings → Image Gen → Grok.
-export const GROK_ASPECT_RATIOS = Object.freeze(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']);
-
 // Human-facing backend names — the pure half of imageGenBackends' per-mode
 // metadata (its icon half stays there with the lucide import).
 export const MODE_LABELS = Object.freeze({
@@ -119,25 +135,13 @@ export const MODE_LABELS = Object.freeze({
 // GROK` disjunctions.
 export const isCloudCliMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode);
 
-// Client mirror of the server's `supportsModelOverride` spec flag
-// (imageGen/cloudProviderConfig.js) — cloud CLIs that accept a per-render
-// `cloudModel` replacing the saved `settings.imageGen.<mode>.model` for one
-// queue item. Grok is absent because its image tools run on a fixed xAI backend
-// with no model knob, so offering the control there would be a lie.
-// Use `supportsCloudModelOverride` instead of hand-rolled
-// `mode === CODEX || mode === AGY` disjunctions — the two must stay in lock-step
-// with the server spec, and a new CLI backend should be one entry here.
-export const MODEL_OVERRIDE_CAPABLE_MODES = Object.freeze([
-  IMAGE_GEN_MODE.CODEX,
-  IMAGE_GEN_MODE.AGY,
-]);
-export const supportsCloudModelOverride = (mode) => MODEL_OVERRIDE_CAPABLE_MODES.includes(mode);
-
 /**
- * Client mirror of the server's `renderTargetDefaults`
+ * The client-side counterpart of the server's `renderTargetDefaults`
  * (imageGen/cloudProviderConfig.js) — one surface's saved `settings.renderDefaults`
  * pin, re-keyed to the flat `imageMode`/`imageModelId` shape `renderPinLadder`
- * consumes so a target pin and a record pin are the same kind of thing.
+ * consumes so a target pin and a record pin are the same kind of thing. Its
+ * input is the settings payload the client already holds, so this reads that
+ * object rather than importing a resolver from a service module.
  */
 export const renderTargetPin = (settings, target) => ({
   imageMode: settings?.renderDefaults?.[target]?.imageMode ?? null,
@@ -146,7 +150,7 @@ export const renderTargetPin = (settings, target) => ({
 
 /**
  * Resolve the effective render pin from an ordered ladder of pin sources — the
- * client mirror of the server's `resolveRenderTargetConfig` (#3231), minus the
+ * client-side counterpart of the server's `resolveRenderTargetConfig` (#3231), minus the
  * explicit-per-request rung the caller owns. Pass sources highest-priority
  * first, which for every surface is: the record's own pin (`recordRenderPin`'s
  * `imageMode`/`imageModelId`), then the target's `renderTargetPin(settings, target)`.
@@ -211,15 +215,6 @@ export function applyRecordRenderPin(cfg, sources, availableBackends = null) {
 // MODE_LABELS already holds and grow a branch per backend.
 export const modeLabel = (mode) => MODE_LABELS[mode] || mode || '';
 
-// Backends that support image-to-image (init image / reference conditioning).
-// The external SD-API path does not. Client mirror of the server's
-// EDIT_INCAPABLE_IMAGE_MODES complement (imageGen/modes.js), bound to it by
-// server/lib/renderTargets.parity.test.js. Ordered best-first — pickI2iMode
-// walks this list.
-export const I2I_CAPABLE_MODES = Object.freeze([
-  IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY,
-]);
-
 // True when a mode can run image-to-image.
 export const isI2iCapableMode = (mode) => I2I_CAPABLE_MODES.includes(mode);
 
@@ -246,33 +241,6 @@ export function pickI2iMode(backends) {
   return null;
 }
 
-// Client mirror of the `maxInputImages` field on the server's
-// CLOUD_PROVIDER_SPECS (imageGen/cloudProviderConfig.js) — how many input
-// images (init image + reference slots, combined) each cloud CLI's image tool
-// accepts. The form uses this to cap the reference slots it offers, so a user
-// never fills a slot the backend would silently drop. Only agy declares a
-// maximum; codex and grok are absent because their tool schemas declare none,
-// so the form's own slot count is their only bound. Local is absent for the
-// same reason: FLUX.2 takes the init image plus all 4 reference slots.
-// Bound to the server values by server/lib/renderTargets.parity.test.js.
-export const MAX_INPUT_IMAGES = Object.freeze({
-  [IMAGE_GEN_MODE.AGY]: 3,
-});
-
-// Client mirror of the server's `promptRequiredWithInputImage` spec flag
-// (imageGen/cloudProviderConfig.js) — cloud CLIs whose image tool lists the
-// prompt in its `required` parameters, so an image-only render still needs one.
-// Codex and grok are absent: their tools render from an input image alone.
-// Kept as data (like MODEL_OVERRIDE_CAPABLE_MODES) rather than a hand-rolled
-// `mode === AGY` comparison, so a new CLI backend is one entry here.
-export const PROMPT_REQUIRED_WITH_INPUT_IMAGE_MODES = Object.freeze([IMAGE_GEN_MODE.AGY]);
-
-// Client mirror of the server's cloudPromptRequired (imageGen/cloudProviderConfig.js).
-// Text-to-image always needs a prompt; with an input image it depends on the
-// backend. Bound to the server predicate by server/lib/renderTargets.parity.test.js.
-export const cloudPromptRequired = (mode, hasInputImage) => isCloudCliMode(mode)
-  && (!hasInputImage || PROMPT_REQUIRED_WITH_INPUT_IMAGE_MODES.includes(mode));
-
 /**
  * How many reference slots the form should offer for `mode`.
  *
@@ -287,7 +255,7 @@ export const cloudPromptRequired = (mode, hasInputImage) => isCloudCliMode(mode)
 export function referenceSlotsFor(mode, { hasInitImage = false, maxSlots = 4, localSupportsReferences = false } = {}) {
   if (mode === IMAGE_GEN_MODE.LOCAL) return localSupportsReferences ? maxSlots : 0;
   if (!isCloudCliMode(mode)) return 0;
-  const cap = MAX_INPUT_IMAGES[mode] ?? Infinity;
+  const cap = maxInputImages(mode) ?? Infinity;
   return Math.min(maxSlots, cap - (hasInitImage ? 1 : 0));
 }
 

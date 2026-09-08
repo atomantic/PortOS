@@ -53,6 +53,7 @@ import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js
 import {
   IMAGE_GEN_MODE, describeFidelity, grokImageTool, nearestAspectRatio, visualReferenceRole,
 } from './modes.js';
+import { GROK_ASPECT_RATIOS } from '../../lib/imageGenCapabilities.js';
 import { resolveInputImages } from './inputImages.js';
 import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js';
@@ -73,10 +74,11 @@ const DEFAULT_BIN = 'grok';
 const DEFAULT_HARVEST_TIMEOUT_MS = 5000;
 let harvestTimeoutMs = DEFAULT_HARVEST_TIMEOUT_MS;
 
-// Aspect ratios grok's image_gen/image_edit tools accept. Width/height from
-// PortOS callers are mapped to the closest of these; a configured default
-// (`imageGen.grok.aspectRatio`) applies when the caller sent no dimensions.
-export const GROK_ASPECT_RATIOS = Object.freeze(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']);
+// The tool's aspect-ratio alphabet lives in the dependency-free
+// `lib/imageGenCapabilities.js` leaf (Settings offers it as the default-ratio
+// picker, and this module is unreachable from the browser bundle). Re-exported
+// so `videoGen/grok.js` and the render paths keep importing it from here.
+export { GROK_ASPECT_RATIOS };
 
 // Map a width/height pair to the closest supported grok aspect ratio, or null
 // when dimensions are absent/invalid (the tool then uses its own default).
