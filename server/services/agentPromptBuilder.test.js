@@ -176,6 +176,44 @@ describe('composable skill template routing', () => {
     },
   );
 
+  // A registered audit type is authoritative about what it is, so it must never
+  // fall through to the description keyword matcher. That matcher cannot read
+  // an audit correctly: the security template claims the bare word "audit",
+  // which every audit prompt says about itself in its opening line, so eleven of
+  // nineteen audit types were being handed OWASP scoping guidance the operator
+  // never chose — copy, typing, api-contract, ux and the rest. Ordinary
+  // vocabulary misroutes the others just as easily: an audit that mentions
+  // duplication while explicitly ceding it to a sibling drew the dead-code
+  // template. The correct answer for an audit type with no template of its own
+  // is NO lifecycle template, not a guess.
+  it('never keyword-guesses a lifecycle template for a registered audit type', async () => {
+    const { AUDIT_TASK_TYPES } = await import('../lib/auditCatalog.js');
+    const SKILLED = { security: 'security-audit', 'mobile-responsive': 'mobile-responsive', documentation: 'documentation', 'data-safety': 'data-safety', simplify: 'simplify', 'module-hygiene': 'module-hygiene' };
+
+    for (const taskType of AUDIT_TASK_TYPES) {
+      // The real dispatched body, which is what the matcher actually sees.
+      const description = DEFAULT_TASK_PROMPTS[taskType]
+        .replaceAll('{appName}', 'Example App')
+        .replaceAll('{repoPath}', '/workspace/example-app')
+        .replace('{modeInstructions}', '## Mode: file issues, change nothing');
+      const routed = detectSkillTemplates(makeTask({ description, metadata: { analysisType: taskType } }));
+      expect(routed, taskType).toEqual(SKILLED[taskType] ? [SKILLED[taskType]] : []);
+    }
+  });
+
+  it('still keyword-matches a free-text task, which is what the fallback is for', () => {
+    // No task type — an operator-written task keeps the keyword routing.
+    expect(detectSkillTemplates(makeTask({
+      description: 'Fix the broken avatar upload crash',
+    }))).toEqual(['bug-fix']);
+    // An unregistered type falls through to keywords rather than resolving to
+    // no template, so a custom job is unaffected by the audit-type gate.
+    expect(detectSkillTemplates(makeTask({
+      description: 'Refactor the export pipeline',
+      metadata: { analysisType: 'custom-app-job' },
+    }))).toEqual(['refactor']);
+  });
+
   it('joins templates in routing order and tolerates an unavailable domain guide', async () => {
     const loadTemplate = vi.fn(async (name) => ({
       'security-audit': 'Security lifecycle guidance',

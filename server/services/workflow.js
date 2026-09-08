@@ -83,7 +83,13 @@ export const WORKFLOW_STAGES = [
       'api-contract',
       'react-lifecycle',
       'observability',
-      'copy'
+      'copy',
+      'better-complexity',
+      'better-cognitive-load',
+      'better-structural-drift',
+      'better-runtime-safety',
+      'better-dependency-freedom',
+      'better-test-quality'
     ],
     jobIds: ['job-wiki-maintenance', 'job-refresh-local-llm-catalog', 'job-refresh-cli-provider-catalogs']
   },

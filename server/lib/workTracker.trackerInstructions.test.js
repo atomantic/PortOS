@@ -144,19 +144,60 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
   });
 
   // The SHIPPED prompt (not the generator's mocked stand-in) must fully expand:
-  // the tracker block is injected FIRST precisely because it carries {appName}/
-  // {repoPath} of its own, and a token that survives reaches the agent literally.
+  // a token that survives reaches the agent literally. The substitution order
+  // below MIRRORS buildImprovementTaskDescription and is load-bearing — the
+  // file-issues mode contract carries a {trackerInstructions} of its own, and
+  // the injected tracker block carries {appName}/{repoPath} of its own. Run in
+  // any other order and a real dispatch ships a literal placeholder.
   it('leaves no unexpanded {token} in the shipped ux prompt on any tracker', async () => {
     const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    const { modeContractFor } = await import('./auditCatalog.js');
     const template = DEFAULT_TASK_PROMPTS['ux'];
     expect(template).toContain('{trackerInstructions}');
+    expect(template).toContain('{modeInstructions}');
 
     for (const tracker of ['plan', 'github', 'gitlab', 'jira']) {
-      const rendered = template
-        .replace(/\{trackerInstructions\}/g, () => formatTrackerInstructions(tracker, ux))
-        .replace(/\{appName\}/g, () => 'Example App')
-        .replace(/\{repoPath\}/g, () => '/tmp/example-repo');
-      expect(rendered.match(/\{[a-zA-Z][a-zA-Z0-9_]*\}/g)).toBeNull();
+      for (const fileIssues of [true, false]) {
+        const rendered = template
+          .replace(/\{modeInstructions\}/g, () => modeContractFor(fileIssues))
+          .replace(/\{trackerInstructions\}/g, () => formatTrackerInstructions(tracker, ux))
+          .replace(/\{appName\}/g, () => 'Example App')
+          .replace(/\{repoPath\}/g, () => '/tmp/example-repo');
+        expect(rendered.match(/\{[a-zA-Z][a-zA-Z0-9_]*\}/g), `${tracker} fileIssues=${fileIssues}`).toBeNull();
+      }
+    }
+  });
+
+  // The same contract for EVERY audit lane, not just ux. Each one is dispatched
+  // through the identical chain, so one prompt that introduces a placeholder the
+  // generator does not substitute ships that literal text to the agent — and the
+  // failure is invisible until someone reads a run's transcript. Cheap to assert
+  // across the whole catalog, and it covers each new lane on the day it is added.
+  it('leaves no unexpanded {token} in ANY shipped audit prompt, in either mode', async () => {
+    const { DEFAULT_TASK_PROMPTS } = await import('../services/taskPromptDefaults.js');
+    const { AUDIT_TASK_TYPES, modeContractFor, getAuditFilingPreset } = await import('./auditCatalog.js');
+
+    expect(AUDIT_TASK_TYPES.size).toBeGreaterThan(1);
+    for (const taskType of AUDIT_TASK_TYPES) {
+      const template = DEFAULT_TASK_PROMPTS[taskType];
+      expect(template, taskType).toBeTruthy();
+      for (const tracker of ['plan', 'github', 'gitlab', 'jira']) {
+        for (const fileIssues of [true, false]) {
+          // Do-work mode resolves {trackerInstructions} to empty, exactly as
+          // resolveTrackerFilingBlock does when an audit is not filing.
+          const rendered = template
+            .replace(/\{modeInstructions\}/g, () => modeContractFor(fileIssues))
+            .replace(/\{trackerInstructions\}/g, () => (
+              fileIssues ? formatTrackerInstructions(tracker, getAuditFilingPreset(taskType)) : ''
+            ))
+            .replace(/\{appName\}/g, () => 'Example App')
+            .replace(/\{repoPath\}/g, () => '/tmp/example-repo');
+          expect(
+            rendered.match(/\{[a-zA-Z][a-zA-Z0-9_]*\}/g),
+            `${taskType} on ${tracker} fileIssues=${fileIssues}`,
+          ).toBeNull();
+        }
+      }
     }
   });
 });

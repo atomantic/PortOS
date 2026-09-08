@@ -57,9 +57,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // Quota-burn `data-safety-audit` counterpart. Migrations, schema parity, and
   // cross-version compatibility. Defaults to file-issues (safer for unattended).
   'data-safety',
-  // Quota-burn `simplify-audit` counterpart. Dead code, unused exports, and
-  // copy-paste drift — distinct from `code-quality` (which is the broader DRY /
-  // long-function / TODO pass). Defaults to file-issues.
+  // Quota-burn `simplify-audit` counterpart. Dead code, unused exports,
+  // copy-paste drift, and YAGNI (speculative abstractions) — distinct from
+  // `code-quality` (conventional defects: magic values, brittle conditionals,
+  // convention violations). Defaults to file-issues.
   'simplify',
   // Structural-maintainability audit. Treats complexity thresholds as candidate
   // signals, then proves responsibility, reuse, or discoverability impact before
@@ -80,6 +81,37 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // ambiguous action verbs, dead-end error text. Files under the `ux` label;
   // narrower than the `ux` audit, which walks the running UI. File-issues.
   'copy',
+  // The six lanes below complete the scheduled counterparts of the slashdo
+  // `do:better` audit lenses (DO_BETTER_LENS_COVERAGE in lib/auditCatalog.js),
+  // so every category of app quality can be scheduled on its own cadence
+  // instead of fanning eight sub-agents out of one command run.
+  // Measured branching per function — ranks the hottest high-complexity
+  // functions by churn and reduces them with a named transformation. The
+  // structural cousin of `module-hygiene` (which owns responsibility and
+  // ownership, and only uses complexity as a candidate signal). Remediation
+  // is a mechanical refactor of hot code, so do-work is worktree-isolated.
+  'better-complexity',
+  // Reader cost no metric catches: mixed abstraction levels, flag arguments,
+  // misleading names, action at a distance. Sibling of `better-complexity`.
+  'better-cognitive-load',
+  // Carved out of `code-quality` v3: derived artifacts kept as a second
+  // source of truth, hand-synchronized registries, incidental-layout
+  // coupling. Files under `code-quality`; do-work is worktree-isolated.
+  'better-structural-drift',
+  // Latent defects found by reading source: missing awaits, unhandled
+  // rejections, unguarded null access, resource leaks, races, unbounded
+  // reads. Distinct from `console-errors` (observed at runtime),
+  // `error-handling` (failure paths + resilience) and `react-lifecycle`
+  // (component effects). Files under `bug`.
+  'better-runtime-safety',
+  // Third-party dependency NECESSITY (the `do:depfree` lens) — replace
+  // micro-packages and native-API wrappers with in-repo code. Distinct from
+  // `dependency-updates`, which bumps what stays. Worktree-isolated do-work.
+  'better-dependency-freedom',
+  // Tests that prove nothing: assert on mocks, can never fail, re-implement
+  // the code under test, or duplicate a stronger boundary test. Distinct from
+  // `test-coverage`, which owns the GAPS. Files under `tests`.
+  'better-test-quality',
   // Audits `git stash list` for {appName} and drops entries already superseded
   // by (or a subset of) current `main`/HEAD, or that are stale/abandoned scratch
   // work — without discarding real unlanded work. On-demand only (no cadence
@@ -462,6 +494,16 @@ export const DEFAULT_TASK_INTERVALS = {
   'react-lifecycle':   { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'observability':     { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   'copy':                { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  // The do:better-lens lanes. All file-issues by default (an unattended run
+  // must not land a refactor) and on-demand until the user picks a cadence.
+  // Open issues + PRs are preloaded so the agent dedups against in-flight
+  // work without spending its own forge calls, the way module-hygiene does.
+  'better-complexity':          { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'better-cognitive-load':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'better-structural-drift':    { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'better-runtime-safety':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'better-dependency-freedom':  { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
+  'better-test-quality':        { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, dataInputs: ['open-issues', 'open-pull-requests'], taskMetadata: { fileIssues: true, useWorktree: false, openPR: false } },
   // Trusted remediation is separate from external intake. Legacy author
   // filter settings cannot widen this lane into untrusted contributor PRs.
   'pr-watcher':          { type: INTERVAL_TYPES.ON_DEMAND, intervalMs: 1800000, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { prAuthorFilter: 'trusted', readOnly: false } },
@@ -657,6 +699,12 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'react-lifecycle': 'React lifecycle/state audit — file issues (default) or implement fixes',
   'observability': 'Logging/observability audit — file issues (default) or implement fixes',
   'copy': 'Copy/text-clarity audit — file issues (default) or implement rewrites',
+  'better-complexity': 'Cyclomatic complexity — measure branching per function, reduce the hottest offenders; file issues (default) or implement one refactor',
+  'better-cognitive-load': 'Cognitive load — mixed abstraction levels, flag arguments, misleading names, action at a distance; file issues (default) or implement one refactor',
+  'better-structural-drift': 'Structural drift — generated artifacts as a second source of truth, hand-synced registries, layout coupling; file issues (default) or implement one consolidation',
+  'better-runtime-safety': 'Runtime safety — missing awaits, unhandled rejections, unguarded nulls, leaks, races; file issues (default) or implement fixes',
+  'better-dependency-freedom': 'Dependency freedom — replace micro-packages and native-API wrappers with in-repo code; file issues (default) or implement one removal',
+  'better-test-quality': 'Test quality — vacuous, weak, or redundant tests; file issues (default) or implement one cleanup',
   'model-comparison-refresh': 'Research sourced model quality, effort, price, latency and quota evidence for Models Comparison',
   'stash-cleanup': 'Triage git stash list — drop entries superseded by or stale relative to main, leave real unlanded work in place',
   'repo-sync': 'Sync every managed app with origin — back on the default branch, pushed and pulled, merged branches/worktrees and redundant stashes cleared',
