@@ -36,6 +36,18 @@ import { publicReviewPostureForTask, resolvePublicReviewProvider } from './publi
  * >}
  */
 export async function resolveAgentProviderAndModel(task) {
+  if (task?.metadata?.videoProduction) {
+    const { assertVideoAttemptDispatch } = await import('./creativeDirector/videoExecution.js');
+    const marker = task.metadata.videoProduction;
+    const project = await assertVideoAttemptDispatch(marker.projectId, marker.attemptId).catch(() => null);
+    if (!project) return { ok: false, permanent: true, error: 'Video production is paused or changed. Review and Resume from the project.' };
+    const choice = project.videoExecution.choices[marker.kind === 'evaluate' ? 'evaluation' : marker.kind];
+    const provider = choice?.providerId ? await getProviderById(choice.providerId) : null;
+    if (!provider || provider.enabled === false || provider.type === 'api' || !await isProviderAvailable(provider.id)) {
+      return { ok: false, permanent: true, error: 'The reviewed Video agent provider is unavailable. Change Models or Settings and Resume.' };
+    }
+    return { ok: true, provider, selectedModel: choice.model, modelSelection: { model: choice.model, tier: 'user-specified', reason: 'Reviewed Video production choice' } };
+  }
   if (isPrivateSecurityTask(task)) {
     const { privateSecurityEndpoint } = await import('../lib/privateSecuritySandbox.js');
     Object.assign(task.metadata, PRIVATE_SECURITY_DELIVERY);

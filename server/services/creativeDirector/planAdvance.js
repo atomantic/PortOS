@@ -424,6 +424,7 @@ async function runPlanStep(project, step) {
   const targetAbility = project.directive?.constraints?.targetAbility;
   const dispatch = await dispatchCreativeTool(resolvedStep.toolName, resolvedStep.args, {
     projectId,
+    ...(project.workspace === 'video' ? { videoStepId: step.stepId } : {}),
     ...(targetAbility ? { targetAbility } : {}),
   })
     .catch((err) => ({ ok: false, threw: true, error: err.message }));
@@ -491,9 +492,12 @@ async function settlePlanStepDispatch(projectId, step, runId, dispatch) {
 // times, then the project pauses with residuals for human review.
 async function handlePlanStepFailure(projectId, step) {
   const project = await getProject(projectId).catch(() => null);
+  if (project?.workspace === 'video' && (project.videoExecution?.attempts || []).some(attempt => attempt.status === 'uncertain')) {
+    return pausePlanWithResidual(projectId, 'A Video submission is uncertain. Reconcile its job before retrying.');
+  }
   if (!project || project.status === 'paused' || project.status === 'failed') return;
   const rounds = project.plan?.replanRounds || 0;
-  if (rounds < MAX_REPLAN_ROUNDS && !inflightPlanner.has(projectId)) {
+  if (rounds < (project.workspace === 'video' ? project.videoExecution?.limits?.maxReplans ?? 0 : MAX_REPLAN_ROUNDS) && !inflightPlanner.has(projectId)) {
     // MAX_REPLAN_ROUNDS alone cannot bound this path: `replanRounds` is bumped by
     // applyPlan, so a planner that never PATCHes leaves it at the same value and
     // this branch would re-fire forever (#4146). The empty-run gate is what

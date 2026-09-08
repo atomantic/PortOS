@@ -124,6 +124,19 @@ export const creativeDirectorRenderBackendSchema = z.object({
   video: creativeDirectorRenderPinSchema.optional(),
 }).strict();
 
+export const creativeDirectorVideoLimitsSchema = z.object({
+  maxClips: z.number().int().min(1).max(200).default(60),
+  maxRetries: z.number().int().min(0).max(3).default(1),
+  maxReplans: z.number().int().min(0).max(5).default(2),
+  maxAgentCalls: z.number().int().min(1).max(500).default(100),
+  spendCapUsd: z.number().positive().max(10000).nullable().default(null),
+}).strict();
+export const creativeDirectorVideoStartSchema = z.object({
+  configurationRevision: z.string().regex(/^[a-f0-9]{32}$/),
+  limits: creativeDirectorVideoLimitsSchema,
+  retryAttemptIds: z.array(z.string().uuid()).max(200).default([]),
+}).strict();
+
 // Additive workspace metadata. Absence keeps pre-Video execution semantics.
 export const creativeDirectorVideoDraftSchema = z.object({
   durationRange: z.object({

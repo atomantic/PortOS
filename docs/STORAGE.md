@@ -331,3 +331,15 @@ never ride the wire. Owner records reject remote overwrites, and receivers never
 acquire local execution authorization from sync. Pre-owner Video drafts remain inert
 and can be recreated locally from their settings. Legacy generalized projects retain
 their prior sync/execution behavior. Project sync v8 gates these semantics.
+
+Video execution authorization and attempt receipts persist in the same project
+JSONB as `videoExecution`: frozen provider/model identifiers, reviewed configuration
+revision, limits, and queued job/task IDs. These are machine-local and excluded
+from sync. No credentials or separate store are introduced. Clip submissions,
+agent calls, retries and replans consume explicit limits; unknown provider prices
+prevent promising a dollar cap. Pause revokes dispatch before canceling owned work.
+Restart reconciles receipts without replaying provider submissions; uncertain
+submissions require explicit retry consent because they may already have charged.
+Completed jobs can be reused after reconciliation. Project sync v9 gates the
+execution semantics; existing records need no rewrite and remain unauthorized
+until the owner explicitly starts them.

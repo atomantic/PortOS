@@ -67,6 +67,10 @@ export async function runSceneRender(project, scene) {
   if (project.workspace === 'video') {
     const { videoReviewAllowsDispatch } = await import('./videoReview.js');
     if (!await videoReviewAllowsDispatch(project.id, ['script-shot-plan', 'references'])) return null;
+    const { effectiveVideoProject } = await import('./videoExecution.js');
+    project = effectiveVideoProject(await getProject(project.id));
+    scene = project.treatment?.scenes?.find(value => value.sceneId === scene.sceneId);
+    if (!scene || scene.status !== 'pending') return null;
   }
   console.log(`🎞️  CD scene render starting: ${project.id} / ${scene.sceneId} (order ${scene.order}, attempt ${(scene.retryCount || 0) + 1}/${CD_MAX_SCENE_RETRIES + 1})`);
 
@@ -240,11 +244,27 @@ export async function runSceneRender(project, scene) {
   // throw here leaves the scene stuck in 'rendering' forever with nothing to
   // advance the project. Settle it through the normal failure path instead.
   let jobId;
+  let videoAttemptId;
   try {
     const params = videoBackendJobParams(settings, videoPin, sceneParams, { durationSeconds: scene.durationSeconds });
-    ({ jobId } = await enqueueUnattendedMediaJob({ kind: 'video', params, owner }));
+    if (project.workspace === 'video') {
+      const { enqueueVideoProductionJob } = await import('./videoExecution.js');
+      const queued = await enqueueVideoProductionJob(project, { params, sceneId: scene.sceneId, workRevision: scene.workRevision || 0 });
+      if (!queued) {
+        await updateScene(project.id, scene.sceneId, { expectedWorkRevision: scene.workRevision || 0, status: 'pending' });
+        return null;
+      }
+      jobId = queued.jobId;
+      videoAttemptId = queued.attemptId;
+      await updateScene(project.id, scene.sceneId, { expectedWorkRevision: scene.workRevision || 0, renderedJobId: jobId });
+    } else ({ jobId } = await enqueueUnattendedMediaJob({ kind: 'video', params, owner }));
   } catch (error) {
     console.error(`❌ CD scene ${scene.sceneId}: could not queue the render: ${error.message}`);
+    if (project.workspace === 'video') {
+      const { pauseVideoExecution } = await import('./videoExecution.js');
+      await pauseVideoExecution(project.id, error.message);
+      return null;
+    }
     await handleRenderFailed(project.id, scene.sceneId, error.message || 'could not queue the render', {
       workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined,
       retry: error.code !== 'VIDEO_BACKEND_INPUT_UNSUPPORTED' && error.code !== 'VIDEO_BACKEND_UNSUPPORTED',
@@ -258,27 +278,34 @@ export async function runSceneRender(project, scene) {
   // cancelJob handlers — we MUST listen for all three or a user-initiated
   // cancel via the Render Queue UI would leave the scene stuck in
   // `rendering` forever and leak listeners.
+  const settleReceipt = (status) => videoAttemptId
+    ? import('./videoExecution.js').then(({ settleVideoAttempt }) => settleVideoAttempt(project.id, videoAttemptId, { status }))
+    : Promise.resolve();
+  let settled = false;
   const onCompleted = (job) => {
-    if (job.id !== jobId) return;
+    if (settled || job.id !== jobId) return;
+    settled = true;
     cleanup();
-    handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack, workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })
+    settleReceipt('completed').then(() => handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack, workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined }))
       .catch(error => console.error(`❌ CD render completion failed: ${error.message}`));
   };
   const onFailed = (job) => {
-    if (job.id !== jobId) return;
+    if (settled || job.id !== jobId) return;
+    settled = true;
     cleanup();
-    handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed', { workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined })
+    settleReceipt(/timeout|timed out|interrupted/i.test(job.error || '') ? 'uncertain' : 'failed').then(() => handleRenderFailed(project.id, scene.sceneId, job.error || 'render failed', { workRevision: project.workspace === 'video' ? scene.workRevision || 0 : undefined }))
       .catch(error => console.error(`❌ CD render failure handling failed: ${error.message}`));
   };
   const onCanceled = (job) => {
-    if (job.id !== jobId) return;
+    if (settled || job.id !== jobId) return;
+    settled = true;
     cleanup();
     // Treat user-initiated cancel as a terminal stop for this scene — do
     // NOT route through handleRenderFailed (which would retry up to
     // CD_MAX_SCENE_RETRIES); the user explicitly stopped this. Mark the scene
     // failed and let the completionHook flag the project so the user can
     // resume from the UI.
-    handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined)
+    settleReceipt(job.params?.videoProduction?.submissionUncertain ? 'uncertain' : 'canceled').then(() => handleRenderCanceled(project.id, scene.sceneId, project.workspace === 'video' ? scene.workRevision || 0 : undefined))
       .catch(error => console.error(`❌ CD render cancellation handling failed: ${error.message}`));
   };
   function cleanup() {
@@ -289,6 +316,13 @@ export async function runSceneRender(project, scene) {
   mediaJobEvents.on('completed', onCompleted);
   mediaJobEvents.on('failed', onFailed);
   mediaJobEvents.on('canceled', onCanceled);
+  if (project.workspace === 'video') {
+    const { getJob } = await import('../mediaJobQueue/index.js');
+    const settled = getJob(jobId);
+    if (settled?.status === 'completed') onCompleted(settled);
+    if (settled?.status === 'failed') onFailed(settled);
+    if (settled?.status === 'canceled') onCanceled(settled);
+  }
 
   return jobId;
 }
@@ -453,7 +487,12 @@ async function handleRenderFailed(projectId, sceneId, errorMsg, { retry = true, 
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
   if (!scene || (workRevision !== undefined && workRevision !== (scene.workRevision || 0))) return;
   const nextRetry = (scene.retryCount || 0) + 1;
-  if (retry && nextRetry <= CD_MAX_SCENE_RETRIES) {
+  if (fresh.workspace === 'video' && /quota|credit|balance|429|timeout|timed out|interrupted/i.test(errorMsg)) {
+    const { pauseVideoExecution } = await import('./videoExecution.js');
+    await pauseVideoExecution(projectId, `Render blocked: ${errorMsg}. Review the provider and saved job before Resume.`);
+    return;
+  }
+  if (retry && nextRetry <= (fresh.workspace === 'video' ? fresh.videoExecution?.limits?.maxRetries ?? 0 : CD_MAX_SCENE_RETRIES)) {
     console.log(`🔁 CD scene ${sceneId} render failed (${errorMsg}) — retry ${nextRetry}/${CD_MAX_SCENE_RETRIES}`);
     await updateScene(projectId, sceneId, { ...(workRevision === undefined ? {} : { expectedWorkRevision: workRevision }), status: 'pending', retryCount: nextRetry });
     const updated = { ...scene, retryCount: nextRetry };

@@ -5,6 +5,8 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 vi.mock('../services/apiCreativeDirector.js', () => ({
   getCreativeDirectorProject: vi.fn(),
+  getCreativeDirectorVideoExecution: vi.fn(async () => ({ canStart: false, blockers: ['Configure a provider'], choices: null, limits: { maxClips: 60, maxRetries: 1, maxReplans: 2, maxAgentCalls: 100, spendCapUsd: null }, execution: null })),
+  startCreativeDirectorVideoExecution: vi.fn(),
   getCreativeDirectorSources: vi.fn(async () => ({ draft: [], artifact: [] })),
   deleteCreativeDirectorProject: vi.fn(),
   startCreativeDirectorProject: vi.fn(),

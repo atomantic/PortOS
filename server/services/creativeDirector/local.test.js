@@ -85,7 +85,7 @@ describe('setTreatment — first-pass scene frames (#1867/#1938)', () => {
     mockReadJSONFile.mockResolvedValue([project]);
     getIngredient.mockResolvedValue(null);
     const treatment = { ...VALID_TREATMENT, script: 'A cat finds a hat.', scenes: Array.from({ length: 12 }, (_, order) => ({ ...VALID_TREATMENT.scenes[0], sceneId: `scene-${order}`, order, durationSeconds: 10 })) };
-    const plan = { steps: [{ stepId: 'lookup', toolName: 'catalog_searchIngredients', args: { query: 'Example' } }] };
+    const plan = { steps: [{ stepId: 'render', toolName: 'media_enqueueVideoJob', args: { params: { prompt: 'Example forest', durationSeconds: 10 } } }] };
     await expect(setTreatment(project.id, treatment)).rejects.toMatchObject({ code: 'VIDEO_SOURCE_MISSING', status: 409 });
     await expect(setPlan(project.id, plan)).rejects.toMatchObject({ code: 'VIDEO_SOURCE_MISSING', status: 409 });
     getIngredient.mockRejectedValueOnce(new Error('Store unavailable'));

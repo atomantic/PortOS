@@ -494,6 +494,14 @@ export async function initMediaJobQueue() {
     const videoReap = await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
     if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
     for (const j of persistedJobs) {
+      // Explicit Video Start grants one process lifetime. Restored jobs wait for
+      // project reconciliation; replaying an unknown paid submit could charge twice.
+      if (j.params?.videoProduction && ['queued', 'running'].includes(j.status)) {
+        archive.push({ ...j, status: 'failed', error: 'Video production paused after restart', completedAt: new Date().toISOString(),
+          params: { ...restoredParams(j), videoProduction: { ...j.params.videoProduction, submissionUncertain: j.status === 'running' } } });
+        restartedFailedIds.push(j.id);
+        continue;
+      }
       if (j.status === 'running') {
         // A remote provider job survives this process: its local queue id is
         // also the stable Idempotency-Key. Re-enqueue the same record and let
@@ -961,6 +969,12 @@ async function runJob(job) {
     // (how far it got) — consumers gate the progress UI on status === 'running',
     // so the residual values are not displayed for terminal jobs.
     job.completedAt = new Date().toISOString();
+    if (job.params?.videoProduction) {
+      const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
+      const tag = job.params.videoProduction;
+      await settleVideoAttempt(tag.projectId, tag.attemptId, { jobId: job.id, status: job.params.videoProduction.submissionUncertain || (state === 'failed' && /timeout|timed out|interrupted/i.test(job.error || '')) ? 'uncertain' : state })
+        .catch(error => console.error(`❌ Video receipt could not settle: ${error.message}`));
+    }
     // Wake the lane finalizer without polling. Some providers emit their
     // terminal event just before their kickoff promise resolves; the promise
     // retains that signal until runJob reaches the await below.
@@ -1144,6 +1158,10 @@ async function runJob(job) {
 
   try {
     const mod = await getGenModuleForJob(job);
+    if (job.params?.videoProduction) {
+      const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+      await assertVideoAttemptDispatch(job.params.videoProduction.projectId, job.params.videoProduction.attemptId, { jobId: job.id });
+    }
     if (!mod) throw new Error(`Unknown job kind: ${job.kind}`);
     // A cancel that arrived while this job was still queued lives on the
     // persisted marker, not on any in-memory adapter state. Re-stamp it for
@@ -1330,6 +1348,10 @@ export async function cancelJob(jobId) {
     // cancelRequested flips the dispatcher's `failed` handler into the
     // `canceled` branch instead of marking it failed.
     runningJob.cancelRequested = true;
+    if (runningJob.params?.videoProduction && ['reactor', 'fal', 'grok'].includes(runningJob.params.mode)) {
+      runningJob.params.videoProduction = { ...runningJob.params.videoProduction, submissionUncertain: true };
+      await persist();
+    }
     if (isRemoteMediaJob(runningJob)) {
       // Remote cancellation can outlive this process when the peer is down.
       // Persist the intent before signaling the adapter so boot reconciliation

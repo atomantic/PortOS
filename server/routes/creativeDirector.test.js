@@ -77,6 +77,8 @@ import * as creativeTools from '../services/creative/toolRegistry.js';
 import { CREATIVE_DIRECTOR_IDS_BATCH_MAX } from '../lib/creativeDirectorValidation.js';
 vi.mock('../services/creativeDirector/videoReview.js', () => ({ reviewVideo: vi.fn(async () => ({ checkpoints: [], feedback: [] })), getVideoReview: vi.fn(async () => ({ checkpoints: [], canReview: true })) }));
 import { reviewVideo } from '../services/creativeDirector/videoReview.js';
+vi.mock('../services/creativeDirector/videoExecution.js', () => ({ getVideoExecutionPreview: vi.fn(async () => ({ canStart: true })), startVideoExecution: vi.fn(async () => ({ status: 'planning' })) }));
+const { getVideoExecutionPreview, startVideoExecution } = await import('../services/creativeDirector/videoExecution.js');
 import creativeDirectorRoutes from './creativeDirector.js';
 
 describe('creativeDirector routes', () => {
@@ -87,6 +89,19 @@ describe('creativeDirector routes', () => {
     app.use(express.json());
     app.use('/api/creative-director', creativeDirectorRoutes);
     vi.clearAllMocks();
+  });
+
+  it('previews choices, validates explicit Start limits, and cancels owned work on Video Pause', async () => {
+    cdService.getProject.mockResolvedValue({ id: 'cd-video', workspace: 'video', status: 'draft' });
+    expect((await request(app).get('/api/creative-director/cd-video/execution')).body.canStart).toBe(true);
+    expect(getVideoExecutionPreview).toHaveBeenCalledWith('cd-video');
+    const input = { configurationRevision: 'a'.repeat(32), limits: { maxClips: 2 } };
+    expect((await request(app).post('/api/creative-director/cd-video/start').send({ ...input, limits: { maxClips: 0 } })).status).toBe(400);
+    expect(startVideoExecution).not.toHaveBeenCalled();
+    expect((await request(app).post('/api/creative-director/cd-video/start').send(input)).status).toBe(200);
+    expect(startVideoExecution).toHaveBeenCalledWith('cd-video', expect.objectContaining({ configurationRevision: input.configurationRevision, limits: expect.objectContaining({ maxClips: 2 }) }));
+    await request(app).post('/api/creative-director/cd-video/pause').send({});
+    expect(stop.stopProject).toHaveBeenCalledWith('cd-video', { reason: 'Paused by the user.' });
   });
 
   it('validates review revisions and feedback before the owner mutation', async () => {
@@ -172,7 +187,7 @@ describe('creativeDirector routes', () => {
         ['auto-cast', { compose: true, generateFirstPass: true }],
         ['plan/step/example', { action: 'retry' }],
       ]) {
-        expect((await request(app).post('/api/creative-director/cd-video/' + action).send(body)).status).toBe(409);
+        expect((await request(app).post('/api/creative-director/cd-video/' + action).send(body)).status).toBe(['start', 'resume'].includes(action) ? 400 : 409);
       }
       expect(cdService.updateProject).not.toHaveBeenCalled();
       expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();

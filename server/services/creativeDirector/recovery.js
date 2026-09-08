@@ -79,6 +79,13 @@ export async function recoverInFlightProjects() {
   let resumed = 0;
   const completedAt = new Date().toISOString();
   for (const project of needsCleanup) {
+    if (project.workspace === 'video') {
+      if (project.videoReplica || !project.videoOwnerInstanceId) continue;
+      const { reconcileVideoExecution } = await import('./videoExecution.js');
+      await retireRuns(project.id, { runs: inflightRuns(project), reason: 'Video production paused after restart', taskMetadata: { interruptedByRestart: 'true' } });
+      await reconcileVideoExecution(project.id, { restarting: true });
+      continue;
+    }
     // CDO Phase 2 (#2184): a directive-driven project's plan steps stuck in
     // `running` lost their in-memory dispatch/job listener when the process
     // died — reset them to `pending` so the advance loop re-dispatches. (Their

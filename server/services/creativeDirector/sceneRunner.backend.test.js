@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(() => ({ jobId: 'job-1' })),
+  getJob: vi.fn(() => null),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
 vi.mock('../instances.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
@@ -32,7 +33,7 @@ vi.mock('../settings.js', () => ({
 }));
 vi.mock('./local.js', () => ({
   updateScene: vi.fn(async () => {}),
-  mutateVideoProject: vi.fn(async (_id, mutate) => mutate(await getProject())),
+  mutateVideoProject: vi.fn(async (_id, mutate) => { const result = await mutate(await getProject()); if (!result.skipPersist) getProject.mockResolvedValue(result.project); return result; }),
   updateProject: vi.fn(async () => {}),
   getProject: vi.fn(async () => null),
 }));
@@ -51,6 +52,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
 
 import { runSceneRender } from './sceneRunner.js';
 import { dispatchSceneEvaluation } from './sceneEvaluator.js';
+import { videoConfigurationRevision } from './videoExecution.js';
 import { videoReviewStages } from '../../lib/creativeDirectorVideoReview.js';
 import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
@@ -244,16 +246,18 @@ describe('runSceneRender — Reactor and fal pins', () => {
 
 describe('Video production review boundary', () => {
   it('does not enqueue before approval and ignores a superseded render completion', async () => {
-    const shot = scene({ workRevision: 0 });
+    const shot = scene({ workRevision: 0, status: 'pending' });
     const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner',
-      videoExecution: { authorized: true }, videoDraft: { sources: [] },
+      videoExecution: { id: 'example-execution', authorized: true, limits: { maxClips: 3, maxRetries: 1, maxAgentCalls: 10, maxReplans: 1, spendCapUsd: null }, choices: { video: { mode: 'local' }, evaluation: { type: 'agent' } } }, videoDraft: { sources: [] },
       treatment: { artifact: { revision: 1 }, script: 'Example script', scenes: [shot] } });
+    video.videoExecution.inputRevision = videoConfigurationRevision(video);
     getProject.mockResolvedValue(video);
     getSettings.mockResolvedValue(LOCAL_READY);
     expect(await runSceneRender(video, shot)).toBeNull();
     expect(enqueueJob).not.toHaveBeenCalled();
     const checkpoint = videoReviewStages(video)[0];
     video.videoReview = { decisions: { [checkpoint.stage]: { action: 'approve', revision: checkpoint.revision } } };
+    getProject.mockResolvedValue(video);
     expect(await runSceneRender(video, shot)).toBe('job-1');
     const completed = mediaJobEvents.on.mock.calls.find(([event]) => event === 'completed')[1];
     getProject.mockResolvedValue({ ...video, treatment: { ...video.treatment, scenes: [{ ...shot, workRevision: 1 }] } });

@@ -347,8 +347,8 @@ export function applyProjectPatch(project, patch) {
   if (patch.status && !PROJECT_STATUSES.includes(patch.status)) {
     throw new ServerError(`Invalid status: ${patch.status}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  if ('videoDraft' in patch && (project.workspace !== 'video' || project.status !== 'draft')) {
-    throw new ServerError('Production settings can only be edited on a Video draft', { status: 409, code: 'INVALID_STATE' });
+  if ('videoDraft' in patch && (project.workspace !== 'video' || !['draft', 'paused', 'failed'].includes(project.status))) {
+    throw new ServerError('Pause Video production before editing production settings', { status: 409, code: 'INVALID_STATE' });
   }
   if ('workspace' in patch && patch.workspace !== project.workspace) {
     throw new ServerError('The project workspace cannot be changed', { status: 409, code: 'INVALID_STATE' });
@@ -375,7 +375,7 @@ export function applyProjectPatch(project, patch) {
   return next;
 }
 
-function validateVideoShot(project, scene, isFirst) {
+export function validateVideoShot(project, scene, isFirst) {
   const backend = project.renderBackend?.video?.mode;
   const unsupported = [];
   if (isFirst && scene.useContinuationFromPrior) unsupported.push('continuation without a prior shot');
@@ -535,6 +535,19 @@ export function applyPlan(project, planInput) {
       `Plan validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
       { status: 400, code: 'VALIDATION_ERROR' },
     );
+  }
+  if (project.workspace === 'video' && parsed.data.steps.some(step => step.toolName !== 'media_enqueueVideoJob')) {
+    throw new ServerError('Video production plans support bounded media_enqueueVideoJob steps. Use the saved reference and audio choices for other media.', { status: 400, code: 'VIDEO_PLAN_TOOL_UNSUPPORTED' });
+  }
+  if (project.workspace === 'video') {
+    for (const step of parsed.data.steps) {
+      const params = step.args?.params || {};
+      if (!Number.isFinite(params.durationSeconds) || params.durationSeconds < 1 || params.durationSeconds > 10
+          || Number(params.chunks || 1) !== 1 || Number(params.batchSize || 1) !== 1) {
+        throw new ServerError('Each Video plan step must render one clip with durationSeconds between 1 and 10.', { status: 400, code: 'VIDEO_PLAN_CLIP_BOUNDS' });
+      }
+      validateVideoShot(project, { sceneId: step.stepId, prompt: String(params.prompt || ''), durationSeconds: params.durationSeconds }, false);
+    }
   }
   const prevSteps = Array.isArray(project.plan?.steps) ? project.plan.steps : [];
   const prevById = new Map(prevSteps.map((s) => [s.stepId, s]));

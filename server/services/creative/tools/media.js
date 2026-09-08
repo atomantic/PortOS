@@ -143,9 +143,8 @@ export function reconcileVideoParamsWithModel(params, project, models = getVideo
  * `creativeDirectorMusicBed` already on the params (a caller that set its own
  * destination) wins and is left as-is.
  */
-async function configureMusicJob(params, ctx) {
+async function configureMusicJob(params, ctx, project) {
   if (!ctx?.projectId) return params;
-  const project = await loadOwningProject(ctx);
   if ((ctx.targetAbility === 'music' || ctx.targetAbility === 'music-video') && !project) {
     throw new Error('commission-project-unavailable');
   }
@@ -308,12 +307,19 @@ const mediaTool = (kind, label) => ({
   },
   execute: async (args, ctx) => {
     let params = args.params || {};
+    const owningProject = await loadOwningProject(ctx);
+    let owningVideo = owningProject;
+    if (owningVideo?.workspace === 'video') {
+      if (kind !== 'video' || !ctx.videoStepId) throw new Error('Video production requires a bounded video plan step.');
+      const { effectiveVideoProject } = await import('../../creativeDirector/videoExecution.js');
+      owningVideo = effectiveVideoProject(owningVideo);
+    } else owningVideo = null;
     if (kind === 'audio') {
-      params = await configureMusicJob(params, ctx);
+      params = await configureMusicJob(params, ctx, owningProject);
     } else {
       // Image + video both consult the owning project: video for its locked
       // geometry preset, both for a pinned render backend (#3135).
-      const project = await loadOwningProject(ctx);
+      const project = owningVideo || owningProject;
       if (ctx.targetAbility && !project) throw new Error('commission-project-unavailable');
       if (kind === 'video') params = enforceVideoRenderPreset(params, project);
       if (kind === 'image') params = enforceImageRenderPreset(params, project);
@@ -344,6 +350,12 @@ const mediaTool = (kind, label) => ({
     // planner renders but not its scene renders). It resolves LAST, after the
     // project/install pin ladder above: a configured remote provider overrides
     // those local backend choices, and an unrouted job is unaffected.
+    if (owningVideo) {
+      const { enqueueVideoProductionJob } = await import('../../creativeDirector/videoExecution.js');
+      const queued = await enqueueVideoProductionJob(owningVideo, { kind, params, stepId: ctx.videoStepId });
+      if (!queued) throw new Error('Video production is paused or its execution limit is exhausted.');
+      return queued;
+    }
     return enqueueUnattendedMediaJob({ kind, params, owner: resolveOwner(args, ctx) });
   },
 });

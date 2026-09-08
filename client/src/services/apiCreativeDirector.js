@@ -109,3 +109,8 @@ export const getCreativeDirectorVideoReview = (id, options = {}) => request(`/cr
 export const submitCreativeDirectorVideoReview = (id, input, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/review`, {
   method: 'POST', body: JSON.stringify(input), ...options,
 });
+
+export const getCreativeDirectorVideoExecution = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/execution`, options);
+export const startCreativeDirectorVideoExecution = (id, input, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/start`, {
+  method: 'POST', body: JSON.stringify(input), ...options,
+});
