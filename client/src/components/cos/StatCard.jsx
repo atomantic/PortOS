@@ -41,7 +41,7 @@ const SIZES = {
   },
 };
 
-export default function StatCard({ label, value, icon, active, activeLabel, compact, mini, tone, onClick, title }) {
+export default function StatCard({ label, value, icon, active, activeLabel, compact, mini, tone, onClick, title, className }) {
   const ariaLabel = `${label}: ${value}${active && activeLabel ? `, ${activeLabel}` : ''}`;
   // Only tint the icon when a tone was asked for — tone-less callers pass a
   // pre-colored icon element of their own.
@@ -65,7 +65,7 @@ export default function StatCard({ label, value, icon, active, activeLabel, comp
   const interactiveClass = onClick
     ? `text-left hover:bg-port-card/60${hasNeutralBorder ? ' hover:border-port-accent-2/50' : ''}`
     : '';
-  const shellClass = `${size.bg} border transition-all ${size.root} ${borderClass} ${interactiveClass}`;
+  const shellClass = `${size.bg} border transition-all ${size.root} ${borderClass} ${interactiveClass}${className ? ` ${className}` : ''}`;
 
   if (compact) {
     return (
