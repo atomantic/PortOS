@@ -1630,11 +1630,11 @@ describe('buildPrompt', () => {
     expect(out).toContain('existing-thing');
     expect(out).toContain('ship faster');
     expect(out).toContain('JSON only');
-    expect(out).toContain('"model": "light | medium | heavy"');
+    expect(out).toContain('"model": "light | medium | heavy | ultra"');
     expect(out).toContain('"effort": "low | medium | high | xhigh | max"');
     expect(out).toContain('"goodFirstIssue"');
     expect(out).toContain('"helpWanted"');
-    expect(out).toContain('never mark a wide mechanical sweep as a good first issue');
+    expect(out).toContain('NOT a good first issue');
   });
 
   it('mentions the hand-off only when it is enabled', () => {
@@ -2881,17 +2881,15 @@ describe('forge I/O (injected exec)', () => {
 
   it('fileProposalToForge embeds slug marker and returns issue number from URL', async () => {
     const exec = vi.fn()
-      .mockResolvedValueOnce({ code: 0, stdout: '' }) // label create
-      .mockResolvedValueOnce({ code: 0, stdout: '' }) // label create
-      .mockResolvedValueOnce({ code: 0, stdout: 'https://github.com/o/r/issues/123\n' });
-    const res = await fileProposalToForge({ cli: 'gh', cwd: '/x', title: 'T', body: 'B', slug: 'my-slug', exec });
+      .mockResolvedValue({ code: 0, stdout: 'https://github.com/o/r/issues/123\n' });
+    const res = await fileProposalToForge({ cli: 'gh', cwd: '/x', title: 'T', body: 'B', slug: 'my-slug', model: 'light', effort: 'low', exec });
     expect(res.success).toBe(true);
     expect(res.number).toBe(123);
     // The create call body carries the slug marker.
-    const createCall = exec.mock.calls[2][1];
+    const createCall = exec.mock.calls.find(c => c[1][0] === 'issue')[1];
     const bodyIdx = createCall.indexOf('--body') + 1;
     expect(createCall[bodyIdx]).toContain(slugMarker('my-slug'));
-    expect(createCall.filter((a) => a === '--label')).toHaveLength(1);
+    expect(createCall.filter((a) => a === '--label')).toHaveLength(3);
     expect(createCall).toContain(LI_LABEL);
   });
 
@@ -2915,18 +2913,19 @@ describe('forge I/O (injected exec)', () => {
 
   it('fileProposalToForge does not invent dispatch labels from a missing hint', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: 'https://github.com/o/r/issues/9\n' });
-    await fileProposalToForge({ cli: 'gh', cwd: '/x', title: 'T', body: 'B', slug: 's', exec });
+    const result = await fileProposalToForge({ cli: 'gh', cwd: '/x', title: 'T', body: 'B', slug: 's', exec });
+    expect(result.success).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
     const created = exec.mock.calls.filter((c) => c[1][0] === 'label').map((c) => c[1][2]);
     expect(created).not.toContain('model:medium');
     expect(created).not.toContain('good first issue');
   });
 
   it('fileProposalToForge reports failure on nonzero exit', async () => {
-    const exec = vi.fn()
-      .mockResolvedValueOnce({ code: 0, stdout: '' })
-      .mockResolvedValueOnce({ code: 0, stdout: '' })
-      .mockResolvedValueOnce({ code: 1, stdout: '', stderr: 'boom' });
-    const res = await fileProposalToForge({ cli: 'gh', cwd: '/x', title: 'T', body: 'B', slug: 's', exec });
+    const exec = vi.fn(async (_cli, args) => args[0] === 'label'
+      ? { code: 0, stdout: '' }
+      : { code: 1, stdout: '', stderr: 'boom' });
+    const res = await fileProposalToForge({ cli: 'gh', cwd: '/x', title: 'T', body: 'B', slug: 's', model: 'heavy', effort: 'high', exec });
     expect(res.success).toBe(false);
     expect(res.error).toContain('boom');
   });

@@ -65,7 +65,7 @@ export const CONTRIBUTOR_LABEL_COLORS = Object.freeze({
 
 export const CONTRIBUTOR_LABEL_DESCRIPTIONS = Object.freeze({
   [GOOD_FIRST_ISSUE_LABEL]: 'Self-contained work a new contributor can ship without deep repo context',
-  [HELP_WANTED_LABEL]: 'Extra hands welcome — scoped enough to pick up cold',
+  [HELP_WANTED_LABEL]: 'Specific hardware validation or input from multiple real users needed',
 });
 
 /**
@@ -527,26 +527,6 @@ export const ISSUE_QUALITY_GUIDANCE = [
 ].join('\n');
 
 /**
- * Standing guidance for any planner that files GitHub/GitLab issues. Used in
- * tracker-filing instructions, quota-burn audits, claim follow-ups, and the
- * file-issue skill so the vocabulary cannot drift.
- */
-export const DISPATCH_HINT_GUIDANCE = [
-  'Dispatch hints (`model:` + `effort:`) are optional, independent labels recommending HOW to run the work — not a size estimate:',
-  '- `model:light|medium|heavy|ultra` — capability: light is mechanical (rename, config, well-specified edit); heavy is genuinely hard reasoning (concurrency, redesign); ultra is exceptional frontier reasoning, explicitly requested.',
-  '- `effort:low|medium|high|xhigh|max` — reasoning budget per step, independent of model. `model:light` + `effort:max` is a mechanical sweep across many call sites; `model:heavy` + `effort:low` is a two-line change that hinges on one idea.',
-  'Choose each axis only when the work you just inspected justifies it. Omit an axis rather than guessing. Do NOT stamp `medium` on both by reflex, and do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title — those belong in labels.',
-  'Create each missing hint label immediately before applying it (`gh label create <name> --color <hex> 2>/dev/null || true`; glab needs `--name` and `#<hex>`). Colors: model:light D4C5F9, model:medium A371F7, model:heavy 6F42C1, model:ultra C2185B, effort:low BFE5E5, effort:medium 76C7C7, effort:high 1D7874, effort:xhigh 0E4F4C, effort:max 05403D.',
-  'Also apply contributor labels when the work actually fits them — independently of `model:`/`effort:`:',
-  '- `good first issue` (color 7057FF) — self-contained, well-specified, a new contributor can ship it without deep repo context. A `model:light` 40-file sweep is NOT a good first issue.',
-  '- `help wanted` (color 008672) — extra hands welcome and the body is scoped enough to pick up cold.',
-  'Create those two with the same `gh` / `glab label create` form as the dispatch hints (quote the name; glab still needs `--name` and `#<hex>`).',
-  'Planner attribution: also apply the `planner:<model>` label naming the model that WROTE the plan. Never guess it from what you believe you are — use the exact label your run\'s "Planner attribution" instruction gives you, and omit the axis when your run was given none. It is a third independent axis: it records the AUTHOR, while `model:`/`effort:` recommend how a future agent should RUN the work.',
-  'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `layered-intelligence`, …). Never relabel a deduplicated existing issue.',
-  ISSUE_QUALITY_GUIDANCE,
-].join('\n');
-
-/**
  * The CONSUMER half of `DISPATCH_HINT_GUIDANCE`, in two forms.
  *
  * Every other constant here is producer-side — how a planner CHOOSES a
@@ -587,30 +567,26 @@ export const DISPATCH_HINT_FANOUT_GUIDANCE = [
   ...HINT_FALLBACK_LINES,
 ].join('\n');
 
-/**
- * Mandatory-axis sibling of `DISPATCH_HINT_GUIDANCE`, for producers that read
- * the target code closely before filing — the quota-burn audits, which spend
- * most of a window researching one slice and arrive at a chosen fix.
- *
- * The general guidance keeps both axes optional because most callers file from
- * thinner evidence, and a guessed hint is worse than none. That reasoning does
- * not transfer here: an agent that has traced the failure and decided the fix
- * already knows how the work should run, so "omit rather than guess" just
- * strands the issue with no routing at all — which is exactly what happened to
- * the audit issues filed before this contract existed. Same vocabulary and the
- * same colors as the optional form; only the obligation differs.
- */
+const HELP_WANTED_CRITERIA = 'only when testing or validation requires specific hardware, or input from multiple real users would materially enrich development. Name the required hardware or the user perspectives sought and how they improve validation or design in the issue body. A well-scoped task, complexity, or a desire for extra hands alone does not qualify.';
+const HELP_WANTED_GUIDANCE = `Apply \`help wanted\` (color 008672) ${HELP_WANTED_CRITERIA}`;
+
+/** Canonical filing contract for every autonomous issue producer. */
 export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
-  'Dispatch labels are REQUIRED on every issue you file: exactly one `model:` and exactly one `effort:`. They are two independent axes describing HOW to run the work, not how big it is — pick each from the code you just read.',
+  'If you file issues, follow this contract even when older task text or examples describe dispatch labels as optional. This does not authorize issue creation on its own.',
+  'Dispatch labels are REQUIRED on every issue you file: exactly one `model:` and exactly one `effort:`. They are two independent axes describing HOW to run the work, not how big it is — pick each from the code you just read. If evidence is insufficient, investigate before filing rather than guessing or omitting an axis.',
   '- `model:light|medium|heavy|ultra` — capability: light is mechanical (rename, config, a well-specified single-file edit); medium is routine multi-file work; heavy is genuinely hard reasoning (concurrency, schema/compatibility design, redesign); ultra is exceptional frontier reasoning, explicitly requested.',
   '- `effort:low|medium|high|xhigh|max` — reasoning budget per step, independent of model. `model:light` + `effort:max` is a mechanical sweep across many call sites; `model:heavy` + `effort:low` is a two-line change that hinges on one idea.',
   'Never derive one axis from the other, and do NOT stamp `medium` on both by reflex — where that genuinely is the answer, justify it in one line of the body. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
   'Create each label immediately before applying it (`gh label create <name> --color <hex> 2>/dev/null || true`; glab needs `--name` and `#<hex>`). Colors: model:light D4C5F9, model:medium A371F7, model:heavy 6F42C1, model:ultra C2185B, effort:low BFE5E5, effort:medium 76C7C7, effort:high 1D7874, effort:xhigh 0E4F4C, effort:max 05403D.',
-  'Contributor labels stay OPTIONAL and independent: `good first issue` (color 7057FF) when the work is self-contained enough for a new contributor with no deep repo context — a `model:light` 40-file sweep is NOT one — and `help wanted` (color 008672) when the body is scoped enough to pick up cold. Same `label create` form.',
+  'Contributor labels stay OPTIONAL and independent: `good first issue` (color 7057FF) when the work is self-contained enough for a new contributor with no deep repo context — a `model:light` 40-file sweep is NOT a good first issue. Use the same gh / glab label create form.',
+  HELP_WANTED_GUIDANCE,
   'Planner attribution: also apply the `planner:<model>` label naming the model that WROTE the plan. Never guess it from what you believe you are — use the exact label your run\'s "Planner attribution" instruction gives you, and omit the axis when your run was given none. It is a third independent axis: it records the AUTHOR, while `model:`/`effort:` recommend how a future agent should RUN the work.',
-  'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …). After creating each issue, read its labels back (`gh issue view <number> --json labels`) and apply any that did not stick. Never relabel a deduplicated existing issue.',
+  'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …). After creating each issue, read its labels back (`gh issue view <number> --json labels`) and apply any that did not stick and read back again. Do not report filing complete until both axes are present; report a labeling failure explicitly if repair fails. Never relabel a deduplicated existing issue.',
   ISSUE_QUALITY_GUIDANCE,
 ].join('\n');
+
+/** Backward-compatible export: all forge filing callers now require both axes. */
+export const DISPATCH_HINT_GUIDANCE = MANDATORY_DISPATCH_HINT_GUIDANCE;
 
 /**
  * Jira sibling of `DISPATCH_HINT_GUIDANCE`. Same vocabulary, hyphenated label
@@ -622,7 +598,8 @@ export const JIRA_DISPATCH_HINT_GUIDANCE = [
   '- `model-light|model-medium|model-heavy|model-ultra` — capability (mechanical, routine, complex, exceptional frontier reasoning).',
   '- `effort-low|effort-medium|effort-high|effort-xhigh|effort-max` — reasoning budget per step, independent of model.',
   'Choose each axis only when the work you just inspected justifies it. Omit an axis rather than guessing. Do NOT stamp `medium` on both by reflex, and do NOT put `[model-…]` / `[effort-…]` / `[category]` / `[SEVERITY]` in the summary — those belong in labels.',
-  'Also apply contributor labels when the work actually fits them — independently of the dispatch axes: `good-first-issue` (self-contained, a new contributor can ship it) and `help-wanted` (extra hands welcome, scoped enough to pick up cold). A `model-light` 40-file sweep is NOT a good-first-issue.',
+  'Also apply contributor labels when the work actually fits them — independently of the dispatch axes: `good-first-issue` (self-contained, a new contributor can ship it) and `help-wanted` under the criteria below. A `model-light` 40-file sweep is NOT a good-first-issue.',
+  `Apply \`help-wanted\` ${HELP_WANTED_CRITERIA}`,
   'Planner attribution: also apply the `planner-<model>` label naming the model that WROTE the plan, taken verbatim from your run\'s "Planner attribution" instruction (omit the axis when your run was given none). It records the AUTHOR, independently of the dispatch axes.',
   'Preserve existing category/scope labels. Never relabel a ticket you skipped as a duplicate.',
   ISSUE_QUALITY_GUIDANCE,
@@ -674,8 +651,8 @@ export const PORTOS_AREA_LABEL_GUIDANCE = [
 
 /**
  * Repo studies have enough target-code evidence to make all three routing
- * decisions. Keep this contract separate from the general guidance, where the
- * model/effort axes are intentionally optional for other issue producers.
+ * decisions. This adds mandatory area labels to the dispatch axes required
+ * by the general forge-filing contract.
  */
 export const REPO_STUDY_LABEL_CONTRACT = Object.freeze({
   forgeFlags: '--label area:<area> --label model:<tier> --label effort:<level>',
