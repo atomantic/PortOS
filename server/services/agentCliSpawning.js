@@ -23,7 +23,8 @@ import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
 import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
-import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
+import { finalizeAgentRunCommon } from './agentRunFinalize.js';
+import { activeAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import { safeJSONParse, PATHS, writeFileGuarded } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { isKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
@@ -43,7 +44,7 @@ import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { prClaimWasVerified } from '../lib/prDisposition.js';
 import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
 import { doneSentinelPath } from '../lib/agentSentinel.js';
-import { isHostShuttingDown, shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
+import { isHostShuttingDown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { ensureOllamaAgentContext } from './ollamaAgentContext.js';
 import { isOllamaBackedProvider } from './providers.js';
 import { isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
@@ -325,6 +326,20 @@ export async function getClaudeSettingsEnv() {
   }
   _claudeSettingsEnvCacheTime = Date.now();
   return _claudeSettingsEnvCache;
+}
+
+/**
+ * What went wrong with a direct-CLI run, or `null` when there is nothing to
+ * analyze — a successful run, or a private security assessment whose transcript
+ * must not be read (its findings stay in the local assessment archive).
+ *
+ * The raw stream buffer is preferred over the display buffer: it still carries
+ * the full stream-json payload, error details included. A fallback signal the
+ * run already raised (a usage-limit hit, say) outranks a keyword sweep.
+ */
+function resolveCliErrorAnalysis({ finalSuccess, task, model, rawStreamBuffer, outputBuffer, immediateFallbackAnalysis }) {
+  if (finalSuccess || isPrivateSecurityTask(task)) return null;
+  return immediateFallbackAnalysis || analyzeAgentFailure(rawStreamBuffer || outputBuffer, task, model);
 }
 
 /**
@@ -759,6 +774,54 @@ export async function spawnDirectly({
     }
   };
 
+  /**
+   * The close handler threw — outside any request lifecycle, so nothing above
+   * will catch it and the process now SURVIVES rather than restarting. Leave
+   * nothing held: free a lane the throw beat, and persist a terminal record so
+   * the agent/run aren't stuck `running` with no live process to finish them.
+   *
+   * A paused agent was already persisted + lane-released by `markAgentPaused`, so
+   * it gets ONLY the in-memory cleanup — finalizing it as failed here would
+   * overwrite the paused state and break a later resume.
+   *
+   * Each persistence call is guarded on its own so a failure can't re-crash.
+   */
+  const recoverFromCloseHandlerFailure = async (handlerErr, { code, laneReleased, outputBuffer }) => {
+    console.error(`❌ Agent ${agentId} close handler error: ${handlerErr.message}`);
+    if (pausedAgents.has(agentId)) {
+      consumePausedAgentExit(agentId);
+      unregisterSpawnedAgent(claudeProcess.pid);
+      activeAgents.delete(agentId);
+      return;
+    }
+    if (!laneReleased) {
+      try {
+        releaseAgentLane({
+          agentId,
+          success: false,
+          exitCode: code,
+          executionId,
+          laneName,
+          errorExecutionMessage: `Agent close handler error: ${handlerErr.message}`,
+        });
+      } catch (releaseErr) {
+        console.error(`❌ Agent ${agentId} lane release failed during recovery: ${releaseErr.message}`);
+      }
+    }
+    try {
+      await completeAgent(agentId, { success: false, error: `Close handler error: ${handlerErr.message}` });
+    } catch (completeErr) {
+      console.error(`❌ Agent ${agentId} completeAgent failed during recovery: ${completeErr.message}`);
+    }
+    try {
+      await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
+    } catch (runErr) {
+      console.error(`❌ Agent ${agentId} completeAgentRun failed during recovery: ${runErr.message}`);
+    }
+    unregisterSpawnedAgent(claudeProcess.pid);
+    activeAgents.delete(agentId);
+  };
+
   handleClose = async (code) => {
     // Runs outside the request lifecycle — a throw from outputBatcher.flush,
     // analyzeAgentFailure, or finalizeAgent would re-escape this async handler
@@ -781,27 +844,16 @@ export async function spawnDirectly({
       agentData.killTimer = null;
     }
 
-    const terminatedByUser = userTerminatedAgents.has(agentId);
-    if (terminatedByUser) userTerminatedAgents.delete(agentId);
     // This run's own sentinel (see doneSentinelName) — a worktree-less agent
     // shares its workspace and must not read a sibling's signal as its own.
     const sentinelPath = doneSentinelPath(cwd, agentId);
     const completionSentinelPresent = !!sentinelPath && existsSync(sentinelPath);
-    const completedBeforeHostShutdown = isHostShuttingDown() && completionSentinelPresent;
-
-    // If the user terminated the agent, force success=false even if the
-    // process happened to exit 0 in the race window — otherwise the run is
-    // recorded as successful while the task remains blocked. Mirrors the TUI
-    // `finish` path's `finalSuccess = terminatedByUser ? false : success`.
     // A mid-stream fallback signal (e.g. usage-limit hit) kills the CLI; if it
     // races to exit 0, don't record success or the fallback/retry never fires.
     // A completion sentinel written before host shutdown is also authoritative:
     // TreeKill may surface its otherwise-completed child with a null exit code.
-    // Mirrors the runner path (`runner.js`) and the TUI finish() handling.
-    const finalSuccess = terminatedByUser
-      ? false
-      : ((success || completedBeforeHostShutdown) && !immediateFallbackAnalysis);
-    const finalError = terminatedByUser ? 'Agent terminated by user' : null;
+    const completedBeforeHostShutdown = isHostShuttingDown() && completionSentinelPresent;
+    const rawSuccess = (success || completedBeforeHostShutdown) && !immediateFallbackAnalysis;
 
     // Drain any queued transcript writes before reading/appending outputBuffer
     // for finalization — a still-pending stdout/stderr write would otherwise
@@ -838,33 +890,27 @@ export async function spawnDirectly({
 
     await writeFileGuarded(outputFile, outputBuffer).catch(() => {});
 
-    // Paused agents are finalized in `markAgentPaused` (which already released
-    // the lane + execution). Return BEFORE `releaseAgentLane` below — re-running
-    // it on the same executionId logs a spurious "Invalid state transition".
-    // Mirrors the TUI path's pause-check-before-releaseAgentLane ordering.
-    if (pausedAgents.has(agentId)) {
-      consumePausedAgentExit(agentId);
-      if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
-      activeAgents.delete(agentId);
-      return;
-    }
-
-    // PortOS is going down and took this child with it (pm2's TreeKill walks
-    // portos-server's descendants). Abandon rather than finalize, for the same
-    // reasons as the TUI path (#3202): finalizing would charge the task's
-    // failure budget — and possibly file an investigation task — for a fault the
-    // agent didn't have, and its cleanup hands the worktree to `cleanupAgentWorktree`,
-    // which removes a clean tree, discarding the state a resume needs. Leaving
-    // the record `running` is what lets the next boot's orphan sweep see this
-    // agent in the host-shutdown marker and requeue it as interrupted.
-    // The transcript is already flushed and output.txt written above.
-    // A user-terminated run still finalizes, so it's recorded as such rather
-    // than resurrected by the requeue.
-    if (shouldAbandonForHostShutdown({
+    // The teardown both in-process spawners share: paused early return, then
+    // the host-shutdown abandon gate, the user-termination consume, the
+    // final success/error derivation, and the lane release (done before the
+    // error-analysis + state-write chain, since lanes serialize related work).
+    // The transcript is already flushed and output.txt written above, so every
+    // early-out below still leaves a complete record. See agentRunFinalize.js.
+    const finalizeOutcome = finalizeAgentRunCommon({
+      agentId,
+      agentData,
+      success: rawSuccess,
+      error: null,
+      exitCode: code,
+      duration,
+      executionId,
+      laneName,
       sentinelPresent: completionSentinelPresent,
-      terminatedByUser,
-      paused: pausedAgents.has(agentId),
-    })) {
+    });
+
+    if (finalizeOutcome.outcome === 'paused') return;
+
+    if (finalizeOutcome.outcome === 'abandoned') {
       outputBatcher.push('🛑 PortOS restarted while this agent was running — the run was interrupted, not completed. Its worktree is preserved and the task will resume.');
       emitLog('warn', `Agent ${agentId} interrupted by a PortOS host restart — preserved for resume`, { agentId, phase: 'interrupted' });
       await Promise.all([
@@ -877,24 +923,12 @@ export async function spawnDirectly({
       return;
     }
 
-    // Release lane + complete execution tracking BEFORE the error-analysis +
-    // state-write chain — neither call blocks on I/O, but lanes serialize
-    // related work. Fall back to outer scope when activeAgents was cleared by
-    // killAgent before close fired.
-    releaseAgentLane({
-      agentId,
-      success: finalSuccess,
-      duration,
-      exitCode: code,
-      executionId: agentData?.executionId || executionId,
-      laneName: agentData?.laneName || laneName,
-      errorExecutionMessage: finalError || undefined,
-    });
+    const { finalSuccess, finalError, terminatedByUser } = finalizeOutcome;
     laneReleased = true;
 
-    // Use raw stream buffer for error analysis (contains full JSON with error details)
-    const analysisBuffer = rawStreamBuffer || outputBuffer;
-    const errorAnalysis = finalSuccess || isPrivateSecurityTask(task) ? null : (immediateFallbackAnalysis || analyzeAgentFailure(analysisBuffer, task, model));
+    const errorAnalysis = resolveCliErrorAnalysis({
+      finalSuccess, task, model, rawStreamBuffer, outputBuffer, immediateFallbackAnalysis,
+    });
 
     // Every CLI agent that is a real coding harness drives its own push → PR →
     // review → merge (#3733): a slashdo-capable Claude runs `/simplify` +
@@ -922,9 +956,8 @@ export async function spawnDirectly({
 
     // try/finally so a throw from finalizeAgent still runs the local cleanup
     // (the shared completion dispatch, pid unregister, activeAgents delete).
-    // Mirrors the TUI path's pattern.
-    // See the TUI path: a PR-claim downgrade must reach cleanup, or a run that
-    // opened no PR is cleaned up as a success and loses its retry state (#3358).
+    // A PR-claim downgrade must reach cleanup, or a run that opened no PR is
+    // cleaned up as a success and loses its retry state (#3358).
     let cleanupSuccess = finalSuccess;
     try {
       const finalized = await finalizeAgent({
@@ -968,50 +1001,7 @@ export async function spawnDirectly({
       activeAgents.delete(agentId);
     }
     } catch (handlerErr) {
-      console.error(`❌ Agent ${agentId} close handler error: ${handlerErr.message}`);
-      // A paused agent was already persisted + lane-released by markAgentPaused;
-      // if the throw beat the pause guard above, do ONLY the in-memory cleanup
-      // (mirrors the normal pause path) — finalizing it as failed here would
-      // overwrite the paused state and break later resume.
-      if (pausedAgents.has(agentId)) {
-        consumePausedAgentExit(agentId);
-        unregisterSpawnedAgent(claudeProcess.pid);
-        activeAgents.delete(agentId);
-      } else {
-        // If the throw beat releaseAgentLane, the lane/execution is still held.
-        // The process now survives instead of restarting, so a held lane would
-        // block later tasks indefinitely — release it on the recovery path too.
-        if (!laneReleased) {
-          try {
-            releaseAgentLane({
-              agentId,
-              success: false,
-              exitCode: code,
-              executionId,
-              laneName,
-              errorExecutionMessage: `Agent close handler error: ${handlerErr.message}`,
-            });
-          } catch (releaseErr) {
-            console.error(`❌ Agent ${agentId} lane release failed during recovery: ${releaseErr.message}`);
-          }
-        }
-        // Persist a terminal failure record so the agent/run don't stay stuck as
-        // running with no live process to finish them — the process now survives
-        // instead of restarting. Mirrors the error handler's completion path;
-        // each call is guarded so a persistence failure can't re-crash.
-        try {
-          await completeAgent(agentId, { success: false, error: `Close handler error: ${handlerErr.message}` });
-        } catch (completeErr) {
-          console.error(`❌ Agent ${agentId} completeAgent failed during recovery: ${completeErr.message}`);
-        }
-        try {
-          await completeAgentRun(runId, isPrivateSecurityTask(task) ? 'Private security assessment failed; inspect its local assessment archive.' : outputBuffer, 1, 0, { message: handlerErr.message, category: 'close-handler-error' });
-        } catch (runErr) {
-          console.error(`❌ Agent ${agentId} completeAgentRun failed during recovery: ${runErr.message}`);
-        }
-        unregisterSpawnedAgent(claudeProcess.pid);
-        activeAgents.delete(agentId);
-      }
+      await recoverFromCloseHandlerFailure(handlerErr, { code, laneReleased, outputBuffer });
     }
   };
 

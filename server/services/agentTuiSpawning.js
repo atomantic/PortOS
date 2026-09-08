@@ -14,13 +14,14 @@ import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgentLifecycle.js';
 import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 import { resolveErrorAnalysis } from './agentTuiSpawning/finalizeHelpers.js';
-import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
+import { finalizeAgent } from './agentFinalization.js';
 import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
-import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
+import { activeAgents, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
 import { PATHS, watchForFile } from '../lib/fileUtils.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { doneSentinelName, doneSentinelPath as resolveDoneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
-import { shouldAbandonForHostShutdown, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
+import { HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
+import { finalizeAgentRunCommon, shouldAbandonAgentRun } from './agentRunFinalize.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 import { prClaimWasVerified, leavesPrForHuman } from '../lib/prDisposition.js';
 import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
@@ -993,6 +994,39 @@ export async function spawnTuiAgent({
     return agentData;
   };
 
+  /**
+   * Everything this run held, released in one place: its own `.agent-done`
+   * sentinel, the shared completion dispatch, the pid registration, the
+   * `activeAgents` entry, and the PTY session.
+   *
+   * Called from `finish()`'s `finally`, so it must run even when `finalizeAgent`
+   * threw — a memory-extraction crash would otherwise strand the worktree and
+   * the shell session on disk.
+   */
+  const releaseRunResources = async ({ agentData, cleanupSuccess, prOwnership, prClaimVerified, noChangesToShip }) => {
+    // This run's sentinel only — a sibling agent sharing this workspace owns
+    // its own file and may still be running.
+    if (doneSentinelPath) await rm(doneSentinelPath).catch(() => {});
+
+    // Pipeline progression → worktree cleanup with the PR disposition →
+    // retry-hold release, in the one owner both in-process spawners share.
+    // Caught so a throw there cannot skip the in-memory teardown below — this
+    // runs off a PTY exit, outside any request lifecycle.
+    await runSpawnerCompletionCleanup({
+      agentId,
+      task,
+      success: cleanupSuccess,
+      prOwnership,
+      prClaimVerified,
+      noChangesToShip,
+      outputBuffer: getOutputBuffer(),
+    }).catch(err => emitLog('warn', `TUI completion cleanup failed for ${agentId}: ${err.message}`, { agentId }));
+
+    if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
+    activeAgents.delete(agentId);
+    if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);
+  };
+
   const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
     // `finalized` alone used to be the whole re-entrancy guard, safe because it
     // was set SYNCHRONOUSLY as this function's first act. The merge-gate check
@@ -1029,11 +1063,7 @@ export async function spawnTuiAgent({
     // recovery's user-terminated skip would miss it and resurrect the run. And a
     // run the user paused already has its own don't-finalize branch below, which
     // owns the paused bookkeeping (pid unregister, activeAgents delete).
-    if (shouldAbandonForHostShutdown({
-      sentinelPresent: sentinelPresent(),
-      terminatedByUser: userTerminatedAgents.has(agentId),
-      paused: pausedAgents.has(agentId),
-    })) {
+    if (shouldAbandonAgentRun({ agentId, sentinelPresent: sentinelPresent() })) {
       await abandonForHostShutdown();
       return;
     }
@@ -1080,34 +1110,38 @@ export async function spawnTuiAgent({
     await drainLines();
     await drainRaw();
 
-    if (pausedAgents.has(agentId)) {
-      consumePausedAgentExit(agentId);
-      const pausedAgentData = activeAgents.get(agentId);
-      if (pausedAgentData?.pid) unregisterSpawnedAgent(pausedAgentData.pid);
-      activeAgents.delete(agentId);
+    // The teardown both in-process spawners share: paused early return, then
+    // the host-shutdown abandon gate, the user-termination consume, the final
+    // success/error derivation, and the lane release — done before the
+    // potentially-slow error-analysis / completeAgent / processAgentCompletion
+    // chain, since lanes serialize related work. See agentRunFinalize.js.
+    //
+    // The abandon gate is consulted a second time here on purpose: the gate at
+    // the top of finish() ran before ingestDoneSentinel and the merge-gate probe,
+    // which can take seconds, and a host restart that begins in that window is
+    // still an interruption rather than an outcome (#3202).
+    const duration = Date.now() - (agentData?.startedAt || Date.now());
+    const finalizeOutcome = finalizeAgentRunCommon({
+      agentId,
+      agentData,
+      success,
+      error,
+      exitCode,
+      duration,
+      executionId,
+      laneName,
+      sentinelPresent: sentinelPresent(),
+      errorExecutionFallback: `TUI agent ended: ${reason}`,
+    });
+
+    if (finalizeOutcome.outcome === 'paused') return;
+
+    if (finalizeOutcome.outcome === 'abandoned') {
+      await abandonForHostShutdown();
       return;
     }
 
-    const duration = Date.now() - (agentData?.startedAt || Date.now());
-    const terminatedByUser = userTerminatedAgents.has(agentId);
-    if (terminatedByUser) userTerminatedAgents.delete(agentId);
-
-    const finalSuccess = terminatedByUser ? false : success;
-    const finalError = terminatedByUser ? 'Agent terminated by user' : error;
-
-    // Release the lane + complete execution tracking BEFORE the
-    // potentially-slow error-analysis / completeAgent / processAgentCompletion
-    // chain — neither call blocks on I/O, but lanes serialize related work
-    // and we don't want them held longer than necessary.
-    releaseAgentLane({
-      agentId,
-      success: finalSuccess,
-      duration,
-      exitCode,
-      executionId: agentData?.executionId || executionId,
-      laneName: agentData?.laneName || laneName,
-      errorExecutionMessage: finalError || `TUI agent ended: ${reason}`,
-    });
+    const { finalSuccess, finalError, terminatedByUser } = finalizeOutcome;
 
     // output.txt has already been incrementally appended via the spooler;
     // do NOT writeFile() it from the output buffer at finalize — the buffer is
@@ -1181,27 +1215,7 @@ export async function spawnTuiAgent({
       prClaimVerified = prClaimWasVerified(finalized?.prVerdict);
       noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
     } finally {
-      // This run's sentinel only — a sibling agent sharing this workspace owns
-      // its own file and may still be running.
-      if (doneSentinelPath) await rm(doneSentinelPath).catch(() => {});
-
-      // Pipeline progression → worktree cleanup with the PR disposition →
-      // retry-hold release, in the one owner both in-process spawners share.
-      // Caught so a throw there cannot skip the in-memory teardown below — this
-      // runs off a PTY exit, outside any request lifecycle.
-      await runSpawnerCompletionCleanup({
-        agentId,
-        task,
-        success: cleanupSuccess,
-        prOwnership,
-        prClaimVerified,
-        noChangesToShip,
-        outputBuffer: getOutputBuffer(),
-      }).catch(err => emitLog('warn', `TUI completion cleanup failed for ${agentId}: ${err.message}`, { agentId }));
-
-      if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
-      activeAgents.delete(agentId);
-      if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);
+      await releaseRunResources({ agentData, cleanupSuccess, prOwnership, prClaimVerified, noChangesToShip });
     }
   };
 

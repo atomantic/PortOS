@@ -35,6 +35,7 @@ const CLUSTER = [
   'subAgentSpawner.js',
   'cosAgentLifecycle.js',
   'agentFinalization.js',
+  'agentRunFinalize.js',
   'agentSummaryExtraction.js',
   'agentRunnerSync.js',
   'agentRunnerOutputBatchers.js',
@@ -129,11 +130,11 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
   });
 
   it('keeps the extracted leaves free of back-edges into the cluster orchestrators', () => {
-    // These four exist ONLY to be depended on. If any of them grows an import of
+    // These exist ONLY to be depended on. If any of them grows an import of
     // an orchestrator, the cycle comes straight back — fail loudly and early
     // rather than waiting for the graph walk above to go red for a subtler reason.
     const orchestrators = ['agentLifecycle.js', 'agentCliSpawning.js', 'agentTuiSpawning.js', 'agentManagement.js', 'subAgentSpawner.js'];
-    for (const leaf of ['agentFinalization.js', 'agentSummaryExtraction.js', 'agentRunnerSync.js', 'agentRunnerOutputBatchers.js']) {
+    for (const leaf of ['agentFinalization.js', 'agentRunFinalize.js', 'agentSummaryExtraction.js', 'agentRunnerSync.js', 'agentRunnerOutputBatchers.js']) {
       const back = (graph.get(leaf) || []).filter(dep => orchestrators.includes(dep));
       expect(back, `${leaf} must not import ${back.join(', ')}`).toEqual([]);
     }
