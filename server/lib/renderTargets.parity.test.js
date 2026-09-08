@@ -1,19 +1,20 @@
 /**
- * Cross-package parity for the image-gen capability mirrors (#3231).
+ * Cross-package parity for the render-target Settings rows (#3231).
  *
- * The backend, render-target, and execution-lane ALPHABETS are no longer
- * mirrored: `client/src/lib/imageGenModes.js` re-exports them from the
- * dependency-free server leaves (`lib/generationModes.js`,
- * `lib/renderTargets.js`), so they cannot drift and nothing here asserts them.
+ * Nothing else needs binding any more. The backend, render-target, and
+ * execution-lane ALPHABETS re-export from the dependency-free server leaves
+ * (`lib/generationModes.js`, `lib/renderTargets.js`), and #6590 moved the
+ * per-backend CAPABILITY literals — the input-image caps, the prompt rule, the
+ * i2i-capable complement of `EDIT_INCAPABLE_IMAGE_MODES`, the shipped default
+ * models — into `lib/imageGenCapabilities.js`, which the client re-exports too.
+ * Facts that are imported cannot drift, so asserting them here would only
+ * restate an `export`.
  *
- * What this suite still binds is the client's copy of facts that live in
- * server SERVICE modules the browser bundle cannot load (they import
- * `errorHandler.js`, and through it Node's `events`): the per-provider
- * input-image capability specs on `CLOUD_PROVIDER_SPECS`, the i2i-capable
- * complement of `EDIT_INCAPABLE_IMAGE_MODES`, and the one presentation
- * decision the Settings tab owns — which render targets get a Defaults row.
- * Drift there is invisible to either suite alone: the client tests assert the
- * client's own literals, and the server never loads the client mirror.
+ * What remains is the one thing the client genuinely owns: which render targets
+ * get a Defaults row in Settings. That is a presentation decision with no
+ * server counterpart to import, so it is the only place drift is still possible
+ * — and it is invisible to either suite alone, because the client tests assert
+ * the client's own list and the server never loads it.
  *
  * Lives server-side because the server runner loads the pure client lib fine,
  * while the client (happy-dom) runner can't load service modules.
@@ -21,18 +22,10 @@
 
 import { describe, it, expect } from 'vitest';
 import { RENDER_TARGET, RENDER_TARGETS } from './renderTargets.js';
-import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODES } from './generationModes.js';
-import { EDIT_INCAPABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
-import { cloudPromptRequired, maxInputImages } from '../services/imageGen/cloudProviderConfig.js';
 // Import the node-safe leaf, NOT imageGenBackends.js — that module imports
 // lucide-react, which is not installed in the server CI job (this exact import
 // broke main's CI when Phase 2 landed pointing at imageGenBackends).
-import {
-  RENDER_TARGET_OPTIONS as CLIENT_OPTIONS,
-  I2I_CAPABLE_MODES as CLIENT_I2I_CAPABLE,
-  MAX_INPUT_IMAGES as CLIENT_MAX_INPUT_IMAGES,
-  cloudPromptRequired as clientCloudPromptRequired,
-} from '../../client/src/lib/imageGenModes.js';
+import { RENDER_TARGET_OPTIONS as CLIENT_OPTIONS } from '../../client/src/lib/imageGenModes.js';
 
 // Targets the Settings UI deliberately does NOT list — a pin nobody's
 // resolver reads would be a control that silently does nothing. FableLoom
@@ -57,59 +50,6 @@ describe('render-target Settings rows (#3231)', () => {
     for (const id of RENDER_TARGETS) {
       expect(client.has(id) || DELIBERATELY_UNLISTED.has(id),
         `server render target "${id}" is neither in client RENDER_TARGET_OPTIONS nor allowlisted as deliberately unlisted`).toBe(true);
-    }
-  });
-});
-
-/**
- * The client's `I2I_CAPABLE_MODES` is what the i2i-only pickers (the sprite fork
- * modal, #3331) filter their backend options through, and the server's
- * `EDIT_INCAPABLE_IMAGE_MODES` is what rejects such a mode at request time. If a
- * future edit-incapable backend were added server-side and not removed from the
- * client list, every i2i picker would go back to offering a backend the server
- * 400s — the exact bug #3331 fixed, re-introduced silently.
- *
- * Both directions are asserted: the two sets are exact complements over the mode
- * alphabet, so a backend that gains or loses input-image support server-side has
- * to be reflected in the client list.
- */
-describe('edit-capability client mirror parity (#3331)', () => {
-  it('the client i2i-capable list is the exact complement of the server incapable list', () => {
-    const expected = IMAGE_GEN_MODES.filter((m) => !EDIT_INCAPABLE_IMAGE_MODES.includes(m));
-    expect([...CLIENT_I2I_CAPABLE].sort()).toEqual([...expected].sort());
-  });
-});
-
-/**
- * The per-provider input-image capabilities live on `CLOUD_PROVIDER_SPECS`
- * (server/services/imageGen/cloudProviderConfig.js) and are mirrored into the
- * client so the Image Gen form can offer exactly the reference slots the backend
- * accepts and gate the Generate button on the same prompt rule the server
- * enforces. Drift in either direction is invisible to both suites on its own:
- * the client tests assert the client's own literals, and the server never loads
- * the client mirror. A raised/lowered cap would make the form offer a slot the
- * server silently drops; a changed prompt rule would enable a button on a render
- * `prepareParams` then 400s.
- */
-describe('cloud input-image capability client mirror parity', () => {
-  it('every cloud CLI mirrors its server maxInputImages', () => {
-    for (const mode of CLOUD_IMAGE_GEN_MODES) {
-      // An absent client entry and a null server cap are the same fact ("this
-      // tool declares no maximum"), so normalize before comparing — otherwise
-      // the mirror could drop a real cap and still pass.
-      expect(CLIENT_MAX_INPUT_IMAGES[mode] ?? null,
-        `client MAX_INPUT_IMAGES["${mode}"] does not match the server spec's maxInputImages`)
-        .toBe(maxInputImages(mode));
-    }
-  });
-
-  it('the client prompt-required predicate agrees with the server for every mode', () => {
-    for (const mode of IMAGE_GEN_MODES) {
-      for (const hasInputImage of [false, true]) {
-        expect(clientCloudPromptRequired(mode, hasInputImage),
-          `client cloudPromptRequired("${mode}", ${hasInputImage}) disagrees with the server`)
-          .toBe(cloudPromptRequired(mode, hasInputImage));
-      }
     }
   });
 });

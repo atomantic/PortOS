@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   IMAGE_GEN_MODE,
   I2I_CAPABLE_MODES,
-  MAX_INPUT_IMAGES,
   cloudPromptRequired,
+  maxInputImages,
   isI2iCapableMode,
   pickI2iMode,
   referenceSlotsFor,
@@ -40,12 +40,12 @@ describe('I2I_CAPABLE_MODES / isI2iCapableMode', () => {
 
 describe('input-image capability helpers', () => {
   it('caps agy at the 3 images its generate_image tool accepts', () => {
-    expect(MAX_INPUT_IMAGES[IMAGE_GEN_MODE.AGY]).toBe(3);
-    // The other two declare no maximum, so they carry no entry at all — the
-    // form's own slot count is their only ceiling. Restating it here as a
+    expect(maxInputImages(IMAGE_GEN_MODE.AGY)).toBe(3);
+    // The other two declare no maximum, so they report null — the form's own
+    // slot count is their only ceiling. Restating a number here as a
     // "capability" would make a form change look like a provider limit.
-    expect(MAX_INPUT_IMAGES[IMAGE_GEN_MODE.CODEX]).toBeUndefined();
-    expect(MAX_INPUT_IMAGES[IMAGE_GEN_MODE.GROK]).toBeUndefined();
+    expect(maxInputImages(IMAGE_GEN_MODE.CODEX)).toBeNull();
+    expect(maxInputImages(IMAGE_GEN_MODE.GROK)).toBeNull();
   });
 
   it('lets codex/grok render image-only but always demands a prompt for agy', () => {
