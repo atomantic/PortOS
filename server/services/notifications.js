@@ -25,20 +25,7 @@ export const notificationEvents = new EventEmitter();
 // In-memory cache
 let notificationsCache = null;
 
-// Notification types
-export const NOTIFICATION_TYPES = {
-  MEMORY_APPROVAL: 'memory_approval',
-  TASK_APPROVAL: 'task_approval',
-  CODE_REVIEW: 'code_review',
-  HEALTH_ISSUE: 'health_issue',
-  BRIEFING_READY: 'briefing_ready',
-  AUTOBIOGRAPHY_PROMPT: 'autobiography_prompt',
-  PLAN_QUESTION: 'plan_question',
-  AGENT_WARNING: 'agent_warning',
-  AUTOPILOT_PAUSED: 'autopilot_paused',
-  DAILY_POST_REMINDER: 'daily_post_reminder',
-  CREATIVE_COMMISSION: 'creative_commission'
-};
+export { NOTIFICATION_TYPES } from '../lib/notificationTypes.js';
 
 // Priority levels
 export const PRIORITY_LEVELS = {

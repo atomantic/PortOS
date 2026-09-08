@@ -6,6 +6,8 @@ import { getSettings, updateSettingsWith } from '../services/settings.js';
 import * as telegram from '../services/telegram.js';
 import * as telegramBridge from '../services/telegramBridge.js';
 
+import { AVAILABLE_FORWARD_TYPES } from '../lib/notificationTypes.js';
+
 const router = Router();
 
 /**
@@ -28,7 +30,8 @@ router.get('/status', asyncHandler(async (req, res) => {
       ...status,
       hasToken: status.hasBotToken,
       hasChatId: status.hasChatId,
-      forwardTypes: settings.telegram?.forwardTypes || []
+      forwardTypes: settings.telegram?.forwardTypes || [],
+      availableForwardTypes: AVAILABLE_FORWARD_TYPES
     });
   } else {
     const status = telegram.getStatus();
@@ -37,7 +40,8 @@ router.get('/status', asyncHandler(async (req, res) => {
       ...status,
       hasToken: !!settings.secrets?.telegram?.token,
       hasChatId: !!settings.telegram?.chatId,
-      forwardTypes: settings.telegram?.forwardTypes || []
+      forwardTypes: settings.telegram?.forwardTypes || [],
+      availableForwardTypes: AVAILABLE_FORWARD_TYPES
     });
   }
 }));
