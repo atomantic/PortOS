@@ -320,10 +320,10 @@ export function BackupTab() {
                         <ShieldOff size={14} />
                       </span>
                     )}
-                    <code className={`px-1.5 py-0.5 bg-port-bg border rounded shrink-0 ${d.defaultActive ? 'text-gray-300 border-port-border' : 'text-port-success border-port-success/30'}`}>{d.path}</code>
+                    <code className="px-1.5 py-0.5 bg-port-bg border rounded shrink-0 text-gray-300 border-port-border">{d.path}</code>
                     <span className="text-gray-500">
                       {d.reason}
-                      {!d.defaultActive && <span className="text-port-success/80 ml-1">(Default exclusion disabled)</span>}
+                      {!d.defaultActive && <span className="text-gray-400 ml-1">(Default exclusion disabled)</span>}
                     </span>
                   </li>
                 ))}

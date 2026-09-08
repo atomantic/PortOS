@@ -390,7 +390,7 @@ describe('BackupTab', () => {
       fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: 'loras/**' } });
       fireEvent.click(screen.getByLabelText('Add exclude path'));
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Save$/ })); });
-      expect(updateSettings).toHaveBeenLastCalledWith({ backup: { ...backup, disabledDefaultExcludes: expect.arrayContaining([loraPath, '/cache']), excludePaths: [...custom, 'loras/**'] } }, { silent: true });
+      expect(updateSettings).toHaveBeenLastCalledWith({ backup: { ...backup, disabledDefaultExcludes: ['/cache', loraPath], excludePaths: [...custom, 'loras/**'] } }, { silent: true });
       expect(toast.error).not.toHaveBeenCalled();
 
       cleanup();
