@@ -42,6 +42,7 @@ const {
   __resetVoiceOutput,
 } = await import('../services/voice/voiceOutput.js');
 const { transcribe } = await import('../services/voice/stt.js');
+const { synthesize } = await import('../services/voice/tts.js');
 const { runTurn } = await import('../services/voice/pipeline.js');
 const {
   attachHost: attachCallHost,
@@ -325,6 +326,10 @@ describe('call host opening line', () => {
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   beforeEach(() => {
+    // The failure cases below install rejecting implementations; restore the
+    // shared stub so ordering between cases cannot matter.
+    synthesize.mockReset();
+    synthesize.mockImplementation(async (text) => ({ wav: Buffer.from(`wav:${text}`), latencyMs: 1 }));
     __resetCallSession();
     __setCallSessionDeps({
       probe: vi.fn(async () => ({ state: 'connected' })),
@@ -354,6 +359,49 @@ describe('call host opening line', () => {
     await pollCall();
     await flush();
     expect(host.emitted.filter((e) => e.event === 'voice:call:tts')).toHaveLength(1);
+  });
+
+  it('retries the line on the next state broadcast when synthesis fails, and speaks it exactly once', async () => {
+    // A call bridge fails TTS routinely (provider down, rate-limited, timed
+    // out). Consuming the line before synthesize resolved left the call
+    // connected to permanent silence, because every later state emit found
+    // nothing pending to say.
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    await host.fire('voice:call:attach');
+
+    synthesize.mockRejectedValueOnce(new Error('tts provider unavailable'));
+
+    await startCall({ openingLine: 'This is PortOS about your backups.', origin: 'mind' });
+    await pollCall();
+    await flush();
+    await pollCall();
+    await flush();
+
+    const spoken = host.emitted.filter((e) => e.event === 'voice:call:tts');
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0].payload.sentence).toBe('This is PortOS about your backups.');
+    // recordTurn ran only for the attempt that actually emitted the audio —
+    // the failed attempt must not leave a spoken turn in the transcript.
+    expect(getCallState().turns).toBe(1);
+  });
+
+  it('gives up on the line after three failed attempts rather than hammering a dead provider', async () => {
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    await host.fire('voice:call:attach');
+
+    synthesize.mockRejectedValue(new Error('tts provider unavailable'));
+
+    await startCall({ openingLine: 'This is PortOS about your backups.', origin: 'mind' });
+    await pollCall();
+    await flush();
+    await pollCall();
+    await flush();
+
+    expect(synthesize).toHaveBeenCalledTimes(3);
+    expect(host.emitted.filter((e) => e.event === 'voice:call:tts')).toHaveLength(0);
+    expect(getCallState().turns).toBe(0);
   });
 
   it('says nothing extra on a call the user placed themselves', async () => {
