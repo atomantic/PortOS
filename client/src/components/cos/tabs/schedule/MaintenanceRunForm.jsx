@@ -25,6 +25,16 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
   const run = async () => {
     if (busy || blocked || !jobs || !provider || !model || !consent) return;
     setBusy(true);
+    setMessage('Checking existing plan…');
+    const current = await api.getQuotaBurn(false, { silent: true }).catch(error => {
+      setMessage(`Could not check existing plan: ${error.message}`);
+      return null;
+    });
+    if (!current?.config || current.config.families?.[familyId]?.jobs?.length) {
+      if (current?.config) setMessage('This family already has a plan. Manage or clear it in Quota Burn before starting another sequence.');
+      setBusy(false);
+      return;
+    }
     setMessage('Saving maintenance sequence…');
     // Each invocation gets fresh completion keys. Pins apply to the audits AND
     // their claim drains; the scheduled tasks' saved settings remain intact.
@@ -81,10 +91,10 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
       />
       {appId && !jobs && <p role="status">Enable every maintenance task and claim-issue for this app, and set claim-issue to perpetual, before running the sequence.</p>}
       {blocked && <p role="status">Enable Improvement and start the CoS daemon before running maintenance.</p>}
-      <p className="text-xs">Runs the first step now; later steps continue in order through Quota Burn, subject to its quota gates. Supports subscription CLI/TUI providers.</p>
+      <p className="text-xs">Runs the first step now, bypassing its reset window, reserve, and dispatch cap; later steps continue in order through Quota Burn, subject to its quota gates. Supports subscription CLI/TUI providers. Blank effort inherits each scheduled task’s saved effort.</p>
       <label className="flex items-start gap-2" htmlFor="maintenance-run-consent">
         <input id="maintenance-run-consent" type="checkbox" checked={consent} disabled={busy} onChange={event => setConsent(event.target.checked)} />
-        <span>Enable Quota Burn and replace this provider family’s plan with this maintenance sequence. Other enabled family plans may also resume.</span>
+        <span>Enable Quota Burn and add this maintenance sequence to an empty provider family plan. Other enabled family plans may also resume.</span>
       </label>
       <div className="flex items-center gap-3 flex-wrap">
         <button type="button" onClick={run} disabled={busy || blocked || !jobs || !provider || !model || !consent || !providersLoaded} className="px-3 py-1.5 bg-port-accent text-white rounded disabled:opacity-50">

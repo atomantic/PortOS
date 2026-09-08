@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import { MAINTENANCE_TASK_ORDER } from '../../../../lib/quotaBurnTasks';
 import MaintenanceRunForm from './MaintenanceRunForm';
 
-const api = vi.hoisted(() => ({ saveQuotaBurn: vi.fn(), runQuotaBurn: vi.fn() }));
+const api = vi.hoisted(() => ({ getQuotaBurn: vi.fn(), saveQuotaBurn: vi.fn(), runQuotaBurn: vi.fn() }));
 vi.mock('../../../../services/api', () => api);
 const tasks = Object.fromEntries([...MAINTENANCE_TASK_ORDER, 'claim-issue'].map(taskType => [taskType, {
   enabled: true, perpetual: taskType === 'claim-issue', appOverrides: { example: { enabled: true } },
@@ -25,6 +25,7 @@ const select = async user => {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  api.getQuotaBurn.mockResolvedValue({ config: { families: {} } });
   api.saveQuotaBurn.mockResolvedValue({ config: {} });
   api.runQuotaBurn.mockResolvedValue({ result: { dispatched: true } });
 });
@@ -65,6 +66,29 @@ describe('maintenance launch', () => {
     api.runQuotaBurn.mockResolvedValueOnce({ result: { dispatched: false, reason: 'provider unavailable' } });
     await user.click(screen.getByRole('button', { name: 'Run now' }));
     expect(await screen.findByText(/Sequence saved; waiting: provider unavailable/)).toBeInTheDocument();
+  });
+  it('preserves existing family plans and refuses to save when the plan cannot be read', async () => {
+    const user = userEvent.setup();
+    show();
+    await select(user);
+    api.getQuotaBurn.mockResolvedValueOnce({ config: { families: { claude: { jobs: [{ id: 'existing' }] } } } });
+    await user.click(screen.getByRole('button', { name: 'Run now' }));
+    expect(await screen.findByText(/This family already has a plan/)).toBeInTheDocument();
+    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+    api.getQuotaBurn.mockRejectedValueOnce(new Error('offline'));
+    await user.click(screen.getByRole('button', { name: 'Run now' }));
+    expect(await screen.findByText(/Could not check existing plan: offline/)).toBeInTheDocument();
+    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+    expect(api.runQuotaBurn).not.toHaveBeenCalled();
+  });
+  it('links to the saved plan after dispatch transport failure', async () => {
+    const user = userEvent.setup();
+    show();
+    await select(user);
+    api.runQuotaBurn.mockRejectedValueOnce(new Error('runner offline'));
+    await user.click(screen.getByRole('button', { name: 'Run now' }));
+    expect(await screen.findByText(/Sequence saved, but could not start: runner offline/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Manage sequence/ })).toHaveAttribute('href', '/devtools/quota-burn/claude');
   });
   it('blocks missing task eligibility and a stopped daemon', async () => {
     const user = userEvent.setup();

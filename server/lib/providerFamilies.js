@@ -1,6 +1,5 @@
 import { isClaudeHarnessProvider } from './providerTypes.js';
 import { commandBasename } from './providerModels.js';
-import { isGrokCommand } from './grok.js';
 
 /**
  * Subscription-quota FAMILY identity: which provider configs belong to the same
@@ -45,7 +44,7 @@ export const PROVIDER_FAMILIES = [
     id: 'grok',
     label: 'Grok',
     idPattern: /grok/i,
-    matches: (p) => isGrokCommand(p.command) || /grok/i.test(p.id || '')
+    matches: (p) => commandBasename(p.command) === 'grok' || /grok/i.test(p.id || '')
   }
 ];
 

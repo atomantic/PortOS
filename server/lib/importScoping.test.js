@@ -39,6 +39,8 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 // Each row: the entry that was narrowed, the module it must no longer
 // statically reach, and why the entry only ever needed a slice of it.
 const NARROWED = [
+  ['lib/providerFamilies.js', 'lib/grok.js',
+    'shares browser-safe family identity without Grok filesystem helpers'],
   ['services/promptSections/instructions.js', 'services/taskScheduleRegistry.js',
     'needs task names, which scheduledTaskTypes.js declares'],
   ['services/agentAppWorkspace.js', 'services/promptRunner.js',
