@@ -316,11 +316,13 @@ export const creativeDirectorTreatmentSchema = z.object({
   // Optional standalone script; artifact IDs/revisions/timing are server-owned.
   script: z.string().trim().min(1).max(50000).optional(),
   sourceContextRevision: z.string().regex(/^[a-f0-9]{32}$/).optional(),
+  productionRevision: z.number().int().min(0).optional(),
   scenes: z.array(creativeDirectorSceneSchema).min(1).max(120),
 });
 
 // Used by the agent when finishing a scene render.
 export const creativeDirectorSceneUpdateSchema = z.object({
+  expectedWorkRevision: z.number().int().min(0).optional(),
   // Full SCENE_STATUSES — the evaluator agent flips a scene back to 'pending'
   // (with an updated prompt + bumped retryCount) to request a re-render; see
   // creativeDirectorPrompts.js and completionHook.js's advanceAfterSceneSettled.
@@ -377,6 +379,7 @@ export const creativeDirectorPlanStepSchema = z.object({
 
 export const creativeDirectorPlanSchema = z.object({
   sourceContextRevision: z.string().regex(/^[a-f0-9]{32}$/).optional(),
+  productionRevision: z.number().int().min(0).optional(),
   steps: z.array(creativeDirectorPlanStepSchema).min(1).max(60),
 }).strict().superRefine(({ steps }, ctx) => {
   // Validate the whole graph before any adapter persists it or the route
@@ -598,3 +601,18 @@ export const importerCommitSchema = z.object({
   // Defaults to false to preserve the additive merge behavior.
   replaceMode: z.boolean().optional().default(false),
 }).strict();
+
+export const creativeDirectorVideoReviewActionSchema = z.object({
+  action: z.enum(['approve', 'request-revision', 'feedback']),
+  stage: z.enum(VIDEO_REVIEW_CHECKPOINTS),
+  revision: z.string().regex(/^[a-f0-9]{32}$/),
+  note: z.string().trim().max(5000).optional(),
+  rating: z.enum(['up', 'down']).optional(),
+  sceneId: z.string().min(1).max(64).optional(),
+  stepId: z.string().min(1).max(64).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.sceneId && value.stepId) ctx.addIssue({ code: 'custom', message: 'Choose a shot or a plan step, not both' });
+  if (value.action !== 'request-revision' && (value.sceneId || value.stepId)) ctx.addIssue({ code: 'custom', message: 'Only revision requests can target a shot or step' });
+  if (value.action === 'feedback' && !value.rating) ctx.addIssue({ code: 'custom', path: ['rating'], message: 'Choose thumbs up or down' });
+  if (value.action === 'request-revision' && !value.note) ctx.addIssue({ code: 'custom', path: ['note'], message: 'Describe the requested revision' });
+});

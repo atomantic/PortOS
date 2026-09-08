@@ -1,3 +1,4 @@
+vi.mock('../instances.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
 /**
  * Creative Director file-backend federation merge (#1564) — soft-delete,
  * LWW merge, tombstone prune, and the conflict-journal + base-hash wiring.
@@ -90,7 +91,7 @@ describe('Video treatment artifacts', () => {
   it('rejects backend-incompatible drafts and edits before replacing a saved artifact', async () => {
     const p = await createVideo();
     await file.updateProject(p.id, { renderBackend: { video: { mode: 'reactor' } } });
-    await file.setTreatment(p.id, videoTreatment());
+    await file.setTreatment(p.id, { ...videoTreatment(), productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 });
     const saved = await file.getProject(p.id);
     const tooShort = videoTreatment();
     tooShort.scenes[0].durationSeconds = 5;
@@ -106,8 +107,8 @@ describe('Video treatment artifacts', () => {
     await file.updateProject(p.id, { renderBackend: { video: { mode: 'grok' } } });
     const rounded = videoTreatment();
     rounded.scenes = Array.from({ length: 15 }, (_, order) => ({ ...rounded.scenes[0], sceneId: `scene-${order}`, order, durationSeconds: 8 }));
-    await expect(file.setTreatment(p.id, rounded)).rejects.toThrow('choose 6 or 10 seconds');
-    await file.setTreatment(p.id, videoTreatment());
+    await expect(file.setTreatment(p.id, { ...rounded, productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 })).rejects.toThrow('choose 6 or 10 seconds');
+    await file.setTreatment(p.id, { ...videoTreatment(), productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 });
     expect((await file.getProject(p.id)).treatment.artifact.targetDurationSeconds).toBe(120);
   });
 
@@ -153,7 +154,7 @@ describe('Video treatment artifacts', () => {
 
   it('rejects ambiguous scene identities, ordering and a mismatched duration without replacing the saved artifact', async () => {
     const p = await createVideo();
-    await file.setTreatment(p.id, videoTreatment());
+    await file.setTreatment(p.id, { ...videoTreatment(), productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 });
     const saved = await file.getProject(p.id);
     const duplicateId = videoTreatment();
     duplicateId.scenes[1].sceneId = duplicateId.scenes[0].sceneId;
@@ -169,13 +170,13 @@ describe('Video treatment artifacts', () => {
     expect(writeCounter.project).toBe(writesBefore);
     expect(await file.getProject(p.id)).toEqual(saved);
     await file.updateProject(p.id, { videoDraft: { ...p.videoDraft, sources: [...p.videoDraft.sources, ...p.videoDraft.sources] } });
-    await expect(file.setTreatment(p.id, videoTreatment())).rejects.toThrow('unique kind and id');
-    expect((await file.getProject(p.id)).treatment).toEqual({ ...saved.treatment, artifact: { ...saved.treatment.artifact, stale: true } });
+    await expect(file.setTreatment(p.id, { ...videoTreatment(), productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 })).rejects.toThrow('unique kind and id');
+    expect((await file.getProject(p.id)).treatment).toEqual({ ...saved.treatment, artifact: { ...saved.treatment.artifact, stale: true }, scenes: saved.treatment.scenes.map(scene => ({ ...scene, workRevision: (scene.workRevision || 0) + 1 })) });
   });
 
   it('versions creative shot changes and marks changed draft context stale until a new compilation', async () => {
     const p = await createVideo();
-    await file.setTreatment(p.id, videoTreatment());
+    await file.setTreatment(p.id, { ...videoTreatment(), productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 });
     await file.updateScene(p.id, 'scene-0', { status: 'rendering' });
     expect((await file.getProject(p.id)).treatment.artifact.revision).toBe(1);
     await file.updateScene(p.id, 'scene-0', { prompt: 'An imaginary garden at dusk' });
@@ -186,7 +187,7 @@ describe('Video treatment artifacts', () => {
     await file.updateProject(p.id, { videoDraft });
     const stale = (await file.getProject(p.id)).treatment.artifact;
     expect(stale).toMatchObject({ stale: true, revision: 2, references: [{ revision: 'revision-1' }] });
-    await file.setTreatment(p.id, videoTreatment());
+    await file.setTreatment(p.id, { ...videoTreatment(), productionRevision: (await file.getProject(p.id)).videoWorkRevision || 0 });
     expect((await file.getProject(p.id)).treatment.artifact).toMatchObject({ stale: false, revision: 3, references: [{ revision: 'revision-2' }] });
   });
 });

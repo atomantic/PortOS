@@ -605,3 +605,5 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `requestOrigin.js` | `remoteRequestHandler` and `isRemoteRequest` preserve remote transport identity across a localhost hop without trusting client headers. |
 
 | `cosFederationPolicy.js` | `isMachineLocalCosTask` excludes private assessments and explicitly machine-local tasks and agent archives from federation. |
+
+| `creativeDirectorVideoReview.js` | Video checkpoint fingerprints, owner-only review actions, feedback, and targeted revision invalidation. |

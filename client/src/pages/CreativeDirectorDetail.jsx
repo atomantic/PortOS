@@ -14,6 +14,7 @@ import {
   stopCreativeDirectorProject,
   resumeCreativeDirectorProject,
 } from '../services/apiCreativeDirector.js';
+import VideoReviewPanel from '../components/creative-director/VideoReviewPanel.jsx';
 import VideoDraftDrawer from '../components/creative-director/VideoDraftDrawer.jsx';
 import OverviewTab from '../components/creative-director/OverviewTab.jsx';
 import TreatmentTab from '../components/creative-director/TreatmentTab.jsx';
@@ -30,7 +31,7 @@ import useMediaJobProgress from '../hooks/useMediaJobProgress';
 
 const TERMINAL_PROJECT_STATUSES = new Set(['complete', 'failed', 'paused', 'draft']);
 
-const VIDEO_DRAFT_TABS = [{ id: 'overview', label: 'Overview' }, { id: 'artifacts', label: 'Artifacts' }, { id: 'segments', label: 'Shots' }, { id: 'runs', label: 'Runs' }];
+const VIDEO_DRAFT_TABS = [{ id: 'overview', label: 'Overview' }, { id: 'review', label: 'Review' }, { id: 'artifacts', label: 'Artifacts' }, { id: 'segments', label: 'Shots' }, { id: 'runs', label: 'Runs' }];
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -324,6 +325,8 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
       </div>
 
       <div className="flex-1 overflow-auto p-6">
+        {project.workspace === 'video' && activeTab === 'review' && <VideoReviewPanel key={project.id} project={project} onChange={fetchProject} />}
+
         <ActiveAgentsBanner agents={activeAgents} />
         {project.workspace === 'video' && activeTab === 'overview' && <section className="space-y-4">
           <h2 className="text-lg font-medium">Video draft</h2>

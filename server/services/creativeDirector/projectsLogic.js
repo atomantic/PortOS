@@ -10,6 +10,7 @@
  * read/write to the caller.
  */
 
+import { videoSceneInputs } from '../../lib/creativeDirectorVideoReview.js';
 import { randomUUID } from 'crypto';
 import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -194,6 +195,8 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     ...(input.workspace === 'video' ? {
       workspace: 'video',
       videoDraft,
+      videoOwnerInstanceId: input.videoOwnerInstanceId || null,
+      videoReplica: false,
     } : {}),
     status: 'draft',
     createdAt: now,
@@ -322,7 +325,10 @@ export function startingImageFilename(startingImageFile) {
 export function mergeProjectRecord(local, remoteRaw) {
   const remote = sanitizeProjectForSync(remoteRaw);
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
-  if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
+  if (!local) return { next: remote.workspace === 'video' ? { ...remote, videoReplica: true, videoExecution: null } : remote, inserted: true, remoteWins: true, changed: true };
+  // Video owner records cannot acquire approvals or execution through a peer.
+  if (local.workspace === 'video' && local.videoReplica !== true) return { next: local, inserted: false, remoteWins: false, changed: false };
+  if (remote.workspace === 'video') { remote.videoReplica = true; remote.videoExecution = null; }
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
   // `commissionId` is machine-local — syncWire strips it, so a winning remote
   // never carries one. Re-attach the receiver's own value (mirrors
@@ -358,8 +364,13 @@ export function applyProjectPatch(project, patch) {
   // empty/model-only stage stubs; the client sends the full object each save.
   if ('modelOverrides' in patch) next.modelOverrides = normalizeModelOverrides(patch.modelOverrides);
   if (project.workspace === 'video' && project.treatment?.artifact
-      && ['videoDraft', 'targetDurationSeconds', 'aspectRatio', 'userStory', 'styleSpec', 'cast', 'startingImageFile', 'modelId', 'renderBackend', 'quality'].some((key) => key in patch && JSON.stringify(next[key]) !== JSON.stringify(project[key]))) {
-    next.treatment = { ...project.treatment, artifact: { ...project.treatment.artifact, stale: true } };
+      && ['videoDraft', 'targetDurationSeconds', 'aspectRatio', 'userStory', 'styleSpec', 'cast', 'startingImageFile', 'modelId', 'renderBackend', 'quality', 'modelOverrides', 'disableAudio'].some((key) => key in patch && JSON.stringify(next[key]) !== JSON.stringify(project[key]))) {
+    next.treatment = { ...project.treatment, artifact: { ...project.treatment.artifact, stale: true },
+      scenes: project.treatment.scenes.map(scene => ({ ...scene, workRevision: (scene.workRevision || 0) + 1 })) };
+    next.videoWorkRevision = (project.videoWorkRevision || 0) + 1;
+    next.videoRoughCut = null;
+    next.videoFinalCut = null;
+    next.finalVideoId = null;
   }
   return next;
 }
@@ -444,6 +455,9 @@ function priorVideoTreatments(project) {
 }
 
 function assertPlannedSourceRevision(project, input) {
+  if (project.workspace === 'video' && project.videoWorkRevision > 0 && input?.productionRevision !== project.videoWorkRevision) {
+    throw new ServerError('This production was revised after planning began. Use the current productionRevision.', { status: 409, code: 'VIDEO_WORK_STALE' });
+  }
   if (project.workspace === 'video' && project.videoPlanningContext
       && input?.sourceContextRevision !== project.videoPlanningContext.revision) {
     throw new ServerError('This plan used a different source context. Use the latest planning context and submit its sourceContextRevision.', { status: 409, code: 'VIDEO_SOURCE_CONTEXT_CHANGED' });
@@ -464,13 +478,26 @@ export function applyTreatment(project, treatmentInput, sourceRevisions) {
       { status: 400, code: 'VALIDATION_ERROR' },
     );
   }
-  const scenes = parsed.data.scenes.map((s) => ({
+  let scenes = parsed.data.scenes.map((s) => ({
     ...s,
     status: s.status || 'pending',
     retryCount: s.retryCount ?? 0,
     renderedJobId: s.renderedJobId ?? null,
     evaluation: s.evaluation ?? null,
   }));
+  if (project.workspace === 'video') {
+    const previous = new Map((project.treatment?.scenes || []).map(scene => [scene.sceneId, scene]));
+    let priorChanged = false;
+    scenes = scenes.sort((a, b) => a.order - b.order).map(scene => {
+      const old = previous.get(scene.sceneId);
+      const unchanged = old && !project.treatment?.artifact?.stale && JSON.stringify(videoSceneInputs(old)) === JSON.stringify(videoSceneInputs(scene))
+        && !(scene.useContinuationFromPrior && priorChanged);
+      priorChanged = !unchanged;
+      return unchanged ? { ...scene, status: old.status, retryCount: old.retryCount, renderedJobId: old.renderedJobId,
+        evaluation: old.evaluation, workRevision: old.workRevision || 0 }
+        : { ...scene, status: 'pending', retryCount: 0, renderedJobId: null, evaluation: null, workRevision: (old?.workRevision || 0) + (old ? 1 : 0) };
+    });
+  }
   const treatment = { ...parsed.data, scenes };
   if (project.workspace === 'video') {
     treatment.artifact = compileVideoArtifact(project, treatment, sourceRevisions);
@@ -482,6 +509,7 @@ export function applyTreatment(project, treatmentInput, sourceRevisions) {
   return {
     ...project,
     treatment,
+    ...(project.workspace === 'video' ? { videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
     status: nextStatus,
     updatedAt: new Date().toISOString(),
   };
@@ -510,11 +538,26 @@ export function applyPlan(project, planInput) {
   }
   const prevSteps = Array.isArray(project.plan?.steps) ? project.plan.steps : [];
   const prevById = new Map(prevSteps.map((s) => [s.stepId, s]));
+  const invalidated = new Set();
+  if (project.workspace === 'video') {
+    for (const step of parsed.data.steps) {
+      const prior = prevById.get(step.stepId);
+      if (!prior || project.treatment?.artifact?.stale || JSON.stringify([prior.toolName, prior.args, prior.dependsOn || []]) !== JSON.stringify([step.toolName, step.args, step.dependsOn || []])) invalidated.add(step.stepId);
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const step of parsed.data.steps) if (!invalidated.has(step.stepId) && step.dependsOn?.some(id => invalidated.has(id))) {
+        invalidated.add(step.stepId);
+        changed = true;
+      }
+    }
+  }
   const steps = parsed.data.steps.map((s) => {
     const prior = prevById.get(s.stepId);
     // Preserve a step the prior plan already finished successfully — a re-plan
     // must not re-run a completed render or re-issue a created record.
-    if (prior && PLAN_STEP_TERMINAL_SUCCESS.has(prior.status)) {
+    if (prior && !invalidated.has(s.stepId) && PLAN_STEP_TERMINAL_SUCCESS.has(prior.status)) {
       return {
         ...s,
         status: prior.status,
@@ -525,9 +568,9 @@ export function applyPlan(project, planInput) {
     }
     return {
       ...s,
-      status: s.status || 'pending',
-      retryCount: s.retryCount ?? 0,
-      result: s.result ?? null,
+      status: project.workspace === 'video' ? 'pending' : s.status || 'pending',
+      retryCount: project.workspace === 'video' ? 0 : s.retryCount ?? 0,
+      result: project.workspace === 'video' ? null : s.result ?? null,
       dependsOn: Array.isArray(s.dependsOn) ? s.dependsOn : [],
     };
   });
@@ -539,7 +582,8 @@ export function applyPlan(project, planInput) {
     : 'rendering';
   return {
     ...project,
-    plan: { steps, replanRounds, ...(parsed.data.sourceContextRevision ? { sourceContextRevision: parsed.data.sourceContextRevision } : {}), updatedAt: new Date().toISOString() },
+    ...(project.workspace === 'video' ? { videoWorkRevision: (project.videoWorkRevision || 0) + 1, videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
+    plan: { steps, replanRounds, ...(project.workspace === 'video' ? { submittedProductionRevision: project.videoWorkRevision || 0 } : {}), ...(project.workspace === 'video' && project.plan ? { history: [...(project.plan.history || []), { steps: structuredClone(prevSteps), updatedAt: project.plan.updatedAt }] } : {}), ...(parsed.data.sourceContextRevision ? { sourceContextRevision: parsed.data.sourceContextRevision } : {}), updatedAt: new Date().toISOString() },
     status: nextStatus,
     updatedAt: new Date().toISOString(),
   };
@@ -556,7 +600,11 @@ export function applyPlanStepUpdate(project, stepId, patch) {
   if (!steps) return { project, updated: null };
   const idx = steps.findIndex((s) => s.stepId === stepId);
   if (idx < 0) return { project, updated: null };
-  const updated = { ...steps[idx], ...patch };
+  const { expectedProductionRevision, ...changes } = patch;
+  if (project.workspace === 'video' && expectedProductionRevision !== undefined && expectedProductionRevision !== (project.videoWorkRevision || 0)) {
+    throw new ServerError('This plan callback belongs to a superseded revision', { status: 409, code: 'VIDEO_WORK_STALE' });
+  }
+  const updated = { ...steps[idx], ...changes };
   const nextSteps = steps.slice();
   nextSteps[idx] = updated;
   const next = {
@@ -578,13 +626,19 @@ export function applySceneUpdate(project, sceneId, patch) {
   }
   const sceneIdx = project.treatment.scenes.findIndex((s) => s.sceneId === sceneId);
   if (sceneIdx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const updated = { ...project.treatment.scenes[sceneIdx], ...patch };
+  const { expectedWorkRevision, ...changes } = patch;
+  const previousScene = project.treatment.scenes[sceneIdx];
+  if (project.workspace === 'video' && expectedWorkRevision !== undefined && expectedWorkRevision !== (previousScene.workRevision || 0)) {
+    throw new ServerError('This shot callback belongs to a superseded revision', { status: 409, code: 'VIDEO_WORK_STALE' });
+  }
+  const updated = { ...previousScene, ...changes };
   const scenes = project.treatment.scenes.slice();
   scenes[sceneIdx] = updated;
   const treatment = { ...project.treatment, scenes };
   if (project.workspace === 'video' && treatment.artifact
       && ['prompt', 'imageStrength'].some((key) => key in patch && patch[key] !== project.treatment.scenes[sceneIdx][key])) {
     validateVideoShot(project, updated, sceneId === [...scenes].sort((a, b) => a.order - b.order)[0].sceneId);
+    updated.workRevision = (previousScene.workRevision || 0) + 1;
     // A shot edit changes the reviewed content, but cannot refresh stale source context.
     treatment.artifact = { ...treatment.artifact, revision: treatment.artifact.revision + 1 };
     treatment.history = priorVideoTreatments(project);

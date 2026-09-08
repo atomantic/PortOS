@@ -18,6 +18,8 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(() => ({ jobId: 'job-1' })),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
+vi.mock('../instances.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
+vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: vi.fn() }));
 vi.mock('../settings.js', () => ({
   getSettings: vi.fn(),
   getSettingsWithStatus: async (...args) => {
@@ -30,6 +32,7 @@ vi.mock('../settings.js', () => ({
 }));
 vi.mock('./local.js', () => ({
   updateScene: vi.fn(async () => {}),
+  mutateVideoProject: vi.fn(async (_id, mutate) => mutate(await getProject())),
   updateProject: vi.fn(async () => {}),
   getProject: vi.fn(async () => null),
 }));
@@ -47,7 +50,9 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
 }));
 
 import { runSceneRender } from './sceneRunner.js';
-import { enqueueJob } from '../mediaJobQueue/index.js';
+import { dispatchSceneEvaluation } from './sceneEvaluator.js';
+import { videoReviewStages } from '../../lib/creativeDirectorVideoReview.js';
+import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { updateScene, getProject } from './local.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
@@ -233,5 +238,29 @@ describe('runSceneRender — Reactor and fal pins', () => {
       status: 'failed', evaluation: expect.objectContaining({ notes: expect.stringContaining('audio-disabled output') }),
     }));
     expect(updateScene.mock.calls.filter(([, , patch]) => patch.status === 'rendering')).toHaveLength(1);
+  });
+});
+
+
+describe('Video production review boundary', () => {
+  it('does not enqueue before approval and ignores a superseded render completion', async () => {
+    const shot = scene({ workRevision: 0 });
+    const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner',
+      videoExecution: { authorized: true }, videoDraft: { sources: [] },
+      treatment: { artifact: { revision: 1 }, script: 'Example script', scenes: [shot] } });
+    getProject.mockResolvedValue(video);
+    getSettings.mockResolvedValue(LOCAL_READY);
+    expect(await runSceneRender(video, shot)).toBeNull();
+    expect(enqueueJob).not.toHaveBeenCalled();
+    const checkpoint = videoReviewStages(video)[0];
+    video.videoReview = { decisions: { [checkpoint.stage]: { action: 'approve', revision: checkpoint.revision } } };
+    expect(await runSceneRender(video, shot)).toBe('job-1');
+    const completed = mediaJobEvents.on.mock.calls.find(([event]) => event === 'completed')[1];
+    getProject.mockResolvedValue({ ...video, treatment: { ...video.treatment, scenes: [{ ...shot, workRevision: 1 }] } });
+    updateScene.mockClear();
+    completed({ id: 'job-1' });
+    await vi.waitFor(() => expect(mediaJobEvents.off).toHaveBeenCalledWith('completed', completed));
+    expect(updateScene).not.toHaveBeenCalled();
+    expect(dispatchSceneEvaluation).not.toHaveBeenCalled();
   });
 });

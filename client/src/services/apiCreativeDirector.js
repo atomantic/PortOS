@@ -104,3 +104,8 @@ export const applyCreativeDirectorAutoCast = (id, { brief, types, limit, compose
     }),
     ...options,
   });
+
+export const getCreativeDirectorVideoReview = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/review`, options);
+export const submitCreativeDirectorVideoReview = (id, input, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/review`, {
+  method: 'POST', body: JSON.stringify(input), ...options,
+});

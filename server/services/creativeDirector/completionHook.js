@@ -53,6 +53,12 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
     return;
   }
 
+  if (project.workspace === 'video' && meta.productionRevision !== (project.videoWorkRevision || 0)) {
+    const ownsPlanWrite = meta.kind === 'plan' && project.plan?.submittedProductionRevision === meta.productionRevision
+      && project.videoWorkRevision === meta.productionRevision + 1;
+    if (!ownsPlanWrite) return;
+  }
+
   // #4146 — a `plan`/`treatment` agent's deliverable is the PATCH its prompt
   // describes, not its exit code. A non-tool-calling model narrates a
   // done-message, exits 0, and writes nothing; recording that as `completed`
@@ -264,7 +270,11 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
   // fresh defer on a stale/stalled duplicate seed job (which would loop).
   const skipSeedDeferSceneId = opts.skipSeedDeferSceneId || null;
   const project = await getProject(projectId);
-  if (!project || project.workspace === 'video') return;
+  if (!project) return;
+  if (project.workspace === 'video') {
+    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+    if (!await videoReviewAllowsDispatch(projectId, [])) return;
+  }
   if (project.status === 'paused' || project.status === 'failed') return;
 
   // No treatment yet → enqueue treatment task.
@@ -609,7 +619,10 @@ export async function advanceAfterSceneSettled(projectId, opts = {}) {
  */
 export async function startCreativeDirectorProject(projectId) {
   const project = await getProject(projectId).catch(() => null);
-  if (project?.workspace === 'video') return;
+  if (project?.workspace === 'video') {
+    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
+    if (!await videoReviewAllowsDispatch(projectId, [])) return;
+  }
   if (project?.directive) return advanceAfterPlanStepSettled(projectId);
   return advanceAfterSceneSettled(projectId);
 }

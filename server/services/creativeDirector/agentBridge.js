@@ -97,6 +97,7 @@ async function buildTaskRecord(project, kind, scene, context) {
         ...(project.workspace === 'video' ? { machineLocal: true } : {}),
         creativeDirector: {
           projectId: project.id,
+          ...(project.workspace === 'video' ? { productionRevision: project.videoWorkRevision || 0 } : {}),
           kind,
           sceneId: scene?.sceneId || null,
           runId,
