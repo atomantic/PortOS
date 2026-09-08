@@ -208,7 +208,10 @@ describe('prompt stage call-site scanner', () => {
 // literal-key call site (or renaming a file that has one) without rerunning
 // the generator leaves stages unprotected, and this fails until it's rerun.
 describe('prompt stage call-site manifest', () => {
-  it('matches a fresh scan of the tracked server sources', () => {
+  // Babel-parses every tracked non-test source under `server/` in one test —
+  // ~7s on a warm dev machine, and past the 10s default on a loaded CI runner.
+  // Raised so the scan's own cost cannot be misreported as manifest drift.
+  it('matches a fresh scan of the tracked server sources', { timeout: 60000 }, () => {
     const stale = `${MANIFEST_RELATIVE_PATH} is stale — run \`${REGENERATE_COMMAND}\` and commit the result.`;
     const fresh = generateStageCallSites();
 
