@@ -4,11 +4,13 @@
  * Pure leaf (no Node built-ins, nothing outside server/lib), so the browser
  * imports it: client/src/utils/providerModels.js re-exports the sentinels,
  * effort ladders and the Antigravity split, and delegates its own ladder
- * resolution to `effortLevelsForProvider` / `clampEffortToLadder`. The
- * `isXProvider` predicates are still copied in client/src/utils/providerTypes.js
- * — keep those in sync. One caveat the purity guard cannot see: the Bedrock /
- * Claude-argv resolvers below default to `process.env`, so they are server-only
- * — never call them from the browser (they tree-shake out unless something does).
+ * resolution to `effortLevelsForProvider` / `clampEffortToLadder`;
+ * client/src/utils/providerTypes.js re-exports the `isXProvider` predicates,
+ * `commandBasename`, `localRuntimeNamespace`, `isOpencodeLocalProvider` and
+ * `isCodexSubscriptionProvider`. One caveat the purity guard
+ * cannot see: the Bedrock / Claude-argv resolvers below default to
+ * `process.env`, so they are server-only — never call them from the browser
+ * (they tree-shake out unless something does).
  */
 
 import { gatewayIdForProvider, isGatewayNamespace } from './providerGateways.js';
@@ -260,6 +262,37 @@ export function isCodexProvider(provider) {
 }
 
 /**
+ * True when a CLI/TUI record runs on Codex's ChatGPT subscription — what the
+ * account half of the Codex providers (`codexAccount.js`, #5589) keys its
+ * readiness on.
+ *
+ * Keyed on the COMMAND, not the id: a user who cloned `codex` into
+ * `codex-review` still runs the same binary against the same ChatGPT sign-in,
+ * and hard-coding two ids would leave that card blank. API providers are
+ * excluded — an OpenAI API-key provider authenticates with its own stored key
+ * and has nothing to do with a subscription. So is a local-runtime-backed codex
+ * record (`codex --oss --local-provider ollama`): it generates its tokens on
+ * this machine and authenticates against nothing, and without that exclusion
+ * the card would paint "No ChatGPT account is signed in" on a provider that
+ * needs no account and sit in UNKNOWN until an account read that will never
+ * matter answers.
+ *
+ * Lives here rather than in `codexAccount.js` so the browser, which re-exports
+ * it through client/src/utils/providerTypes.js, does not also carry that
+ * module's frozen protocol tables — top-level `Object.freeze` calls the bundler
+ * cannot shake.
+ * @param {{type?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isCodexSubscriptionProvider(provider) {
+  if (provider?.type !== 'cli' && provider?.type !== 'tui') return false;
+  const command = typeof provider?.command === 'string' ? provider.command.trim() : '';
+  if (command === '') return false;
+  if (commandBasename(command) !== 'codex') return false;
+  return localRuntimeNamespace(provider) === null;
+}
+
+/**
  * True when a provider is Grok-Build-flavored — the shipped `grok-cli`/`grok-tui`
  * ids or any provider whose launch command basename is `grok`. Same posture as
  * `isCodexProvider`, and deliberately defined here rather than imported from
@@ -309,7 +342,7 @@ export function isOpencodeProvider(provider) {
  * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
  * ids or any provider whose launch command basename is `kimi` (path/exe tolerant).
  * The single home for the kimi signature, same posture as `isCodexProvider`.
- * Mirrored in client/src/utils/providerTypes.js — keep in lockstep.
+ * Re-exported by client/src/utils/providerTypes.js, so it stays browser-safe.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -324,8 +357,8 @@ export function isKimiProvider(provider) {
  * basename is `agy`/`antigravity` (path/exe tolerant). The provider-shaped
  * companion to `isAntigravityCommand` in antigravity.js; lives here (rather
  * than there) so `effortLevelsForProvider` can key on it without this
- * dependency-light module importing a sibling. Mirrored in
- * client/src/utils/providerTypes.js — keep in lockstep.
+ * dependency-light module importing a sibling. Re-exported by
+ * client/src/utils/providerTypes.js, so it stays browser-safe.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -348,7 +381,7 @@ export function isAntigravityProvider(provider) {
  *
  * Deliberately never matches a bare `cursor` command: that is Cursor's GUI
  * editor launcher, not the agent binary (see cursor.js).
- * Mirrored in client/src/utils/providerTypes.js — keep in lockstep.
+ * Re-exported by client/src/utils/providerTypes.js, so it stays browser-safe.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @returns {boolean}
  */
@@ -412,7 +445,7 @@ export function foldCursorEffortIntoModel(model, effort) {
  */
 export function effortLevelsForProvider(provider, model = null) {
   if (!provider) return null;
-  if (isOpencodeProvider(provider) && getOpencodeLocalProviderNamespace(provider)) return OPENCODE_LOCAL_EFFORT_LEVELS;
+  if (isOpencodeLocalProvider(provider)) return OPENCODE_LOCAL_EFFORT_LEVELS;
   if (isCodexProvider(provider)) return codexEffortLevelsForModel(model);
   if (isAntigravityProvider(provider)) {
     const perModel = model ? antigravityModelEffortLevels(model, provider.models) : null;
@@ -752,6 +785,19 @@ export function getOpencodeLocalProviderNamespace(provider) {
 export function localRuntimeNamespace(provider) {
   const namespace = getOpencodeLocalProviderNamespace(provider);
   return namespace && !isGatewayNamespace(namespace) ? namespace : null;
+}
+
+/**
+ * True when an OpenCode process provider runs against a local OpenAI-compatible
+ * backend or a hosted gateway — any namespace `getOpencodeLocalProviderNamespace`
+ * resolves — rather than a vendor cloud model. This is the gate on the OpenCode
+ * effort ladder, and the browser re-exports it so the effort picker and the run
+ * agree on which records get one (#4765).
+ * @param {object|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isOpencodeLocalProvider(provider) {
+  return isOpencodeProvider(provider) && getOpencodeLocalProviderNamespace(provider) !== null;
 }
 
 /**
