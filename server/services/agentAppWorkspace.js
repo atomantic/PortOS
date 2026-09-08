@@ -71,4 +71,3 @@ export async function getAppDataForTask(task) {
 
   return apps[appName] || Object.values(apps).find(a => a.name === appName) || null;
 }
-
