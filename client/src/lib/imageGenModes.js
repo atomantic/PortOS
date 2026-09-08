@@ -16,8 +16,10 @@
  * hand-copied alphabet is how fal.ai and Reactor video renders came to be
  * filed under "Local machine" (#6292). What remains a mirror is only what
  * lives in server SERVICE modules the browser bundle cannot load (per-provider
- * capability specs, shipped default models) — each is labeled below and bound
- * to its server value by the parity suite.
+ * capability specs, shipped default models) — each is labeled below. The
+ * parity suite binds `I2I_CAPABLE_MODES`, `MAX_INPUT_IMAGES` and
+ * `cloudPromptRequired`; the shipped defaults and `GROK_ASPECT_RATIOS` are
+ * unbound copies.
  */
 
 import {
@@ -25,6 +27,7 @@ import {
   CLOUD_VIDEO_GEN_MODES,
   IMAGE_GEN_MODE,
   MEDIA_JOB_EXECUTION_LANES,
+  VIDEO_GEN_MODE,
   VIDEO_GEN_MODES,
   mediaJobExecutionLane,
 } from '../../../server/lib/generationModes.js';
@@ -39,6 +42,9 @@ export {
   IMAGE_GEN_MODE,
   RENDER_TARGET,
   RENDER_TARGET_BACKEND_AUTO,
+  // The backend alphabet for the video pin controls and the install-wide
+  // `settings.videoGen.mode` pin, under the name the pickers already use.
+  VIDEO_GEN_MODES as VIDEO_RENDER_MODES,
   normalizeRenderPinValue,
 };
 
@@ -86,18 +92,9 @@ export const RENDER_TARGET_OPTIONS = Object.freeze([
   { id: RENDER_TARGET.CREATIVE_AGENT, label: 'Creative agent renders', video: true },
 ]);
 
-// The server's VIDEO_GEN_MODES — the backend alphabet for the video pin
-// controls above and the install-wide `settings.videoGen.mode` pin.
-export const VIDEO_RENDER_MODES = VIDEO_GEN_MODES;
-
-// The server's CLOUD_VIDEO_GEN_MODES — the video backends that render in a
-// provider's cloud rather than on the local accelerator.
-export const CLOUD_VIDEO_RENDER_MODES = CLOUD_VIDEO_GEN_MODES;
-export const isCloudVideoMode = (mode) => CLOUD_VIDEO_RENDER_MODES.includes(mode);
-
-// The server's MEDIA_JOB_EXECUTION_LANES — the lanes the media-job scheduler
-// runs in.
-export const MEDIA_JOB_LANES = MEDIA_JOB_EXECUTION_LANES;
+// True when a video backend renders in a provider's cloud rather than on the
+// local accelerator.
+export const isCloudVideoMode = (mode) => CLOUD_VIDEO_GEN_MODES.includes(mode);
 
 // Client mirror of the server's GROK_ASPECT_RATIOS (imageGen/grok.js) — the
 // aspect ratios grok's image_gen/image_edit tools accept, offered as the
@@ -112,15 +109,14 @@ export const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.GROK]: 'Grok',
   [IMAGE_GEN_MODE.AGY]: 'Agy',
   [IMAGE_GEN_MODE.EXTERNAL]: 'External',
-  fal: 'fal.ai',
-  reactor: 'Reactor.inc',
+  [VIDEO_GEN_MODE.FAL]: 'fal.ai',
+  [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
 });
 
-// The server's CLOUD_IMAGE_GEN_MODES (re-exported above) — cloud-CLI backends
-// that pick model/steps/seed internally, run through the media queue's
-// parallel cloud lane, and need a prompt for text-to-image. Use
-// `isCloudCliMode` instead of hand-rolled `mode === CODEX || mode === GROK`
-// disjunctions.
+// True for a cloud-CLI backend: one that picks model/steps/seed internally,
+// runs through the media queue's parallel cloud lane, and needs a prompt for
+// text-to-image. Use this instead of hand-rolled `mode === CODEX || mode ===
+// GROK` disjunctions.
 export const isCloudCliMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode);
 
 // Client mirror of the server's `supportsModelOverride` spec flag
@@ -227,25 +223,17 @@ export const I2I_CAPABLE_MODES = Object.freeze([
 // True when a mode can run image-to-image.
 export const isI2iCapableMode = (mode) => I2I_CAPABLE_MODES.includes(mode);
 
-// Backward-compatibility read of a media job's execution lane for a queue
-// response carrying no `executionLane`. The bundle is served by the same
-// install whose API it calls, so this is not routine version skew — it covers
-// the window where a rebuilt client is already being served by a server
-// process that has not restarted yet, and a replayed/hand-edited response. The
-// classification itself is the scheduler's own `mediaJobExecutionLane`; the
-// only client-side work is reading "federated" off the projected `renderer`
-// field. Never call this when `executionLane` is present: the server's own
-// classification is authoritative.
-export const fallbackExecutionLane = ({ kind, mode, renderer } = {}) => (
-  mediaJobExecutionLane({ kind, mode, remote: renderer === 'remote' })
-);
-
-// THE one lane read for a projected media job: the server's classification when
-// it is there, the compatibility derivation when it isn't.
+// THE one lane read for a projected media job: the server's classification
+// when it is there, and otherwise the scheduler's own `mediaJobExecutionLane`
+// re-run over the projection — the only client-side work is reading
+// "federated" off the projected `renderer` field. The fallback is not routine
+// version skew (the bundle is served by the install whose API it calls): it
+// covers the window where a rebuilt client is already being served by a server
+// process that has not restarted yet, and a replayed/hand-edited response.
 export const mediaJobLane = (job) => (
-  MEDIA_JOB_LANES.includes(job?.executionLane)
+  MEDIA_JOB_EXECUTION_LANES.includes(job?.executionLane)
     ? job.executionLane
-    : fallbackExecutionLane({ kind: job?.kind, mode: job?.params?.mode, renderer: job?.renderer })
+    : mediaJobExecutionLane({ kind: job?.kind, mode: job?.params?.mode, remote: job?.renderer === 'remote' })
 );
 
 // Pick the best available i2i backend from a list of `{ id }` backends,

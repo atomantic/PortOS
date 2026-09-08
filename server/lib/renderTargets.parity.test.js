@@ -13,10 +13,7 @@
  * complement of `EDIT_INCAPABLE_IMAGE_MODES`, and the one presentation
  * decision the Settings tab owns — which render targets get a Defaults row.
  * Drift there is invisible to either suite alone: the client tests assert the
- * client's own literals, and the server never loads the client mirror. A
- * typo'd id in the Settings rows would make the strict
- * `renderDefaultsSettingsSchema` 400 the ENTIRE settings PUT while the
- * client test (which mocks updateSettings) stayed green.
+ * client's own literals, and the server never loads the client mirror.
  *
  * Lives server-side because the server runner loads the pure client lib fine,
  * while the client (happy-dom) runner can't load service modules.
