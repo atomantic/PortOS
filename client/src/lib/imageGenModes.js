@@ -4,18 +4,49 @@
  * parity suite (`server/lib/renderTargets.parity.test.js`) and the server CI
  * job import this module directly, where client-only packages (lucide-react)
  * are not installed. Nothing here may import React, icons, or any package —
- * keep this file dependency-free. Icon metadata and settings-driven backend
- * derivation stay in `imageGenBackends.js`, which re-exports everything below
- * so client consumers keep a single import site.
+ * the only imports allowed are the two dependency-free server leaves below,
+ * the same way `Layout.jsx` reads `server/lib/navManifest.js`. Icon metadata
+ * and settings-driven backend derivation stay in `imageGenBackends.js`, which
+ * re-exports everything below so client consumers keep a single import site.
+ *
+ * The backend / render-target / execution-lane ALPHABETS are not copied here:
+ * they are re-exported from `server/lib/generationModes.js` and
+ * `server/lib/renderTargets.js`, so a backend added server-side reaches every
+ * client picker and the Render Queue's lane grouping in the same commit. A
+ * hand-copied alphabet is how fal.ai and Reactor video renders came to be
+ * filed under "Local machine" (#6292). What remains a mirror is only what
+ * lives in server SERVICE modules the browser bundle cannot load (per-provider
+ * capability specs, shipped default models) — each is labeled below. The
+ * parity suite binds `I2I_CAPABLE_MODES`, `MAX_INPUT_IMAGES` and
+ * `cloudPromptRequired`; the shipped defaults and `GROK_ASPECT_RATIOS` are
+ * unbound copies.
  */
 
-export const IMAGE_GEN_MODE = Object.freeze({
-  LOCAL: 'local',
-  CODEX: 'codex',
-  GROK: 'grok',
-  AGY: 'agy',
-  EXTERNAL: 'external',
-});
+import {
+  CLOUD_IMAGE_GEN_MODES,
+  CLOUD_VIDEO_GEN_MODES,
+  IMAGE_GEN_MODE,
+  MEDIA_JOB_EXECUTION_LANES,
+  VIDEO_GEN_MODE,
+  VIDEO_GEN_MODES,
+  mediaJobExecutionLane,
+} from '../../../server/lib/generationModes.js';
+import {
+  RENDER_TARGET,
+  RENDER_TARGET_BACKEND_AUTO,
+  normalizeRenderPinValue,
+} from '../../../server/lib/renderTargets.js';
+
+export {
+  CLOUD_IMAGE_GEN_MODES,
+  IMAGE_GEN_MODE,
+  RENDER_TARGET,
+  RENDER_TARGET_BACKEND_AUTO,
+  // The backend alphabet for the video pin controls and the install-wide
+  // `settings.videoGen.mode` pin, under the name the pickers already use.
+  VIDEO_GEN_MODES as VIDEO_RENDER_MODES,
+  normalizeRenderPinValue,
+};
 
 // Shipped default Codex reasoning-effort level — the client mirror of the
 // server's CODEX_IMAGEGEN_DEFAULT_EFFORT (server/services/imageGen/modes.js).
@@ -38,60 +69,32 @@ export const AGY_IMAGEGEN_DEFAULT_MODEL = 'gemini-3.5-flash-low';
 // mistaken for an image-model picker.
 export const AGY_IMAGEGEN_IMAGE_MODEL = 'imagen-3.0-generate-002';
 
-// Client mirror of the server's render-target alphabet
-// (server/lib/renderTargets.js, #3231) — the surfaces whose default backend +
+// The Settings → Image Gen → Defaults rows for the server's render-target
+// alphabet (`RENDER_TARGET`, #3231) — the surfaces whose default backend +
 // model are pinnable via settings.renderDefaults. Only targets whose resolver
 // is LIVE are listed here — showing a pin no resolver reads would be a control
-// that silently does nothing. Labels are the Settings-UI display names.
-// `video: true` marks the targets whose VIDEO lane also consults
-// `renderDefaults[target].videoMode` (#3231 Phase 4): music-video (scene clips
-// + new-project backend seeding) and creative-agent (commission video steps).
-// Video pins are backend-only — grok video has no model knob
-// (supportsModelOverride: false) and local video models are picked on the
-// surface itself, so no video-model control is offered anywhere.
-export const RENDER_TARGET_BACKEND_AUTO = 'auto';
-// Named ids for the targets the CLIENT resolves itself (via `renderTargetPin`),
-// so a call site names the surface instead of retyping the string. The ids are
-// bound to the server's RENDER_TARGETS by renderTargets.parity.test.js.
-export const RENDER_TARGET = Object.freeze({
-  UNIVERSE_BIBLE: 'universe-bible',
-  PIPELINE_VISUAL: 'pipeline-visual',
-});
+// that silently does nothing; the parity suite fails on a server target that
+// is neither listed nor explicitly allowlisted as unlisted. Labels are the
+// Settings-UI display names. `video: true` marks the targets whose VIDEO lane
+// also consults `renderDefaults[target].videoMode` (#3231 Phase 4):
+// music-video (scene clips + new-project backend seeding) and creative-agent
+// (commission video steps). Video pins are backend-only — grok video has no
+// model knob (supportsModelOverride: false) and local video models are picked
+// on the surface itself, so no video-model control is offered anywhere.
 export const RENDER_TARGET_OPTIONS = Object.freeze([
-  { id: 'universe-bible', label: 'Universe Bible & canon renders' },
-  { id: 'universe-character-sheet', label: 'Universe character sheets' },
-  { id: 'series-first-pass', label: 'Series first-pass portraits & frames' },
-  { id: 'sprite-reference', label: 'Sprite references & anchors' },
-  { id: 'pipeline-visual', label: 'Pipeline visuals (storyboards, comics, covers)' },
-  { id: 'music-video', label: 'Music Video scene frames & clips', video: true },
-  { id: 'lora-dataset', label: 'LoRA training datasets' },
-  { id: 'creative-agent', label: 'Creative agent renders', video: true },
+  { id: RENDER_TARGET.UNIVERSE_BIBLE, label: 'Universe Bible & canon renders' },
+  { id: RENDER_TARGET.UNIVERSE_CHARACTER_SHEET, label: 'Universe character sheets' },
+  { id: RENDER_TARGET.SERIES_FIRST_PASS, label: 'Series first-pass portraits & frames' },
+  { id: RENDER_TARGET.SPRITE_REFERENCE, label: 'Sprite references & anchors' },
+  { id: RENDER_TARGET.PIPELINE_VISUAL, label: 'Pipeline visuals (storyboards, comics, covers)' },
+  { id: RENDER_TARGET.MUSIC_VIDEO, label: 'Music Video scene frames & clips', video: true },
+  { id: RENDER_TARGET.LORA_DATASET, label: 'LoRA training datasets' },
+  { id: RENDER_TARGET.CREATIVE_AGENT, label: 'Creative agent renders', video: true },
 ]);
 
-// Client mirror of the server's VIDEO_GEN_MODES (services/videoGen/modes.js) —
-// the backend alphabet for the video pin controls above and the install-wide
-// `settings.videoGen.mode` pin.
-export const VIDEO_RENDER_MODES = Object.freeze(['local', 'grok', 'fal', 'reactor']);
-
-// Client mirror of the server's CLOUD_VIDEO_GEN_MODES (lib/generationModes.js)
-// — the video backends that render in a provider's cloud rather than on the
-// local accelerator. 'local' is the only non-cloud entry of VIDEO_RENDER_MODES.
-export const CLOUD_VIDEO_RENDER_MODES = Object.freeze(
-  VIDEO_RENDER_MODES.filter((mode) => mode !== IMAGE_GEN_MODE.LOCAL),
-);
-export const isCloudVideoMode = (mode) => CLOUD_VIDEO_RENDER_MODES.includes(mode);
-
-// Client mirror of the server's MEDIA_JOB_EXECUTION_LANES
-// (server/lib/generationModes.js) — the lanes the media-job scheduler runs in.
-export const MEDIA_JOB_LANES = Object.freeze(['gpu', 'cloud', 'remote']);
-
-// Client mirror of the server's normalizeRenderPinValue
-// (server/lib/renderTargets.js) — THE one render-pin normalization rule: trim;
-// the 'auto' sentinel and blank strings collapse to null ("no pin").
-export const normalizeRenderPinValue = (v) => {
-  const s = typeof v === 'string' ? v.trim() : '';
-  return s && s !== RENDER_TARGET_BACKEND_AUTO ? s : null;
-};
+// True when a video backend renders in a provider's cloud rather than on the
+// local accelerator.
+export const isCloudVideoMode = (mode) => CLOUD_VIDEO_GEN_MODES.includes(mode);
 
 // Client mirror of the server's GROK_ASPECT_RATIOS (imageGen/grok.js) — the
 // aspect ratios grok's image_gen/image_edit tools accept, offered as the
@@ -106,20 +109,14 @@ export const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.GROK]: 'Grok',
   [IMAGE_GEN_MODE.AGY]: 'Agy',
   [IMAGE_GEN_MODE.EXTERNAL]: 'External',
-  fal: 'fal.ai',
-  reactor: 'Reactor.inc',
+  [VIDEO_GEN_MODE.FAL]: 'fal.ai',
+  [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
 });
 
-// Client mirror of the server's CLOUD_IMAGE_GEN_MODES (imageGen/modes.js) —
-// cloud-CLI backends that pick model/steps/seed internally,
-// run through the media queue's parallel cloud lane, and need a prompt for
-// text-to-image. Use `isCloudCliMode` instead of hand-rolled
-// `mode === CODEX || mode === GROK` disjunctions.
-export const CLOUD_IMAGE_GEN_MODES = Object.freeze([
-  IMAGE_GEN_MODE.CODEX,
-  IMAGE_GEN_MODE.GROK,
-  IMAGE_GEN_MODE.AGY,
-]);
+// True for a cloud-CLI backend: one that picks model/steps/seed internally,
+// runs through the media queue's parallel cloud lane, and needs a prompt for
+// text-to-image. Use this instead of hand-rolled `mode === CODEX || mode ===
+// GROK` disjunctions.
 export const isCloudCliMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode);
 
 // Client mirror of the server's `supportsModelOverride` spec flag
@@ -226,30 +223,17 @@ export const I2I_CAPABLE_MODES = Object.freeze([
 // True when a mode can run image-to-image.
 export const isI2iCapableMode = (mode) => I2I_CAPABLE_MODES.includes(mode);
 
-// Backward-compatibility read of a media job's execution lane for a queue
-// response carrying no `executionLane` (server/lib/generationModes.js#
-// mediaJobExecutionLane). The bundle is served by the same install whose API it
-// calls, so this is not routine version skew — it covers the window where a
-// rebuilt client is already being served by a server process that has not
-// restarted yet, and a replayed/hand-edited response. A federated job
-// is already identifiable from `renderer`; otherwise the cloud alphabets
-// decide, and every remaining mode — including local video's semantic
-// text/image/fflf values, which are not backend names at all — is a local GPU
-// render. Never call this when `executionLane` is present: the server's own
-// classification is authoritative.
-export const fallbackExecutionLane = ({ kind, mode, renderer } = {}) => {
-  if (renderer === 'remote') return 'remote';
-  if (kind === 'image' && isCloudCliMode(mode)) return 'cloud';
-  if (kind === 'video' && isCloudVideoMode(mode)) return 'cloud';
-  return 'gpu';
-};
-
-// THE one lane read for a projected media job: the server's classification when
-// it is there, the compatibility derivation when it isn't.
+// THE one lane read for a projected media job: the server's classification
+// when it is there, and otherwise the scheduler's own `mediaJobExecutionLane`
+// re-run over the projection — the only client-side work is reading
+// "federated" off the projected `renderer` field. The fallback is not routine
+// version skew (the bundle is served by the install whose API it calls): it
+// covers the window where a rebuilt client is already being served by a server
+// process that has not restarted yet, and a replayed/hand-edited response.
 export const mediaJobLane = (job) => (
-  MEDIA_JOB_LANES.includes(job?.executionLane)
+  MEDIA_JOB_EXECUTION_LANES.includes(job?.executionLane)
     ? job.executionLane
-    : fallbackExecutionLane({ kind: job?.kind, mode: job?.params?.mode, renderer: job?.renderer })
+    : mediaJobExecutionLane({ kind: job?.kind, mode: job?.params?.mode, remote: job?.renderer === 'remote' })
 );
 
 // Pick the best available i2i backend from a list of `{ id }` backends,

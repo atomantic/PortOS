@@ -1780,8 +1780,8 @@ const agyImageModelSchema = z.preprocess(
 // route makes for catalogUserTypes. The route persists the raw body, so a
 // newer build's pins survive the round-trip intact rather than being dropped.
 // Known fields keep full enum/charset enforcement (that's what stops a bad
-// model id reaching a CLI argv); the client mirror's parity test guards the
-// known-key alphabet.
+// model id reaching a CLI argv); the known-key alphabet is RENDER_TARGETS from
+// lib/renderTargets.js, which the client re-exports rather than mirrors.
 const renderTargetModelSchema = z.preprocess(
   (v) => (v === '' ? null : v),
   cloudModelIdString('model must be a valid model id').nullable().optional(),

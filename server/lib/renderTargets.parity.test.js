@@ -1,40 +1,37 @@
 /**
- * Cross-package parity for the render-target alphabet (#3231).
+ * Cross-package parity for the image-gen capability mirrors (#3231).
  *
- * `server/lib/renderTargets.js` is the source of truth; the client's
- * `RENDER_TARGET_OPTIONS` (client/src/lib/imageGenBackends.js) is a
- * hand-maintained mirror feeding the Settings → Image Gen → Defaults tab. A
- * typo'd or renamed id in the client list would make the strict
- * `renderDefaultsSettingsSchema` 400 the ENTIRE settings PUT — and both
- * suites would stay green, because the client test mocks updateSettings
- * (the exact mocked-client-suite blind spot this repo has shipped before).
- * This suite imports both and fails on drift instead.
+ * The backend, render-target, and execution-lane ALPHABETS are no longer
+ * mirrored: `client/src/lib/imageGenModes.js` re-exports them from the
+ * dependency-free server leaves (`lib/generationModes.js`,
+ * `lib/renderTargets.js`), so they cannot drift and nothing here asserts them.
+ *
+ * What this suite still binds is the client's copy of facts that live in
+ * server SERVICE modules the browser bundle cannot load (they import
+ * `errorHandler.js`, and through it Node's `events`): the per-provider
+ * input-image capability specs on `CLOUD_PROVIDER_SPECS`, the i2i-capable
+ * complement of `EDIT_INCAPABLE_IMAGE_MODES`, and the one presentation
+ * decision the Settings tab owns — which render targets get a Defaults row.
+ * Drift there is invisible to either suite alone: the client tests assert the
+ * client's own literals, and the server never loads the client mirror.
  *
  * Lives server-side because the server runner loads the pure client lib fine,
- * while the client (jsdom) runner can't load server modules.
+ * while the client (happy-dom) runner can't load service modules.
  */
 
 import { describe, it, expect } from 'vitest';
-import { RENDER_TARGET, RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
-import {
-  CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODES, VIDEO_GEN_MODES,
-  CLOUD_VIDEO_GEN_MODES, MEDIA_JOB_EXECUTION_LANES, mediaJobExecutionLane,
-} from './generationModes.js';
+import { RENDER_TARGET, RENDER_TARGETS } from './renderTargets.js';
+import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODES } from './generationModes.js';
 import { EDIT_INCAPABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 import { cloudPromptRequired, maxInputImages } from '../services/imageGen/cloudProviderConfig.js';
 // Import the node-safe leaf, NOT imageGenBackends.js — that module imports
 // lucide-react, which is not installed in the server CI job (this exact import
 // broke main's CI when Phase 2 landed pointing at imageGenBackends).
 import {
-  RENDER_TARGET as CLIENT_RENDER_TARGET,
   RENDER_TARGET_OPTIONS as CLIENT_OPTIONS,
-  RENDER_TARGET_BACKEND_AUTO as CLIENT_AUTO,
   I2I_CAPABLE_MODES as CLIENT_I2I_CAPABLE,
   MAX_INPUT_IMAGES as CLIENT_MAX_INPUT_IMAGES,
   cloudPromptRequired as clientCloudPromptRequired,
-  CLOUD_VIDEO_RENDER_MODES as CLIENT_CLOUD_VIDEO_MODES,
-  MEDIA_JOB_LANES as CLIENT_MEDIA_JOB_LANES,
-  fallbackExecutionLane as clientFallbackExecutionLane,
 } from '../../client/src/lib/imageGenModes.js';
 
 // Targets the Settings UI deliberately does NOT list — a pin nobody's
@@ -44,8 +41,11 @@ import {
 // resolver guard.
 const DELIBERATELY_UNLISTED = new Set([RENDER_TARGET.FABLELOOM_PRODUCTION]);
 
-describe('render-target client mirror parity (#3231)', () => {
-  it('every client option id is a real server render target', () => {
+describe('render-target Settings rows (#3231)', () => {
+  // The rows key their ids off the server's RENDER_TARGET map, so a mistyped
+  // member name surfaces here as an `undefined` id rather than as a 400 on
+  // the whole settings PUT.
+  it('every Settings row names a real server render target', () => {
     const server = new Set(RENDER_TARGETS);
     for (const { id } of CLIENT_OPTIONS) {
       expect(server.has(id), `client RENDER_TARGET_OPTIONS id "${id}" is not in server RENDER_TARGETS`).toBe(true);
@@ -58,20 +58,6 @@ describe('render-target client mirror parity (#3231)', () => {
       expect(client.has(id) || DELIBERATELY_UNLISTED.has(id),
         `server render target "${id}" is neither in client RENDER_TARGET_OPTIONS nor allowlisted as deliberately unlisted`).toBe(true);
     }
-  });
-
-  // The client's named-id map is the subset of targets the CLIENT resolves
-  // itself via `renderTargetPin`. A drifting id there is worse than a drifting
-  // option label: the pin silently reads an absent `settings.renderDefaults`
-  // key and every render falls through to the install default with no error.
-  it('every client RENDER_TARGET id matches the server constant of the same name', () => {
-    for (const [name, id] of Object.entries(CLIENT_RENDER_TARGET)) {
-      expect(RENDER_TARGET[name], `client RENDER_TARGET.${name} has no server counterpart`).toBe(id);
-    }
-  });
-
-  it('the auto sentinel matches across packages', () => {
-    expect(CLIENT_AUTO).toBe(RENDER_TARGET_BACKEND_AUTO);
   });
 });
 
@@ -123,37 +109,6 @@ describe('cloud input-image capability client mirror parity', () => {
         expect(clientCloudPromptRequired(mode, hasInputImage),
           `client cloudPromptRequired("${mode}", ${hasInputImage}) disagrees with the server`)
           .toBe(cloudPromptRequired(mode, hasInputImage));
-      }
-    }
-  });
-});
-
-/**
- * The Render Queue groups rows by the lane the scheduler actually chose, and
- * derives it client-side when a response carries no `executionLane`. That
- * derivation is a second copy of the rule, and a second copy nothing binds to
- * the first is exactly how fal.ai and Reactor video renders came to be filed
- * under "Local machine" (#6292). Bind it here: adding a cloud backend
- * server-side now fails this suite until the client mirror follows.
- */
-describe('media-job execution-lane client mirror parity', () => {
-  it('mirrors the cloud video alphabet and the lane vocabulary', () => {
-    expect([...CLIENT_CLOUD_VIDEO_MODES].sort()).toEqual([...CLOUD_VIDEO_GEN_MODES].sort());
-    expect([...CLIENT_MEDIA_JOB_LANES].sort()).toEqual([...MEDIA_JOB_EXECUTION_LANES].sort());
-  });
-
-  it('derives the same lane as the scheduler for every kind/mode/remote combination', () => {
-    // 'text' stands in for the semantic (non-backend) modes a local video
-    // render carries; an unknown value stands in for a backend this build has
-    // never heard of. Both must resolve to the GPU lane.
-    const modes = [...new Set([...IMAGE_GEN_MODES, ...VIDEO_GEN_MODES, 'text', 'unknown-future-backend', undefined])];
-    for (const kind of ['image', 'video', 'training', 'audio']) {
-      for (const mode of modes) {
-        for (const remote of [false, true]) {
-          expect(clientFallbackExecutionLane({ kind, mode, renderer: remote ? 'remote' : 'local' }),
-            `client fallbackExecutionLane(${kind}, ${mode}, remote=${remote}) disagrees with the scheduler`)
-            .toBe(mediaJobExecutionLane({ kind, mode, remote }));
-        }
       }
     }
   });
