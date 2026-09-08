@@ -435,8 +435,12 @@ export const createCosJobSchema = z.object({
   // An empty array actively clears every selection on update; absent preserves
   // the stored selection.
   dataInputs: taskDataInputsSchema.optional(),
-  command: z.string().optional(),
-  triggerAction: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
+  // Null actively clears the field: the jobs UI emits `command: null` /
+  // `triggerAction: null` whenever a job is saved as an AI-agent type (the two
+  // keys only apply to shell/script jobs), so rejecting null 400'd every edit of
+  // an agent job. Empty string keeps its historical meaning per field.
+  command: z.string().nullable().optional(),
+  triggerAction: z.preprocess(v => (v === '' ? undefined : v), z.string().nullable().optional()),
   // Optional AI provider + model override for agent jobs. Empty string from the
   // UI picker → null so a PUT can actively clear the override back to the active
   // provider/default model (updateJob only skips `undefined`). Forwarded into the
