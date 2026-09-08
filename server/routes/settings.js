@@ -19,6 +19,7 @@ import { ensureEidoverseHost } from '../services/eidoverseHost.js';
 import { isGitHubRepoUrl } from '../lib/repoUrl.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
+import { resolveBackupConfig } from '../lib/backupConfig.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
@@ -135,13 +136,32 @@ const mergeFederationSlice = (next, current) => {
   return next;
 };
 
+// The backup slice is stored sparsely, so every response projects the EFFECTIVE
+// schedule (`server/lib/backupConfig.js`) over the stored values. Without this the
+// Settings screen had to guess what an omitted `enabled`/`cronExpression` meant,
+// guessed the opposite of the scheduler, and then saved its guess back — silently
+// cancelling a destination-only install's nightly backup (#6632). The stored keys
+// stay sparse on disk; only the transport carries the resolved view.
+const projectEffectiveBackup = (safe) => {
+  const effective = resolveBackupConfig(safe.backup);
+  return {
+    ...safe,
+    backup: {
+      ...safe.backup,
+      destPath: effective.destPath,
+      enabled: effective.enabled,
+      cronExpression: effective.cronExpression
+    }
+  };
+};
+
 // Single sanitizer every settings response (GET load + PUT save) runs through,
 // so a leak can't reappear on one path after being closed on the other: strip
-// the top-level `secrets` hierarchy, redact external tokens (#1821), then
-// decorate server-authoritative bounds.
+// the top-level `secrets` hierarchy, redact external tokens (#1821), decorate
+// server-authoritative bounds, then resolve the sparse backup schedule.
 const sanitizeSettingsForResponse = (settings) => {
   const { secrets, ...safe } = settings;
-  return decorateBounds(redactExternalTokens(safe));
+  return projectEffectiveBackup(decorateBounds(redactExternalTokens(safe)));
 };
 
 // GET /api/settings

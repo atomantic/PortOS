@@ -502,4 +502,34 @@ describe('BackupTab', () => {
       expect(screen.getByText(/Dump failed: version_mismatch/i)).toBeTruthy();
     });
   });
+
+  describe('resolved schedule from the API (#6632)', () => {
+    // The regression: editing something unrelated and saving used to write the
+    // screen's own defaults over the schedule, cancelling it.
+    it('preserves the resolved schedule when only an exclusion is edited and saved', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/example-backups', enabled: true, cronExpression: '0 0 * * *', excludePaths: [], disabledDefaultExcludes: [] }
+      });
+      updateSettings.mockResolvedValue({});
+      await renderTab();
+
+      fireEvent.change(screen.getByPlaceholderText('repos/'), { target: { value: 'scratch/' } });
+      fireEvent.click(screen.getByLabelText('Add exclude path'));
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Save$/i })); });
+
+      expect(updateSettings).toHaveBeenCalledWith(
+        { backup: expect.objectContaining({ enabled: true, cronExpression: '0 0 * * *', excludePaths: ['scratch/'] }) },
+        { silent: true }
+      );
+    });
+
+    // An unresolved response is not 'the defaults': the form must not render, so
+    // nothing can be saved over a live schedule.
+    it('refuses to render the form when the response carries no resolved schedule', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/example-backups' } });
+      render(<BackupTab />);
+      await waitFor(() => expect(screen.getByText(/Failed to load backup settings/i)).toBeTruthy());
+      expect(screen.queryByRole('button', { name: /^Save$/i })).toBeNull();
+    });
+  });
 });

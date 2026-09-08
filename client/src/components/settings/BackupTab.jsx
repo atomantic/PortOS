@@ -42,13 +42,21 @@ export function BackupTab() {
   const additionalExcludeId = useId();
   const defaultExcludesPanelId = useId();
   const [loading, setLoading] = useState(true);
+  // A settings response that never resolved is NOT 'the defaults' — the schedule
+  // fields stay null and the form is replaced by an error panel, so an unreachable
+  // API can't be saved back as invented values (#6632).
+  const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [destPath, setDestPath] = useState('');
   const [savedDestPath, setSavedDestPath] = useState('');
-  const [enabled, setEnabled] = useState(false);
-  const [savedEnabled, setSavedEnabled] = useState(false);
-  const [cronExpression, setCronExpression] = useState('0 2 * * *');
-  const [savedCronExpression, setSavedCronExpression] = useState('0 2 * * *');
+  // Schedule state is seeded ONLY from the API's resolved values. The server
+  // owns how a sparse backup config resolves (server/lib/backupConfig.js); a
+  // client-side fallback here would be a second, conflicting interpretation —
+  // which is exactly what silently cancelled destination-only schedules (#6632).
+  const [enabled, setEnabled] = useState(null);
+  const [savedEnabled, setSavedEnabled] = useState(null);
+  const [cronExpression, setCronExpression] = useState(null);
+  const [savedCronExpression, setSavedCronExpression] = useState(null);
   const [excludePaths, setExcludePaths] = useState([]);
   const [savedExcludePaths, setSavedExcludePaths] = useState([]);
   const [disabledDefaultExcludes, setDisabledDefaultExcludes] = useState([]);
@@ -78,8 +86,14 @@ export function BackupTab() {
         const savedDisabled = asArray(backup.disabledDefaultExcludes);
         setDestPath(saved);
         setSavedDestPath(saved);
-        const savedEnabledValue = backup.enabled ?? false;
-        const savedCron = backup.cronExpression || '0 2 * * *';
+        // The GET projects the effective schedule, so these are always present.
+        // Anything else is an unresolved response and is treated as a load failure
+        // rather than being papered over with a locally invented default.
+        if (typeof backup.enabled !== 'boolean' || !backup.cronExpression) {
+          throw new Error('Settings response did not include a resolved backup schedule');
+        }
+        const savedEnabledValue = backup.enabled;
+        const savedCron = backup.cronExpression;
         setEnabled(savedEnabledValue);
         setSavedEnabled(savedEnabledValue);
         setCronExpression(savedCron);
@@ -93,7 +107,10 @@ export function BackupTab() {
         setBackupStatus(status?.status ?? 'never');
         setSnapshots(Array.isArray(snaps) ? snaps : []);
       })
-      .catch(() => toast.error('Failed to load settings'))
+      .catch(() => {
+        setLoadFailed(true);
+        toast.error('Failed to load settings');
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -172,6 +189,15 @@ export function BackupTab() {
 
   if (loading) {
     return <BrailleSpinner text="Loading backup settings" />;
+  }
+
+  if (loadFailed) {
+    return (
+      <div className="text-sm text-port-error">
+        Failed to load backup settings. Reload the page to try again — the form stays hidden so an
+        unresolved response can&apos;t be saved over your schedule.
+      </div>
+    );
   }
 
   const dirty = destPath !== savedDestPath

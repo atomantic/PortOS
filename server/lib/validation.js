@@ -1,4 +1,5 @@
 import { CREDENTIALS } from './credentialRegistry.js';
+import { DEFAULT_BACKUP_CRON } from './backupConfig.js';
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap } from './zodCompat.js';
@@ -870,9 +871,13 @@ export const mediaSketchSaveSchema = z.object({
 // any direct backup-config endpoint. destPath is nullable: the UI persists an
 // empty string when the field is cleared, and the route handler treats empty/
 // missing destPath as "not configured" rather than rejecting the save.
+// The enabled/cron defaults here are the SAME interpretation `backupConfig.js`
+// declares (omitted enabled = enabled, blank cron = midnight) and are sourced
+// from it, so the boundary schema can never drift from the module the scheduler
+// and the settings GET both resolve through (#6632).
 export const backupConfigSchema = z.object({
   destPath: z.string().nullable().optional(),
-  cronExpression: z.string().optional(),
+  cronExpression: z.string().optional().default(DEFAULT_BACKUP_CRON),
   enabled: z.boolean().optional().default(true),
   excludePaths: z.array(z.string()).optional().default([]),
   disabledDefaultExcludes: z.array(z.string()).optional().default([])

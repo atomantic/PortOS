@@ -818,3 +818,54 @@ describe('Settings routes — optional networking preference', () => {
     expect(store.networkSetupPreference).toBe('none');
   });
 });
+
+describe('Settings routes — backup schedule resolution (#6632)', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  // The stored slice is sparse — the user only ever typed a destination. The
+  // screen used to read that as "disabled, 02:00" while the scheduler read it as
+  // "enabled, midnight", so the screen's next save cancelled a running schedule.
+  it('projects the scheduler-compatible effective schedule for a destination-only config', async () => {
+    store = { backup: { destPath: '/example-backups' } };
+    const res = await request(buildApp()).get('/api/settings');
+    expect(res.body.backup).toMatchObject({
+      destPath: '/example-backups',
+      enabled: true,
+      cronExpression: '0 0 * * *'
+    });
+  });
+
+  it('leaves an explicit disable and a custom cron untouched', async () => {
+    store = { backup: { destPath: '/example-backups', enabled: false, cronExpression: '0 3 * * *' } };
+    const res = await request(buildApp()).get('/api/settings');
+    expect(res.body.backup).toMatchObject({ enabled: false, cronExpression: '0 3 * * *' });
+  });
+
+  it('resolves a null destination when none is configured', async () => {
+    const res = await request(buildApp()).get('/api/settings');
+    expect(res.body.backup).toMatchObject({ destPath: null, enabled: true, cronExpression: '0 0 * * *' });
+  });
+
+  // Resolution is read-time only: the sparse shape survives on disk, so an older
+  // peer/client reading settings.json still sees exactly what it wrote.
+  it('does not persist the resolved values back into the store', async () => {
+    store = { backup: { destPath: '/example-backups' } };
+    await request(buildApp()).get('/api/settings');
+    expect(store.backup).toEqual({ destPath: '/example-backups' });
+  });
+
+  // The round trip the bug actually took: read the effective values, edit only an
+  // exclusion, save. The saved slice must still register the same schedule.
+  it('keeps schedule eligibility when only an exclusion is edited and saved back', async () => {
+    store = { backup: { destPath: '/example-backups' } };
+    const loaded = await request(buildApp()).get('/api/settings');
+    const saved = await request(buildApp())
+      .put('/api/settings')
+      .send({ backup: { ...loaded.body.backup, excludePaths: ['/scratch'] } });
+    expect(saved.status).toBe(200);
+    expect(store.backup).toMatchObject({ enabled: true, cronExpression: '0 0 * * *', destPath: '/example-backups' });
+  });
+});
