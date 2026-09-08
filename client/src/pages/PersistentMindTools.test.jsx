@@ -65,7 +65,7 @@ describe('PersistentMindTools', () => {
     expect(toggle).not.toBeChecked();
     await userEvent.setup().click(toggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith({
-      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 7, visitEidoversePeers: true, manageEidoverse: false }),
+      persistentMindCapabilities: expect.objectContaining({ schemaVersion: 8, visitEidoversePeers: true, manageEidoverse: false }),
     }, { silent: true }));
   });
 
@@ -96,7 +96,7 @@ describe('PersistentMindTools', () => {
     await user.click(toggle);
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
-      { persistentMindCapabilities: { schemaVersion: 7, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
+      { persistentMindCapabilities: { schemaVersion: 8, createTasks: true, manageMind: false, manageEidoverse: false, visitEidoversePeers: false, callUser: false, adjustLocalContext: false, readPortos: false, writePortos: false, taskModelAllowlist: [] } },
       { silent: true },
     ));
     expect(await screen.findByText(/persistent-mind capabilities granted/)).toHaveTextContent('1 of 1');
@@ -116,12 +116,13 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 7,
+        schemaVersion: 8,
         createTasks: false,
         manageMind: true,
         manageEidoverse: false,
         visitEidoversePeers: false,
         callUser: false,
+        adjustLocalContext: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [],
@@ -152,12 +153,13 @@ describe('PersistentMindTools', () => {
 
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 7,
+        schemaVersion: 8,
         createTasks: true,
         manageMind: false,
         manageEidoverse: false,
         visitEidoversePeers: false,
         callUser: false,
+        adjustLocalContext: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [],
@@ -217,12 +219,13 @@ describe('PersistentMindTools', () => {
     await user.click(callToggle);
     await waitFor(() => expect(api.updateCosConfig).toHaveBeenCalledWith(
       { persistentMindCapabilities: {
-        schemaVersion: 7,
+        schemaVersion: 8,
         createTasks: false,
         manageMind: false,
         manageEidoverse: false,
         visitEidoversePeers: false,
         callUser: true,
+        adjustLocalContext: false,
         readPortos: false,
         writePortos: false,
         taskModelAllowlist: [],

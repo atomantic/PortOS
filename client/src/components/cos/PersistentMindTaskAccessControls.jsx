@@ -3,12 +3,13 @@ import * as api from '../../services/api';
 import toast from '../ui/Toast';
 
 const normalizeCapabilities = (value) => ({
-  schemaVersion: 7,
+  schemaVersion: 8,
   createTasks: value?.createTasks === true,
   manageMind: value?.manageMind === true,
   manageEidoverse: value?.manageEidoverse === true,
   visitEidoversePeers: value?.visitEidoversePeers === true,
   callUser: value?.callUser === true,
+  adjustLocalContext: value?.adjustLocalContext === true,
   readPortos: value?.readPortos === true,
   writePortos: value?.writePortos === true,
   taskModelAllowlist: Array.isArray(value?.taskModelAllowlist)
@@ -50,6 +51,11 @@ const OPTIONS = [
     hint: 'Lets the mind archive only its own memories, forget older trajectory history, or rebuild derived context. Cleanup remains bounded and auditable.',
   },
   {
+    key: 'adjustLocalContext',
+    label: 'Allow mind to adjust local model context (numCtx)',
+    hint: 'Lets the mind raise or lower its own local API provider context window within RAM/GPU safety clamps. Cloud providers stay out of reach; oversized requests are refused so PortOS is not OOMed.',
+  },
+  {
     key: 'callUser',
     label: 'Allow mind to call you on FaceTime Audio',
     hint: 'Lets the mind ring the handle configured in Settings > Voice when nothing on screen can reach you. Honors quiet hours, never dials while a browser tab can speak, and is capped at 3 calls per 24 hours at least 30 minutes apart.',
@@ -71,7 +77,7 @@ export default function PersistentMindTaskAccessControls({
 
   useEffect(() => {
     if (!saving) setDraft(normalizeCapabilities(capabilities));
-  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
+  }, [capabilities?.schemaVersion, capabilities?.createTasks, capabilities?.manageMind, capabilities?.manageEidoverse, capabilities?.visitEidoversePeers, capabilities?.callUser, capabilities?.adjustLocalContext, capabilities?.readPortos, capabilities?.writePortos, capabilities?.taskModelAllowlist, capabilities?.taskModelAllowlistInvalid, capabilities?.allowedAppIds?.join('\0'), saving]);
 
   const save = async (key, enabled) => {
     const previous = draft;

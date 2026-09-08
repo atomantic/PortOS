@@ -27,6 +27,7 @@ import {
   persistentMindThinkingSelectionSchema,
 } from '../lib/persistentMindThinkingPresets.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PERSISTENT_MIND_PLAYBOOK_CATALOG } from '../lib/persistentMindPlaybook.js';
 import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
 import { validateRequest } from '../lib/validation.js';
@@ -223,6 +224,7 @@ router.delete('/mind/thinking-request', asyncHandler(async (_req, res) => {
 router.get('/mind/context', asyncHandler(async (_req, res) => {
   const root = await loadState();
   const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
+  const playbook = normalizePersistentMindPlaybook(root.config?.persistentMindPlaybook);
   const profile = normalizePersistentMindProfile(root.config?.persistentMindProfile);
   const [memories, rollups, provider] = await Promise.all([
     readPersistentMindMemories(PERSISTENT_MIND_ID),
@@ -232,11 +234,13 @@ router.get('/mind/context', asyncHandler(async (_req, res) => {
   const preview = await preparePersistentMindContext({
     mindId: PERSISTENT_MIND_ID,
     identity: prompt.identity,
-    instructions: prompt.instructions,
+    instructions: composePersistentMindInstructions(prompt.instructions, playbook),
     memories,
   });
   res.json({
     prompt,
+    playbook,
+    playbookCatalog: PERSISTENT_MIND_PLAYBOOK_CATALOG,
     preview,
     memories,
     rollups,

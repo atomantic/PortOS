@@ -20,6 +20,7 @@ import { persistentMindCapabilitiesSchema } from '../lib/persistentMindCapabilit
 import { persistentMindProfileSchema } from '../lib/persistentMindProfile.js';
 import { persistentMindThinkingPresetsSchema } from '../lib/persistentMindThinkingPresets.js';
 import { persistentMindPromptSchema } from '../lib/persistentMindPrompt.js';
+import { persistentMindPlaybookSchema } from '../lib/persistentMindPlaybook.js';
 
 const router = Router();
 
@@ -75,6 +76,7 @@ export const cosConfigSchema = z.object({
   // changes nothing about the route the mind wakes on by default.
   persistentMindThinkingPresets: persistentMindThinkingPresetsSchema.optional(),
   persistentMindPrompt: persistentMindPromptSchema.optional(),
+  persistentMindPlaybook: persistentMindPlaybookSchema.optional(),
   // Separate opt-in action grant: an enabled reasoning profile does not imply
   // authority to create and execute agent tasks.
   persistentMindCapabilities: persistentMindCapabilitiesSchema.optional(),

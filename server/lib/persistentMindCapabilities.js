@@ -14,12 +14,12 @@ import {
   portosSemanticToolGrantsSchema,
 } from './cosToolContracts.js';
 
-export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 7;
+export const PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION = 8;
 // Every wire version this server still accepts on input. Installs upgrade on
 // their own schedule, so a browser bundle (or a route caller) pinned at an
 // older version must keep being able to toggle the grants it already knows
 // about; normalization always writes the current version forward.
-const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7]);
+const ACCEPTED_CAPABILITIES_SCHEMA_VERSIONS = Object.freeze([2, 3, 4, 5, 6, 7, 8]);
 
 export const PERSISTENT_MIND_TASK_MODEL_ALLOWLIST_LIMITS = Object.freeze({
   MAX_ENTRIES: 200,
@@ -125,6 +125,20 @@ export const PERSISTENT_MIND_TOOL_CATALOG = Object.freeze([
     ],
   }),
   Object.freeze({
+    id: 'mind.adjust-local-context',
+    capability: 'adjustLocalContext',
+    name: 'Adjust local model context',
+    kind: 'semantic-tools',
+    defaultEnabled: false,
+    description: 'Raise or lower this mind\'s own local API provider numCtx within RAM/GPU safety clamps so longer exploration fits without OOMing PortOS.',
+    guardrails: [
+      'Only the mind\'s configured local API provider (e.g. Ollama)',
+      'Hard RAM / free-memory / GPU VRAM ceilings — oversized requests are refused',
+      'At most six adjustments per rolling 24 hours, 10 minutes apart',
+      'No cloud providers, paid routes, downloads, or permission changes',
+    ],
+  }),
+  Object.freeze({
     id: 'mind.cleanup',
     capability: 'manageMind',
     name: 'Maintain mindspace',
@@ -195,6 +209,7 @@ export const persistentMindCapabilitiesSchema = portosSemanticToolGrantsSchema.e
   manageMind: z.boolean().optional(),
   callUser: z.boolean().optional(),
   chooseThinkingPreset: z.boolean().optional(),
+  adjustLocalContext: z.boolean().optional(),
   thinkingPresetAllowlist: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
   // An empty list preserves the legacy unrestricted task catalog. Once any
   // entries are configured, requests must name one of these exact pairs.
@@ -265,6 +280,7 @@ export function createDefaultPersistentMindCapabilities() {
     visitEidoversePeers: false,
     callUser: false,
     chooseThinkingPreset: false,
+    adjustLocalContext: false,
     thinkingPresetAllowlist: [],
     thinkingPresetGrants: {},
     readPortos: false,
@@ -321,6 +337,7 @@ export function normalizePersistentMindCapabilities(raw) {
     manageMind: source.manageMind === true,
     callUser: source.callUser === true,
     chooseThinkingPreset: source.chooseThinkingPreset === true,
+    adjustLocalContext: source.adjustLocalContext === true,
     thinkingPresetAllowlist: z.array(z.string().min(1).max(64)).max(20).safeParse(source.thinkingPresetAllowlist).data || [],
     thinkingPresetGrants: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)).safeParse(source.thinkingPresetGrants).data || {},
     ...semanticGrants,

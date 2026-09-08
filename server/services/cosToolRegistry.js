@@ -296,7 +296,34 @@ const thinkingTools = ['mind.thinking-presets', 'mind.request-thinking-preset'].
   policy: { scopes: ['mind'], requiredCapabilities: ['chooseThinkingPreset'], sideEffect: index ? 'write' : 'read', idempotent: true, async: false, confirmation: 'capability-grant' },
   adapter: { kind: index ? 'thinking-request' : 'thinking-catalog' },
 }));
-const toolCatalog = (intent) => [...thinkingTools, taskTool, mindCleanupTool, mindProtectMemoryTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
+const localContextTools = (() => {
+  // Lazy schema import keeps the registry load light when Zod trees grow.
+  const adjustSchema = z.object({
+    numCtx: z.number().int().min(512).max(131072),
+    reason: z.string().trim().min(1).max(240),
+  }).strict();
+  return [
+    {
+      type: 'portos_tool', name: 'mind.local-context', version: COS_TOOL_SCHEMA_VERSION,
+      providerName: providerToolName('mind.local-context'), aliases: [],
+      description: 'Inspect this mind\'s local API provider numCtx and the RAM/GPU safety ceiling for adjustments.',
+      input_schema: zodToOpenApiSchema(z.object({}).strict()),
+      output_schema: objectOutputSchema,
+      policy: { scopes: ['mind'], requiredCapabilities: ['adjustLocalContext'], sideEffect: 'read', idempotent: true, async: false, confirmation: 'capability-grant' },
+      adapter: { kind: 'local-context-catalog' },
+    },
+    {
+      type: 'portos_tool', name: 'mind.adjust-local-context', version: COS_TOOL_SCHEMA_VERSION,
+      providerName: providerToolName('mind.adjust-local-context'), aliases: [],
+      description: 'Adjust this mind\'s own local API provider numCtx within host safety clamps. Refused when it would risk OOMing PortOS.',
+      input_schema: zodToOpenApiSchema(adjustSchema),
+      output_schema: objectOutputSchema,
+      policy: { scopes: ['mind'], requiredCapabilities: ['adjustLocalContext'], sideEffect: 'write', idempotent: true, async: false, confirmation: 'capability-grant' },
+      adapter: { kind: 'local-context-adjust' },
+    },
+  ];
+})();
+const toolCatalog = (intent) => [...thinkingTools, ...localContextTools, taskTool, mindCleanupTool, mindProtectMemoryTool, userActionsQueryTool, ...eidoverseTools, ...voiceTools(intent)];
 const toolCalls = new Map();
 const toolCallFingerprints = new Map();
 
@@ -305,6 +332,7 @@ const normalizeToolCapabilities = (raw) => ({
   createTasks: raw?.createTasks === true,
   manageMind: raw?.manageMind === true,
   chooseThinkingPreset: raw?.chooseThinkingPreset === true,
+  adjustLocalContext: raw?.adjustLocalContext === true,
 });
 
 const publicTool = (tool, { scope, capabilities }) => ({
@@ -427,6 +455,12 @@ const executeAdapter = async (tool, args, context) => {
     return tool.adapter.kind === 'thinking-catalog'
       ? getPersistentMindThinkingRequestCatalog()
       : requestPersistentMindThinkingPreset(args, context);
+  }
+  if (tool.adapter.kind.startsWith('local-context-')) {
+    const { getPersistentMindLocalContextCatalog, adjustPersistentMindLocalContext } = await import('./persistentMindLocalContext.js');
+    return tool.adapter.kind === 'local-context-catalog'
+      ? getPersistentMindLocalContextCatalog()
+      : adjustPersistentMindLocalContext(args, context);
   }
   if (tool.adapter.kind === 'voice-tool') {
     return dispatchTool(tool.adapter.legacyName, args, { sideEffects: [], signal: context.signal });

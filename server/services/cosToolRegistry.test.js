@@ -96,6 +96,8 @@ describe('cosToolRegistry', () => {
     expect(catalog.tools.map((tool) => tool.name)).toEqual([
       'mind.thinking-presets',
       'mind.request-thinking-preset',
+      'mind.local-context',
+      'mind.adjust-local-context',
       'cos.create-task',
       'mind.cleanup',
       'mind.protect-memory',
