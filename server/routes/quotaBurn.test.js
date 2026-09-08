@@ -232,3 +232,16 @@ describe('POST /api/quota-burn/rearm', () => {
     expect(runQuotaBurnCycle).not.toHaveBeenCalled();
   });
 });
+
+it('accepts a strict claim-drain sequence and rejects non-drainable or repeating steps', async () => {
+  saveQuotaBurnConfig.mockResolvedValue({ enabled: true });
+  const job = { id: 'claim', runOnce: true, drain: true, taskRef: { kind: 'builtin', taskType: 'claim-issue', appId: 'example-app' } };
+  const body = { families: { codex: { sequence: true, jobs: [job] } } };
+  expect((await request(buildApp()).put('/api/quota-burn').send(body)).status).toBe(200);
+  expect(saveQuotaBurnConfig).toHaveBeenCalledWith(body);
+  job.runOnce = false;
+  expect((await request(buildApp()).put('/api/quota-burn').send(body)).status).toBe(400);
+  job.runOnce = true;
+  job.taskRef.taskType = 'documentation';
+  expect((await request(buildApp()).put('/api/quota-burn').send(body)).status).toBe(400);
+});

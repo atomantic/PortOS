@@ -309,3 +309,14 @@ describe('AUDIT_SUGGESTED_AFTER', () => {
     }
   });
 });
+
+it('keeps the quota-burn maintenance preset on registered tasks in the advisory order', async () => {
+  const { MAINTENANCE_TASK_ORDER } = await import('../../client/src/lib/quotaBurnTasks.js');
+  const { DEFAULT_TASK_INTERVALS } = await import('../services/taskScheduleRegistry.js');
+  for (const [index, taskType] of MAINTENANCE_TASK_ORDER.entries()) {
+    expect(DEFAULT_TASK_INTERVALS[taskType], taskType).toBeDefined();
+    for (const predecessor of AUDIT_SUGGESTED_AFTER[taskType] || []) {
+      expect(MAINTENANCE_TASK_ORDER.indexOf(predecessor), predecessor).toBeLessThan(index);
+    }
+  }
+});

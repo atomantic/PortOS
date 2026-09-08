@@ -648,7 +648,7 @@ export const AUDIT_SUGGESTED_AFTER = Object.freeze({
   'better-cognitive-load': Object.freeze(['better-complexity']),
   // Measure and describe the shape that survived the ladder.
   performance: Object.freeze(['better-complexity']),
-  documentation: Object.freeze(['better-cognitive-load']),
+  documentation: Object.freeze(['performance', 'better-cognitive-load']),
 });
 
 // WHY each audit sits where it does in the order above — rationale only. The

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildQuotaBurnTaskCatalog,
+  MAINTENANCE_TASK_ORDER,
+  maintenanceSequence,
   effectiveQuotaBurnSettings,
   findTaskEntry,
   quotaBurnStepPayload,
@@ -217,3 +219,20 @@ describe('taskSourceHref', () => {
 });
 
 // @vitest-environment node
+
+it('populates the canonical audit ladder with perpetual drains and refuses incomplete app scope', () => {
+  const tasks = Object.fromEntries([...MAINTENANCE_TASK_ORDER, 'claim-issue'].map(type => [type, {
+    enabled: true, perpetual: type === 'claim-issue', appOverrides: { app1: { enabled: true } },
+  }]));
+  const groups = buildQuotaBurnTaskCatalog({ schedule: { tasks } });
+  const jobs = maintenanceSequence(groups, 'app1', 'sequence');
+  expect(jobs).toHaveLength(13);
+  expect(jobs.filter(job => !job.drain).map(job => job.taskRef.taskType)).toEqual(MAINTENANCE_TASK_ORDER);
+  expect(jobs.filter(job => job.drain)).toHaveLength(6);
+  expect(jobs.every(job => job.runOnce && job.taskRef.appId === 'app1')).toBe(true);
+  expect(jobs[0].overrides.params).toEqual({ fileIssues: true });
+  expect(jobs.at(-1).overrides.params).toEqual({ fileIssues: false });
+  expect(maintenanceSequence(groups, 'app2', 'sequence')).toBeNull();
+  tasks['claim-issue'].perpetual = false;
+  expect(maintenanceSequence(buildQuotaBurnTaskCatalog({ schedule: { tasks } }), 'app1', 'sequence')).toBeNull();
+});

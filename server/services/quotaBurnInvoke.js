@@ -462,7 +462,9 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
         // is what carries a migrated issues-only burn's explicit
         // `fileIssues: true` (#6381); without it the burn would run the
         // referenced task's SAVED mode and start writing code.
-        params: resolved.effective.params,
+        // The canonical generator merges saved global and app metadata itself.
+        // Re-sending the global defaults here would overwrite app-specific claim filters.
+        params: step.overrides?.params || {},
       },
     },
   });

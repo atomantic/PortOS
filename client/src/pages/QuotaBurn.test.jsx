@@ -32,6 +32,7 @@ vi.mock('../components/ui/Toast', () => {
 });
 
 import * as api from '../services/api';
+import { MAINTENANCE_TASK_ORDER } from '../lib/quotaBurnTasks';
 
 const NO_OVERRIDES = { providerId: null, model: null, effort: null, params: {} };
 
@@ -1106,4 +1107,28 @@ describe('QuotaBurn per-invocation overrides', () => {
     renderPage('/devtools/quota-burn/claude');
     expect(await screen.findByText(/ux · App One · claude-sonnet-4 · high/)).toBeInTheDocument();
   });
+});
+
+it('saves and enables the maintenance sequence before starting, and never runs after a failed save', async () => {
+  const tasks = Object.fromEntries([...MAINTENANCE_TASK_ORDER, 'claim-issue'].map(type => [type, {
+    enabled: true, perpetual: type === 'claim-issue', appOverrides: { a1: { enabled: true } },
+  }]));
+  api.getCosSchedule.mockResolvedValue({ tasks });
+  const empty = { ...config, families: { ...config.families, grok: { ...config.families.grok, jobs: [] } } };
+  api.getQuotaBurn.mockResolvedValue({ config: empty, status });
+  renderPage('/devtools/quota-burn/grok');
+  const user = userEvent.setup();
+  await screen.findByLabelText('Maintenance sequence app');
+  await user.selectOptions(screen.getByLabelText('Maintenance sequence app'), 'a1');
+  api.saveQuotaBurn.mockRejectedValueOnce(new Error('save unavailable'));
+  await user.click(screen.getByRole('button', { name: 'Populate and start sequence' }));
+  await waitFor(() => expect(toastError).toHaveBeenCalledWith('Could not save sequence: save unavailable'));
+  expect(api.runQuotaBurn).not.toHaveBeenCalled();
+  api.saveQuotaBurn.mockResolvedValueOnce({ config: empty });
+  await user.click(screen.getByRole('button', { name: 'Populate and start sequence' }));
+  await waitFor(() => expect(api.runQuotaBurn).toHaveBeenCalledWith({ familyId: 'grok' }, { silent: true }));
+  const patch = api.saveQuotaBurn.mock.calls.at(-1)[0];
+  expect(patch.enabled).toBe(true);
+  expect(patch.families.grok).toMatchObject({ enabled: true, sequence: true });
+  expect(patch.families.grok.jobs).toHaveLength(13);
 });

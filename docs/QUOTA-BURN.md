@@ -598,3 +598,28 @@ reaches disk instead of being persisted as a step the runner can only refuse.
 | `client/src/pages/QuotaBurn.jsx` | The config page |
 | `client/src/components/quotaBurn/TaskRefPicker.jsx` | The searchable, grouped scheduled-task picker |
 | `client/src/components/quotaBurn/StepSettings.jsx` | Per-invocation overrides + the effective settings and audit mode |
+
+## Maintenance sequence
+
+An empty family plan offers **Populate maintenance sequence** and **Populate and
+start sequence** after choosing an app. The latter saves first, enables Quota
+Burn and the family, then evaluates the plan under its quota gates. No tasks
+run merely by opening the page or populating the plan.
+
+The default order is structural drift → simplify → module hygiene → complexity
+→ performance + cognitive load → documentation. Performance and cognitive load
+share a stage in the guidance; the preset serializes performance first. A
+perpetual `claim-issue` drain separates every pair of audits (13 steps total).
+The first six audits explicitly file issues; documentation explicitly does the
+work. All steps reference the existing scheduled tasks and inherit their pins
+and configuration. Each task must be enabled for the selected app, and
+`claim-issue` must have perpetual mode enabled in Scheduled Tasks.
+
+This opts the family into `sequence: true`. Unlike the existing rotation, an
+unavailable, disabled, queued, running, or blocked predecessor holds the sequence.
+Audits finish after successful completion; a `drain: true` claim step repeats
+under the same quota gates until the configured eligibility detector reports no
+remaining actionable or in-flight issues. Transient detection errors hold the
+step. Claim filters, the canonical perpetual convergence guard, and the CoS
+Improve gate still apply. The completion ledger survives restarts; re-arm the
+plan to run it again. Existing plans retain rotation behavior.
