@@ -6,6 +6,7 @@ import { modelCapabilityInfo } from '../../utils/providers.js';
 import ModelCapabilitySummary from '../models/ModelCapabilitySummary.jsx';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
+import LocalPersistentMindSetupCard from '../settings/LocalPersistentMindSetupCard.jsx';
 
 const DEFAULT_PROFILE = {
   schemaVersion: 1,
@@ -156,6 +157,19 @@ export default function PersistentMindProfileControls({
 
   return (
     <div className="space-y-3">
+      <LocalPersistentMindSetupCard
+        compact
+        onApplied={(result) => {
+          if (!result?.profile) return;
+          const next = normalizeProfile(result.profile);
+          draftRef.current = next;
+          publishedProfileRef.current = next;
+          setDraft(next);
+          setSelectedProviderId(next.providerId);
+          setSelectedModel(next.model);
+          onSaved?.(next);
+        }}
+      />
       <div className="flex items-start justify-between gap-4">
         <div>
           <label htmlFor={enabledId} className="text-sm text-port-text">Enable persistent mind profile</label>

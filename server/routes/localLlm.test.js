@@ -129,6 +129,8 @@ vi.mock('../services/specDecodeModels.js', () => ({
 // so mock it (defaults to no backends disabled; the disabled-case test flips it).
 vi.mock('../services/settings.js', () => ({
   getSettings: vi.fn(async () => ({})),
+  // localPersistentMindSetup → cos → cosTaskStore → codeReview listens on boot.
+  settingsEvents: { on: vi.fn(), emit: vi.fn(), setMaxListeners: vi.fn() },
 }));
 
 function makeApp() {

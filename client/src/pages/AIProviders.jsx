@@ -21,6 +21,7 @@ import ProviderForm from '../components/providers/ProviderForm';
 import CollapsibleSection from '../components/ui/CollapsibleSection';
 import FleetProviderSetup from '../components/providers/FleetProviderSetup';
 import FleetHostSetup from '../components/providers/FleetHostSetup';
+import LocalPersistentMindSetupCard from '../components/settings/LocalPersistentMindSetupCard.jsx';
 import ProviderConnections from '../components/providers/ProviderConnections';
 
 // The two local apps an API provider can front. Their installer lives on the
@@ -776,6 +777,7 @@ export default function AIProviders() {
 
       <div className="flex-1 overflow-auto p-4 space-y-6">
 
+      <LocalPersistentMindSetupCard compact onApplied={loadData} />
       <FleetHostSetup compact providers={providers} />
 
       {/* Sample Providers Panel */}

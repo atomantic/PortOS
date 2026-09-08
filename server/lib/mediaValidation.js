@@ -148,6 +148,10 @@ export const localLlmMigrateSchema = z.object({
   mode: z.enum(['link', 'copy']).optional().default('link'),
 });
 export const localLlmInstallBackendSchema = z.object({ backend: localLlmBackendSchema });
+export const localPersistentMindSetupApplySchema = z.object({
+  setMindProfile: z.boolean().optional(),
+  modelId: z.string().trim().max(200).optional(),
+}).strict();
 export const localLlmOllamaServiceSchema = z.object({ action: z.enum(['start', 'stop', 'enable', 'disable']) });
 // LM Studio's own server has no enable/disable equivalent (the app owns its
 // launch-at-login), so this is start/stop only — deliberately NOT reusing the
