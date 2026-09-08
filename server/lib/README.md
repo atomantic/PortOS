@@ -621,3 +621,5 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `creativeDirectorVideoCompiler.js` | `compileVideoArtifact` and `validateVideoShot` — pure timed-shot/source-reference compilation and pinned-backend compatibility shared by Creative Director project mutations and Video execution preflight. Storage, history and approval remain with their existing owners. |
 
 | `providerTypes.js` | Pure shared `isCliProvider`, `isTuiProvider`, `isApiProvider`, `isProcessProvider`, and type-gated `isClaudeHarnessProvider` predicates. |
+
+| `notificationTypes.js` | Notification vocabulary and human labels: `NOTIFICATION_CATALOG`, compatible `NOTIFICATION_TYPES`, and `AVAILABLE_FORWARD_TYPES` for Telegram settings. |

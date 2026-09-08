@@ -286,7 +286,7 @@ export const deleteNotification = (id) => request(`/notifications/${id}`, { meth
 export const clearNotifications = () => request('/notifications', { method: 'DELETE' });
 
 // Telegram
-export const getTelegramStatus = () => request('/telegram/status');
+export const getTelegramStatus = (options) => request('/telegram/status', options);
 export const updateTelegramConfig = (data, options) => request('/telegram/config', {
   method: 'PUT',
   body: JSON.stringify(data),

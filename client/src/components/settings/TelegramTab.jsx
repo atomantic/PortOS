@@ -7,17 +7,6 @@ import {
   deleteTelegramConfig, testTelegram, updateTelegramForwardTypes, updateTelegramMethod
 } from '../../services/api';
 
-const NOTIFICATION_TYPES = [
-  { key: 'memory_approval', label: 'Memory Approvals' },
-  { key: 'task_approval', label: 'Task Approvals' },
-  { key: 'code_review', label: 'Code Reviews' },
-  { key: 'health_issue', label: 'Health Issues' },
-  { key: 'briefing_ready', label: 'Briefings' },
-  { key: 'autobiography_prompt', label: 'Autobiography Prompts' },
-  { key: 'plan_question', label: 'Plan Questions' },
-  { key: 'daily_post_reminder', label: 'POST Reminders' }
-];
-
 export function TelegramTab() {
   const botTokenId = useId();
   const chatIdId = useId();
@@ -32,17 +21,19 @@ export function TelegramTab() {
   const [tgTesting, setTgTesting] = useState(false);
   const [tgDisconnecting, setTgDisconnecting] = useState(false);
   const [tgForwardTypes, setTgForwardTypes] = useState([]);
+  const [availableForwardTypes, setAvailableForwardTypes] = useState(null);
 
   useEffect(() => {
     Promise.all([
       getSettings({ silent: true }),
-      getTelegramStatus().catch(() => null)
+      getTelegramStatus({ silent: true }).catch(() => null)
     ]).then(([settings, status]) => {
+      setTgForwardTypes(status?.forwardTypes || settings?.telegram?.forwardTypes || []);
       if (status) {
         setTgStatus(status);
         setMethod(status.method || 'manual');
         setTgChatId(settings?.telegram?.chatId || '');
-        setTgForwardTypes(status.forwardTypes || []);
+        setAvailableForwardTypes(Array.isArray(status.availableForwardTypes) ? status.availableForwardTypes : null);
       }
     }).catch(() => toast.error('Failed to load Telegram settings'))
       .finally(() => setLoading(false));
@@ -303,12 +294,16 @@ export function TelegramTab() {
       )}
 
       {/* Forward types (shared between both methods) */}
-      {tgStatus?.connected && (
+      {(tgStatus?.connected || availableForwardTypes === null) && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-2">
           <p className="block text-sm text-gray-400">Forward Notification Types</p>
-          <p className="text-xs text-gray-500">When all are unchecked, all types are forwarded</p>
+          {availableForwardTypes === null ? (
+            <p role="status" className="text-sm text-gray-400">Notification choices unavailable. Saved forwarding selections are unchanged. Reload to try again.</p>
+          ) : (
+            <p className="text-xs text-gray-500">When all are unchecked, all types are forwarded</p>
+          )}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {NOTIFICATION_TYPES.map(({ key, label }) => (
+            {(availableForwardTypes || []).map(({ key, label }) => (
               <label key={key} className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
                 <input
                   type="checkbox"
