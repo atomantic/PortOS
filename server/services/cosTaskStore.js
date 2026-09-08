@@ -51,13 +51,6 @@ const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 // already use.
 export { PAUSED_BLOCKED_CATEGORIES };
 
-// `isTerminalTaskStatus` is imported from lib/taskStatusTransition.js — the same
-// set cosTaskMerge's release-on-transition uses, and the one the LI cross-peer
-// verdict consume (#2779) reads to spot a non-terminal→terminal ADOPTION (a failed
-// hand-off blocks, a clean one completes; both are legitimate execution outcomes
-// worth recording). Three copies of that two-value set is exactly the drift the
-// transition module exists to prevent.
-
 // Fields an `updateTask` patch may carry directly (vs nested under `metadata`);
 // they're normalized into `metadata` on write. Listed once so the content-edit
 // detector and the normalizer below can't drift apart. `prompt` joined the list
@@ -538,8 +531,8 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
 
   // Retire the metadata this transition releases. Ordered — see the table's note on
   // the `blockedCategory` clear feeding the resume-pointer check below.
-  for (const [condition, keys] of TRANSITION_METADATA_CLEARS) {
-    if (!transition[condition]) continue;
+  for (const [field, keys] of TRANSITION_METADATA_CLEARS) {
+    if (!transition[field]) continue;
     for (const key of keys) delete updatedMetadata[key];
   }
 
