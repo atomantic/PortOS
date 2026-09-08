@@ -186,10 +186,10 @@ function GoalFidelityPanel({ review }) {
   if (!tone) return null;
   return (
     <div className={`mt-2 bg-port-bg/50 border rounded p-2.5 ${tone.border}`}>
-      <div className={`text-[11px] flex items-center gap-1 ${tone.text}`}>
+      <div className={`text-[11px] flex flex-wrap items-center gap-1 ${tone.text}`}>
         <Target size={10} aria-hidden="true" />
         Goal fidelity: {tone.label}
-        <span className="text-gray-500">
+        <span className="min-w-0 [overflow-wrap:anywhere] text-gray-500">
           ({review.verdict}{review.model ? ` · ${review.model}` : ''}{review.diffTruncated ? ' · partial diff' : ''})
         </span>
       </div>
@@ -540,15 +540,15 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
   }, [activeStageTab, pipelineStages, stageOutputs, fetchStageOutput]);
 
   return (
-    <div className={`bg-port-card border rounded-lg overflow-hidden ${
+    <div className={`min-w-0 bg-port-card border rounded-lg overflow-hidden ${completed && expanded ? 'col-span-full' : ''} ${
       inactive
         ? isSystemAgent ? 'border-port-border opacity-50' : 'border-port-border opacity-75'
         : 'border-port-accent/50'
     }`}>
-      <div className="p-4">
+      <div className={completed ? "p-3 [overflow-wrap:anywhere]" : "p-4"}>
         {/* Top row: Agent ID, badges, and actions */}
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+        <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1 mb-2">
+          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1 basis-64">
             <Cpu size={16} aria-hidden="true" className={`shrink-0 ${inactive ? 'text-gray-500' : 'text-port-accent animate-pulse'}`} />
             <span className="font-mono text-sm text-gray-400 truncate">{agent.id}</span>
             <button
@@ -582,7 +582,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
               <span className="px-1.5 py-0.5 text-xs bg-gray-500/20 text-gray-400 rounded shrink-0">SYS</span>
             )}
             {agent.metadata?.model && (
-              <span className={`px-2 py-0.5 text-xs rounded shrink-0 ${
+              <span className={`px-2 py-0.5 text-xs rounded min-w-0 max-w-full break-words ${
                 ['heavy', 'ultra'].includes(agent.metadata.modelTier) ? 'bg-purple-500/20 text-purple-400' :
                 agent.metadata.modelTier === 'light' ? 'bg-green-500/20 text-green-400' :
                 'bg-blue-500/20 text-blue-400'
@@ -611,7 +611,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             )}
           </div>
           {/* Actions - right side */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 ml-auto">
             {(output.length > 0 || inactive) && (
               <button
                 onClick={() => setExpanded(!expanded)}
@@ -1066,7 +1066,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
 
         {/* Feedback section - shown for completed, manually-run, non-system local agents */}
         {completed && !isSystemAgent && isManualUserAgent && !remote && (
-          <div className="mt-3 pt-3 border-t border-port-border/50">
+          <div className="mt-2 pt-1 border-t border-port-border/50">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs text-gray-500">Was this helpful?</span>
               <div className="flex items-center gap-1.5">
