@@ -60,7 +60,7 @@ export default function TaskConfigDrawer({
     <Drawer
       open={open && !!config}
       onClose={onClose}
-      title={taskType || 'Task'}
+      title={config?.displayName || taskType || 'Task'}
       size="md"
       tabs={tabs}
       activeTab={activeTab}
@@ -86,6 +86,7 @@ export default function TaskConfigDrawer({
 
           {activeTab === 'global' && (
             <GlobalConfigControls
+              key={taskType}
               taskType={taskType}
               config={config}
               onUpdate={onUpdate}

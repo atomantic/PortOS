@@ -1,19 +1,21 @@
 import { useState } from 'react';
 import { Search, X } from 'lucide-react';
 import AppTaskCard from './AppTaskCard';
-import { TASK_FILTERS, DEFAULT_FILTER_ID, taskSortKey } from './scheduleConstants';
+import { TASK_FILTERS, DEFAULT_FILTER_ID, taskSortKey, taskLabels } from './scheduleConstants';
 
-export default function AppTaskTypeSection({ tasks, apps, providers, providersLoaded, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange }) {
+export default function AppTaskTypeSection({ tasks, apps, providers, providersLoaded, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange, label = '', onLabelChange }) {
   const [search, setSearch] = useState('');
   const taskEntries = Object.entries(tasks || {});
 
   const activeFilter = TASK_FILTERS.find(f => f.id === filter) || TASK_FILTERS[0];
   const counts = Object.fromEntries(TASK_FILTERS.map(f => [f.id, taskEntries.filter(f.match).length]));
 
+  const labels = [...new Set(taskEntries.flatMap(([, config]) => taskLabels(config)))].sort();
   const query = search.trim().toLowerCase();
   const visibleEntries = taskEntries
     .filter(activeFilter.match)
-    .filter(([taskType]) => !query || taskType.toLowerCase().includes(query))
+    .filter(([, config]) => !label || taskLabels(config).includes(label))
+    .filter(([taskType, config]) => !query || [taskType, config.displayName, config.description, ...taskLabels(config)].filter(Boolean).join(' ').toLowerCase().includes(query))
     .sort(([aType, aConfig], [bType, bConfig]) => {
       const a = taskSortKey(aType, aConfig);
       const b = taskSortKey(bType, bConfig);
@@ -50,13 +52,23 @@ export default function AppTaskTypeSection({ tasks, apps, providers, providersLo
         Tasks that analyze and improve PortOS and managed apps. Click a card to configure its schedule and to turn it on or off per app.
       </p>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor="schedule-label-filter" className="text-sm text-gray-400">Label</label>
+        <select id="schedule-label-filter" value={label} onChange={event => onLabelChange(event.target.value)}
+          className="max-w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white">
+          <option value="">All labels</option>
+          {label && !labels.includes(label) && <option value={label}>{label} (unavailable)</option>}
+          {labels.map(value => <option key={value} value={value}>{value} ({taskEntries.filter(([, config]) => taskLabels(config).includes(value)).length})</option>)}
+        </select>
+        {label && <button onClick={() => onLabelChange('')} className="text-sm text-port-accent">Clear label</button>}
+      </div>
       <div className="relative max-w-sm">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Filter tasks by name…"
+          placeholder="Search names, descriptions, labels…"
           aria-label="Filter tasks by name"
           className="w-full bg-port-card border border-port-border rounded-lg pl-9 pr-9 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent/50"
         />
@@ -74,7 +86,7 @@ export default function AppTaskTypeSection({ tasks, apps, providers, providersLo
 
       {visibleEntries.length === 0 ? (
         <div className="text-center py-8 text-gray-500 border border-dashed border-port-border rounded-lg">
-          {query
+          {label ? <>No tasks match this label and the current filters. <button onClick={() => onLabelChange('')} className="text-port-accent">Clear label</button></> : query
             ? <>No tasks match “{search.trim()}”. <button onClick={() => setSearch('')} className="text-port-accent hover:underline">Clear filter</button></>
             : <>{activeFilter.emptyMessage}{' '}
                 {activeFilter.id !== DEFAULT_FILTER_ID && (

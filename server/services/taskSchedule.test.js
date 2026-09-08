@@ -2347,6 +2347,17 @@ describe('taskSchedule', () => {
       expect(status.improvementEnabled).toBe(false)
     })
 
+    it('upgrades audit presentation without renaming stored schedule identities', async () => {
+      mockSchedule({ tasks: { security: { type: 'on-demand', enabled: false, labels: ['backend'], description: 'Custom summary' } } })
+      const status = await getScheduleStatus()
+      expect(status.tasks.security).toMatchObject({ displayName: 'better-security', labels: ['backend'], description: 'Custom summary', enabled: false })
+      expect(status.tasks.security.defaultLabels).toEqual(expect.arrayContaining(['slashdo', 'codebase-improvement', 'security']))
+      expect(status.tasks['better-security']).toBeUndefined()
+      expect(status.tasks['module-hygiene'].runGuidance).toContain('before function-level complexity')
+      expect(status.tasks['better-complexity'].runGuidance).toContain('After structural drift')
+      expect(status.tasks['claim-issue']).toMatchObject({ displayName: 'claim-issue', defaultLabels: [] })
+    })
+
     it('projects task summaries and explains hook-owned prompts', async () => {
       mockSchedule()
 

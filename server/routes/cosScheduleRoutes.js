@@ -21,9 +21,12 @@ const templateTaskSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
+const scheduleLabelsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
+  .transform(labels => [...new Set(labels.map(label => label.toLowerCase()))]);
+
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'dataInputs', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
   // Perpetual (drain-until-done) recheck cadence: after a perpetual task drains
   // its backlog and parks, it re-probes its work-detector on this cadence.
   // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
@@ -65,6 +68,13 @@ function pickScheduleSettings(body) {
   }
   if (settings.cronExpression !== undefined && settings.cronExpression !== null && !isCronExpression(settings.cronExpression)) {
     throw new ServerError('cronExpression must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek) or null', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.labels !== undefined) {
+    const parsed = scheduleLabelsSchema.safeParse(settings.labels);
+    if (!parsed.success) {
+      throw new ServerError('labels must be at most 20 non-empty strings of at most 40 characters', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.labels = parsed.data;
   }
   if (settings.description !== undefined) {
     if (settings.description !== null && typeof settings.description !== 'string') {

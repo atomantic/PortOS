@@ -474,4 +474,17 @@ describe('CoS Schedule Routes', () => {
     });
   });
 
+  it('normalizes labels, supports clearing, and rejects invalid labels before writing', async () => {
+    taskSchedule.updateTaskInterval.mockResolvedValue({ labels: ['backend'] });
+    const response = await request(app).put('/api/cos/schedule/task/security').send({ labels: [' Backend ', 'backend'] });
+    expect(response.status).toBe(200);
+    expect(taskSchedule.updateTaskInterval).toHaveBeenLastCalledWith('security', { labels: ['backend'] });
+    expect((await request(app).put('/api/cos/schedule/task/security').send({ labels: [] })).status).toBe(200);
+    taskSchedule.updateTaskInterval.mockClear();
+    for (const labels of [null, 'backend', [''], ['x'.repeat(41)], Array(21).fill('x')]) {
+      expect((await request(app).put('/api/cos/schedule/task/security').send({ labels })).status).toBe(400);
+    }
+    expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+  });
+
 });
