@@ -49,11 +49,12 @@ describe('Video planning source context', () => {
       { type: 'function', function: { name: 'media_enqueueVideoJob', description: 'Video', parameters: {} } },
       { type: 'function', function: { name: 'pipeline_runSeriesAutopilot', description: 'Batch', parameters: {} } },
     ]);
-    const video = { ...project, workspace: 'video', videoDraft: { sources: [] } };
+    const video = { ...project, workspace: 'video', videoDraft: { sources: [], audio: { mode: 'silent' } } };
     await enqueuePlanTask(video);
     expect(mocks.buildPlanPrompt.mock.calls[0][1].toolSpecs).toEqual([
       expect.objectContaining({ function: expect.objectContaining({ name: 'media_enqueueVideoJob', description: expect.stringContaining('exactly one clip') }) }),
     ]);
+    expect(mocks.addTask.mock.calls[0][0].metadata.context).toContain('Saved Video audio contract: {"mode":"silent"}');
     mocks.addTask.mockRejectedValueOnce(new Error('store unavailable'));
     await expect(enqueueTreatmentTask(video)).rejects.toThrow('store unavailable');
     expect(settleVideoAttempt).toHaveBeenLastCalledWith('cd-1', 'example-attempt', { status: 'failed' });
