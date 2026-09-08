@@ -34,6 +34,8 @@ import * as appsService from '../services/apps.js';
 import * as appUpdater from '../services/appUpdater.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
 import { logAction } from '../services/history.js';
+import { checkPortosUpdatePreflight } from '../services/updatePreflight.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { __resetAppOperations, registerAppHandlers } from '../sockets/apps.js';
 
 // Two app records pointing at ONE checkout — the case app id alone can't catch.
@@ -41,6 +43,9 @@ const APPS = {
   'app-a': { id: 'app-a', name: 'Example App A', repoPath: '/repos/shared', type: 'node' },
   'app-b': { id: 'app-b', name: 'Example App B', repoPath: '/repos/shared', type: 'node' },
   'app-c': { id: 'app-c', name: 'Example App C', repoPath: '/repos/other', type: 'node' },
+  // PortOS itself: the one update path with an await (the preflight) between
+  // resolving the app record and starting the run.
+  [PORTOS_APP_ID]: { id: PORTOS_APP_ID, name: 'PortOS', repoPath: '/repos/portos', type: 'node' },
 };
 
 const deferred = () => {
@@ -102,6 +107,9 @@ describe('app socket handlers', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // activeAppOperations is module state: a test that fails mid-run would
+    // otherwise leave the guard armed and cascade into every later test.
+    __resetAppOperations();
     bus = makeBus();
     appsService.getAppById.mockImplementation(async (id) => APPS[id] ?? null);
   });
@@ -147,6 +155,64 @@ describe('app socket handlers', () => {
 
       release();
       await settled;
+    });
+
+    it("refuses a second self-update dispatched inside the preflight window", async () => {
+      // app:update awaits the PortOS preflight between resolving the app record
+      // and starting the run. The claim has to be taken synchronously with the
+      // conflict check and ahead of that await — otherwise both dispatches pass
+      // the guard, two update.sh runs rewrite one checkout, and the first to
+      // finish deletes the survivor from the registry (#6638).
+      const preflight = deferred();
+      checkPortosUpdatePreflight.mockImplementation(async () => { await preflight.promise; });
+      const gate = deferred();
+      appUpdater.updateApp.mockImplementation(async () => gate.promise);
+
+      const first = connect(bus);
+      const second = connect(bus);
+      const firstRun = first.fire("app:update", { appId: PORTOS_APP_ID });
+      const secondRun = second.fire("app:update", { appId: PORTOS_APP_ID });
+
+      // Both handlers are now parked in the preflight — the exact window the
+      // claim used to sit behind. Releasing it lets them race.
+      preflight.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(appUpdater.updateApp).toHaveBeenCalledTimes(1);
+      const refusals = [...first.events("app:update:error"), ...second.events("app:update:error")];
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0].payload).toMatchObject({ appId: PORTOS_APP_ID, duplicate: true });
+
+      // The survivor is still the only registered run while it is in flight.
+      expect(first.last("app:operations:active").payload.operations)
+        .toMatchObject([{ appId: PORTOS_APP_ID, type: "update" }]);
+
+      gate.resolve({ success: true, steps: [] });
+      await Promise.all([firstRun, secondRun]);
+      expect(first.last("app:operations:active").payload.operations).toEqual([]);
+    });
+
+    it("clears every key a finished operation held without evicting a concurrent run", async () => {
+      // app-a holds two keys: its own id and the /repos/shared checkout.
+      const shared = await startParkedUpdate(bus, "app-a");
+      const unrelated = await startParkedUpdate(bus, "app-c");
+
+      shared.release();
+      await shared.settled;
+
+      // A finished run must not take its neighbour out of the registry with it.
+      expect(unrelated.client.last("app:operations:active").payload.operations)
+        .toMatchObject([{ appId: "app-c", type: "update" }]);
+
+      // ...and it has to release the repoPath key too, or the shared checkout
+      // stays blocked forever by an operation that already ended.
+      const reuse = connect(bus);
+      appUpdater.updateApp.mockResolvedValueOnce({ success: true, steps: [] });
+      await reuse.fire("app:update", { appId: "app-b" });
+      expect(reuse.events("app:update:error")).toHaveLength(0);
+
+      unrelated.release();
+      await unrelated.settled;
     });
 
     it('refuses a standardize while an update is running on the same checkout', async () => {
