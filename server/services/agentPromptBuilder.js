@@ -83,12 +83,7 @@ const AGENTS_DIR = PATHS.cosAgents;
 // These scheduled audits inspect a running web UI. Keep their runtime contract
 // in the builder rather than only in the default prompt bodies so customized
 // prompts and tasks queued before a prompt revision get the same guidance.
-// The configurable briefing template the full (`api`) path renders. Named here,
-// above this file's first template literal, because the prompt-stage call-site
-// generator indexes stage keys by scanning string tokens — and its scanner can
-// lose phase on a file with this many nested backticks, which silently dropped
-// agentPromptBuilder.js from this stage's "Referenced in" list. A key declared
-// before the first multi-line template is found regardless of that phase.
+// The configurable briefing template the full (`api`) path renders.
 const BRIEFING_STAGE_KEY = 'cos-agent-briefing';
 
 export const UI_AUDIT_TASK_TYPES = Object.freeze([
