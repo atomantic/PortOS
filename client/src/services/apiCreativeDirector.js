@@ -2,6 +2,7 @@ import { request } from './apiCore.js';
 import { fetchByIds } from './apiBatch.js';
 
 export const listCreativeDirectorProjects = (options = {}) => request('/creative-director', options);
+export const getCreativeDirectorSources = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/sources`, options);
 // Pass `{ slim: true }` to receive only the fields a polling consumer needs
 // (status / per-scene status / finalVideoId / failureReason / updatedAt) —
 // drops the `runs[]` history and the full treatment text. Useful

@@ -133,6 +133,8 @@ export async function deleteProject(id) {
 }
 
 export async function setTreatment(id, treatmentInput) {
+  const { assertVideoSourcesAvailable } = await import('./videoSources.js');
+  await assertVideoSourcesAvailable(await getProject(id));
   const next = await (await selectBackend()).setTreatment(id, treatmentInput);
   emitRecordUpdated('creativeDirectorProject', id);
   // Scene reference frames (#1867): the user opts into first-pass gen at
@@ -151,6 +153,8 @@ export async function setTreatment(id, treatmentInput) {
 }
 
 export async function setPlan(id, planInput) {
+  const { assertVideoSourcesAvailable } = await import('./videoSources.js');
+  await assertVideoSourcesAvailable(await getProject(id));
   const next = await (await selectBackend()).setPlan(id, planInput);
   emitRecordUpdated('creativeDirectorProject', id);
   return next;

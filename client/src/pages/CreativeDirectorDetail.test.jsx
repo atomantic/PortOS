@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 vi.mock('../services/apiCreativeDirector.js', () => ({
   getCreativeDirectorProject: vi.fn(),
+  getCreativeDirectorSources: vi.fn(async () => ({ draft: [], artifact: [] })),
   deleteCreativeDirectorProject: vi.fn(),
   startCreativeDirectorProject: vi.fn(),
   pauseCreativeDirectorProject: vi.fn(),
@@ -162,5 +163,21 @@ describe('Video saved artifacts', () => {
     expect(await screen.findByText(/No compiled artifact yet/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Review the brief' })).toHaveAttribute('href', '/video/cd-example/overview');
     expect(screen.getByText('No tool plan saved.')).toBeInTheDocument();
+  });
+
+  it('reports missing sources, links to repair, and retries failed checks without altering saved revisions', async () => {
+    const user = userEvent.setup();
+    cdApi.getCreativeDirectorSources.mockRejectedValueOnce(new Error('Unavailable'));
+    renderVideo();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Availability is unknown');
+    cdApi.getCreativeDirectorSources.mockResolvedValueOnce({
+      draft: [{ referenceId: 'universe:example-universe', kind: 'universe', id: 'example-universe', available: false }],
+      artifact: [{ referenceId: 'universe:example-universe', kind: 'universe', id: 'example-universe', available: false }],
+    });
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(await screen.findByText('Missing universe: example-universe')).toBeInTheDocument();
+    expect(screen.getByText('Source revision: rev-4')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Edit source attachments' })).toHaveAttribute('href', '/video/cd-example/overview?draft=1&videoDraftTab=sources');
+    expect(cdApi.startCreativeDirectorProject).not.toHaveBeenCalled();
   });
 });
