@@ -809,6 +809,7 @@ export default function ChiefOfStaff() {
         value={learningRate ?? 'No data'}
         icon={<Brain className="w-4 h-4" />}
         compact
+        className="hidden lg:flex"
       />
       {status?.running ? (
         <>
