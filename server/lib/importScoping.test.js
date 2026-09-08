@@ -351,3 +351,13 @@ describe('server suite import budget (#6156)', () => {
     ).toBeLessThanOrEqual(MAX_STATIC_INSTANTIATIONS);
   }, 60_000);
 });
+
+// The shared compiler must remain usable without loading project mutations.
+it('keeps Video compilation independent of project storage and execution', () => {
+  const closure = staticImportClosure(abs('lib/creativeDirectorVideoCompiler.js')).files;
+  expect(closure.has(abs('lib/grokVideoClip.js'))).toBe(true);
+  expect(closure.has(abs('lib/reactorVideoClip.js'))).toBe(true);
+  expect(closure.has(abs('services/creativeDirector/projectsLogic.js'))).toBe(false);
+  expect(closure.has(abs('services/creativeDirector/videoExecution.js'))).toBe(false);
+  expect(closure.has(abs('lib/validation.js'))).toBe(false);
+});

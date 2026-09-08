@@ -267,7 +267,7 @@ export async function enqueueVideoProductionJob(project, { kind = 'video', param
   if (!Number.isFinite(seconds) || seconds < 1 || seconds > 10.1 || Number(params.chunks || 1) !== 1 || Number(params.batchSize || 1) !== 1) {
     throw new ServerError('A Video submission must contain one clip of at most 10 seconds.', { status: 409, code: 'VIDEO_PLAN_CLIP_BOUNDS' });
   }
-  const { validateVideoShot } = await import('./projectsLogic.js');
+  const { validateVideoShot } = await import('../../lib/creativeDirectorVideoCompiler.js');
   validateVideoShot(project, { sceneId: sceneId || stepId, prompt: String(params.prompt || ''), durationSeconds: seconds }, false);
   const { hasConfiguredMediaRoute, enqueueUnattendedMediaJob } = await import('../federatedMedia/defaultRouting.js');
   if (await hasConfiguredMediaRoute(kind)) throw new ServerError('A standing peer route would change the reviewed video backend. Change Settings before Resume.', { status: 409, code: 'VIDEO_ROUTE_CHANGED' });
