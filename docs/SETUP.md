@@ -66,3 +66,12 @@ npm run pm2:restart       # activate a newly provisioned certificate
 ```
 
 For HTTPS without Tailscale, `npm run setup:cert -- --self-signed` remains an explicit fallback. Browsers will warn because that certificate is not publicly trusted, and a stable MagicDNS URL is still preferable for remote use.
+
+## Grok Bot box / CPU-only Persistent Mind
+
+On a **CPU-only ~16 GB** host (for example a Grok Bot box with no GPU), prefer a
+**free local Persistent Mind** on Ollama + `qwen2.5:7b-instruct`, and keep
+**Cursor Agent / OpenCode Zen** for coding. PortOS offers that setup on
+**AI Providers**, **Models → LLMs**, and **Persistent Mind → Settings**. See
+[features/grok-box-local-mind.md](./features/grok-box-local-mind.md).
+
