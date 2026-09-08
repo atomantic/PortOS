@@ -244,6 +244,22 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'phi4-mini',
     lmstudio: 'lmstudio-community/Phi-4-mini-instruct-GGUF'
   },
+  {
+    key: 'gemma3-4b-it',
+    name: 'Gemma 3 4B IT',
+    category: 'general',
+    recommendedFor: ['general', 'vision', 'lightweight'],
+    params: '4B',
+    size: '3.3 GB',
+    family: 'gemma',
+    description: "Google's lightweight multimodal Gemma 3 4B instruction model with vision capabilities and a 128K context window.",
+    repository: 'google/gemma-3-4b-it',
+    gated: true,
+    capabilities: ['chat', 'vision'],
+    context: 131072,
+    ollama: 'gemma3:4b',
+    lmstudio: 'lmstudio-community/gemma-3-4b-it-GGUF'
+  },
   // ── General-purpose laptop tier (16–32GB) ──
   {
     key: 'lfm2.5-8b-a1b',
@@ -526,6 +542,20 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/DeepSeek-R1-Distill-Qwen-14B-GGUF'
   },
   {
+    key: 'deepseek-r1-32b',
+    name: 'DeepSeek-R1 32B',
+    category: 'reasoning',
+    recommendedFor: ['reasoning'],
+    params: '32B',
+    size: '20 GB',
+    family: 'deepseek',
+    description: "DeepSeek's open reasoning model distilled into a 32B Qwen architecture — advanced chain-of-thought thinking for math, logic, and complex problem-solving.",
+    capabilities: ['chat', 'reasoning'],
+    context: 131072,
+    ollama: 'deepseek-r1:32b',
+    lmstudio: 'lmstudio-community/DeepSeek-R1-Distill-Qwen-32B-GGUF'
+  },
+  {
     key: 'phi-4-14b',
     name: 'Phi-4 14B',
     category: 'reasoning',
@@ -566,6 +596,21 @@ export const LOCAL_LLM_CATALOG = [
     context: 1048576,
     ollama: 'nemotron-3-nano:30b',
     lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3-Nano-30B-A3B-GGUF'
+  },
+  {
+    key: 'llama3.3-70b',
+    name: 'Llama 3.3 70B',
+    category: 'general',
+    recommendedFor: ['general', 'reasoning', 'multilingual'],
+    params: '70B',
+    size: '43 GB',
+    family: 'llama',
+    description: "Meta's flagship 70B model with a 128K context window — offers performance comparable to Llama 3.1 405B for high-memory machines.",
+    capabilities: ['chat', 'tools', 'multilingual'],
+    context: 131072,
+    ollama: 'llama3.3',
+    ollamaAliases: ['llama3.3:70b'],
+    lmstudio: 'lmstudio-community/Llama-3.3-70B-Instruct-GGUF'
   },
   {
     key: 'qwen3.5-122b-a10b',
@@ -613,6 +658,20 @@ export const LOCAL_LLM_CATALOG = [
     context: 131072,
     ollama: 'qwen2.5-coder:7b',
     lmstudio: 'lmstudio-community/Qwen2.5-Coder-7B-Instruct-GGUF'
+  },
+  {
+    key: 'qwen2.5-coder-32b',
+    name: 'Qwen2.5-Coder 32B',
+    category: 'coding',
+    recommendedFor: ['coding', 'reasoning'],
+    params: '32B',
+    size: '20 GB',
+    family: 'qwen',
+    description: "Alibaba's 32B open coding model — state-of-the-art code generation, repository-level editing, and agentic tool use for 32GB+ hardware.",
+    capabilities: ['chat', 'code', 'tools'],
+    context: 131072,
+    ollama: 'qwen2.5-coder:32b',
+    lmstudio: 'lmstudio-community/Qwen2.5-Coder-32B-Instruct-GGUF'
   },
   {
     key: 'codestral-22b',
@@ -900,7 +959,6 @@ const RETIRED_MODEL_MAPPINGS = [
 
   { ollama: 'llama3.2', lmstudio: 'lmstudio-community/Llama-3.2-3B-Instruct-GGUF' },
   { ollama: 'llama3.1', lmstudio: 'lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF' },
-  { ollama: 'llama3.3:70b', lmstudio: 'lmstudio-community/Llama-3.3-70B-Instruct-GGUF' },
   { ollama: 'qwen2.5', lmstudio: 'lmstudio-community/Qwen2.5-7B-Instruct-GGUF' },
   { ollama: 'qwen3:30b', lmstudio: 'lmstudio-community/Qwen3-30B-A3B-GGUF' },
   { ollama: 'qwen2.5vl', lmstudio: 'lmstudio-community/Qwen2.5-VL-7B-Instruct-GGUF' },
