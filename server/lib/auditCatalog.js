@@ -576,8 +576,8 @@ export function applyAuditModeWrapper(promptTemplate, modeInstructions) {
  * per-definition field could not answer the question the map exists for: did
  * upstream add a lens that NOTHING here owns?
  *
- * It is a parity record, not runtime wiring — nothing dereferences it at
- * dispatch. auditCatalog.test.js is its consumer, and checks it two ways: every
+ * It drives schedule discovery labels, never dispatch or execution ordering.
+ * auditCatalog.test.js checks it two ways: every
  * listed type is a real audit type, and (when the submodule is checked out)
  * every lens slashdo declares has an entry here, so a lens added upstream
  * cannot silently go unschedulable.
@@ -594,4 +594,35 @@ export const DO_BETTER_LENS_COVERAGE = Object.freeze({
   ux: ['ux', 'mobile-responsive', 'copy'],
   structural: ['module-hygiene', 'better-structural-drift', 'simplify'],
   'cognitive-load': ['better-cognitive-load', 'better-complexity'],
+});
+
+/** Display metadata is derived, so upgrades never rewrite durable task IDs. */
+export function getAuditScheduleMetadata(taskType) {
+  if (!isAuditTaskType(taskType)) return { displayName: taskType, defaultLabels: [] };
+  const lenses = Object.entries(DO_BETTER_LENS_COVERAGE)
+    .filter(([, types]) => types.includes(taskType)).map(([lens]) => lens);
+  return {
+    displayName: taskType.startsWith('better-') ? taskType : `better-${taskType}`,
+    defaultLabels: ['codebase-improvement', 'slashdo', ...lenses],
+  };
+}
+
+// Advisory phases for the SAME slice, not scheduler dependencies. Urgent bugs
+// outrank this sequence; re-measure after each merged change to avoid stale work.
+export const AUDIT_RUN_GUIDANCE = Object.freeze({
+  'better-test-quality': 'For an audit batch, run after other findings to assess their coverage. Before implementing refactors, ensure tests detect regressions; recheck afterward.',
+  'test-coverage': 'Audit after other findings to identify missing boundary coverage. Add needed regression tests before implementing refactors; avoid duplicate assertions.',
+  security: 'Prioritize exploitable defects before cleanup, regardless of the suggested sequence.',
+  'data-safety': 'Fix data-loss and upgrade hazards before structural or complexity refactoring.',
+  'better-runtime-safety': 'Fix reachable runtime defects before refactoring; rerun after structural changes.',
+  'error-handling': 'Establish safe failure behavior before restructuring the same code.',
+  'better-structural-drift': 'Before module hygiene or complexity, consolidate sources of truth so later refactors target the surviving implementation.',
+  simplify: 'After structural drift, remove dead and duplicate code before reorganizing modules or reducing branches.',
+  'module-hygiene': 'After structural drift and dead-code cleanup, establish ownership and module boundaries before function-level complexity work.',
+  'better-dependency-freedom': 'After ownership is clear, remove unnecessary dependencies before polishing functions that may be replaced.',
+  'better-complexity': 'After structural drift, simplify, and module hygiene, remeasure surviving functions and reduce costly branching.',
+  'better-cognitive-load': 'After complexity work, review names, abstraction levels, and readability of the final shape.',
+  'code-quality': 'Use for broad triage first, then choose a focused audit; avoid overlapping fixes in the same slice.',
+  documentation: 'Refresh documentation after behavior and structure settle so it describes the final result.',
+  performance: 'Measure a real bottleneck before optimizing; remeasure after structural and complexity changes.',
 });

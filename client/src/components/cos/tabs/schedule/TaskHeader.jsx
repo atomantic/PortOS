@@ -1,5 +1,5 @@
 import { GitBranch, GitMerge, Users } from 'lucide-react';
-import { badge, statusDot, getTaskStatusGroup, pipelineStages } from './scheduleConstants';
+import { taskLabels, badge, statusDot, getTaskStatusGroup, pipelineStages } from './scheduleConstants';
 import IntervalBadge from './IntervalBadge';
 
 // Shared task identity row — status dot, monospace name, pipeline + swarm
@@ -22,7 +22,7 @@ export default function TaskHeader({ taskType, config }) {
       <div className="flex items-center justify-between gap-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <span className={`w-2 h-2 rounded-full shrink-0 ${statusDot(group)}`} title={group} aria-hidden="true" />
-          <span className="font-mono text-sm text-white truncate leading-tight" title={taskType}>{taskType}</span>
+          <span className="font-mono text-sm text-white truncate leading-tight" title={taskType}>{config.displayName || taskType}</span>
         </div>
         <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
           {automationOnly && (
@@ -56,6 +56,12 @@ export default function TaskHeader({ taskType, config }) {
       </div>
       {config.description && (
         <p className="text-xs text-gray-400 line-clamp-2" title={config.description}>{config.description}</p>
+      )}
+      {config.runGuidance && <p className="text-xs text-gray-400">Suggested order: {config.runGuidance}</p>}
+      {taskLabels(config).length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {taskLabels(config).map(label => <span key={label} className={badge('gray')}>{label}</span>)}
+        </div>
       )}
       {automationOnly && invocation.description && (
         <p className="text-xs text-port-warning/80">{invocation.description}</p>

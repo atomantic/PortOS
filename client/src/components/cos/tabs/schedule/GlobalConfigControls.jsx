@@ -50,6 +50,11 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   const [selectedType, setSelectedType] = useState(config.type);
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
+  const labelsDraft = useFieldDraft((config.labels || []).join(', '), async next => {
+    setUpdating(true);
+    await onUpdate(taskType, { labels: next.split(',').map(label => label.trim()).filter(Boolean) })
+      .finally(() => setUpdating(false));
+  });
   const descriptionDraft = useFieldDraft(
     config.description || '',
     async (next) => {
@@ -257,6 +262,13 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           All scheduled runs are paused for this task
         </Banner>
       )}
+
+      <FormField label="Custom labels" labelClassName="text-sm text-gray-400 block mb-2">
+        <input id={`schedule-labels-${taskType}`} value={labelsDraft.value}
+          onChange={labelsDraft.onChange} onBlur={labelsDraft.onBlur} disabled={updating}
+          placeholder="maintenance, frontend" className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm" />
+        <p className="text-xs text-gray-500 mt-1">Comma-separated; up to 20 labels, 40 characters each. Shipped labels remain available. Saves on blur.</p>
+      </FormField>
 
       <FormField label="Summary / byline" labelClassName="text-sm text-gray-400 block mb-2">
         <input

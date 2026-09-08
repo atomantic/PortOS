@@ -45,6 +45,14 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  const label = searchParams.get('label') || '';
+  const setLabel = next => {
+    const params = new URLSearchParams(searchParams);
+    if (next) params.set('label', next);
+    else params.delete('label');
+    setSearchParams(params, { replace: true });
+  };
+
   const filterParam = searchParams.get('filter');
   const filter = TASK_FILTERS.some(f => f.id === filterParam) ? filterParam : DEFAULT_FILTER_ID;
   const setFilter = useCallback((next) => {
@@ -206,6 +214,8 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
         onSelectTask={setSelectedTask}
         improvementDisabled={improvementDisabled}
         filter={filter}
+        label={label}
+        onLabelChange={setLabel}
         onFilterChange={setFilter}
       />
 

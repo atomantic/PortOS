@@ -26,7 +26,7 @@ import { loadState, isImprovementEnabled } from './cosState.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
-import { isAuditTaskType, defaultFileIssuesFor, auditDoWorkRequiresWorktree } from '../lib/auditCatalog.js';
+import { isAuditTaskType, defaultFileIssuesFor, auditDoWorkRequiresWorktree, getAuditScheduleMetadata, AUDIT_RUN_GUIDANCE } from '../lib/auditCatalog.js';
 import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js';
 import {
   DEFAULT_PERPETUAL_RECHECK_MS,
@@ -235,7 +235,9 @@ export async function updateTaskInterval(taskType, settings) {
     // actually parked so their stale notifications can be pruned after the save.
     const topExec = schedule.executions[`task:${taskType}`];
     const unparkedScopes = [];
-    if (topExec) {
+    // Labels organize the page; they do not signal that a failed task is repaired.
+    const labelsOnly = Object.keys(settings).every(key => key === 'labels');
+    if (topExec && !labelsOnly) {
       if (topExec.failureParkedAt) unparkedScopes.push(null);
       clearFailureLedgerFields(topExec);
       for (const [id, rec] of Object.entries(topExec.perApp || {})) {
@@ -1298,6 +1300,9 @@ export async function getScheduleStatus() {
 
     const taskStatus = {
       ...interval,
+      ...getAuditScheduleMetadata(taskType),
+      labels: interval.labels || [],
+      runGuidance: AUDIT_RUN_GUIDANCE[taskType] || (isAuditTaskType(taskType) ? 'Run when this area has a concrete need; coordinate overlapping fixes and validate after each merge.' : null),
       lastRun: execution.lastRun,
       runCount: execution.count,
       globalLastRun: execution.lastRun,

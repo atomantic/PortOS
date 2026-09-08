@@ -295,3 +295,6 @@ export function toggleMetadataField(metadata, field) {
   }
   return newMeta;
 }
+
+// Shipped clusters remain discoverable alongside the operator's own labels.
+export const taskLabels = config => [...new Set([...(config.defaultLabels || []), ...(config.labels || [])])];
