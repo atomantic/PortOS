@@ -295,7 +295,19 @@ describe('deferred imports stay deferred (#6156)', () => {
 // and it pulls in nothing new (its only import, `generationModes.js`, was
 // already in every one of them). A leaf with nothing behind it to defer is the
 // tolerated shape. The allowance had drifted to ~30 again, so restore the ~1.5k.
-const MAX_STATIC_INSTANTIATIONS = 98500;
+//
+// #6617 is that shape once more: collapsing `runAgentSpawn`'s eight hand-copied
+// block-and-bail epilogues into one helper meant lifting the steps they were
+// tangled with out of the orchestrator — `lib/publicReviewSpawnGate.js`,
+// `lib/agentRegistrationRecord.js`, `lib/taskGenerationOverrides.js` and
+// `services/publicReviewSpawnInput.js`. Measured 98,642 (+142 over main's
+// 98,500): four modules appearing as +1 each in the closures that already
+// reached `agentLifecycle.js`, pulling in nothing those closures lacked. The
+// one edge that WOULD have been new — `agentRegistrationRecord.js` reaching
+// `normalizeReviewers` through the 123-module `validation.js` catch-all — is
+// narrowed to its declaring leaf, `reviewerConfig.js`, so it contributes
+// nothing. Restore the ~1.5k allowance.
+const MAX_STATIC_INSTANTIATIONS = 100000;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {
