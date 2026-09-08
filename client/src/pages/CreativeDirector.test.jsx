@@ -2,7 +2,7 @@ vi.mock('../services/apiMusic.js', () => ({ listMusicEngines: vi.fn(() => Promis
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Routes, Route } from 'react-router';
 
 vi.mock('../services/apiCreativeDirector.js', () => ({
   listCreativeDirectorProjects: vi.fn(() => Promise.resolve([])),
@@ -135,14 +135,14 @@ describe('CreativeDirector header action hierarchy (#3287)', () => {
 
 
 describe('Video workspace draft creation', () => {
-  it('saves an inert draft and links existing project IDs within Video', async () => {
+  it('saves an inert draft and links existing project IDs within Creative Director', async () => {
     const user = userEvent.setup();
     vi.clearAllMocks();
     cdApi.listCreativeDirectorProjects.mockResolvedValue([{ id: 'existing-project', name: 'Existing project', status: 'draft', workspace: 'video' }]);
     cdApi.createCreativeDirectorProject.mockResolvedValue({ id: 'new-draft', name: 'Example short', workspace: 'video', status: 'draft' });
-    render(<MemoryRouter initialEntries={['/video']}><CreativeDirector basePath="/video" workspace="video" /></MemoryRouter>);
+    render(<MemoryRouter initialEntries={['/creative-director']}><CreativeDirector /></MemoryRouter>);
     await user.click(await screen.findByRole('button', { name: 'New video draft' }));
-    expect(screen.getByRole('link', { name: 'Open Existing project' })).toHaveAttribute('href', '/video/existing-project/overview');
+    expect(screen.getByRole('link', { name: 'Open Existing project' })).toHaveAttribute('href', '/creative-director/existing-project/overview');
     expect(screen.queryByRole('button', { name: 'Start' })).toBeNull();
     await user.type(screen.getByLabelText('Name'), 'Example short');
     await user.type(screen.getByRole('textbox', { name: 'Brief' }), 'A traveler returns home.');
@@ -155,14 +155,26 @@ describe('Video workspace draft creation', () => {
   });
 });
 
-it('keeps a Video remix draft open and forwards source IDs once on save', async () => {
+it.each(['/creative-director', '/video'])('keeps a Video remix from %s open and forwards source IDs once on save', async pathname => {
   vi.clearAllMocks();
   cdApi.listCreativeDirectorProjects.mockResolvedValue([]);
   cdApi.createCreativeDirectorProject.mockResolvedValue({ id: 'remix-draft', name: 'Example remix', workspace: 'video', status: 'draft' });
   const user = userEvent.setup();
-  render(<MemoryRouter initialEntries={[{ pathname: '/video', search: '?view=all', hash: '#drafts', state: { remix: { ingredientIds: ['source-example'] } } }]}><CreativeDirector basePath="/video" workspace="video" /></MemoryRouter>);
+  render(<MemoryRouter initialEntries={[{ pathname, search: '?view=all&new=video', hash: '#drafts', state: { remix: { ingredientIds: ['source-example'] } } }]}><Routes><Route path="/video" element={<CreativeDirector browseOnly />} /><Route path="/creative-director" element={<CreativeDirector />} /><Route path="/creative-director/:id/overview" element={<div>Saved draft</div>} /></Routes></MemoryRouter>);
   await user.type(await screen.findByRole('textbox', { name: 'Name' }), 'Example remix');
   await user.click(screen.getByRole('button', { name: 'Save draft' }));
   await waitFor(() => expect(cdApi.createCreativeDirectorProject).toHaveBeenCalledTimes(1));
   expect(cdApi.createCreativeDirectorProject).toHaveBeenCalledWith(expect.objectContaining({ catalogIngredientIds: ['source-example'], videoDraft: expect.objectContaining({ sources: [{ kind: 'catalog', id: 'source-example' }] }) }), { silent: true });
+});
+
+
+it('keeps Video as a browsing surface and sends production actions to Creative Director', async () => {
+  vi.clearAllMocks();
+  cdApi.listCreativeDirectorProjects.mockResolvedValue([{ id: 'commission-video', name: 'Example commission video', status: 'complete', commissionId: 'example-commission' }]);
+  render(<MemoryRouter initialEntries={['/video']}><CreativeDirector browseOnly /></MemoryRouter>);
+  expect(await screen.findByRole('link', { name: 'Open Example commission video' })).toHaveAttribute('href', '/creative-director/commission-video/overview');
+  expect(screen.getByRole('link', { name: 'Open Creative Director' })).toHaveAttribute('href', '/creative-director');
+  expect(screen.queryByRole('button', { name: /New|Start|Delete|Model defaults/ })).toBeNull();
+  expect(cdApi.createCreativeDirectorProject).not.toHaveBeenCalled();
+  expect(cdApi.startCreativeDirectorProject).not.toHaveBeenCalled();
 });

@@ -262,6 +262,11 @@ their existing dedicated stores and management flows.
 
 ### Video workspace drafts
 
+Creative Director is the production entry point (`/creative-director?new=video`).
+Create > Video (`/video`) browses existing project and commission outputs; old
+Video project/tab/shot URLs redirect to the same Creative Director project ID.
+The standalone clip generator remains `/video/generate`.
+
 Video reuses `creative_director_projects` and its existing project IDs, collection
 links, PostgreSQL JSONB record, and test-only file adapter. New records opt in
 with `workspace: 'video'`; missing workspace means the existing Creative Director

@@ -40,26 +40,25 @@ const STATUS_COLORS = {
 
 const EMPTY_DIRECTIVE = { goal: '', deliverables: [], constraints: { universeId: null, seriesId: null, budgetCap: null } };
 
-export default function CreativeDirector({ basePath = '/creative-director', workspace } = {}) {
-  const isVideo = workspace === 'video';
+export default function CreativeDirector({ basePath = '/creative-director', browseOnly = false } = {}) {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [legacyFormOpen, setLegacyFormOpen] = useState(false);
-  const showForm = isVideo ? searchParams.get('new') === 'video' : legacyFormOpen;
-  const setShowForm = value => {
-    const open = typeof value === 'function' ? value(showForm) : value;
-    if (!isVideo) { setLegacyFormOpen(open); return; }
-    setSearchParams(prev => { const next = new URLSearchParams(prev); if (open) next.set('new', 'video'); else next.delete('new'); return next; }, { replace: true });
-  };
+  const [showForm, setShowForm] = useState(false);
+  const videoDraftOpen = !browseOnly && searchParams.get('new') === 'video';
+  const setVideoDraftOpen = open => setSearchParams(prev => {
+    const next = new URLSearchParams(prev);
+    if (open) next.set('new', 'video'); else next.delete('new');
+    return next;
+  }, { replace: true });
   const [models, setModels] = useState([]);
   // Directive composer (CDO Phase 4, #2186) — deep-linkable drawer (`?new=directive`)
   // that creates a studio production project seeded with a directive. State is
   // hoisted here (above the Drawer body) per the Drawer state-hoisting rule.
-  const directiveOpen = searchParams.get('new') === 'directive';
-  const modelsOpen = searchParams.get('models') === '1';
+  const directiveOpen = !browseOnly && searchParams.get('new') === 'directive';
+  const modelsOpen = !browseOnly && searchParams.get('models') === '1';
   const [directiveName, setDirectiveName] = useState('');
   const [directiveDraft, setDirectiveDraft] = useState(EMPTY_DIRECTIVE);
   const [creatingDirective, setCreatingDirective] = useState(false);
@@ -109,24 +108,32 @@ export default function CreativeDirector({ basePath = '/creative-director', work
     }).catch(() => {});
   }, [fetchProjects]);
 
-  // Consume the remix handoff once at mount, then clear the history state so a
+  // Consume each remix handoff, then clear the history state so a
   // refresh doesn't re-seed (mirrors Story Builder's prefill-consume pattern).
   // Auto-open the create form so the seeded ingredient chips are visible.
   useEffect(() => {
+    if (browseOnly) {
+      if (searchParams.get('new') || location.state?.remix) {
+        const next = new URLSearchParams(location.search);
+        if (!next.has('new')) next.set('new', 'video');
+        navigate({ pathname: '/creative-director', search: next.toString(), hash: location.hash }, { replace: true, state: location.state });
+      }
+      return;
+    }
     const ids = location.state?.remix?.ingredientIds;
     if (!Array.isArray(ids) || ids.length === 0) return;
     const cleanIds = ids.filter(Boolean).slice(0, 50);
     if (cleanIds.length === 0) return;
     setRemixIds(cleanIds);
-    setShowForm(true);
+    if (!videoDraftOpen) setShowForm(true);
     listCatalogIngredientsByIds(cleanIds, { silent: true })
       .then((res) => setRemixIngredients(Array.isArray(res) ? res : (Array.isArray(res?.items) ? res.items : [])))
       .catch(() => {});
     // Clear the handoff state so a refresh doesn't re-seed (ids already captured).
     const nextSearch = new URLSearchParams(location.search);
-    if (isVideo) nextSearch.set('new', 'video');
+    if (videoDraftOpen) nextSearch.set('new', 'video');
     navigate({ pathname: location.pathname, search: nextSearch.toString(), hash: location.hash }, { replace: true, state: {} });
-  }, []);
+  }, [browseOnly, location.key]);
 
   // Drop any pending remix handoff so abandoned ingredient ids can't leak into
   // a later, unrelated project created from this list page (#1808 review).
@@ -290,18 +297,18 @@ export default function CreativeDirector({ basePath = '/creative-director', work
     <div className="flex flex-col h-full">
       <PageHeader
         icon={Film}
-        title={isVideo ? 'Video' : 'Creative Director'}
-        subtitle={isVideo ? 'Draft standalone shorts, then review each production stage' : 'Long-form video projects driven by an autonomous CoS agent'}
-        actions={
+        title={browseOnly ? 'Video' : 'Creative Director'}
+        subtitle={browseOnly ? 'Browse videos from Creative Director and Creative Commissions' : 'Plan and produce videos and creative projects'}
+        actions={browseOnly ? <Link to="/creative-director" className="px-3 py-2 rounded border border-port-border text-sm">Open Creative Director</Link> :
           <>
-            {!isVideo && <button
+            <button
               onClick={openDirective}
               className="flex items-center gap-2 bg-port-card border border-port-border hover:bg-port-card/60 text-port-text px-3 py-2 rounded text-sm"
               title="Compose a directive — the Creative Director plans and executes it across the creative suite"
             >
               <Wand2 className="w-4 h-4" />
               New directive
-            </button>}
+            </button>
             <button
               onClick={() => setModelsOpen(true)}
               className="flex items-center gap-2 bg-port-card border border-port-border hover:bg-port-card/60 text-port-text px-3 py-2 rounded text-sm"
@@ -310,7 +317,7 @@ export default function CreativeDirector({ basePath = '/creative-director', work
               <SlidersHorizontal className="w-4 h-4" />
               Model defaults
             </button>
-            {!isVideo && <OverflowMenu
+            <OverflowMenu
               label="More Creative Director actions"
               triggerRef={smokeMenuTriggerRef}
               items={[
@@ -322,14 +329,14 @@ export default function CreativeDirector({ basePath = '/creative-director', work
                   onSelect: () => setConfirmingSmokeTest(true),
                 },
               ]}
-            />}
-            {isVideo && <Link to="/video/generate" className="px-3 py-2 rounded border border-port-border text-sm">Generate clip</Link>}
+            />
+            <button onClick={() => { clearRemix(); setVideoDraftOpen(true); }} className="px-3 py-2 rounded bg-port-accent text-white text-sm">New video draft</button>
             <button
               onClick={() => { setShowForm((s) => !s); clearRemix(); }}
               className="flex items-center gap-2 bg-port-accent hover:bg-port-accent/80 text-white px-3 py-2 rounded text-sm"
             >
               <Plus className="w-4 h-4" />
-              {isVideo ? 'New video draft' : 'New project'}
+              New project
             </button>
           </>
         }
@@ -353,7 +360,7 @@ export default function CreativeDirector({ basePath = '/creative-director', work
         />
       )}
 
-      {showForm && !isVideo && (
+      {showForm && !browseOnly && (
         <form onSubmit={handleCreate} className="shrink-0 p-6 border-b border-port-border bg-port-card/40 space-y-3">
           {remixIngredients.length > 0 && (
             <div className="rounded border border-port-accent/40 bg-port-accent/10 px-3 py-2">
@@ -483,7 +490,7 @@ export default function CreativeDirector({ basePath = '/creative-director', work
       <div className="flex-1 overflow-auto p-6">
         {projects.length === 0 && !showForm && (
           <div className="text-port-text-muted text-sm">
-            No projects yet. Click <span className="text-port-text">New project</span> to start one.
+            No projects yet. Open <Link to="/creative-director?new=video" className="text-port-accent">Creative Director</Link> to create a video draft.
           </div>
         )}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -508,19 +515,19 @@ export default function CreativeDirector({ basePath = '/creative-director', work
                 {/* Pause is meaningful only when the agent could be in flight.
                     `draft` has nothing running yet, and the terminal states are
                     obviously inert — match the detail page's gating. */}
-                {!['paused', 'complete', 'failed', 'draft'].includes(p.status) && (
+                {!browseOnly && !['paused', 'complete', 'failed', 'draft'].includes(p.status) && (
                   <button onClick={() => handlePause(p.id)} className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs">
                     <Pause className="w-3 h-3" /> Pause
                   </button>
                 )}
-                {p.workspace !== 'video' && (p.status === 'paused' || p.status === 'draft' || p.status === 'failed') && (
+                {!browseOnly && p.workspace !== 'video' && (p.status === 'paused' || p.status === 'draft' || p.status === 'failed') && (
                   <button onClick={() => handleStart(p.id)} className="flex items-center gap-1 px-2 py-1 bg-port-accent/30 text-port-accent rounded text-xs">
                     <Play className="w-3 h-3" /> Start
                   </button>
                 )}
-                <button onClick={() => handleDelete(p.id)} aria-label="Delete" className="ml-auto flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error">
+                {!browseOnly && <button onClick={() => handleDelete(p.id)} aria-label="Delete" className="ml-auto flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error">
                   <Trash2 className="w-3 h-3" />
-                </button>
+                </button>}
               </div>
             </div>
           ))}
@@ -567,7 +574,7 @@ export default function CreativeDirector({ basePath = '/creative-director', work
         </div>
       </Drawer>
 
-      {isVideo && <VideoDraftDrawer open={showForm} onClose={() => { setShowForm(false); clearRemix(); }} catalogIngredientIds={remixIds} onSaved={created => { setProjects(prev => [created, ...prev]); navigate(`${basePath}/${created.id}/overview`); }} />}
+      {!browseOnly && <VideoDraftDrawer open={videoDraftOpen} onClose={() => { setVideoDraftOpen(false); clearRemix(); }} catalogIngredientIds={remixIds} onSaved={created => { setProjects(prev => [created, ...prev]); navigate(`${basePath}/${created.id}/overview`); }} />}
       <CreativeDirectorModelsDrawer
         scope="global"
         open={modelsOpen}
