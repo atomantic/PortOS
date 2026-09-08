@@ -70,6 +70,7 @@ vi.mock('./agentState.js', () => ({
   activeAgents: new Map(),
   userTerminatedAgents: new Set(),
   pausedAgents: new Map(),
+  consumePausedAgentExit: vi.fn(),
   registerSpawnedAgent: vi.fn(),
   unregisterSpawnedAgent: vi.fn(),
   metaStringOr: (value, fallback) => (typeof value === 'string' && value) ? value : fallback,
@@ -1393,6 +1394,96 @@ describe('stream error containment', () => {
           workspacePath: minimalArgs.workspacePath,
         }),
       );
+    });
+  });
+
+  // ── Shared finalize-sequence contract (#6619) ────────────────────────────────
+  //
+  // The CLI close handler and the TUI `finish()` used to hold two hand-mirrored
+  // copies of this teardown, kept in sync by prose comments and running their two
+  // gates in OPPOSITE order. These three tests are the oracle for the invariants
+  // that mirroring protected — the same three, asserted the same way, live in
+  // agentTuiSpawning.test.js. They pin the lane/registry/marker effects that the
+  // other suites' finalizeAgent-argument assertions do not observe.
+  describe('shared finalize sequence (#6619)', () => {
+    beforeEach(async () => {
+      const { releaseAgentLane } = await import('./agentFinalization.js');
+      const { consumePausedAgentExit } = await import('./agentState.js');
+      releaseAgentLane.mockClear();
+      consumePausedAgentExit.mockClear();
+      agentStateMocks.updateAgent.mockClear();
+    });
+
+    afterEach(async () => {
+      const { pausedAgents, userTerminatedAgents } = await import('./agentState.js');
+      pausedAgents.clear();
+      userTerminatedAgents.clear();
+      resetHostShutdownFlagForTests();
+    });
+
+    // A paused run was already finalized (and lane-released) by markAgentPaused.
+    // Re-releasing the same executionId logs a spurious "Invalid state
+    // transition", so the paused gate must win over the host-shutdown gate.
+    it('paused run exiting during host shutdown takes the paused path, releasing no lane and writing no interrupted marker', async () => {
+      const { releaseAgentLane } = await import('./agentFinalization.js');
+      const { pausedAgents, consumePausedAgentExit, activeAgents } = await import('./agentState.js');
+
+      spawnDirectly({ ...minimalArgs });
+      await new Promise((r) => setTimeout(r, 10));
+      pausedAgents.set(minimalArgs.agentId, true);
+      markHostShuttingDown();
+      fakeProcess.emit('close', 0);
+
+      await vi.waitFor(() => expect(consumePausedAgentExit).toHaveBeenCalledWith(minimalArgs.agentId), { interval: 5 });
+      expect(releaseAgentLane).not.toHaveBeenCalled();
+      expect(activeAgents.has(minimalArgs.agentId)).toBe(false);
+      expect(agentStateMocks.updateAgent).not.toHaveBeenCalledWith(
+        minimalArgs.agentId,
+        { metadata: { phase: 'interrupted', interruptedBy: 'host-shutdown' } },
+      );
+    });
+
+    // The process can win the race and exit 0 after the user killed it. Recording
+    // that as a success leaves the task blocked with a "successful" run attached.
+    it('user-terminated run that exits 0 finalizes as failure with the terminated error', async () => {
+      const { finalizeAgent, releaseAgentLane } = await import('./agentFinalization.js');
+      const { userTerminatedAgents } = await import('./agentState.js');
+      userTerminatedAgents.add(minimalArgs.agentId);
+
+      spawnDirectly({ ...minimalArgs });
+      await new Promise((r) => setTimeout(r, 10));
+      fakeProcess.emit('close', 0);
+
+      await vi.waitFor(() => expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+        terminatedByUser: true,
+        success: false,
+        error: 'Agent terminated by user',
+      })), { interval: 5 });
+      expect(releaseAgentLane).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        errorExecutionMessage: 'Agent terminated by user',
+      }));
+      // Consumed, so a later resume of the same agent id is not misread as a kill.
+      expect(userTerminatedAgents.has(minimalArgs.agentId)).toBe(false);
+    });
+
+    // pm2's TreeKill took the child down with portos-server. The run has no
+    // outcome: leave the record `running` for the next boot's orphan sweep and
+    // do NOT release the lane through the finalize path.
+    it('run interrupted by host shutdown with no sentinel is abandoned without releasing its lane', async () => {
+      const { finalizeAgent, releaseAgentLane } = await import('./agentFinalization.js');
+
+      spawnDirectly({ ...minimalArgs });
+      await new Promise((r) => setTimeout(r, 10));
+      markHostShuttingDown();
+      fakeProcess.emit('close', 0);
+
+      await vi.waitFor(() => expect(agentStateMocks.updateAgent).toHaveBeenCalledWith(
+        minimalArgs.agentId,
+        { metadata: { phase: 'interrupted', interruptedBy: 'host-shutdown' } },
+      ), { interval: 5 });
+      expect(releaseAgentLane).not.toHaveBeenCalled();
+      expect(finalizeAgent).not.toHaveBeenCalled();
     });
   });
 });

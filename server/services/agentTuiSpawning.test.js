@@ -103,6 +103,7 @@ vi.mock('./agentState.js', async (importOriginal) => ({
   activeAgents: new Map(),
   userTerminatedAgents: new Set(),
   pausedAgents: new Map(),
+  consumePausedAgentExit: vi.fn(),
   registerSpawnedAgent: vi.fn(),
   unregisterSpawnedAgent: vi.fn(),
 }));
@@ -247,7 +248,7 @@ import * as agentErrorAnalysis from './agentErrorAnalysis.js';
 import * as cosAgentLifecycle from './cosAgentLifecycle.js';
 import * as gitService from './git.js';
 import { probePrForBranch } from './prProbe.js';
-import { activeAgents, userTerminatedAgents } from './agentState.js';
+import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit } from './agentState.js';
 import {
   SELF_CLEARING_RESUBMIT_INTERVAL_MS,
   OOM_NUDGE_SETTLE_MS,
@@ -2956,6 +2957,89 @@ describe('spawnTuiAgent runtime', () => {
       expect(probePrForBranch).not.toHaveBeenCalled();
       expect(shellService.pasteToSession).not.toHaveBeenCalled();
       expect(agentLifecycle.finalizeAgent).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ── Shared finalize-sequence contract (#6619) ────────────────────────────────
+  //
+  // `finish()` and the CLI close handler used to hold two hand-mirrored copies of
+  // this teardown, kept in sync by prose comments and running their two gates in
+  // OPPOSITE order. These three tests are the oracle for the invariants that
+  // mirroring protected — the same three, asserted the same way, live in
+  // agentCliSpawning.test.js. They pin the lane/registry/marker effects that this
+  // suite's finalizeAgent-argument assertions do not observe.
+  describe('shared finalize sequence (#6619)', () => {
+    afterEach(() => {
+      pausedAgents.clear();
+      userTerminatedAgents.clear();
+      resetHostShutdownFlagForTests();
+    });
+
+    // A paused run was already finalized (and lane-released) by markAgentPaused.
+    // Re-releasing the same executionId logs a spurious "Invalid state
+    // transition", so the paused gate must win over the host-shutdown gate.
+    it('paused run exiting during host shutdown takes the paused path, releasing no lane and writing no interrupted marker', async () => {
+      const spawnPromise = runSpawn();
+      await flushMicrotasks();
+
+      pausedAgents.set('agent-1', true);
+      markHostShuttingDown();
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await flushMicrotasks();
+      await spawnPromise;
+
+      expect(consumePausedAgentExit).toHaveBeenCalledWith('agent-1');
+      expect(agentLifecycle.releaseAgentLane).not.toHaveBeenCalled();
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+      expect(activeAgents.has('agent-1')).toBe(false);
+      expect(vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.some(
+        ([, patch]) => patch?.metadata?.phase === 'interrupted'
+      )).toBe(false);
+    });
+
+    // The PTY can win the race and report exit 0 after the user killed it.
+    // Recording that as a success leaves the task blocked with a "successful"
+    // run attached.
+    it('user-terminated run that exits 0 finalizes as failure with the terminated error', async () => {
+      userTerminatedAgents.add('agent-1');
+
+      const spawnPromise = runSpawn();
+      await flushMicrotasks();
+
+      await capturedOnExit({ exitCode: 0, killed: true });
+      await flushMicrotasks();
+      await spawnPromise;
+
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
+        terminatedByUser: true,
+        success: false,
+        error: 'Agent terminated by user',
+      }));
+      expect(agentLifecycle.releaseAgentLane).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        errorExecutionMessage: 'Agent terminated by user',
+      }));
+      // Consumed, so a later resume of the same agent id is not misread as a kill.
+      expect(userTerminatedAgents.has('agent-1')).toBe(false);
+    });
+
+    // pm2's TreeKill took the PTY down with portos-server. The run has no
+    // outcome: leave the record `running` for the next boot's orphan sweep and
+    // do NOT release the lane through the finalize path.
+    it('run interrupted by host shutdown with no sentinel is abandoned without releasing its lane', async () => {
+      const spawnPromise = runSpawn();
+      await flushMicrotasks();
+
+      markHostShuttingDown();
+      await capturedOnExit({ exitCode: 0, killed: false });
+      await flushMicrotasks();
+      await spawnPromise;
+
+      expect(vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.some(
+        ([, patch]) => patch?.metadata?.phase === 'interrupted' && patch?.metadata?.interruptedBy === 'host-shutdown'
+      )).toBe(true);
+      expect(agentLifecycle.releaseAgentLane).not.toHaveBeenCalled();
+      expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
     });
   });
 });
