@@ -86,10 +86,15 @@ export const providerDisplayName = (providers, id, fallback = '') =>
   providers.find((p) => p.id === id)?.name || id || fallback;
 
 /**
- * Provider `{ id, name }` options eligible for an assignment entry — the entry's
- * pre-baked `providerOptions` when present, else every provider whose `type` is
- * in the entry's `providerTypes` (all providers when unfiltered), tagged with a
- * "(disabled)" suffix on disabled providers.
+ * Provider `{ id, name, enabled }` options eligible for an assignment entry —
+ * the entry's pre-baked `providerOptions` when present, else every provider
+ * whose `type` is in the entry's `providerTypes` (all providers when
+ * unfiltered), tagged with a "(disabled)" suffix on disabled providers.
+ *
+ * `enabled` rides along so a caller can mark the rendered `<option>` itself
+ * `disabled` — the suffix alone still lets a `<select>` submit a provider that
+ * can't actually run. Pre-baked `providerOptions` carry no `enabled` field, so
+ * they're left selectable (undefined, not false).
  */
 export const assignmentProviderOptions = (entry, providers) => {
   if (Array.isArray(entry?.providerOptions)) return entry.providerOptions;
@@ -98,7 +103,7 @@ export const assignmentProviderOptions = (entry, providers) => {
     : null;
   return providers
     .filter((p) => !types || types.has(p.type))
-    .map((p) => ({ id: p.id, name: `${p.name}${p.enabled ? '' : ' (disabled)'}` }));
+    .map((p) => ({ id: p.id, name: `${p.name}${p.enabled ? '' : ' (disabled)'}`, enabled: !!p.enabled }));
 };
 
 /**
