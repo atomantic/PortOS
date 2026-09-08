@@ -22,7 +22,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
+import { privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -73,6 +73,16 @@ const redactExternalTokens = (settings) => {
     const { apiKey, ...rest } = next.civitai;
     next.civitai = rest;
   }
+  // Beeper access token (#30/#31) — write-only, same posture as
+  // imageGen.hfToken / civitai.apiKey above. Since #31 the live credential is
+  // AES-256-GCM in `beeper_credentials`, not here; this strip covers the LEGACY
+  // plaintext field, which `beeperCredentials.resolveBeeperToken` still reads as
+  // a fallback for an install that hand-edited one. Nothing writes it, and it
+  // must never be echoed back to the client on a settings GET.
+  if (isPlainObject(next.beeper)) {
+    const { token, ...rest } = next.beeper;
+    next.beeper = rest;
+  }
   return next;
 };
 
@@ -111,6 +121,15 @@ const preserveExternallyOwnedKeys = (next, current) => {
   carryOver('imageGen', 'hfToken');
   carryOver('civitai', 'apiKey');
   carryOver('videoGen', 'acceptedModelTerms', { alwaysStored: true });
+  // beeperSettingsSchema is `.strict()` with no `token`/`tokenExpiresAt`
+  // field, so a valid `beeper` PUT through this route can never carry either
+  // — without this, the generic top-level shallow merge (`{ ...current,
+  // ...settingsPatch }`) would REPLACE `current.beeper` wholesale and silently
+  // wipe out a legacy hand-edited token that `resolveBeeperToken` still falls
+  // back to (#31's own credential lives in Postgres, out of reach of this
+  // route entirely).
+  carryOver('beeper', 'token');
+  carryOver('beeper', 'tokenExpiresAt');
   return next;
 };
 
@@ -221,20 +240,61 @@ router.post('/features/eidoverse/host', asyncHandler(async (_req, res) => {
   res.json(await ensureEidoverseHost());
 }));
 
+// The Beeper sweep scheduler and its realtime transport arm on the instance
+// feature plus a stored token, and that gate used to be read at boot only — so
+// turning the feature on left realtime down and no sweep registered until the
+// next restart (fork issue #1, final live pass). Reconciling here closes that
+// half; the credential paths close the other. Beeper sits in the `comms` group,
+// so the group toggle moves the same gate — and so does the general settings
+// PUT below, when it flips the user's own `settings.beeper.enabled` sync
+// toggle: that save used to persist silently and never reach
+// `startBeeperScheduler()` until a restart.
+//
+// Imported lazily inside the handler: a feature toggle is a rare path, and the
+// arming module reaches the whole Beeper service graph (`ws` included), which
+// has no business loading with every settings request.
+const BEEPER_FEATURE_GROUP = 'comms';
+async function reconcileBeeperArming(reason) {
+  const { reconcileBeeperIngestion } = await import('../services/beeperArming.js');
+  // The flag is already persisted, so a reconcile failure must not turn a saved
+  // toggle into a 500.
+  await reconcileBeeperIngestion({ reason })
+    .catch((err) => console.error(`❌ Beeper ingestion reconcile (${reason}) failed: ${err.message}`));
+}
+
+// An interval-only Beeper save (no `enabled` flip) used to take effect only
+// at the next process restart: the registered event's `intervalMs` is read
+// once, at `schedule()` time (`createSettingsGatedSyncScheduler.js`), and
+// `startBeeperScheduler()` deliberately no-ops once `beeper-sync` is already
+// registered (fork issue #79). `restartBeeperScheduler()` is the fix — cancel
+// and register fresh, which reads `getBeeperSyncConfig()` again and picks up
+// whatever interval was just persisted. Lazily imported for the same reason
+// `reconcileBeeperArming` above is: this is a rare save, and the scheduler
+// module reaches the whole Beeper service graph.
+async function restartBeeperSchedulerForIntervalChange(reason) {
+  const { restartBeeperScheduler } = await import('../services/beeperScheduler.js');
+  await restartBeeperScheduler()
+    .catch((err) => console.error(`❌ Beeper scheduler restart (${reason}) failed: ${err.message}`));
+}
+
 // PUT /api/settings/features/:featureId
 // `enabled` is nullable: null clears a grouped feature's override back to
 // "inherit" (see instanceFeatureUpdateSchema and updateInstanceFeature).
 router.put('/features/:featureId', asyncHandler(async (req, res) => {
   const featureId = validateRequest(instanceFeatureIdSchema, req.params.featureId);
   const { enabled } = validateRequest(instanceFeatureUpdateSchema, req.body || {});
-  res.json(await updateInstanceFeature(featureId, enabled));
+  const result = await updateInstanceFeature(featureId, enabled);
+  if (featureId === 'beeper') await reconcileBeeperArming('feature-toggle');
+  res.json(result);
 }));
 
 // PUT /api/settings/features/groups/:groupId (#40)
 router.put('/features/groups/:groupId', asyncHandler(async (req, res) => {
   const groupId = validateRequest(instanceFeatureGroupIdSchema, req.params.groupId);
   const { enabled } = validateRequest(instanceFeatureGroupUpdateSchema, req.body || {});
-  res.json(await updateInstanceFeatureGroup(groupId, enabled));
+  const result = await updateInstanceFeatureGroup(groupId, enabled);
+  if (groupId === BEEPER_FEATURE_GROUP) await reconcileBeeperArming('feature-group-toggle');
+  res.json(result);
 }));
 
 // PUT /api/settings/ai-assignments/:id
@@ -352,6 +412,20 @@ router.put('/', asyncHandler(async (req, res) => {
   // malformed enabled/interval can't reach disk and break the sync scheduler.
   if (req.body?.signal !== undefined) {
     validateRequest(signalConfigSchema.partial(), req.body.signal);
+  }
+  // Beeper Desktop bridge ingestion + connection config (#30) — validate the
+  // slice when present so a malformed enabled/interval/baseUrl/budget can't
+  // reach disk. `beeperSettingsSchema` is `.strict()` and deliberately has no
+  // `token`/`tokenExpiresAt` field, so a client attempting to smuggle a token
+  // through this generic route 400s instead of it silently reaching disk —
+  // the credential's own write path is POST/DELETE /api/beeper/token (#31),
+  // which stores it AES-256-GCM encrypted in Postgres. Used directly, NOT
+  // `.partial()`: every field is already individually `.optional()` (so
+  // `.partial()` was a no-op), and the schema's `superRefine` (SEC-2's
+  // loopback-only `baseUrl` gate) returns a `ZodEffects`, which has no
+  // `.partial()` method at all.
+  if (req.body?.beeper !== undefined) {
+    validateRequest(beeperSettingsSchema, req.body.beeper);
   }
   // Spotify ingestion config (#2152) — validate the slice when present so a
   // malformed enabled/interval can't reach disk and break the sync scheduler.
@@ -480,11 +554,54 @@ router.put('/', asyncHandler(async (req, res) => {
   // `actor: 'user'` is what separates a save made HERE — a human on the Settings
   // page — from every other `save()` caller (schedulers, sync hooks, feature
   // writes), which keep the `'system'` default in the operator-action ledger (#5594).
-  let merged = await updateSettingsWith((current) =>
-    preserveExternallyOwnedKeys(
+  let previousBeeperEnabled;
+  let previousBeeperIntervalMinutes;
+  let merged = await updateSettingsWith((current) => {
+    // Read inside the queue, against the freshest persisted snapshot (same
+    // reasoning as `mergeFederationSlice` above) — a stale pre-image here could
+    // read a no-op as a flip, or a real flip as a no-op.
+    previousBeeperEnabled = current?.beeper?.enabled === true;
+    previousBeeperIntervalMinutes = current?.beeper?.intervalMinutes;
+    return preserveExternallyOwnedKeys(
       mergeFederationSlice({ ...current, ...settingsPatch }, current),
       current,
-    ), { actor: 'user' });
+    );
+  }, { actor: 'user' });
+  // A beeper save that flips `enabled` never armed the scheduler until a
+  // restart. `startBeeperScheduler()` is the only thing that registers the
+  // sweep, and it's reached exclusively through `reconcileBeeperArming` —
+  // which the feature and comms-group toggles call, but this generic PUT path
+  // never did. `undefined` counts as `false` on both sides, matching how
+  // `getBeeperSyncConfig()` reads the stored flag, so an install that has
+  // never touched the Beeper card doesn't read as a flip. Fires AFTER the
+  // write above so the reconcile (and the scheduler's own re-read) see the
+  // value that was actually persisted, not the request body.
+  const nextBeeperEnabled = merged?.beeper?.enabled === true;
+  const beeperIntervalChanged = merged?.beeper?.intervalMinutes !== previousBeeperIntervalMinutes;
+  if (nextBeeperEnabled !== previousBeeperEnabled) {
+    // Fork issue #94: the flip branch does NOT always get a fresh
+    // registration. `reconcileBeeperArming` only registers the scheduler when
+    // it is not already registered (fork issue #79's re-registration guard in
+    // beeperArming.js), and a true→false save deliberately leaves the
+    // scheduler registered — it just gates per tick (see the true→false test
+    // beside this route's other Beeper tests) — so a false→true flip right
+    // after finds it already registered and the reconcile below is a no-op
+    // for the scheduler. Capture that "already registered" state BEFORE
+    // reconciling: if this save also changed the interval, the still-
+    // registered event is holding the stale `intervalMs`
+    // `createSettingsGatedSyncScheduler.js` locked in at `schedule()` time, so
+    // restart explicitly to pick up what was just persisted.
+    const { isBeeperSchedulerRegistered } = await import('../services/beeperScheduler.js');
+    const wasSchedulerRegisteredBeforeReconcile = isBeeperSchedulerRegistered();
+    await reconcileBeeperArming('sync-toggle');
+    if (nextBeeperEnabled && beeperIntervalChanged && wasSchedulerRegisteredBeforeReconcile) {
+      await restartBeeperSchedulerForIntervalChange('sync-toggle-interval-change');
+    }
+  } else if (beeperIntervalChanged) {
+    // Fork issue #79: an interval-only change (no `enabled` flip) still has to
+    // take effect without a restart.
+    await restartBeeperSchedulerForIntervalChange('interval-change');
+  }
   if (subscriptionCostsPatch !== undefined) {
     const costs = await saveSubscriptionCosts(subscriptionCostsPatch, { actor: 'user' });
     merged = { ...merged, subscriptionCosts: costs };

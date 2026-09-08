@@ -6,6 +6,8 @@ import {
   buildPersonMatchIndex,
   matchPerson,
   matchPeople,
+  normalizeNetworkHandle,
+  classifyNetworkHandle,
 } from './tribeMatch.js';
 
 const PEOPLE = [
@@ -141,6 +143,48 @@ describe('tribeMatch', () => {
     it('drops unmatched and empty identities', () => {
       const ids = matchPeople([null, '', { email: 'x@x.com' }, { name: 'Sam' }], index);
       expect(ids.size).toBe(0);
+    });
+  });
+
+  describe('normalizeNetworkHandle', () => {
+    it('lowercases, trims, and strips a leading @', () => {
+      expect(normalizeNetworkHandle('  @Alice  ')).toBe('alice');
+    });
+    it('strips only a leading @, not one mid-string', () => {
+      expect(normalizeNetworkHandle('@user@example')).toBe('user@example');
+    });
+    it('returns empty string for nullish', () => {
+      expect(normalizeNetworkHandle(null)).toBe('');
+      expect(normalizeNetworkHandle(undefined)).toBe('');
+    });
+  });
+
+  describe('classifyNetworkHandle', () => {
+    it('classifies a bare 10-digit NANP number as phone', () => {
+      expect(classifyNetworkHandle('5551234567')).toEqual({ kind: 'phone', handle: '+15551234567' });
+    });
+    it('classifies an E.164 number with punctuation as phone', () => {
+      expect(classifyNetworkHandle('+1 (555) 010-0199')).toEqual({ kind: 'phone', handle: '+15550100199' });
+    });
+    it('classifies a username handle, stripping a leading @', () => {
+      expect(classifyNetworkHandle('@ExampleUser')).toEqual({ kind: 'handle', handle: 'exampleuser' });
+    });
+    it('does NOT classify a digit-bearing username as a phone (#15 hazard, guarded)', () => {
+      // A network username containing letters must never take the phone branch,
+      // no matter how many digits it carries.
+      expect(classifyNetworkHandle('user5550100199')).toEqual({ kind: 'handle', handle: 'user5550100199' });
+      expect(classifyNetworkHandle('x5550100199')).toEqual({ kind: 'handle', handle: 'x5550100199' });
+    });
+    it('does not classify a too-short all-digit token as a phone', () => {
+      expect(classifyNetworkHandle('4242')).toEqual({ kind: 'handle', handle: '4242' });
+    });
+    it('does not classify an implausibly long all-digit token (a snowflake shape) as a phone', () => {
+      expect(classifyNetworkHandle('987654321098765432')).toEqual({ kind: 'handle', handle: '987654321098765432' });
+    });
+    it('returns null for a blank handle', () => {
+      expect(classifyNetworkHandle('')).toBeNull();
+      expect(classifyNetworkHandle(null)).toBeNull();
+      expect(classifyNetworkHandle(undefined)).toBeNull();
     });
   });
 });

@@ -63,8 +63,31 @@ vi.mock('../services/eidoverseHost.js', () => ({
 vi.mock('../services/credentialInventory.js', () => ({
   getCredentialInventory: vi.fn(async () => ({ headline: 'Most of PortOS works with no key at all.', credentials: [] })),
 }));
+// The Beeper feature toggle now reconciles the sweep + realtime transport
+// against the gate it just moved (fork issue #1). Mocked here because the real
+// module reaches the whole Beeper service graph; what a reconcile actually does
+// is covered by services/beeperArming.test.js.
+vi.mock('../services/beeperArming.js', () => ({
+  reconcileBeeperIngestion: vi.fn(async () => ({ armed: false, changed: false })),
+}));
+// The interval-change half of fork issue #79: a Beeper save that changes only
+// `intervalMinutes` restarts the scheduler directly rather than going through
+// `reconcileBeeperIngestion` (that stays reserved for an `enabled` flip). Mocked
+// for the same reason `beeperArming.js` is above — what a restart actually does
+// is covered by services/beeperScheduler.test.js.
+// `isBeeperSchedulerRegistered` defaults to `false` (mimicking a scheduler
+// that was never registered) so the existing interval-change tests below,
+// which never set this, keep exercising that path; the fork issue #94 test
+// under "beeper sync-toggle arming" overrides it to `true` for the
+// already-registered case.
+vi.mock('../services/beeperScheduler.js', () => ({
+  restartBeeperScheduler: vi.fn(async () => {}),
+  isBeeperSchedulerRegistered: vi.fn(() => false),
+}));
 
 import settingsRoutes from './settings.js';
+import { reconcileBeeperIngestion } from '../services/beeperArming.js';
+import { restartBeeperScheduler, isBeeperSchedulerRegistered } from '../services/beeperScheduler.js';
 import { updateSettingsWith } from '../services/settings.js';
 import { hasConfiguredInstances as hasConfiguredDatadogInstances } from '../services/datadog.js';
 import { hasConfiguredInstances as hasConfiguredJiraInstances } from '../services/jira.js';
@@ -188,6 +211,11 @@ describe('Settings routes — instance feature participation', () => {
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'gsd', enabled: false }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'openclaw', enabled: false }));
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'health', enabled: true }));
+    // #40 — iMessage and Signal join the comms group, defaulting to enabled
+    // with no settings write, exactly like an existing install saw before.
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'imessage', enabled: true, group: 'comms' }));
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'signal', enabled: true, group: 'comms' }));
+    expect(res.body.groups).toContainEqual(expect.objectContaining({ id: 'comms', enabled: true }));
   });
 
   it('lists an integration-backed feature as auto-enabled when its detector finds configuration', async () => {
@@ -229,6 +257,31 @@ describe('Settings routes — instance feature participation', () => {
     expect(res.status).toBe(200);
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'post', enabled: false }));
     expect(store).toEqual({ theme: 'dark', instanceFeatures: { post: { enabled: false } } });
+    // Only Beeper's own gate is reconciled; an unrelated toggle must not reach
+    // into the Beeper service graph at all.
+    expect(reconcileBeeperIngestion).not.toHaveBeenCalled();
+  });
+
+  // Fork issue #1, final live pass: the Beeper sweep + realtime transport arm on
+  // the instance feature plus a token, and that gate was read at boot only — so
+  // turning the feature on left both down until the next restart.
+  it('reconciles Beeper ingestion when the Beeper feature is toggled', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings/features/beeper')
+      .send({ enabled: true });
+
+    expect(res.status).toBe(200);
+    expect(reconcileBeeperIngestion).toHaveBeenCalledWith({ reason: 'feature-toggle' });
+  });
+
+  // Beeper sits in the Comms group, so the group toggle moves the same gate.
+  it('reconciles Beeper ingestion when the Comms group is toggled', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings/features/groups/comms')
+      .send({ enabled: false });
+
+    expect(res.status).toBe(200);
+    expect(reconcileBeeperIngestion).toHaveBeenCalledWith({ reason: 'feature-group-toggle' });
   });
 
   it('installs and explicitly enables Eidoverse from its consent endpoint', async () => {
@@ -294,6 +347,96 @@ describe('Settings routes — instance feature participation', () => {
 
     expect(res.status).toBe(400);
     expect(installEidoverse).not.toHaveBeenCalled();
+  });
+
+  it('clears a grouped feature override back to inherit with enabled: null', async () => {
+    store = { instanceFeatures: { facetime: { enabled: true } } };
+
+    const res = await request(buildApp())
+      .put('/api/settings/features/facetime')
+      .send({ enabled: null });
+
+    expect(res.status).toBe(200);
+    expect(store).toEqual({ instanceFeatures: {} });
+    // This suite doesn't mock voice/facetimeBridge.js, so only the storage and
+    // the no-longer-`explicit` source are pinned — the resolved boolean depends
+    // on the real (unmocked) detector's answer on the machine running the test.
+    const facetime = res.body.features.find((f) => f.id === 'facetime');
+    expect(facetime.source).not.toBe('explicit');
+  });
+
+  it('uses iMessage as a grouped feature with no override to prove the same clear-to-inherit path on a feature with no detector', async () => {
+    store = { instanceFeatures: { imessage: { enabled: false } } };
+
+    const res = await request(buildApp())
+      .put('/api/settings/features/imessage')
+      .send({ enabled: null });
+
+    expect(res.status).toBe(200);
+    expect(store).toEqual({ instanceFeatures: {} });
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'imessage', enabled: true, source: 'default' }));
+  });
+
+  it('toggles the comms feature group and reflects it on the group and member list', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings/features/groups/comms')
+      .send({ enabled: false });
+
+    expect(res.status).toBe(200);
+    expect(store).toEqual({ instanceFeatureGroups: { comms: { enabled: false } } });
+    expect(res.body.groups).toContainEqual(expect.objectContaining({ id: 'comms', enabled: false }));
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'imessage', enabled: false, source: 'group-off' }));
+  });
+
+  it('lets an explicit per-feature override outrank an off group', async () => {
+    store = { instanceFeatureGroups: { comms: { enabled: false } } };
+
+    const res = await request(buildApp())
+      .put('/api/settings/features/imessage')
+      .send({ enabled: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'imessage', enabled: true, source: 'explicit' }));
+    // Signal has no override of its own, so it stays hidden by the off group.
+    expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'signal', enabled: false, source: 'group-off' }));
+  });
+
+  it('rejects an unknown feature group id and a non-boolean group enabled value', async () => {
+    const unknown = await request(buildApp())
+      .put('/api/settings/features/groups/not-registered')
+      .send({ enabled: false });
+    const malformed = await request(buildApp())
+      .put('/api/settings/features/groups/comms')
+      .send({ enabled: 'false' });
+    // Unlike the per-feature route, a group has no inherit state of its own —
+    // null is rejected rather than treated as a third value.
+    const nullEnabled = await request(buildApp())
+      .put('/api/settings/features/groups/comms')
+      .send({ enabled: null });
+
+    expect(unknown.status).toBe(400);
+    expect(malformed.status).toBe(400);
+    expect(nullEnabled.status).toBe(400);
+    expect(unknown.body.code).toBe('VALIDATION_ERROR');
+    expect(malformed.body.code).toBe('VALIDATION_ERROR');
+    expect(nullEnabled.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('validates the instanceFeatureGroups slice on the generic settings PUT', async () => {
+    const ok = await request(buildApp())
+      .put('/api/settings')
+      .send({ instanceFeatureGroups: { comms: { enabled: false } } });
+    const malformed = await request(buildApp())
+      .put('/api/settings')
+      .send({ instanceFeatureGroups: { comms: { enabled: 'nope' } } });
+    const unknownGroup = await request(buildApp())
+      .put('/api/settings')
+      .send({ instanceFeatureGroups: { 'not-a-group': { enabled: false } } });
+
+    expect(ok.status).toBe(200);
+    expect(store.instanceFeatureGroups).toEqual({ comms: { enabled: false } });
+    expect(malformed.status).toBe(400);
+    expect(unknownGroup.status).toBe(400);
   });
 
   it('rejects unknown feature ids and malformed enabled values', async () => {
@@ -682,6 +825,244 @@ describe('Settings routes — videoGen slice (#3231 Phase 4)', () => {
       .send({ videoGen: { mode: 'local', acceptedModelTerms: ['smuggled-license'] } });
     expect(res.status).toBe(200);
     expect(res.body.videoGen).toEqual({ mode: 'local' });
+  });
+});
+
+describe('Settings routes — beeper slice (#30)', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  it('accepts a valid beeper slice and persists it', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, intervalMinutes: 10, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5 } });
+    expect(res.status).toBe(200);
+    expect(res.body.beeper).toEqual({ enabled: true, intervalMinutes: 10, baseUrl: 'http://127.0.0.1:23373', attachmentBudgetGb: 5 });
+  });
+
+  it('rejects a non-boolean enabled gate', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: 'yes' } });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an out-of-range interval', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { intervalMinutes: 0 } });
+    expect(res.status).toBe(400);
+  });
+
+  // The security-load-bearing case (#30/#31): this slice must never add a
+  // plaintext write path for the token, and `.strict()` is what enforces it —
+  // a client attempting to smuggle one through the generic settings route
+  // gets a 400, not a silent write to disk.
+  it('rejects a beeper patch that carries a token — no plaintext write path through this route', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, token: 'smuggled-token' } });
+    expect(res.status).toBe(400);
+  });
+
+  it('never echoes a stored beeper token back on GET /api/settings', async () => {
+    store = { beeper: { enabled: true, token: 'super-secret-token' } };
+    const res = await request(buildApp()).get('/api/settings');
+    expect(res.status).toBe(200);
+    expect(res.body.beeper.token).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toMatch(/super-secret-token/);
+  });
+
+  // Without this, the generic top-level shallow merge would REPLACE
+  // current.beeper wholesale and silently wipe out a token stored by another
+  // write path (#31's vault, or a hand-edited settings.json) the instant the
+  // user saves an unrelated field like `enabled` from this slice's settings
+  // card — same posture as imageGen.hfToken / civitai.apiKey above. The
+  // ordinary ingestion-config fields (baseUrl, intervalMinutes,
+  // attachmentBudgetGb) follow the existing iMessage/Signal convention
+  // instead: the settings card always PUTs its complete known slice, so
+  // there's no separate "don't drop this on a partial patch" guard for them.
+  it('preserves a stored token across a beeper patch that only touches other fields', async () => {
+    store = { beeper: { enabled: false, token: 'existing-token' } };
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true } });
+    expect(res.status).toBe(200);
+    // The response itself redacts the token (see the GET test above); assert
+    // against the mocked store, which reflects what was actually persisted.
+    expect(store.beeper).toEqual({ enabled: true, token: 'existing-token' });
+  });
+});
+
+// The general settings PUT persists `settings.beeper.enabled` but, unlike the
+// feature and comms-group toggles above, used to never reconcile arming — so a
+// save made right after connecting (enabled still false at that point) left
+// the sweep unregistered until the next restart. These pin the fix: reconcile
+// only fires when the effective (boolean-coerced) value actually changes.
+describe('Settings routes — beeper sync-toggle arming', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  it('reconciles once, after the settings are persisted, when enabled flips false→true', async () => {
+    store = { beeper: { enabled: false, intervalMinutes: 5 } };
+
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, intervalMinutes: 5 } });
+
+    expect(res.status).toBe(200);
+    expect(reconcileBeeperIngestion).toHaveBeenCalledTimes(1);
+    expect(reconcileBeeperIngestion).toHaveBeenCalledWith({ reason: 'sync-toggle' });
+    // Ordering: the write must land before the reconcile fires, so the
+    // scheduler's own settings re-read (and the reconcile itself) see the
+    // value that was actually persisted, not the request body.
+    const [writeOrder] = updateSettingsWith.mock.invocationCallOrder;
+    const [reconcileOrder] = reconcileBeeperIngestion.mock.invocationCallOrder;
+    expect(writeOrder).toBeLessThan(reconcileOrder);
+  });
+
+  // Registering the scheduler is `reconcileBeeperArming`'s job; stopping it on
+  // a true→false flip is not — `reconcileBeeperIngestion` only disarms on the
+  // feature+token gate, not on this opt-in (see beeperArming.js), so it is the
+  // scheduler's own per-tick `getBeeperSyncConfig()` re-read that actually
+  // stops runs here. This still calls reconcile, for symmetry and so the
+  // transition is logged/serialized on the same tail as every other trigger.
+  it('reconciles once when enabled flips true→false', async () => {
+    store = { beeper: { enabled: true, intervalMinutes: 5 } };
+
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: false, intervalMinutes: 5 } });
+
+    expect(res.status).toBe(200);
+    expect(reconcileBeeperIngestion).toHaveBeenCalledTimes(1);
+    expect(reconcileBeeperIngestion).toHaveBeenCalledWith({ reason: 'sync-toggle' });
+  });
+
+  it('does not reconcile arming when a save leaves enabled unchanged (interval-only)', async () => {
+    store = { beeper: { enabled: true, intervalMinutes: 5 } };
+
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, intervalMinutes: 15 } });
+
+    expect(res.status).toBe(200);
+    expect(reconcileBeeperIngestion).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the PUT when the reconcile rejects', async () => {
+    reconcileBeeperIngestion.mockRejectedValueOnce(new Error('boom'));
+    store = { beeper: { enabled: false, intervalMinutes: 5 } };
+
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, intervalMinutes: 5 } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.beeper.enabled).toBe(true);
+  });
+
+  // Fork issue #94: a true→false save leaves the scheduler registered (see
+  // "reconciles once when enabled flips true→false" above) — it just gates
+  // per tick — so a false→true flip right after finds
+  // `isBeeperSchedulerRegistered()` already true and the reconcile is a no-op
+  // for the scheduler. When this save also changes the interval, the still-
+  // registered event is holding the stale `intervalMs`, so the route has to
+  // restart the scheduler explicitly, after reconciling, to pick up what was
+  // just persisted.
+  it('restarts the scheduler, after reconciling, when enabled flips and the interval changes on an already-registered scheduler', async () => {
+    isBeeperSchedulerRegistered.mockReturnValueOnce(true);
+    store = { beeper: { enabled: false, intervalMinutes: 5 } };
+
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, intervalMinutes: 15 } });
+
+    expect(res.status).toBe(200);
+    expect(reconcileBeeperIngestion).toHaveBeenCalledTimes(1);
+    expect(restartBeeperScheduler).toHaveBeenCalledTimes(1);
+    const [reconcileOrder] = reconcileBeeperIngestion.mock.invocationCallOrder;
+    const [restartOrder] = restartBeeperScheduler.mock.invocationCallOrder;
+    expect(reconcileOrder).toBeLessThan(restartOrder);
+  });
+});
+
+// Fork issue #79's other half: an interval-only save (no `enabled` flip) used
+// to take effect only at the next process restart, because the registered
+// event's `intervalMs` is locked in at `schedule()` time and
+// `startBeeperScheduler()` deliberately no-ops once `beeper-sync` is already
+// registered. `restartBeeperScheduler()` (cancel, then register fresh) is the
+// fix; this describe block pins WHEN the route calls it, not what it does —
+// that lives in services/beeperScheduler.test.js.
+describe('Settings routes — beeper interval change', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  it('restarts the scheduler, after the settings are persisted, when only the interval changes', async () => {
+    store = { beeper: { enabled: true, intervalMinutes: 5 } };
+
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, intervalMinutes: 15 } });
+
+    expect(res.status).toBe(200);
+    expect(restartBeeperScheduler).toHaveBeenCalledTimes(1);
+    expect(reconcileBeeperIngestion).not.toHaveBeenCalled();
+    // Same ordering requirement as the arming reconcile: the restart has to
+    // read the interval AFTER it lands on disk, or a fast save/restart race
+    // could re-register against the value that was about to be overwritten.
+    const [writeOrder] = updateSettingsWith.mock.invocationCallOrder;
+    const [restartOrder] = restartBeeperScheduler.mock.invocationCallOrder;
+    expect(writeOrder).toBeLessThan(restartOrder);
+  });
+
+  it('does not restart the scheduler when the interval is unchanged', async () => {
+    store = { beeper: { enabled: true, intervalMinutes: 5 } };
+
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, intervalMinutes: 5 } });
+
+    expect(res.status).toBe(200);
+    expect(restartBeeperScheduler).not.toHaveBeenCalled();
+  });
+
+  // With the scheduler not yet registered (`isBeeperSchedulerRegistered()`
+  // defaults to `false` in this file's mock — a fresh install / first
+  // enable), the `enabled`-flip branch's reconcile does the fresh
+  // registration itself and picks up the just-persisted interval, so
+  // restarting the scheduler too would just cancel and re-register a second
+  // time for nothing. When the scheduler IS already registered going in, the
+  // route restarts it explicitly — see the "already-registered scheduler"
+  // test under "beeper sync-toggle arming" above (fork issue #94).
+  it('does not also restart the scheduler when enabled flips, even if the interval changed in the same save', async () => {
+    store = { beeper: { enabled: false, intervalMinutes: 5 } };
+
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, intervalMinutes: 15 } });
+
+    expect(res.status).toBe(200);
+    expect(reconcileBeeperIngestion).toHaveBeenCalledTimes(1);
+    expect(restartBeeperScheduler).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the PUT when the scheduler restart rejects', async () => {
+    restartBeeperScheduler.mockRejectedValueOnce(new Error('boom'));
+    store = { beeper: { enabled: true, intervalMinutes: 5 } };
+
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ beeper: { enabled: true, intervalMinutes: 20 } });
+
+    expect(res.status).toBe(200);
+    expect(res.body.beeper.intervalMinutes).toBe(20);
   });
 });
 

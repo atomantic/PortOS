@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, useLocation, useSearchParams } from 'react-router';
 
 vi.mock('../services/api', () => ({
   getTribePeople: vi.fn(() => Promise.resolve({ people: [] })),
@@ -10,6 +10,17 @@ vi.mock('../services/api', () => ({
   // Non-blocking duplicate-identifier report (#5908); defaults to clean so
   // tests unrelated to it never see the banner.
   getTribeDuplicateIdentifiers: vi.fn(() => Promise.resolve({ emails: [], phones: [] })),
+  // Single-person read (#99) — the "Linked on Beeper" block's data source;
+  // defaults to no identities so tests unrelated to it never see the block.
+  getTribePerson: vi.fn(() => Promise.resolve({ identities: [] })),
+  unlinkBeeperIdentity: vi.fn(() => Promise.resolve({ success: true })),
+  // Circle tab's aside mounts MemoryLinksPanel/TouchpointsPanel once a
+  // person is selected (`draft.id` set) — the `?person=` deep-link tests and
+  // the "Linked on Beeper" tests below both select a real person, so these
+  // need real (empty) defaults too.
+  getTribeMemoryLinks: vi.fn(() => Promise.resolve({ links: [] })),
+  getMemories: vi.fn(() => Promise.resolve({ memories: [] })),
+  getTribeTouchpoints: vi.fn(() => Promise.resolve({ touchpoints: [] })),
 }));
 
 vi.mock('../services/socket', () => ({
@@ -168,6 +179,73 @@ describe('Tribe care filter', () => {
   });
 });
 
+/**
+ * #98 part C: Beeper's Tribe chip and its participants-panel "Linked ·
+ * <name>" rows deep-link here via `?person=<id>`. On load (and whenever the
+ * param changes) the page takes the exact path a click on the person's own
+ * `ContactCard` takes (`selectContact`) — switch to Circle, populate the
+ * form — and scrolls that card into view. An id nothing recognizes (a
+ * deleted person, or someone else's stale bookmark) is silently ignored:
+ * PortOS never toasts an error for it.
+ */
+describe('Tribe person deep link (#98 part C)', () => {
+  beforeEach(() => {
+    api.getTribePeople.mockClear();
+    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    window.localStorage.clear();
+  });
+
+  it('selects the named person, switches to Circle, and opens the form on their record', async () => {
+    renderAt('/tribe?person=p2');
+
+    await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('tab=circle'));
+    expect(screen.getByLabelText('Name')).toHaveValue('Sample Neighbor');
+    // Circle-only content — proves the tab actually switched, not just the draft.
+    expect(screen.getByPlaceholderText('Search relationships')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Relationship' })).toBeInTheDocument();
+  });
+
+  it('scrolls the matching card into view', async () => {
+    const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+    renderAt('/tribe?person=p2');
+
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    scrollSpy.mockRestore();
+  });
+
+  it('re-applies when the person param changes to a different id, without remounting the page', async () => {
+    // `MemoryRouter`'s `initialEntries` is read once at construction, so
+    // exercising a real in-place param change needs an in-tree navigator
+    // rather than a fresh `render`/`rerender` with different entries.
+    function ChangePersonButton() {
+      const [, setPersonParams] = useSearchParams();
+      return (
+        <button type="button" onClick={() => setPersonParams({ person: 'p2' })}>
+          Switch to p2
+        </button>
+      );
+    }
+    render(
+      <MemoryRouter initialEntries={['/tribe?person=p1']}>
+        <Tribe />
+        <ChangePersonButton />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Example Person'));
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to p2' }));
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Sample Neighbor'));
+  });
+
+  it('ignores an id the roster does not recognize, with no error toast and no tab switch', async () => {
+    renderAt('/tribe?person=does-not-exist');
+
+    await screen.findByRole('group', { name: 'Care filter' }); // stayed on the default Care Queue tab
+    expect(screen.queryByPlaceholderText('Search relationships')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
 describe('Tribe shared-identifier banner (#5908)', () => {
   beforeEach(() => {
     api.getTribePeople.mockClear();
@@ -205,5 +283,69 @@ describe('Tribe shared-identifier banner (#5908)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /dismiss shared contact info/i }));
     expect(screen.queryByText(/shared contact info/i)).toBeNull();
+  });
+});
+
+describe('Tribe "Linked on Beeper" block (#99)', () => {
+  beforeEach(() => {
+    api.getTribePeople.mockClear();
+    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    api.getTribePerson.mockReset();
+    api.getTribePerson.mockResolvedValue({ identities: [] });
+    api.unlinkBeeperIdentity.mockReset();
+    api.unlinkBeeperIdentity.mockResolvedValue({ success: true });
+    window.localStorage.clear();
+  });
+
+  it('renders nothing when the selected person has no Beeper identities', async () => {
+    renderAt('/tribe?tab=circle');
+    fireEvent.click(await screen.findByText('Example Person'));
+    await waitFor(() => expect(api.getTribePerson).toHaveBeenCalledWith('p1', { silent: true }));
+    expect(screen.queryByText('Linked on Beeper')).toBeNull();
+  });
+
+  it('renders a chip per identity with its network + handle and a thread link', async () => {
+    api.getTribePerson.mockResolvedValue({
+      identities: [
+        {
+          id: 'identity-1', personId: 'p1', kind: 'beeper-user', network: 'account-1', handle: 'user-1',
+          source: 'user', linkedAt: '2026-06-01T00:00:00.000Z',
+          conversations: [{ conversationId: 'conv-1', network: 'whatsapp', title: 'Example Thread', accountId: 'account-1', displayName: 'Example Contact' }],
+        },
+        {
+          id: 'identity-2', personId: 'p1', kind: 'handle', network: 'discord', handle: 'ada',
+          source: 'user', linkedAt: '2026-06-01T00:00:00.000Z', conversations: [],
+        },
+      ],
+    });
+
+    renderAt('/tribe?tab=circle');
+    fireEvent.click(await screen.findByText('Example Person'));
+
+    expect(await screen.findByText('Linked on Beeper')).toBeTruthy();
+    expect(screen.getByText('whatsapp')).toBeTruthy();
+    expect(screen.getByText('Example Contact')).toBeTruthy();
+    expect(screen.getByText('discord')).toBeTruthy();
+    expect(screen.getByText('ada')).toBeTruthy();
+    const threadLink = screen.getByRole('link', { name: /Open "Example Thread"/ });
+    expect(threadLink.getAttribute('href')).toBe('/messages/beeper/conv-1');
+  });
+
+  it('unlinks an identity and removes its chip', async () => {
+    api.getTribePerson.mockResolvedValue({
+      identities: [{
+        id: 'identity-1', personId: 'p1', kind: 'handle', network: 'discord', handle: 'ada',
+        source: 'user', linkedAt: '2026-06-01T00:00:00.000Z', conversations: [],
+      }],
+    });
+
+    renderAt('/tribe?tab=circle');
+    fireEvent.click(await screen.findByText('Example Person'));
+    await screen.findByText('Linked on Beeper');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink ada' }));
+
+    await waitFor(() => expect(api.unlinkBeeperIdentity).toHaveBeenCalledWith('identity-1', { silent: true }));
+    await waitFor(() => expect(screen.queryByText('Linked on Beeper')).toBeNull());
   });
 });

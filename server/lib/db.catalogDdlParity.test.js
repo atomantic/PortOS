@@ -153,6 +153,25 @@ function extractTypeCheckSet(source) {
   );
 }
 
+// Pull the `<column> IN (...)` literal set out of one table's CHECK, from
+// whichever of the two DDL sources is passed in. Used to pin a closed
+// PortOS-owned state machine (e.g. beeper_outbox.state) so a value silently
+// added to one file's CHECK but not the other — or dropped from both without
+// anyone deciding to — surfaces here instead of at a runtime INSERT.
+function extractCheckInSet(source, table, column) {
+  const body = extractCreateTable(source, table);
+  if (!body) return null;
+  const re = new RegExp(`CHECK\\s*\\(\\s*${column}\\s+IN\\s*\\(([^)]*)\\)\\s*\\)`, 'i');
+  const m = re.exec(body);
+  if (!m) return null;
+  return new Set(
+    m[1]
+      .split(',')
+      .map((s) => s.replace(/['"\s]/g, ''))
+      .filter(Boolean),
+  );
+}
+
 // Pull the `payload->>'<key>'` identifiers from the `search_tsv` generated
 // expression. Both files repeat them in the same per-line shape; we just
 // collect the set across the whole source.
@@ -443,6 +462,87 @@ describe('catalog DDL parity (init-db.sql ↔ db.js ensureSchema)', () => {
       expect(sqlIdx.size).toBeGreaterThan(0);
     });
   }
+
+  // Beeper mirror (#27 + #35) — eight machine-local tables that ship in BOTH
+  // sources. `beeper_messages.is_sender` is the reason this block exists: a
+  // column present on one side only would leave every EXISTING install with a
+  // thread that has one side (init-db.sql runs on fresh provisioning alone),
+  // and the additive `ALTER TABLE … ADD COLUMN IF NOT EXISTS` that backfills it
+  // is asserted separately below, because a CREATE TABLE match alone would pass
+  // while pre-existing installs never got the column.
+  for (const { table, idxPrefix } of [
+    { table: 'beeper_accounts', idxPrefix: null },
+    { table: 'beeper_credentials', idxPrefix: null },
+    { table: 'beeper_conversations', idxPrefix: 'idx_beeper_conversations_' },
+    { table: 'beeper_participants', idxPrefix: 'idx_beeper_participants_' },
+    { table: 'beeper_messages', idxPrefix: 'idx_beeper_messages_' },
+    { table: 'beeper_attachments', idxPrefix: 'idx_beeper_attachments_' },
+    { table: 'beeper_sync_cursors', idxPrefix: null },
+    { table: 'beeper_outbox', idxPrefix: 'idx_beeper_outbox_' },
+  ]) {
+    it(`${table} has the same columns${idxPrefix ? ' and indexes' : ''} in both files`, () => {
+      const sqlBody = extractCreateTable(INIT_SQL, table);
+      const jsBody = extractCreateTable(DB_JS, table);
+      expect(sqlBody, `init-db.sql missing CREATE TABLE ${table}`).toBeTruthy();
+      expect(jsBody, `db/schema/beeper.js missing CREATE TABLE ${table}`).toBeTruthy();
+      expect([...new Set(extractColumnNames(sqlBody))].sort())
+        .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+      if (!idxPrefix) return;
+      const sqlIdx = extractIndexNames(INIT_SQL, idxPrefix);
+      const jsIdx = extractIndexNames(DB_JS, idxPrefix);
+      expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+      expect(sqlIdx.size).toBeGreaterThan(0);
+    });
+  }
+
+  // LENS-7: beeper_outbox's `state` CHECK is PortOS's own send-lifecycle state
+  // machine (not a Beeper vocabulary), so — unlike beeper_conversations.type —
+  // a new state SHOULD cost a two-file schema change. Pin the literal set so a
+  // value added to one file's CHECK and not the other (or silently dropped
+  // from both) fails here rather than at a runtime INSERT.
+  it('beeper_outbox.state CHECK literal set is pinned and matches in both files', () => {
+    const expected = new Set(['draft', 'approved', 'sending', 'awaiting-confirmation', 'sent', 'failed']);
+    const sqlSet = extractCheckInSet(INIT_SQL, 'beeper_outbox', 'state');
+    const jsSet = extractCheckInSet(DB_JS, 'beeper_outbox', 'state');
+    expect(sqlSet, 'init-db.sql missing beeper_outbox.state CHECK').not.toBeNull();
+    expect(jsSet, 'db/schema/beeper.js missing beeper_outbox.state CHECK').not.toBeNull();
+    expect(sqlSet).toEqual(expected);
+    expect(jsSet).toEqual(expected);
+  });
+
+  // LENS-7: tribe_identities (server/lib/db/schema/tribe.js) is what a durable
+  // Beeper handle claim (kind='handle') resolves against — the same drift risk
+  // as the beeper_* block above (a column or index added to one DDL source
+  // only), so it gets its own parity assertion.
+  it('tribe_identities has the same columns and indexes in both files', () => {
+    const sqlBody = extractCreateTable(INIT_SQL, 'tribe_identities');
+    const jsBody = extractCreateTable(DB_JS, 'tribe_identities');
+    expect(sqlBody, 'init-db.sql missing CREATE TABLE tribe_identities').toBeTruthy();
+    expect(jsBody, 'db/schema/tribe.js missing CREATE TABLE tribe_identities').toBeTruthy();
+    expect([...new Set(extractColumnNames(sqlBody))].sort())
+      .toEqual([...new Set(extractColumnNames(jsBody))].sort());
+    const sqlIdx = extractIndexNames(INIT_SQL, 'idx_tribe_identities_');
+    const jsIdx = extractIndexNames(DB_JS, 'idx_tribe_identities_');
+    expect([...sqlIdx].sort()).toEqual([...jsIdx].sort());
+    expect(sqlIdx.size).toBeGreaterThan(0);
+  });
+
+  // Every column a beeper_* table gained after its first ship needs an
+  // additive ALTER on the upgrade path too — a fresh install gets it from the
+  // CREATE above, an existing one only from here.
+  it('beeper_* additive columns carry an ALTER TABLE for existing installs', () => {
+    for (const { table, columns } of [
+      { table: 'beeper_messages', columns: ['is_sender'] },
+      { table: 'beeper_attachments', columns: ['local_path', 'fetched_at', 'unavailable_at', 'fetch_error'] },
+      { table: 'beeper_conversations', columns: ['seen_at'] },
+    ]) {
+      for (const column of columns) {
+        const re = new RegExp(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column}\\b`, 'i');
+        expect(re.test(DB_JS), `db/schema/beeper.js missing the additive ALTER for ${table}.${column}`).toBe(true);
+        expect(extractCreateTable(INIT_SQL, table)).toContain(column);
+      }
+    }
+  });
 
   // Versioned DB-migration tracker (#1029) — non-`catalog_`-prefixed table in
   // BOTH DDL sources (base schema), so it gets its own column parity assertion.
