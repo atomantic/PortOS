@@ -49,16 +49,21 @@ beforeEach(() => {
 });
 const requireFfmpeg = context => { if (!ffmpeg) context.skip(); };
 
-it('assembles fake Reactor clips through real Timeline, trims to target, validates, and links reusable outputs', async context => {
+it('assembles a one-minute standalone cut from fake Reactor clips through real Timeline and links reusable outputs', async context => {
   requireFfmpeg(context);
+  state.project.targetDurationSeconds = 60;
+  state.project.videoDraft.durationRange = { min: 60, max: 180 };
+  state.project.treatment.scenes = Array.from({ length: 20 }, (_, order) => ({ ...state.project.treatment.scenes[order % 2], sceneId: `shot-${order}`, order }));
+  state.project.videoExecution.inputRevision = videoConfigurationRevision(state.project);
   await runVideoAssembly('example-video');
   expect(state.project.failureReason).toBeNull();
   expect(state.project.status).toBe('complete');
   expect(state.project.finalVideoId).not.toBe('00000000-0000-4000-8000-000000000001');
-  expect(state.project.videoFinalCut).toMatchObject({ audioMode: 'silent', durationSeconds: 5 });
+  expect(state.project.videoFinalCut).toMatchObject({ audioMode: 'silent', durationSeconds: 60 });
   const { getProject } = await import('../videoTimeline/local.js');
   const timeline = await getProject(state.project.timelineProjectId);
-  expect(timeline.segments.map(segment => segment.outSec)).toEqual([3, 2]);
+  expect(timeline.segments).toHaveLength(20);
+  expect(timeline.segments.reduce((sum, segment) => sum + segment.outSec - segment.inSec, 0)).toBe(60);
   expect(timeline.segments[0].fadeOutSec).toBe(0.25);
   expect(await hasAudioStream(join(state.root, 'videos', state.project.videoFinalCut.filename))).toBe(false);
   expect(state.collection).toEqual([{ kind: 'video', ref: state.project.finalVideoId }]);
@@ -100,6 +105,7 @@ it('assembles directive clips and repeats an imported standalone soundtrack in t
   expect(state.project.status).toBe('complete');
   const { getProject } = await import('../videoTimeline/local.js');
   const timeline = await getProject(state.project.timelineProjectId);
+  expect(timeline.segments.map(segment => segment.outSec)).toEqual([3, 2]);
   expect(timeline.audio.tracks.map(track => track.durationSec)).toEqual([2, 2, 1]);
   expect(timeline.audio.clipVolume).toBe(0);
   expect(await hasAudioStream(join(state.root, 'videos', state.project.videoFinalCut.filename))).toBe(true);
