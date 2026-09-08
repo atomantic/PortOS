@@ -416,9 +416,9 @@ function compileVideoArtifact(project, treatment, sourceRevisions) {
   if (Math.abs(elapsed - project.targetDurationSeconds) > 0.000001) {
     throw new ServerError(`Video shots total ${elapsed}s; they must total the exact target of ${project.targetDurationSeconds}s`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const references = (project.videoDraft?.sources || []).map((source) => ({
+  const references = (project.videoPlanningContext?.references || project.videoDraft?.sources || []).map((source) => ({
     ...source, referenceId: `${source.kind}:${source.id}`,
-    ...(sourceRevisions ? { sourceRevision: sourceRevisions[`${source.kind}:${source.id}`] ?? null } : {}),
+    ...(sourceRevisions ? { sourceRevision: sourceRevisions[`${source.kind}:${source.id}`] ?? source.sourceRevision ?? null } : {}),
   }));
   if (new Set(references.map((ref) => ref.referenceId)).size !== references.length) {
     throw new ServerError('Video source references must have unique kind and id values', { status: 400, code: 'VALIDATION_ERROR' });
@@ -428,6 +428,7 @@ function compileVideoArtifact(project, treatment, sourceRevisions) {
     revision: (project.treatment?.artifact?.revision || 0) + 1,
     targetDurationSeconds: project.targetDurationSeconds,
     aspectRatio: project.aspectRatio,
+    ...(project.videoPlanningContext ? { sourceContextRevision: project.videoPlanningContext.revision } : {}),
     // Keep the selected IDs/revisions, never copy or mutate creative-suite records.
     references,
     shots,
@@ -442,12 +443,20 @@ function priorVideoTreatments(project) {
   return [...history, structuredClone(snapshot)];
 }
 
+function assertPlannedSourceRevision(project, input) {
+  if (project.workspace === 'video' && project.videoPlanningContext
+      && input?.sourceContextRevision !== project.videoPlanningContext.revision) {
+    throw new ServerError('This plan used a different source context. Use the latest planning context and submit its sourceContextRevision.', { status: 409, code: 'VIDEO_SOURCE_CONTEXT_CHANGED' });
+  }
+}
+
 /**
  * Validate + apply a treatment to a project. Returns the next record. Initializes
  * each scene's runtime fields if the agent didn't supply them, and preserves
  * paused/failed status (otherwise flips the project to 'rendering').
  */
 export function applyTreatment(project, treatmentInput, sourceRevisions) {
+  assertPlannedSourceRevision(project, treatmentInput);
   const parsed = creativeDirectorTreatmentSchema.safeParse(treatmentInput);
   if (!parsed.success) {
     throw new ServerError(
@@ -491,6 +500,7 @@ export function applyTreatment(project, treatmentInput, sourceRevisions) {
  * loop starts executing; preserves paused/failed (a human parked it).
  */
 export function applyPlan(project, planInput) {
+  assertPlannedSourceRevision(project, planInput);
   const parsed = creativeDirectorPlanSchema.safeParse(planInput);
   if (!parsed.success) {
     throw new ServerError(
@@ -529,7 +539,7 @@ export function applyPlan(project, planInput) {
     : 'rendering';
   return {
     ...project,
-    plan: { steps, replanRounds, updatedAt: new Date().toISOString() },
+    plan: { steps, replanRounds, ...(parsed.data.sourceContextRevision ? { sourceContextRevision: parsed.data.sourceContextRevision } : {}), updatedAt: new Date().toISOString() },
     status: nextStatus,
     updatedAt: new Date().toISOString(),
   };
