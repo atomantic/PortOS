@@ -600,3 +600,5 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `privateSecuritySandbox.js` | Loopback-only local-provider gate and macOS Seatbelt launch with isolated CLI home and scratch workspace. |
 
 | `requestOrigin.js` | `remoteRequestHandler` and `isRemoteRequest` preserve remote transport identity across a localhost hop without trusting client headers. |
+
+| `cosFederationPolicy.js` | `isMachineLocalCosTask` excludes private assessments and explicitly machine-local tasks and agent archives from federation. |

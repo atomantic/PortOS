@@ -98,9 +98,9 @@ describe('buildCosHistoryManifest', () => {
     }
   );
 
-  it('excludes every archive file of a private assessment', async () => {
+  it.each([{ taskAnalysisType: 'private-security-assessment' }, { machineLocal: true }, { machineLocal: 'true' }])('excludes every machine-local archive file (%j)', async (metadata) => {
     await seedArchive('2026-06-20', 'agent-private', {
-      'metadata.json': JSON.stringify({ metadata: { taskAnalysisType: 'private-security-assessment' } }),
+      'metadata.json': JSON.stringify({ metadata }),
       'output.txt': 'private finding', 'prompt.txt': 'private source',
     });
     expect((await buildCosHistoryManifest()).entries).toEqual([]);

@@ -661,9 +661,9 @@ describe('peer-sync routes', () => {
       await rm(tmp, { recursive: true, force: true });
     });
 
-    it('refuses a private assessment archive even when the peer knows its path', async () => {
+    it.each([{ taskAnalysisType: 'private-security-assessment' }, { machineLocal: true }, { machineLocal: 'true' }])('refuses a machine-local archive even when the peer knows its path (%j)', async (metadata) => {
       await writeFile(join(tmp, 'agents', '2026-06-20', 'agent-abc', 'metadata.json'),
-        JSON.stringify({ metadata: { taskAnalysisType: 'private-security-assessment' } }));
+        JSON.stringify({ metadata }));
       await writeFile(join(tmp, 'agents', '2026-06-20', 'agent-abc', 'output.txt'), 'private finding');
       const res = await request(buildApp())
         .get('/api/peer-sync/cos-agent-archive?date=2026-06-20&agentId=agent-abc&file=output.txt');

@@ -296,8 +296,20 @@ read-only history. Missing history on older records means no retained snapshots;
 previously overwritten content cannot be reconstructed. History shares the same
 JSONB storage and backup coverage as its project.
 Sync v6 prevents older writers from discarding retained history.
+Planning resolves bounded source summaries only on explicit task dispatch. The
+existing canon/style renderers supply Universe context, including a selected
+Series' linked Universe. Only source IDs, store revision fingerprints and the
+combined context fingerprint persist in `videoPlanningContext`; resolved content
+is passed to the local planner, not copied into the project. Its output must echo
+`sourceContextRevision`, and source edits/deletions during planning reject the
+write until the user plans again. A source without revision metadata must be
+saved or repaired first. Each summary is bounded and the combined source context
+is limited to 60,000 characters; exceeding that limit requires fewer attachments.
+Sync v7 gates writers that cannot enforce this planning-context contract.
 This is additive optional metadata: legacy treatments are unchanged and existing
 records are not backfilled. `creativeDirectorProjects` v5 originally shipped because
 a v4 peer can edit a shot without incrementing its artifact revision, or discard
 the artifact on treatment replacement. The Video dispatch barrier remains in
 force; this artifact does not certify backend compatibility or grant approval.
+
+Video planning tasks carry `metadata.machineLocal`, preserved on agent archives. CoS live task sync, archive manifests, direct archive downloads, and incoming task merges exclude them so resolved source context stays on the owning install.

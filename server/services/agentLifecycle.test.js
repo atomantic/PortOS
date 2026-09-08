@@ -933,3 +933,8 @@ describe('runAgentSpawn source — quota-burn provenance projection (#6406)', ()
     expect(AGENT_LIFECYCLE_SRC.match(/^\s*taskQuotaBurn\w*\s*:/gm) || []).toEqual([]);
   });
 });
+
+// Archive classification must survive the task-to-agent metadata projection.
+it('preserves the machine-local privacy marker in spawned agent metadata', () => {
+  expect(AGENT_LIFECYCLE_SRC).toContain('machineLocal: isTruthyMeta(task.metadata?.machineLocal)');
+});

@@ -42,7 +42,7 @@ export const ACCEPTED_OLD_MD5 = {
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'cd-treatment.md': '1de973575a772db0544bbeda2ba5df77', // current shipped reference; migration 371 upgrades existing installs
+  'cd-treatment.md': '4da071646deff0001473502a7c4b5252', // current shipped reference; migration 371 upgrades existing installs
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

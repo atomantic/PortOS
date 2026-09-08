@@ -1,5 +1,5 @@
 import { tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
-import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
+import { isMachineLocalCosTask } from '../lib/cosFederationPolicy.js';
 import { isPlainObject } from '../lib/objects.js';
 /**
  * Federated peer-sync HTTP routes.
@@ -226,7 +226,7 @@ router.get('/cos-agent-archive', asyncHandler(async (req, res) => {
   await authorizePeerPull(req, { route: 'cos-agent-archive' });
   const abs = join(PATHS.cos, 'agents', date, agentId, file);
   const metadata = safeJSONParse(await tryReadFile(join(PATHS.cos, 'agents', date, agentId, 'metadata.json')), null);
-  if (!isPlainObject(metadata) || isPrivateSecurityTask(metadata) || !existsSync(abs)) {
+  if (!isPlainObject(metadata) || isMachineLocalCosTask(metadata) || !existsSync(abs)) {
     throw new ServerError('archive not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.sendFile(abs);

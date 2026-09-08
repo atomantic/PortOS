@@ -582,3 +582,4 @@ export * from './privateSecurityPolicy.js';
 export * from './privateSecuritySandbox.js';
 
 export * from './requestOrigin.js';
+export * from './cosFederationPolicy.js';

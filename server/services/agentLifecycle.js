@@ -831,6 +831,8 @@ async function runAgentSpawn(task) {
       // recipe, so without this the card is indistinguishable from an agent
       // whose PTY failed to attach.
       publicReviewPosture,
+      // Preserve privacy after the task becomes an archived agent.
+      machineLocal: isTruthyMeta(task.metadata?.machineLocal),
       taskAnalysisType: task.metadata?.analysisType || null,
       taskReviewType: task.metadata?.reviewType || null,
       taskApp: task.metadata?.app || null,

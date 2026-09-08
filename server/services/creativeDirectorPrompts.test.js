@@ -78,6 +78,13 @@ describe('buildPlanPrompt — locked render settings', () => {
 });
 
 describe('buildTreatmentPrompt — template-rendered output', () => {
+  it('passes resolved Video source descriptions and the matching revision in the treatment output contract', async () => {
+    const revision = 'a'.repeat(32);
+    const out = await buildTreatmentPrompt({ ...baseProject, workspace: 'video', videoPlanningContext: { revision }, resolvedVideoSources: [{ kind: 'universe', id: 'example-universe', summary: { canon: 'The traveler wears a silver cloak.' } }] });
+    expect(out).toContain('The traveler wears a silver cloak.');
+    expect(out).toContain(`"sourceContextRevision": "${revision}"`);
+    expect(out).toContain('changed or deleted sources require planning again');
+  });
   it('renders project header and resolves aspect/quality dimensions', async () => {
     const out = await buildTreatmentPrompt(baseProject);
     expect(out).toContain('# Creative Director — Treatment task');
