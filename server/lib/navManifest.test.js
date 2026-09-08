@@ -740,3 +740,9 @@ describe('nav contract — POST Practice Library links are registered destinatio
     });
   }
 });
+
+it('keeps Video browsing separate from Creative Director production aliases', () => {
+  expect(resolveNavCommand('video').path).toBe('/video');
+  expect(resolveNavCommand('create-video').path).toBe('/creative-director');
+  expect(resolveNavCommand('video-production').path).toBe('/creative-director');
+});

@@ -18,5 +18,11 @@ it.each(['/media/video', '/video-gen'])('preserves clip handoff state through %s
 it('normalizes a bare Video project URL while preserving its identity and handoff', async () => {
   const state = { selected: 'example' };
   render(<MemoryRouter initialEntries={[{ pathname: '/video/example-project', search: '?x=1', hash: '#shot', state }]}><App /></MemoryRouter>);
-  expect(JSON.parse((await screen.findByTestId('project-location')).textContent)).toEqual({ pathname: '/video/example-project/overview', search: '?x=1', hash: '#shot', state });
+  expect(JSON.parse((await screen.findByTestId('project-location')).textContent)).toEqual({ pathname: '/creative-director/example-project/overview', search: '?x=1', hash: '#shot', state });
+});
+
+
+it('redirects a Video shot deep link to the same Creative Director shot', async () => {
+  render(<MemoryRouter initialEntries={['/video/example-project/artifacts/example-shot?revision=2#script']}><App /></MemoryRouter>);
+  expect(JSON.parse((await screen.findByTestId('project-location')).textContent)).toMatchObject({ pathname: '/creative-director/example-project/artifacts/example-shot', search: '?revision=2', hash: '#script' });
 });

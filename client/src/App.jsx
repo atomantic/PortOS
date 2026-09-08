@@ -185,11 +185,12 @@ function UniverseRouteRedirect({ fromPrefix, to, canon = false }) {
 // 3D (`/media/3d/:id`) so far — so it's parameterized rather than copied per
 // move. `from` must be an anchored regex so it can only match the prefix.
 function PrefixRedirect({ from, to }) {
-  const { pathname, search, hash } = useLocation();
+  const { pathname, search, hash, state } = useLocation();
   const rest = pathname.replace(from, '');
-  return <Navigate to={`${to}${rest}${search}${hash}`} replace />;
+  return <Navigate to={`${to}${rest}${search}${hash}`} state={state} replace />;
 }
 
+const VIDEO_PROJECT_PREFIX = /^\/video/;
 const MEDIA_CREATIVE_DIRECTOR_PREFIX = /^\/media\/creative-director/;
 const MEDIA_SPRITES_PREFIX = /^\/media\/sprites/;
 const MEDIA_MUSIC_VIDEO_PREFIX = /^\/media\/music-video/;
@@ -483,11 +484,11 @@ export default function App() {
               carrying any query string + hash (relative Navigate preserves the
               :id in the path) so a deep-link like /creative-director/abc?x#y
               lands on /creative-director/abc/overview?x#y intact. */}
-          <Route path="video" element={<CreativeDirector basePath="/video" workspace="video" />} />
+          <Route path="video" element={<CreativeDirector browseOnly />} />
           <Route path="video/generate" element={<VideoGen />} />
-          <Route path="video/:id" element={<CreativeDirectorOverviewRedirect />} />
-          <Route path="video/:id/:tab/:sceneId" element={<CreativeDirectorDetail basePath="/video" />} />
-          <Route path="video/:id/:tab" element={<CreativeDirectorDetail basePath="/video" />} />
+          <Route path="video/:id" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
+          <Route path="video/:id/:tab/:sceneId" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
+          <Route path="video/:id/:tab" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
           <Route path="creative-director" element={<CreativeDirector />} />
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
           <Route path="creative-director/:id/:tab/:sceneId" element={<CreativeDirectorDetail />} />
