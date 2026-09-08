@@ -354,7 +354,10 @@ export default function ModelComparison() {
   const showLabels = params.get('labels') === '1' || !params.has('labels');
   const xAxis = Object.hasOwn(AXES, params.get('xAxis')) ? params.get('xAxis') : 'cost';
   const yAxis = Object.hasOwn(AXES, params.get('yAxis')) ? params.get('yAxis') : 'quality';
-  const changeAxis = (key, value) => changeParams({ [key]: value, xMin: null, xMax: null, yMin: null, yMax: null, scale: 'linear' });
+  // Clear (not force-linear) scale on an axis change so the cost-axis log
+  // default below still applies — forcing 'linear' here permanently
+  // overrode that default the moment a user picked "Cost per task".
+  const changeAxis = (key, value) => changeParams({ [key]: value, xMin: null, xMax: null, yMin: null, yMax: null, scale: null });
   // Cost spans four orders of magnitude across the catalog, so a linear axis
   // stacks every affordable model on the y-axis. Log is the readable default.
   const scale = params.get('scale') === 'log' || (!params.has('scale') && xAxis === 'cost') ? 'log' : 'linear';

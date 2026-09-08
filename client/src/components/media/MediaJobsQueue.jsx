@@ -672,6 +672,16 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
   // failing the retry. An empty override means the shipped default model, whose
   // ladder is the unrestricted one.
   const codexEffortLevels = effortLevelsForProvider({ id: 'codex', command: 'codex' }, model.trim());
+  // The ladder is MODEL-gated (comment above), but `effort` only changes on a
+  // direct <select> interaction — retyping `model` to a narrower ladder (e.g.
+  // gpt-6, which drops `minimal`) left a stale out-of-ladder level selected,
+  // so submit still sent it and the server 400ed. Reconcile on every ladder
+  // change, not just on model's own onChange, since model is free-typed text.
+  useEffect(() => {
+    if (effort !== EFFORT_DEFAULT_OPTION && !codexEffortLevels.includes(effort)) {
+      setEffort(EFFORT_DEFAULT_OPTION);
+    }
+  }, [codexEffortLevels, effort]);
 
   const submit = (e) => {
     e.preventDefault();
