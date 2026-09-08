@@ -39,6 +39,12 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 // Each row: the entry that was narrowed, the module it must no longer
 // statically reach, and why the entry only ever needed a slice of it.
 const NARROWED = [
+  ['services/agentAppWorkspace.js', 'services/promptRunner.js',
+    'resolves app records without AI-backed JIRA title generation'],
+  ['services/agentAppWorkspace.js', 'services/jira.js',
+    'reads workspace metadata without ticket creation'],
+  ['services/agentAppWorkspace.js', 'services/agentPromptBuilder.js',
+    'owns workspace resolution independently of prompt assembly'],
   ['services/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
     'loads version and catalog parsers only when probing a harness'],
   ['lib/db.js', 'lib/db/schema/index.js',
@@ -71,6 +77,7 @@ describe('narrowed imports stay narrow (#6009)', () => {
   // Positive controls. Without these the negatives above would also pass if
   // `staticImportClosure` stopped resolving these files at all.
   it('still sees the modules the narrowed entries were pointed AT', () => {
+    expect(reaches('services/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('lib/pipelineValidation.js', 'lib/editorial/checkInfra/taxonomy.js')).toBe(true);
     expect(reaches('services/apps.js', 'lib/cosValidation.js')).toBe(true);
     expect(reaches('services/memoryEmbeddings.js', 'services/memoryConfig.js')).toBe(true);
