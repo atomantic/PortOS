@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { DEFAULT_CRON } from '../utils/cronHelpers';
+import { DEFAULT_CRON, findCronExpressionError } from '../utils/cronHelpers';
 import CronSchedulePicker from './CronSchedulePicker';
 import InlineConfirmRow from './ui/InlineConfirmRow';
 
@@ -24,7 +24,10 @@ export default function CronInput({ value, onSave, onCancel, className = '' }) {
 
   const trimmed = expr.trim();
   const isDirty = trimmed !== savedExpression.trim();
-  const isValid = trimmed.split(/\s+/).length === 5;
+  // Field ranges too, not just the 5-token shape: the save routes reject an
+  // out-of-range expression with a 400, and the scheduler would never fire it.
+  const validationError = findCronExpressionError(trimmed);
+  const isValid = validationError === null;
 
   const handleSave = () => {
     if (!isValid) return;
@@ -68,13 +71,13 @@ export default function CronInput({ value, onSave, onCancel, className = '' }) {
           aria-live="polite"
           className={`mr-auto text-xs ${isDirty ? 'font-medium text-port-warning' : 'text-gray-500'}`}
         >
-          {isDirty ? (isValid ? 'Unsaved changes — save before closing' : 'Enter a valid 5-field cron expression') : null}
+          {isDirty ? (isValid ? 'Unsaved changes — save before closing' : validationError) : null}
         </span>
         <button
           type="button"
           onClick={handleSave}
           disabled={!isValid}
-          title={isValid ? 'Save schedule changes' : 'Enter a valid 5-field cron expression before saving'}
+          title={isValid ? 'Save schedule changes' : validationError}
           className={`inline-flex min-h-[40px] items-center justify-center rounded px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${isDirty
             ? 'bg-port-accent text-white shadow-sm ring-2 ring-port-accent/50 hover:bg-port-accent/80'
             : 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30'}`}

@@ -12,6 +12,7 @@ import { promptSourceSchema, PROMPT_SOURCES } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
 import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
+import { findCronExpressionError } from '../lib/cronValidation.js';
 
 const templateTaskSchema = z.object({
   name: z.string().min(1),
@@ -76,8 +77,14 @@ function pickScheduleSettings(body, taskType) {
       settings.cronExpression = decoded.cronExpression;
     }
   }
-  if (settings.cronExpression !== undefined && settings.cronExpression !== null && !isCronExpression(settings.cronExpression)) {
-    throw new ServerError('cronExpression must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek) or null', { status: 400, code: 'VALIDATION_ERROR' });
+  // Field RANGES, not just the 5-token shape: an out-of-range expression saved
+  // on an enabled schedule would be silently dropped by the walker and never
+  // fire (#6634).
+  if (settings.cronExpression !== undefined && settings.cronExpression !== null) {
+    const cronError = findCronExpressionError(settings.cronExpression);
+    if (cronError) {
+      throw new ServerError(`cronExpression is invalid: ${cronError}`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
   }
   if (settings.labels !== undefined) {
     const parsed = scheduleLabelsSchema.safeParse(settings.labels);
@@ -110,9 +117,14 @@ function pickScheduleSettings(body, taskType) {
     // Empty string clears it; otherwise require a 5-field cron expression.
     if (trimmed === '') {
       settings.recheckCron = null;
-    } else if (trimmed.split(/\s+/).length !== 5) {
-      throw new ServerError('recheckCron must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek)', { status: 400, code: 'VALIDATION_ERROR' });
     } else {
+      // An invalid recheck cron does not merely 'not fire' —
+      // computePerpetualRecheckAt silently falls back to another cadence — so
+      // reject it here with the same shared validator (#6634).
+      const recheckError = findCronExpressionError(trimmed);
+      if (recheckError) {
+        throw new ServerError(`recheckCron is invalid: ${recheckError}`, { status: 400, code: 'VALIDATION_ERROR' });
+      }
       settings.recheckCron = trimmed;
     }
   }

@@ -4,8 +4,8 @@ import { request } from '../../lib/testHelper.js';
 import taskTypeRoutes from './taskTypes.js';
 
 // Only the apps service is mocked; SELF_IMPROVEMENT_TASK_TYPES (taskScheduleRegistry) and
-// parseCronToNextRun (eventScheduler) run for real, as do the sanitizeTaskMetadata
-// validators.
+// the shared cron validator (lib/cronValidation.js) run for real, as do the
+// sanitizeTaskMetadata validators.
 const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../../services/userActions.js', () => ({ recordUserAction }));
 
@@ -389,6 +389,59 @@ describe('Apps Task-Type Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.code).toBe('INVALID_TASK_TYPE');
+    });
+
+    // #6634: this route used to call parseCronToNextRun and discard its result,
+    // on the belief that it throws for an out-of-range field. It returns null,
+    // so these were saved as enabled per-app cadences that never fire.
+    it('rejects an out-of-range cron interval before persisting it', async () => {
+      for (const interval of ['99 9 * * *', '0 25 * * *']) {
+        appsService.updateAppTaskTypeOverride.mockClear();
+        const response = await request(app)
+          .put('/api/apps/app-001/task-types/feature-ideas')
+          .send({ interval });
+        expect(response.status, interval).toBe(400);
+        expect(appsService.updateAppTaskTypeOverride).not.toHaveBeenCalled();
+      }
+    });
+
+    it('accepts a valid cron interval, a leap-day cron, a legacy cadence name, and null', async () => {
+      appsService.updateAppTaskTypeOverride.mockResolvedValue({
+        id: 'app-001', name: 'Test App', taskTypeOverrides: {}
+      });
+
+      // A leap-day cron has no occurrence in the scheduler's bounded two-year
+      // search window, but is syntactically valid and must still save.
+      for (const interval of [' 0 */6 * * * ', '0 0 29 2 *']) {
+        appsService.updateAppTaskTypeOverride.mockClear();
+        const ok = await request(app)
+          .put('/api/apps/app-001/task-types/feature-ideas')
+          .send({ interval });
+        expect(ok.status, interval).toBe(200);
+        expect(appsService.updateAppTaskTypeOverride).toHaveBeenCalledWith(
+          'app-001', 'feature-ideas', expect.objectContaining({ interval: interval.trim() })
+        );
+      }
+
+      // A retired cadence name from an older client is still decoded, not rejected.
+      appsService.updateAppTaskTypeOverride.mockClear();
+      const legacy = await request(app)
+        .put('/api/apps/app-001/task-types/feature-ideas')
+        .send({ interval: 'weekly' });
+      expect(legacy.status).toBe(200);
+      expect(appsService.updateAppTaskTypeOverride).toHaveBeenCalledWith(
+        'app-001', 'feature-ideas', expect.objectContaining({ interval: '0 7 * * 1' })
+      );
+
+      // null clears the override back to inheriting the global cadence.
+      appsService.updateAppTaskTypeOverride.mockClear();
+      const cleared = await request(app)
+        .put('/api/apps/app-001/task-types/feature-ideas')
+        .send({ interval: null });
+      expect(cleared.status).toBe(200);
+      expect(appsService.updateAppTaskTypeOverride).toHaveBeenCalledWith(
+        'app-001', 'feature-ideas', expect.objectContaining({ interval: null })
+      );
     });
   });
 

@@ -506,6 +506,57 @@ describe('CoS Schedule Routes', () => {
         .send({ type: 'cron', cronExpression: '0 9 * *' });
       expect(response.status).toBe(400);
     });
+
+    // #6634: a 5-token expression with an out-of-range field used to be saved
+    // and enabled, then silently dropped by the scheduler — an 'enabled'
+    // schedule that never fires. The store must not be written at all.
+    it('rejects an out-of-range cronExpression before persisting it', async () => {
+      for (const cronExpression of ['99 9 * * *', '0 25 * * *']) {
+        taskSchedule.updateTaskInterval.mockClear();
+        const response = await request(app)
+          .put('/api/cos/schedule/task/security')
+          .send({ type: 'cron', cronExpression });
+        expect(response.status, cronExpression).toBe(400);
+        expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+      }
+    });
+
+    it('rejects an out-of-range recheckCron before persisting it, and still clears on empty', async () => {
+      taskSchedule.updateTaskInterval.mockClear();
+      const bad = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ recheckCron: '99 9 * * *' });
+      expect(bad.status).toBe(400);
+      expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+
+      taskSchedule.updateTaskInterval.mockClear();
+      const cleared = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ recheckCron: '  ' });
+      expect(cleared.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', { recheckCron: null });
+
+      taskSchedule.updateTaskInterval.mockClear();
+      const ok = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ recheckCron: ' 0 */6 * * * ' });
+      expect(ok.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', { recheckCron: '0 */6 * * *' });
+    });
+
+    // Syntax validity is not 'has an occurrence in the search window' — the
+    // scheduler's bounded walk finds no leap day within two years of this
+    // reference, but the expression is still savable.
+    it('accepts a leap-day cron that has no occurrence in the search window', async () => {
+      taskSchedule.updateTaskInterval.mockClear();
+      const response = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ type: 'cron', cronExpression: '0 0 29 2 *' });
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', expect.objectContaining({
+        type: 'cron', cronExpression: '0 0 29 2 *'
+      }));
+    });
   });
 
   it('normalizes labels, supports clearing, and rejects invalid labels before writing', async () => {

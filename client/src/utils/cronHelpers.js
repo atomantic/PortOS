@@ -1,5 +1,9 @@
 import { INTERVAL_OPTIONS } from '../../../server/lib/autonomousJobIntervals.js';
 export { ON_DEMAND_INTERVAL } from '../../../server/lib/autonomousJobIntervals.js';
+// Syntax/range validation shared with the scheduler and every save route, so
+// the editor cannot enable Save on an expression the server will 400 (#6634).
+// cronValidation.js is a pure leaf — importing it pulls in no service graph.
+export { isValidCronExpression, findCronExpressionError } from '../../../server/lib/cronValidation.js';
 
 export const CRON_PRESETS = [
   { value: '*/15 * * * *', label: 'Every 15 min' },
@@ -14,9 +18,9 @@ export const CRON_PRESETS = [
   { value: '0 0 1 * *', label: 'Monthly 1st at midnight' }
 ];
 
-export function isCronExpression(val) {
-  return typeof val === 'string' && val.trim().split(/\s+/).length === 5;
-}
+// SHAPE only (mirrors the server's `isCronShaped`) — it separates a cron from a
+// named cadence. Gate a SAVE on `isValidCronExpression` instead.
+export { isCronShaped as isCronExpression } from '../../../server/lib/cronValidation.js';
 
 const DOW_MAP = { '0': 'Sun', '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat', '7': 'Sun' };
 
