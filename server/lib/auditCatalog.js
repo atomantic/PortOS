@@ -319,6 +319,98 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'copy finding(s)',
     }),
   },
+  // The six types below give every `do:better` audit lens a scheduled
+  // counterpart (DO_BETTER_LENS_COVERAGE, at the bottom of this file). They
+  // are refactor- or defect-hunting lanes carved out of the broader
+  // code-quality / module-hygiene / test-coverage bodies so each can be
+  // scheduled, pinned to a provider, and toggled between filing and fixing on
+  // its own. Every one files under an existing label rather than minting a
+  // near-duplicate category, and the refactor lanes require a managed
+  // worktree in do-work mode: a mechanical restructuring of a hot function or
+  // a dependency swap is exactly the edit that must never land in the user's
+  // live checkout.
+  'better-complexity': {
+    quotaBurnId: null,
+    label: 'Cyclomatic complexity',
+    description: 'Complexity-reduction audit — configurable: file issues (default) or implement one refactor',
+    defaultFileIssues: true,
+    doWorkRequiresWorktree: true,
+    filing: filing({
+      slugPrefix: 'complexity-',
+      label: 'complexity-audit',
+      issueLabel: 'code-quality',
+      labelDescription: 'Proposed from a cyclomatic-complexity audit',
+      noun: 'complexity finding(s)',
+    }),
+  },
+  'better-cognitive-load': {
+    quotaBurnId: null,
+    label: 'Cognitive load & readability',
+    description: 'Reader-cost audit — configurable: file issues (default) or implement one refactor',
+    defaultFileIssues: true,
+    doWorkRequiresWorktree: true,
+    filing: filing({
+      slugPrefix: 'cognitive-load-',
+      label: 'cognitive-load-audit',
+      issueLabel: 'code-quality',
+      labelDescription: 'Proposed from a cognitive-load/readability audit',
+      noun: 'cognitive-load finding(s)',
+    }),
+  },
+  'better-structural-drift': {
+    quotaBurnId: null,
+    label: 'Structural drift & sources of truth',
+    description: 'Generated-artifact / hand-synced-registry drift audit — configurable: file issues (default) or implement one consolidation',
+    defaultFileIssues: true,
+    doWorkRequiresWorktree: true,
+    filing: filing({
+      slugPrefix: 'structural-drift-',
+      label: 'structural-drift-audit',
+      issueLabel: 'code-quality',
+      labelDescription: 'Proposed from a structural-drift audit',
+      noun: 'structural-drift finding(s)',
+    }),
+  },
+  'better-runtime-safety': {
+    quotaBurnId: null,
+    label: 'Runtime safety & async correctness',
+    description: 'Latent-defect audit — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'runtime-safety-',
+      label: 'runtime-safety-audit',
+      issueLabel: 'bug',
+      labelDescription: 'Proposed from a runtime-safety audit',
+      noun: 'runtime-safety finding(s)',
+    }),
+  },
+  'better-dependency-freedom': {
+    quotaBurnId: null,
+    label: 'Dependency freedom',
+    description: 'Dependency-necessity audit — configurable: file issues (default) or implement one removal',
+    defaultFileIssues: true,
+    doWorkRequiresWorktree: true,
+    filing: filing({
+      slugPrefix: 'depfree-',
+      label: 'dependency-freedom-audit',
+      issueLabel: 'dependencies',
+      labelDescription: 'Proposed from a dependency-freedom audit',
+      noun: 'dependency finding(s)',
+    }),
+  },
+  'better-test-quality': {
+    quotaBurnId: null,
+    label: 'Test quality',
+    description: 'Vacuous/weak/redundant-test audit — configurable: file issues (default) or implement one cleanup',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'test-quality-',
+      label: 'test-quality-audit',
+      issueLabel: 'tests',
+      labelDescription: 'Proposed from a test-quality audit',
+      noun: 'test-quality finding(s)',
+    }),
+  },
 });
 
 export const AUDIT_TASK_TYPES = new Set(Object.keys(AUDIT_DEFINITIONS));
@@ -470,3 +562,36 @@ export function applyAuditModeWrapper(promptTemplate, modeInstructions) {
   if (prompt.includes('{modeInstructions}')) return prompt;
   return `${modeInstructions}\n\n---\n\n${prompt}`;
 }
+
+/**
+ * Which scheduled audit types cover each `do:better` audit lens
+ * (lib/slashdo/lib/better-audit.md, the `For \`<lens>\`:` list). The slashdo
+ * command fans the same lenses out to sub-agents in one run; PortOS exposes
+ * each as its own schedulable, provider-pinnable task so a managed app can run
+ * every category of self-improvement on its own cadence. Keys are the lens
+ * slugs slashdo uses; values are the AUDIT_DEFINITIONS types that own that
+ * lens's findings, in no significant order — the relation is many-to-many both
+ * ways (`security` answers three lenses; `bugs-perf` has four owners), which
+ * is why this is a lens-keyed map rather than a field on each definition. A
+ * per-definition field could not answer the question the map exists for: did
+ * upstream add a lens that NOTHING here owns?
+ *
+ * It is a parity record, not runtime wiring — nothing dereferences it at
+ * dispatch. auditCatalog.test.js is its consumer, and checks it two ways: every
+ * listed type is a real audit type, and (when the submodule is checked out)
+ * every lens slashdo declares has an entry here, so a lens added upstream
+ * cannot silently go unschedulable.
+ */
+export const DO_BETTER_LENS_COVERAGE = Object.freeze({
+  security: ['security'],
+  'code-quality': ['code-quality', 'observability'],
+  dry: ['simplify'],
+  architecture: ['module-hygiene', 'api-contract'],
+  'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability'],
+  'stack-specific': ['react-lifecycle', 'accessibility', 'data-safety', 'security'],
+  deps: ['better-dependency-freedom', 'security'],
+  tests: ['test-coverage', 'better-test-quality'],
+  ux: ['ux', 'mobile-responsive', 'copy'],
+  structural: ['module-hygiene', 'better-structural-drift', 'simplify'],
+  'cognitive-load': ['better-cognitive-load', 'better-complexity'],
+});

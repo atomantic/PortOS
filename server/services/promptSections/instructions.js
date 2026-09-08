@@ -7,6 +7,7 @@ import { readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { PATHS, tryReadFile } from '../../lib/fileUtils.js';
 import { AGENT_INSTRUCTIONS_FILENAME, CLAUDE_BRIDGE_FILENAME } from '../../lib/agentInstructionsFile.js';
+import { isAuditTaskType } from '../../lib/auditCatalog.js';
 
 const SKILLS_DIR = join(PATHS.root, 'data/prompts/skills');
 
@@ -59,6 +60,24 @@ const TASK_TYPE_SKILL_ALIASES = Object.freeze({
   security: 'security-audit',
 });
 
+/**
+ * A registered audit type carries its whole method in its own prompt body and
+ * is therefore AUTHORITATIVE about what it is — so when it has no template of
+ * its own, the answer is "no lifecycle template", not "guess from the words".
+ *
+ * The keyword fallback below exists for free-text user tasks, and it cannot
+ * read an audit correctly: the `security-audit` matcher claims the bare word
+ * `audit`, which every audit prompt says about itself in its first line. That
+ * silently spliced OWASP scoping guidance into the copy, typing, api-contract,
+ * react-lifecycle, observability, ux, accessibility, ui-bugs, console-errors,
+ * error-handling and test-coverage audits — eleven of nineteen at the time this
+ * gate was added. Ordinary vocabulary misroutes the rest just as easily: an
+ * audit that mentions "duplication" while ceding it to a sibling drew the
+ * dead-code template, and one that mentions the module-hygiene work drew that
+ * one. Every case reads as a template the operator never chose.
+ */
+const NO_LIFECYCLE_SKILL = Symbol('no-lifecycle-skill');
+
 const skillForTaskType = (task) => {
   const taskTypes = [
     task?.metadata?.analysisType,
@@ -72,6 +91,7 @@ const skillForTaskType = (task) => {
       return TASK_TYPE_SKILL_ALIASES[normalized];
     }
     if (SKILL_NAMES.has(normalized)) return normalized;
+    if (isAuditTaskType(normalized)) return NO_LIFECYCLE_SKILL;
   }
   return null;
 };
@@ -98,6 +118,7 @@ const DOMAIN_SKILL_MATCHERS = [
  */
 export function detectSkillTemplate(task) {
   const taskTypeSkill = skillForTaskType(task);
+  if (taskTypeSkill === NO_LIFECYCLE_SKILL) return null;
   if (taskTypeSkill) return taskTypeSkill;
 
   const desc = (task?.description || '').toLowerCase();

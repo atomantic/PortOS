@@ -1,31 +1,37 @@
 {
   "DEFAULT_TASK_PROMPTS": {
-    "accessibility": "372916803f32b82da38a5b2130a54baf",
+    "accessibility": "76cfcab471c1a555767b71b8b9932ae0",
     "api-contract": "cf02b10a5993baf473e0d320771f26b6",
+    "better-cognitive-load": "a1fe22f6ef936131456c55a6b0623204",
+    "better-complexity": "c92b99080d0453d70bb26a412fb48ce9",
+    "better-dependency-freedom": "8a79c8be829f926bbc7720ee29818d53",
+    "better-runtime-safety": "4259ab85dd3eaf8efb16a250187bd857",
+    "better-structural-drift": "941389a1f1c8983eef4f87af1241fbf9",
+    "better-test-quality": "ab53a477cd194a5c4fbda09d901a3775",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "44281269863b3133696fdebe9b558256",
     "claim-issue": "5600fde65e31874bd96c3ad83ce72a92",
     "claim-issue-gitlab": "bb83608738b6517f3f05df116994a6fd",
     "claim-issue-jira": "b14a5dde5519fda59c2ba1ae7a3d8989",
-    "code-quality": "c34792a374dd9868e6381557da582dc1",
+    "code-quality": "6762542233cdffb86d4e2244945bf52b",
     "code-reviewer-implement": "2e10cac7c1e1cd021d06bfddb5c1eaf2",
     "code-reviewer-review": "27ded42013f28e7d327d8f1cc624aac1",
-    "console-errors": "2b6ed595287f0742bed9ecba6788afe6",
+    "console-errors": "eec33a9293f9393019917a6632dd964e",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "data-safety": "86b07f51abdbcbe7016f840b5bb0cd9b",
     "dependency-updates": "1d59f04bea630a85a3085829db8599e7",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
-    "documentation": "246be4932c277fa0ec0ab365beb3baad",
-    "error-handling": "9afba2e99b90a8d5771c75e7f0615d96",
+    "documentation": "a30e3bfba8cd13369ccaf806a3534a79",
+    "error-handling": "137b371f38398042c0a2c7e2279c92ce",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
     "issue-reconcile": "53e068c533e989ae31025fdfd4a3ecf9",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
-    "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
+    "mobile-responsive": "eb7f6b307bccd15199c74d7aff5c21c3",
     "model-comparison-refresh": "dc1702b07c7fb8be6165feb776d5acb6",
     "module-hygiene": "3b7671cd44f719d4b2116b96a279e6d0",
     "observability": "fdb4d77df5891cfb653a5da2553ecf8a",
-    "performance": "672bd3958b12afb0f382bcebb6dc3b33",
+    "performance": "d7e3a80f42903fbf90be0efc9b559c0b",
     "plan-feature": "87f71a894757f89354da4e2119e07118",
     "plan-task": "b85fe92999aa4ee4a8910320457c4242",
     "plan-task-claim": "910802d67f3b5a785f068f4d90178543",
@@ -39,41 +45,47 @@
     "refresh-local-llm-catalog": "9741ca6a8419fcdea2743e3b64781a8b",
     "release-check": "5a82eec9f86ad05185ed77a42dbfd9d4",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
-    "security": "8e58c1305a391ac765b0b13ab9615eb3",
+    "security": "c5e35a12eeb06e6afe4617f4428fa1ab",
     "simplify": "2a048214d1dd3b75bee9ae1a38fa1589",
     "stash-cleanup": "1c12bac5aac6bb27008c40981e7db08c",
-    "test-coverage": "0d8359170529da12cd63356610b2e220",
-    "typing": "1f2758ce0bb62d789a21aec241549531",
-    "ui-bugs": "def9ad96bd74ab397233f234d79a1974",
+    "test-coverage": "36beffc0c2959be5d818ded54b3fe298",
+    "typing": "bd7cb874b2784395280b116369c7e7ac",
+    "ui-bugs": "073bea13a94b0266c53b5f55bb2344b9",
     "user-action-review": "1a083430e43f60cdd586cfffbdebc583",
-    "ux": "e03d03fc7c16faa5b5db93be2896b9ad"
+    "ux": "ac11f692eae40ffe8ddeaeaccbcf75e9"
   },
   "PROMPT_VERSIONS": {
-    "accessibility": 2,
+    "accessibility": 3,
     "api-contract": 1,
+    "better-cognitive-load": 1,
+    "better-complexity": 1,
+    "better-dependency-freedom": 1,
+    "better-runtime-safety": 1,
+    "better-structural-drift": 1,
+    "better-test-quality": 1,
     "branch-reconcile": 5,
     "claim-issue": 25,
     "claim-issue-gitlab": 22,
     "claim-issue-jira": 16,
-    "code-quality": 3,
+    "code-quality": 4,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
-    "console-errors": 2,
+    "console-errors": 3,
     "copy": 1,
     "data-safety": 1,
     "dependency-updates": 4,
     "do-replan": 2,
-    "documentation": 6,
-    "error-handling": 2,
+    "documentation": 7,
+    "error-handling": 3,
     "feature-ideas": 11,
     "issue-reconcile": 5,
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
-    "mobile-responsive": 2,
+    "mobile-responsive": 3,
     "model-comparison-refresh": 1,
     "module-hygiene": 1,
     "observability": 1,
-    "performance": 2,
+    "performance": 3,
     "plan-feature": 5,
     "plan-task": 18,
     "pr-reviewer": 5,
@@ -83,20 +95,21 @@
     "refresh-local-llm-catalog": 4,
     "release-check": 13,
     "repo-sync": 1,
-    "security": 2,
+    "security": 3,
     "simplify": 1,
     "stash-cleanup": 2,
-    "test-coverage": 2,
-    "typing": 2,
-    "ui-bugs": 2,
+    "test-coverage": 3,
+    "typing": 3,
+    "ui-bugs": 3,
     "user-action-review": 2,
-    "ux": 1
+    "ux": 2
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 3,
   "PREVIOUS_DEFAULT_PROMPTS": {
     "accessibility": [
       "ce7377d0ac57cbf0526074cfb95e3803",
-      "b07cfe1e367411036ef1d4cc4b6e9d2e"
+      "b07cfe1e367411036ef1d4cc4b6e9d2e",
+      "372916803f32b82da38a5b2130a54baf"
     ],
     "branch-reconcile": [
       "7ef2b5f7d8f05937d4912b26ad45f42e",
@@ -172,11 +185,13 @@
     ],
     "code-quality": [
       "62752723eba7a39aa94e010911923cc8",
-      "b1cce8f89218844746746ceb576553c1"
+      "b1cce8f89218844746746ceb576553c1",
+      "c34792a374dd9868e6381557da582dc1"
     ],
     "console-errors": [
       "23b1a2e33cb414f27d4002b51d315e83",
-      "3e3f690729ead5e312927ae4bce330c0"
+      "3e3f690729ead5e312927ae4bce330c0",
+      "2b6ed595287f0742bed9ecba6788afe6"
     ],
     "dependency-updates": [
       "020d66b93698341c556eca1eee851bee",
@@ -193,10 +208,12 @@
       "658395fa391df5a0fefaaebdf8dbedb7",
       "751186658f5d9a9dbccdd6830946f3d8",
       "74aa8433896647e7815f9d6d9e4a56c8",
-      "b375f95ae2274f03d06ba5ceff5705d8"
+      "b375f95ae2274f03d06ba5ceff5705d8",
+      "246be4932c277fa0ec0ab365beb3baad"
     ],
     "error-handling": [
-      "26225ac04f2f35feb61151b2e6474465"
+      "26225ac04f2f35feb61151b2e6474465",
+      "9afba2e99b90a8d5771c75e7f0615d96"
     ],
     "feature-ideas": [
       "abc098e3acf4eb6b9d1211680ec0440f",
@@ -217,11 +234,13 @@
       "a30f5d76b980bc9016f576047c9d5bb1"
     ],
     "mobile-responsive": [
-      "636bdc17fa39ed2f2e27623284c8e04c"
+      "636bdc17fa39ed2f2e27623284c8e04c",
+      "16d8e7f63a673a2de48994c0ac08ef3d"
     ],
     "performance": [
       "c8224243c15f6897ee04be25d172f021",
-      "4fea5eb3585bdc150980934b289016bc"
+      "4fea5eb3585bdc150980934b289016bc",
+      "672bd3958b12afb0f382bcebb6dc3b33"
     ],
     "plan-feature": [
       "9fbc2a2ded8f4533d1f0f6b9cb780b34",
@@ -280,23 +299,30 @@
     ],
     "security": [
       "b199739b21a8c45ed3778b2339ebf55f",
-      "d0f54c1fbe62d067b1a23ee0a9f3528c"
+      "d0f54c1fbe62d067b1a23ee0a9f3528c",
+      "8e58c1305a391ac765b0b13ab9615eb3"
     ],
     "stash-cleanup": [
       "f9de8b10937919ceb6656fbdb70179c4"
     ],
     "test-coverage": [
       "ec70fb2b8e193b6a98bec2fbf337b190",
-      "c2b0f0dee5bc881239684e706ea88324"
+      "c2b0f0dee5bc881239684e706ea88324",
+      "0d8359170529da12cd63356610b2e220"
     ],
     "typing": [
-      "d8fd1423cf2a523b528ed7d2d7a2bb55"
+      "d8fd1423cf2a523b528ed7d2d7a2bb55",
+      "1f2758ce0bb62d789a21aec241549531"
     ],
     "ui-bugs": [
-      "01d2a7e034713195f33071f2c71a3c99"
+      "01d2a7e034713195f33071f2c71a3c99",
+      "def9ad96bd74ab397233f234d79a1974"
     ],
     "user-action-review": [
       "945a716d446d26a03e2805d28bd1ae16"
+    ],
+    "ux": [
+      "e03d03fc7c16faa5b5db93be2896b9ad"
     ]
   }
 }

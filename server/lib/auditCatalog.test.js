@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { QUOTA_BURN_PROMPT_PRESETS } from './quotaBurnPresets.js';
+import { requireSlashdoSubmoduleInCi } from './testHelper.js';
 import {
   AUDIT_DEFINITIONS,
   AUDIT_TASK_TYPES,
@@ -14,6 +15,7 @@ import {
   getAuditFilingPreset,
   modeContractFor,
   applyAuditModeWrapper,
+  DO_BETTER_LENS_COVERAGE,
 } from './auditCatalog.js';
 
 describe('AUDIT_DEFINITIONS', () => {
@@ -197,5 +199,65 @@ describe('getAuditFilingPreset', () => {
 
   it('AUDIT_TASK_TYPES is derived from the definitions table', () => {
     expect(AUDIT_TASK_TYPES).toEqual(new Set(Object.keys(AUDIT_DEFINITIONS)));
+  });
+});
+
+// The `better-*` audit types exist to give each slashdo `do:better` audit lens
+// a schedulable counterpart. The coverage map is the contract between the two,
+// and it only means anything if both halves are checked: that every type it
+// names is real, and that every lens upstream declares is actually named.
+describe('DO_BETTER_LENS_COVERAGE', () => {
+  it('names only registered audit types, without duplicates', () => {
+    for (const [lens, owners] of Object.entries(DO_BETTER_LENS_COVERAGE)) {
+      expect(Array.isArray(owners), lens).toBe(true);
+      expect(owners.length, lens).toBeGreaterThan(0);
+      for (const owner of owners) {
+        expect(AUDIT_TASK_TYPES.has(owner), `${lens} -> ${owner}`).toBe(true);
+      }
+      expect(new Set(owners).size, `${lens} lists a duplicate owner`).toBe(owners.length);
+    }
+  });
+
+  // The seeded schedule row ALWAYS sets taskMetadata.fileIssues, so for a
+  // scheduled dispatch the catalog default is never actually consulted — which
+  // means the two can disagree and nothing would notice until someone read the
+  // catalog and believed it. They encode one product decision; pin them equal.
+  it('agrees with the seeded schedule row on every audit default', async () => {
+    const { DEFAULT_TASK_INTERVALS } = await import('../services/taskScheduleRegistry.js');
+    for (const taskType of AUDIT_TASK_TYPES) {
+      const seeded = DEFAULT_TASK_INTERVALS[taskType]?.taskMetadata?.fileIssues;
+      if (seeded === undefined) continue; // not seeded with an explicit posture
+      expect(seeded, taskType).toBe(defaultFileIssuesFor(taskType));
+    }
+  });
+
+  it('gives every better-prefixed audit type a lens to be in parity with', () => {
+    const covered = new Set(Object.values(DO_BETTER_LENS_COVERAGE).flat());
+    const orphaned = [...AUDIT_TASK_TYPES]
+      .filter((type) => type.startsWith('better-') && !covered.has(type));
+    expect(orphaned).toEqual([]);
+  });
+
+  // Reads the bundled submodule when it is initialized. A lens added upstream
+  // with no entry here is a category of app quality that silently became
+  // unschedulable — exactly the gap these task types were added to close.
+  it('covers every lens the bundled do:better command declares', async () => {
+    const { existsSync, readFileSync } = await import('fs');
+    const { join } = await import('path');
+    const { PATHS } = await import('./paths.js');
+    // Anchored on PATHS.slashdo rather than a relative URL: a missing file here
+    // SKIPS outside CI, so a path that silently goes stale disables the guard
+    // instead of failing it — the exact failure this test exists to prevent.
+    const auditRef = join(PATHS.slashdo, 'lib', 'better-audit.md');
+    if (!existsSync(auditRef)) {
+      requireSlashdoSubmoduleInCi(false);
+      return;
+    }
+    const body = readFileSync(auditRef, 'utf8');
+    // Each lens is introduced as: For `<slug>`:
+    const declared = [...body.matchAll(/^For `([a-z-]+)`:/gm)].map(([, slug]) => slug);
+    expect(declared.length).toBeGreaterThan(5);
+    const missing = declared.filter((lens) => !DO_BETTER_LENS_COVERAGE[lens]);
+    expect(missing).toEqual([]);
   });
 });
