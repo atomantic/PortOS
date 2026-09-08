@@ -607,3 +607,4 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `cosFederationPolicy.js` | `isMachineLocalCosTask` excludes private assessments and explicitly machine-local tasks and agent archives from federation. |
 
 | `creativeDirectorVideoReview.js` | `retainVideoCuts` preserves rendered cut references on invalidation. Video checkpoint fingerprints, owner-only review actions, feedback, and targeted revision invalidation. |
+| `creativeDirectorVideoCompiler.js` | `compileVideoArtifact` and `validateVideoShot` — pure timed-shot/source-reference compilation and pinned-backend compatibility shared by Creative Director project mutations and Video execution preflight. Storage, history and approval remain with their existing owners. |

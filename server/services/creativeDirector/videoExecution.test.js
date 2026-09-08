@@ -136,6 +136,10 @@ it('checks the duration the backend actually consumes and rejects batch expansio
     params: { mode: 'fal', durationSeconds: 5, duration: 60, prompt: 'Example' } })).rejects.toMatchObject({ code: 'VIDEO_PLAN_CLIP_BOUNDS' });
   await expect(enqueueVideoProductionJob(state.project, { sceneId: 'opening', workRevision: 0,
     params: { mode: 'text', durationSeconds: 5, numFrames: 1440, fps: 24, prompt: 'Example' } })).rejects.toMatchObject({ code: 'VIDEO_PLAN_CLIP_BOUNDS' });
+  // A clip within the queue bounds must still satisfy its pinned backend.
+  await expect(enqueueVideoProductionJob({ ...state.project, renderBackend: { video: { mode: 'grok' } } }, {
+    sceneId: 'opening', workRevision: 0, params: { mode: 'grok', duration: 5, prompt: 'Example' },
+  })).rejects.toMatchObject({ code: 'VIDEO_BACKEND_INPUT_UNSUPPORTED' });
   expect(state.project.videoExecution.attempts).toHaveLength(0);
   expect(enqueueUnattendedMediaJob).not.toHaveBeenCalled();
 });
