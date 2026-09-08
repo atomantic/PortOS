@@ -155,13 +155,11 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
 
   return (
     <CodeReviewDefaultsProvider>
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-baseline gap-2 flex-wrap min-w-0">
           <h2 className="text-xl font-semibold text-white">Task Schedule</h2>
-          <p className="text-sm text-gray-400 mt-1">
-            Configure how often each task type runs.
-          </p>
+          <p className="text-sm text-gray-400">Configure how often each task type runs.</p>
         </div>
         <button
           onClick={fetchSchedule}
