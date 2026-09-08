@@ -107,6 +107,8 @@ const PRESTEP_SRC = readFileSync(join(__dirname, 'cosTaskPreStepBlocks.js'), 'ut
 // both, so moving code between them can neither break it nor silently disarm it.
 const LAYER_SRC = `${GEN_SRC}\n${PRESTEP_SRC}`;
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
+// The ONE Priority-0 on-demand loop body both engines delegate to (#6618).
+const DRAIN_SRC = readFileSync(join(__dirname, 'onDemandDrain.js'), 'utf-8');
 
 const task = (id, metadata = {}) => ({ id, metadata });
 const noCooldown = () => Promise.resolve(false);
@@ -250,34 +252,44 @@ describe('dry-run hook wiring matches each engine execute path', () => {
   });
 });
 
-// Both on-demand spawn engines must merge the request's own metadata onto the
-// generated task through `onDemandRequestMetadata`, or a MANUAL "Run Now"
-// perpetual drain processed by whichever engine forgot would refill through the
-// auto-run-gated queue lane and stall after one item (see perpetualRefillPlan in
-// cos.js) — and a QUOTA BURN would arrive with no provenance, reading as an
-// ordinary manual run that then drains its whole backlog outside the burn gates.
-// The cos.js engine's stamp + ignoreTaskId forwarding is pinned in cos.test.js;
-// this pins the sibling evaluateTasks engine here so the mirror can't drift.
+// The two Priority-0 on-demand engines used to be hand-mirrored line for line,
+// and every guard on their parity was a source grep against each engine body —
+// which is exactly why #3294's registry-failure fix could land on ONE of them
+// and stay green (#6618). The loop lives in onDemandDrain.js now and both
+// engines are thin adapters over it, so the parity is structural: the behavior
+// is pinned once, behaviorally, in onDemandDrain.test.js.
 //
-// It greps for the shared CALL rather than the fork itself: the fork lives in
-// one place now (lib/quotaBurnOrigin.js, unit-tested directly), and the only
-// thing an engine can still get wrong is failing to consult it.
-describe('both on-demand engines merge onDemandRequestMetadata', () => {
-  const onDemandStamp = (src, engineFn) => {
-    const start = src.indexOf(engineFn);
-    expect(start, `${engineFn} must exist`).toBeGreaterThan(-1);
-    // Scan to the next top-level function so the assertion is scoped to this engine.
-    const next = src.indexOf('\nasync function ', start + 1);
-    return src.slice(start, next === -1 ? src.length : next);
-  };
-  const MERGE = /task\.metadata = \{ \.\.\.\(task\.metadata \|\| \{\}\), \.\.\.onDemandRequestMetadata\(request\) \}/;
+// What still needs a source guard is the DELEGATION itself — a future edit that
+// re-inlines a loop into either engine is the regression, and no behavioral test
+// of the shared module can see it.
+describe('both on-demand engines delegate to the shared drain', () => {
+  for (const [engine, src] of [
+    ['cosTaskGenerator.spawnPriority0OnDemand', () => GEN_SRC],
+    ['cos.spawnDequeuePriority0OnDemand', () => COS_SRC],
+  ]) {
+    it(`${engine} calls drainOnDemandRequests and owns no request loop of its own`, () => {
+      const text = src();
+      expect(text).toMatch(/import \{ drainOnDemandRequests \} from '\.\/onDemandDrain\.js'/);
+      expect(text).toContain('drainOnDemandRequests({ state }, {');
+      expect(
+        text,
+        `${engine} must not re-inline the on-demand loop — it belongs to onDemandDrain.js`
+      ).not.toMatch(/for \(const request of onDemandRequests\)/);
+    });
+  }
 
-  it('evaluateTasks engine (spawnPriority0OnDemand) merges the request metadata before addTask', () => {
-    expect(MERGE.test(onDemandStamp(GEN_SRC, 'async function spawnPriority0OnDemand'))).toBe(true);
-  });
-
-  it('dequeueNextTask engine (spawnDequeuePriority0OnDemand) merges the request metadata before addTask', () => {
-    expect(MERGE.test(onDemandStamp(COS_SRC, 'async function spawnDequeuePriority0OnDemand'))).toBe(true);
+  it('the shared drain reads the app registry once per cycle with the failure sentinel', () => {
+    // #3294's fix, now in the one place both engines run. `null` = the read
+    // FAILED (defer); `[]` = a real empty registry (clear as unknown-app). The
+    // read sits OUTSIDE the loop, so a 3-request cycle can't miss getActiveApps'
+    // 2s cache at a boundary. Behavior is pinned in onDemandDrain.test.js.
+    expect(DRAIN_SRC).toMatch(/const apps = onDemandRequests\.length > 0 \? await getActiveApps\(\)\.catch\(\(\) => null\) : \[\];/);
+    expect(DRAIN_SRC, 'a [] fallback is the #6618 defect — it clears the request as unknown-app')
+      .not.toMatch(/getActiveApps\(\)\.catch\(\(\) => \[\]\)/);
+    const readIdx = DRAIN_SRC.indexOf('await getActiveApps()');
+    const loopIdx = DRAIN_SRC.indexOf('for (const request of onDemandRequests)');
+    expect(readIdx).toBeGreaterThan(-1);
+    expect(loopIdx).toBeGreaterThan(readIdx);
   });
 });
 
@@ -355,31 +367,16 @@ describe('isConfiguredApprovalRequired', () => {
   });
 });
 
-describe('both on-demand engines apply consent before addTask', () => {
+describe('the on-demand consent flip reaches every drain path', () => {
   // Run Now is the user's sign-off. Without this flip, a safety-kind or
   // low-confidence type (release-check used to match `\brelease\b`) is
   // persisted as APPROVAL, Priority 2 will not pick it, and force-spawn
   // refuses it — so "Run Now" sits in awaiting-approve forever.
-  const engineBody = (src, engineFn) => {
-    const start = src.indexOf(engineFn);
-    expect(start, `${engineFn} must exist`).toBeGreaterThan(-1);
-    const next = src.indexOf('\nasync function ', start + 1);
-    return src.slice(start, next === -1 ? src.length : next);
-  };
-
-  it('evaluateTasks engine consents before canSpawn / addTask', () => {
-    const engine = engineBody(GEN_SRC, 'async function spawnPriority0OnDemand');
-    expect(engine.indexOf('applyOnDemandConsent(task)')).toBeGreaterThan(-1);
-    expect(engine.indexOf('applyOnDemandConsent(task)')).toBeLessThan(engine.indexOf('canSpawnTask(task)'));
-  });
-
-  it('dequeueNextTask engine consents before canSpawn / addTask', () => {
-    const engine = engineBody(COS_SRC, 'async function spawnDequeuePriority0OnDemand');
-    expect(engine.indexOf('applyOnDemandConsent(task)')).toBeGreaterThan(-1);
-    // Match either admit method: Priority 0 is a COMMITTED tier, so it calls
-    // `canSpawnCommitted` rather than `canSpawn` (#4834).
-    expect(engine.indexOf('applyOnDemandConsent(task)')).toBeLessThan(engine.search(/capacity\.canSpawn(Committed)?\(task/));
-  });
+  //
+  // The two Priority-0 engines run ONE shared drain now, and its
+  // consent-before-admission ordering is pinned behaviorally in
+  // onDemandDrain.test.js. What is left here is the THIRD path — idle review
+  // stealing a queued on-demand request — which carries its own copy.
 
   it('idle-review steal path consents when it drains an on-demand request', () => {
     const start = GEN_SRC.indexOf('async function generateManagedAppImprovementTask(app, state');
@@ -1720,36 +1717,40 @@ describe('pr-reviewer security preflight wiring', () => {
 
 /**
  * The loop's root cause: the drain's completion refill re-issues itself through the
- * on-demand lane, and BOTH on-demand engines treated every request as a human "Run"
+ * on-demand lane, and the on-demand drain treated every request as a human "Run"
  * — resetting the park, the convergence signature, and the dispatch counter, i.e.
- * every brake the drain has. Either engine may drain a given request, so both must
- * gate the reset on origin.
+ * every brake the drain has. The reset is gated on ORIGIN now, and it lives in
+ * taskSchedule.applyOnDemandRunResets (behaviorally tested there) so no drain path
+ * can reach around it.
  */
 describe('automated drain refills do not clear their own convergence brakes', () => {
   it('the refill stamps origin: refill', () => {
     expect(COS_SRC).toMatch(/triggerOnDemandTask\(plan\.taskType, plan\.appId, \{\s*emit: false, origin: taskScheduleMod\.ON_DEMAND_ORIGINS\.REFILL\s*\}\)/);
   });
 
-  // The origin check lives in taskSchedule.applyOnDemandRunResets (behaviorally
-  // tested there), so what matters HERE is that no engine reaches around it: an
-  // engine calling the reset primitives directly is the exact regression, since
-  // that is the shape the loop had.
-  for (const [engine, src] of [['cos.dequeueNextTask', () => COS_SRC], ['cosTaskGenerator.spawnPriority0OnDemand', () => GEN_SRC]]) {
-    it(`${engine} resets on-demand state only through applyOnDemandRunResets`, () => {
-      const text = src();
-      expect(text).toMatch(/const userInitiated = await task[Ss]chedule(Mod)?\.applyOnDemandRunResets\(request, targetApp\?\.id \?\? null\)/);
+  // A drain path calling the reset primitives directly is the exact regression,
+  // since that is the shape the loop had. The shared drain is one of three
+  // callers; the scan covers every module that touches an on-demand request.
+  for (const [where, src] of [
+    ['onDemandDrain', () => DRAIN_SRC],
+    ['cos.js', () => COS_SRC],
+    ['cosTaskGenerator.js', () => GEN_SRC],
+  ]) {
+    it(`${where} resets on-demand state only through applyOnDemandRunResets`, () => {
       for (const fn of ['resetPerpetualForManualRun', 'clearTaskTypeFailurePark']) {
-        const direct = text.split('\n').filter((l) => l.includes(`.${fn}(request.taskType`));
-        expect(direct, `${engine} must not call ${fn} directly — go through applyOnDemandRunResets`).toEqual([]);
+        const direct = src().split('\n').filter((l) => l.includes(`.${fn}(request.taskType`));
+        expect(direct, `${where} must not call ${fn} directly — go through applyOnDemandRunResets`).toEqual([]);
       }
     });
-
-    // A refill that toasts "nothing to do" turns a healthy overnight drain into a
-    // pile of notifications nobody asked for.
-    it(`${engine} only reports an empty result for a user-initiated request`, () => {
-      expect(src()).toMatch(/\}\s*else if \(!task && userInitiated\) \{/);
-    });
   }
+
+  it('the shared drain gates the reset on the request and reports only a user-initiated empty', () => {
+    // A refill that toasts "nothing to do" turns a healthy overnight drain into
+    // a pile of notifications nobody asked for. Both halves are pinned
+    // behaviorally in onDemandDrain.test.js; this keeps the call shape honest.
+    expect(DRAIN_SRC).toMatch(/const userInitiated = await taskScheduleMod\.applyOnDemandRunResets\(request, targetApp\?\.id \?\? null\)/);
+    expect(DRAIN_SRC).toMatch(/\}\s*else if \(!task && userInitiated\) \{/);
+  });
 });
 
 // The claim button on the managed-app Issues tab, the Agent Operations `/do:next`
