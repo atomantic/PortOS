@@ -457,6 +457,12 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
   // level unlock) minus the on-screen morse hints and the reference cheat
   // sheet — the only meaningful difference the issue asks for.
   const showReference = mode !== 'head-copy';
+  // Reference tab lives in the `?ref=` search param so it's deep-linkable and
+  // survives reload/share; a stale value degrades to 'tree'. It's owned here
+  // rather than inside ReferenceWidget because it also decides the page layout:
+  // the tree needs the full width, the other two views sit in a side column.
+  const [refView, setRefView] = useDrawerTab('ref', 'tree', REFERENCE_VIEW_IDS);
+  const sideBySideReference = showReference && refView !== 'tree';
 
   // Hydrate the authoritative Koch level from the server (localStorage is now a
   // write-through cache). One-time adoption: if the server has never had a level
@@ -565,7 +571,7 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
           so the guard belongs on the grid that holds them, not on either one.
           Off send mode nothing owns Space and this is inert. */}
       <div
-        className={`grid grid-cols-1 ${showReference ? 'xl:grid-cols-[minmax(0,1fr)_24rem]' : ''} gap-6`}
+        className={`grid grid-cols-1 ${sideBySideReference ? 'xl:grid-cols-[minmax(0,1fr)_24rem]' : ''} gap-6`}
         {...(mode === 'send' ? noPointerFocusSurfaceProps : null)}
       >
         <div className="space-y-6 min-w-0 max-w-2xl">
@@ -582,7 +588,7 @@ export default function MorseTrainer({ mode = null, onSelectMode, onExitMode, on
           )}
           {!mode && <MorseProgressPanel refreshKey={progressRefresh} />}
         </div>
-        {showReference && <ReferenceWidget keying={keying} mode={mode} />}
+        {showReference && <ReferenceWidget keying={keying} mode={mode} view={refView} setView={setRefView} />}
       </div>
     </div>
   );
@@ -704,16 +710,17 @@ export const REFERENCE_VIEWS = [
 
 const REFERENCE_VIEW_IDS = REFERENCE_VIEWS.map((v) => v.id);
 
-function ReferenceWidget({ keying, mode }) {
-  // Reference tab lives in the `?ref=` search param so it's deep-linkable and
-  // survives reload/share; a stale value degrades to 'tree'.
-  const [view, setView] = useDrawerTab('ref', 'tree', REFERENCE_VIEW_IDS);
+function ReferenceWidget({ keying, mode, view, setView }) {
   // Only show the in-progress key path in Send mode — in Copy mode the right
   // widget is a passive cheat-sheet, not live feedback for the user.
   const currentPath = mode === 'send' ? keying.pattern : '';
 
+  // The tree needs the whole page width to render all 41 characters legibly, so
+  // it stacks under the drill instead of sharing the sticky side column.
+  const sideColumn = view !== 'tree';
+
   return (
-    <div className="space-y-4 xl:sticky xl:top-4 xl:self-start">
+    <div className={`space-y-4 ${sideColumn ? 'xl:sticky xl:top-4 xl:self-start' : 'min-w-0'}`}>
       <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
         <div className="flex border-b border-port-border">
           {REFERENCE_VIEWS.map((v) => {
@@ -755,21 +762,43 @@ export function isNodeOnPath(node, currentPath) {
   return { matched, onPath };
 }
 
+// Nodes are SVG (not absolutely-positioned divs) so the whole tree lives in one
+// `viewBox` and scales with its container — at the tree tab's full-width desktop
+// layout every one of the 41 characters is on screen at once instead of hiding
+// behind a horizontal scrollbar.
 function TreeNodeLabel({ x, depth, node, currentPath }) {
   const { matched, onPath } = isNodeOnPath(node, currentPath);
   const display = node.char || (node.code === '' ? '·' : '');
+  const cx = x * TREE_SLOT_W + TREE_SLOT_W / 2;
+  const cy = depth * TREE_ROW_H + TREE_ROW_H / 2;
+  const label = display || '·';
+  const boxW = label.length * 7 + 8;
   return (
-    <div
-      className={`absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-        matched ? 'bg-port-accent text-white font-bold' :
-        onPath ? 'text-port-accent bg-port-bg' :
-        display ? 'text-gray-300 bg-port-bg' : 'text-gray-700 bg-port-bg'
-      }`}
-      style={{ left: x * TREE_SLOT_W + TREE_SLOT_W / 2, top: depth * TREE_ROW_H + TREE_ROW_H / 2 }}
-      title={node.code || 'start'}
-    >
-      {display || '·'}
-    </div>
+    <g title={node.code || 'start'}>
+      <rect
+        x={cx - boxW / 2}
+        y={cy - 9}
+        width={boxW}
+        height={18}
+        rx={3}
+        className={matched ? 'fill-port-accent' : 'fill-port-bg'}
+      />
+      <text
+        x={cx}
+        y={cy}
+        textAnchor="middle"
+        dominantBaseline="central"
+        fontSize={11}
+        fontWeight={matched ? 700 : 400}
+        className={`font-mono ${
+          matched ? 'fill-white' :
+          onPath ? 'fill-port-accent' :
+          display ? 'fill-gray-300' : 'fill-gray-700'
+        }`}
+      >
+        {label}
+      </text>
+    </g>
   );
 }
 
@@ -785,28 +814,34 @@ function TreeView({ currentPath, mode }) {
         <span>start</span>
         <span>dit →</span>
       </div>
-      <div className="overflow-x-auto pb-1">
-        <div className="relative mx-auto" style={{ width: pixelWidth, height: pixelHeight }}>
-          <svg className="absolute inset-0 overflow-visible" width={pixelWidth} height={pixelHeight}>
-            {edges.map((e, i) => {
-              const highlighted = currentPath.length > 0 && currentPath.startsWith(e.childCode);
-              return (
-                <line
-                  key={i}
-                  x1={e.x1 * TREE_SLOT_W + TREE_SLOT_W / 2}
-                  y1={e.y1 * TREE_ROW_H + TREE_ROW_H / 2}
-                  x2={e.x2 * TREE_SLOT_W + TREE_SLOT_W / 2}
-                  y2={e.y2 * TREE_ROW_H + TREE_ROW_H / 2}
-                  className={highlighted ? 'stroke-port-accent' : 'stroke-port-border'}
-                  strokeWidth={highlighted ? 2 : 1}
-                />
-              );
-            })}
-          </svg>
+      <div className="pb-1">
+        {/* Capped at its natural pixel size so a wide viewport doesn't blow the
+            glyphs up; below that it shrinks to fit rather than overflowing. */}
+        <svg
+          className="block mx-auto w-full h-auto"
+          style={{ maxWidth: pixelWidth }}
+          viewBox={`0 0 ${pixelWidth} ${pixelHeight}`}
+          role="img"
+          aria-label="Morse code decoding tree"
+        >
+          {edges.map((e, i) => {
+            const highlighted = currentPath.length > 0 && currentPath.startsWith(e.childCode);
+            return (
+              <line
+                key={i}
+                x1={e.x1 * TREE_SLOT_W + TREE_SLOT_W / 2}
+                y1={e.y1 * TREE_ROW_H + TREE_ROW_H / 2}
+                x2={e.x2 * TREE_SLOT_W + TREE_SLOT_W / 2}
+                y2={e.y2 * TREE_ROW_H + TREE_ROW_H / 2}
+                className={highlighted ? 'stroke-port-accent' : 'stroke-port-border'}
+                strokeWidth={highlighted ? 2 : 1}
+              />
+            );
+          })}
           {nodes.map(({ x, depth, node }) => (
             <TreeNodeLabel key={node.code} x={x} depth={depth} node={node} currentPath={currentPath} />
           ))}
-        </div>
+        </svg>
       </div>
       <p className="text-[10px] text-gray-500 mt-3">
         {mode === 'send'

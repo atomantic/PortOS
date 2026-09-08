@@ -443,11 +443,35 @@ describe('MorseTrainer Tree reference view', () => {
     // Regression guard for the reported bug: the root previously rendered
     // displaced toward the DIT side. Its computed x-slot should sit near the
     // horizontal middle of the tree's total width, not near either edge.
-    const treeContainer = root.closest('.relative.mx-auto');
-    const totalWidth = parseFloat(treeContainer.style.width);
-    const rootLeft = parseFloat(root.style.left);
+    const svg = root.closest('svg');
+    const totalWidth = parseFloat(svg.getAttribute('viewBox').split(' ')[2]);
+    const rootLeft = parseFloat(root.querySelector('text').getAttribute('x'));
     expect(rootLeft).toBeGreaterThan(totalWidth * 0.3);
     expect(rootLeft).toBeLessThan(totalWidth * 0.7);
+  });
+
+  // Regression guard: the tree used to be a fixed-pixel-width block inside an
+  // `overflow-x-auto` side column, so most of the 41 characters were off-screen
+  // behind a scrollbar on desktop. It must now scale to whatever width it gets.
+  it('renders the whole tree as a scalable viewBox with no horizontal scroller', async () => {
+    const { container } = await renderMorse({ mode: null, onSelectMode: vi.fn() });
+    const svg = container.querySelector('[title="start"]').closest('svg');
+    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 \d+ \d+$/);
+    expect(svg.getAttribute('class')).toContain('w-full');
+    for (let el = svg.parentElement; el && el !== container; el = el.parentElement) {
+      expect(el.className).not.toMatch(/overflow-x-auto/);
+    }
+  });
+
+  // The tree gets the full page width; the compact Length/List views keep the
+  // narrow sticky side column beside the drill.
+  it('stacks the tree full-width but keeps the other reference views in a side column', async () => {
+    const treeRender = await renderMorse({ mode: null, onSelectMode: vi.fn() }, { route: '/post/morse?ref=tree' });
+    expect(treeRender.container.querySelector('.xl\\:grid-cols-\\[minmax\\(0\\,1fr\\)_24rem\\]')).toBeNull();
+    treeRender.unmount();
+
+    const listRender = await renderMorse({ mode: null, onSelectMode: vi.fn() }, { route: '/post/morse?ref=list' });
+    expect(listRender.container.querySelector('.xl\\:grid-cols-\\[minmax\\(0\\,1fr\\)_24rem\\]')).toBeTruthy();
   });
 });
 
