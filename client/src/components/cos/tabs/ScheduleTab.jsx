@@ -10,6 +10,7 @@ import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
 import TaskConfigDrawer from './schedule/TaskConfigDrawer';
+import MaintenanceRunForm from './schedule/MaintenanceRunForm';
 import { TASK_FILTERS, DEFAULT_FILTER_ID, TASK_SORTS, DEFAULT_SORT_ID, suggestedOrderSteps } from './schedule/scheduleConstants';
 
 export function mergeUpdatedTaskInterval(schedule, taskType, interval) {
@@ -189,6 +190,10 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
       <Banner size="md" title="Recommended maintenance order">
         <p className="text-sm break-words">{MAINTENANCE_ORDER_GUIDANCE}</p>
         <p className="text-xs mt-1">Resolve findings between audits, then document the resulting code. Quota Burn offers this sequence with perpetual claim-issue drains between steps.</p>
+        <details className="mt-2">
+          <summary className="cursor-pointer text-sm font-medium">Run maintenance now</summary>
+          <MaintenanceRunForm schedule={schedule} apps={apps} providers={providers} providersLoaded={providersLoaded} improvementDisabled={improvementDisabled} daemonRunning={daemonRunning} />
+        </details>
       </Banner>
 
       {improvementDisabled && (
