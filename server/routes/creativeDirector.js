@@ -128,6 +128,14 @@ router.get('/:id', asyncHandler(async (req, res) => {
   res.json(req.query.slim === '1' ? slimProject(p) : p);
 }));
 
+router.get('/:id/sources', asyncHandler(async (req, res) => {
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  if (project.workspace !== 'video') throw new ServerError('Source checks require a Video project', { status: 400, code: 'INVALID_STATE' });
+  const { getVideoSourceStatus } = await import('../services/creativeDirector/videoSources.js');
+  res.json(await getVideoSourceStatus(project));
+}));
+
 router.post('/', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorProjectCreateSchema, req.body);
   const project = await createProject(data);

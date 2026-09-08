@@ -511,7 +511,9 @@ export function applyPlan(project, planInput) {
     };
   });
   const replanRounds = project.plan ? (project.plan.replanRounds || 0) + 1 : 0;
-  const nextStatus = (project.status === 'paused' || project.status === 'failed')
+  // Like treatment saves, an inert Video plan must remain editable so missing
+  // attachments can be repaired. Saving a plan is not production approval.
+  const nextStatus = (project.workspace === 'video' || project.status === 'paused' || project.status === 'failed')
     ? project.status
     : 'rendering';
   return {

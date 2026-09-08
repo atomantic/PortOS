@@ -32,7 +32,10 @@ vi.mock('./firstPassGen.js', () => ({
   enqueueFirstPassSceneFrames: vi.fn(async () => ({ mode: 'local', enqueued: [], skipped: [] })),
 }));
 
-const { setTreatment, recordRun, updateRun, trimRuns, getProjectsByIds } = await import('./local.js');
+vi.mock('../catalogDB/ingredients.js', () => ({ getIngredient: vi.fn() }));
+import { getIngredient } from '../catalogDB/ingredients.js';
+
+const { setTreatment, setPlan, recordRun, updateRun, trimRuns, getProjectsByIds } = await import('./local.js');
 import * as firstPassGen from './firstPassGen.js';
 
 const VALID_TREATMENT = {
@@ -57,6 +60,25 @@ beforeEach(() => {
 });
 
 describe('setTreatment — first-pass scene frames (#1867/#1938)', () => {
+  it('blocks both Video artifact writers on missing sources, then saves after source repair', async () => {
+    const project = { id: 'cd-video', workspace: 'video', status: 'draft', name: 'Example', targetDurationSeconds: 120, aspectRatio: '16:9', videoDraft: { sources: [{ kind: 'catalog', id: 'example-catalog', revision: 'revision-1' }] } };
+    mockReadJSONFile.mockResolvedValue([project]);
+    getIngredient.mockResolvedValue(null);
+    const treatment = { ...VALID_TREATMENT, script: 'A cat finds a hat.', scenes: Array.from({ length: 12 }, (_, order) => ({ ...VALID_TREATMENT.scenes[0], sceneId: `scene-${order}`, order, durationSeconds: 10 })) };
+    const plan = { steps: [{ stepId: 'lookup', toolName: 'catalog_searchIngredients', args: { query: 'Example' } }] };
+    await expect(setTreatment(project.id, treatment)).rejects.toMatchObject({ code: 'VIDEO_SOURCE_MISSING', status: 409 });
+    await expect(setPlan(project.id, plan)).rejects.toMatchObject({ code: 'VIDEO_SOURCE_MISSING', status: 409 });
+    getIngredient.mockRejectedValueOnce(new Error('Store unavailable'));
+    await expect(setTreatment(project.id, treatment)).rejects.toThrow('Store unavailable');
+    expect(mockAtomicWrite).not.toHaveBeenCalled();
+    getIngredient.mockResolvedValue({ id: 'example-catalog', updatedAt: 'newer-source-revision' });
+    const saved = await setTreatment(project.id, treatment);
+    expect(saved.treatment.artifact.references).toEqual([{ kind: 'catalog', id: 'example-catalog', referenceId: 'catalog:example-catalog', revision: 'revision-1' }]);
+    expect(saved.status).toBe('draft');
+    await expect(setPlan(project.id, plan)).resolves.toMatchObject({ status: 'draft' });
+    expect(firstPassGen.enqueueFirstPassSceneFrames).not.toHaveBeenCalled();
+  });
+
   it('seeds first-pass scene frames when the project opted into generateFirstPass', async () => {
     mockReadJSONFile.mockResolvedValue([{ id: 'cd-1', generateFirstPass: true, name: 'Test' }]);
     const result = await setTreatment('cd-1', VALID_TREATMENT);

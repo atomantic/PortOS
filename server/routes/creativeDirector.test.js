@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 
+vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn(async () => ({ id: 'example-universe', name: 'Example universe' })) }));
+vi.mock('../services/pipeline/series.js', () => ({ getSeries: vi.fn(async () => ({ id: 'example-series' })) }));
+vi.mock('../services/catalogDB/ingredients.js', () => ({ getIngredient: vi.fn(async () => ({ id: 'example-catalog' })) }));
+vi.mock('../services/tracks/index.js', () => ({ getTrack: vi.fn(async () => ({ id: 'example-music' })) }));
+vi.mock('../services/voice/profiles.js', () => ({ getVoiceProfile: vi.fn(async () => ({ id: 'example-voice', inference: { checkpointPath: '/fake/private/voice' } })) }));
+import { getUniverse } from '../services/universeBuilder/crud.js';
+import { getSeries } from '../services/pipeline/series.js';
+
 vi.mock('../services/creativeDirector/local.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'cd-1', name: 'A' }]),
   getProjectsByIds: vi.fn(async () => []),
@@ -80,6 +88,36 @@ describe('creativeDirector routes', () => {
   });
 
   describe('Video drafts', () => {
+    it('checks draft and saved sources without exporting source records or rewriting revisions', async () => {
+      const sources = ['universe', 'series', 'catalog', 'music', 'voice'].map(kind => ({ kind, id: `example-${kind}`, revision: 'recorded-revision' }));
+      const project = { id: 'cd-video', workspace: 'video', videoDraft: { sources }, treatment: { artifact: { references: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, revision: 'older-revision' })) } } };
+      cdService.getProject.mockResolvedValueOnce(project);
+      const res = await request(app).get('/api/creative-director/cd-video/sources');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        draft: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, available: true })),
+        artifact: sources.map(source => ({ ...source, referenceId: `${source.kind}:${source.id}`, revision: 'older-revision', available: true })),
+      });
+      expect(getUniverse).toHaveBeenCalledTimes(1);
+      expect(cdService.updateProject).not.toHaveBeenCalled();
+      expect(project.treatment.artifact.references[0].revision).toBe('older-revision');
+    });
+
+    it('reports deleted sources but treats failed lookups as unknown instead of missing', async () => {
+      const project = { workspace: 'video', videoDraft: { sources: [{ kind: 'series', id: 'example-series' }] } };
+      cdService.getProject.mockResolvedValue(project);
+      getSeries.mockRejectedValueOnce(Object.assign(new Error('Missing series'), { code: 'PIPELINE_SERIES_NOT_FOUND' }));
+      const missing = await request(app).get('/api/creative-director/cd-video/sources');
+      expect(missing.status).toBe(200);
+      expect(missing.body.draft[0].available).toBe(false);
+      getSeries.mockRejectedValueOnce(new Error('Store unavailable'));
+      const failed = await request(app).get('/api/creative-director/cd-video/sources');
+      expect(failed.status).toBe(500);
+      expect(failed.body.draft).toBeUndefined();
+      cdService.getProject.mockResolvedValueOnce(null);
+      expect((await request(app).get('/api/creative-director/missing/sources')).status).toBe(404);
+    });
+
     const draft = {
       name: 'Example short', workspace: 'video', modelId: '',
       aspectRatio: '16:9', quality: 'draft', targetDurationSeconds: 60,
