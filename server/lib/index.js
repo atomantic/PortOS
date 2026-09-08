@@ -202,6 +202,7 @@ export * from './providerPrerequisites.js';
 // collision check as flat exports.
 export * as providerVendors from './providerVendors.js';
 export * from './providerTranscriptUsage.js';
+export * from './publicReviewSpawnGate.js';
 // Namespaced: reviewerConfig.js is re-exported flat by cosValidation.js (and so
 // by validation.js), so a flat `export *` here would trip the barrel's
 // duplicate-identifier collision check.
@@ -290,6 +291,7 @@ export * from './agentGuard/index.js';
 export * from './agentOutputMarkers.js';
 export * from './agentRunEvents.js';
 export * from './agentRunReconcile.js';
+export * from './agentRegistrationRecord.js';
 export * from './persistentMind.js';
 export * from './persistentMindCapabilities.js';
 export * from './persistentMindTrajectory.js';
@@ -378,6 +380,7 @@ export * from './clientApiPaths.js';
 export * from './htmlToText.js';
 export * from './jsonExtract.js';
 export * from './taskParser.js';
+export * from './taskGenerationOverrides.js';
 export * from './cosTaskPrompt.js';
 export * from './taskPauseHold.js';
 export * from './taskBlockCategories.js';

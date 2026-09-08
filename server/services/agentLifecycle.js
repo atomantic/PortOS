@@ -43,7 +43,7 @@ import { registerAgent, updateAgent, completeAgent } from './cosAgentLifecycle.j
 // paid to read one string. Same trap documented at agentWorktreeCleanup.js:562.
 import { getConfig, updateTask, getTaskById, getAgentRecord } from './cos.js';
 import { spawnAgentViaRunner, getRunnerHealth, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
-import { MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isRetryHeld } from '../lib/taskRetryHold.js';
 import { PROVIDER_CONFIG_BLOCKED_CATEGORY } from '../lib/taskBlockCategories.js';
@@ -59,17 +59,20 @@ import { buildAgentPrompt, getAppWorkspace, inlinePrLifecycleSection, isClaimFlo
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
 import { prClaimWasVerified } from '../lib/prDisposition.js';
-import { quotaBurnAgentMetadata } from '../lib/quotaBurnOrigin.js';
 import { composeProviderEnv } from '../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../lib/processEnv.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { dropUnsupportedOllamaThinking } from './ollamaAgentContext.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
-import { publicReviewProviderBlock, publicReviewPostureForProfile, supportsTuiPublicReviewActionsProvider, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
+import { publicReviewPostureForProfile, supportsTuiPublicReviewActionsProvider, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
+import { checkPublicReviewSpawnPreconditions } from '../lib/publicReviewSpawnGate.js';
+import { buildAgentRegistration, resolveExecutionMode } from '../lib/agentRegistrationRecord.js';
+import { applyTaskGenerationOverrides } from '../lib/taskGenerationOverrides.js';
 import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
 import { formatPublicReviewInputPrompt } from '../lib/modelAbuseGuard.js';
-import { materializePublicReviewInput, materializePublicReviewPatches, readPublicReviewInputSnapshot, validatePublicReviewModel } from './modelAbuseGuard.js';
+import { validatePublicReviewModel } from './modelAbuseGuard.js';
+import { loadPublicReviewSpawnInput } from './publicReviewSpawnInput.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { ensureInstanceId } from './instances.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from './cosTaskClaim.js';
@@ -95,51 +98,6 @@ import { handleOrphanedTask } from './agentManagement.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
-const PUBLIC_REVIEW_SCAN_STATUSES = new Set(['passed', 'findings']);
-
-function publicReviewScanBlock(task) {
-  const scan = task?.metadata?.pipeline?.securityScan;
-  const hasClearedPr = Number.isInteger(scan?.safePrCount) && scan.safePrCount > 0;
-  if (scan?.completed === true && PUBLIC_REVIEW_SCAN_STATUSES.has(scan.status) && hasClearedPr) return null;
-
-  if (scan?.completed === true && scan.status === 'findings' && !hasClearedPr) {
-    return {
-      reason: 'Public review withheld: the model-abuse scan cleared no pull requests',
-      category: 'public-review-no-cleared-prs',
-    };
-  }
-  return {
-    reason: `Public review withheld: the model-abuse scan is incomplete${scan?.code ? ` (${scan.code})` : ''}`,
-    category: 'public-review-security-scan-incomplete',
-  };
-}
-
-function publicReviewEligibilityBlock(task) {
-  const eligibility = task?.metadata?.pipeline?.eligibility;
-  const eligibleNumbers = Array.isArray(eligibility?.eligibleNumbers)
-    ? eligibility.eligibleNumbers.filter((number) => Number.isInteger(number) && number > 0)
-    : [];
-  const expected = task?.metadata?.issueWatcher?.pullRequests;
-  const expectedNumbers = Array.isArray(expected)
-    ? expected.map((item) => item?.number).filter((number) => Number.isInteger(number) && number > 0)
-    : [];
-  const allowed = new Set(eligibleNumbers);
-  const coverageMatches = expectedNumbers.length === eligibleNumbers.length
-    && expectedNumbers.every((number) => allowed.has(number));
-  if (eligibility?.complete === true && eligibleNumbers.length > 0 && coverageMatches) return null;
-  if (eligibility?.complete === true && eligibleNumbers.length === 0) {
-    return {
-      reason: 'Public review withheld: the eligibility gate cleared no pull requests',
-      category: 'public-review-no-eligible-prs',
-    };
-  }
-  return {
-    reason: 'Public review withheld: a complete eligibility gate result is required before actions',
-    category: 'public-review-eligibility-incomplete',
-  };
-}
-
-
 
 /**
  * Spawn an agent for a task.
@@ -228,70 +186,40 @@ async function runAgentSpawn(task) {
     return null;
   }
 
-  // Check total spawn count across all retry types to prevent runaway respawning
-  const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
-  if (totalSpawns >= MAX_TOTAL_SPAWNS) {
-    console.log(`🚫 Task ${task.id} hit max total spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS}), blocking`);
-    await updateTask(task.id, {
-      status: 'blocked',
-      metadata: {
-        ...task.metadata,
-        blockedReason: `Max total spawns exceeded (${totalSpawns}/${MAX_TOTAL_SPAWNS})`,
-        blockedCategory: 'max-spawns',
-        blockedAt: new Date().toISOString()
-      }
-    }, task.taskType || 'user').catch(() => {});
-    // Give up on this task — release the synthetic app-review marker so the app
-    // doesn't read "in review" forever (issue #989). No-op without metadata.app
-    // or when a real agent holds the marker.
-    await releaseAppReviewMarker(task.metadata?.app).catch(() => {});
-    return null;
-  }
-
-  const agentId = `agent-${uuidv4().slice(0, 8)}`;
-
-  // Tag agent with execution lane (priority/observability only — concurrency
-  // is gated upstream by maxConcurrentAgents + maxConcurrentAgentsPerProject).
-  const laneName = determineLane(task);
-  const laneResult = acquire(laneName, agentId, { taskId: task.id });
-  if (!laneResult.success) {
-    emitLog('warn', `Failed to tag lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
-    await releaseAppReviewMarker(task.metadata?.app).catch(() => {});
-    return null;
-  }
-
-  // Create tool execution for state tracking
-  const toolExecution = createToolExecution('agent-spawn', agentId, {
-    taskId: task.id,
-    lane: laneName,
-    priority: task.priority
-  });
-  startExecution(toolExecution.id);
-
-  // Set once the federation claim has been persisted (just below). cleanupOnError
-  // reads it to release the claim on any failed-setup early exit.
+  // Spawn-local state `cleanupOnError` releases. Declared with `let` — and
+  // BEFORE the first gate — so one cleanup closure covers every early exit,
+  // including the two that run before the lane and tool execution exist. Each
+  // release is guarded on the thing having actually been acquired, so an early
+  // gate cannot release a lane nobody took.
+  let agentId = null;
+  let toolExecution = null;
+  let laneAcquired = false;
+  // Set once the federation claim has been persisted. cleanupOnError reads it
+  // to release the claim on any failed-setup early exit.
   let claimAcquired = false;
-
-  // Helper to cleanup on early exit. Releases the dedup guard, the execution
-  // lane, and the tool-execution state — and the synthetic app-review marker
-  // bound by `bindAppReviewAgent` before this spawn. Without the marker
-  // release, a pre-completion `return null` (provider resolution, prep
-  // deferred/blocked, in_progress updateTask failure) strands the app reading
-  // "in review" until the next daemon restart (issue #989). The release is a
-  // no-op when the task carries no `metadata.app` or the marker is a real
-  // `agent-*` id from a different live agent.
   // The throwaway worktree this attempt cut (set once prepareAgentWorkspace
   // returns one), so every setup failure after that point removes it. Without
   // this each failed spawn left a full checkout behind: the task stayed pending
   // and every retry cut another.
   let spawnWorktree = null;
+
+  // Helper to cleanup on early exit. Releases the execution lane and the
+  // tool-execution state — and the synthetic app-review marker bound by
+  // `bindAppReviewAgent` before this spawn. Without the marker release, a
+  // pre-completion `return null` (max spawns, lane acquire, provider
+  // resolution, prep deferred/blocked, in_progress updateTask failure) strands
+  // the app reading "in review" until the next daemon restart (issue #989).
+  // The release is a no-op when the task carries no `metadata.app` or the
+  // marker is a real `agent-*` id from a different live agent.
   const cleanupOnError = async (error) => {
     // The spawn-dedup guard is released by withSpawnDedupGuard's finally around
     // this whole body (see spawnAgentForTask) — cleanupOnError only owns the
     // lane, tool-execution, claim, app-review marker, and setup-worktree releases.
-    release(agentId);
-    errorExecution(toolExecution.id, { message: error });
-    completeExecution(toolExecution.id, { success: false });
+    if (laneAcquired) release(agentId);
+    if (toolExecution) {
+      errorExecution(toolExecution.id, { message: error });
+      completeExecution(toolExecution.id, { success: false });
+    }
     // Release the federation claim acquired before setup (issue #1563) so a
     // failed spawn never strands the task as claimed-but-not-running, which
     // would block both this instance's retry and a peer for a full lease window.
@@ -310,6 +238,91 @@ async function runAgentSpawn(task) {
       });
     }
   };
+
+  /**
+   * The one way this spawn refuses a task: persist the terminal `blocked`
+   * transition, release everything this attempt acquired, announce it, and
+   * return null for the caller to `return`.
+   *
+   * Every eligibility gate below ends here. They used to end in eight hand-
+   * copies of this epilogue, which drifted: two announced with a warn log and
+   * two skipped the app-review-marker release, and no test could see either —
+   * the suite grepped the source for the blocked-status literal, which every
+   * copy still had. The three axes they legitimately differ on are the
+   * parameters:
+   *
+   * - `persist` — false leaves the task PENDING so the next dispatch retries
+   *   it. Only a failure that would repeat identically forever gets blocked.
+   * - `emit` — `'agent:error'` raises an investigator; `'warn-log'` is for a
+   *   fail-closed safety outcome that must NOT create one, because the
+   *   investigator could retry the same unvalidated input; `'none'` is for a
+   *   standing decision that is neither.
+   * - `emitPayload` — extra event fields (the provider identity on a
+   *   provider-config failure).
+   *
+   * The block write itself frees the federation lease (updateTask strips the
+   * claim on any non-`in_progress` status change), so persisting BEFORE
+   * `cleanupOnError` keeps the terminal transition and the lease release as one
+   * write. Blocking after the release would open a window where a peer could
+   * claim and start the task, then have its live `in_progress` record clobbered
+   * to `blocked` — which outranks `in_progress` in the claim-aware merge.
+   */
+  const blockAndBail = async ({ reason, category, emit = 'agent:error', emitPayload = {}, persist = true }) => {
+    if (persist) {
+      await updateTask(task.id, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason: reason,
+          blockedCategory: category,
+          blockedAt: new Date().toISOString(),
+        },
+      }, task.taskType || 'user').catch(() => {});
+    }
+    await cleanupOnError(reason);
+    if (emit === 'agent:error') {
+      cosEvents.emit('agent:error', { taskId: task.id, error: reason, ...emitPayload });
+    } else if (emit === 'warn-log') {
+      emitLog('warn', `Public review withheld for task ${task.id}: ${category}`, { taskId: task.id });
+    }
+    return null;
+  };
+
+  // Check total spawn count across all retry types to prevent runaway respawning
+  const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
+  if (totalSpawns >= MAX_TOTAL_SPAWNS) {
+    console.log(`🚫 Task ${task.id} hit max total spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS}), blocking`);
+    // A standing decision, not an agent failure: an agent:error here would
+    // spawn an investigator for the same runaway task on every dispatch.
+    return blockAndBail({
+      reason: `Max total spawns exceeded (${totalSpawns}/${MAX_TOTAL_SPAWNS})`,
+      category: 'max-spawns',
+      emit: 'none',
+    });
+  }
+
+  agentId = `agent-${uuidv4().slice(0, 8)}`;
+
+  // Tag agent with execution lane (priority/observability only — concurrency
+  // is gated upstream by maxConcurrentAgents + maxConcurrentAgentsPerProject).
+  const laneName = determineLane(task);
+  const laneResult = acquire(laneName, agentId, { taskId: task.id });
+  if (!laneResult.success) {
+    emitLog('warn', `Failed to tag lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
+    // A lane is a transient resource, so the task stays PENDING and retries —
+    // but the marker still has to come back, which is cleanupOnError's job.
+    await cleanupOnError(`Failed to tag lane ${laneName}`);
+    return null;
+  }
+  laneAcquired = true;
+
+  // Create tool execution for state tracking
+  toolExecution = createToolExecution('agent-spawn', agentId, {
+    taskId: task.id,
+    lane: laneName,
+    priority: task.priority
+  });
+  startExecution(toolExecution.id);
 
   // Acquire the federation lease BEFORE any spawn setup (issue #1563, addressing
   // the codex review: the claim must be taken up front, not at the in_progress
@@ -400,35 +413,16 @@ async function runAgentSpawn(task) {
       // every re-dispatch. Leaving the task pending makes it silently re-fail
       // forever AND wedge its app's single improvement slot. Block it with an
       // actionable reason so it stops re-dispatching and surfaces in the UI.
-      //
-      // Do this BEFORE cleanupOnError releases the federation lease, and while we
-      // still hold it: the block write itself frees the lease (updateTask strips
-      // the claim on any non-`in_progress` status change), so the terminal
-      // transition + lease release are one atomic write. Blocking AFTER the
-      // release would open a window where a federated peer could claim + start the
-      // task (e.g. with a working CLI provider) and then have its live
-      // `in_progress` record clobbered to `blocked` — which outranks `in_progress`
-      // in the claim-aware merge. Transient failures fall through, skip the block,
-      // and stay pending to retry.
-      if (resolution.permanent) {
-        await updateTask(task.id, {
-          status: 'blocked',
-          metadata: {
-            ...task.metadata,
-            blockedReason: resolution.error,
-            blockedCategory: PROVIDER_CONFIG_BLOCKED_CATEGORY,
-            blockedAt: new Date().toISOString()
-          }
-        }, task.taskType || 'user').catch(() => {});
-      }
-      await cleanupOnError(resolution.error);
-      cosEvents.emit('agent:error', {
-        taskId: task.id,
-        error: resolution.error,
-        ...(resolution.providerId && { providerId: resolution.providerId }),
-        ...(resolution.providerStatus && { providerStatus: resolution.providerStatus }),
+      // Transient failures skip the block and stay pending to retry.
+      return blockAndBail({
+        reason: resolution.error,
+        category: PROVIDER_CONFIG_BLOCKED_CATEGORY,
+        persist: resolution.permanent,
+        emitPayload: {
+          ...(resolution.providerId && { providerId: resolution.providerId }),
+          ...(resolution.providerStatus && { providerStatus: resolution.providerStatus }),
+        },
       });
-      return null;
     }
     const { provider, selectedModel, modelSelection } = resolution;
     const privateSecurity = isPrivateSecurityTask(task);
@@ -455,82 +449,23 @@ async function runAgentSpawn(task) {
     const publicReviewTui = publicReviewActions && isTui
       && supportsTuiPublicReviewActionsProvider(provider);
     const spawnHeadless = !isTui || (publicReview && !publicReviewTui);
-    if (publicReview && !privateSecurity) {
-      const scanBlock = publicReviewScanBlock(task);
-      if (scanBlock) {
-        await updateTask(task.id, {
-          status: 'blocked',
-          metadata: {
-            ...task.metadata,
-            blockedReason: scanBlock.reason,
-            blockedCategory: scanBlock.category,
-            blockedAt: new Date().toISOString(),
-          },
-        }, task.taskType || 'user').catch(() => {});
-        await cleanupOnError(scanBlock.reason);
-        // This is an expected fail-closed safety outcome, not an agent/provider
-        // failure. Do not emit agent:error, which would create an automatic
-        // investigator and potentially retry the same unvalidated input.
-        emitLog('warn', `Public review withheld for task ${task.id}: ${scanBlock.category}`, { taskId: task.id });
-        return null;
-      }
-    }
-    if (publicReviewActions) {
-      const eligibilityBlock = publicReviewEligibilityBlock(task);
-      if (eligibilityBlock) {
-        await updateTask(task.id, {
-          status: 'blocked',
-          metadata: {
-            ...task.metadata,
-            blockedReason: eligibilityBlock.reason,
-            blockedCategory: eligibilityBlock.category,
-            blockedAt: new Date().toISOString(),
-          },
-        }, task.taskType || 'user').catch(() => {});
-        await cleanupOnError(eligibilityBlock.reason);
-        emitLog('warn', `Public review withheld for task ${task.id}: ${eligibilityBlock.category}`, { taskId: task.id });
-        return null;
-      }
-    }
-    // One posture check for both stages. Eligibility is declared by the vendor
-    // row and re-asserted HERE, at spawn time, because a schedule or API
-    // payload can be edited without the browser: the picker is a convenience,
-    // never the enforcement. The helper owns the "no posture requested" case,
-    // so an ordinary task (posture `null`) passes straight through (#5830).
-    const postureBlock = publicReviewProviderBlock(provider, publicReviewPosture);
-    if (postureBlock) {
-      const { reason, category } = postureBlock;
-      await updateTask(task.id, {
-        status: 'blocked',
-        metadata: {
-          ...task.metadata,
-          blockedReason: reason,
-          blockedCategory: category,
-          blockedAt: new Date().toISOString(),
-        },
-      }, task.taskType || 'user').catch(() => {});
-      await cleanupOnError(reason);
-      cosEvents.emit('agent:error', { taskId: task.id, error: reason });
-      return null;
-    }
-    if (publicReviewNoTools && !privateSecurity) {
-      const modelPolicy = await validatePublicReviewModel({ provider, model: selectedModel, posture: PUBLIC_REVIEW_NO_TOOL_POSTURE });
-      if (!modelPolicy.ok) {
-        const reason = `Public review model is unavailable or not tool-free (${modelPolicy.code})`;
-        await updateTask(task.id, {
-          status: 'blocked',
-          metadata: {
-            ...task.metadata,
-            blockedReason: reason,
-            blockedCategory: modelPolicy.code || 'public-review-model-unsupported',
-            blockedAt: new Date().toISOString(),
-          },
-        }, task.taskType || 'user').catch(() => {});
-        await cleanupOnError(reason);
-        cosEvents.emit('agent:error', { taskId: task.id, error: reason });
-        return null;
-      }
-    }
+    // Every public-review spawn precondition, in one ordered gate: the scan
+    // clears the input, the eligibility gate names the touchable PRs, the
+    // vendor row must declare a maintained recipe for the requested posture,
+    // and only then is the model checked. The helper owns the "no posture
+    // requested" case, so an ordinary task passes straight through (#5830).
+    const publicReviewBlock = await checkPublicReviewSpawnPreconditions({
+      task,
+      provider,
+      selectedModel,
+      publicReviewPosture,
+      publicReview,
+      publicReviewActions,
+      publicReviewNoTools,
+      privateSecurity,
+      validateModel: validatePublicReviewModel,
+    });
+    if (publicReviewBlock) return blockAndBail(publicReviewBlock);
     // Every public-content stage is direct-only. The CoS runner is a shared
     // process and may inherit ambient tool configuration; the final stage's
     // provider-specific direct CLI recipe is what enforces its sandbox.
@@ -559,55 +494,18 @@ async function runAgentSpawn(task) {
     }
 
     if (publicReview && !privateSecurity) {
-      const allowedPullRequestNumbers = publicReviewActions
-        ? task.metadata?.pipeline?.eligibility?.eligibleNumbers
-        : null;
-      const materialized = await materializePublicReviewInput({
+      // Materialize the screened snapshot (and, for the actions stage, its
+      // read-only patch files) into the workspace, then read it back for the
+      // prompt. Fails closed on any of those, through the same epilogue.
+      const reviewInput = await loadPublicReviewSpawnInput({
         scanKey: task.metadata?.pipeline?.reviewInputKey,
         workspacePath,
-        allowedPullRequestNumbers,
+        actionsStage: publicReviewActions,
+        eligibleNumbers: task.metadata?.pipeline?.eligibility?.eligibleNumbers,
+        noToolReviewer: publicReviewNoTools,
       });
-      const patchesMaterialized = !publicReviewActions || await materializePublicReviewPatches({
-        scanKey: task.metadata?.pipeline?.reviewInputKey,
-        workspacePath,
-        allowedPullRequestNumbers,
-      });
-      if (!materialized || !patchesMaterialized) {
-        const reason = 'The screened public-review input snapshot is unavailable or invalid';
-        await updateTask(task.id, {
-          status: 'blocked',
-          metadata: {
-            ...task.metadata,
-            blockedReason: reason,
-            blockedCategory: 'public-review-input-missing',
-            blockedAt: new Date().toISOString(),
-          },
-        }, task.taskType || 'user').catch(() => {});
-        await cleanupOnError(reason);
-        cosEvents.emit('agent:error', { taskId: task.id, error: reason });
-        return null;
-      }
-      publicReviewPromptData = await readPublicReviewInputSnapshot({
-        scanKey: task.metadata?.pipeline?.reviewInputKey,
-        allowedPullRequestNumbers,
-      });
-      if (!publicReviewPromptData) {
-        const reason = publicReviewNoTools
-          ? 'The screened public-review input could not be loaded for the no-tools reviewer'
-          : 'The screened public-review input could not be loaded for the final reviewer';
-        await updateTask(task.id, {
-          status: 'blocked',
-          metadata: {
-            ...task.metadata,
-            blockedReason: reason,
-            blockedCategory: 'public-review-input-missing',
-            blockedAt: new Date().toISOString(),
-          },
-        }, task.taskType || 'user').catch(() => {});
-        await cleanupOnError(reason);
-        cosEvents.emit('agent:error', { taskId: task.id, error: reason });
-        return null;
-      }
+      if (reviewInput.block) return blockAndBail(reviewInput.block);
+      publicReviewPromptData = reviewInput.promptData;
     }
 
     // Auto-snapshot the workspace context of the app CoS was last working in
@@ -725,7 +623,7 @@ async function runAgentSpawn(task) {
       workspacePath,
       appName: resolvedAppName
     });
-    const executionMode = !spawnHeadless ? (dispatchUseRunner ? 'runner-tui' : 'tui') : dispatchUseRunner ? 'runner' : 'direct';
+    const executionMode = resolveExecutionMode({ spawnHeadless, useRunner: dispatchUseRunner });
 
     // Register the agent with model info.
     //
@@ -757,7 +655,9 @@ async function runAgentSpawn(task) {
     // `isTruthyMetaFn` argument — which is exactly the split that made a claim
     // run badge itself "main".
     const claimFlowTask = isClaimFlowTask(task, isTruthyMeta);
-    await registerAgent(agentId, task.id, {
+    await registerAgent(agentId, task.id, buildAgentRegistration({
+      task,
+      provider,
       instanceId,
       workspacePath,
       sourceWorkspace,
@@ -769,159 +669,26 @@ async function runAgentSpawn(task) {
       // worktree. Non-throwing: an unreadable checkout yields null, which the
       // detector reads as "nothing to check".
       primaryCheckoutBaseline: sourceWorkspace ? await capturePrimaryCheckoutState(sourceWorkspace) : null,
-      worktreeBranch: worktreeInfo?.branchName || null,
-      isWorktree: !!worktreeInfo,
-      isPersistentWorktree: !!worktreeInfo?.isPersistentWorktree,
-      taskDescription: task.description,
-      taskType: task.taskType,
-      priority: task.priority,
-      providerId: provider.id,
-      // Persisted alongside the id because the cleanup path's `agentOwnsPR` gate
-      // must derive from the SAME `canTypeSlashCommands` predicate the prompt used
-      // to decide whether the agent opens its own PR (#3114). An id alone can't
-      // answer that — a path-configured `claude` under a custom id is slashdo-
-      // capable, and a lean `--bare` session is not.
-      providerCommand: provider.command || null,
-      // The endpoint this agent's inference actually lands on, stamped for the
-      // same reason as the command above: the per-local-endpoint spawn cap
-      // (#4834) must know which GPU a RUNNING agent is occupying, and an id
-      // alone can't answer that once the provider record is edited or deleted
-      // mid-run. Pre-#4834 agent records have no value here, so the counter
-      // falls back to resolving the id against the live provider list.
-      //
-      // Resolved through the SAME helper the counter reads with, so writer and
-      // reader can't drift — a CLI provider records its daemon in envVars or an
-      // OpenCode config, not in `endpoint`. Stamped as the RAW url, never the
-      // slot key: a slot key is null for a cloud provider, and stamping null
-      // would re-open the mid-run-edit hole this exists to close.
+      worktreeInfo,
+      explicitWorktree,
+      jiraBranchName,
+      // The endpoint this agent's inference actually lands on, resolved through
+      // the SAME helper the per-local-endpoint spawn cap (#4834) reads with, so
+      // writer and reader cannot drift.
       providerEndpoint: providerBaseUrl(provider),
-      // What this run's prompt costs to prefill on a LOCAL endpoint, and the
-      // duration estimate raised by it (#6117). `null` for a cloud provider and
-      // for a run with nothing assembled to measure — the card must read that as
-      // "no estimate", never as a small one, so it stays absent rather than 0.
       localPromptBudget,
       leanMode,
-      // Whether THIS run's prompt told the agent to push, open, review, and merge
-      // its own PR. Persisted rather than re-derived at cleanup time: the two
-      // must agree exactly or PortOS double-fires `gh pr create`. A pre-upgrade
-      // record has no value here, so cleanup falls back to the old
-      // `canTypeSlashCommands` derivation — what those runs were prompted with.
-      //
-      // Stamped from `inlinePrLifecycleSection`, the SAME predicate that decided
-      // whether the prompt above emitted the PR steps — NOT from `provider.type`
-      // alone. Ownership depends on task shape too (read-only, no-code-output,
-      // discard-worktree, JIRA/leave-open, and no-worktree runs are all told
-      // PortOS owns the PR), and a provider-only stamp claimed ownership for
-      // every one of them — routing a Creative Director reasoning run into the
-      // did-you-open-it net, which then opened a PR for it and filed a HIGH
-      // notification blaming the agent for skipping a step it was never given.
       ownsPrWorkflow,
-      model: selectedModel,
-      // The reasoning-effort override this run was dispatched with (null when the
-      // task pinned none). Persisted next to the model because the Resume Agent
-      // modal seeds its own effort select from here — without it a resume of an
-      // effort-pinned run silently drops back to the provider default.
-      effort: task.metadata?.effort || null,
-      modelTier: modelSelection.tier,
-      modelReason: modelSelection.reason,
+      claimFlowTask,
+      selectedModel,
+      modelSelection,
       runId,
-      phase: 'initializing',
-      useRunner: dispatchUseRunner,
+      dispatchUseRunner,
       executionMode,
-      // The public-review posture this run executes under (null for an ordinary
-      // task). Projected beside `executionMode` because the UI cannot otherwise
-      // explain why the card has no "Open Shell" link: a public-review stage is
-      // forced headless (`spawnHeadless` above) unless it is the sandboxed-
-      // actions stage on a TUI provider whose vendor declares an attachable
-      // recipe, so without this the card is indistinguishable from an agent
-      // whose PTY failed to attach.
       publicReviewPosture,
-      // Preserve privacy after the task becomes an archived agent.
-      machineLocal: isTruthyMeta(task.metadata?.machineLocal),
-      taskAnalysisType: task.metadata?.analysisType || null,
-      taskReviewType: task.metadata?.reviewType || null,
-      taskApp: task.metadata?.app || null,
-      // Marks a run dispatched by an explicit "Run Now" (on-demand) trigger, so
-      // the perpetual drain-on-completion refill (perpetualRefillPlan in cos.js)
-      // continues a MANUAL drain in the user-initiated on-demand lane rather than
-      // the auto-run-gated queue lane. `isTruthyMeta` accepts the boolean set at
-      // spawn AND the string `"true"` a COS-TASKS.md round-trip yields.
-      taskOnDemand: isTruthyMeta(task.metadata?.onDemand),
-      // WHO asked for that on-demand run. `perpetualRefillPlan` needs it to tell
-      // a human Run (which keeps draining) from an automated origin such as a
-      // quota burn (which is one unit and stops).
-      taskOnDemandOrigin: task.metadata?.onDemandOrigin || null,
-      // The single PR a pr-reviewer run was narrowed to. Same hand-picked-projection
-      // reason as the keys around it: perpetualRefillPlan must see from the AGENT
-      // record that this run was scoped, or its untargeted re-issue silently widens
-      // a per-row click back into a sweep of every open PR.
-      taskTargetPullRequest: task.metadata?.targetPullRequest || null,
-      // LI hand-off provenance (#2765): projected onto the agent so the completion
-      // hook (recordTaskCompletion) can attribute the run's success/failure back to
-      // the proposal's domain. agent.metadata is a hand-picked projection of
-      // task.metadata (not a full spread), so this must be listed explicitly.
-      taskLiProposal: task.metadata?.liProposal || null,
-      // Quota-burn provenance. Same hand-picked-projection reason as
-      // `taskLiProposal`: the runner listens for `agent:completed` and dispatches
-      // the NEXT job in this family's burn plan when the previous one finishes,
-      // so it must be able to tell a burn run from any other agent from the
-      // agent record alone. Spread from the ONE block definition
-      // (`lib/quotaBurnOrigin.js`) so every field that reaches disk reaches the
-      // runner's continuation and the denial ledger — naming them here one at a
-      // time is how `quotaBurnStepId` ended up persisted but unprojected (#6406).
-      // Values are coerced on the way through: a COS-TASKS.md round-trip hands
-      // every scalar back as a string.
-      ...quotaBurnAgentMetadata(task.metadata),
-      // Same reason as taskLiProposal — a hand-picked projection, so this must be
-      // listed explicitly. `declaresNoCommitCriterion` (taskTypeHooks.js) reads it
-      // to decide whether a run declared a commit criterion at all,
-      // and taskLearning's history backfill re-processes the ARCHIVED agent shape
-      // through that same predicate. Without the projection an archived
-      // tracker-filing run (reference-watch/ux on a github/gitlab/jira app) looks
-      // like a committing task during backfill, so its stale `validationPassed:
-      // false` fossil survives the sanitizer (#3273). `?? null` — not `|| null` —
-      // because `false` is the load-bearing value here.
-      worktreeChangesExpected: task.metadata?.worktreeChangesExpected ?? null,
-      taskAppName: resolvedAppName,
-      selfImprovementType: task.metadata?.selfImprovementType || null,
-      jobId: task.metadata?.jobId || null,
-      missionName: task.metadata?.missionName || null,
-      missionId: task.metadata?.missionId || null,
-      jiraTicketId: task.metadata?.jiraTicketId || null,
-      jiraTicketUrl: task.metadata?.jiraTicketUrl || null,
-      jiraBranch: task.metadata?.jiraBranch || null,
-      jiraInstanceId: task.metadata?.jiraInstanceId || null,
-      jiraCreatePR: task.metadata?.jiraCreatePR ?? null,
-      configOpenPR: isTruthyMeta(task.metadata?.openPR),
-      // Claim prompts own their external claim/<item> worktree and forge
-      // lifecycle even though CoS must keep configOpenPR/configUseWorktree off
-      // to avoid provisioning a nested worktree. Preserve that distinction in
-      // the run record so completion diagnostics cannot mistake the claim path
-      // for the generic commit-only handoff.
-      configClaimFlow: claimFlowTask,
-      configSimplify: isTruthyMeta(task.metadata?.simplify),
-      configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),
-      configReviewers: normalizeReviewers(task.metadata),
-      configUseWorktree: !!worktreeInfo,
-      configWorktreeAutoDetected: !!worktreeInfo && !explicitWorktree,
-      // A read-only run is given no worktree on purpose (agentWorkspacePrep) and
-      // commits nothing, so it is not "coding on main" either. Projected as its own
-      // key because the card has no other way to tell it from a commit-only handoff.
-      configReadOnly: isTruthyMeta(task.metadata?.readOnly),
-      // Coding on the default branch is the LEFTOVER posture: no CoS worktree, no
-      // JIRA feature branch, no claim worktree of its own, and not read-only. Each
-      // new branch-owning or non-committing flow has to be excluded here, or its
-      // card wears a warning badge that is simply false — which is how every issue
-      // claimed from the Issues page came to be badged "main" while the claim
-      // command was working in its own `claim/<item>` worktree.
-      configCodingOnMain: !worktreeInfo && !jiraBranchName && !claimFlowTask
-        && !isTruthyMeta(task.metadata?.readOnly),
-      // Feature-agent provenance must survive the in-memory runner handoff and
-      // server restarts so featureAgents can clear currentAgentId and record the
-      // run when the shared CoS lifecycle emits agent:completed.
-      featureAgentId: task.metadata?.featureAgentId || null,
-      featureAgentRun: isTruthyMeta(task.metadata?.featureAgentRun)
-    });
+      resolvedAppName,
+      isTruthyMetaFn: isTruthyMeta,
+    }));
 
     emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
 
@@ -987,16 +754,7 @@ async function runAgentSpawn(task) {
     // Task-level OpenCode/Ollama generation controls override provider defaults
     // for this one run. The child-environment composer turns these into the
     // dynamic `agent.build` config instead of mutating saved provider state.
-    const taskTemperature = task.metadata?.temperature === '' ? NaN : Number(task.metadata?.temperature);
-    const taskThinking = task.metadata?.thinking;
-    const requestedProvider = {
-      ...provider,
-      ...(Number.isFinite(taskTemperature) && taskTemperature >= 0 && taskTemperature <= 2
-        ? { temperature: taskTemperature }
-        : {}),
-      ...([true, false, 'true', 'false'].includes(taskThinking) ? { thinking: taskThinking } : {}),
-      ...(typeof task.metadata?.effort === 'string' ? { effort: task.metadata.effort } : {}),
-    };
+    const requestedProvider = applyTaskGenerationOverrides(provider, task.metadata);
     // Ollama 400s the whole request when a model that never implements thinking
     // is asked to think, so a non-reasoning local model dispatched at any effort
     // level dies on its first turn with exit 1 and no output. Resolved here,
@@ -1093,16 +851,15 @@ async function runAgentSpawn(task) {
     const setupError = isPrivateSecurityTask(task)
       ? 'Private assessment setup failed. Verify its local model, isolated harness, and source access before retrying.'
       : err.message;
-    if (isPrivateSecurityTask(task)) {
-      await updateTask(task.id, {
-        status: 'blocked',
-        metadata: { ...task.metadata, blockedCategory: 'private-security-setup-failed',
-          blockedReason: setupError, blockedAt: new Date().toISOString() },
-      }, task.taskType || 'user').catch(() => {});
-    }
     emitLog('error', `Agent spawn setup failed: ${setupError}`, { taskId: task.id, error: setupError });
-    await cleanupOnError(setupError);
-    cosEvents.emit('agent:error', { taskId: task.id, error: setupError });
+    // Only a private assessment is blocked here: its setup failure names a
+    // missing local model / isolated harness that will not fix itself, while an
+    // ordinary task's is transient and must stay pending to retry.
+    await blockAndBail({
+      reason: setupError,
+      category: 'private-security-setup-failed',
+      persist: isPrivateSecurityTask(task),
+    });
     // Preserve the autonomous-job retry contract. Pre-widening, an uncaught
     // throw here propagated to subAgentSpawner's `task:ready` listener,
     // which emitted `job:spawn-failed` so cos.js could clear
