@@ -1,11 +1,17 @@
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { useEffect, useState } from 'react';
 import { getCreativeDirectorSources } from '../../services/apiCreativeDirector.js';
 import { formatTimecode } from '../../utils/formatters.js';
 import { PLAN_STEP_STATUS_META, stepResultLink } from '../../lib/creativeDirectorPlan.js';
 
 export default function VideoArtifactsTab({ project, basePath }) {
-  const treatment = project.treatment;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedRevision = searchParams.get('revision');
+  const revisions = [...(project.treatment?.history || []), ...(project.treatment ? [project.treatment] : [])];
+  const treatment = selectedRevision
+    ? revisions.find(value => String(value.artifact?.revision) === selectedRevision)
+    : project.treatment;
+  const historical = Boolean(treatment && treatment !== project.treatment);
   const artifact = treatment?.artifact;
   const projectPath = `${basePath}/${encodeURIComponent(project.id)}`;
   const scenes = new Map((treatment?.scenes || []).map(scene => [scene.sceneId, scene]));
@@ -27,6 +33,20 @@ export default function VideoArtifactsTab({ project, basePath }) {
     <div className="max-w-4xl space-y-4">
       <h2 className="text-lg font-medium">Production artifacts</h2>
       <p className="text-sm text-port-text-muted">Saved planning artifacts. Production remains blocked until revision approvals and dispatch controls are available.</p>
+      {project.treatment?.artifact && <div className="space-y-2">
+        <label htmlFor="video-artifact-revision" className="block text-sm">View revision</label>
+        <select id="video-artifact-revision" value={selectedRevision || ''} onChange={event => {
+          const next = new URLSearchParams(searchParams);
+          if (event.target.value) next.set('revision', event.target.value);
+          else next.delete('revision');
+          setSearchParams(next);
+        }} className="bg-port-card border border-port-border rounded p-2">
+          <option value="">Current revision</option>
+          {revisions.map(value => <option key={value.artifact.revision} value={value.artifact.revision}>Revision {value.artifact.revision}</option>)}
+        </select>
+        {historical && <p role="status" className="text-sm text-port-text-muted">Viewing a saved previous revision. Shot descriptions and source references are preserved as they were saved.</p>}
+        {selectedRevision && !treatment && <p role="alert">Revision not found. Select the current revision to continue.</p>}
+      </div>}
       <section aria-label="Source availability" className="bg-port-card border border-port-border rounded p-4 space-y-2 text-sm">
         <h3 className="font-medium">Source availability</h3>
         {sourceError ? <p role="alert">Unable to check sources. Availability is unknown; no references were changed.</p>
@@ -68,7 +88,7 @@ export default function VideoArtifactsTab({ project, basePath }) {
                 const scene = scenes.get(shot.sceneId);
                 return <li key={shot.shotId} className="bg-port-card border border-port-border rounded p-3 space-y-1 text-sm">
                   <div className="flex flex-wrap justify-between gap-2">
-                    {scene ? <Link className="text-port-accent hover:underline break-words" to={`${projectPath}/segments/${encodeURIComponent(shot.sceneId)}`}>{shot.shotId}</Link>
+                    {scene && !historical ? <Link className="text-port-accent hover:underline break-words" to={`${projectPath}/segments/${encodeURIComponent(shot.sceneId)}`}>{shot.shotId}</Link>
                       : <span className="break-words">{shot.shotId}</span>}
                     <span>{formatTimecode(shot.startSeconds)}–{formatTimecode(shot.endSeconds)} · {shot.durationSeconds}s</span>
                   </div>
@@ -85,7 +105,7 @@ export default function VideoArtifactsTab({ project, basePath }) {
             {!artifact.references.length && <p className="text-sm">No attached sources in this revision.</p>}
             <ul className="space-y-2">
               {artifact.references.map(reference => {
-                const status = sourceState?.artifact.find(source => source.referenceId === reference.referenceId);
+                const status = historical ? undefined : sourceState?.artifact.find(source => source.referenceId === reference.referenceId);
                 const available = status?.available;
                 const sourcePath = reference.kind === 'universe' ? `/universes/${encodeURIComponent(reference.id)}`
                   : reference.kind === 'series' ? `/pipeline/series/${encodeURIComponent(reference.id)}` : null;

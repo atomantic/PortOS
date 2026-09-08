@@ -131,6 +131,17 @@ describe('Video treatment artifacts', () => {
     const revised = (await file.getProject(p.id)).treatment;
     expect(revised.artifact).toEqual({ ...saved.treatment.artifact, revision: 2 });
     expect(revised.script).toBe('The visitor takes a different path.');
+    const { history: ignoredHistory, ...original } = saved.treatment;
+    expect(revised.history).toEqual([original]);
+    await file.updateScene(p.id, 'scene-0', { prompt: 'A different path through a moonlit garden' });
+    const edited = (await file.getProject(p.id)).treatment;
+    expect(edited.artifact.revision).toBe(3);
+    expect(edited.history.map(value => value.artifact.revision)).toEqual([1, 2]);
+    expect(edited.history[1].script).toBe(revised.script);
+    expect(edited.history[1].scenes).toEqual(revised.scenes);
+    expect(edited.history.every(value => !('history' in value))).toBe(true);
+    await file.updateScene(p.id, 'scene-0', { status: 'accepted' });
+    expect((await file.getProject(p.id)).treatment.history).toEqual(edited.history);
     const reference = revised.artifact.references[0];
     expect((await getVideoSourceStatus(await file.getProject(p.id))).artifact[0].revisionChanged).toBe(false);
     getUniverse.mockResolvedValueOnce({ id: 'example-universe', updatedAt: '2026-09-02T00:00:00.000Z' });

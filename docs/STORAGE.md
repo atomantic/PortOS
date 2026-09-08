@@ -288,8 +288,16 @@ projects in their current state and do not dispatch production. Creative shot
 edits increment the artifact revision; runtime status updates do not. Changes to
 brief, source selection or production settings mark the artifact stale until it
 is compiled again. Source snapshots remain references, not copied source records.
+Replacing a Video treatment or changing a creative shot retains the previous
+script, scenes and artifact metadata in `treatment.history`. Each entry is one
+snapshot without nested history; runtime-only updates do not create revisions.
+The Artifacts revision selector uses the `revision` query parameter for reloadable
+read-only history. Missing history on older records means no retained snapshots;
+previously overwritten content cannot be reconstructed. History shares the same
+JSONB storage and backup coverage as its project.
+Sync v6 prevents older writers from discarding retained history.
 This is additive optional metadata: legacy treatments are unchanged and existing
-records are not backfilled. Sync advances to `creativeDirectorProjects` v5 because
+records are not backfilled. `creativeDirectorProjects` v5 originally shipped because
 a v4 peer can edit a shot without incrementing its artifact revision, or discard
 the artifact on treatment replacement. The Video dispatch barrier remains in
 force; this artifact does not certify backend compatibility or grant approval.

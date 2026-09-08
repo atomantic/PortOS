@@ -435,6 +435,13 @@ function compileVideoArtifact(project, treatment, sourceRevisions) {
   };
 }
 
+function priorVideoTreatments(project) {
+  if (!project.treatment?.artifact) return [];
+  // Snapshots contain one revision only; nesting prior history grows exponentially.
+  const { history = [], ...snapshot } = project.treatment;
+  return [...history, structuredClone(snapshot)];
+}
+
 /**
  * Validate + apply a treatment to a project. Returns the next record. Initializes
  * each scene's runtime fields if the agent didn't supply them, and preserves
@@ -456,7 +463,10 @@ export function applyTreatment(project, treatmentInput, sourceRevisions) {
     evaluation: s.evaluation ?? null,
   }));
   const treatment = { ...parsed.data, scenes };
-  if (project.workspace === 'video') treatment.artifact = compileVideoArtifact(project, treatment, sourceRevisions);
+  if (project.workspace === 'video') {
+    treatment.artifact = compileVideoArtifact(project, treatment, sourceRevisions);
+    treatment.history = priorVideoTreatments(project);
+  }
   const nextStatus = (project.workspace === 'video' || project.status === 'paused' || project.status === 'failed')
     ? project.status
     : 'rendering';
@@ -567,6 +577,7 @@ export function applySceneUpdate(project, sceneId, patch) {
     validateVideoShot(project, updated, sceneId === [...scenes].sort((a, b) => a.order - b.order)[0].sceneId);
     // A shot edit changes the reviewed content, but cannot refresh stale source context.
     treatment.artifact = { ...treatment.artifact, revision: treatment.artifact.revision + 1 };
+    treatment.history = priorVideoTreatments(project);
   }
   const next = {
     ...project,
