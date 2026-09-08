@@ -12,6 +12,7 @@
  * logic stays in cos.js while persistence lives here.
  */
 
+import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -1392,7 +1393,7 @@ export async function resolveTaskChallengeWithRecheck(taskId, { recheck, resolve
   // single-model daemon re-checks without one. It reports `code: 'NO_MODEL'` when it
   // could not resolve one either, which stays a config problem (4xx) rather than the
   // 502 bucket reserved for a reviewer that's actually unreachable.
-  const model = recheck?.model || recheckDefaults?.[`${backend}Model`] || null;
+  const model = recheck?.model || reviewerModelsFromDefaults(recheckDefaults)[backend] || null;
   console.log(`⚖️ Re-checking challenge on ${taskId} via ${backend} (${model || 'model from the backend'}${effort ? `, ${effort} effort` : ''})`);
   const review = await runLocalCodeReview({ backend, model, effort, diff: recheck?.diff });
   if (!review?.ok) {

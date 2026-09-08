@@ -23,6 +23,9 @@ import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn, gua
 import { buildCliChildEnv } from './cliChildEnv.js';
 import { modelPinIsOffered } from './localProviderRuntime.js';
 import { filterCallerModeEligible } from './callerModePolicy.js';
+import { buildVendorSpawnConfig, supportsPublicReviewProvider } from './providerVendors.js';
+import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
+import { resolveCliModel } from './providerModels.js';
 
 // How much stderr to hand back to callers. Enough to carry a rate-limit banner
 // or a stack's first frames, short enough to embed in an error message or a
@@ -99,10 +102,11 @@ export function pickCliProvider(providers, config = {}) {
  * @param {number} [args.timeoutMs] - SIGTERM after this many ms (default 300000)
  * @param {(chunk: string, stream: 'stdout'|'stderr') => void} [args.onData] - live output callback
  * @param {NodeJS.ProcessEnv} [args.baseEnv] - base env for the child (default process.env); the shared child-env composer filters inherited variables. Explicit provider.envVars still overlays it.
+ * @param {string} [args.safetyProfile] - Optional maintained no-tool profile. Refuses unsupported providers and extra argv; both argv and environment use the same profile.
  * @returns {Promise<{ text: string, exitCode: number, stderr: string, partial: boolean, stderrTail: string } | { error: string, exitCode?: number, stderr?: string, stderrTail?: string }>}
  */
 export function runCliProviderPrompt(args = {}) {
-  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env } = args;
+  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env, safetyProfile = null } = args;
 
   if (!provider?.command) {
     return Promise.resolve({ error: 'Provider has no command configured' });
@@ -110,11 +114,17 @@ export function runCliProviderPrompt(args = {}) {
   if (typeof prompt !== 'string' || prompt.length === 0) {
     return Promise.resolve({ error: 'prompt must be a non-empty string' });
   }
+  if (safetyProfile && (!isPublicReviewNoToolProfile(safetyProfile) || !supportsPublicReviewProvider(provider) || extraArgs.length)) {
+    return Promise.resolve({ error: 'Provider has no enforced tool-free review mode, or extra arguments would override it.' });
+  }
 
   // Clone with the per-call model as defaultModel so buildCliArgs injects the
   // right --model/-m flag for this provider's CLI convention.
-  const effectiveProvider = { ...provider, defaultModel: model ?? provider.defaultModel };
-  const builtArgs = [...buildCliArgs(effectiveProvider), ...(Array.isArray(extraArgs) ? extraArgs : [])];
+  const effectiveProvider = { ...provider, apiKey: provider.apiKey, defaultModel: model ?? provider.defaultModel };
+  const restrictedConfig = safetyProfile ? buildVendorSpawnConfig(effectiveProvider, {
+    safetyProfile, effectiveModel: resolveCliModel(effectiveProvider.defaultModel), effort: effectiveProvider.effort,
+  }) : null;
+  const builtArgs = restrictedConfig?.args || [...buildCliArgs(effectiveProvider), ...(Array.isArray(extraArgs) ? extraArgs : [])];
   // Deliver the prompt per provider convention: antigravity gets it as the
   // --print VALUE (no stdin); grok's `--prompt-file /dev/stdin` is fed via stdin
   // on POSIX / a temp file on Windows (useStdin=false); everyone else via stdin.
@@ -140,6 +150,7 @@ export function runCliProviderPrompt(args = {}) {
       baseEnv,
       provider: effectiveProvider,
       cwd: effectiveCwd,
+      safetyProfile,
     });
 
     // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap
@@ -204,7 +215,9 @@ export function runCliProviderPrompt(args = {}) {
       if (code !== 0 && !text) {
         return done({ error: (stderr.trim().slice(0, STDERR_TAIL_LIMIT) || `${provider.command} exited with code ${code}`), exitCode: code, stderr, stderrTail });
       }
-      done({ text, exitCode: code, stderr, partial: code !== 0, stderrTail });
+      done({ text, exitCode: code, stderr, partial: code !== 0, stderrTail,
+        ...(restrictedConfig?.streamFormat ? { streamFormat: restrictedConfig.streamFormat } : {}),
+      });
     });
   });
 }

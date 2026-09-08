@@ -6,7 +6,7 @@
  */
 
 import { join } from 'path';
-import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, LOCAL_LLM_REVIEWERS } from '../lib/validation.js';
+import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, isToolFreeReviewer } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { shellQuote } from '../lib/shellQuote.js';
 
@@ -106,7 +106,7 @@ export const appendReviewerEffortBlock = (reviewers, reviewerEfforts, reviewerMo
   appendBlock(buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewerModels }));
 
 export function buildLocalReviewerInstructions(reviewers, reviewerModels = {}, reviewerEfforts = {}, { claimCommentGate = false } = {}) {
-  const localReviewers = (reviewers || []).filter((reviewer) => LOCAL_LLM_REVIEWERS.includes(reviewer));
+  const localReviewers = (reviewers || []).filter((reviewer) => isToolFreeReviewer(reviewer));
   if (!localReviewers.length) return '';
 
   const diffCommand = [
