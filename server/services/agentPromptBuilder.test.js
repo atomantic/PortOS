@@ -111,6 +111,7 @@ vi.mock('./codeReview.js', () => ({
   getCodeReviewDefaults: vi.fn().mockResolvedValue({ reviewers: ['copilot'] }),
 }));
 
+import { resolveCompletionMode } from '../lib/agentCompletionMode.js';
 import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection, getAppWorkspace, getAgentInstructionsContext, detectSkillTemplates, loadSkillTemplates, UI_AUDIT_RUNTIME_RULE, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
 
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
@@ -2707,16 +2708,16 @@ describe('unattended-run rule reaches every prompt path', () => {
 describe('buildCompletionGuidelineBullet', () => {
   it('read-only short-circuits regardless of other flags', () => {
     const bullet = buildCompletionGuidelineBullet({
-      isReadOnly: true, isTui: true, slashdoFree: true,
-      tuiCompletionCommand: '/do:pr', worktreeInfo: null, willOpenPR: true, willReviewLoop: false,
+      mode: resolveCompletionMode({ isReadOnly: true, isTui: true, worktreeInfo: null, willOpenPR: true }),
+      slashdoFree: true, tuiCompletionCommand: '/do:pr', worktreeInfo: null, willOpenPR: true,
     });
     expect(bullet).toMatch(/read-only task/i);
   });
 
   it('slashdo TUI bullet references the slashdo command', () => {
     const bullet = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: true, slashdoFree: false,
-      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false,
+      mode: resolveCompletionMode({ isTui: true, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
+      slashdoFree: false, tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
     });
     expect(bullet).toMatch(/`\/do:pr`/);
     expect(bullet).not.toMatch(/plain `git`\/`gh`/);
@@ -2725,8 +2726,8 @@ describe('buildCompletionGuidelineBullet', () => {
 
   it('slashdo-free TUI bullet points at the commit + PortOS handoff, not a /do:* command', () => {
     const bullet = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: true, slashdoFree: true,
-      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false,
+      mode: resolveCompletionMode({ isTui: true, canRunSlashCommands: false, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
+      slashdoFree: true, tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
     });
     expect(bullet).toMatch(/plain `git` commit \+ PortOS handoff/);
     expect(bullet).toMatch(/no slashdo commands/);
@@ -2736,31 +2737,31 @@ describe('buildCompletionGuidelineBullet', () => {
 
   it('non-TUI worktree+openPR bullet defers push/PR to the system, and read-only/null cases return null', () => {
     const prBullet = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: false, tuiCompletionCommand: '/do:pr',
-      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false,
+      mode: resolveCompletionMode({ worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
     });
     expect(prBullet).toMatch(/the system will push your branch and open a pull request/);
     // Without a review loop, a follow-up merges on green CI...
     expect(prBullet).toMatch(/merges the PR once CI is green/);
     // ...unless the PR is a human's to land, where the bullet must not promise a merge.
     const jiraBullet = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: false, tuiCompletionCommand: '/do:pr',
-      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: false, leavePrOpen: true,
+      mode: resolveCompletionMode({ worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, leavePrOpen: true,
     });
     expect(jiraBullet).toMatch(/left OPEN for a human/);
     expect(jiraBullet).not.toMatch(/merges the PR once CI is green/);
     // No worktree, not TUI, not read-only → no bullet.
     const none = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: false, tuiCompletionCommand: '/do:push',
-      worktreeInfo: null, willOpenPR: false, willReviewLoop: false,
+      mode: resolveCompletionMode({ worktreeInfo: null, willOpenPR: false }),
+      tuiCompletionCommand: '/do:push', worktreeInfo: null, willOpenPR: false,
     });
     expect(none).toBeNull();
   });
 
   it('marks a catalog audit no-op as a valid completion without weakening the change path', () => {
     const bullet = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: false, tuiCompletionCommand: '/do:pr',
-      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, noChangeSuccess: true,
+      mode: resolveCompletionMode({ worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true }),
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, noChangeSuccess: true,
     });
     expect(bullet).toMatch(/no change is needed/i);
     expect(bullet).toMatch(/leave the worktree clean/i);
@@ -2770,9 +2771,8 @@ describe('buildCompletionGuidelineBullet', () => {
 
   it('discardWorktree short-circuits to the reasoning-only bullet (wins over TUI/openPR)', () => {
     const bullet = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: true, tuiCompletionCommand: '/do:pr',
-      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: true,
-      discardWorktree: true,
+      mode: resolveCompletionMode({ isTui: true, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, discardWorktree: true }),
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
     });
     expect(bullet).toMatch(/reasoning-only task/i);
     expect(bullet).toMatch(/discarded on exit/);
@@ -2781,8 +2781,8 @@ describe('buildCompletionGuidelineBullet', () => {
 
   it('claimFlow short-circuits to the claim-owned lifecycle bullet', () => {
     const bullet = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: true, tuiCompletionCommand: '/do:push',
-      worktreeInfo: null, willOpenPR: false, claimFlow: true,
+      mode: resolveCompletionMode({ isTui: true, worktreeInfo: null, willOpenPR: false, claimFlow: true }),
+      tuiCompletionCommand: '/do:push', worktreeInfo: null, willOpenPR: false,
     });
     expect(bullet).toMatch(/self-managed claim flow/i);
     expect(bullet).toMatch(/Do NOT stop after committing/);
@@ -2797,9 +2797,8 @@ describe('buildCompletionGuidelineBullet', () => {
     // told "write your result to the sentinel" — that is how a run performs no
     // action and reports its findings into a file that is then discarded.
     const bullet = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: true, tuiCompletionCommand: '/do:pr',
-      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
-      discardWorktree: true, noCodeOutput: true,
+      mode: resolveCompletionMode({ isTui: true, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, discardWorktree: true, noCodeOutput: true }),
+      tuiCompletionCommand: '/do:pr', worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true,
     });
     expect(bullet).toMatch(/produces no code output/i);
     expect(bullet).not.toMatch(/reasoning-only task/i);
@@ -4188,8 +4187,8 @@ describe('auto-merge posture (worktree, no PR) is commit-only on every path', ()
 
   it('buildCompletionGuidelineBullet renders the commit-only TUI wording when there is no completion command', () => {
     const bullet = buildCompletionGuidelineBullet({
-      isReadOnly: false, isTui: true, tuiCompletionCommand: null,
-      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: false,
+      mode: resolveCompletionMode({ isTui: true, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: false }),
+      tuiCompletionCommand: null, worktreeInfo: { worktreePath: '/wt' }, willOpenPR: false,
     });
     expect(bullet).toMatch(/commit only — no push; PortOS merges your branch back after you exit/);
     expect(bullet).not.toMatch(/`\/do:push`/);

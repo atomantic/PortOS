@@ -150,6 +150,7 @@ export * as childProcess from './childProcess.js';
 export * from './callerModePolicy.js';
 export * from './cliChildEnv.js';
 export * from './agentExecutionProfiles.js';
+export * from './agentCompletionMode.js';
 export * from './localEndpoint.js';
 export * from './cliProviderArgs.js';
 export * from './cliProviderRun.js';

@@ -32,12 +32,14 @@ import { manualForgeCli, resolveManualForgeCli } from './promptSections/forge.js
 import { buildOrchestrationDoctrineSection } from './promptSections/orchestrationDoctrine.js';
 import { buildPlannerAttributionSection } from './promptSections/plannerAttribution.js';
 import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from '../lib/agentExecutionProfiles.js';
+import { COMPLETION_MODES, resolveCompletionMode } from '../lib/agentCompletionMode.js';
 import {
   DISCARD_WORKTREE_NOTE,
   buildActionOutputCompletionSection,
   buildClaimFlowCompletionSection,
   buildCliCompletionSection,
   buildCompletionGuidelineBullet,
+  buildFallbackCompletionInstructions,
   buildInlineReviewLoopSection,
   NO_CHANGE_AUDIT_GUIDANCE,
   buildProgrammaticOutputCompletionSection,
@@ -81,6 +83,14 @@ const AGENTS_DIR = PATHS.cosAgents;
 // These scheduled audits inspect a running web UI. Keep their runtime contract
 // in the builder rather than only in the default prompt bodies so customized
 // prompts and tasks queued before a prompt revision get the same guidance.
+// The configurable briefing template the full (`api`) path renders. Named here,
+// above this file's first template literal, because the prompt-stage call-site
+// generator indexes stage keys by scanning string tokens — and its scanner can
+// lose phase on a file with this many nested backticks, which silently dropped
+// agentPromptBuilder.js from this stage's "Referenced in" list. A key declared
+// before the first multi-line template is found regardless of that phase.
+const BRIEFING_STAGE_KEY = 'cos-agent-briefing';
+
 export const UI_AUDIT_TASK_TYPES = Object.freeze([
   'accessibility', 'console-errors', 'ui-bugs', 'mobile-responsive', 'ux'
 ]);
@@ -435,6 +445,10 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
   const noChangeSuccess = isTruthyMetaFn(task.metadata?.noChangeSuccess);
   const isReadOnly = isTruthyMetaFn(task.metadata?.readOnly);
+  // The review-loop follow-up that addresses PR feedback and merges (spawned by
+  // the previous agent's cleanup hook). Its own procedure section renders far
+  // below; the flag is read up here because it is an input to the mode decision.
+  const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
   const worktreeCommitNote = worktreeInfo
     ? worktreeCommitGuidance({
@@ -482,14 +496,10 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   const canRunSlashCommands = canTypeSlashCommands({
     providerId, providerCommand, leanMode, assumeClaudeWhenUnknown: false,
   });
-  const simplifyInstruction = canRunSlashCommands
-    ? 'run `/simplify` to review the changed code for reuse, quality, and efficiency'
-    : SIMPLIFY_INLINE_REVIEW;
-  // Discard tasks don't commit, so the simplify-before-commit step is moot.
-  const simplifySection = simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
-## Simplify Step
-After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : portosMergesBranch ? 'commit your changes (do NOT push — PortOS merges this branch back into the source checkout after you exit; a pushed copy would only be left behind on origin)' : 'commit and push using `/do:push`'}.
-` : '';
+  const simplifySection = buildSimplifySection({
+    canRunSlashCommands, simplifyEnabled, isTui, discardWorktree, claimFlow,
+    worktreeInfo, willOpenPR, portosMergesBranch,
+  });
 
   // Resolve the user's ordered reviewer list + flags (task metadata wins; else the
   // install's configured Code Review Defaults; else `[]`). Declared up here
@@ -530,50 +540,175 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // is a plain commit (buildCompletionGuidelineBullet renders that case).
   const tuiCompletionCommand = willOpenPR ? '/do:pr' : portosMergesBranch ? null : '/do:push';
   const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
-  // A discard task's completion is the sentinel-only contract (no push/PR/merge),
-  // and this applies to every provider type — so it wins over the isTui fork and
-  // over the fallback template's commit/push instructions below.
-  // Same precedence as buildCompletionGuidelineBullet: where the deliverable
-  // goes (`noCodeOutput`) decides the completion contract, and only then does
-  // worktree disposal (`discardWorktree`) pick the reasoning-payload contract.
-  // A task doing external work during the run must not be told the sentinel is
-  // its output channel.
-  const tuiCompletionSection = toolFreeReasoning
-    ? buildToolFreeReasoningCompletionSection()
-    : sentinelPayloadOutput
-    ? buildProgrammaticOutputCompletionSection(sentinelPath)
-    : noCodeOutput
-    ? buildActionOutputCompletionSection({ isTui, sentinelPath })
-    : discardWorktree
-      ? buildProgrammaticOutputCompletionSection(sentinelPath)
-      : claimFlow
-        ? buildClaimFlowCompletionSection({ isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) })
-      : isTui
-        ? buildTuiCompletionSection({
-            willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, portosMergesBranch,
-            // Unreachable today — every `tui`/`cli` provider returns early at the
-            // LIGHT_CONTEXT gate above, so `isTui` is always false on this path
-            // (same situation as buildCompletionGuidelineBullet's `isTui` arm).
-            // Kept provider-aware anyway so it can't be the ONE call site that
-            // silently promises `/do:pr` to a host that can't type it if the
-            // routing ever changes — this arm previously passed no slashdoFree at
-            // all, which is how gates like this drift (#3114).
-            slashdoFree: !canRunSlashCommands,
-            branchName: worktreeInfo?.branchName || null,
-            baseBranch: worktreeInfo?.baseBranch || null,
-            sentinelPath,
-            leavePrOpen: leavesPrForHuman(task),
-            reviewers: taskReviewers,
-            usernames: taskReviewerUsernames,
-            optionalReviewers: taskOptionalReviewers,
-            reviewerMaxRounds: taskReviewerMaxRounds,
-            reviewerModels: taskReviewerModels,
-            reviewerEfforts: taskReviewerEfforts,
-            reviewStopMode: taskReviewStopMode,
-            reviewerApplies: taskReviewerApplies
-          })
-        : '';
+  // THE completion decision, made once. Every section below renders this key;
+  // none re-derives it. See lib/agentCompletionMode.js for the rule order.
+  const completionMode = resolveCompletionMode({
+    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
+    isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands, portosMergesBranch,
+    worktreeInfo, willOpenPR,
+  });
+  // Step 4, the Git Hygiene bullet and the commit-target bullet as ONE record,
+  // so the three cannot contradict each other the way they did (#6616).
+  const completionInstructions = buildFallbackCompletionInstructions({
+    mode: completionMode, worktreeInfo, willOpenPR, tuiCompletionCommand,
+  });
+  // The `## Guidelines` completion bullet: same mode, rendered here so the
+  // fallback template stays pure interpolation.
+  const guidelineBullet = buildCompletionGuidelineBullet({
+    mode: completionMode, whenDone,
+    tuiCompletionCommand, slashdoFree: isTui && !canRunSlashCommands,
+    worktreeInfo, willOpenPR, prCompletion, noChangeSuccess,
+    leavePrOpen: leavesPrForHuman(task),
+  });
+  const completionBullet = guidelineBullet ? `- ${guidelineBullet}` : '';
+  // Unreachable today — every `tui`/`cli` provider returns early at the
+  // LIGHT_CONTEXT gate above, so `isTui` is always false on this path (the
+  // light path's `buildTuiCompletionSection` call is the live one). Kept
+  // provider-aware anyway so this can't become the ONE call site that silently
+  // promises `/do:pr` to a host that can't type it if the routing ever changes
+  // — this arm previously passed no slashdoFree at all, which is how gates like
+  // it drift (#3114).
+  const buildFullPathTuiCompletion = () => buildTuiCompletionSection({
+    willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, portosMergesBranch,
+    slashdoFree: !canRunSlashCommands,
+    branchName: worktreeInfo?.branchName || null,
+    baseBranch: worktreeInfo?.baseBranch || null,
+    sentinelPath,
+    leavePrOpen: leavesPrForHuman(task),
+    reviewers: taskReviewers,
+    usernames: taskReviewerUsernames,
+    optionalReviewers: taskOptionalReviewers,
+    reviewerMaxRounds: taskReviewerMaxRounds,
+    reviewerModels: taskReviewerModels,
+    reviewerEfforts: taskReviewerEfforts,
+    reviewStopMode: taskReviewStopMode,
+    reviewerApplies: taskReviewerApplies
+  });
 
+  // Which completion section this mode gets. A mode with no entry renders
+  // nothing HERE because the full path carries its contract elsewhere: the
+  // review-loop follow-up has its own procedure section below, read-only and
+  // the commit/push modes are covered by the Guidelines bullet and Git Hygiene.
+  const tuiCompletionSection = ({
+    [COMPLETION_MODES.TOOL_FREE]: () => buildToolFreeReasoningCompletionSection(),
+    [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => buildProgrammaticOutputCompletionSection(sentinelPath),
+    [COMPLETION_MODES.ACTION_OUTPUT]: () => buildActionOutputCompletionSection({ isTui, sentinelPath }),
+    [COMPLETION_MODES.DISCARD_WORKTREE]: () => buildProgrammaticOutputCompletionSection(sentinelPath),
+    [COMPLETION_MODES.CLAIM_FLOW]: () => buildClaimFlowCompletionSection({
+      isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
+    }),
+    [COMPLETION_MODES.TUI_SLASHDO_FREE]: buildFullPathTuiCompletion,
+    [COMPLETION_MODES.TUI]: buildFullPathTuiCompletion,
+  }[completionMode] || (() => ''))();
+
+  const {
+    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection,
+    toolsSection, planningContextSection,
+  } = await buildFullPathOptionalSections({
+    task, workspaceDir, agentId, worktreeInfo, isTui, prCompletion, willOpenPR,
+    taskReviewers, isReviewLoopFollowUp, isFollowUpNeedingRecipes, localAgentLoopBody,
+    skipDevContext,
+  });
+
+  // Try to use the prompt template system. Skip the template path for
+  // review-loop follow-up agents because the user-side template usually
+  // predates the {{reviewLoopFollowUpSection}} placeholder; the built-in
+  // fallback is the source of truth for that section, and silently dropping
+  // it would leave the agent with no instructions and the loop would not run.
+  // Precomputed display label for the stock "Target Application" heading in the
+  // cos-agent-briefing template. Mirrors buildTaskBlock's predicate: suppress
+  // the redundant heading for the PortOS default app (empty string → the
+  // template section is falsy and renders nothing), surface the app id for
+  // managed apps. `task.metadata.app` stays in the context for any custom
+  // template references — only the stock heading gates on this.
+  const briefingApp = task.metadata?.app;
+  const targetAppLabel = briefingApp && briefingApp !== PORTOS_APP_ID ? briefingApp : '';
+  // The task's prompt payload + human note as ONE string (#4153). Templates —
+  // the shipped `cos-agent-briefing.md` AND every copy an install has since
+  // customized — reference `{{task.metadata.context}}`, so the split is folded
+  // back into that key for rendering instead of being pushed out to every
+  // template on every install. `metadata.prompt` still travels untouched for a
+  // custom template that wants to address it directly.
+  const briefingSourceTask = taskVisibleToPipelineReviewer(task);
+  const contextBlock = taskContextBlock(briefingSourceTask);
+  const uiAuditRuntimeSection = isUiAuditTask(task) ? UI_AUDIT_RUNTIME_RULE : '';
+  const briefingTask = contextBlock === (briefingSourceTask.metadata?.[TASK_CONTEXT_KEY] ?? null)
+    ? briefingSourceTask
+    : { ...briefingSourceTask, metadata: { ...briefingSourceTask.metadata, [TASK_CONTEXT_KEY]: contextBlock } };
+  const promptData = isReviewLoopFollowUp ? null : await buildPrompt(BRIEFING_STAGE_KEY, {
+    task: briefingTask,
+    targetAppLabel,
+    config,
+    memorySection,
+    agentInstructionsSection,
+    digitalTwinSection,
+    worktreeSection,
+    pipelineSection,
+    jiraSection,
+    simplifySection,
+    tuiCompletionSection,
+    reviewLoopSection,
+    reviewLoopFollowUpSection,
+    compactionSection,
+    skillSection,
+    planningContextSection,
+    toolsSection,
+    claudeMdSection: agentInstructionsSection, // Backwards compatibility for prompt templates (pre-#4852 name)
+    soulSection: digitalTwinSection, // Backwards compatibility for prompt templates
+    timestamp: new Date().toISOString()
+  }).catch(() => null);
+
+  if (promptData?.prompt) {
+    return `${promptData.prompt}${orchestrationSection ? `\n\n${orchestrationSection}` : ''}${plannerAttributionSection ? `\n\n${plannerAttributionSection}` : ''}\n\n${UNATTENDED_RUN_RULE}${uiAuditRuntimeSection ? `\n\n${uiAuditRuntimeSection}` : ''}\n\n${PM2_SAFETY_RULE}`;
+  }
+
+  return buildFallbackAgentPrompt({
+    task, workspaceDir, agentInstructionsSection, memorySection, contextBlock,
+    worktreeSection, pipelineSection, jiraSection, orchestrationSection,
+    plannerAttributionSection, simplifySection, tuiCompletionSection,
+    reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
+    toolsSection, planningContextSection, uiAuditRuntimeSection,
+    completionBullet, completionInstructions, noChangeSuccess,
+  });
+}
+
+/**
+ * The "## Simplify Step" section for the full (`api`) path — the
+ * reuse/quality/efficiency self-review the agent runs before it commits.
+ *
+ * `/simplify` is a Claude Code built-in slash command, so only a session that
+ * loaded its commands can run it; everyone else gets the inline equivalent
+ * describing the same pass. Empty for the contracts that never commit.
+ */
+function buildSimplifySection({
+  canRunSlashCommands, simplifyEnabled, isTui, discardWorktree, claimFlow,
+  worktreeInfo, willOpenPR, portosMergesBranch,
+}) {
+  const simplifyInstruction = canRunSlashCommands
+    ? 'run `/simplify` to review the changed code for reuse, quality, and efficiency'
+    : SIMPLIFY_INLINE_REVIEW;
+  // Discard tasks don't commit, so the simplify-before-commit step is moot.
+  const simplifySection = simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
+## Simplify Step
+After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : portosMergesBranch ? 'commit your changes (do NOT push — PortOS merges this branch back into the source checkout after you exit; a pushed copy would only be left behind on origin)' : 'commit and push using `/do:push`'}.
+` : '';
+  return simplifySection;
+}
+
+/**
+ * The full (`api`) path's per-task optional sections: the review-loop notice,
+ * the review-loop follow-up procedure, JIRA context, the auto-matched skill
+ * templates, the tools summary and any `.planning/` context.
+ *
+ * Each is independent of the others and of the completion contract — lifting
+ * them out of `buildAgentPrompt` keeps that function about ORDER (resolve,
+ * then render) rather than about every section's presence test.
+ */
+async function buildFullPathOptionalSections({
+  task, workspaceDir, agentId, worktreeInfo, isTui, prCompletion, willOpenPR,
+  taskReviewers, isReviewLoopFollowUp, isFollowUpNeedingRecipes, localAgentLoopBody,
+  skipDevContext,
+}) {
   // Build review loop section if enabled. The agent itself does NOT open the PR
   // or run /do:rpr — by the time the PR exists, the agent has already exited.
   // The system requests Copilot review automatically after PR creation on GitHub
@@ -597,7 +732,6 @@ After your task completes, the system will spawn a follow-up agent that runs the
   // hook (see spawnReviewLoopFollowUp in agentLifecycle.js). It needs the full /do:rpr
   // procedure inlined because the agent runs in a one-shot session and won't trigger
   // a slash command itself.
-  const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   let reviewLoopFollowUpSection = '';
   if (isReviewLoopFollowUp) {
     // `/do:rpr` is the Copilot/@github comment-resolution procedure — a merge-only
@@ -663,63 +797,34 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
       }
     }
   }
+  return {
+    reviewLoopSection, reviewLoopFollowUpSection, jiraSection, skillSection,
+    toolsSection, planningContextSection,
+  };
+}
 
-  // Try to use the prompt template system. Skip the template path for
-  // review-loop follow-up agents because the user-side template usually
-  // predates the {{reviewLoopFollowUpSection}} placeholder; the built-in
-  // fallback is the source of truth for that section, and silently dropping
-  // it would leave the agent with no instructions and the loop would not run.
-  // Precomputed display label for the stock "Target Application" heading in the
-  // cos-agent-briefing template. Mirrors buildTaskBlock's predicate: suppress
-  // the redundant heading for the PortOS default app (empty string → the
-  // template section is falsy and renders nothing), surface the app id for
-  // managed apps. `task.metadata.app` stays in the context for any custom
-  // template references — only the stock heading gates on this.
-  const briefingApp = task.metadata?.app;
-  const targetAppLabel = briefingApp && briefingApp !== PORTOS_APP_ID ? briefingApp : '';
-  // The task's prompt payload + human note as ONE string (#4153). Templates —
-  // the shipped `cos-agent-briefing.md` AND every copy an install has since
-  // customized — reference `{{task.metadata.context}}`, so the split is folded
-  // back into that key for rendering instead of being pushed out to every
-  // template on every install. `metadata.prompt` still travels untouched for a
-  // custom template that wants to address it directly.
-  const briefingSourceTask = taskVisibleToPipelineReviewer(task);
-  const contextBlock = taskContextBlock(briefingSourceTask);
-  const uiAuditRuntimeSection = isUiAuditTask(task) ? UI_AUDIT_RUNTIME_RULE : '';
-  const briefingTask = contextBlock === (briefingSourceTask.metadata?.[TASK_CONTEXT_KEY] ?? null)
-    ? briefingSourceTask
-    : { ...briefingSourceTask, metadata: { ...briefingSourceTask.metadata, [TASK_CONTEXT_KEY]: contextBlock } };
-  const promptData = isReviewLoopFollowUp ? null : await buildPrompt('cos-agent-briefing', {
-    task: briefingTask,
-    targetAppLabel,
-    config,
-    memorySection,
-    agentInstructionsSection,
-    digitalTwinSection,
-    worktreeSection,
-    pipelineSection,
-    jiraSection,
-    simplifySection,
-    tuiCompletionSection,
-    reviewLoopSection,
-    reviewLoopFollowUpSection,
-    compactionSection,
-    skillSection,
-    planningContextSection,
-    toolsSection,
-    claudeMdSection: agentInstructionsSection, // Backwards compatibility for prompt templates (pre-#4852 name)
-    soulSection: digitalTwinSection, // Backwards compatibility for prompt templates
-    timestamp: new Date().toISOString()
-  }).catch(() => null);
+/**
+ * The built-in fallback prompt for the full (`api`) path — rendered when the
+ * configurable `cos-agent-briefing` template is unavailable or a review-loop
+ * follow-up bypasses it.
+ *
+ * Pure string assembly, deliberately separate from `buildAgentPrompt`: every
+ * optional section it interpolates is decided by the caller, so the
+ * orchestrator reads as "resolve the sections, then render" instead of
+ * carrying each section's presence ternary in its own body.
+ */
+function buildFallbackAgentPrompt({
+  task, workspaceDir, agentInstructionsSection, memorySection, contextBlock,
+  worktreeSection, pipelineSection, jiraSection, orchestrationSection,
+  plannerAttributionSection, simplifySection, tuiCompletionSection,
+  reviewLoopSection, reviewLoopFollowUpSection, compactionSection, skillSection,
+  toolsSection, planningContextSection, uiAuditRuntimeSection,
+  completionBullet, completionInstructions, noChangeSuccess,
+}) {
+const taskBlock = buildTaskBlock(task, { screenshotsAsList: false });
 
-  if (promptData?.prompt) {
-    return `${promptData.prompt}${orchestrationSection ? `\n\n${orchestrationSection}` : ''}${plannerAttributionSection ? `\n\n${plannerAttributionSection}` : ''}\n\n${UNATTENDED_RUN_RULE}${uiAuditRuntimeSection ? `\n\n${uiAuditRuntimeSection}` : ''}\n\n${PM2_SAFETY_RULE}`;
-  }
-
-  const taskBlock = buildTaskBlock(task, { screenshotsAsList: false });
-
-  // Fallback to built-in template
-  return `${agentInstructionsSection || ''}
+// Fallback to built-in template
+return `${agentInstructionsSection || ''}
 
 ${memorySection || ''}
 
@@ -741,27 +846,7 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task
 3. Test your changes when possible
-4. ${toolFreeReasoning
-  ? 'Answer in this reply — you have no tools to commit, push, or call an API with; the Completion section above is the whole contract'
-  : sentinelPayloadOutput
-  ? 'Write your result to the completion sentinel in the payload format your task describes (see the Completion section above) — do NOT commit, push, or open a PR'
-  : noCodeOutput
-  ? 'Deliver your result the way the task describes (the API call or command it names) — do NOT commit, push, or open a PR; this task changes no code'
-  : discardWorktree
-  ? 'Write your result to the completion sentinel (see the Completion section above) — do NOT commit, push, or open a PR; this worktree is discarded on exit'
-  : claimFlow
-    ? 'Follow the claim workflow prompt above; it owns its worktree, PR/MR, review, merge or human-handoff, and cleanup. Do not stop after committing.'
-  : isReadOnly
-    ? 'Do NOT commit, push, or modify any files — this is a read-only task; read what you need and report your findings'
-  : isReviewLoopFollowUp
-    ? 'Follow the follow-up section above — push any fixes you make to the PR branch; a run that needed no fix makes no commit and that is a success, not a miss'
-    : portosMergesBranch
-    ? `Commit your changes (see ${isTui ? 'Completion Workflow above' : 'Git Hygiene below'}) — do NOT push, PortOS merges this branch back on exit`
-    : isTui
-    ? `Commit, push, and ${willOpenPR ? 'open the PR (see Completion Workflow above)' : 'push the branch (see Completion Workflow above)'}`
-    : worktreeInfo && willOpenPR
-      ? 'Commit your changes (see Git Hygiene below) — do NOT push, the system handles that on exit'
-      : 'Commit and push your changes (see Git Hygiene below)'}
+4. ${completionInstructions.step4}
 5. Provide a summary of what was done
 
 ## Guidelines
@@ -771,44 +856,15 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 - Do not make unrelated changes
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
-${(() => {
-  const bullet = buildCompletionGuidelineBullet({
-    isReadOnly, whenDone,
-    isTui, tuiCompletionCommand, slashdoFree: isTui && !canRunSlashCommands,
-    worktreeInfo, willOpenPR, prCompletion, discardWorktree, noCodeOutput: noCodeOutput && !sentinelPayloadOutput, noChangeSuccess,
-    leavePrOpen: leavesPrForHuman(task),
-    isPrFollowUp: isReviewLoopFollowUp, claimFlow, toolFreeReasoning,
-  });
-  return bullet ? `- ${bullet}` : '';
-})()}
+${completionBullet}
 
 ## Git Hygiene (CRITICAL)
 - **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
 - **NEVER use \`git stash\`** in any form (\`git stash push\`, \`git stash pop\`, etc.). This is a multi-agent system — stashing can silently destroy or corrupt another agent's or the user's in-progress work. Work around uncommitted changes instead. (Note: the backend may use \`--autostash\` in user-triggered pull operations — that is safe because those are single-user UI actions, not concurrent agent operations.)
 - **Only commit files YOU changed** for this task. Never use \`git add -A\` or \`git add .\` — always stage specific files by name.
 ${noChangeSuccess ? `- **No-change audits may exit cleanly.** ${NO_CHANGE_AUDIT_GUIDANCE}` : ''}
-${toolFreeReasoning
-  ? `- **No git at all.** You have no tools; the Completion section above is the whole contract.`
-  : noCodeOutput && !sentinelPayloadOutput
-  ? `- **Do NOT commit, push, or open a PR.** This task changes no code — its result is delivered by the API call or command described above. Without this, a no-worktree task of this shape was told to \`/do:push\` **directly to the branch it is standing on**, which for a task running in the app's live checkout is its default branch.`
-  : discardWorktree
-  ? `- **Do NOT commit, push, or open a PR.** This worktree is discarded on exit — your only output is the completion sentinel (see the Completion section above).`
-  : claimFlow
-    ? `- **Follow the claim workflow prompt above.** It owns the claim worktree and the full PR/MR lifecycle; do not stop after committing or hand push/PR/merge/cleanup back to PortOS.`
-  : isReadOnly
-    ? `- **Do NOT commit, push, or modify any files.** This is a read-only task — read what you need and report your findings.`
-  : isReviewLoopFollowUp
-    ? `- **Push fixes straight to the PR branch you are on** (the follow-up section above is the procedure). Stage specific files, use a \`fix:\` prefix, no Co-Authored-By annotations. Do NOT open a new PR.`
-  : isTui && !canRunSlashCommands
-    ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations, then write the completion sentinel. PortOS will handle the branch after it closes the session.`
-    : portosMergesBranch
-    ? `- **Commit only — do NOT push.** Stage specific files (no \`git add -A\`), use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations. PortOS merges this branch back into the source checkout after you exit and deletes it, so do NOT run \`git push\` or \`/do:push\` yourself — a pushed copy would only be left behind on origin.`
-    : isTui
-    ? `- **Use \`${tuiCompletionCommand}\` to ${willOpenPR ? 'commit, push, and open the PR' : 'commit and push the branch'}** — see the Completion Workflow section above. Stage specific files (no \`git add -A\`), use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations.`
-    : worktreeInfo && willOpenPR
-      ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations. The system will push your branch and open the PR after you exit, so do NOT run \`git push\` or \`/do:push\` yourself.`
-      : `- **Commit and push using \`/do:push\`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If \`/do:push\` is unavailable, follow its conventions manually: stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations, and push with \`git pull --rebase && git push\`.`}
-${toolFreeReasoning || isReadOnly || discardWorktree || noCodeOutput || claimFlow ? '' : worktreeInfo ? `- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.` : `- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.`}
+${completionInstructions.gitHygiene}
+${completionInstructions.commitTarget}
 
 ## Working Directory
 ${task.metadata?.app ? `You are working in the target app directory: \`${workspaceDir}\`. All code changes, research, plans, and docs for this task belong in this directory — NOT in the PortOS repo.` : 'You are working in the project directory.'} Use the available tools to explore, modify, and test code.
@@ -1022,96 +1078,65 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const lightOrchestrationSection = buildOrchestrationDoctrineSection(task);
   if (lightOrchestrationSection) contractSections.push(lightOrchestrationSection);
 
-  // --- Worktree ----------------------------------------------------------
-  if (worktreeInfo) {
-    contractSections.push([
-      '## Git Worktree',
-      `- **Branch**: \`${worktreeInfo.branchName}\`${isWorktreeOnExistingBranch ? ' *(pre-existing PR branch)*' : ''}`,
-      `- **Path**: \`${worktreeInfo.worktreePath}\``,
-      worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
-      '',
-      worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
-      'Do NOT manually switch branches or modify the worktree configuration.',
-      // Resuming a previous failed agent's branch: establish what's already done
-      // before writing code (see buildResumeSection). '' when not a resume.
-      buildResumeSection(task, worktreeInfo) || null
-    ].filter(Boolean).join('\n'));
-  }
-
-  // --- Pipeline ----------------------------------------------------------
-  const pipelineCtx = task.metadata?.pipeline;
-  const pipelineLines = pipelineContextLines(pipelineCtx);
-  if (pipelineLines.length) contractSections.push(['## Pipeline Context', ...pipelineLines].join('\n'));
-
-  // --- JIRA --------------------------------------------------------------
-  if (task.metadata?.jiraTicketId) {
-    contractSections.push([
-      '## JIRA',
-      `- **Ticket**: ${task.metadata.jiraTicketId} (${task.metadata.jiraTicketUrl})`,
-      task.metadata.jiraBranch ? `- **Branch**: \`${task.metadata.jiraBranch}\` — commit here; do NOT switch branches.` : null,
-      `Include the ticket ID in commit messages, e.g. \`${task.metadata.jiraTicketId}: description\`.`
-    ].filter(Boolean).join('\n'));
-  }
+  // --- Worktree / pipeline / JIRA context --------------------------------
+  contractSections.push(...buildLightTaskContextSections({
+    task, worktreeInfo, isWorktreeOnExistingBranch, isTui, hasSlashdo, ownsPrWorkflow,
+    willOpenPR, discardWorktree, claimFlow, noChangeSuccess,
+  }));
 
   // --- Completion / review-loop ------------------------------------------
-  // Ordering matches the full path's (buildCompletionGuidelineBullet and the
-  // tuiCompletionSection ternary): the deliverable's destination
-  // (`noCodeOutput`) decides the contract, and only then does worktree disposal
-  // (`discardWorktree`) pick the reasoning-payload one. THIS is the branch that
-  // matters in production — every `tui`/`cli` provider returns from the light
-  // path above and never reaches the other two, so a fix applied only there is
-  // no fix at all for anything a subscription-quota job can run.
-  if (toolFreeReasoning) {
-    // No tools at all: the reply is the deliverable (see the full path's
-    // tuiCompletionSection ternary for the same precedence).
-    contractSections.push(buildToolFreeReasoningCompletionSection());
-  } else if (noCodeOutput && !sentinelPayloadOutput) {
-    contractSections.push(buildActionOutputCompletionSection({
-      isTui,
-      sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
-    }));
-  } else if (discardWorktree) {
+  // THIS is the branch that matters in production — every `tui`/`cli` provider
+  // returns from the light path and never reaches the full one, so a fix
+  // applied only there is no fix at all for anything a subscription-quota job
+  // can run. The precedence itself lives in `resolveCompletionMode`.
+  const completionMode = resolveCompletionMode({
+    toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
+    isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands: canTypeSlash,
+    portosMergesBranch, worktreeInfo, willOpenPR,
+  });
+  const lightSentinelPath = () => resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
+  // Both TUI modes render the same section — `buildTuiCompletionSection` takes
+  // `slashdoFree` and adapts the workflow itself. Likewise the three commit/push
+  // modes: `buildCliCompletionSection` already reads `worktreeInfo`/`willOpenPR`.
+  const pushTuiCompletion = () => contractSections.push(buildTuiCompletionSection({
+    willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, slashdoFree: tuiSlashdoFree, ownsPrWorkflow, portosMergesBranch,
+    sentinelPath: lightSentinelPath(),
+    branchName: worktreeInfo?.branchName || null,
+    baseBranch: worktreeInfo?.baseBranch || null,
+    leavePrOpen: leavesPrForHuman(task),
+    reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies,
+    forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null
+  }));
+  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, ownsPrWorkflow, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null }));
+
+  ({
+    [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
+    // A sandboxed review stage sets `noCodeOutput` too, but its deliverable is
+    // the sentinel payload, not an API action.
+    [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => contractSections.push(buildProgrammaticOutputCompletionSection(lightSentinelPath())),
+    [COMPLETION_MODES.ACTION_OUTPUT]: () => contractSections.push(buildActionOutputCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     // Reasoning-only task: the sentinel payload (shape set by the task-type
-    // output hook) is the sole output; the worktree is discarded on exit. Wins
-    // over the isTui / CLI push-and-PR completion workflows below.
-    contractSections.push(buildProgrammaticOutputCompletionSection(resolveSentinelPath(worktreeInfo, workspaceDir, agentId)));
-  } else if (claimFlow) {
-    contractSections.push(buildClaimFlowCompletionSection({
-      isTui,
-      sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
-      reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
-    }));
-  } else if (isReadOnly) {
-    contractSections.push(buildReadOnlyCompletionSection({
-      isTui,
-      sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
-    }));
-  } else if (isReviewLoopFollowUp) {
-    contractSections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
-    if (isTui) {
-      const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
+    // output hook) is the sole output; the worktree is discarded on exit.
+    [COMPLETION_MODES.DISCARD_WORKTREE]: () => contractSections.push(buildProgrammaticOutputCompletionSection(lightSentinelPath())),
+    [COMPLETION_MODES.CLAIM_FLOW]: () => contractSections.push(buildClaimFlowCompletionSection({
+      isTui, sentinelPath: lightSentinelPath(), reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
+    })),
+    [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
+    [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
+      contractSections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
+      if (!isTui) return;
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
       const sentinelTail = branchName ? `   ## Branch\n   ${branchName}` : '   ## Branch\n   <branch name>';
       contractSections.push([
         '## Completion Handoff',
         'When finished with the follow-up steps above, write the completion sentinel to signal PortOS that you are done:',
         '',
-        ...buildSentinelWriteSteps(1, sentinelPath, sentinelTail)
+        ...buildSentinelWriteSteps(1, lightSentinelPath(), sentinelTail)
       ].join('\n'));
-    }
-  } else if (isTui) {
-    contractSections.push(buildTuiCompletionSection({
-      willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, slashdoFree: tuiSlashdoFree, ownsPrWorkflow, portosMergesBranch,
-      sentinelPath: resolveSentinelPath(worktreeInfo, workspaceDir, agentId),
-      branchName: worktreeInfo?.branchName || null,
-      baseBranch: worktreeInfo?.baseBranch || null,
-      leavePrOpen: leavesPrForHuman(task),
-      reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies,
-      forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null
-    }));
-  } else {
-    contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, hasSlashdo, ownsPrWorkflow, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null }));
-  }
+    },
+    [COMPLETION_MODES.TUI_SLASHDO_FREE]: pushTuiCompletion,
+    [COMPLETION_MODES.TUI]: pushTuiCompletion,
+  }[completionMode] || pushCliCompletion)();
 
   // The manual workflow's step 4 points here — it must follow the completion
   // section it is a step of. Gated on the SAME value that made that step emit,
@@ -1146,4 +1171,48 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   }
 
   return { taskSections, contractSections };
+}
+
+/**
+ * The light path's worktree / pipeline / JIRA context sections, in the order
+ * they render. Each is present only when the task carries that context, which
+ * is why they are collected here rather than tested inline in
+ * `buildLightContextSections`.
+ */
+function buildLightTaskContextSections({
+  task, worktreeInfo, isWorktreeOnExistingBranch, isTui, hasSlashdo, ownsPrWorkflow,
+  willOpenPR, discardWorktree, claimFlow, noChangeSuccess,
+}) {
+  const sections = [];
+  // --- Worktree ----------------------------------------------------------
+  if (worktreeInfo) {
+    sections.push([
+      '## Git Worktree',
+      `- **Branch**: \`${worktreeInfo.branchName}\`${isWorktreeOnExistingBranch ? ' *(pre-existing PR branch)*' : ''}`,
+      `- **Path**: \`${worktreeInfo.worktreePath}\``,
+      worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
+      '',
+      worktreeCommitGuidance({ isTui, hasSlashdo, ownsPrWorkflow, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
+      'Do NOT manually switch branches or modify the worktree configuration.',
+      // Resuming a previous failed agent's branch: establish what's already done
+      // before writing code (see buildResumeSection). '' when not a resume.
+      buildResumeSection(task, worktreeInfo) || null
+    ].filter(Boolean).join('\n'));
+  }
+
+  // --- Pipeline ----------------------------------------------------------
+  const pipelineCtx = task.metadata?.pipeline;
+  const pipelineLines = pipelineContextLines(pipelineCtx);
+  if (pipelineLines.length) sections.push(['## Pipeline Context', ...pipelineLines].join('\n'));
+
+  // --- JIRA --------------------------------------------------------------
+  if (task.metadata?.jiraTicketId) {
+    sections.push([
+      '## JIRA',
+      `- **Ticket**: ${task.metadata.jiraTicketId} (${task.metadata.jiraTicketUrl})`,
+      task.metadata.jiraBranch ? `- **Branch**: \`${task.metadata.jiraBranch}\` — commit here; do NOT switch branches.` : null,
+      `Include the ticket ID in commit messages, e.g. \`${task.metadata.jiraTicketId}: description\`.`
+    ].filter(Boolean).join('\n'));
+  }
+  return sections;
 }
