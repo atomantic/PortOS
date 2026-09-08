@@ -95,11 +95,12 @@ describe('maintenance launch', () => {
   });
   it('blocks missing task eligibility and a stopped daemon', async () => {
     const user = userEvent.setup();
-    show({ schedule: { tasks: {} }, daemonRunning: false });
+    show({ schedule: { tasks: {} }, daemonRunning: false, onRefresh: vi.fn() });
     await select(user);
     expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
     expect(screen.getByText(/Run now needs these saved task settings/)).toBeInTheDocument();
     expect(screen.getByText(/start the CoS daemon/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Enable required tasks' })).not.toBeInTheDocument();
     expect(api.saveQuotaBurn).not.toHaveBeenCalled();
   });
 });
@@ -143,13 +144,14 @@ it('enables only missing prerequisites and waits for refreshed saved settings be
 
 it('refreshes partial setup after failure without saving a plan or starting work', async () => {
   const user = userEvent.setup();
-  const onRefresh = vi.fn().mockResolvedValue({ tasks });
+  const onRefresh = vi.fn().mockRejectedValue(new Error('refresh unavailable'));
   api.updateAppTaskTypeOverride.mockRejectedValueOnce(new Error('save unavailable'));
   show({ schedule: { tasks: { ...tasks, simplify: { ...tasks.simplify, enabled: false, appOverrides: {} } } }, onRefresh });
   await select(user);
   await user.click(screen.getByRole('button', { name: 'Enable required tasks' }));
   expect(await screen.findByText(/Setup incomplete: save unavailable/)).toBeInTheDocument();
   expect(onRefresh).toHaveBeenCalledOnce();
+  expect(screen.getByText(/Refreshing the schedule also failed/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
   expect(api.saveQuotaBurn).not.toHaveBeenCalled();
   expect(api.runQuotaBurn).not.toHaveBeenCalled();

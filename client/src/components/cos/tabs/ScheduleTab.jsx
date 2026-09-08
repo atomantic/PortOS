@@ -86,7 +86,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
 
   const fetchSchedule = useCallback(async () => {
     const data = await api.getCosSchedule().catch(() => null);
-    setSchedule(data);
+    setSchedule(current => data || current);
     setLoading(false);
     return data;
   }, []);

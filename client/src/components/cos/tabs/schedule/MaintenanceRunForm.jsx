@@ -48,8 +48,10 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
     });
     // Refresh even after a partial save so retries use the persisted settings.
     const refreshed = await onRefresh().catch(() => false);
-    if (!refreshed) setMessage('Could not refresh task settings. Refresh the schedule before running maintenance.');
-    else if (saved) setMessage('Required tasks enabled. You can now run maintenance.');
+    if (!refreshed) setMessage(current => saved
+      ? 'Could not refresh task settings. Refresh the schedule before running maintenance.'
+      : `${current} Refreshing the schedule also failed.`);
+    else if (saved) setMessage('Required task settings saved.');
     setPreparing(false);
     setBusy(false);
   };
