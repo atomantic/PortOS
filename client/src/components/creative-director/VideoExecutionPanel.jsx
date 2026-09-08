@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { getCreativeDirectorVideoExecution, startCreativeDirectorVideoExecution } from '../../services/apiCreativeDirector.js';
 
 const LIMITS = [
+  ['maxAudioJobs', 'Maximum soundtrack jobs', 0, 4],
   ['maxClips', 'Maximum clip submissions', 1, 200],
   ['maxRetries', 'Retries per shot or step', 0, 3],
   ['maxReplans', 'Replans', 0, 5],
@@ -60,7 +61,7 @@ export default function VideoExecutionPanel({ project, onChange, basePath }) {
     {preview && <>
       <dl className="grid gap-2 text-sm sm:grid-cols-2">
         {['treatment', 'plan', 'evaluation', 'video'].map(key => <div key={key}><dt className="capitalize text-port-text-muted">{key}</dt><dd className="break-words">{choiceText(preview.choices?.[key])}</dd></div>)}
-        <div><dt className="text-port-text-muted">Audio</dt><dd>{preview.choices?.audio?.providerId ? choiceText(preview.choices.audio) : 'Attached music or native clip audio'}</dd></div>
+        <div><dt className="text-port-text-muted">Audio</dt><dd>{preview.choices?.audio?.providerId ? choiceText(preview.choices.audio) : preview.choices?.audio?.mode || 'Native clip audio'}</dd></div>
       </dl>
       <p className="text-xs text-port-text-muted">{preview.costNotice}</p>
       {preview.blockers.map(blocker => <p key={blocker} role="alert" className="text-port-warning">{blocker}</p>)}
@@ -73,7 +74,7 @@ export default function VideoExecutionPanel({ project, onChange, basePath }) {
         </div>)}
         <div><label className="block text-sm" htmlFor="video-dollar-cap">Dollar cap (optional)</label><input id="video-dollar-cap" type="number" min="0.01" max="10000" step="0.01" placeholder="Unknown cost; use clip limits" value={limits.spendCapUsd ?? ''} disabled={active || pending} onChange={event => setLimits(previous => ({ ...previous, spendCapUsd: event.target.value }))} className="w-full rounded border border-port-border bg-port-bg p-2" /></div>
       </div>}
-      <p className="text-xs text-port-text-muted">Used: {(preview.execution?.attempts || []).filter(attempt => attempt.kind === 'clip').length} clip submissions · {(preview.execution?.attempts || []).filter(attempt => attempt.kind !== 'clip').length} agent calls. Limits include previous attempts.</p>
+      <p className="text-xs text-port-text-muted">Used: {(preview.execution?.attempts || []).filter(attempt => attempt.kind === 'clip').length} clip submissions · {(preview.execution?.attempts || []).filter(attempt => !['clip', 'audio'].includes(attempt.kind)).length} agent calls · {(preview.execution?.attempts || []).filter(attempt => attempt.kind === 'audio').length} soundtrack jobs. Limits include previous attempts.</p>
       {uncertain.map(attempt => <div key={attempt.id} className="text-sm">
         <label htmlFor={`retry-${attempt.id}`} className="flex gap-2 items-start"><input id={`retry-${attempt.id}`} type="checkbox" checked={retryAttemptIds.includes(attempt.id)} onChange={event => setRetryAttemptIds(previous => event.target.checked ? [...previous, attempt.id] : previous.filter(id => id !== attempt.id))} />Authorize another attempt for {attempt.sceneId || attempt.stepId || attempt.kind}. The earlier submission is uncertain and retrying may charge again{attempt.jobId ? ` (job ${attempt.jobId})` : ''}.</label>
       </div>)}

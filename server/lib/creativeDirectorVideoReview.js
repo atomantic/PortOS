@@ -57,6 +57,15 @@ export function videoReviewStages(project) {
   });
 }
 
+/** Preserve rendered cuts when an edit invalidates their approvals. */
+export function retainVideoCuts(project) {
+  const cuts = [...(project.videoCutHistory || [])];
+  for (const cut of [project.videoRoughCut, project.videoFinalCut]) {
+    if (cut?.videoId && !cuts.some(row => row.videoId === cut.videoId)) cuts.push(cut);
+  }
+  return cuts;
+}
+
 /** One atomic owner action; feedback never changes authorization or artifact readiness. */
 export function applyVideoReviewAction(project, input, instanceId, now = new Date().toISOString()) {
   assertVideoOwner(project, instanceId);
@@ -113,7 +122,7 @@ export function applyVideoReviewAction(project, input, instanceId, now = new Dat
     plan = { ...plan, history: [...(plan.history || []), { steps: structuredClone(plan.steps), updatedAt: plan.updatedAt }],
       steps: plan.steps.map(step => affected.has(step.stepId) ? { ...step, status: 'pending', result: null, workRevision: (step.workRevision || 0) + 1 } : step) };
   }
-  return { project: { ...project, treatment, plan, status: 'paused', finalVideoId: null,
+  return { project: { ...project, treatment, plan, status: 'paused', finalVideoId: null, videoCutHistory: retainVideoCuts(project),
     ...(index <= 2 ? { videoRoughCut: null } : {}), videoFinalCut: null,
     videoWorkRevision: (project.videoWorkRevision || 0) + 1,
     videoReview: { ...review, decisions, waitingFor: null,

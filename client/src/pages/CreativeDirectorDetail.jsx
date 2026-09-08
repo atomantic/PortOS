@@ -14,6 +14,7 @@ import {
   stopCreativeDirectorProject,
   resumeCreativeDirectorProject,
 } from '../services/apiCreativeDirector.js';
+import VideoCutPanel from '../components/creative-director/VideoCutPanel.jsx';
 import VideoExecutionPanel from '../components/creative-director/VideoExecutionPanel.jsx';
 import VideoReviewPanel from '../components/creative-director/VideoReviewPanel.jsx';
 import VideoDraftDrawer from '../components/creative-director/VideoDraftDrawer.jsx';
@@ -336,6 +337,7 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
           <p className="text-sm">Exact target: {project.targetDurationSeconds} seconds (requested: {project.videoDraft?.durationRange?.min}–{project.videoDraft?.durationRange?.max} seconds) · {project.aspectRatio} · {project.quality}</p>
           <p className="text-sm">Review: {project.videoDraft?.reviewPolicy || 'review'} · Checkpoints: {(project.videoDraft?.checkpoints || []).join(', ')}</p>
           {['draft', 'paused', 'failed'].includes(project.status) && <button onClick={() => setEditingDraft(true)} className="px-3 py-2 rounded bg-port-accent text-white">{project.status === 'draft' ? 'Edit draft' : 'Edit production settings'}</button>}
+          <VideoCutPanel project={project} />
           <VideoExecutionPanel key={project.id} project={project} onChange={fetchProject} basePath={basePath} />
           <VideoDraftDrawer open={editingDraft} onClose={() => setEditingDraft(false)} project={project} onSaved={saved => setProject(prev => ({ ...prev, ...saved }))} />
         </section>}

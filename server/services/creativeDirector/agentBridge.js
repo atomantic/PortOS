@@ -91,6 +91,8 @@ async function buildTaskRecord(project, kind, scene, context) {
   let attempt;
   if (project.workspace === 'video') {
     const { reserveVideoAttempt, assertVideoAttemptDispatch } = await import('./videoExecution.js');
+    const audio = project.videoExecution?.choices?.audio || project.videoDraft?.audio || { mode: 'native' };
+    context = `${context}\n\nSaved Video audio contract: ${JSON.stringify(audio)}. Soundtracks are assembled separately; do not enqueue audio or assume the video renderer supplies dialogue or lip sync. Plan visual storytelling to fit this audio choice. Shot joins: ${project.videoDraft?.transition || 'cut'}; joins do not overlap or shorten the saved shot timing.`;
     attempt = await reserveVideoAttempt(project.id, { kind, expectedProductionRevision: project.videoWorkRevision || 0, key: `${kind}:${scene?.sceneId || 'project'}`, ...(scene ? { sceneId: scene.sceneId, workRevision: scene.workRevision || 0 } : {}) });
     if (!attempt) return null;
     await assertVideoAttemptDispatch(project.id, attempt.id).catch(async error => {

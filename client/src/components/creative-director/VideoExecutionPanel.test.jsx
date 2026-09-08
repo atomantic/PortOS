@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 vi.mock('../../services/apiCreativeDirector.js', () => ({ getCreativeDirectorVideoExecution: vi.fn(), startCreativeDirectorVideoExecution: vi.fn() }));
 import { getCreativeDirectorVideoExecution, startCreativeDirectorVideoExecution } from '../../services/apiCreativeDirector.js';
 import VideoExecutionPanel from './VideoExecutionPanel.jsx';
-const preview = { canStart: true, blockers: [], configurationRevision: 'a'.repeat(32), choices: { video: { mode: 'reactor', modelDescription: 'fast-h3' }, treatment: { providerId: 'example-agent', model: 'example-model' }, audio: {} }, costNotice: 'Provider prices are unknown.', limits: { maxClips: 60, maxRetries: 1, maxReplans: 2, maxAgentCalls: 100, spendCapUsd: null }, execution: null };
+const preview = { canStart: true, blockers: [], configurationRevision: 'a'.repeat(32), choices: { video: { mode: 'reactor', modelDescription: 'fast-h3' }, treatment: { providerId: 'example-agent', model: 'example-model' }, audio: {} }, costNotice: 'Provider prices are unknown.', limits: { maxAudioJobs: 1, maxClips: 60, maxRetries: 1, maxReplans: 2, maxAgentCalls: 100, spendCapUsd: null }, execution: null };
 beforeEach(() => {
   vi.resetAllMocks();
   getCreativeDirectorVideoExecution.mockResolvedValue(preview);

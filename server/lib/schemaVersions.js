@@ -455,7 +455,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v7: Planning binds to resolved source revisions; older writers skip that guard.
   // v8: Revision-bound approvals and machine-local execution authority.
   // v9: Bounded owner execution receipts and fail-closed restart reconciliation.
-  creativeDirectorProjects: 9,
+  // v10: Validated assembled cuts, retained cut history, and explicit standalone audio.
+  creativeDirectorProjects: 10,
   // v1 = Mood boards (PostgreSQL `mood_boards`) federated via the per-record
   // peer-sync push pipeline (record kind `moodBoard`, sync category `moodBoards`,
   // #1564). Same posture as `creativeDirectorProjects` above: a brand-NEW synced

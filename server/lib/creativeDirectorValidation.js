@@ -128,6 +128,7 @@ export const creativeDirectorVideoLimitsSchema = z.object({
   maxClips: z.number().int().min(1).max(200).default(60),
   maxRetries: z.number().int().min(0).max(3).default(1),
   maxReplans: z.number().int().min(0).max(5).default(2),
+  maxAudioJobs: z.number().int().min(0).max(4).default(1),
   maxAgentCalls: z.number().int().min(1).max(500).default(100),
   spendCapUsd: z.number().positive().max(10000).nullable().default(null),
 }).strict();
@@ -148,7 +149,11 @@ export const creativeDirectorVideoDraftSchema = z.object({
     id: z.string().trim().min(1).max(120),
     revision: z.string().max(120).optional(),
   }).strict()).max(50).default([]),
+  transition: z.enum(['cut', 'fade']).default('cut'),
   audio: z.object({
+    mode: z.enum(['silent', 'native', 'imported', 'generated']).default('native'),
+    trackId: z.string().max(120).optional(),
+    prompt: z.string().trim().max(1000).optional(),
     providerId: z.string().max(120).optional(),
     model: z.string().max(200).optional(),
   }).strict().default({}),
