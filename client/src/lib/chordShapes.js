@@ -13,6 +13,7 @@
 //     'ukulele' → { instrument, frets: [4 × …], baseFret, bass }
 //     'piano'   → { instrument, notes: ['A','C','E'], bass }
 //   splitJoinedChords(name)          → dash-joined "Am-Am7" → ['Am', 'Am7']
+//   sheetUsedChords(text)            → unique chord names in first-appearance order
 //   toVoicingInstrument(instrument)  → song instrument → diagram instrument
 //   VOICING_INSTRUMENTS              → ['guitar', 'ukulele', 'piano']
 //
@@ -21,7 +22,7 @@
 // window (1 = baseFret); at baseFret 1 they are absolute. Forgiving — unknown
 // or unparseable chords return null, never throw.
 
-import { CHORD_TOKEN_RE, NOTE_TO_PC, spellPitchClass } from './tabNotation.js';
+import { CHORD_TOKEN_RE, NOTE_TO_PC, parseTabSheet, spellPitchClass } from './tabNotation.js';
 
 export const VOICING_INSTRUMENTS = ['guitar', 'ukulele', 'piano'];
 
@@ -128,6 +129,28 @@ export const splitJoinedChords = (name) => {
   if (!raw.includes('-')) return [raw];
   const parts = raw.split('-');
   return parts.every((p) => isChordToken(p)) ? parts : [raw];
+};
+
+// Every chord a sheet names, unique, in order of first appearance — the data
+// behind the viewer's "Chords used" card. Dash-joined quick changes split into
+// their segments FIRST, so "Am-Am7" plus a standalone "Am" contributes Am and
+// Am7 exactly once each (and an N.C. segment can't ride a joined token past the
+// filter). N.C. is a rest marker, not a voicing, so it never appears.
+export const sheetUsedChords = (text) => {
+  const { lines } = parseTabSheet(String(text ?? ''));
+  const seen = new Set();
+  const out = [];
+  for (const line of lines) {
+    for (const { name } of line.chords || []) {
+      for (const part of splitJoinedChords(name)) {
+        if (part && !/^N\.?C\.?$/.test(part) && !seen.has(part)) {
+          seen.add(part);
+          out.push(part);
+        }
+      }
+    }
+  }
+  return out;
 };
 
 // ---------------------------------------------------------------------------
