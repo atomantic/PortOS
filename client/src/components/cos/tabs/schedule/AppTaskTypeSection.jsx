@@ -1,11 +1,14 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import AppTaskCard from './AppTaskCard';
-import { TASK_FILTERS, DEFAULT_FILTER_ID, taskSortKey, taskLabels } from './scheduleConstants';
+import { TASK_FILTERS, DEFAULT_FILTER_ID, TASK_SORTS, compareByStatus, compareBySuggestedOrder, suggestedOrderSteps, taskLabels } from './scheduleConstants';
 
-export default function AppTaskTypeSection({ tasks, apps, providers, providersLoaded, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange, label = '', onLabelChange }) {
+export default function AppTaskTypeSection({ tasks, apps, providers, providersLoaded, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange, label = '', onLabelChange, sort, onSortChange }) {
   const [search, setSearch] = useState('');
   const taskEntries = Object.entries(tasks || {});
+  // Ranked over every task, not just the visible ones, so filtering to one
+  // label doesn't renumber the sequence under the user.
+  const orderSteps = useMemo(() => suggestedOrderSteps(tasks), [tasks]);
 
   const activeFilter = TASK_FILTERS.find(f => f.id === filter) || TASK_FILTERS[0];
   const counts = Object.fromEntries(TASK_FILTERS.map(f => [f.id, taskEntries.filter(f.match).length]));
@@ -16,11 +19,7 @@ export default function AppTaskTypeSection({ tasks, apps, providers, providersLo
     .filter(activeFilter.match)
     .filter(([, config]) => !label || taskLabels(config).includes(label))
     .filter(([taskType, config]) => !query || [taskType, config.displayName, config.description, ...taskLabels(config)].filter(Boolean).join(' ').toLowerCase().includes(query))
-    .sort(([aType, aConfig], [bType, bConfig]) => {
-      const a = taskSortKey(aType, aConfig);
-      const b = taskSortKey(bType, bConfig);
-      return a.order - b.order || a.next - b.next || a.taskType.localeCompare(b.taskType);
-    });
+    .sort(sort === 'suggested-order' ? compareBySuggestedOrder(orderSteps) : compareByStatus);
 
   if (taskEntries.length === 0) return null;
 
@@ -84,6 +83,12 @@ export default function AppTaskTypeSection({ tasks, apps, providers, providersLo
           {labels.map(value => <option key={value} value={value}>{value} ({taskEntries.filter(([, config]) => taskLabels(config).includes(value)).length})</option>)}
         </select>
         {label && <button onClick={() => onLabelChange('')} className="text-sm text-port-accent">Clear label</button>}
+        <label htmlFor="schedule-sort" className="text-sm text-gray-400">Sort</label>
+        <select id="schedule-sort" value={sort} onChange={event => onSortChange(event.target.value)}
+          className="max-w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white"
+          title="Suggested order sorts by each task's advisory position — what to run first">
+          {TASK_SORTS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select>
       </div>
 
       {visibleEntries.length === 0 ? (
@@ -110,6 +115,7 @@ export default function AppTaskTypeSection({ tasks, apps, providers, providersLo
               onUpdate={onUpdate}
               onConfigure={onSelectTask}
               improvementDisabled={improvementDisabled}
+              orderStep={orderSteps[taskType]}
             />
           ))}
         </div>

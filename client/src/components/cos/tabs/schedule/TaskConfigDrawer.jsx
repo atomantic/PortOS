@@ -35,6 +35,7 @@ export default function TaskConfigDrawer({
   onUpdateOverride,
   onBulkToggleOverride,
   allTaskTypes,
+  orderStep,
   improvementDisabled,
   dataInputCatalog,
 }) {
@@ -70,7 +71,7 @@ export default function TaskConfigDrawer({
     >
       {config && (
         <div className="space-y-6">
-          <TaskHeader taskType={taskType} config={config} />
+          <TaskHeader taskType={taskType} config={config} orderStep={orderStep} />
 
           {activeTab === 'stages' && hasStages && (
             <PipelineStageConfig

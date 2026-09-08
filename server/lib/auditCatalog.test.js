@@ -16,6 +16,8 @@ import {
   modeContractFor,
   applyAuditModeWrapper,
   DO_BETTER_LENS_COVERAGE,
+  AUDIT_RUN_GUIDANCE,
+  AUDIT_SUGGESTED_AFTER,
 } from './auditCatalog.js';
 
 describe('AUDIT_DEFINITIONS', () => {
@@ -259,5 +261,51 @@ describe('DO_BETTER_LENS_COVERAGE', () => {
     expect(declared.length).toBeGreaterThan(5);
     const missing = declared.filter((lens) => !DO_BETTER_LENS_COVERAGE[lens]);
     expect(missing).toEqual([]);
+  });
+});
+
+// The advisory run order and the prose that explains it are two halves of one
+// answer to "which audit do I run first?" — the order names task types, the
+// prose says why. They can drift silently (nothing dispatches on either), so
+// pin the claims they make about each other.
+describe('AUDIT_SUGGESTED_AFTER', () => {
+  it('names only registered task types, in both directions', async () => {
+    const { DEFAULT_TASK_INTERVALS } = await import('../services/taskScheduleRegistry.js');
+    for (const [taskType, after] of Object.entries(AUDIT_SUGGESTED_AFTER)) {
+      expect(DEFAULT_TASK_INTERVALS[taskType], taskType).toBeDefined();
+      for (const dep of after) expect(DEFAULT_TASK_INTERVALS[dep], `${taskType} -> ${dep}`).toBeDefined();
+    }
+  });
+
+  it('keeps each entry to its immediate predecessors — a restated chain is unreadable', () => {
+    for (const [taskType, after] of Object.entries(AUDIT_SUGGESTED_AFTER)) {
+      expect(after.length, taskType).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it('is acyclic, so the shipped ladder reads as one sequence', () => {
+    const seen = new Set();
+    const walk = (taskType, trail) => {
+      expect(trail.includes(taskType), `cycle: ${[...trail, taskType].join(' -> ')}`).toBe(false);
+      for (const dep of AUDIT_SUGGESTED_AFTER[taskType] || []) walk(dep, [...trail, taskType]);
+      seen.add(taskType);
+    };
+    for (const taskType of Object.keys(AUDIT_SUGGESTED_AFTER)) walk(taskType, []);
+    expect(seen.size).toBeGreaterThan(0);
+  });
+
+  // "Head of the order" is a claim about the DATA. A type given a predecessor
+  // later must lose that phrasing, or the card contradicts its own chips.
+  it('reserves the "head of the order" phrasing for types with no predecessor', () => {
+    for (const [taskType, guidance] of Object.entries(AUDIT_RUN_GUIDANCE)) {
+      if (!guidance.startsWith('Head of the order')) continue;
+      expect(AUDIT_SUGGESTED_AFTER[taskType] || [], taskType).toEqual([]);
+    }
+  });
+
+  it('explains every type it orders', () => {
+    for (const taskType of Object.keys(AUDIT_SUGGESTED_AFTER)) {
+      expect(AUDIT_RUN_GUIDANCE[taskType], taskType).toBeTruthy();
+    }
   });
 });

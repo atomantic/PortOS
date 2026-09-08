@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTaskStatusGroup, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, stagePublicReviewPosture, togglePrReviewerActions } from './scheduleConstants';
+import { getTaskStatusGroup, taskSortKey, TASK_FILTERS, STATUS_GROUPS, describeNextRun, coverageTone, setMetadataOverride, toggleMetadataField, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata, prReviewerStageRole, stagePublicReviewPosture, togglePrReviewerActions, suggestedOrderSteps, compareBySuggestedOrder } from './scheduleConstants';
 
 describe('pr-reviewer pipeline helpers', () => {
   it('recognizes semantic roles and legacy prompt-key stages', () => {
@@ -284,3 +284,37 @@ describe('coverageTone', () => {
   });
 });
 // @vitest-environment node
+
+describe('suggestedOrderSteps', () => {
+  it('ranks a chain one step past its latest predecessor', () => {
+    const steps = suggestedOrderSteps({
+      a: {},
+      b: { suggestedAfter: ['a'] },
+      c: { suggestedAfter: ['b'] },
+      d: { suggestedAfter: ['a', 'c'] },
+    });
+    expect(steps).toEqual({ a: 1, b: 2, c: 3, d: 4 });
+  });
+
+  it('leaves a task that neither names nor is named unranked, not "step 1"', () => {
+    const steps = suggestedOrderSteps({ ordered: { suggestedAfter: ['head'] }, head: {}, loner: {} });
+    expect(steps.loner).toBeUndefined();
+    expect(steps).toMatchObject({ head: 1, ordered: 2 });
+  });
+
+  it('ignores an edge naming a task this install does not have', () => {
+    expect(suggestedOrderSteps({ here: { suggestedAfter: ['from-a-newer-peer'] } })).toEqual({});
+  });
+
+  it('terminates on a user-declared cycle instead of hanging', () => {
+    const steps = suggestedOrderSteps({ a: { suggestedAfter: ['b'] }, b: { suggestedAfter: ['a'] } });
+    expect(Number.isInteger(steps.a)).toBe(true);
+    expect(Number.isInteger(steps.b)).toBe(true);
+  });
+
+  it('sorts unranked tasks last — they make no ordering claim', () => {
+    const steps = { late: 3, early: 1 };
+    const sorted = [['unranked', {}], ['late', {}], ['early', {}]].sort(compareBySuggestedOrder(steps));
+    expect(sorted.map(([taskType]) => taskType)).toEqual(['early', 'late', 'unranked']);
+  });
+});

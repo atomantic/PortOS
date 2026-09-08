@@ -171,6 +171,40 @@ describe('CoS Schedule Routes', () => {
       expect(JSON.stringify(recordUserAction.mock.calls.at(-1)[0])).not.toContain(prompt);
     });
 
+    it('keeps an emptied suggestedAfter as [], so the shipped default is not re-seeded', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'on-demand' });
+
+      const response = await request(app)
+        .put('/api/cos/schedule/task/review')
+        .send({ suggestedAfter: [] });
+
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('review', expect.objectContaining({
+        suggestedAfter: []
+      }));
+    });
+
+    it('normalizes suggestedAfter — self-reference and duplicates dropped, never nulled', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'on-demand' });
+
+      const response = await request(app)
+        .put('/api/cos/schedule/task/review')
+        .send({ suggestedAfter: ['review', 'deploy', 'deploy'] });
+
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('review', expect.objectContaining({
+        suggestedAfter: ['deploy']
+      }));
+    });
+
+    it('rejects a suggestedAfter that is not a list of task type strings', async () => {
+      const response = await request(app)
+        .put('/api/cos/schedule/task/review')
+        .send({ suggestedAfter: [{ taskType: 'deploy' }] });
+
+      expect(response.status).toBe(400);
+    });
+
     it('should set runAfter to null when only self-reference remains', async () => {
       taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'rotation' });
 
