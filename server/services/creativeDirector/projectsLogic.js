@@ -10,7 +10,7 @@
  * read/write to the caller.
  */
 
-import { videoSceneInputs } from '../../lib/creativeDirectorVideoReview.js';
+import { videoSceneInputs, retainVideoCuts } from '../../lib/creativeDirectorVideoReview.js';
 import { randomUUID } from 'crypto';
 import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -368,6 +368,7 @@ export function applyProjectPatch(project, patch) {
     next.treatment = { ...project.treatment, artifact: { ...project.treatment.artifact, stale: true },
       scenes: project.treatment.scenes.map(scene => ({ ...scene, workRevision: (scene.workRevision || 0) + 1 })) };
     next.videoWorkRevision = (project.videoWorkRevision || 0) + 1;
+    next.videoCutHistory = retainVideoCuts(project);
     next.videoRoughCut = null;
     next.videoFinalCut = null;
     next.finalVideoId = null;
@@ -509,7 +510,7 @@ export function applyTreatment(project, treatmentInput, sourceRevisions) {
   return {
     ...project,
     treatment,
-    ...(project.workspace === 'video' ? { videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
+    ...(project.workspace === 'video' ? { videoCutHistory: retainVideoCuts(project), videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
     status: nextStatus,
     updatedAt: new Date().toISOString(),
   };
@@ -595,7 +596,7 @@ export function applyPlan(project, planInput) {
     : 'rendering';
   return {
     ...project,
-    ...(project.workspace === 'video' ? { videoWorkRevision: (project.videoWorkRevision || 0) + 1, videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
+    ...(project.workspace === 'video' ? { videoCutHistory: retainVideoCuts(project), videoWorkRevision: (project.videoWorkRevision || 0) + 1, videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
     plan: { steps, replanRounds, ...(project.workspace === 'video' ? { submittedProductionRevision: project.videoWorkRevision || 0 } : {}), ...(project.workspace === 'video' && project.plan ? { history: [...(project.plan.history || []), { steps: structuredClone(prevSteps), updatedAt: project.plan.updatedAt }] } : {}), ...(parsed.data.sourceContextRevision ? { sourceContextRevision: parsed.data.sourceContextRevision } : {}), updatedAt: new Date().toISOString() },
     status: nextStatus,
     updatedAt: new Date().toISOString(),
@@ -648,10 +649,14 @@ export function applySceneUpdate(project, sceneId, patch) {
   const scenes = project.treatment.scenes.slice();
   scenes[sceneIdx] = updated;
   const treatment = { ...project.treatment, scenes };
-  if (project.workspace === 'video' && treatment.artifact
-      && ['prompt', 'imageStrength'].some((key) => key in patch && patch[key] !== project.treatment.scenes[sceneIdx][key])) {
+  const creativeEdit = project.workspace === 'video' && treatment.artifact
+    && ['prompt', 'imageStrength'].some((key) => key in patch && patch[key] !== previousScene[key]);
+  if (creativeEdit) {
     validateVideoShot(project, updated, sceneId === [...scenes].sort((a, b) => a.order - b.order)[0].sceneId);
     updated.workRevision = (previousScene.workRevision || 0) + 1;
+    updated.status = 'pending';
+    updated.renderedJobId = null;
+    updated.evaluation = null;
     // A shot edit changes the reviewed content, but cannot refresh stale source context.
     treatment.artifact = { ...treatment.artifact, revision: treatment.artifact.revision + 1 };
     treatment.history = priorVideoTreatments(project);
@@ -659,6 +664,7 @@ export function applySceneUpdate(project, sceneId, patch) {
   const next = {
     ...project,
     treatment,
+    ...(creativeEdit ? { status: 'paused', videoWorkRevision: (project.videoWorkRevision || 0) + 1, videoCutHistory: retainVideoCuts(project), videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
     updatedAt: new Date().toISOString(),
   };
   return { project: next, updated };

@@ -606,4 +606,4 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 
 | `cosFederationPolicy.js` | `isMachineLocalCosTask` excludes private assessments and explicitly machine-local tasks and agent archives from federation. |
 
-| `creativeDirectorVideoReview.js` | Video checkpoint fingerprints, owner-only review actions, feedback, and targeted revision invalidation. |
+| `creativeDirectorVideoReview.js` | `retainVideoCuts` preserves rendered cut references on invalidation. Video checkpoint fingerprints, owner-only review actions, feedback, and targeted revision invalidation. |

@@ -39,8 +39,8 @@ export async function runStitch(projectId) {
     return;
   }
   if (project.workspace === 'video') {
-    const { videoReviewAllowsDispatch } = await import('./videoReview.js');
-    if (!await videoReviewAllowsDispatch(projectId, ['script-shot-plan', 'references'])) return;
+    const { runVideoAssembly } = await import('./videoAssembly.js');
+    return runVideoAssembly(projectId);
   }
   const clips = buildTimelineClips(project);
   if (!clips.length) {

@@ -32,7 +32,7 @@ export default function VideoArtifactsTab({ project, basePath }) {
   return (
     <div className="max-w-4xl space-y-4">
       <h2 className="text-lg font-medium">Production artifacts</h2>
-      <p className="text-sm text-port-text-muted">Saved planning artifacts. Production remains blocked until revision approvals and dispatch controls are available.</p>
+      <p className="text-sm text-port-text-muted">Saved scripts, shot plans, and partial clips. Review current revisions before dependent work proceeds.</p>
       {project.treatment?.artifact && <div className="space-y-2">
         <label htmlFor="video-artifact-revision" className="block text-sm">View revision</label>
         <select id="video-artifact-revision" value={selectedRevision || ''} onChange={event => {

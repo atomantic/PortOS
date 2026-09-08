@@ -343,3 +343,15 @@ submissions require explicit retry consent because they may already have charged
 Completed jobs can be reused after reconciliation. Project sync v9 gates the
 execution semantics; existing records need no rewrite and remain unauthorized
 until the owner explicitly starts them.
+
+Validated `videoRoughCut` / `videoFinalCut` references and `videoCutHistory` remain
+in the Creative Director project JSONB. Timeline records and video-history entries
+use their existing stores; rendered files remain under `data/videos/`, thumbnails
+under `data/video-thumbnails/`, and standalone soundtrack assets under `data/music/`.
+Existing backup classification covers those assets. Generated soundtracks create
+ordinary Music Track records; no synthetic Series or source issue is created.
+The machine-local execution receipt also carries audio jobs and the current
+Timeline render ID, so restart can reconcile output without new provider work.
+Project sync v10 gates cut validation and explicit audio semantics. Older Video
+audio settings default to native clip audio when read; new drafts explicitly
+select a contract. No new store, seed or data-rewriting migration is required.

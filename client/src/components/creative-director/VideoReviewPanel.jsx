@@ -61,7 +61,7 @@ export default function VideoReviewPanel({ project, onChange }) {
           {checkpoint.ready && <>
             <p className="text-xs text-port-text-muted">Artifact revision {review.artifacts?.revision ?? 'unknown'} · <span title={checkpoint.revision}>{checkpoint.revision.slice(0, 12)}</span></p>
             {checkpoint.stage === 'script-shot-plan' && <p className="text-sm whitespace-pre-wrap">{typeof review.artifacts?.script === 'string' ? review.artifacts.script : JSON.stringify(review.artifacts?.script)}</p>}
-            {artifact?.videoId && <ScenePreview jobId={artifact.videoId} label={`${checkpoint.label} preview`} />}
+            {artifact?.videoId && <ScenePreview jobId={artifact.videoId} src={artifact.filename ? `/data/videos/${encodeURIComponent(artifact.filename)}` : null} label={`${checkpoint.label} preview`} />}
             <details><summary className="cursor-pointer text-xs">View full saved artifact</summary><pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs">{JSON.stringify(artifact, null, 2)}</pre></details>
           </>}
           {checkpoint.stale && <p className="text-xs text-port-warning">Previous approval is stale.</p>}

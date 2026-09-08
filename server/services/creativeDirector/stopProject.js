@@ -176,6 +176,10 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
     const { pauseVideoExecution } = await import('./videoExecution.js');
     // If the durable stop fails, do not pretend subsequent teardown is safe.
     await pauseVideoExecution(projectId, reason, { invalidate: true });
+    if (project.videoExecution?.assembly?.jobId) {
+      const { cancelRender } = await import('../videoTimeline/local.js');
+      cancelRender(project.videoExecution.assembly.jobId);
+    }
   } else await updateProject(projectId, { status: 'paused', failureReason: reason })
     .catch((e) => console.error(`❌ CD stop ${projectId}: park failed: ${e.message}`));
 
@@ -213,7 +217,7 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
   if (project.workspace === 'video') {
     const { mutateVideoProject } = await import('./local.js');
     await mutateVideoProject(projectId, current => ({ project: { ...current, videoExecution: { ...current.videoExecution,
-      attempts: (current.videoExecution?.attempts || []).map(attempt => attempt.kind !== 'clip' && ['running', 'submitting'].includes(attempt.status) ? { ...attempt, status: 'failed' } : attempt),
+      attempts: (current.videoExecution?.attempts || []).map(attempt => !['clip', 'audio'].includes(attempt.kind) && ['running', 'submitting'].includes(attempt.status) ? { ...attempt, status: 'failed' } : attempt),
     } }, result: true }));
   }
   console.log(`🛑 CD project ${projectId} stopped: ${reason} (${retired.runs} run(s), ${retired.tasks} task(s), ${retired.agents} agent(s), ${jobs} job(s))`);

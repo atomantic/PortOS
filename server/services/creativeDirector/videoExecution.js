@@ -6,6 +6,7 @@ import { creativeDirectorVideoLimitsSchema } from '../../lib/creativeDirectorVal
 import { assertVideoOwner } from '../../lib/creativeDirectorVideoReview.js';
 
 const ACTIVE = new Set(['planning', 'rendering', 'stitching']);
+const isMediaAttempt = attempt => ['clip', 'audio'].includes(attempt.kind);
 const LIVE_ATTEMPTS = new Set(['submitting', 'queued', 'running', 'uncertain']);
 const now = () => new Date().toISOString();
 
@@ -71,7 +72,9 @@ async function resolveChoices(project) {
   const explicitEval = project.modelOverrides?.evaluation?.providerId || settings.creativeDirector?.evaluation?.providerId;
   if (explicitEval && vision?.provider.id !== explicitEval) throw new ServerError('The selected evaluation provider is unavailable. Change Models or Settings before Start.', { status: 409, code: 'VIDEO_AGENT_UNAVAILABLE' });
   const evaluation = vision ? { type: 'api', providerId: vision.provider.id, model: vision.model || vision.provider.defaultModel || null } : await agentChoice('evaluate');
-  return { video, treatment, plan, evaluation, audio: project.videoDraft?.audio || {}, costEstimateUsd: null };
+  const { resolveVideoAudioChoice } = await import('./videoAudio.js');
+  const audio = await resolveVideoAudioChoice(project);
+  return { video, treatment, plan, evaluation, audio, costEstimateUsd: null };
 }
 
 export async function getVideoExecutionPreview(projectId) {
@@ -90,7 +93,7 @@ export async function getVideoExecutionPreview(projectId) {
   return { canStart: canStart && blockers.length === 0, blockers, choices,
     inputRevision: videoConfigurationRevision(project),
     configurationRevision: canonicalSnapshotChecksum({ input: videoConfigurationRevision(project), choices }),
-    limits: project.videoExecution?.limits || creativeDirectorVideoLimitsSchema.parse({}),
+    limits: creativeDirectorVideoLimitsSchema.parse(project.videoExecution?.limits || {}),
     execution: project.videoExecution || null,
     costNotice: 'Provider prices and balances are unknown. Clip and agent-call limits are enforced; a dollar cap blocks calls whose price cannot be bounded.' };
 }
@@ -118,7 +121,7 @@ export async function reconcileVideoExecution(projectId, { restarting = false, r
   const snapshot = await getProject(projectId);
   const tasks = new Map();
   if (!restarting) {
-    const liveAgents = (snapshot?.videoExecution?.attempts || []).filter(attempt => attempt.kind !== 'clip' && LIVE_ATTEMPTS.has(attempt.status) && attempt.taskId);
+    const liveAgents = (snapshot?.videoExecution?.attempts || []).filter(attempt => !isMediaAttempt(attempt) && LIVE_ATTEMPTS.has(attempt.status) && attempt.taskId);
     if (liveAgents.length) {
       const { getTaskById } = await import('../cos.js');
       for (const attempt of liveAgents) tasks.set(attempt.taskId, await getTaskById(attempt.taskId));
@@ -127,7 +130,7 @@ export async function reconcileVideoExecution(projectId, { restarting = false, r
   return ownedMutation(projectId, project => {
     const attempts = (project.videoExecution?.attempts || []).map(attempt => {
       if (!LIVE_ATTEMPTS.has(attempt.status)) return attempt;
-      if (attempt.kind !== 'clip') return restarting || (attempt.taskId && (!tasks.get(attempt.taskId) || ['blocked', 'completed', 'failed'].includes(tasks.get(attempt.taskId).status))) ? { ...attempt, status: 'failed' } : attempt;
+      if (!isMediaAttempt(attempt)) return restarting || (attempt.taskId && (!tasks.get(attempt.taskId) || ['blocked', 'completed', 'failed'].includes(tasks.get(attempt.taskId).status))) ? { ...attempt, status: 'failed' } : attempt;
       const job = jobs.find(job => job.id === attempt.jobId || job.params?.videoProduction?.attemptId === attempt.id);
       if (job?.status === 'completed') return { ...attempt, jobId: job.id, status: 'completed' };
       if (job?.status === 'queued' || job?.status === 'running') return { ...attempt, jobId: job.id, status: job.status };
@@ -136,7 +139,7 @@ export async function reconcileVideoExecution(projectId, { restarting = false, r
       if (uncertain && !retryAttemptIds.includes(attempt.id)) return { ...attempt, jobId: job?.id || attempt.jobId, status: 'uncertain' };
       return { ...attempt, status: 'failed', explicitlyRetriedAt: retryAttemptIds.includes(attempt.id) ? now() : undefined };
     });
-    const retiredTaskIds = new Set(attempts.filter(attempt => attempt.kind !== 'clip' && attempt.status === 'failed').map(attempt => attempt.taskId).filter(Boolean));
+    const retiredTaskIds = new Set(attempts.filter(attempt => !isMediaAttempt(attempt) && attempt.status === 'failed').map(attempt => attempt.taskId).filter(Boolean));
     const runs = (project.runs || []).map(run => retiredTaskIds.has(run.taskId) && run.status === 'running' ? { ...run, status: 'failed', failureReason: 'Provider task ended before resume' } : run);
     const scenes = project.treatment?.scenes?.map(scene => {
       const receipt = [...attempts].reverse().find(attempt => attempt.sceneId === scene.sceneId && attempt.workRevision === (scene.workRevision || 0) && attempt.kind === 'clip');
@@ -197,10 +200,12 @@ export async function reserveVideoAttempt(projectId, details) {
     if (attempts.some(attempt => LIVE_ATTEMPTS.has(attempt.status) && attempt.key === details.key)) return { project, result: null, skipPersist: true };
     const limits = execution.limits;
     const isClip = details.kind === 'clip';
+    const isAudio = details.kind === 'audio';
     const sameKey = attempts.filter(attempt => attempt.key === details.key);
     if (isClip && attempts.filter(attempt => attempt.kind === 'clip').length >= limits.maxClips) blocker = 'The clip limit is exhausted. Review limits before Resume.';
     if (isClip && sameKey.length > limits.maxRetries) blocker = 'The retry limit for this shot is exhausted. Review limits before Resume.';
-    if (!isClip && attempts.filter(attempt => attempt.kind !== 'clip').length >= limits.maxAgentCalls) blocker = 'The agent-call limit is exhausted. Review limits before Resume.';
+    if (!isClip && !isAudio && attempts.filter(attempt => !isMediaAttempt(attempt)).length >= limits.maxAgentCalls) blocker = 'The agent-call limit is exhausted. Review limits before Resume.';
+    if (isAudio && (attempts.filter(attempt => attempt.kind === 'audio').length >= (limits.maxAudioJobs ?? 1) || sameKey.length > limits.maxRetries)) blocker = 'The audio job limit is exhausted. Review limits before Resume.';
     if (details.kind === 'plan' && attempts.filter(attempt => attempt.kind === 'plan').length > limits.maxReplans) blocker = 'The replan limit is exhausted. Review limits before Resume.';
     if (limits.spendCapUsd !== null) blocker = 'The next call has unknown cost and cannot fit an enforceable dollar cap.';
     if (blocker) return { project: { ...project, status: 'paused', failureReason: blocker, videoExecution: { ...execution, blocker }, updatedAt: now() }, result: null };
@@ -232,6 +237,10 @@ export async function assertVideoAttemptDispatch(projectId, attemptId, { jobId }
   const { getSettings } = await import('../settings.js');
   const { resolveVideoBackendPin } = await import('../videoGen/backendPin.js');
   resolveVideoBackendPin(effective, await getSettings());
+  if (attempt.kind === 'audio') {
+    const { resolveVideoAudioChoice } = await import('./videoAudio.js');
+    await resolveVideoAudioChoice({ ...project, videoDraft: { ...project.videoDraft, audio: execution.choices.audio } });
+  }
   const { hasConfiguredMediaRoute } = await import('../federatedMedia/defaultRouting.js');
   if (await hasConfiguredMediaRoute('video')) throw new ServerError('The standing video route changed the reviewed backend. Review Settings and Resume.', { status: 409, code: 'VIDEO_ROUTE_CHANGED' });
   {

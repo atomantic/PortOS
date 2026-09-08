@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ project: null, jobs: [], settings: null }));
+const state = vi.hoisted(() => ({ project: null, jobs: [], settings: null, tracks: [] }));
 vi.mock('./local.js', () => ({
   getProject: vi.fn(async () => structuredClone(state.project)),
   mutateVideoProject: vi.fn(async (_id, mutate) => {
@@ -16,7 +16,12 @@ vi.mock('../agentProviderResolution.js', () => ({ resolveAgentProviderAndModel: 
 vi.mock('./sceneEvaluator.js', () => ({ resolveVisionEvalTarget: vi.fn(async () => null) }));
 vi.mock('../videoGen/reactor.js', () => ({ REACTOR_MODEL_ID: 'fast-h3' }));
 vi.mock('../videoGen/modelSelection.js', () => ({ resolveVideoModelSelection: vi.fn() }));
-vi.mock('../mediaJobQueue/index.js', () => ({ listJobs: vi.fn(() => state.jobs) }));
+vi.mock('../mediaJobQueue/index.js', () => ({ listJobs: vi.fn(() => state.jobs), getJob: vi.fn(id => state.jobs.find(job => job.id === id)),
+  enqueueJob: vi.fn(job => { const jobId = `example-audio-${state.jobs.length}`; state.jobs.push({ ...job, id: jobId, status: 'completed', result: { filename: 'example-bed.wav', durationSec: 10 } }); return { jobId }; }),
+}));
+vi.mock('../pipeline/musicGen.js', () => ({ ENGINES: { 'example-audio': { id: 'example-audio', models: [{ id: 'example-model' }], defaultModelId: 'example-model', minDurationSec: 1, maxDurationSec: 30 } }, isEngineHealthy: vi.fn(async () => true) }));
+vi.mock('../pipeline/audioMux.js', () => ({ resolveMusicTrackPath: vi.fn(async filename => filename ? `/fake/music/${filename}` : null) }));
+vi.mock('../tracks/index.js', () => ({ listTracks: async () => state.tracks, createTrack: async input => { const track = { id: 'example-track', ...input }; state.tracks.push(track); return track; } }));
 vi.mock('../federatedMedia/defaultRouting.js', () => ({
   hasConfiguredMediaRoute: vi.fn(async () => false),
   enqueueUnattendedMediaJob: vi.fn(async job => {
@@ -35,6 +40,7 @@ import { getVideoExecutionPreview, startVideoExecution, enqueueVideoProductionJo
 beforeEach(() => {
   vi.clearAllMocks();
   state.jobs = [];
+  state.tracks = [];
   state.settings = { videoGen: { reactor: { apiKey: 'example-key' } } };
   state.project = { id: 'example-video', workspace: 'video', videoOwnerInstanceId: 'example-owner',
     status: 'draft', userStory: 'An invented woodland journey.', videoDraft: { sources: [], audio: {} },
@@ -132,4 +138,23 @@ it('checks the duration the backend actually consumes and rejects batch expansio
     params: { mode: 'text', durationSeconds: 5, numFrames: 1440, fps: 24, prompt: 'Example' } })).rejects.toMatchObject({ code: 'VIDEO_PLAN_CLIP_BOUNDS' });
   expect(state.project.videoExecution.attempts).toHaveLength(0);
   expect(enqueueUnattendedMediaJob).not.toHaveBeenCalled();
+});
+
+it('generates one explicitly selected soundtrack, retains its Track, and reuses it within audio job limits', async () => {
+  const { prepareVideoSoundtrack } = await import('./videoAudio.js');
+  const { enqueueJob } = await import('../mediaJobQueue/index.js');
+  state.project.videoDraft.audio = { mode: 'generated', providerId: 'example-audio', model: 'example-model', prompt: 'A quiet invented melody.' };
+  await startVideoExecution('example-video', await startInput({ maxAudioJobs: 1 }));
+  const bed = await prepareVideoSoundtrack(state.project, async () => true);
+  expect(bed).toMatchObject({ filename: 'example-bed.wav', trackId: 'example-track' });
+  expect(enqueueJob).toHaveBeenCalledWith(expect.objectContaining({ kind: 'audio', owner: 'creative-director:example-video', params: expect.objectContaining({ engine: 'example-audio', modelId: 'example-model', durationSec: 10, videoProduction: expect.objectContaining({ projectId: 'example-video' }) }) }));
+  expect(state.project.videoExecution.attempts.filter(attempt => attempt.kind === 'audio')).toHaveLength(1);
+  await prepareVideoSoundtrack(state.project, async () => true);
+  expect(enqueueJob).toHaveBeenCalledTimes(1);
+  state.project.videoDraft.audio.prompt = 'A different melody.';
+  state.project.status = 'paused';
+  await startVideoExecution('example-video', await startInput({ maxAudioJobs: 1 }));
+  expect(await prepareVideoSoundtrack(state.project, async () => true)).toBeNull();
+  expect(state.project.videoExecution.blocker).toMatch(/audio job limit/);
+  expect(enqueueJob).toHaveBeenCalledTimes(1);
 });

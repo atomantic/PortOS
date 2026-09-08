@@ -9,6 +9,7 @@ import { listUniverses } from '../../services/apiUniverseBuilder.js';
 import { listPipelineSeries } from '../../services/apiPipeline.js';
 import { listCatalogIngredients } from '../../services/apiCatalog.js';
 import { listMusicEngines } from '../../services/apiMusic.js';
+import { listTracks } from '../../services/apiTracks.js';
 import { listVideoModels } from '../../services/apiImageVideo.js';
 
 const TABS = [{ id: 'brief', label: 'Brief' }, { id: 'production', label: 'Production' }, { id: 'sources', label: 'Sources' }];
@@ -19,6 +20,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
   const [form, setForm] = useState({});
   const [models, setModels] = useState([]);
   const [engines, setEngines] = useState([]);
+  const [tracks, setTracks] = useState([]);
   const [sourceOptions, setSourceOptions] = useState({});
   const [sourceKind, setSourceKind] = useState('universe');
   const [sourceId, setSourceId] = useState('');
@@ -33,8 +35,9 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
       videoMode: project?.renderBackend?.video?.mode || 'local', backendModelId: project?.renderBackend?.video?.modelId || '',
       aspectRatio: project?.aspectRatio || '16:9', quality: project?.quality || 'standard', modelId: (project?.renderBackend?.video?.mode === 'local' ? project.renderBackend.video.modelId : '') || project?.modelId || '',
       min: draft?.durationRange?.min || 30, max: draft?.durationRange?.max || 60,
-      reviewPolicy: draft?.reviewPolicy || 'review', audioProvider: draft?.audio?.providerId || '', audioModel: draft?.audio?.model || '',
+      reviewPolicy: draft?.reviewPolicy || 'review', transition: draft?.transition || 'cut', audioMode: draft?.audio?.mode || (project ? 'native' : 'silent'), trackId: draft?.audio?.trackId || '', audioPrompt: draft?.audio?.prompt || '', audioProvider: draft?.audio?.providerId || '', audioModel: draft?.audio?.model || '',
       sources: draft?.sources || catalogIngredientIds.map(id => ({ kind: 'catalog', id })) });
+    listTracks({ silent: true }).then(data => setTracks(Array.isArray(data) ? data : data?.tracks || [])).catch(() => {});
     listMusicEngines({ silent: true }).then(data => setEngines(data?.engines || [])).catch(() => {});
     const rows = data => Array.isArray(data) ? data : data?.items || data?.series || data?.universes || [];
     Promise.all([listUniverses({ silent: true }), listPipelineSeries({ silent: true }), listCatalogIngredients({ limit: 100, silent: true })]).then(([u, s, c]) => setSourceOptions({ universe: rows(u), series: rows(s), catalog: rows(c) })).catch(() => toast.error('Unable to load source choices. Close and reopen to retry.'));
@@ -53,7 +56,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
       aspectRatio: form.aspectRatio, quality: form.quality, modelId: form.modelId, targetDurationSeconds: exactTarget,
       ...(!project ? { workspace: 'video', catalogIngredientIds: sources.filter(s => s.kind === 'catalog').map(s => s.id) } : {}),
       renderBackend: { ...project?.renderBackend, video: { ...project?.renderBackend?.video, mode: form.videoMode, modelId: form.videoMode === 'local' ? form.modelId : form.backendModelId || null } },
-      videoDraft: { durationRange: { min, max }, sources, audio: { ...(form.audioProvider ? { providerId: form.audioProvider } : {}), ...(form.audioModel ? { model: form.audioModel } : {}) }, reviewPolicy: form.reviewPolicy, checkpoints: project?.videoDraft?.checkpoints || VIDEO_REVIEW_CHECKPOINTS } };
+      videoDraft: { durationRange: { min, max }, sources, transition: form.transition, audio: { mode: form.audioMode, ...(form.trackId ? { trackId: form.trackId } : {}), ...(form.audioPrompt ? { prompt: form.audioPrompt } : {}), ...(form.audioProvider ? { providerId: form.audioProvider } : {}), ...(form.audioModel ? { model: form.audioModel } : {}) }, reviewPolicy: form.reviewPolicy, checkpoints: project?.videoDraft?.checkpoints || VIDEO_REVIEW_CHECKPOINTS } };
     setSaving(true);
     const saved = await (project ? updateCreativeDirectorProject(project.id, payload, { silent: true }) : createCreativeDirectorProject(payload, { silent: true }))
       .catch(err => { toast.error(err.message || 'Unable to save video draft'); return null; });
@@ -77,8 +80,13 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
           : form.videoMode === 'fal' ? input('backendModelId', 'fal.ai model (optional)', { placeholder: 'Use configured fal.ai default', maxLength: 64 })
           : select('backendModelId', 'Media model', [['', form.videoMode === 'reactor' ? 'fast-h3 (backend default)' : 'Backend default'], ...(form.backendModelId ? [[form.backendModelId, `${form.backendModelId} (saved model)`]] : [])])}
         <p className="text-sm text-port-text-muted">Backend selections are saved without running providers. Cloud renders may incur charges when production is enabled.</p>
-        <h3 className="font-medium">Audio conditioning</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><label htmlFor="video-draft-audioProvider" className="block text-sm">Audio engine<select id="video-draft-audioProvider" className={fieldClass} value={form.audioProvider || ''} onChange={e => { change('audioProvider', e.target.value); change('audioModel', ''); }}><option value="">Choose before production</option>{engines.map(engine => <option key={engine.id} value={engine.id}>{engine.name || engine.id}</option>)}</select></label>{select('audioModel', 'Audio model', [['', 'Engine default'], ...(engines.find(e => e.id === form.audioProvider)?.models || []).map(m => [m.id, m.name || m.id])])}</div>
+        {select('transition', 'Shot joins', [['cut', 'Straight cuts'], ['fade', 'Fade through black (no overlap)']])}
+        <h3 className="font-medium">Soundtrack</h3>
+        {select('audioMode', 'Audio contract', [['silent', 'Silent (remove audio)'], ['native', 'Native audio from every clip'], ['imported', 'Existing Music track'], ['generated', 'Generate one soundtrack bed']])}
+        {form.audioMode === 'imported' && select('trackId', 'Soundtrack track', [['', 'Choose a track'], ...tracks.filter(track => track.audioFilename).map(track => [track.id, track.title || track.id])])}
+        {form.audioMode === 'generated' && input('audioPrompt', 'Soundtrack description', { maxLength: 1000 })}
+        <p className="text-sm text-port-text-muted">Native audio requires audio in every clip; it does not guarantee dialogue or lip sync. Soundtracks replace clip audio and repeat to fill the cut. Generated audio uses one bounded job unless you authorize a retry.</p>
+        {form.audioMode === 'generated' && <div className="grid grid-cols-1 sm:grid-cols-2 gap-3"><label htmlFor="video-draft-audioProvider" className="block text-sm">Audio engine<select id="video-draft-audioProvider" className={fieldClass} value={form.audioProvider || ''} onChange={e => { change('audioProvider', e.target.value); change('audioModel', ''); }}><option value="">Choose before production</option>{engines.map(engine => <option key={engine.id} value={engine.id}>{engine.name || engine.id}</option>)}</select></label>{select('audioModel', 'Audio model', [['', 'Engine default'], ...(engines.find(e => e.id === form.audioProvider)?.models || []).map(m => [m.id, m.name || m.id])])}</div>}
         {select('reviewPolicy', 'Review policy', [['review', 'Review at checkpoints'], ['autonomous', 'Autonomous after production is enabled']])}
         <p className="text-sm text-port-text-muted">Checkpoints: script and shot plan, references, rough cut, final cut. Start authorizes the displayed provider choices and limits. Creative changes require a fresh review.</p>
       </>}
