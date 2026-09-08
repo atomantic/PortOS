@@ -93,7 +93,6 @@ vi.mock('./layeredIntelligenceOutcomes.js', () => ({
 
 import {
   firstLine,
-  PRIORITY_VALUES,
   getUserTasks,
   getCosTasks,
   getAllTasks,
@@ -116,6 +115,7 @@ import {
   DEFAULT_FAILURE_TASK_MAX_AGE_MS,
   __resetTaskCache
 } from './cosTaskStore.js';
+import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 

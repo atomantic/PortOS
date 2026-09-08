@@ -160,6 +160,9 @@ const orchestrationModeUpdateSchema = z.preprocess(emptyToNull, z.enum(ORCHESTRA
 
 const reviewerSchema = z.string().refine(isReviewer, 'Unknown reviewer');
 
+// The metadata-bound fields below are carried onto the task by
+// `services/cosTaskIntake.js#buildTaskMetadata`; its test fails when a field is
+// added here without a mapping there (or an explicit non-metadata verdict).
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
   diagnostics: cosTaskDiagnosticsSchema.optional(),

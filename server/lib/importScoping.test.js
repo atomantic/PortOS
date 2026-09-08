@@ -67,6 +67,8 @@ const NARROWED = [
     'needs inferTuiCommand, which providerVendors.js declares'],
   ['services/voice/tools/pipeline.js', 'services/pipeline/issues.js',
     'needs NAVIGABLE_STAGE_IDS, which issuesShared.js declares'],
+  ['services/cosTaskIntake.js', 'lib/validation.js',
+    'needs SWARM_COUNT_* and the reviewer normalizers, which cosValidation.js / reviewerConfig.js declare'],
 ];
 
 describe('narrowed imports stay narrow (#6009)', () => {
