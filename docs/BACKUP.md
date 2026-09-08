@@ -28,15 +28,17 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 `DEFAULT_EXCLUDES` (in `backup.js`) skips ephemeral/cache data and large re-downloadable assets — all anchored with a leading `/` (rsync filter syntax). Two tiers:
 
 - **Non-overridable** (`overridable: false`): browser CDP profile, agent worktrees — caches with no irreplaceable user data; never backed up.
-- **Overridable** (`overridable: true`): LoRA weight files, cloned repos, reference repos, browser downloads — re-downloadable; the user can opt back in from the Backup settings UI via `disabledDefaultExcludes`.
+- **Overridable** (`overridable: true`): LoRA weight files, cloned repos, reference repos, browser downloads — re-downloadable; the user can disable these built-in exclusion rules from the Backup settings UI via `disabledDefaultExcludes`.
 
 The effective exclude list is computed by the pure `computeEffectiveExcludes()` helper (unit-tested in `backup.test.js`). The scheduled cron handler in `backupScheduler.js` re-reads settings on every run, so `destPath`, `excludePaths`, `disabledDefaultExcludes`, and `enabled` all take effect on the next run without a restart. See [Scheduling & status](#scheduling--status) for how the cron registration itself tracks settings.
 
-#### Why every exclude must be anchored with a leading `/`
+#### Why every default exclude must be anchored with a leading `/`
 
 `DEFAULT_EXCLUDES` is **rsync filter syntax** — the leading `/` means "relative to the transfer root". Without the anchor, `loras/*.safetensors` also matches any `loras/` directory nested anywhere under `data/`, silently dropping unrelated user data (e.g. `brain/.../loras/`). An unanchored pattern is a data-loss bug, not a style nit.
 
-The two `overridable` tiers are enforced, not advisory. A hand-edited `settings.json` that lists a non-overridable path in `disabledDefaultExcludes` is silently dropped server-side; `computeEffectiveExcludes()` enforces both the overridable allow-list and `Array.isArray` guards for hand-edited settings. The Backup tab's toggle UI uses a `shadowsDefault()` helper that also catches broader custom patterns (`loras/`, `loras/**`, `/cos/`) so the "included" state never lies about rsync's actual behavior.
+The two `overridable` tiers are enforced, not advisory. A hand-edited `settings.json` that lists a non-overridable path in `disabledDefaultExcludes` is silently dropped server-side; `computeEffectiveExcludes()` enforces both the overridable allow-list and `Array.isArray` guards for hand-edited settings. The Backup tab switches describe default rule state: switching on disables that default exclusion, and switching off re-enables it. The summary counts enabled and disabled default rules, not included files.
+
+Additional Exclude Paths is independent: toggling a default never removes custom patterns, and custom rsync patterns remain accepted even when they overlap defaults. Additional rules still apply when a default is disabled, so disabling `/loras/*.safetensors` does not guarantee weights will be backed up: `*.safetensors` or `/lo*/` can still exclude them. `computeEffectiveExcludes()` produces the filter list; rsync alone decides which paths match. The UI does not predict snapshot contents.
 
 ## The Postgres dump is mandatory, not optional
 
