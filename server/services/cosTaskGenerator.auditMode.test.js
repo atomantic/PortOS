@@ -324,18 +324,15 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(task.metadata.notARealFlag).toBeUndefined();
   });
 
-  // Both on-demand engines may drain any given request (see
-  // `onDemandRequestMetadata`), so a burn's run parameters have to be forwarded
-  // from BOTH or the mode a migrated step pinned would depend on which engine
-  // got there first. Asserted at the source because the two engines are a
-  // deliberate mirror and only their agreement is the invariant.
-  it('both on-demand engines forward the burn step run parameters', async () => {
+  // Either Priority-0 engine may drain any given request, so a burn step's run
+  // parameters must reach the generator whichever one got there first. They do
+  // by construction now — both engines delegate to the one shared drain — so
+  // this asserts the forwarding survives in that single owner.
+  it('the shared on-demand drain forwards the burn step run parameters', async () => {
     const { readFile } = await import('fs/promises');
     const { PATHS } = await import('../lib/fileUtils.js');
-    for (const file of ['server/services/cosTaskGenerator.js', 'server/services/cos.js']) {
-      const source = await readFile(`${PATHS.root}/${file}`, 'utf8');
-      expect(source, file).toContain('runOverrides: request.burn?.overrides?.params ?? null');
-    }
+    const source = await readFile(`${PATHS.root}/server/services/onDemandDrain.js`, 'utf8');
+    expect(source).toContain('runOverrides: request.burn?.overrides?.params ?? null');
   });
 });
 
