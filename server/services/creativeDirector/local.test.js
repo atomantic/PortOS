@@ -73,7 +73,7 @@ describe('setTreatment — first-pass scene frames (#1867/#1938)', () => {
     expect(mockAtomicWrite).not.toHaveBeenCalled();
     getIngredient.mockResolvedValue({ id: 'example-catalog', updatedAt: 'newer-source-revision' });
     const saved = await setTreatment(project.id, treatment);
-    expect(saved.treatment.artifact.references).toEqual([{ kind: 'catalog', id: 'example-catalog', referenceId: 'catalog:example-catalog', revision: 'revision-1' }]);
+    expect(saved.treatment.artifact.references).toEqual([{ kind: 'catalog', id: 'example-catalog', referenceId: 'catalog:example-catalog', revision: 'revision-1', sourceRevision: expect.any(String) }]);
     expect(saved.status).toBe('draft');
     await expect(setPlan(project.id, plan)).resolves.toMatchObject({ status: 'draft' });
     expect(firstPassGen.enqueueFirstPassSceneFrames).not.toHaveBeenCalled();
