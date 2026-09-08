@@ -27,10 +27,13 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
 
   return (
     <div className="flex flex-col border border-port-border rounded-lg bg-port-card hover:border-port-border/60 transition-colors">
+      {/* `flex flex-col items-stretch` is load-bearing: a stretched <button> centers its
+          content box vertically, which floats a short card's body to the middle of the
+          card and breaks the top alignment across a row. */}
       <button
         type="button"
         onClick={() => onConfigure(taskType)}
-        className="flex-1 text-left p-4 space-y-3 rounded-t-lg hover:bg-port-card/60 transition-colors"
+        className="flex-1 flex flex-col items-stretch gap-3 text-left p-4 rounded-t-lg hover:bg-port-card/60 transition-colors"
       >
         <TaskHeader taskType={taskType} config={config} />
 
