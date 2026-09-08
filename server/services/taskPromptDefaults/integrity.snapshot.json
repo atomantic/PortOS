@@ -10,8 +10,8 @@
     "better-test-quality": "ab53a477cd194a5c4fbda09d901a3775",
     "branch-cleanup": "8fdeb4acc2749816a47ca318b6602721",
     "branch-reconcile": "44281269863b3133696fdebe9b558256",
-    "claim-issue": "5600fde65e31874bd96c3ad83ce72a92",
-    "claim-issue-gitlab": "bb83608738b6517f3f05df116994a6fd",
+    "claim-issue": "c57f3f92044bd53763d57db35fb77483",
+    "claim-issue-gitlab": "7c9e23ed8b4ad76658a4333c02598c12",
     "claim-issue-jira": "b14a5dde5519fda59c2ba1ae7a3d8989",
     "code-quality": "6762542233cdffb86d4e2244945bf52b",
     "code-reviewer-implement": "2e10cac7c1e1cd021d06bfddb5c1eaf2",
@@ -24,7 +24,7 @@
     "documentation": "a30e3bfba8cd13369ccaf806a3534a79",
     "error-handling": "137b371f38398042c0a2c7e2279c92ce",
     "feature-ideas": "804f62f1dadadbfa8a0bcd4aff16b2e8",
-    "issue-reconcile": "53e068c533e989ae31025fdfd4a3ecf9",
+    "issue-reconcile": "62a2940dfecffaa4902396a4687fd9f7",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9d374a9d8ccb92c5c8fd0aa9899e79a5",
     "mobile-responsive": "eb7f6b307bccd15199c74d7aff5c21c3",
@@ -64,8 +64,8 @@
     "better-structural-drift": 1,
     "better-test-quality": 1,
     "branch-reconcile": 5,
-    "claim-issue": 25,
-    "claim-issue-gitlab": 22,
+    "claim-issue": 26,
+    "claim-issue-gitlab": 23,
     "claim-issue-jira": 16,
     "code-quality": 4,
     "code-reviewer-a": 1,
@@ -78,7 +78,7 @@
     "documentation": 7,
     "error-handling": 3,
     "feature-ideas": 11,
-    "issue-reconcile": 5,
+    "issue-reconcile": 6,
     "jira-sprint-manager": 1,
     "jira-status-report": 1,
     "mobile-responsive": 3,
@@ -141,7 +141,8 @@
       "af99e76b4881d1a18234eff0d58d49a4",
       "9bf278ab141120625cd6faf854622f91",
       "688661e7e7b0b4b5af95288dd86a23e8",
-      "78325cbcfb0e5698018fcd16b3aa8b49"
+      "78325cbcfb0e5698018fcd16b3aa8b49",
+      "5600fde65e31874bd96c3ad83ce72a92"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -164,7 +165,8 @@
       "1f9ec476dce71d04e588d17e72cd46c9",
       "b5e24d2caefba4acc6fb09f6c09f2afd",
       "745672581d766edff0ec585dd5b1ef5d",
-      "42fcfae41076d73b49050015fac0ae0e"
+      "42fcfae41076d73b49050015fac0ae0e",
+      "bb83608738b6517f3f05df116994a6fd"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
@@ -231,7 +233,8 @@
       "6f33db6ad0b57c36909229694b78891a",
       "c57a39aaa118173a496f030f5878bfc1",
       "c87d7adb57de208c069964760c9c6276",
-      "a30f5d76b980bc9016f576047c9d5bb1"
+      "a30f5d76b980bc9016f576047c9d5bb1",
+      "53e068c533e989ae31025fdfd4a3ecf9"
     ],
     "mobile-responsive": [
       "636bdc17fa39ed2f2e27623284c8e04c",

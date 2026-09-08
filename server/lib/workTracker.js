@@ -262,19 +262,17 @@ export function formatTrackerInstructions(tracker, options = {}) {
     planItemBody, bodyRequirements, planCommitMessage,
   } = { ...referenceWatchPreset, ...options };
   // The reference-watch preset is the backwards-compatible default, but its
-  // complete-label contract must not bleed into other filing presets when they
-  // omit an issueLabelContract of their own.
+  // preset-specific scope contract stays separate from the dispatch labels now
+  // required for every forge filing preset.
   const issueLabelContract = options.issueLabelContract
     || (slugPrefix === referenceWatchPreset.slugPrefix ? REFERENCE_WATCH_LABEL_CONTRACT : null);
-  const dispatchLabelCreateWording = issueLabelContract
-    ? 'Then create each required dispatch-hint label immediately before applying it.'
-    : 'Then create each justified dispatch-hint label immediately before applying it.';
+  const dispatchLabelCreateWording = 'Then create each required dispatch-hint label immediately before applying it.';
   const jiraDispatchLabelWording = issueLabelContract
     ? `plus the required equivalent dispatch-hint labels ${issueLabelContract.jiraFlags}:`
     : 'plus equivalent dispatch-hint labels when justified:';
   // Rendered from the shared slot list rather than a literal, so a new label
   // axis reaches this copy-pasteable example without re-patching it here.
-  const forgeLabelFlags = formatOptionalIssueLabelFlags(issueLabelContract?.forgeFlags);
+  const forgeLabelFlags = formatOptionalIssueLabelFlags(issueLabelContract?.forgeFlags || '--label model:<tier> --label effort:<level>');
   const dispatchGuidance = issueLabelContract?.dispatchGuidance || DISPATCH_HINT_GUIDANCE;
   const jiraDispatchGuidance = issueLabelContract?.jiraDispatchGuidance || JIRA_DISPATCH_HINT_GUIDANCE;
   const jiraLabelContract = issueLabelContract

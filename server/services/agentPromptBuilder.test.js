@@ -13,6 +13,7 @@
  * autonomous agent…" preamble are gone from BOTH paths.
  */
 
+import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
 import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
@@ -1482,7 +1483,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/RECIPE HEADER/);
       // The fixed review-blocked publication/merge contract adds prose to the
       // prompt, but the 40KB recipe itself must still stay in the staged file.
-      expect(prompt.length).toBeLessThan(25_000);
+      expect(prompt.replace(MANDATORY_DISPATCH_HINT_GUIDANCE, '').length).toBeLessThan(25_000);
     });
 
     it('quotes a hostile branch ref inert in the PR-create command line', () => {
@@ -1871,7 +1872,7 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta);
       expect(prompt).toMatch(/gh pr merge "https:\/\/github\.example\.com\/o\/r\/pull\/7" --merge --delete-branch/);
-      expect(prompt).not.toMatch(/glab/);
+      expect(prompt).not.toMatch(/glab (?:issue|mr) /);
     });
 
     it('threads a non-default reviewer (claude) into the follow-up block via --review-with', () => {
@@ -4142,16 +4143,21 @@ describe('planner attribution', () => {
       { providerType: 'api', providerId: 'lmstudio', providerModel: 'claude-opus-5' },
     );
     const text = typeof prompt === 'string' ? prompt : prompt.userPrompt;
+    expect(text).toContain('## Issue Filing Labels');
+    expect(text).toContain('exactly one `model:` and exactly one `effort:`');
     expect(text).toMatch(/## Planner Attribution/);
     expect(text).toMatch(/--label planner:opus-5/);
   });
 
-  it('says nothing at all when PortOS cannot attribute the run', () => {
+  it('still enforces filing labels when PortOS cannot attribute the run', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta, {},
     );
     expect(prompt).not.toMatch(/## Planner Attribution/);
-    expect(prompt).not.toMatch(/planner:/);
+    expect(prompt).toContain('## Issue Filing Labels');
+    expect(prompt).toContain('exactly one `model:` and exactly one `effort:`');
+    expect(prompt).toContain('specific hardware');
+    expect(prompt).toContain('multiple real users');
   });
 });
 

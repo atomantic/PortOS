@@ -5,7 +5,7 @@
  * forge CLI (injectable `exec`).
  */
 
-import { dispatchLabelSpec, forgeIssueLabels } from '../../lib/dispatchLabels.js';
+import { dispatchLabelSpec, forgeIssueLabels, isDispatchModel, isDispatchEffort } from '../../lib/dispatchLabels.js';
 import { safeJSONParse } from '../../lib/fileUtils.js';
 import { normalizeIssueState } from '../../lib/forgeIssueState.js';
 import { LI_LABEL, LI_BLOCKING_LABEL } from './constants.js';
@@ -241,9 +241,9 @@ export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec 
 /**
  * File ONE proposal issue on a forge (gh/glab). Ensures labels first, embeds the
  * slug marker in the body, and returns `{ success, number, url }`. The issue
- * number is parsed from the created URL's trailing digits. Optional dispatch
- * hints and contributor labels are applied only when the proposal supplied
- * valid values — never derived from `complexity`. `planner` is the identity of
+ * number is parsed from the created URL's trailing digits. Required dispatch
+ * hints are validated before filing; contributor labels remain optional — never
+ * derived from `complexity`. `planner` is the identity of
  * the model that REASONED this proposal (PortOS knows it; the reasoner is never
  * asked to name itself), applied as `planner:<model>` and lazily created by
  * `ensureForgeLabels` like every other extra.
@@ -251,6 +251,9 @@ export async function ensureForgeLabels({ cli, cwd, env, extraLabels = [], exec 
 export async function fileProposalToForge({
   cli, cwd, env, title, body, slug, model, effort, goodFirstIssue, helpWanted, planner, exec = runCli
 } = {}) {
+  if (!isDispatchModel(model) || !isDispatchEffort(effort)) {
+    return { success: false, error: 'Issue filing requires valid model and effort dispatch labels; investigate and supply both before retrying' };
+  }
   const extras = forgeIssueLabels({ model, effort, goodFirstIssue, helpWanted, planner });
   await ensureForgeLabels({ cli, cwd, env, extraLabels: extras, exec });
   const fullBody = `${body}\n\n${slugMarker(slug)}`;

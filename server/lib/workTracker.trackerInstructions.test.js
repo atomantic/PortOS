@@ -126,7 +126,7 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
   it('labels filed forge issues `ux` (and `plan`) and searches titles by the slug stem', () => {
     const github = formatTrackerInstructions('github', ux);
     expect(github).toContain('gh label create ux --description "Proposed from a UX/design audit" --force');
-    expect(github).toContain(`--label ux --label plan ${formatOptionalIssueLabelFlags()}`);
+    expect(github).toContain(`--label ux --label plan ${formatOptionalIssueLabelFlags('--label model:<tier> --label effort:<level>')}`);
     expect(github).toContain('--search "ux in:title"');
     expect(formatTrackerInstructions('gitlab', ux)).toContain('glab issue list --label ux');
     expect(formatTrackerInstructions('gitlab', ux)).toContain('--label ux --label plan');
@@ -181,6 +181,11 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
             .replace(/\{trackerInstructions\}/g, () => trackerInstructions)
             .replace(/\{appName\}/g, () => 'Example App')
             .replace(/\{repoPath\}/g, () => '/tmp/example-repo');
+          if (tracker === 'github' && fileIssues) {
+            expect(rendered, taskType).toContain('exactly one `model:` and exactly one `effort:`');
+            expect(rendered, taskType).toContain('--label model:<tier> --label effort:<level>');
+            expect(rendered, taskType).not.toContain('[--label model:<tier>]');
+          }
           expect(
             rendered.match(/\{[a-zA-Z][a-zA-Z0-9_]*\}/g),
             `${taskType} on ${tracker} fileIssues=${fileIssues}`,
