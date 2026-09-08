@@ -40,9 +40,6 @@ import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 // must normalize on the first line to match multi-line inputs.
 export const firstLine = (s) => (s || '').split('\n').map(l => l.trim()).find(l => l) || '';
 
-// Re-exported at the address callers already use; taskParser.js declares it.
-export { PRIORITY_VALUES };
-
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 
 
@@ -260,9 +257,6 @@ export async function getTaskById(taskId) {
  * interval. `suppressDequeue` is reserved for an explicit dispatcher that will
  * force-spawn the returned task itself; the change event still reaches socket
  * consumers, but the normal scheduler must not race that dispatch.
- *
- * The non-raw request → task record mapping lives in `cosTaskIntake.js`
- * (`buildQueuedTask`), whose test keeps it in parity with `createCosTaskSchema`.
  */
 export async function addTask(taskData, taskType = 'user', { raw = false, ignoreTaskId = null, now = Date.now(), suppressDequeue = false } = {}) {
   return withStateLock(async () => {
@@ -321,12 +315,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   }
 
   // When raw=true, use the pre-built task object directly (for on-demand/generated tasks)
-  let newTask;
-  if (raw) {
-    newTask = taskData;
-  } else {
-    newTask = buildQueuedTask(taskData, taskType, { now });
-  }
+  let newTask = raw ? taskData : buildQueuedTask(taskData, taskType, { now });
 
   // Route a multi-line context payload to `metadata.prompt` (#4153). Applied to
   // BOTH branches — the raw path is how the generator, the reference-watch

@@ -22,7 +22,8 @@
  */
 
 import { hasKnownPrefix, PRIORITY_VALUES } from '../lib/taskParser.js';
-import { KEYED_REVIEWER_PINS, REVIEW_STOP_MODES, SWARM_COUNT_MAX, SWARM_COUNT_MIN, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../lib/validation.js';
+import { SWARM_COUNT_MAX, SWARM_COUNT_MIN } from '../lib/cosValidation.js';
+import { KEYED_REVIEWER_PINS, REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../lib/reviewerConfig.js';
 import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { quotaBurnProvenance, quotaBurnTaskMetadata } from '../lib/quotaBurnOrigin.js';
@@ -50,7 +51,7 @@ export function buildTaskMetadata(taskData, taskType, { now = Date.now() } = {})
   if (taskData.context) metadata.context = taskData.context;
   // The full agent-facing payload, when the producer names it explicitly
   // (#4153). Producers that still pass a multi-line `context` are classified
-  // by `splitTaskPromptFields` below, so both call shapes converge.
+  // by `splitTaskPromptFields` in `cosTaskStore.js#addTask`, so both call shapes converge.
   if (typeof taskData.prompt === 'string') metadata.prompt = taskData.prompt;
   if (taskData.model) metadata.model = taskData.model;
   if (taskData.provider) metadata.provider = taskData.provider;
@@ -241,7 +242,7 @@ export function buildTaskMetadata(taskData, taskType, { now = Date.now() } = {})
   // window will refuse first, which burn step asked, and which on-demand
   // request (if any) it was generated for. The built-in lane stamps these onto
   // the generated task's metadata via `lib/quotaBurnOrigin.js` and reaches disk
-  // through the RAW path above; a custom-job burn reaches disk through this
+  // through the RAW path in `cosTaskStore.js#addTask`; a custom-job burn reaches disk through this
   // non-raw path instead. Both spread the SAME block so the two lanes cannot
   // carry different provenance for the same feature — mapping the keys one at
   // a time here is how `quotaBurnStepId` came to reach disk without ever

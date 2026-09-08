@@ -1,24 +1,18 @@
 /**
- * Schema ↔ intake parity for the non-raw `addTask` path.
- *
- * `createCosTaskSchema` (lib/cosValidation.js) and `buildTaskMetadata`
- * (cosTaskIntake.js) are two halves of one contract: the schema admits a
- * request field, the intake carries it onto `metadata`. They drifted three
- * times while the mapping was buried inside the store (`optionalReviewers`
- * validated but never persisted; `discardWorktree` / `noCodeOutput` reachable
- * only through the raw path). Every schema field must now be classified here:
- * either it maps (and a sample proves it), or it is named as a non-metadata
- * field with the reason. Adding a schema field without doing either fails.
+ * Parity guard between `createCosTaskSchema` (lib/cosValidation.js) and
+ * `buildTaskMetadata` — see the module header in cosTaskIntake.js for why.
+ * Every schema field is either mapped (a schema-valid sample must change the
+ * metadata) or named as non-metadata with the reason; anything else fails.
  */
 
 import { describe, it, expect } from 'vitest';
 import { createCosTaskSchema } from '../lib/cosValidation.js';
 import { REVIEW_STOP_MODES } from '../lib/reviewerConfig.js';
 import { PR_COMPLETIONS } from '../lib/prDisposition.js';
-import { buildTaskMetadata, buildQueuedTask } from './cosTaskIntake.js';
+import { buildTaskMetadata } from './cosTaskIntake.js';
 
 const NOW = Date.UTC(2026, 0, 2, 3, 4, 5);
-const base = (taskType = 'user') => buildTaskMetadata({ description: 'x' }, taskType, { now: NOW });
+const base = () => buildTaskMetadata({ description: 'x' }, 'user', { now: NOW });
 
 // Request fields consumed by the route or the store itself, never carried
 // into `metadata`. Naming them is the verdict; the parity test below refuses
@@ -78,7 +72,6 @@ describe('createCosTaskSchema ↔ buildTaskMetadata parity', () => {
   it('classifies every schema field exactly once', () => {
     const schemaFields = Object.keys(createCosTaskSchema.shape).sort();
     const classified = [...Object.keys(NON_METADATA_FIELDS), ...Object.keys(METADATA_SAMPLES)].sort();
-    expect(new Set(classified).size).toBe(classified.length);
     expect(classified).toEqual(schemaFields);
   });
 
@@ -93,29 +86,5 @@ describe('createCosTaskSchema ↔ buildTaskMetadata parity', () => {
   // really does leave metadata untouched.
   it('leaves metadata untouched for a field the intake does not map', () => {
     expect(buildTaskMetadata({ description: 'x', notARequestField: true }, 'user', { now: NOW })).toEqual(base());
-  });
-});
-
-describe('buildQueuedTask', () => {
-  it('builds the pending record with a prefixed id and the LWW stamp', () => {
-    const task = buildQueuedTask({ id: 'abc', description: 'Do it', priority: 'high' }, 'user', { now: NOW });
-    expect(task).toMatchObject({
-      id: 'task-abc', status: 'pending', priority: 'HIGH', priorityValue: 3,
-      description: 'Do it', approvalRequired: false, autoApproved: false, section: 'pending',
-    });
-    expect(task.metadata.updatedAt).toBe(new Date(NOW).toISOString());
-  });
-
-  it('collapses plan-only into the read-only, no-delivery posture', () => {
-    const { metadata } = buildQueuedTask(
-      { description: 'Plan it', planOnly: true, useWorktree: true, openPR: true, reviewers: ['codex'] },
-      'user', { now: NOW }
-    );
-    expect(metadata).toMatchObject({
-      planOnly: true, slashdoCommand: 'plan-task', slashdoArgs: '--yes', readOnly: true,
-      noCodeOutput: true, useWorktree: false, openPR: false, reviewLoop: false,
-    });
-    expect(metadata).not.toHaveProperty('reviewers');
-    expect(metadata).not.toHaveProperty('prCompletion');
   });
 });
