@@ -20,6 +20,8 @@ import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
 import { TASK_CONTEXT_KEY, taskContextBlock } from '../lib/cosTaskPrompt.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../lib/prDisposition.js';
+// Shared with cosTaskGenerator.js, which stamps the same set as metadata.claimFlow.
+import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
 import { PORTOS_APP_ID } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './promptSections/constants.js';
@@ -75,13 +77,6 @@ export { buildReviewLoopFollowUpSection } from './promptSections/reviewLifecycle
 export { createJiraTicketForTask, generateJiraTitle, getAppDataForTask, getAppWorkspace } from './promptSections/appContext.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
-
-// Scheduled claim tasks created before the explicit marker was introduced still
-// carry their task kind in analysisType. Keep those persisted queue records on
-// the claim-owned lifecycle while new/manual tasks use the explicit marker.
-const CLAIM_FLOW_TASK_TYPES = new Set([
-  'plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work'
-]);
 
 // These scheduled audits inspect a running web UI. Keep their runtime contract
 // in the builder rather than only in the default prompt bodies so customized
