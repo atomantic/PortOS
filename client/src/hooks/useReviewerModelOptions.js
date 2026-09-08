@@ -158,6 +158,8 @@ export default function useReviewerModelOptions() {
         return [reviewer, matched];
       })
     );
+    for (const provider of providers || []) providersByReviewer[`provider:${provider.id}`] = [provider];
+    const providerReviewers = (providers || []).map(provider => `provider:${provider.id}`);
     const providersFor = (reviewer) => providersByReviewer[reviewer] || [];
 
     // `selectableModelsForProvider` owns the per-provider normalization (today:
@@ -195,6 +197,7 @@ export default function useReviewerModelOptions() {
 
     const ollama = localIds('ollama');
     const optionsByReviewer = {
+      ...Object.fromEntries(providerReviewers.map(reviewer => [reviewer, providerTiers(reviewer)])),
       lmstudio: localIds('lmstudio'),
       ollama,
       codex: providerTiers('codex'),
@@ -223,6 +226,7 @@ export default function useReviewerModelOptions() {
     };
 
     const defaultModels = {
+      ...Object.fromEntries(providerReviewers.map(reviewer => [reviewer, providerDefault(reviewer)])),
       lmstudio: localDefault('lmstudio'),
       ollama: localDefault('ollama'),
       codex: providerDefault('codex'),
@@ -264,6 +268,7 @@ export default function useReviewerModelOptions() {
     };
 
     return {
+      providers: providers || [],
       optionsByReviewer,
       defaultModels,
       modelEffortLevels,
@@ -280,7 +285,7 @@ export default function useReviewerModelOptions() {
       // namespaces the Zen catalog never lists. Derived from the rosters so a
       // reviewer added to either one can't silently default to the wrong control.
       freeText: Object.fromEntries(
-        MODEL_SELECTABLE_REVIEWERS.map((r) => [r, !PROBED_LOCAL_BACKENDS.includes(r)])
+        [...MODEL_SELECTABLE_REVIEWERS, ...providerReviewers].map((r) => [r, !PROBED_LOCAL_BACKENDS.includes(r)])
       ),
       unavailable: {
         lmstudio: localStatus?.lmstudio?.available === false,

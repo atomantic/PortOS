@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   describeReviewerCli,
+  isProviderReviewer,
   isCliReviewer,
   reviewerCliBinary,
   DEFAULT_REVIEWER,
@@ -420,6 +421,9 @@ describe('client mirror of the reviewer vocabulary', () => {
   it('matches the server reviewer roster', async () => {
     const client = await import('../../client/src/lib/reviewerPins.js');
     expect([...client.REVIEWER_VALUES].sort()).toEqual([...REVIEWER_VALUES].sort());
+    for (const token of ['provider:example-gpu', 'provider:custom-1', 'provider:', 'provider:foo,claude', 'provider:foo~opt', 'provider:foo[model]', 'provider:UPPER', 'claude']) {
+      expect(client.isProviderReviewer(token)).toBe(isProviderReviewer(token));
+    }
   });
 
   // Aliases resolve slugs already stored on tasks (`gemini`, `cursor-agent`). One

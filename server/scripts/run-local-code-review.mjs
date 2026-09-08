@@ -6,13 +6,19 @@
  */
 import { getCodeReviewDefaults, runLocalClaimCommentReview, runLocalCodeReview } from '../services/codeReview.js';
 
+import { Console } from 'node:console';
+import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
+
+// Provider/runtime diagnostics belong on stderr; stdout is exactly one JSON
+// response for the claim procedure's jq gate.
+globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 
 try {
   const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   const defaults = await getCodeReviewDefaults().catch(() => null);
-  const model = request.model || defaults?.[`${request.backend}Model`] || null;
+  const model = request.model || reviewerModelsFromDefaults(defaults)[request.backend] || null;
   const effort = request.effort || defaults?.[`${request.backend}Effort`] || null;
   const review = request.kind === 'claim-comments'
     ? runLocalClaimCommentReview

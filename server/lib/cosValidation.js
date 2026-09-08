@@ -30,7 +30,8 @@ import {
   MODEL_CAPABLE_CLI_REVIEWERS,
   MODEL_SELECTABLE_REVIEWERS,
   REVIEWER_ALIASES,
-  REVIEWER_VALUES,
+  isReviewer,
+  isToolFreeReviewer,
   REVIEW_STOP_MODES,
   normalizeOptionalReviewers,
   normalizeReviewUsernames,
@@ -157,6 +158,8 @@ export const orchestrationProfilesSettingsSchema = z.array(namedOrchestrationPro
 const orchestrationModeInputSchema = z.preprocess(emptyToUndefined, z.enum(ORCHESTRATION_MODES).optional());
 const orchestrationModeUpdateSchema = z.preprocess(emptyToNull, z.enum(ORCHESTRATION_MODES).nullable().optional());
 
+const reviewerSchema = z.string().refine(isReviewer, 'Unknown reviewer');
+
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
   diagnostics: cosTaskDiagnosticsSchema.optional(),
@@ -238,11 +241,11 @@ export const createCosTaskSchema = z.object({
   ),
   reviewer: z.preprocess(
     v => v === '' ? undefined : (typeof v === 'string' ? (REVIEWER_ALIASES[v] ?? v) : v),
-    z.enum(REVIEWER_VALUES).optional()
+    reviewerSchema.optional()
   ),
   reviewers: z.preprocess(
     v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
-    z.array(z.enum(REVIEWER_VALUES)).optional()
+    z.array(reviewerSchema).optional()
   ),
   reviewStopMode: z.enum(REVIEW_STOP_MODES).optional(),
   reviewerApplies: z.preprocess(
@@ -326,7 +329,7 @@ export const updateCosTaskSchema = z.object({
 export const challengeTaskSchema = z.object({
   reason: z.string().trim().min(1).max(5000),
   evidence: z.string().trim().max(20_000).optional(),
-  reviewer: z.enum(REVIEWER_VALUES).optional(),
+  reviewer: reviewerSchema.optional(),
 });
 
 // Automatic re-check request (#2471). Instead of a human `outcome`, the resolver
@@ -337,7 +340,7 @@ export const challengeTaskSchema = z.object({
 // re-run by the follow-up agent itself, which then resolves with an explicit
 // `outcome`.
 export const challengeRecheckSchema = z.object({
-  backend: z.enum(LOCAL_LLM_REVIEWERS),
+  backend: z.string().refine(isToolFreeReviewer),
   model: z.string().trim().min(1).optional(),
   diff: z.string().min(1).max(500_000),
 });
@@ -582,9 +585,10 @@ export const taskTemplateFromTaskSchema = z.object({
 // `claudeModel` doubles as the Ollama model id when the user runs an
 // Ollama-backed `claude` (isOllamaClaudeProvider) as their reviewer.
 export const codeReviewSettingsSchema = z.object({
+  providerModels: z.preprocess(normalizeReviewerModels, z.record(z.string()).optional()),
   reviewers: z.preprocess(
     v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
-    z.array(z.enum(REVIEWER_VALUES)).optional()
+    z.array(reviewerSchema).optional()
   ),
   // Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
   // reviewers to gate the merge, appended to `--review-with` after the keyed
@@ -1014,7 +1018,7 @@ export function sanitizeTaskMetadata(raw) {
   }
   // `reviewer` is a legacy single constrained string.
   const normalizedReviewer = REVIEWER_ALIASES[raw.reviewer] || raw.reviewer;
-  if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && REVIEWER_VALUES.includes(normalizedReviewer)) {
+  if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && isReviewer(normalizedReviewer)) {
     clean.reviewer = normalizedReviewer;
     hasKeys = true;
   }
@@ -1024,7 +1028,7 @@ export function sanitizeTaskMetadata(raw) {
     const list = [];
     for (const r of raw.reviewers) {
       const normalized = REVIEWER_ALIASES[r] || r;
-      if (REVIEWER_VALUES.includes(normalized) && !seen.has(normalized)) { seen.add(normalized); list.push(normalized); }
+      if (isReviewer(normalized) && !seen.has(normalized)) { seen.add(normalized); list.push(normalized); }
     }
     if (list.length) { clean.reviewers = list; hasKeys = true; }
   }

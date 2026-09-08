@@ -14,7 +14,7 @@ import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, isCliReviewer, resolveReviewerConfig } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, isToolFreeReviewer, isCliReviewer, resolveReviewerConfig } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
@@ -942,7 +942,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // Slashdo already partitions reviewers. Plain-git completion prompts need the
   // same split spelled out: local CLIs/local LLMs inspect the committed branch
   // before it is public; Copilot and @login reviewers can only run after a PR.
-  const isLocalReviewer = reviewer => isCliReviewer(reviewer) || LOCAL_LLM_REVIEWERS.includes(reviewer);
+  const isLocalReviewer = reviewer => isCliReviewer(reviewer) || isToolFreeReviewer(reviewer);
   const localReviewers = lightReviewers.filter(isLocalReviewer);
   const localReviewRequired = localReviewers.some(reviewer => !lightOptionalReviewers.includes(reviewer));
   const reviewerPositions = [

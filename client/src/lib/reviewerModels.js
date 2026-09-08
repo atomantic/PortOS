@@ -1,3 +1,4 @@
+import { isProviderReviewer } from './reviewerPins';
 import {
   MODEL_SELECTABLE_REVIEWERS,
   MAX_REVIEWER_MODEL_LENGTH,
@@ -13,7 +14,8 @@ import {
  * The Code Review Defaults settings slice persists ONE SCALAR PER REVIEWER
  * (`codexModel`, `claudeModel`, `lmstudioModel`, `ollamaModel`, and the matching
  * `<reviewer>Effort` scalars) and stays that way — the encoding crosses installs,
- * so changing it would need a migration for zero gain. Everything else (the
+ * so legacy scalars remain readable. Provider-backed model pins are additive in
+ * `providerModels`, keyed by `provider:<id>`. Everything else (the
  * ReviewerPicker table, per-task metadata, the slashdo token builders) speaks the
  * token-keyed MAP shape the `~opt` / `~max` controls already use, so the two need
  * one documented conversion point rather than a hand-rolled loop in each consumer.
@@ -47,6 +49,13 @@ function pinScalarAdapters(roster, suffix, validateOne) {
   return {
     fromDefaults: (defaults) => {
       const out = {};
+      if (suffix === 'Model') {
+        for (const [key, raw] of Object.entries(defaults?.providerModels || {})) {
+          if (!isProviderReviewer(key) || typeof raw !== 'string') continue;
+          const value = validateOne(raw, key);
+          if (value) out[key] = value;
+        }
+      }
       for (const reviewer of roster) {
         const raw = defaults?.[`${reviewer}${suffix}`];
         if (typeof raw !== 'string') continue;
@@ -55,9 +64,10 @@ function pinScalarAdapters(roster, suffix, validateOne) {
       }
       return out;
     },
-    toDefaults: (pins) => Object.fromEntries(
-      roster.map((reviewer) => [`${reviewer}${suffix}`, pins?.[reviewer] || undefined])
-    )
+    toDefaults: (pins) => ({
+      ...Object.fromEntries(roster.map((reviewer) => [`${reviewer}${suffix}`, pins?.[reviewer] || undefined])),
+      ...(suffix === 'Model' ? { providerModels: Object.fromEntries(Object.entries(pins || {}).filter(([key]) => isProviderReviewer(key))) } : {})
+    })
   };
 }
 

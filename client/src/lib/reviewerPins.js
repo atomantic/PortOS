@@ -264,3 +264,6 @@ export function normalizeReviewers(meta) {
   }
   return out.length ? out : [...DEFAULT_REVIEWERS];
 }
+
+// Stable provider-backed reviewer identity; mirror of the server vocabulary.
+export const isProviderReviewer = (value) => typeof value === 'string' && /^provider:[a-z0-9][a-z0-9-]{0,79}$/.test(value);

@@ -2,7 +2,7 @@
  * Review-loop, CI-gate, and merge prompt sections.
  */
 
-import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEW_STOP_MODE, isToolFreeReviewer, MODEL_CAPABLE_CLI_REVIEWERS, describeReviewerCli, isCliReviewer, reviewerCliBinary, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, reviewerEffortArgs, reviewerModelArg, reviewerModelFlag, resolveKeyedReviewers, buildReviewWithArgs, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
 import { oversizedBodyPointer } from '../../lib/slashdoInvocation.js';
 import { detectForgeCli } from '../../lib/gitForge.js';
 import { shellQuote } from '../../lib/shellQuote.js';
@@ -210,7 +210,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // The orchestrator applies independently validated findings in a later step.
   const reviewerApplies = false;
   const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
-  const hasLocalLlm = reviewers.some(r => LOCAL_LLM_REVIEWERS.includes(r));
+  const hasLocalLlm = reviewers.some(r => isToolFreeReviewer(r));
   // Spawnable-CLI reviewers, in configured order.
   const cliReviewers = reviewers.filter(isCliReviewer);
   const hasCli = cliReviewers.length > 0;
@@ -377,7 +377,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // configured rather than a fixed `<lmstudio|ollama>` placeholder: naming a
   // backend that isn't in the list is a 400 from the route's `z.enum`, and a
   // single configured backend needs no substitution step at all.
-  const localLlmBackends = LOCAL_LLM_REVIEWERS.filter(r => reviewers.includes(r));
+  const localLlmBackends = reviewers.filter(isToolFreeReviewer);
   const localLlmBackendToken = localLlmBackends.length === 1
     ? localLlmBackends[0]
     : `<${localLlmBackends.join('|')}>`;
@@ -385,8 +385,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     ? ''
     : ` Substitute the active reviewer name for \`${localLlmBackendToken}\`.`;
   const pinnedString = (map, r) => (typeof map[r] === 'string' && map[r] ? map[r] : null);
-  const localLlmPins = LOCAL_LLM_REVIEWERS
-    .filter(r => reviewers.includes(r))
+  const localLlmPins = reviewers.filter(isToolFreeReviewer)
     .map(r => ({ reviewer: r, model: pinnedString(reviewerModelMap, r), effort: pinnedString(reviewerEffortMap, r) }))
     .filter(p => p.model || p.effort);
   const localLlmPinNote = localLlmPins.map(({ reviewer, model, effort }) => {
@@ -747,7 +746,7 @@ export function buildLocalReviewLoopSection({
   taskId, branchName, baseBranch, localAgentLoopBody, localAgentLoopBodyPath = null,
   reviewers, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies, reviewerPositions = [],
 }) {
-  const localReviewers = (reviewers || []).filter(reviewer => isCliReviewer(reviewer) || LOCAL_LLM_REVIEWERS.includes(reviewer));
+  const localReviewers = (reviewers || []).filter(reviewer => isCliReviewer(reviewer) || isToolFreeReviewer(reviewer));
   if (!localReviewers.length) return '';
   const localReviewRequired = localReviewers.some(reviewer =>
     !(Array.isArray(optionalReviewers) && optionalReviewers.some(optional => optional.toLowerCase() === reviewer.toLowerCase()))

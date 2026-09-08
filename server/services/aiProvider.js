@@ -548,7 +548,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     return { error: retry.error };
   };
 
-  if (first.status === 400 && LM_STUDIO_NO_MODEL_RE.test(first.body || '')) {
+  if (options.allowModelRecovery !== false && first.status === 400 && LM_STUDIO_NO_MODEL_RE.test(first.body || '')) {
     const loaded = await ensureLMStudioModelLoaded(provider, statusOp);
     if (loaded) {
       statusOp.update('start', `Calling ${provider.name || provider.id} (${loaded})…`, { model: loaded });
@@ -562,7 +562,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
   // "model not found". Only fires for Ollama / LM Studio providers; healing is
   // a no-op (returns null) for remote/CLI providers, leaving the error as-is.
   const { healMissingLocalModel, isModelNotFoundError } = await import('../services/localModelHealing.js');
-  if (isModelNotFoundError(first.body || first.error)) {
+  if (options.allowModelRecovery !== false && isModelNotFoundError(first.body || first.error)) {
     const healed = await healMissingLocalModel({ provider, requestedModel: model }).catch(() => null);
     if (healed) {
       statusOp.update('model:corrected', `"${model}" isn't installed — retrying with ${healed.model}…`, { model: healed.model });
