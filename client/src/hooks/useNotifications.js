@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSocket } from './useSocket';
 import * as api from '../services/api';
 
@@ -8,19 +8,31 @@ export function useNotifications() {
   const [loading, setLoading] = useState(true);
   const socket = useSocket();
 
+  const countGeneration = useRef(0);
+
+  // The total covers the full store, not just the loaded page. A socket total
+  // or newer request supersedes any count request already in flight.
+  const refreshCount = useCallback(async () => {
+    const generation = ++countGeneration.current;
+    await api.getNotificationCount().then(({ count }) => {
+      if (generation === countGeneration.current) setUnreadCount(count);
+    }).catch(err => {
+      console.error(`❌ Failed to load notification count: ${err.message}`);
+    });
+  }, []);
+
   // Fetch initial notifications
   useEffect(() => {
     let cancelled = false;
     const fetchNotifications = async () => {
       setLoading(true);
       try {
-        const [notifs, countData] = await Promise.all([
+        const [notifs] = await Promise.all([
           api.getNotifications({ limit: 50 }),
-          api.getNotificationCount()
+          refreshCount()
         ]);
         if (cancelled) return;
         setNotifications(notifs);
-        setUnreadCount(countData.count);
       } catch (err) {
         if (cancelled) return;
         console.error(`❌ Failed to load notifications: ${err.message}`);
@@ -30,8 +42,8 @@ export function useNotifications() {
     };
 
     fetchNotifications();
-    return () => { cancelled = true; };
-  }, []);
+    return () => { cancelled = true; countGeneration.current++; };
+  }, [refreshCount]);
 
   // Subscribe to socket events
   useEffect(() => {
@@ -40,8 +52,7 @@ export function useNotifications() {
     socket.emit('notifications:subscribe');
 
     const handleAdded = (notification) => {
-      setNotifications(prev => [notification, ...prev]);
-      setUnreadCount(prev => prev + 1);
+      setNotifications(prev => [notification, ...prev.filter(n => n.id !== notification.id)]);
     };
 
     const handleRemoved = ({ id }) => {
@@ -55,12 +66,12 @@ export function useNotifications() {
     };
 
     const handleCount = (count) => {
+      countGeneration.current++;
       setUnreadCount(count);
     };
 
     const handleCleared = () => {
       setNotifications([]);
-      setUnreadCount(0);
     };
 
     socket.on('notifications:added', handleAdded);
@@ -87,34 +98,34 @@ export function useNotifications() {
     setNotifications(prev =>
       prev.map(n => n.id === id ? { ...n, read: true } : n)
     );
-    setUnreadCount(prev => Math.max(0, prev - 1));
-  }, []);
+    await refreshCount();
+  }, [refreshCount]);
 
   const markAllAsRead = useCallback(async () => {
     await api.markAllNotificationsRead();
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    setUnreadCount(0);
-  }, []);
+    await refreshCount();
+  }, [refreshCount]);
 
   const removeNotification = useCallback(async (id) => {
     await api.deleteNotification(id);
     setNotifications(prev => prev.filter(n => n.id !== id));
-  }, []);
+    await refreshCount();
+  }, [refreshCount]);
 
   const clearAll = useCallback(async () => {
     await api.clearNotifications();
     setNotifications([]);
-    setUnreadCount(0);
-  }, []);
+    await refreshCount();
+  }, [refreshCount]);
 
   const refresh = useCallback(async () => {
-    const [notifs, countData] = await Promise.all([
+    const [notifs] = await Promise.all([
       api.getNotifications({ limit: 50 }),
-      api.getNotificationCount()
+      refreshCount()
     ]);
     setNotifications(notifs);
-    setUnreadCount(countData.count);
-  }, []);
+  }, [refreshCount]);
 
   return {
     notifications,
