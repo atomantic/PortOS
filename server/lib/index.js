@@ -296,6 +296,8 @@ export * from './persistentMindTrajectory.js';
 export * from './persistentMindProfile.js';
 export * from './persistentMindMemory.js';
 export * from './persistentMindPrompt.js';
+export * from './persistentMindPlaybook.js';
+export * from './mindLocalContextClamp.js';
 export * from './persistentMindPublic.js';
 export * from './persistentMindThinkingPresets.js';
 export * from './persistentMindChosenName.js';

@@ -27,6 +27,7 @@ import {
   readPersistentMindMemories,
 } from './persistentMindContext.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import { composePersistentMindInstructions, normalizePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { assertVisionRunUsedImages, runPromptThroughProvider } from './promptRunner.js';
 import { stopRun } from './runner.js';
 import {
@@ -329,13 +330,15 @@ export function createPersistentMindTurnAdapter() {
         readPersistentMindMemories(PERSISTENT_MIND_ID),
       ]);
       const prompt = normalizePersistentMindPrompt(root.config?.persistentMindPrompt);
+      const playbook = normalizePersistentMindPlaybook(root.config?.persistentMindPlaybook);
       return {
         ok: true,
         provider: profile.provider,
         model: profile.model,
         effort: profile.effort,
         identity: prompt.identity,
-        instructions: prompt.instructions,
+        instructions: composePersistentMindInstructions(prompt.instructions, playbook),
+        playbook,
         memories,
       };
     },

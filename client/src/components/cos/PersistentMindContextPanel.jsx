@@ -14,6 +14,12 @@ const promptDraft = (data) => ({
   instructions: data?.prompt?.instructions || '',
 });
 
+const playbookDraft = (data) => ({
+  schemaVersion: data?.playbook?.schemaVersion || 1,
+  mode: data?.playbook?.mode || 'default',
+  customInstructions: data?.playbook?.customInstructions || '',
+});
+
 const harnessTone = (recommendation) => recommendation === 'recommended'
   ? 'success'
   : recommendation === 'not-recommended' ? 'warning' : 'info';
@@ -21,6 +27,8 @@ const harnessTone = (recommendation) => recommendation === 'recommended'
 export default function PersistentMindContextPanel({ view = 'all', refreshKey = 0, onMemoriesChanged }) {
   const [data, setData] = useState(null);
   const [draft, setDraft] = useState(() => promptDraft(null));
+  const [playbook, setPlaybook] = useState(() => playbookDraft(null));
+  const [savingPlaybook, setSavingPlaybook] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -32,6 +40,7 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
       .then((next) => {
         setData(next);
         setDraft(promptDraft(next));
+        setPlaybook(playbookDraft(next));
       })
       .catch((nextError) => setError(nextError?.message || 'Could not load the mind context'))
       .finally(() => setLoading(false));
@@ -43,6 +52,17 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
     await load();
     onMemoriesChanged?.();
   }, [load, onMemoriesChanged]);
+
+
+  const savePlaybook = async () => {
+    if (savingPlaybook) return;
+    setSavingPlaybook(true);
+    setError(null);
+    await api.updateCosConfig({ persistentMindPlaybook: playbook }, { silent: true })
+      .then(() => load())
+      .catch((nextError) => setError(nextError?.message || 'Could not save the playbook'))
+      .finally(() => setSavingPlaybook(false));
+  };
 
   const savePrompt = async () => {
     if (saving) return;
@@ -92,6 +112,48 @@ export default function PersistentMindContextPanel({ view = 'all', refreshKey = 
           {data.harness.detail}
         </Banner>
       )}
+
+
+      {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-playbook-heading">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 id="mind-playbook-heading" className="text-sm font-semibold text-port-text">Operating playbook</h3>
+            <p className="mt-1 text-xs text-port-text-muted">First-class mind modes. Continuous play licenses explore → interact → reflect → invent each wake. Saving never starts inference.</p>
+          </div>
+          <button type="button" onClick={savePlaybook} disabled={savingPlaybook || !data} className="flex items-center gap-2 rounded bg-port-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+            <Save size={14} aria-hidden="true" /> {savingPlaybook ? 'Saving…' : 'Save playbook'}
+          </button>
+        </div>
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <label className="text-xs font-medium text-port-text" htmlFor="persistent-mind-playbook-mode">
+            Mode
+            <select
+              id="persistent-mind-playbook-mode"
+              value={playbook.mode}
+              onChange={(event) => setPlaybook((current) => ({ ...current, mode: event.target.value }))}
+              className="mt-1 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text"
+            >
+              {(data?.playbookCatalog || [
+                { id: 'default', label: 'Default' },
+                { id: 'continuous-play', label: 'Continuous play / explore & invent' },
+              ]).map((entry) => (
+                <option key={entry.id} value={entry.id}>{entry.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs font-medium text-port-text" htmlFor="persistent-mind-playbook-custom">
+            Extra playbook notes
+            <textarea
+              id="persistent-mind-playbook-custom"
+              rows={4}
+              maxLength={6000}
+              value={playbook.customInstructions}
+              onChange={(event) => setPlaybook((current) => ({ ...current, customInstructions: event.target.value }))}
+              className="mt-1 w-full resize-y rounded border border-port-border bg-port-bg px-3 py-2 text-sm font-normal text-port-text"
+            />
+          </label>
+        </div>
+      </section>}
 
       {view !== 'memories' && <section className="rounded border border-port-border bg-port-card p-4" aria-labelledby="mind-prompt-heading">
         <div className="flex flex-wrap items-start justify-between gap-3">

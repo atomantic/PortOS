@@ -41,6 +41,7 @@ import { normalizeDomainBudgets, remainingActionBudget } from '../lib/domainBudg
 import { mergePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { mergePersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { mergePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
+import { mergePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkingPresets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
@@ -250,6 +251,7 @@ export async function updateConfig(updates) {
     const priorPersistentMindCapabilities = current.persistentMindCapabilities;
     const priorPersistentMindProfile = current.persistentMindProfile;
     const priorPersistentMindPrompt = current.persistentMindPrompt;
+    const priorPersistentMindPlaybook = current.persistentMindPlaybook;
     const priorPersistentMindThinkingPresets = current.persistentMindThinkingPresets;
     const next = { ...current, ...updates };
     if (updates.domainAutonomy !== undefined) {
@@ -296,6 +298,12 @@ export async function updateConfig(updates) {
       next.persistentMindPrompt = mergePersistentMindPrompt(
         priorPersistentMindPrompt,
         updates.persistentMindPrompt,
+      );
+    }
+    if (updates.persistentMindPlaybook !== undefined) {
+      next.persistentMindPlaybook = mergePersistentMindPlaybook(
+        priorPersistentMindPlaybook,
+        updates.persistentMindPlaybook,
       );
     }
     return saveConfig(next);
