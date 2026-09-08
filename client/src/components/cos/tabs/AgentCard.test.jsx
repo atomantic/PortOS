@@ -553,3 +553,45 @@ describe('AgentCard goal fidelity', () => {
   });
 });
 
+// A claim run works in a `claim/<item>` worktree that the claim command creates
+// itself; CoS keeps useWorktree/openPR off only so it does not nest a second
+// worktree around it. Reading that false/false as "coding on main" made every
+// issue claim from the app Issues page badge itself `main` while it was in fact
+// on an isolated branch.
+describe('AgentCard branch posture badges', () => {
+  const renderWithMetadata = (metadata) => render(
+    <MemoryRouter>
+      <AgentCard agent={{ ...agent, metadata: { ...agent.metadata, ...metadata } }} completed />
+    </MemoryRouter>
+  );
+
+  // The load-bearing case for already-archived runs: every claim agent spawned
+  // before the server projection was corrected has BOTH flags frozen true in its
+  // metadata, so the card has to settle the contradiction on read or those cards
+  // wear two conflicting branch badges at once.
+  it('suppresses the main badge on a claim run whose stored metadata still says it', () => {
+    renderWithMetadata({ configClaimFlow: true, configUseWorktree: false, configCodingOnMain: true });
+
+    expect(screen.getByText('Claim WT')).toBeInTheDocument();
+    expect(screen.queryByText('main')).not.toBeInTheDocument();
+  });
+
+  // Same stale-record problem, other non-committing posture: a read-only run is
+  // denied a worktree on purpose and commits nothing, so the warning is false.
+  it('badges a read-only run as read-only rather than as coding on main', () => {
+    renderWithMetadata({ configReadOnly: true, configUseWorktree: false, configCodingOnMain: true });
+
+    expect(screen.getByText('Read-only')).toBeInTheDocument();
+    expect(screen.queryByText('main')).not.toBeInTheDocument();
+  });
+
+  // The control. Without it every assertion above is satisfied by deleting the
+  // main badge outright.
+  it('still badges a genuine commit-to-main run as main', () => {
+    renderWithMetadata({ configClaimFlow: false, configUseWorktree: false, configCodingOnMain: true });
+
+    expect(screen.getByText('main')).toBeInTheDocument();
+    expect(screen.queryByText('Claim WT')).not.toBeInTheDocument();
+    expect(screen.queryByText('Read-only')).not.toBeInTheDocument();
+  });
+});

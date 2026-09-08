@@ -25,6 +25,7 @@ import {
   Sparkles,
   RefreshCw,
   Copy,
+  Eye,
   Target
 } from 'lucide-react';
 import * as api from '../../../services/api';
@@ -46,6 +47,19 @@ import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 const RE_NUMBERED_LIST = /([.!?:]) (\d+)\. /g;
 const RE_DASH_LIST = /([.!?:]) - /g;
 const RE_SECTION_LABELS = / (Expected output|Steps|Success criteria|Actionable focus|Focus|Suggestions?|Notes?|Context|Requirements?|Constraints?|Result|Output|Summary|Details)([: ])/gi;
+// Every posture the agent-configuration badge row can render. Kept beside the row
+// so adding a badge and widening its visibility guard is one edit, not two — a
+// badge left out of this list silently never renders.
+const CONFIG_BADGE_KEYS = [
+  'configClaimFlow',
+  'configUseWorktree',
+  'configReadOnly',
+  'configCodingOnMain',
+  'configOpenPR',
+  'configSimplify',
+  'configReviewLoop',
+];
+
 const FINISH_SENTINEL_MESSAGE = 'Finish work and write sentinel.';
 
 // Normalize raw task description text into markdown for readable rendering.
@@ -811,8 +825,19 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
         )}
 
         {/* Agent configuration badges */}
-        {(agent.metadata?.configUseWorktree || agent.metadata?.configOpenPR || agent.metadata?.configSimplify || agent.metadata?.configReviewLoop || agent.metadata?.configCodingOnMain) && (
+        {CONFIG_BADGE_KEYS.some(key => agent.metadata?.[key]) && (
           <div className="flex items-center gap-1.5 flex-wrap mb-2">
+            {/* A claim run self-manages its `claim/<item>` worktree and its own forge
+                handoff, so CoS keeps configUseWorktree/configOpenPR off to avoid
+                nesting a second worktree. Badge what it actually does rather than
+                leaving the row bare — the CoS-managed badges cannot speak for it. */}
+            {agent.metadata.configClaimFlow && !agent.metadata.configUseWorktree && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-teal-500/15 text-teal-400"
+                    title="Claim flow — the agent cuts its own claim worktree and owns its forge handoff (PR or filed issue)">
+                <GitBranch size={10} aria-hidden="true" />
+                Claim WT
+              </span>
+            )}
             {agent.metadata.configUseWorktree && (
               <span className={`flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded ${
                 agent.metadata.configWorktreeAutoDetected ? 'bg-orange-500/15 text-orange-400' : 'bg-teal-500/15 text-teal-400'
@@ -821,7 +846,19 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
                 {agent.metadata.configWorktreeAutoDetected ? 'Auto-WT' : 'Worktree'}
               </span>
             )}
-            {agent.metadata.configCodingOnMain && !agent.metadata.configUseWorktree && (
+            {agent.metadata.configReadOnly && (
+              <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-sky-500/15 text-sky-400"
+                    title="Read-only run — inspects the checkout and commits nothing">
+                <Eye size={10} aria-hidden="true" />
+                Read-only
+              </span>
+            )}
+            {/* Re-checked against the sibling postures on READ, not just at spawn:
+                agents registered before those postures joined the projection have a
+                stale configCodingOnMain frozen in their metadata, and an archived
+                card must not warn "coding on main" over its own worktree badge. */}
+            {agent.metadata.configCodingOnMain && !agent.metadata.configUseWorktree
+              && !agent.metadata.configClaimFlow && !agent.metadata.configReadOnly && (
               <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-yellow-500/15 text-yellow-500"
                     title="Agent is coding directly on main branch">
                 <GitBranch size={10} aria-hidden="true" />

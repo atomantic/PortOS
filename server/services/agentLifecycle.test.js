@@ -750,7 +750,12 @@ describe('runAgentSpawn source — instance provenance + claim ordering (#1563)'
     // makes an unrelated comment above them read as a missing key.
     const metaSlice = AGENT_LIFECYCLE_SRC.slice(registerIdx, AGENT_LIFECYCLE_SRC.indexOf('\n  });', registerIdx));
     expect(metaSlice).toContain('configOpenPR: isTruthyMeta(task.metadata?.openPR)');
-    expect(metaSlice).toContain('configClaimFlow: isClaimFlowTask(task, isTruthyMeta)');
+    // Derived from \`isClaimFlowTask\`, not re-implemented inline: the predicate also
+    // recognises a claim run by its \`analysisType\`, which an inline
+    // \`isTruthyMeta(task.metadata?.claimFlow)\` would silently drop. Hoisted to one
+    // const because \`configCodingOnMain\` reads the same fact.
+    expect(AGENT_LIFECYCLE_SRC).toContain('const claimFlowTask = isClaimFlowTask(task, isTruthyMeta);');
+    expect(metaSlice).toContain('configClaimFlow: claimFlowTask');
     expect(metaSlice.indexOf('configClaimFlow')).toBeGreaterThan(metaSlice.indexOf('configOpenPR'));
   });
 

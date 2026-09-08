@@ -752,6 +752,11 @@ async function runAgentSpawn(task) {
       worktreeInfo,
       isTruthyMetaFn: isTruthyMeta,
     }) !== null;
+    // Evaluated once: `configClaimFlow` and `configCodingOnMain` below are two
+    // faces of the same fact, and two separate calls could drift on the
+    // `isTruthyMetaFn` argument — which is exactly the split that made a claim
+    // run badge itself "main".
+    const claimFlowTask = isClaimFlowTask(task, isTruthyMeta);
     await registerAgent(agentId, task.id, {
       instanceId,
       workspacePath,
@@ -893,13 +898,24 @@ async function runAgentSpawn(task) {
       // to avoid provisioning a nested worktree. Preserve that distinction in
       // the run record so completion diagnostics cannot mistake the claim path
       // for the generic commit-only handoff.
-      configClaimFlow: isClaimFlowTask(task, isTruthyMeta),
+      configClaimFlow: claimFlowTask,
       configSimplify: isTruthyMeta(task.metadata?.simplify),
       configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),
       configReviewers: normalizeReviewers(task.metadata),
       configUseWorktree: !!worktreeInfo,
       configWorktreeAutoDetected: !!worktreeInfo && !explicitWorktree,
-      configCodingOnMain: !worktreeInfo && !jiraBranchName,
+      // A read-only run is given no worktree on purpose (agentWorkspacePrep) and
+      // commits nothing, so it is not "coding on main" either. Projected as its own
+      // key because the card has no other way to tell it from a commit-only handoff.
+      configReadOnly: isTruthyMeta(task.metadata?.readOnly),
+      // Coding on the default branch is the LEFTOVER posture: no CoS worktree, no
+      // JIRA feature branch, no claim worktree of its own, and not read-only. Each
+      // new branch-owning or non-committing flow has to be excluded here, or its
+      // card wears a warning badge that is simply false — which is how every issue
+      // claimed from the Issues page came to be badged "main" while the claim
+      // command was working in its own `claim/<item>` worktree.
+      configCodingOnMain: !worktreeInfo && !jiraBranchName && !claimFlowTask
+        && !isTruthyMeta(task.metadata?.readOnly),
       // Feature-agent provenance must survive the in-memory runner handoff and
       // server restarts so featureAgents can clear currentAgentId and record the
       // run when the shared CoS lifecycle emits agent:completed.
