@@ -381,3 +381,12 @@ it('keeps Video compilation independent of project storage and execution', () =>
   expect(closure.has(abs('services/creativeDirector/videoExecution.js'))).toBe(false);
   expect(closure.has(abs('lib/validation.js'))).toBe(false);
 });
+
+describe('shared provider type leaf', () => {
+  it('keeps provider models independent of the type leaf and browser-safe', () => {
+    expect(reaches('lib/providerModels.js', 'lib/providerTypes.js')).toBe(false);
+    const closure = staticImportClosure(abs('lib/providerTypes.js'));
+    expect(closure.packages.size).toBe(0);
+    expect(reaches('lib/providerTypes.js', 'lib/providerModels.js')).toBe(true);
+  });
+});

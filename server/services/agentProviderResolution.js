@@ -1,3 +1,4 @@
+import { isProcessProvider } from '../lib/providerTypes.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 import { supportsPublicReviewProvider } from '../lib/providerVendors.js';
 /**
@@ -43,7 +44,7 @@ export async function resolveAgentProviderAndModel(task) {
     if (!project) return { ok: false, permanent: true, error: 'Video production is paused or changed. Review and Resume from the project.' };
     const choice = project.videoExecution.choices[marker.kind === 'evaluate' ? 'evaluation' : marker.kind];
     const provider = choice?.providerId ? await getProviderById(choice.providerId) : null;
-    if (!provider || provider.enabled === false || provider.type === 'api' || !await isProviderAvailable(provider.id)) {
+    if (!provider || provider.enabled === false || !isProcessProvider(provider) || !await isProviderAvailable(provider.id)) {
       return { ok: false, permanent: true, error: 'The reviewed Video agent provider is unavailable. Change Models or Settings and Resume.' };
     }
     return { ok: true, provider, selectedModel: choice.model, modelSelection: { model: choice.model, tier: 'user-specified', reason: 'Reviewed Video production choice' } };

@@ -35,6 +35,7 @@
  * process environment that will ultimately run the provider.
  */
 
+import { isProcessProvider } from './providerTypes.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import { CODEX_ACCOUNT_STATUS, isCodexSubscriptionProvider } from './codexAccount.js';
 import { isLocalInstanceHost } from './localProviderRuntime.js';
@@ -134,10 +135,6 @@ export const isPrivateNetworkEndpoint = (endpoint) => {
   // A single-label host resolves only inside the local network (`http://nas:11434`).
   return !host.includes('.') && !host.includes(':');
 };
-
-/** True for a process-backed provider (cli/tui), which needs its binary on PATH. */
-const isProcessProvider = (provider) =>
-  provider?.type === PROVIDER_TYPES.CLI || provider?.type === PROVIDER_TYPES.TUI;
 
 /**
  * The key a CLI/TUI provider's runtime is published under in the runtimes map

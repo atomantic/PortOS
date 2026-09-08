@@ -9,15 +9,15 @@
  * below rather than copied, so the browser and the server classify a record
  * with the same function and a vendor added on one side cannot be missing on
  * the other. Only helpers with no browser-importable server twin are declared
- * here: the type predicates a sanitized inventory still answers (their server
- * copies live under `services/` — #6605 gives them a pure-leaf home), the
- * launchability and picker filters, and the Tailwind chip classes.
+ * here: launchability and picker filters, the Grok process composition, and
+ * the Tailwind chip classes.
  *
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
+import { isTuiProvider, isApiProvider, isProcessProvider } from '../../../server/lib/providerTypes.js';
 import { PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
-import { commandBasename, isGrokProvider } from '../../../server/lib/providerModels.js';
+import { isGrokProvider } from '../../../server/lib/providerModels.js';
 
 export { PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
 // The public `aiToolkit/providers.js` barrel reaches `fs` and `child_process`,
@@ -35,18 +35,14 @@ export {
   localRuntimeNamespace,
 } from '../../../server/lib/providerModels.js';
 
-// Agent jobs need the CLI/TUI file-writing harnesses. Keep this allowlist in
-// lockstep with the api-provider rejection in server/services/agentProviderResolution.js.
-export const AGENT_HARNESS_PROVIDER_TYPES = Object.freeze([
-  PROVIDER_TYPES.CLI,
-  PROVIDER_TYPES.TUI
-]);
-
-/**
- * Check if a provider is a TUI-backed agent provider. Mirror of
- * `isTuiProvider` in server/services/agentCliSpawning.js.
- */
-export const isTuiProvider = (provider) => provider?.type === PROVIDER_TYPES.TUI;
+export {
+  isCliProvider,
+  isTuiProvider,
+  isApiProvider,
+  isProcessProvider,
+  isClaudeHarnessProvider,
+  isClaudeHarnessProvider as isClaudeCommandProvider,
+} from '../../../server/lib/providerTypes.js';
 
 /**
  * Can a human launch this provider at a shell prompt?
@@ -64,29 +60,11 @@ export const isTuiProvider = (provider) => provider?.type === PROVIDER_TYPES.TUI
 export const isLaunchableTuiProvider = (provider) => isTuiProvider(provider) && Boolean(provider?.tuiCommandLine);
 
 /**
- * Check if a provider is a one-shot CLI agent provider.
- */
-export const isCliProvider = (provider) => provider?.type === PROVIDER_TYPES.CLI;
-
-/**
- * Check if a provider is an HTTP-API provider (e.g. OpenAI, Anthropic, LM Studio),
- * as opposed to a process-backed CLI/TUI agent. Use this anywhere you'd write
- * `provider.type === PROVIDER_TYPES.API` against a saved provider.
- */
-export const isApiProvider = (provider) => provider?.type === PROVIDER_TYPES.API;
-
-/**
  * Stable, module-scoped filter for `useProviderModels({ filter })` and other
  * call sites that need "enabled HTTP-API providers only". Hoisted so the
  * identity is the same across renders (callers may pass it as a dependency).
  */
 export const enabledApiProviderFilter = (provider) => Boolean(provider?.enabled) && isApiProvider(provider);
-
-/**
- * Check if a provider is process-backed (cli or tui), as opposed to an
- * HTTP-API provider. Use this for "shows a Command + args" config predicates.
- */
-export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiProvider(provider);
 
 /**
  * Stable, module-scoped filter for `useProviderModels({ filter })` on a manual
@@ -96,26 +74,6 @@ export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiP
  * above: a stable identity across renders.
  */
 export const enabledProcessProviderFilter = (provider) => Boolean(provider?.enabled) && isProcessProvider(provider);
-
-/**
- * True when a provider launches the Claude Code binary, whatever backend it is
- * pointed at (`claude-code`, `claude-ollama`, `claude-sglang`, or any renamed
- * record whose command resolves to `claude`).
- *
- * The harness — not the backend — is what decides which knobs are forwardable:
- * Claude Code owns its own sampling and speaks the Anthropic wire, so a control
- * that reaches an OpenCode wrapper through `agent.build` has no route here.
- *
- * Not the server's `isClaudeCommand`: that counts a BLANK command as Claude
- * because the spawners default one to `claude`, which is right for a process
- * record and wrong for the `api` records this also classifies — they carry no
- * command at all, and `generationControlsFor` would strip the sampling controls
- * off the native Ollama API provider. The type-gated form the server uses lives
- * in `providerFamilies.js`, which is not browser-safe, so this stays
- * command-only until the type predicates have a pure-leaf home.
- * @param {{command?:string}|null|undefined} provider
- */
-export const isClaudeCommandProvider = (provider) => commandBasename(provider?.command) === 'claude';
 
 /**
  * Check if a provider is the Grok Build CLI/TUI (the `grok` command harness):
