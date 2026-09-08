@@ -32,7 +32,7 @@ import { nearestGrokDuration } from '../../lib/grokVideoClip.js';
 import { nearestReactorAspect } from '../../lib/reactorVideoClip.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { renderTargetDefaults } from '../imageGen/cloudProviderConfig.js';
-import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode, hasVideoPin } from './modes.js';
+import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode, hasVideoPin, isVideoModeUsable } from './modes.js';
 
 /**
  * Resolve the video backend for a CD project through the pin ladder: the
@@ -61,7 +61,11 @@ export function resolveVideoBackendPin(project, settings, { target = RENDER_TARG
   // it), but a hand-made or peer-synced project can carry the sentinel.
   const mode = normalizeRenderPinValue(raw?.mode);
   const targetDefaults = renderTargetDefaults(settings, target);
-  const resolvedMode = resolveVideoMode(mode, settings, { target });
+  const strictMode = mode || normalizeRenderPinValue(targetDefaults.videoMode) || normalizeRenderPinValue(settings?.videoGen?.mode) || VIDEO_GEN_MODE.LOCAL;
+  if (project?.workspace === 'video' && (!VIDEO_GEN_MODES.includes(strictMode) || !isVideoModeUsable(settings, strictMode))) {
+    throw new ServerError(`The selected ${strictMode} video backend is unavailable. Enable it and configure its credentials in Settings, or change the production backend.`, { status: 409, code: 'VIDEO_BACKEND_UNAVAILABLE' });
+  }
+  const resolvedMode = project?.workspace === 'video' ? strictMode : resolveVideoMode(mode, settings, { target });
   // The target videoModel and project.modelId are local catalog choices. fal
   // accepts an endpoint model only from its own explicit project pin; Reactor
   // and Grok choose their models in the renderer. A lapsed fal pin must not

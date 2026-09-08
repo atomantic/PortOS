@@ -732,6 +732,19 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
   });
 
+  it('holds restored Video production submissions before any worker can spend', async () => {
+    const jobs = ['queued', 'running'].map((status, index) => ({ id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+      kind: 'video', status, queuedAt: '2026-04-30T10:00:00.000Z',
+      params: { videoProduction: { projectId: 'example-video', attemptId: `example-attempt-${index}` } } }));
+    writeFileSync(join(tempDataDir, 'media-jobs.json'), JSON.stringify({ jobs }));
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getJob(jobs[0].id)).toMatchObject({ status: 'failed', params: { videoProduction: { submissionUncertain: false } } });
+    expect(mediaJobQueue.getJob(jobs[1].id)).toMatchObject({ status: 'failed', params: { videoProduction: { submissionUncertain: true } } });
+    expect(stubs.generateVideo).not.toHaveBeenCalled();
+    expect(stubs.generateVideoRemote).not.toHaveBeenCalled();
+  });
+
   it('boot recovery: persisted "running" jobs are reclassified as failed', async () => {
     const interruptedId = '00000000-0000-4000-8000-000000000001';
     const persisted = {

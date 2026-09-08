@@ -71,12 +71,12 @@ describe('Video review workflow', () => {
 
   it('reuses only unchanged successful plan work and invalidates changed dependencies', () => {
     const steps = [
-      { stepId: 'a', toolName: 'video_generate', args: { prompt: 'Old' }, dependsOn: [] },
-      { stepId: 'b', toolName: 'video_generate', args: { prompt: 'Next' }, dependsOn: ['a'] },
-      { stepId: 'c', toolName: 'video_generate', args: { prompt: 'Independent' }, dependsOn: [] },
+      { stepId: 'a', toolName: 'media_enqueueVideoJob', args: { params: { prompt: 'Old', durationSeconds: 5 } }, dependsOn: [] },
+      { stepId: 'b', toolName: 'media_enqueueVideoJob', args: { params: { prompt: 'Next', durationSeconds: 5 } }, dependsOn: ['a'] },
+      { stepId: 'c', toolName: 'media_enqueueVideoJob', args: { params: { prompt: 'Independent', durationSeconds: 5 } }, dependsOn: [] },
     ];
     mocks.project.plan = { steps: steps.map(step => ({ ...step, status: 'done', result: { jobId: step.stepId } })) };
-    const revised = applyPlan(mocks.project, { steps: steps.map(step => step.stepId === 'a' ? { ...step, args: { prompt: 'Changed' }, status: 'done', result: { jobId: 'forged' } } : step) });
+    const revised = applyPlan(mocks.project, { steps: steps.map(step => step.stepId === 'a' ? { ...step, args: { params: { prompt: 'Changed', durationSeconds: 5 } }, status: 'done', result: { jobId: 'forged' } } : step) });
     expect(revised.plan.steps.map(step => step.status)).toEqual(['pending', 'pending', 'done']);
     expect(revised.plan.steps[0].result).toBeNull();
     expect(revised.plan.steps[2].result).toEqual({ jobId: 'c' });

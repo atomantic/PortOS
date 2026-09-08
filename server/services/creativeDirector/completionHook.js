@@ -45,6 +45,11 @@ import {
 } from './deliverableGate.js';
 
 export async function handleCreativeDirectorCompletion(task, agentId, success) {
+  const videoAttempt = task?.metadata?.videoProduction;
+  if (videoAttempt) {
+    const { settleVideoAttempt } = await import('./videoExecution.js');
+    await settleVideoAttempt(videoAttempt.projectId, videoAttempt.attemptId, { status: success ? 'completed' : 'failed' });
+  }
   const meta = task?.metadata?.creativeDirector;
   if (!meta?.projectId) return;
   const project = await getProject(meta.projectId).catch(() => null);
@@ -623,7 +628,7 @@ export async function startCreativeDirectorProject(projectId) {
     const { videoReviewAllowsDispatch } = await import('./videoReview.js');
     if (!await videoReviewAllowsDispatch(projectId, [])) return;
   }
-  if (project?.directive) return advanceAfterPlanStepSettled(projectId);
+  if (project?.directive && (project.workspace !== 'video' || project.treatment)) return advanceAfterPlanStepSettled(projectId);
   return advanceAfterSceneSettled(projectId);
 }
 

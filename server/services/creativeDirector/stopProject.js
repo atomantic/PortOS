@@ -167,12 +167,16 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
   // query per project just to rediscover what it already holds.
   const project = preread || await getProject(projectId).catch(() => null);
   if (!project) return { projectId, stopped: false, skipped: 'missing', runs: 0, tasks: 0, agents: 0, jobs: 0 };
-  if (PROJECT_TERMINAL_STATUSES.has(project.status)) {
+  if (PROJECT_TERMINAL_STATUSES.has(project.status) && (project.workspace !== 'video' || project.status === 'complete')) {
     return { projectId, stopped: false, skipped: 'terminal', runs: 0, tasks: 0, agents: 0, jobs: 0 };
   }
 
   // 1. Park first — a settle event racing us must find `paused` and bail.
-  await updateProject(projectId, { status: 'paused', failureReason: reason })
+  if (project.workspace === 'video') {
+    const { pauseVideoExecution } = await import('./videoExecution.js');
+    // If the durable stop fails, do not pretend subsequent teardown is safe.
+    await pauseVideoExecution(projectId, reason, { invalidate: true });
+  } else await updateProject(projectId, { status: 'paused', failureReason: reason })
     .catch((e) => console.error(`❌ CD stop ${projectId}: park failed: ${e.message}`));
 
   const retired = await retireRuns(projectId, { runs: inflightRuns(project), reason });
@@ -192,8 +196,8 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
   }
   for (const scene of (project.treatment?.scenes || [])) {
     if (scene.status !== 'rendering' && scene.status !== 'evaluating') continue;
-    if (scene.renderedJobId) continue;
-    await updateScene(projectId, scene.sceneId, { status: 'pending' })
+    if (scene.renderedJobId && (project.workspace !== 'video' || scene.status === 'evaluating')) continue;
+    await updateScene(projectId, scene.sceneId, { status: 'pending', ...(project.workspace === 'video' ? { renderedJobId: null } : {}) })
       .catch((e) => console.log(`⚠️ CD stop ${projectId}: reset scene ${scene.sceneId} failed: ${e.message}`));
   }
 
@@ -206,6 +210,12 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
     }
   }
 
+  if (project.workspace === 'video') {
+    const { mutateVideoProject } = await import('./local.js');
+    await mutateVideoProject(projectId, current => ({ project: { ...current, videoExecution: { ...current.videoExecution,
+      attempts: (current.videoExecution?.attempts || []).map(attempt => attempt.kind !== 'clip' && ['running', 'submitting'].includes(attempt.status) ? { ...attempt, status: 'failed' } : attempt),
+    } }, result: true }));
+  }
   console.log(`🛑 CD project ${projectId} stopped: ${reason} (${retired.runs} run(s), ${retired.tasks} task(s), ${retired.agents} agent(s), ${jobs} job(s))`);
   return { projectId, stopped: true, ...retired, jobs };
 }

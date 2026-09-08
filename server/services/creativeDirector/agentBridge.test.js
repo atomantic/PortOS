@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   commissionStagePin: vi.fn(),
 }));
 
+vi.mock('./videoExecution.js', () => ({ effectiveVideoProject: project => project, reserveVideoAttempt: vi.fn(async () => ({ id: 'example-attempt' })), assertVideoAttemptDispatch: vi.fn(async () => ({})), settleVideoAttempt: vi.fn(async () => {}), pauseVideoExecution: vi.fn(async () => {}) }));
 vi.mock('../cos.js', () => ({
   addTask: mocks.addTask,
   reviveBlockedTask: mocks.reviveBlockedTask,
@@ -28,6 +29,7 @@ vi.mock('../creative/toolRegistry.js', () => ({ getToolSpecs: mocks.getToolSpecs
 vi.mock('../settings.js', () => ({ getSettings: mocks.getSettings }));
 vi.mock('./local.js', () => ({ recordRun: mocks.recordRun, updateProject: mocks.updateProject }));
 vi.mock('../universeBuilder/crud.js', () => ({ getUniverse: vi.fn() }));
+import { settleVideoAttempt } from './videoExecution.js';
 import { getUniverse } from '../universeBuilder/crud.js';
 vi.mock('../pipeline/series.js', () => ({ getSeries: vi.fn() }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
@@ -42,6 +44,21 @@ const { enqueueTreatmentTask, enqueuePlanTask, enqueueEvaluateTask } = await imp
 const project = { id: 'cd-1', name: 'Test project', treatment: { scenes: [] } };
 
 describe('Video planning source context', () => {
+  it('keeps the bounded video tool specification and retires a failed enqueue reservation', async () => {
+    mocks.getToolSpecs.mockReturnValue([
+      { type: 'function', function: { name: 'media_enqueueVideoJob', description: 'Video', parameters: {} } },
+      { type: 'function', function: { name: 'pipeline_runSeriesAutopilot', description: 'Batch', parameters: {} } },
+    ]);
+    const video = { ...project, workspace: 'video', videoDraft: { sources: [] } };
+    await enqueuePlanTask(video);
+    expect(mocks.buildPlanPrompt.mock.calls[0][1].toolSpecs).toEqual([
+      expect.objectContaining({ function: expect.objectContaining({ name: 'media_enqueueVideoJob', description: expect.stringContaining('exactly one clip') }) }),
+    ]);
+    mocks.addTask.mockRejectedValueOnce(new Error('store unavailable'));
+    await expect(enqueueTreatmentTask(video)).rejects.toThrow('store unavailable');
+    expect(settleVideoAttempt).toHaveBeenLastCalledWith('cd-1', 'example-attempt', { status: 'failed' });
+  });
+
   it('includes a series linked canon and selected audio context without voice bindings or audio paths', async () => {
     const updatedAt = '2026-09-01T00:00:00Z';
     getSeries.mockResolvedValue({ updatedAt, title: 'Example series', logline: 'A traveler returns', arc: { summary: 'A reunion' }, universeId: 'example-universe' });
