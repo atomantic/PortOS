@@ -434,6 +434,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // programmatic-output contract ahead of the no-code one.
   const sentinelPayloadOutput = isPublicReviewRestrictedProfile(task.metadata?.executionProfile) && !toolFreeReasoning;
   const noChangeSuccess = isTruthyMetaFn(task.metadata?.noChangeSuccess);
+  const isReadOnly = isTruthyMetaFn(task.metadata?.readOnly);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
   const worktreeCommitNote = worktreeInfo
     ? worktreeCommitGuidance({
@@ -740,12 +741,18 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 1. Analyze the task requirements carefully
 2. Make necessary changes to complete the task
 3. Test your changes when possible
-4. ${noCodeOutput
+4. ${toolFreeReasoning
+  ? 'Answer in this reply — you have no tools to commit, push, or call an API with; the Completion section above is the whole contract'
+  : sentinelPayloadOutput
+  ? 'Write your result to the completion sentinel in the payload format your task describes (see the Completion section above) — do NOT commit, push, or open a PR'
+  : noCodeOutput
   ? 'Deliver your result the way the task describes (the API call or command it names) — do NOT commit, push, or open a PR; this task changes no code'
   : discardWorktree
   ? 'Write your result to the completion sentinel (see the Completion section above) — do NOT commit, push, or open a PR; this worktree is discarded on exit'
   : claimFlow
     ? 'Follow the claim workflow prompt above; it owns its worktree, PR/MR, review, merge or human-handoff, and cleanup. Do not stop after committing.'
+  : isReadOnly
+    ? 'Do NOT commit, push, or modify any files — this is a read-only task; read what you need and report your findings'
   : isReviewLoopFollowUp
     ? 'Follow the follow-up section above — push any fixes you make to the PR branch; a run that needed no fix makes no commit and that is a success, not a miss'
     : portosMergesBranch
@@ -766,7 +773,7 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
 ${(() => {
   const bullet = buildCompletionGuidelineBullet({
-    isReadOnly: isTruthyMetaFn(task.metadata?.readOnly), whenDone,
+    isReadOnly, whenDone,
     isTui, tuiCompletionCommand, slashdoFree: isTui && !canRunSlashCommands,
     worktreeInfo, willOpenPR, prCompletion, discardWorktree, noCodeOutput: noCodeOutput && !sentinelPayloadOutput, noChangeSuccess,
     leavePrOpen: leavesPrForHuman(task),
@@ -788,6 +795,8 @@ ${toolFreeReasoning
   ? `- **Do NOT commit, push, or open a PR.** This worktree is discarded on exit — your only output is the completion sentinel (see the Completion section above).`
   : claimFlow
     ? `- **Follow the claim workflow prompt above.** It owns the claim worktree and the full PR/MR lifecycle; do not stop after committing or hand push/PR/merge/cleanup back to PortOS.`
+  : isReadOnly
+    ? `- **Do NOT commit, push, or modify any files.** This is a read-only task — read what you need and report your findings.`
   : isReviewLoopFollowUp
     ? `- **Push fixes straight to the PR branch you are on** (the follow-up section above is the procedure). Stage specific files, use a \`fix:\` prefix, no Co-Authored-By annotations. Do NOT open a new PR.`
   : isTui && !canRunSlashCommands
@@ -799,7 +808,7 @@ ${toolFreeReasoning
     : worktreeInfo && willOpenPR
       ? `- **Commit only — do NOT push.** Stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations. The system will push your branch and open the PR after you exit, so do NOT run \`git push\` or \`/do:push\` yourself.`
       : `- **Commit and push using \`/do:push\`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If \`/do:push\` is unavailable, follow its conventions manually: stage specific files, use \`feat:\`/\`fix:\`/\`breaking:\` prefix, no Co-Authored-By annotations, and push with \`git pull --rebase && git push\`.`}
-${discardWorktree || noCodeOutput || claimFlow ? '' : worktreeInfo ? `- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.` : `- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.`}
+${toolFreeReasoning || isReadOnly || discardWorktree || noCodeOutput || claimFlow ? '' : worktreeInfo ? `- **Your PR should contain only your task's commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents' work.` : `- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.`}
 
 ## Working Directory
 ${task.metadata?.app ? `You are working in the target app directory: \`${workspaceDir}\`. All code changes, research, plans, and docs for this task belong in this directory — NOT in the PortOS repo.` : 'You are working in the project directory.'} Use the available tools to explore, modify, and test code.

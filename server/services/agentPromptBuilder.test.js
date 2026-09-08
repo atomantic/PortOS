@@ -3085,6 +3085,54 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
   });
 });
 
+// #6616 — The full (api) fallback template derives the completion contract in
+// three independent places: step 4 of `## Instructions`, the `## Guidelines`
+// completion bullet, and the `## Git Hygiene` bullet. Every other test in this
+// file asserts one section at a time, so a prompt whose sections CONTRADICT
+// each other reads as green. These two assert the agreement itself.
+//
+// Both shapes are reachable in production and both shipped a self-contradicting
+// prompt: step 4's ladder tests neither `toolFreeReasoning` nor `readOnly`, so
+// each fell through to "Commit and push your changes" while the sibling
+// sections said the opposite.
+describe('full (api) path: step 4 and Git Hygiene agree on the completion contract (#6616)', () => {
+  // Every arm of step 4's ladder that forbids a commit; if the prompt carries
+  // NONE of these, the ladder fell through to its commit-and-push default.
+  const NO_COMMIT_STEP_4 = /4\. (Deliver your result the way the task describes|Write your result to the completion sentinel|Follow the claim workflow prompt above|Follow the follow-up section above|Answer in this reply|Do NOT commit, push, or modify)/;
+
+  it('a tool-free public-review task is never told to commit — in step 4 or in Git Hygiene', async () => {
+    // The Eligibility Gate posture: no tools at all, no worktree, and the
+    // deliverable is the reply itself. `noCodeOutput` is deliberately absent —
+    // that is the exact shape whose step 4 had no matching arm.
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: { executionProfile: 'public-review-gate', useWorktree: false, openPR: false } }),
+      {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+
+    // The contract the other two sections already got right.
+    expect(prompt).toMatch(/## Completion \(Tool-Free Reasoning\)/);
+    expect(prompt).toMatch(/\*\*No git at all\.\*\*/);
+    // …and the one that contradicted them.
+    expect(prompt).not.toMatch(/Commit and push your changes/);
+    expect(prompt).not.toMatch(/Commit and push using/);
+    expect(prompt).toMatch(NO_COMMIT_STEP_4);
+  });
+
+  it('a read-only task is never told to commit — in step 4 or in Git Hygiene', async () => {
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: { readOnly: true, useWorktree: false, openPR: false } }),
+      {}, '/r', null, isTruthyMeta, { providerType: 'api' });
+
+    // The Guidelines bullet already resolved this correctly.
+    expect(prompt).toMatch(/\*\*This is a read-only task\.\*\*/);
+    // Step 4 and Git Hygiene must not send it to commit against that bullet —
+    // and, with no worktree, "commit and push" aims at the app's own checkout.
+    expect(prompt).not.toMatch(/Commit and push your changes/);
+    expect(prompt).not.toMatch(/Commit and push using/);
+    expect(prompt).not.toMatch(/Commit directly to the current branch/);
+    expect(prompt).toMatch(NO_COMMIT_STEP_4);
+  });
+});
+
 // #2507 — CoS app-improve/self-improvement tasks pin no `reviewers`, so the
 // review loop must resolve them from the install's Code Review Defaults
 // (settings.codeReview.reviewers) rather than a hardcoded reviewer,
