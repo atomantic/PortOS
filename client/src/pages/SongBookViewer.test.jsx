@@ -70,6 +70,11 @@ const waitForEditMode = async () => {
   await screen.findByLabelText('Content');
   await settleSongLinksEditor();
 };
+// The play-mode Audio card ships COLLAPSED (its body is `hidden`, so nothing
+// inside is in the accessibility tree) — a test that drives the transport opens
+// it the way a user would.
+const openAudioCard = () => fireEvent.click(screen.getByRole('button', { name: /^Audio/ }));
+
 const renderEditPage = async (path = '/songbook/abc?mode=edit', options) => {
   const page = renderPage(path, options);
   await waitForEditMode();
@@ -319,7 +324,7 @@ E|--3-----|`;
       expect(await screen.findByText('Chorus')).toBeTruthy();
       const select = screen.getByRole('combobox', { name: 'Instrument view' });
       expect(select.value).toBe('guitar');
-      expect(screen.getByText('Chords used')).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Chords used/ })).toBeTruthy();
     });
 
     it('defaults to the song instrument for piano songs and collapses guitar tab', async () => {
@@ -388,6 +393,57 @@ E|--3-----|`;
       fireEvent.click(screen.getByRole('button', { name: /Larger text/ }));
       expect(screen.getAllByRole('status').some((status) => status.textContent === 'Font size 1.000 rem')).toBe(true);
       expect(screen.getByRole('button', { name: /Smaller text \(currently 1.000 rem\)/ })).toBeTruthy();
+    });
+  });
+
+  describe('play-mode header cards', () => {
+    it('ships the Audio card collapsed, and opening it reveals the transport', async () => {
+      renderPage();
+      const audio = await screen.findByRole('button', { name: /^Audio/ });
+      expect(audio.getAttribute('aria-expanded')).toBe('false');
+      // Collapsed means OUT of the accessibility tree, not merely unpainted —
+      // otherwise the transport keeps answering role queries and taps.
+      expect(document.getElementById('song-audio-controls').hidden).toBe(true);
+      expect(screen.queryByRole('button', { name: 'Play along' })).toBeNull();
+      fireEvent.click(audio);
+      expect(document.getElementById('song-audio-controls').hidden).toBe(false);
+      expect(screen.getByRole('button', { name: 'Play along' })).toBeTruthy();
+    });
+
+    it('remembers each card between mounts', async () => {
+      const first = renderPage();
+      fireEvent.click(await screen.findByRole('button', { name: /^Audio/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^Sheet controls/ }));
+      first.unmount();
+
+      renderPage();
+      expect((await screen.findByRole('button', { name: /^Audio/ })).getAttribute('aria-expanded')).toBe('true');
+      expect(screen.getByRole('button', { name: /^Sheet controls/ }).getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('pins Chords used above the sheet scroller, so it survives scrolling', async () => {
+      const { container } = renderPage();
+      expect(await screen.findByText('Chorus')).toBeTruthy();
+      const card = document.getElementById('song-chords-used');
+      const scroller = container.querySelector('.flex-1.overflow-y-auto');
+      expect(scroller).toBeTruthy();
+      expect(scroller.contains(card)).toBe(false);
+    });
+
+    it('keeps the chord diagrams following the transposed names', async () => {
+      renderPage();
+      expect(await screen.findByRole('button', { name: /Chords used/ })).toBeTruthy();
+      const card = document.getElementById('song-chords-used');
+      expect(card.textContent).toContain('C');
+      fireEvent.click(screen.getByRole('button', { name: /Transpose up \(currently 0/ }));
+      expect(document.getElementById('song-chords-used').textContent).toContain('C#');
+    });
+
+    it('shows no Chords used card for a sheet with no chords', async () => {
+      api.getSong.mockResolvedValue(song({ content: { format: 'tab', text: 'Just a lyric line' } }));
+      renderPage();
+      expect(await screen.findByText('Just a lyric line')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /Chords used/ })).toBeNull();
     });
   });
 
@@ -461,7 +517,9 @@ K:  o - - - - - o -`;
     it('recomputes BPM from a percent-of-written button', async () => {
       api.getSong.mockResolvedValue(drumSong());
       renderPage();
-      expect(await screen.findByLabelText('Practice tempo (BPM)')).toBeTruthy();
+      await screen.findByRole('button', { name: /^Audio/ });
+      openAudioCard();
+      expect(screen.getByLabelText('Practice tempo (BPM)')).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: '50%' }));
       await waitFor(() => expect(screen.getByLabelText('Practice tempo (BPM)').value).toBe('48'));
       fireEvent.click(screen.getByRole('button', { name: '100%' }));

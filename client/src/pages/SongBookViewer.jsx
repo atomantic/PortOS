@@ -24,6 +24,15 @@
  *   the sheet) —
  *   plus the attachments section (synced meta, machine-local
  *   bytes → "not on this machine" when absent).
+ *
+ *   The header band above the sheet is THREE collapsible cards, each with its
+ *   own remembered open state (`usePersistedDisclosure`) and a one-line summary
+ *   while closed: **Audio** (the sounding transport — drum kit or chord
+ *   play-along, collapsed by default, since it is the tallest band and a
+ *   set-once one), **Sheet controls** (autoscroll/transpose/size/view/stage),
+ *   and **Chords used** (the sheet's chord shapes, lifted out of
+ *   `<TabSheetView>` so they stay on screen instead of scrolling away after
+ *   bar 1).
  * - EDIT (?mode=edit): metadata form + font-mono content textarea with format
  *   select and live preview. Saves are explicit (single PATCH). The whole
  *   `content` object is always sent — the server fills nested content
@@ -62,6 +71,8 @@ import DrumPreview from '../components/songbook/DrumPreview';
 import DrumTransportBar from '../components/songbook/DrumTransportBar';
 import ChordPreview from '../components/songbook/ChordPreview';
 import ChordTransportBar from '../components/songbook/ChordTransportBar';
+import ChordsUsedCard from '../components/songbook/ChordsUsedCard';
+import CollapsibleSection from '../components/ui/CollapsibleSection';
 import PracticeLogger from '../components/songbook/PracticeLogger';
 import { SongLinkChips, SongLinksEditor } from '../components/songbook/SongLinks';
 import {
@@ -73,6 +84,7 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useDrawerTab from '../hooks/useDrawerTab';
 import useKeyboardShortcuts from '../hooks/useKeyboardShortcuts';
+import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import useAutoscroll from '../hooks/useAutoscroll';
 import useDrumPlayer from '../hooks/useDrumPlayer';
 import useChordPlayer from '../hooks/useChordPlayer';
@@ -333,10 +345,28 @@ export default function SongBookViewer() {
   // unconditionally (hooks rule) — a drum chart, and a `plain` sheet (the
   // explicit opt-out of all notation UI, chord tokens included), parse to zero
   // chords and stand up no player.
-  const chord = useChordPlayer(
-    isDrum || contentFormat === 'plain' ? '' : renderedText,
-    { songId: id },
-  );
+  // Chord voicings, the chord play-along and the chords-used card are all the
+  // same question: does this sheet have chords to work with at all?
+  const chordUiEnabled = !isDrum && contentFormat !== 'plain';
+  const chord = useChordPlayer(chordUiEnabled ? renderedText : '', { songId: id });
+
+  // --- Header cards. Each play-mode band above the sheet is a disclosure whose
+  // state is remembered globally (a practice posture carries across songs, the
+  // way font size does). Audio ships COLLAPSED: it is the tallest band and the
+  // one you set once, so the sheet starts higher up a phone screen.
+  const [audioOpen, setAudioOpen, toggleAudio] = useLocalStorageBool('songbook:audioOpen', false);
+  const [controlsOpen, , toggleControls] = useLocalStorageBool('songbook:controlsOpen', true);
+  const [chordsOpen, , toggleChords] = useLocalStorageBool('songbook:chordsOpen', true);
+
+  // What a collapsed card says about itself — the couple of values you would
+  // otherwise have to open it to read.
+  const transport = isDrum ? drum : chord;
+  const audioSummary = `${transport.playing ? 'playing · ' : ''}${transport.bpm} BPM`;
+  const controlsSummary = [
+    playing ? 'scrolling' : null,
+    transpose ? `${transpose > 0 ? '+' : ''}${transpose} semitones` : null,
+    isDrum ? null : instrumentLabel(instrumentView),
+  ].filter(Boolean).join(' · ');
 
   // The wake lock holds while any play-mode hands-free surface is running.
   // Edit-preview audio owns its lifecycle inside DrumPreview / ChordPreview.
@@ -373,8 +403,15 @@ export default function SongBookViewer() {
   // Play-mode shortcuts. A drum chart rebinds them onto the kit transport (space
   // play/stop, +/- BPM, [ ] loop ends, m mutes the click) since transpose/
   // scroll-speed don't apply.
+  // A shortcut that SOUNDS something opens the Audio card first: the card ships
+  // collapsed, and a kit starting with no transport on screen leaves the tempo,
+  // the kit and the loop unreachable by anyone who hasn't found the chevron.
+  const startTransport = (toggleTransport) => () => {
+    setAudioOpen(true);
+    toggleTransport();
+  };
   const drumShortcuts = {
-    ' ': drum.toggle,
+    ' ': startTransport(drum.toggle),
     m: () => drum.setClickEnabled(!drum.clickEnabled),
     '+': () => drum.setBpm(drum.bpm + 1),
     '=': () => drum.setBpm(drum.bpm + 1),
@@ -394,7 +431,7 @@ export default function SongBookViewer() {
     // The chord play-along gets `p`, not space: space already drives autoscroll
     // here, and the two are complementary (scroll the sheet while the backing
     // sounds) rather than rival meanings of "play".
-    p: chord.toggle,
+    p: startTransport(chord.toggle),
     // Only bound when the song HAS a target — otherwise the key would toast
     // "nothing to fit" at a user who never set one.
     ...(fitDurationSec != null ? { f: fitToSongDuration } : {}),
@@ -835,64 +872,94 @@ export default function SongBookViewer() {
       ) : (
         /* ============================== PLAY MODE ============================== */
         <>
-          {/* Drum play-along transport — its own bar above the shared controls,
-              so the kit's tempo/loop/click sit together rather than interleaved
-              with the sheet controls. */}
-          {isDrum && (
-            <DrumTransportBar
-              playing={drum.playing}
-              onToggle={drum.toggle}
-              hasMusic={drum.hasMusic}
-              bpm={drum.bpm}
-              onBpmChange={drum.setBpm}
-              onPercent={drum.setBpmPercent}
-              writtenTempo={drum.writtenTempo}
-              countInBars={drum.countInBars}
-              onCountInChange={drum.setCountInBars}
-              loopEnabled={drum.loopEnabled}
-              onLoopToggle={drum.setLoopEnabled}
-              loopFrom={drum.loopFrom}
-              loopTo={drum.loopTo}
-              onLoopRangeChange={drum.setLoopRange}
-              barCount={drum.barCount}
-              clickEnabled={drum.clickEnabled}
-              onClickToggle={drum.setClickEnabled}
-              clickVolume={drum.clickVolume}
-              onClickVolumeChange={drum.setClickVolume}
-              kitId={drum.kitId}
-              onKitChange={drum.setKitId}
-              beatsPerBar={drum.beatsPerBar}
-              pulse={drum.pulse}
-              currentBar={drum.currentBar}
-            />
+          {/* Audio playback — the transport that actually SOUNDS (kit synth or
+              chord strums). Collapsed by default: it is the tallest header
+              band and the one you set once per session, so the sheet starts
+              higher up the screen and the summary keeps tempo visible while
+              it is closed. */}
+          {(isDrum || chord.chordCount > 0) && (
+            <CollapsibleSection
+              id="song-audio-controls"
+              size="bar"
+              label="Audio"
+              summary={audioSummary}
+              open={audioOpen}
+              onOpenChange={toggleAudio}
+              className="shrink-0"
+              buttonClassName="border-b border-port-border bg-port-card/60 px-3"
+              // Kept mounted: a transport's own "More" disclosure (and the
+              // sound it is making) must survive a collapse.
+              keepMounted
+            >
+              {isDrum ? (
+                <DrumTransportBar
+                  playing={drum.playing}
+                  onToggle={drum.toggle}
+                  hasMusic={drum.hasMusic}
+                  bpm={drum.bpm}
+                  onBpmChange={drum.setBpm}
+                  onPercent={drum.setBpmPercent}
+                  writtenTempo={drum.writtenTempo}
+                  countInBars={drum.countInBars}
+                  onCountInChange={drum.setCountInBars}
+                  loopEnabled={drum.loopEnabled}
+                  onLoopToggle={drum.setLoopEnabled}
+                  loopFrom={drum.loopFrom}
+                  loopTo={drum.loopTo}
+                  onLoopRangeChange={drum.setLoopRange}
+                  barCount={drum.barCount}
+                  clickEnabled={drum.clickEnabled}
+                  onClickToggle={drum.setClickEnabled}
+                  clickVolume={drum.clickVolume}
+                  onClickVolumeChange={drum.setClickVolume}
+                  kitId={drum.kitId}
+                  onKitChange={drum.setKitId}
+                  beatsPerBar={drum.beatsPerBar}
+                  // The beat readout is the one prop that turns over per beat.
+                  // A collapsed card doesn't render it, so passing null there
+                  // lets the memoized bar skip reconciliation entirely.
+                  pulse={audioOpen ? drum.pulse : null}
+                  currentBar={drum.currentBar}
+                />
+              ) : (
+                <ChordTransportBar
+                  playing={chord.playing}
+                  onToggle={chord.toggle}
+                  hasChords={chord.hasChords}
+                  bpm={chord.bpm}
+                  onBpmChange={chord.setBpm}
+                  onPercent={chord.setBpmPercent}
+                  writtenTempo={chord.writtenTempo}
+                  beatsPerBar={chord.beatsPerBar}
+                  onBeatsPerBarChange={chord.setBeatsPerBar}
+                  countInBars={chord.countInBars}
+                  onCountInChange={chord.setCountInBars}
+                  clickEnabled={chord.clickEnabled}
+                  onClickToggle={chord.setClickEnabled}
+                  chordCount={chord.chordCount}
+                  pulse={audioOpen ? chord.pulse : null}
+                  // Play mode is the only host that binds a key for this transport.
+                  keyHint="(p)"
+                />
+              )}
+            </CollapsibleSection>
           )}
 
-          {/* Chord-sheet play-along transport (#4104) — the same slot one format
-              over, and only for a sheet that actually carries chords (a lyrics-
-              only or plain sheet has nothing to sound, so no bar appears). */}
-          {!isDrum && chord.chordCount > 0 && (
-            <ChordTransportBar
-              playing={chord.playing}
-              onToggle={chord.toggle}
-              hasChords={chord.hasChords}
-              bpm={chord.bpm}
-              onBpmChange={chord.setBpm}
-              onPercent={chord.setBpmPercent}
-              writtenTempo={chord.writtenTempo}
-              beatsPerBar={chord.beatsPerBar}
-              onBeatsPerBarChange={chord.setBeatsPerBar}
-              countInBars={chord.countInBars}
-              onCountInChange={chord.setCountInBars}
-              clickEnabled={chord.clickEnabled}
-              onClickToggle={chord.setClickEnabled}
-              chordCount={chord.chordCount}
-              pulse={chord.pulse}
-              // Play mode is the only host that binds a key for this transport.
-              keyHint="(p)"
-            />
-          )}
-
-          <div className="shrink-0 border-b border-port-border bg-port-card/60 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/* Sheet controls — what you drive the SHEET with (autoscroll,
+              transpose, size, instrument view, stage). Open by default: this is
+              the band you reach for mid-song. Named for the sheet, not "play
+              along", which is the transport's own Play button one card up. */}
+          <CollapsibleSection
+            id="song-sheet-controls"
+            size="bar"
+            label="Sheet controls"
+            summary={controlsSummary}
+            open={controlsOpen}
+            onOpenChange={toggleControls}
+            className="shrink-0"
+            buttonClassName="border-b border-port-border bg-port-card/60 px-3"
+            bodyClassName="border-b border-port-border bg-port-card/60 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-2"
+          >
             {/* Autoscroll — a drum chart scrolls HORIZONTALLY under its own
                 playhead (DrumSheetView), so a second vertical-scroll play button
                 would be a rival transport with a rival meaning of "play". */}
@@ -1012,7 +1079,21 @@ export default function SongBookViewer() {
                 </a>
               )}
             </div>
-          </div>
+          </CollapsibleSection>
+
+          {/* Chords used — pinned in the header band rather than scrolled away
+              with the sheet: the shapes you are reaching for matter at bar 60,
+              not only at bar 1. Follows the transposed text and the instrument
+              view, and a `plain` sheet (the opt-out of all notation UI) and a
+              drum chart have no chords to show. */}
+          {chordUiEnabled && (
+            <ChordsUsedCard
+              text={renderedText}
+              instrument={instrumentView}
+              open={chordsOpen}
+              onToggle={toggleChords}
+            />
+          )}
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 sm:px-4 sm:py-4">
             {/* Cross-links to the Round / music Track this song relates to
@@ -1043,7 +1124,6 @@ export default function SongBookViewer() {
                 fontSizeRem={fontSize}
                 className="max-w-4xl"
                 instrumentView={instrumentView}
-                showChordStrip
                 soundingChord={chord.sounding}
               />
             ) : (

@@ -17,6 +17,8 @@ import {
 // `format`: `'1'` writes `'1'`/`'0'`; `'true'` writes `'true'`/`'false'`.
 // Reads always treat either `'1'` or `'true'` as truthy so existing values
 // keep working when a page switches its `format` later.
+// Returns `[value, setValue, toggle]` — the third element is the flip a
+// disclosure header wants, so a caller never re-rolls `() => set((v) => !v)`.
 export function useLocalStorageBool(key, defaultValue = false, { format = '1' } = {}) {
   const [value, setValue] = useState(() => readBool(key, defaultValue));
 
@@ -29,7 +31,9 @@ export function useLocalStorageBool(key, defaultValue = false, { format = '1' } 
     });
   }, [key, format]);
 
-  return [value, write];
+  const toggle = useCallback(() => write((prev) => !prev), [write]);
+
+  return [value, write, toggle];
 }
 
 // JSON-blob variant: hydrates from localStorage on first render, persists on

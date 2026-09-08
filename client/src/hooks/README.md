@@ -143,7 +143,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
-| `useLocalStorageBool` | Boolean `useState` mirrored to `localStorage`. | Per-user UI preference toggle. |
+| `useLocalStorageBool` | Boolean `useState` mirrored to `localStorage`; returns `[value, setValue, toggle]`. | Per-user UI preference toggle, and any remembered disclosure (the SongBook viewer's Audio / Sheet controls / Chords used cards). |
 | `useNavWorkingSet` | Sidebar Pinned + Recent working set (localStorage MRU + pins); resolves stored paths to `{ path, label, icon }` rows via a `resolveNavEntry` arg. | Rendering the sidebar's Pinned/Recent sections. |
 
 ## Sidebar navigation data

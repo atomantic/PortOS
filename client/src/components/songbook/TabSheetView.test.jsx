@@ -102,18 +102,16 @@ describe('TabSheetView', () => {
 
   it("format='plain' renders verbatim: no headings, no chord highlighting, no chord UI", () => {
     const { container } = render(
-      <TabSheetView text={SAMPLE} format="plain" showChordStrip instrumentView="piano" />,
+      <TabSheetView text={SAMPLE} format="plain" instrumentView="piano" />,
     );
     // The raw [Verse 1] marker stays literal text (not a styled heading)...
     expect(container.textContent).toContain('[Verse 1]');
     expect(container.querySelector('.uppercase.tracking-wide')).toBeNull();
     // ...and no chord token gets the accent highlight.
     expect(container.querySelector('.text-port-accent.font-semibold')).toBeNull();
-    // plain is the opt-out of ALL notation UI: no popover buttons, no
-    // chords-used strip, and tab staffs stay verbatim (no collapse note) even
-    // in a non-guitar view.
+    // plain is the opt-out of ALL notation UI: no popover buttons, and tab
+    // staffs stay verbatim (no collapse note) even in a non-guitar view.
     expect(container.querySelector('[aria-haspopup="dialog"]')).toBeNull();
-    expect(screen.queryByText('Chords used')).toBeNull();
     expect(container.textContent).toContain('e|--3--2--|');
     expect(screen.queryByText(/switch to Guitar view/)).toBeNull();
   });
@@ -155,27 +153,6 @@ describe('TabSheetView', () => {
       expect(dialog.querySelector('svg')).toBeNull();
       expect(dialog.textContent).toContain('B');
       expect(dialog.textContent).toContain('D');
-    });
-  });
-
-  describe('chords-used strip', () => {
-    it('is off by default and lists unique chords in first-appearance order when enabled', () => {
-      const { rerender } = render(<TabSheetView text={SAMPLE} />);
-      expect(screen.queryByText('Chords used')).toBeNull();
-      rerender(<TabSheetView text={SAMPLE} showChordStrip />);
-      // C, G on the chords line + [C]/[G] chordlyric — unique set is {C, G}.
-      expect(screen.getByText('Chords used')).toBeTruthy();
-      expect(screen.getByText('(2)')).toBeTruthy();
-    });
-
-    it('collapses and re-expands', () => {
-      const { container } = render(<TabSheetView text={SAMPLE} showChordStrip />);
-      const toggle = screen.getByRole('button', { name: /Chords used/ });
-      expect(toggle.getAttribute('aria-expanded')).toBe('true');
-      expect(container.querySelectorAll('svg').length).toBeGreaterThan(0);
-      fireEvent.click(toggle);
-      expect(toggle.getAttribute('aria-expanded')).toBe('false');
-      expect(container.querySelectorAll('svg')).toHaveLength(1); // chevron only
     });
   });
 

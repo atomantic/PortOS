@@ -33,6 +33,15 @@ const SIZES = {
     label: 'text-gray-300',
     summary: 'text-gray-500 normal-case',
   },
+  // Full-width header band stacked above a scroller (the SongBook viewer's
+  // play-mode cards): sentence-case text-xs, 44px touch target, so several of
+  // them collapsed still cost almost nothing.
+  bar: {
+    iconSize: 13,
+    button: 'gap-1.5 min-h-[44px] text-xs text-gray-400 hover:text-white',
+    label: 'font-semibold',
+    summary: 'text-gray-500',
+  },
   // Card row (digital-twin analysis card): size-14 icons, gap-2, sentence-case text-sm.
   lg: {
     iconSize: 14,
@@ -45,6 +54,11 @@ const SIZES = {
 export default function CollapsibleSection({
   icon: Icon = null,
   label,
+  // Body id, wired to the header's `aria-controls` — but only while the body
+  // is actually in the DOM: a collapsed section that unmounts its body would
+  // otherwise point `aria-controls` at an id that does not exist, which is
+  // invalid ARIA rather than a helpful link.
+  id,
   summary = '',
   defaultOpen = false,
   size = 'sm',
@@ -59,6 +73,12 @@ export default function CollapsibleSection({
   // section owns its own state, which is what every other call site wants.
   open: controlledOpen,
   onOpenChange,
+  // Render the body always and hide it with the `hidden` attribute instead of
+  // unmounting it. For a section wrapping a LIVE surface whose own local state
+  // would otherwise be thrown away by a collapse — the SongBook transport bars'
+  // "More" disclosure. The attribute sits on a wrapper the caller can't
+  // restyle, so a `bodyClassName` display utility can't defeat it.
+  keepMounted = false,
   children,
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
@@ -77,6 +97,7 @@ export default function CollapsibleSection({
         type="button"
         aria-expanded={open}
         onClick={toggle}
+        aria-controls={id && (open || keepMounted) ? id : undefined}
         className={`flex w-full items-center ${tone.button} ${buttonClassName}`.trim()}
       >
         <Chevron size={tone.iconSize} className="shrink-0" />
@@ -90,7 +111,9 @@ export default function CollapsibleSection({
           ? <span className={`min-w-0 truncate ${tone.summary}`.trim()}>{summary}</span>
           : null}
       </button>
-      {open ? <div className={bodyClassName}>{children}</div> : null}
+      {keepMounted
+        ? <div id={id} hidden={!open}><div className={bodyClassName}>{children}</div></div>
+        : open ? <div id={id} className={bodyClassName}>{children}</div> : null}
     </div>
   );
 }
