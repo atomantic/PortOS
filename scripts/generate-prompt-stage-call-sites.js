@@ -18,6 +18,18 @@
  * regenerates and fails on drift, so a new literal-key call site can't land
  * without the manifest catching up.
  *
+ * Why a real parse rather than a regex tokenizer (#6624): the previous scanner
+ * walked comments and quoted spans with one alternation, which could LOSE
+ * PHASE — a backtick inside a regex literal opened a phantom template that ran
+ * to the next backtick, several lines and one `//` comment later, swallowing
+ * every call site in between. That failure is stable rather than flaky, so the
+ * drift test reports it as "the manifest is stale" and the documented fix
+ * ("run the generator and commit the result") ACCEPTS the wrong manifest,
+ * quietly unprotecting a shipped stage. It cost `cos-agent-briefing` its only
+ * reference during a refactor that changed no call site at all. A parser
+ * cannot lose phase, and comments simply aren't in the AST, so the scanner's
+ * comment-skipping special case disappears with it.
+ *
  * Usage:  node scripts/generate-prompt-stage-call-sites.js
  *
  * Output shape: `{ "<stage-key>": ["server/services/foo.js", …] }`, keys and
@@ -26,6 +38,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
@@ -34,6 +47,16 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 /** Repo root, resolved from this script's own location. */
 export const REPO_ROOT = resolve(HERE, '..');
+
+/**
+ * `@babel/parser` is a devDependency of the `server` workspace, not of the
+ * repo root — CI installs `server/`, `client/`, and `autofixer/` and never the
+ * root, so a bare `import '@babel/parser'` from `scripts/` would resolve
+ * against the (pm2-only) root tree and fail. Anchoring the resolver at
+ * `server/package.json` finds it under both plain Node and Vitest.
+ */
+const requireFromServerWorkspace = createRequire(join(REPO_ROOT, 'server', 'package.json'));
+const { parse } = requireFromServerWorkspace('@babel/parser');
 
 /** Manifest location, repo-relative (posix) so it reads the same on Windows. */
 export const MANIFEST_RELATIVE_PATH = 'server/lib/promptStageCallSites.generated.json';
@@ -49,29 +72,22 @@ export const REGENERATE_COMMAND = 'node scripts/generate-prompt-stage-call-sites
  * key reaches the resolver (direct call, a `{ idea: 'pipeline-idea-expansion' }`
  * lookup table, a `const STAGE = '…'` module constant, …).
  */
-const LITERAL_CALL_RE =
-  /\b(?:getStage|getStageTemplate|buildPrompt|runStage|runStagedLLM|runStageScopedInlineLLM|previewPrompt|resolveStageContext|resolveJudgeForStage)\(\s*(['"])([^'"\n]+)\1/g;
+const STAGE_CALL_NAMES = new Set([
+  'getStage',
+  'getStageTemplate',
+  'buildPrompt',
+  'runStage',
+  'runStagedLLM',
+  'runStageScopedInlineLLM',
+  'previewPrompt',
+  'resolveStageContext',
+  'resolveJudgeForStage',
+]);
 
 /**
- * One pass over a JS source, in precedence order: block comment, line comment,
- * single-quoted, double-quoted, template literal.
- *
- * Comments are in the alternation only so they can be SKIPPED — a stage key
- * named in a `//` note or a JSDoc block is prose, not a call site, and listing
- * that file under "Referenced in" in the delete dialog would be a lie.
- * Matching them here rather than pre-stripping is what keeps a `'http://…'`
- * literal from being mistaken for the start of a comment.
- *
- * A regex literal containing a quote could still desync the scan. That would
- * be stable, not flaky (the drift test compares two runs of the same scanner),
- * and no `server/` source does it today.
- */
-const TOKEN_RE = /\/\*[\s\S]*?\*\/|\/\/[^\n]*|'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\[\s\S])*`/g;
-
-/**
- * A static hyphenated prefix inside a template literal, followed by an
- * interpolation — `` `pipeline-panel-${personaId}` ``. Stages reached this way
- * (the reader-panel personas) have NO literal key anywhere in source, so a
+ * A static hyphenated prefix immediately before an interpolation —
+ * `` `pipeline-panel-${personaId}` ``. Stages reached this way (the
+ * reader-panel personas) have NO literal key anywhere in source, so a
  * literal-only scan would leave them unprotected. Every known key under the
  * prefix counts as referenced by that file.
  *
@@ -115,6 +131,49 @@ export function collectServerSources(repoRoot = REPO_ROOT) {
   return tracked.map((path) => ({ path, source: readFileSync(join(repoRoot, path), 'utf8') }));
 }
 
+/** Keys babel hangs off a node that are never child AST nodes worth walking. */
+const NON_AST_KEYS = new Set(['loc', 'leadingComments', 'trailingComments', 'innerComments', 'extra']);
+
+/** Every node in a parsed program, depth-first. Avoids a `@babel/traverse` dependency. */
+function* walkNodes(node) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const child of node) yield* walkNodes(child);
+    return;
+  }
+  if (typeof node.type !== 'string') return;
+  yield node;
+  for (const key of Object.keys(node)) {
+    if (NON_AST_KEYS.has(key)) continue;
+    yield* walkNodes(node[key]);
+  }
+}
+
+/**
+ * Parse one source into its node list.
+ *
+ * A source that will not parse throws, naming the file: contributing nothing
+ * would silently drop every call site in it, which is the exact failure this
+ * rewrite exists to end.
+ */
+function parseNodes(path, source) {
+  // Outside any request lifecycle, and babel's message names a line/column but
+  // not the file — which of 500 sources broke is the only useful half.
+  try {
+    const ast = parse(source, { sourceType: 'module', plugins: ['jsx'] });
+    return [...walkNodes(ast.program)];
+  } catch (err) {
+    throw new Error(`${path}: ${err.message}`, { cause: err });
+  }
+}
+
+/** The callee name of a call expression, for both `fn(…)` and `obj.fn(…)`. */
+function calleeName(callee) {
+  if (callee?.type === 'Identifier') return callee.name;
+  if (callee?.type === 'MemberExpression' && !callee.computed) return callee.property?.name ?? null;
+  return null;
+}
+
 /**
  * Build the `stageKey -> [source paths]` index.
  *
@@ -125,11 +184,18 @@ export function collectServerSources(repoRoot = REPO_ROOT) {
  *   references omitted
  */
 export function buildStageCallSites({ shippedStageKeys, sources }) {
+  const parsed = sources.map(({ path, source }) => ({ path, nodes: parseNodes(path, source) }));
+
   // A call site may name a stage whose config entry was never shipped; those
   // keys still deserve protection if the user (or a migration) creates them.
   const keys = new Set(shippedStageKeys);
-  for (const { source } of sources) {
-    for (const [, , key] of source.matchAll(LITERAL_CALL_RE)) keys.add(key);
+  for (const { nodes } of parsed) {
+    for (const node of nodes) {
+      if (node.type !== 'CallExpression') continue;
+      if (!STAGE_CALL_NAMES.has(calleeName(node.callee))) continue;
+      const [first] = node.arguments;
+      if (first?.type === 'StringLiteral') keys.add(first.value);
+    }
   }
 
   const index = new Map();
@@ -138,20 +204,30 @@ export function buildStageCallSites({ shippedStageKeys, sources }) {
     index.get(key).add(path);
   };
 
-  for (const { path, source } of sources) {
-    for (const [token] of source.matchAll(TOKEN_RE)) {
-      if (token.startsWith('/')) continue; // comment — prose, not a call site
-      if (token.startsWith('`')) {
-        for (const [, prefix] of token.matchAll(TEMPLATE_PREFIX_RE)) {
-          for (const key of keys) {
-            if (key.length > prefix.length && key.startsWith(prefix)) record(key, path);
-          }
+  for (const { path, nodes } of parsed) {
+    for (const node of nodes) {
+      if (node.type === 'StringLiteral') {
+        if (keys.has(node.value)) record(node.value, path);
+        continue;
+      }
+      if (node.type !== 'TemplateLiteral') continue;
+
+      // A template with no interpolation is just a string spelled differently.
+      if (node.expressions.length === 0) {
+        const only = node.quasis[0]?.value?.cooked;
+        if (only != null && keys.has(only)) record(only, path);
+        continue;
+      }
+
+      // Rebuild the template's SHAPE — static chunks with a placeholder where
+      // each interpolation sat — so a prefix is still recognized as sitting
+      // immediately before a `${`, wherever in the template it appears.
+      const shape = node.quasis.map((quasi) => quasi.value.raw).join('${}');
+      for (const [, prefix] of shape.matchAll(TEMPLATE_PREFIX_RE)) {
+        for (const key of keys) {
+          if (key.length > prefix.length && key.startsWith(prefix)) record(key, path);
         }
       }
-      // An interpolated or escaped literal is never a bare stage key, so the
-      // same unwrap covers all three quote styles.
-      const literal = token.slice(1, -1);
-      if (keys.has(literal)) record(literal, path);
     }
   }
 

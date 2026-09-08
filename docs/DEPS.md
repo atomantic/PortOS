@@ -44,6 +44,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `ws` | 1 | KEEP | remote desktop + browser WebSockets | Foundational WebSocket transport; also used transitively by Socket.IO |
 | `zod` | 1 | KEEP | input validation | Widely-audited |
 | **Server devDeps** | | | | |
+| `@babel/parser` | 1 | KEEP | `scripts/generate-prompt-stage-call-sites.js` — parses `server/` sources to index prompt-stage call sites | Already present transitively (via vitest); promoted to an explicit devDep in #6624 so the generator can't break on a hoist change. Declared on `server` rather than root because CI never installs root `node_modules` |
 | `vitest` | 1 | KEEP | test runner | |
 | `@vitest/coverage-v8` | 1 | KEEP | coverage | Paired with vitest |
 | **Client deps** | | | | |
