@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
+import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import socket from '../../../services/socket';
@@ -390,13 +391,6 @@ export default function WorldTab({ agentId }) {
   // leaving stale phantoms.
   const displayNearby = presence !== null ? presence : nearby;
 
-  const statusDotColor = {
-    connected: 'bg-port-success',
-    connecting: 'bg-port-warning animate-pulse',
-    reconnecting: 'bg-port-warning animate-pulse',
-    disconnected: 'bg-gray-600'
-  }[connectionStatus] || 'bg-gray-600';
-
   // Dynamic param fields for add-to-queue form
   const renderQueueParamFields = () => {
     switch (newActionType) {
@@ -447,11 +441,7 @@ export default function WorldTab({ agentId }) {
     <div className="p-4">
       {/* Connection Banner */}
       <div className="flex flex-wrap items-center gap-4 mb-4 p-3 bg-port-card border border-port-border rounded-lg">
-        <div className="flex items-center gap-2">
-          <span className={`w-2.5 h-2.5 rounded-full ${statusDotColor}`} />
-          <span className="text-sm text-gray-400">WebSocket:</span>
-          <span className="text-sm text-white font-medium">{connectionStatus}</span>
-        </div>
+        <ConnectionStatusDot status={connectionStatus} label="WebSocket:" />
         <div className="flex gap-2 ml-auto">
           {connectionStatus === 'disconnected' ? (
             <button

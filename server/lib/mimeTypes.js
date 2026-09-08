@@ -2,9 +2,24 @@
 import { basename, extname } from 'path';
 
 /**
- * MIME types that could execute scripts when served inline — force Content-Disposition: attachment
+ * MIME types that could execute scripts when served inline — force
+ * Content-Disposition: attachment.
+ *
+ * Lowercase by construction: RFC 2045 makes a media type case-insensitive, so
+ * every membership test has to fold case first (`serveLocalFile` does).
+ * `application/xhtml+xml` and `text/xml` are here because both render as a
+ * document with script enabled in every browser that accepts them, which makes
+ * them the same hazard as `text/html` under a different spelling.
  */
-export const RISKY_MIME_TYPES = new Set(['text/html', 'image/svg+xml', 'application/javascript', 'text/javascript', 'application/xml']);
+export const RISKY_MIME_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'image/svg+xml',
+  'application/javascript',
+  'text/javascript',
+  'application/xml',
+  'text/xml',
+]);
 
 /**
  * Full extension→MIME map covering documents, images, audio, video, code, and

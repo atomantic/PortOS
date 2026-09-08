@@ -292,7 +292,27 @@ describe('deferred imports stay deferred (#6156)', () => {
 // and it pulls in nothing new (its only import, `generationModes.js`, was
 // already in every one of them). A leaf with nothing behind it to defer is the
 // tolerated shape. The allowance had drifted to ~30 again, so restore the ~1.5k.
-const MAX_STATIC_INSTANTIATIONS = 98500;
+//
+// The Beeper fork carries its own suites, so this budget is above upstream's.
+// Measured on the merge of upstream v2.60.0: 99,024 against upstream's own
+// 97,070 at the same commit, +1,954. Two parts, both the tolerated shape and
+// neither an eager edge into a heavy subtree. 1,030 is 21 test files upstream
+// does not have, whose mean closure (49) is BELOW the tree's (58) — mass, not
+// depth. The other 924 is diffuse: +19 on routes/settings.test.js and +2/+3
+// across ~300 suites, from dependency-free leaves reached through
+// `validation.js`'s flat re-export of `mediaValidation.js`. The largest of
+// them, `beeperOAuthOrigin.js`, has a closure of exactly 1 and imports
+// nothing, and it is read inside a synchronous zod refine — there is no
+// subtree to narrow and no call site to defer to. So restore the ~1.5k
+// allowance over the measured total rather than pretend the delta is free.
+//
+// Re-measured after rebuilding this branch as three layered commits on top
+// of a newer upstream/main (9 commits past the previous base, none of them
+// touching a heavy subtree): 99,168, essentially flat against the 99,024
+// measured above at the older v2.60.0 merge point (+144 — ordinary drift
+// from upstream's own intervening growth, not a new eager edge this branch
+// introduced). Restore the same ~1.5k allowance over that fresh total.
+const MAX_STATIC_INSTANTIATIONS = 100668;
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {

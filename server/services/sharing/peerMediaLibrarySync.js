@@ -58,7 +58,13 @@ import { findPeerById, isNonEmptyStr, FORCE_REVALIDATE_EVERY } from './peerSyncS
 // honored. `image` carries a gen-params sidecar (rides via hashImageForManifest);
 // the rest are flat bytes. image-refs are EXCLUDED (ephemeral FLUX multi-ref
 // scratch); video-thumbnails are EXCLUDED (regenerated locally on video pull).
-function mediaLibraryDirs() {
+//
+// Exported because this list — not MEDIA_LIBRARY_KIND_DIRNAMES below, which
+// only translates kinds into backup exclude patterns — is what actually
+// decides which `data/` directories cross to a peer. The #28 federation guard
+// asserts against it directly, so a machine-local media kind cannot be added
+// to the walk unnoticed.
+export function mediaLibraryDirs() {
   return [
     { kind: 'image', dir: PATHS.images },
     { kind: 'video', dir: PATHS.videos },
