@@ -10,14 +10,32 @@ import {
 describe('mindLocalContextClamp', () => {
   it('tiers CPU-only ceilings by installed RAM', () => {
     expect(cpuOnlyContextCeiling(8)).toBe(2048);
-    expect(cpuOnlyContextCeiling(15)).toBe(4096);
-    expect(cpuOnlyContextCeiling(20)).toBe(8192);
-    expect(cpuOnlyContextCeiling(30)).toBe(16384);
+    expect(cpuOnlyContextCeiling(15)).toBe(20480);
+    expect(cpuOnlyContextCeiling(16)).toBe(20480);
+    expect(cpuOnlyContextCeiling(20)).toBe(24576);
+    expect(cpuOnlyContextCeiling(30)).toBe(32768);
   });
 
   it('reserves PortOS headroom when free RAM is tight', () => {
     expect(freeMemoryContextCeiling({ freeMemoryGb: 6, modelSizeGb: 5 })).toBe(MIND_LOCAL_CONTEXT_ABSOLUTE_MIN);
     expect(freeMemoryContextCeiling({ freeMemoryGb: 20, modelSizeGb: 5 })).toBeGreaterThan(8192);
+  });
+
+  it('allows Grok-box validated 20480 on ≤16GB CPU-only when free RAM permits', () => {
+    const clamp = resolveMindLocalContextClamp({
+      totalMemoryGb: 16,
+      freeMemoryGb: 20,
+      hasUsableGpu: false,
+      modelSizeGb: 5,
+    });
+    // CPU tier 20480; free RAM after headroom+model still leaves room for that window.
+    expect(clamp.max).toBe(20480);
+    expect(clampMindLocalContextRequest(20480, {
+      totalMemoryGb: 16,
+      freeMemoryGb: 20,
+      hasUsableGpu: false,
+      modelSizeGb: 5,
+    })).toMatchObject({ ok: true, numCtx: 20480 });
   });
 
   it('refuses requests above the safe host ceiling', () => {
@@ -27,7 +45,7 @@ describe('mindLocalContextClamp', () => {
       hasUsableGpu: false,
       modelSizeGb: 5,
     });
-    // 15 GB CPU-only tier → 4096; free RAM after headroom+model is tight.
+    // 15 GB CPU-only tier → 20480; free RAM after headroom+model is the tighter clamp.
     expect(clamp.max).toBeLessThanOrEqual(4096);
     const refused = clampMindLocalContextRequest(65536, {
       totalMemoryGb: 15,

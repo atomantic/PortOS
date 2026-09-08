@@ -44,10 +44,11 @@ export function cpuOnlyContextCeiling(totalMemoryGb) {
   const total = positiveNumber(totalMemoryGb);
   if (total == null) return 4096;
   if (total < 12) return 2048;
-  if (total < 16) return 4096;
-  if (total < 24) return 8192;
-  if (total < 32) return 16384;
-  if (total < 48) return 32768;
+  // ≤16 GB CPU-only (Grok box): live-validated 20480 with PortOS healthy.
+  if (total <= 16) return 20480;
+  if (total < 24) return 24576;
+  if (total < 32) return 32768;
+  if (total < 48) return 49152;
   return 65536;
 }
 

@@ -32,7 +32,7 @@ Granted via capability `adjustLocalContext` (capabilities schema v8). Semantic t
 `server/lib/mindLocalContextClamp.js` refuses oversized windows so CPU-only / low-RAM hosts (including Grok boxes) cannot OOM PortOS:
 
 - Absolute floor **512**, absolute ceiling **131072**
-- CPU-only ceilings tiered by installed RAM (e.g. ≤16 GB → 4096)
+- CPU-only ceilings tiered by installed RAM (e.g. ≤16 GB → 20480)
 - Free-memory ceiling reserves **2.5 GB** for PortOS + estimated model weights
 - Usable NVIDIA VRAM / Apple Silicon allows higher ceilings
 - Rate limit: **6** adjustments / rolling 24 h, **10** minutes apart
