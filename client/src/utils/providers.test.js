@@ -94,17 +94,15 @@ import {
   effortSurvivingModel,
   seedModelEffort,
 } from './providers.js';
-import { PROVIDER_TYPES as SERVER_PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
 import SHIPPED_PROVIDERS from '../../../data.reference/providers.json';
 // The server's own payload decorator, so the shipped-catalog walk below tests
 // the REAL derivation instead of a hand transcription of it (#3620). Pure and
 // dependency-free — it imports nothing outside the vendored aiToolkit.
 import { withRefreshCapabilityList } from '../../../server/lib/aiToolkit/internal/modelFetchers.js';
-import {
-  effortLevelsForProvider as serverEffortLevelsForProvider,
-  isAntigravityProvider as serverIsAntigravityProvider,
-  resolveCliEffort as serverResolveCliEffort,
-} from '../../../server/lib/providerModels.js';
+import * as providerTypes from './providerTypes.js';
+import * as serverProviderModels from '../../../server/lib/providerModels.js';
+import * as serverOllamaBacked from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
+import * as serverToolkitConstants from '../../../server/lib/aiToolkit/constants.js';
 
 // The client resolves its own ladder and clamps through the server's
 // clampEffortToLadder; the server's resolveCliEffort decides what the CLI
@@ -140,16 +138,16 @@ describe('resolveCliEffort', () => {
     ['null yields no flag', null, CLAUDE, null],
   ])('%s', (_label, effort, provider, expected) => {
     expect(resolveCliEffort(effort, provider)).toBe(expected);
-    expect(serverResolveCliEffort(effort, provider)).toBe(expected);
+    expect(serverProviderModels.resolveCliEffort(effort, provider)).toBe(expected);
   });
 
   it('passes Ultra through for Sol and Terra but clamps it for Luna', () => {
     for (const model of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']) {
       expect(resolveCliEffort('ultra', CODEX, model)).toBe('ultra');
-      expect(serverResolveCliEffort('ultra', CODEX, model)).toBe('ultra');
+      expect(serverProviderModels.resolveCliEffort('ultra', CODEX, model)).toBe('ultra');
     }
     expect(resolveCliEffort('ultra', CODEX, 'gpt-5.6-luna')).toBe('max');
-    expect(serverResolveCliEffort('ultra', CODEX, 'gpt-5.6-luna')).toBe('max');
+    expect(serverProviderModels.resolveCliEffort('ultra', CODEX, 'gpt-5.6-luna')).toBe('max');
   });
 });
 
@@ -184,7 +182,7 @@ describe('effortLevelsForProvider', () => {
 
   it.each(CASES)('%s', (_label, provider, expected) => {
     expect(effortLevelsForProvider(provider)).toEqual(expected);
-    expect(serverEffortLevelsForProvider(provider)).toEqual(expected);
+    expect(serverProviderModels.effortLevelsForProvider(provider)).toEqual(expected);
   });
 
   // Codex's ladder is model-gated in BOTH directions: the gpt-6 family adds
@@ -199,7 +197,7 @@ describe('effortLevelsForProvider', () => {
   ])('codex ladder for %s', (model, expected) => {
     const codex = { id: 'codex', command: 'codex' };
     expect(effortLevelsForProvider(codex, model)).toEqual(expected);
-    expect(serverEffortLevelsForProvider(codex, model)).toEqual(expected);
+    expect(serverProviderModels.effortLevelsForProvider(codex, model)).toEqual(expected);
   });
 });
 
@@ -327,11 +325,11 @@ describe('Antigravity base-model split', () => {
       ['claude-sonnet-4-6', null],
     ]) {
       expect(effortLevelsForProvider(agy, model)).toEqual(expected);
-      expect(serverEffortLevelsForProvider(agy, model)).toEqual(expected);
+      expect(serverProviderModels.effortLevelsForProvider(agy, model)).toEqual(expected);
     }
     // Clamping follows the narrowed ladder, so agy never sees an invalid pair.
     expect(resolveCliEffort('medium', agy, 'gemini-3.1-pro')).toBe('low');
-    expect(serverResolveCliEffort('medium', agy, 'gemini-3.1-pro')).toBe('low');
+    expect(serverProviderModels.resolveCliEffort('medium', agy, 'gemini-3.1-pro')).toBe('low');
   });
 
   it('rewrites only Antigravity model lists', () => {
@@ -565,16 +563,34 @@ describe('configuredDefaultIn', () => {
   });
 });
 
-describe('isAntigravityProvider (server mirror)', () => {
-  it.each([
-    [{ id: 'antigravity-cli' }, true],
-    [{ id: 'antigravity-tui' }, true],
-    [{ id: 'custom', command: 'agy.exe' }, true],
-    [{ id: 'claude-code', command: 'claude' }, false],
-    [null, false],
-  ])('%o → %s', (provider, expected) => {
-    expect(isAntigravityProvider(provider)).toBe(expected);
-    expect(serverIsAntigravityProvider(provider)).toBe(expected);
+// The vendor predicates and backend markers the browser classifies a record
+// with are the server's own functions — identity, not behavioral parity, is the
+// contract. A copy that answers the same today is exactly what let every vendor
+// addition (kimi, cursor, the grok effort flag) land the same predicate twice.
+// Every name the client module shares with a server leaf must be that leaf's
+// export, so a local declaration that shadows a server name fails here too.
+describe('providerTypes re-exports the server predicates', () => {
+  const shared = [serverProviderModels, serverOllamaBacked, serverToolkitConstants]
+    .flatMap((leaf) => Object.keys(leaf).filter((name) => name in providerTypes).map((name) => [name, leaf]));
+
+  it('shares exactly the re-exported names with the server leaves', () => {
+    expect(shared.map(([name]) => name).sort()).toEqual([
+      'PROVIDER_TYPES',
+      'commandBasename',
+      'isAntigravityProvider',
+      'isCodexProvider',
+      'isCodexSubscriptionProvider',
+      'isCursorProvider',
+      'isGrokProvider',
+      'isKimiProvider',
+      'isOllamaBackedProvider',
+      'isOpencodeLocalProvider',
+      'localRuntimeNamespace',
+    ]);
+  });
+
+  it.each(shared)('%s is the server export itself', (name, leaf) => {
+    expect(providerTypes[name]).toBe(leaf[name]);
   });
 });
 
@@ -583,16 +599,8 @@ describe('PROVIDER_TYPES', () => {
     expect(PROVIDER_TYPES).toEqual({ CLI: 'cli', TUI: 'tui', API: 'api' });
   });
 
-  // The client mirror exists because aiToolkit is server-only (the directory is
-  // kept self-contained for upstream sync hygiene). A drift here would let one
-  // side read a provider type the other doesn't recognize.
-  it('matches the server-side enum (mirror must stay in lockstep)', () => {
-    expect({ ...PROVIDER_TYPES }).toEqual({ ...SERVER_PROVIDER_TYPES });
-  });
-
   it('is frozen so callers cannot mutate the shared enum', () => {
     expect(Object.isFrozen(PROVIDER_TYPES)).toBe(true);
-    expect(Object.isFrozen(SERVER_PROVIDER_TYPES)).toBe(true);
   });
 });
 
@@ -1183,7 +1191,7 @@ describe('knownProviderContextWindow', () => {
   });
 });
 
-describe('isKimiProvider (mirror of server providerModels)', () => {
+describe('isKimiProvider (re-exported from server providerModels)', () => {
   it('matches the shipped ids and a path/exe command, rejects others', () => {
     expect(isKimiProvider({ id: 'kimi-cli' })).toBe(true);
     expect(isKimiProvider({ id: 'kimi-tui' })).toBe(true);
@@ -1667,7 +1675,8 @@ describe('credentialSource', () => {
     // and authenticates against nothing, so the account is not one of its
     // prerequisites — without this the card claims "No ChatGPT account is signed
     // in" and, worse, parks in UNKNOWN awaiting a read that never matters.
-    // MIRROR of server/lib/codexAccount.js#isCodexSubscriptionProvider.
+    // The server's own isCodexSubscriptionProvider (server/lib/providerModels.js),
+    // re-exported — one rule for the card and the prerequisite router.
     const local = SHIPPED_PROVIDERS.providers['codex-ollama'];
     expect(local.ollamaBacked).toBe(true);
     expect(isCodexSubscriptionProvider(local)).toBe(false);

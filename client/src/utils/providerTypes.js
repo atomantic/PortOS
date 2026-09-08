@@ -5,124 +5,35 @@
  * `kimi`/`cursor-agent`/`grok`/`claude` still qualifies), and the structural
  * backend markers (`ollamaBacked`, `lmstudioBacked`, …) a wrapper record carries.
  *
- * Browser MIRROR of the predicates in `server/lib/providerModels.js` (the
- * `isXProvider` family, `commandBasename`, `localRuntimeNamespace`),
- * `server/lib/aiToolkit/constants.js#PROVIDER_TYPES` and
- * `server/lib/aiToolkit/providers.js#isOllamaBackedProvider` — keep in lockstep.
- * Every other provider helper module builds on these; this one imports only
- * the gateway registry.
+ * Everything with a server twin is RE-EXPORTED from the pure server leaves
+ * below rather than copied, so the browser and the server classify a record
+ * with the same function and a vendor added on one side cannot be missing on
+ * the other. Only helpers with no browser-importable server twin are declared
+ * here: the type predicates a sanitized inventory still answers (their server
+ * copies live under `services/` — #6605 gives them a pure-leaf home), the
+ * launchability and picker filters, and the Tailwind chip classes.
  *
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
-import { isGatewayBackedProvider } from './providerGateways.js';
+import { PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
+import { commandBasename, isGrokProvider } from '../../../server/lib/providerModels.js';
 
-// Copy of server/lib/providerModels.js#commandBasename (the predicates in this
-// file are the one provider table still copied rather than re-exported — see
-// the header). Strip the directory + a Windows `.exe` suffix so a
-// path-configured command (/opt/homebrew/bin/grok) matches the bare vendor name.
-// Keep in lockstep with the server helper (only `.exe` is stripped, not `.cmd`).
-export const commandBasename = (command) =>
-  typeof command === 'string' && command !== ''
-    ? command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '')
-    : '';
-
-/**
- * True when a provider is codex-flavored — the shipped `codex`/`codex-tui` ids
- * or any provider whose launch command basename is `codex` (path/exe tolerant).
- * MIRROR of `isCodexProvider` in server/lib/providerModels.js — keep in lockstep.
- * @param {{id?:string, command?:string}|null|undefined} provider
- * @returns {boolean}
- */
-export const isCodexProvider = (provider) => {
-  const id = String(provider?.id || '').toLowerCase();
-  return id === 'codex' || id === 'codex-tui' || commandBasename(provider?.command) === 'codex';
-};
-
-/**
- * True when a provider is Grok-Build-flavored. MIRROR of `isGrokProvider` in
- * server/lib/providerModels.js — the shipped `grok-cli`/`grok-tui` ids or a
- * `grok` command basename. The bare `grok` id is the HTTP API provider, which
- * has no CLI flag to carry an effort level, and is excluded.
- * @param {{id?:string, command?:string}|null|undefined} provider
- * @returns {boolean}
- */
-export const isGrokProvider = (provider) => {
-  const id = String(provider?.id || '').toLowerCase();
-  return id === 'grok-cli' || id === 'grok-tui' || commandBasename(provider?.command) === 'grok';
-};
-
-/**
- * True when a CLI/TUI record uses Codex's ChatGPT subscription. This mirrors
- * server/lib/codexAccount.js: the command, not an editable provider id, owns
- * the account contract.
- * @param {{type?:string, command?:string}|null|undefined} provider
- * @returns {boolean}
- */
-export const isCodexSubscriptionProvider = (provider) =>
-  (provider?.type === 'cli' || provider?.type === 'tui')
-  && commandBasename(provider?.command) === 'codex'
-  // A local-runtime-backed codex record (`codex --oss --local-provider ollama`)
-  // generates its tokens on this machine and authenticates against nothing, so
-  // it must not be painted "No ChatGPT account is signed in" — or parked in
-  // UNKNOWN waiting on an account read that will never matter.
-  && localRuntimeNamespace(provider) === null;
-
-/**
- * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
- * ids or any provider whose launch command basename is `kimi` (path/exe tolerant).
- * MIRROR of `isKimiProvider` in server/lib/providerModels.js — keep in lockstep.
- * @param {{id?:string, command?:string}|null|undefined} provider
- * @returns {boolean}
- */
-export const isKimiProvider = (provider) => {
-  const id = String(provider?.id || '').toLowerCase();
-  return id === 'kimi-cli' || id === 'kimi-tui' || commandBasename(provider?.command) === 'kimi';
-};
-
-/**
- * True when a provider is Antigravity-flavored — the shipped
- * `antigravity-cli`/`antigravity-tui` ids or any provider whose launch command
- * basename is `agy`/`antigravity` (path/exe tolerant). MIRROR of
- * `isAntigravityProvider` in server/lib/providerModels.js — keep in lockstep.
- * @param {{id?:string, command?:string}|null|undefined} provider
- * @returns {boolean}
- */
-export const isAntigravityProvider = (provider) => {
-  if (!provider) return false;
-  const id = String(provider.id || '').toLowerCase();
-  if (id === 'antigravity-cli' || id === 'antigravity-tui') return true;
-  const base = commandBasename(provider.command);
-  return base === 'agy' || base === 'antigravity';
-};
-
-/**
- * True when a provider is Cursor-Agent-flavored — the shipped
- * `cursor-cli`/`cursor-tui` ids or any provider whose launch command basename is
- * `cursor-agent` (never a bare `cursor`, which is the GUI editor). MIRROR of
- * `isCursorProvider` in server/lib/providerModels.js — keep in lockstep.
- * @param {{id?:string, command?:string}|null|undefined} provider
- * @returns {boolean}
- */
-export const isCursorProvider = (provider) => {
-  if (!provider) return false;
-  const id = String(provider.id || '').toLowerCase();
-  return id === 'cursor-cli' || id === 'cursor-tui' || commandBasename(provider.command) === 'cursor-agent';
-};
-
-/**
- * Provider-type enum mirrored from server/lib/aiToolkit/constants.js#PROVIDER_TYPES.
- * The aiToolkit directory is kept self-contained (no imports out to other PortOS
- * modules) so the client cannot import the server copy directly — keep these two
- * in lockstep when adding a type. The provider type predicates below and the
- * Tailwind chip helper read from this object, so a string literal only needs to
- * appear once per side.
- */
-export const PROVIDER_TYPES = Object.freeze({
-  CLI: 'cli',
-  TUI: 'tui',
-  API: 'api'
-});
+export { PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
+// The public `aiToolkit/providers.js` barrel reaches `fs` and `child_process`,
+// so the browser takes the dependency-free leaf that barrel itself re-exports.
+export { isOllamaBackedProvider } from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
+export {
+  commandBasename,
+  isAntigravityProvider,
+  isCodexProvider,
+  isCodexSubscriptionProvider,
+  isCursorProvider,
+  isGrokProvider,
+  isKimiProvider,
+  isOpencodeLocalProvider,
+  localRuntimeNamespace,
+} from '../../../server/lib/providerModels.js';
 
 // Agent jobs need the CLI/TUI file-writing harnesses. Keep this allowlist in
 // lockstep with the api-provider rejection in server/services/agentProviderResolution.js.
@@ -130,21 +41,6 @@ export const AGENT_HARNESS_PROVIDER_TYPES = Object.freeze([
   PROVIDER_TYPES.CLI,
   PROVIDER_TYPES.TUI
 ]);
-
-/**
- * True when an OpenCode process provider runs against one of the local
- * OpenAI-compatible backends (Ollama / LM Studio / MTPLX / llama.cpp / vLLM) or
- * a hosted gateway (OrcaRouter / OpenRouter)
- * rather than a vendor cloud model. MIRROR of `isOpencodeProvider(p) &&
- * getOpencodeLocalProviderNamespace(p)` in server/lib/providerModels.js, which
- * is exactly what gates the effort ladder there — so a backend marker missing
- * here hides the effort picker for a provider the server would happily forward
- * `reasoningEffort` for (#4765).
- */
-export const isOpencodeLocalProvider = (provider) =>
-  (['opencode', 'opencode-tui'].includes(String(provider?.id || '').toLowerCase())
-    || commandBasename(provider?.command) === 'opencode')
-  && (localRuntimeNamespace(provider) !== null || isGatewayBackedProvider(provider));
 
 /**
  * Check if a provider is a TUI-backed agent provider. Mirror of
@@ -202,46 +98,6 @@ export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiP
 export const enabledProcessProviderFilter = (provider) => Boolean(provider?.enabled) && isProcessProvider(provider);
 
 /**
- * Whether `provider` is served by an Ollama daemon rather than its nominal
- * cloud/CLI backend: the built-in `ollama` API provider itself (id match), an
- * `api`-type provider whose `endpoint` points at Ollama, or the Claude-Ollama
- * CLI/TUI pattern — a `claude` process carrying the `ollamaBacked` marker or an
- * `ANTHROPIC_BASE_URL` pointed at Ollama, which runs the Claude Code harness but
- * generates tokens locally, so its model list is refreshed from Ollama
- * (including the TUI variant, which the server refreshes via the
- * `type==='tui' && ollamaBacked` branch). MIRROR of `isOllamaBackedProvider` in
- * server/lib/aiToolkit/providers.js.
- * @param {{id?:string,endpoint?:string,ollamaBacked?:boolean,envVars?:Record<string,string>}} provider
- */
-export const isOllamaBackedProvider = (provider) => {
-  if (provider?.id === 'ollama') return true;
-  if (provider?.ollamaBacked === true) return true;
-  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || '');
-  return /:11434\b/.test(base) || /ollama/i.test(base);
-};
-
-/**
- * The LOCAL daemon namespace a provider is marked with, or null. Structural
- * markers only — a hosted gateway is an OpenCode namespace and a remote API, so
- * it is deliberately NOT one of these.
- *
- * MIRROR of `localRuntimeNamespace` in server/lib/providerModels.js — keep in
- * lockstep. The order matters: a malformed record carrying two markers keeps its
- * legacy Ollama outcome on both sides.
- * @param {{ollamaBacked?:boolean,mtplxBacked?:boolean,llamaBacked?:boolean,vllmBacked?:boolean,sglangBacked?:boolean}|null|undefined} provider
- * @returns {'ollama'|'mtplx'|'llama'|'vllm'|'sglang'|null}
- */
-export const localRuntimeNamespace = (provider) => {
-  if (provider?.ollamaBacked === true) return 'ollama';
-  if (provider?.lmstudioBacked === true) return 'lmstudio';
-  if (provider?.mtplxBacked === true) return 'mtplx';
-  if (provider?.llamaBacked === true) return 'llama';
-  if (provider?.vllmBacked === true) return 'vllm';
-  if (provider?.sglangBacked === true) return 'sglang';
-  return null;
-};
-
-/**
  * True when a provider launches the Claude Code binary, whatever backend it is
  * pointed at (`claude-code`, `claude-ollama`, `claude-sglang`, or any renamed
  * record whose command resolves to `claude`).
@@ -249,22 +105,26 @@ export const localRuntimeNamespace = (provider) => {
  * The harness — not the backend — is what decides which knobs are forwardable:
  * Claude Code owns its own sampling and speaks the Anthropic wire, so a control
  * that reaches an OpenCode wrapper through `agent.build` has no route here.
- * MIRROR of `isClaudeCommand` in server/lib/providerModels.js.
+ *
+ * Not the server's `isClaudeCommand`: that counts a BLANK command as Claude
+ * because the spawners default one to `claude`, which is right for a process
+ * record and wrong for the `api` records this also classifies — they carry no
+ * command at all, and `generationControlsFor` would strip the sampling controls
+ * off the native Ollama API provider. The type-gated form the server uses lives
+ * in `providerFamilies.js`, which is not browser-safe, so this stays
+ * command-only until the type predicates have a pure-leaf home.
  * @param {{command?:string}|null|undefined} provider
  */
 export const isClaudeCommandProvider = (provider) => commandBasename(provider?.command) === 'claude';
 
 /**
- * Check if a provider is the Grok Build CLI/TUI (the `grok` command harness).
- * Matches the shipped `grok-cli` / `grok-tui` samples or any process provider
- * whose command basename is `grok`; the plain Grok API provider is excluded.
- * Reviewer-model discovery uses this for custom Grok process providers too.
+ * Check if a provider is the Grok Build CLI/TUI (the `grok` command harness):
+ * a PROCESS provider `isGrokProvider` recognizes — the shipped `grok-cli` /
+ * `grok-tui` samples or any process provider whose command basename is `grok`.
+ * The plain Grok API provider is excluded on both counts. Reviewer-model
+ * discovery uses this for custom Grok process providers too.
  */
-export const isGrokBuildCli = (provider) => {
-  if (!isProcessProvider(provider)) return false;
-  const id = String(provider?.id || '').toLowerCase();
-  return id === 'grok-cli' || id === 'grok-tui' || commandBasename(provider?.command) === 'grok';
-};
+export const isGrokBuildCli = (provider) => isProcessProvider(provider) && isGrokProvider(provider);
 
 /**
  * Tailwind chip classes for the provider type badge ('cli' / 'tui' / 'api').
@@ -276,12 +136,3 @@ export const providerTypeClass = (type) => {
   if (type === PROVIDER_TYPES.TUI) return 'bg-emerald-500/20 text-emerald-400';
   return 'bg-purple-500/20 text-purple-400';
 };
-
-// ---------------------------------------------------------------------------
-// AI Assignments option helpers — shared by the global AI Assignments table
-// (settings/AiAssignmentsTab.jsx) and per-record override drawers (e.g. the
-// Creative Director Models drawer). All three consume the `getAiAssignments`
-// payload shape (`{ providers, assignments }`), where an assignment `entry` may
-// carry `providerTypes` (which provider kinds are eligible) and optional
-// pre-baked `providerOptions` / `modelOptions` overrides for runtime call sites.
-// ---------------------------------------------------------------------------
