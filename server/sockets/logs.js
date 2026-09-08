@@ -102,39 +102,38 @@ export const registerLogHandlers = (socket, _io) => {
       );
 
       activeStreams.set(key, { process: logProcess, processName });
-      let buffer = '';
 
-      logProcess.stdout.on('data', (data) => {
-        buffer += data.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        lines.forEach(line => {
-          if (line.trim()) {
-            socket.emit('logs:line', {
-              line,
-              type: 'stdout',
-              timestamp: Date.now(),
-              processName
-            });
+      // One reader per stream. stdout and stderr are independent EventEmitters
+      // on the same child, so a single shared tail buffer lets a chunk from one
+      // stream be spliced onto the other's partial line and emitted under the
+      // wrong `type` — unrecoverably, since the original two lines can no
+      // longer be separated. A closure per stream removes the shared state.
+      const makeLineReader = (type) => {
+        let buffer = '';
+        const send = (line) => {
+          if (!line.trim()) return;
+          socket.emit('logs:line', { line, type, timestamp: Date.now(), processName });
+        };
+        return {
+          push(chunk) {
+            buffer += chunk.toString();
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            lines.forEach(send);
+          },
+          flush() {
+            const remainder = buffer;
+            buffer = '';
+            send(remainder);
           }
-        });
-      });
+        };
+      };
 
-      logProcess.stderr.on('data', (data) => {
-        buffer += data.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        lines.forEach(line => {
-          if (line.trim()) {
-            socket.emit('logs:line', {
-              line,
-              type: 'stderr',
-              timestamp: Date.now(),
-              processName
-            });
-          }
-        });
-      });
+      const stdoutReader = makeLineReader('stdout');
+      const stderrReader = makeLineReader('stderr');
+
+      logProcess.stdout.on('data', (data) => stdoutReader.push(data));
+      logProcess.stderr.on('data', (data) => stderrReader.push(data));
 
       logProcess.on('error', (err) => {
         socket.emit('logs:error', { error: err.message, processName });
@@ -145,6 +144,10 @@ export const registerLogHandlers = (socket, _io) => {
         // replacement stream has already registered — so it must not delete the
         // live replacement or emit a misleading close frame.
         if (activeStreams.get(key)?.process !== logProcess) return;
+        // A crashing process leaves its last line unterminated; flush both tails
+        // before the close frame so it arrives in order instead of being dropped.
+        stdoutReader.flush();
+        stderrReader.flush();
         socket.emit('logs:close', { code, processName });
         activeStreams.delete(key);
         streamGenerations.delete(key);
