@@ -306,3 +306,27 @@ describe('cosValidation job cadence (#6375)', () => {
     expect(updateCosJobSchema.safeParse({ enabled: false }).success).toBe(true);
   });
 });
+
+describe('cosValidation job shell-only fields cleared on an agent job', () => {
+  // The jobs UI emits `command: null` / `triggerAction: null` for any job saved
+  // as an AI-agent type, so a nullable-hostile schema 400'd every edit with
+  // "expected string, received null" on both keys.
+  it('accepts null command and triggerAction on create and update', () => {
+    const created = createCosJobSchema.parse({ name: 'j', type: 'agent', command: null, triggerAction: null });
+    expect(created.command).toBeNull();
+    expect(created.triggerAction).toBeNull();
+
+    const updated = updateCosJobSchema.parse({ command: null, triggerAction: null });
+    expect(updated.command).toBeNull();
+    expect(updated.triggerAction).toBeNull();
+  });
+
+  it('still drops an empty triggerAction so a PUT preserves the stored action', () => {
+    expect(updateCosJobSchema.parse({ triggerAction: '' }).triggerAction).toBeUndefined();
+  });
+
+  it('still rejects a non-string command', () => {
+    expect(updateCosJobSchema.safeParse({ command: 42 }).success).toBe(false);
+    expect(updateCosJobSchema.safeParse({ triggerAction: 42 }).success).toBe(false);
+  });
+});
