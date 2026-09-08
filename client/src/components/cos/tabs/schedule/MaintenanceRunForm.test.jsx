@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -5,7 +6,7 @@ import { MemoryRouter } from 'react-router';
 import { MAINTENANCE_TASK_ORDER } from '../../../../lib/quotaBurnTasks';
 import MaintenanceRunForm from './MaintenanceRunForm';
 
-const api = vi.hoisted(() => ({ getQuotaBurn: vi.fn(), saveQuotaBurn: vi.fn(), runQuotaBurn: vi.fn() }));
+const api = vi.hoisted(() => ({ getQuotaBurn: vi.fn(), saveQuotaBurn: vi.fn(), runQuotaBurn: vi.fn(), updateCosTaskInterval: vi.fn(), updateAppTaskTypeOverride: vi.fn() }));
 vi.mock('../../../../services/api', () => api);
 const tasks = Object.fromEntries([...MAINTENANCE_TASK_ORDER, 'claim-issue'].map(taskType => [taskType, {
   enabled: true, perpetual: taskType === 'claim-issue', appOverrides: { example: { enabled: true } },
@@ -25,6 +26,8 @@ const select = async user => {
 };
 beforeEach(() => {
   vi.clearAllMocks();
+  api.updateCosTaskInterval.mockResolvedValue({ success: true });
+  api.updateAppTaskTypeOverride.mockResolvedValue({ success: true });
   api.getQuotaBurn.mockResolvedValue({ config: { families: {} } });
   api.saveQuotaBurn.mockResolvedValue({ config: {} });
   api.runQuotaBurn.mockResolvedValue({ result: { dispatched: true } });
@@ -92,11 +95,64 @@ describe('maintenance launch', () => {
   });
   it('blocks missing task eligibility and a stopped daemon', async () => {
     const user = userEvent.setup();
-    show({ schedule: { tasks: {} }, daemonRunning: false });
+    show({ schedule: { tasks: {} }, daemonRunning: false, onRefresh: vi.fn() });
     await select(user);
     expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
-    expect(screen.getByText(/Enable every maintenance task/)).toBeInTheDocument();
+    expect(screen.getByText(/Run now needs these saved task settings/)).toBeInTheDocument();
     expect(screen.getByText(/start the CoS daemon/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Enable required tasks' })).not.toBeInTheDocument();
     expect(api.saveQuotaBurn).not.toHaveBeenCalled();
   });
+});
+
+// Regression: a valid provider/model selection must have a path out of the
+// disabled launch state, and only persisted prerequisites may unlock launch.
+it('enables only missing prerequisites and waits for refreshed saved settings before launch', async () => {
+  const user = userEvent.setup();
+  const incomplete = { ...tasks,
+    simplify: { ...tasks.simplify, enabled: false, appOverrides: {} },
+    'claim-issue': { ...tasks['claim-issue'], perpetual: false },
+  };
+  let finishRefresh;
+  const refreshed = new Promise(resolve => { finishRefresh = resolve; });
+  function Harness() {
+    const [schedule, setSchedule] = useState({ tasks: incomplete });
+    return <MaintenanceRunForm {...props} schedule={schedule} onRefresh={async () => {
+      await refreshed;
+      setSchedule({ tasks });
+      return { tasks };
+    }} />;
+  }
+  render(<MemoryRouter><Harness /></MemoryRouter>);
+  await select(user);
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(screen.getByRole('link', { name: 'simplify' })).toHaveAttribute('href', '/cos/schedule?task=simplify');
+  expect(screen.getByText(/disabled globally; disabled for this app/)).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Enable required tasks' }));
+  await waitFor(() => expect(api.updateCosTaskInterval).toHaveBeenCalledTimes(2));
+  expect(api.updateCosTaskInterval).toHaveBeenCalledWith('simplify', { enabled: true }, { silent: true });
+  expect(api.updateCosTaskInterval).toHaveBeenCalledWith('claim-issue', { perpetual: true }, { silent: true });
+  expect(api.updateAppTaskTypeOverride).toHaveBeenCalledExactlyOnceWith('example', 'simplify', { enabled: true }, { silent: true });
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(screen.getByRole('combobox', { name: 'App' })).toBeDisabled();
+  expect(api.runQuotaBurn).not.toHaveBeenCalled();
+  finishRefresh();
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name: 'Run now' }));
+  expect(await screen.findByText(/Maintenance started/)).toBeInTheDocument();
+});
+
+it('refreshes partial setup after failure without saving a plan or starting work', async () => {
+  const user = userEvent.setup();
+  const onRefresh = vi.fn().mockRejectedValue(new Error('refresh unavailable'));
+  api.updateAppTaskTypeOverride.mockRejectedValueOnce(new Error('save unavailable'));
+  show({ schedule: { tasks: { ...tasks, simplify: { ...tasks.simplify, enabled: false, appOverrides: {} } } }, onRefresh });
+  await select(user);
+  await user.click(screen.getByRole('button', { name: 'Enable required tasks' }));
+  expect(await screen.findByText(/Setup incomplete: save unavailable/)).toBeInTheDocument();
+  expect(onRefresh).toHaveBeenCalledOnce();
+  expect(screen.getByText(/Refreshing the schedule also failed/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+  expect(api.runQuotaBurn).not.toHaveBeenCalled();
 });

@@ -182,3 +182,17 @@ describe('Schedule labels', () => {
     expect(await screen.findByRole('option', { name: 'backend (1)' })).toBeTruthy();
   });
 });
+
+it('keeps maintenance selections and the last saved schedule after a refresh failure', async () => {
+  const user = userEvent.setup();
+  api.getCodeReviewDefaults.mockResolvedValue({});
+  api.getCosSchedule.mockReset().mockResolvedValueOnce({ tasks: {} }).mockRejectedValueOnce(new Error('offline'));
+  render(<MemoryRouter><ScheduleTab apps={[{ id: 'example', name: 'Example App' }]} providers={[]} providersLoaded /></MemoryRouter>);
+  await user.click(await screen.findByText('Run maintenance now'));
+  await user.selectOptions(screen.getByLabelText('App'), 'example');
+  await user.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(api.getCosSchedule).toHaveBeenCalledTimes(2));
+  expect(screen.getByLabelText('App')).toHaveValue('example');
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(screen.queryByText('Failed to load task schedule')).not.toBeInTheDocument();
+});

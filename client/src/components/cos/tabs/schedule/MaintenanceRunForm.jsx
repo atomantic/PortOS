@@ -3,24 +3,58 @@ import { uuidv4 } from '../../../../lib/uuid';
 import { Link } from 'react-router';
 import ProviderModelSelector from '../../../ProviderModelSelector';
 import * as api from '../../../../services/api';
-import { buildQuotaBurnTaskCatalog, maintenanceSequence } from '../../../../lib/quotaBurnTasks';
+import { buildQuotaBurnTaskCatalog, maintenancePrerequisites, maintenanceSequence, taskSourceHref } from '../../../../lib/quotaBurnTasks';
 import { effortAwareModelOptions, isProcessProvider } from '../../../../utils/providers';
 import { familyForProvider } from '../../../../../../server/lib/providerFamilies';
 
-export default function MaintenanceRunForm({ schedule, apps = [], providers = [], providersLoaded, improvementDisabled, daemonRunning }) {
+export default function MaintenanceRunForm({ schedule, apps = [], providers = [], providersLoaded, improvementDisabled, daemonRunning, onRefresh }) {
   const [appId, setAppId] = useState('');
   const [providerId, setProviderId] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [preparing, setPreparing] = useState(false);
   const [message, setMessage] = useState('');
   const availableProviders = providers.filter(provider => provider.enabled && isProcessProvider(provider) && familyForProvider(provider));
   const provider = availableProviders.find(entry => entry.id === providerId);
   const familyId = familyForProvider(provider);
   const groups = buildQuotaBurnTaskCatalog({ schedule, apps });
   const jobs = maintenanceSequence(groups, appId, 'preview');
+  const prerequisites = maintenancePrerequisites(groups, appId);
   const blocked = improvementDisabled || daemonRunning === false;
+
+  const prepare = async () => {
+    if (busy || !onRefresh || !prerequisites.length || prerequisites.some(item => item.unavailable)) return;
+    setBusy(true);
+    setPreparing(true);
+    setMessage('Enabling required tasks…');
+    const save = async () => {
+      for (const { taskType, settings, enableApp } of prerequisites) {
+        if (Object.keys(settings).length) {
+          const result = await api.updateCosTaskInterval(taskType, settings, { silent: true });
+          if (!result?.success) throw new Error(`Could not update ${taskType}`);
+        }
+        if (enableApp) {
+          const result = await api.updateAppTaskTypeOverride(appId, taskType, { enabled: true }, { silent: true });
+          if (!result?.success) throw new Error(`Could not enable ${taskType} for this app`);
+        }
+      }
+      return true;
+    };
+    const saved = await save().catch(error => {
+      setMessage(`Setup incomplete: ${error.message}. Saved changes are kept; retry to finish.`);
+      return false;
+    });
+    // Refresh even after a partial save so retries use the persisted settings.
+    const refreshed = await onRefresh().catch(() => false);
+    if (!refreshed) setMessage(current => saved
+      ? 'Could not refresh task settings. Refresh the schedule before running maintenance.'
+      : `${current} Refreshing the schedule also failed.`);
+    else if (saved) setMessage('Required task settings saved.');
+    setPreparing(false);
+    setBusy(false);
+  };
 
   const run = async () => {
     if (busy || blocked || !jobs || !provider || !model || !consent) return;
@@ -89,7 +123,20 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
         loading={!providersLoaded}
         disabled={busy}
       />
-      {appId && !jobs && <p role="status">Enable every maintenance task and claim-issue for this app, and set claim-issue to perpetual, before running the sequence.</p>}
+      {appId && !jobs && <div className="space-y-2">
+        <p role="status">Run now needs these saved task settings:</p>
+        <ul className="list-disc pl-5 space-y-1">
+          {prerequisites.map(item => <li key={item.taskType}>
+            <Link className="underline" to={taskSourceHref(item)}>{item.taskType}</Link>: {item.reason}
+          </li>)}
+        </ul>
+        {onRefresh && !prerequisites.some(item => item.unavailable) && <>
+          <p className="text-xs">Enable the listed tasks globally and for this app, and set claim-issue to perpetual. This also allows their existing schedules to run.</p>
+          <button type="button" onClick={prepare} disabled={busy} className="px-3 py-1.5 bg-port-accent text-white rounded disabled:opacity-50">
+            {preparing ? 'Enabling…' : 'Enable required tasks'}
+          </button>
+        </>}
+      </div>}
       {blocked && <p role="status">Enable Improvement and start the CoS daemon before running maintenance.</p>}
       <p className="text-xs">Runs the first step now, bypassing its reset window, reserve, and dispatch cap; later steps continue in order through Quota Burn, subject to its quota gates. Supports subscription CLI/TUI providers. Blank effort inherits each scheduled task’s saved effort.</p>
       <label className="flex items-start gap-2" htmlFor="maintenance-run-consent">
@@ -98,7 +145,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
       </label>
       <div className="flex items-center gap-3 flex-wrap">
         <button type="button" onClick={run} disabled={busy || blocked || !jobs || !provider || !model || !consent || !providersLoaded} className="px-3 py-1.5 bg-port-accent text-white rounded disabled:opacity-50">
-          {busy ? 'Starting…' : 'Run now'}
+          {busy && !preparing ? 'Starting…' : 'Run now'}
         </button>
         <Link className="underline" to={familyId ? `/devtools/quota-burn/${familyId}` : '/devtools/quota-burn'}>Manage sequence in Quota Burn</Link>
       </div>

@@ -86,8 +86,9 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
 
   const fetchSchedule = useCallback(async () => {
     const data = await api.getCosSchedule().catch(() => null);
-    setSchedule(data);
+    setSchedule(current => data || current);
     setLoading(false);
+    return data;
   }, []);
 
   useEffect(() => {
@@ -192,7 +193,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
         <p className="text-xs mt-1">Resolve findings between audits, then document the resulting code. Quota Burn offers this sequence with perpetual claim-issue drains between steps.</p>
         <details className="mt-2">
           <summary className="cursor-pointer text-sm font-medium">Run maintenance now</summary>
-          <MaintenanceRunForm schedule={{ ...schedule, tasks }} apps={apps} providers={providers} providersLoaded={providersLoaded} improvementDisabled={improvementDisabled} daemonRunning={daemonRunning} />
+          <MaintenanceRunForm schedule={{ ...schedule, tasks }} apps={apps} providers={providers} providersLoaded={providersLoaded} improvementDisabled={improvementDisabled} daemonRunning={daemonRunning} onRefresh={fetchSchedule} />
         </details>
       </Banner>
 

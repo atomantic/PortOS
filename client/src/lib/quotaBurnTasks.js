@@ -259,14 +259,34 @@ export const MAINTENANCE_TASK_ORDER = Object.freeze([
 ]);
 export const MAINTENANCE_ORDER_GUIDANCE = 'better-structural-drift → simplify → module-hygiene → better-complexity → performance + better-cognitive-load → documentation';
 
+/** Saved settings required by the maintenance ladder, including actionable patches. */
+export function maintenancePrerequisites(groups, appId) {
+  if (!appId) return [];
+  const entries = flattenTaskCatalog(groups);
+  return [...MAINTENANCE_TASK_ORDER, 'claim-issue'].flatMap(taskType => {
+    const entry = entries.find(candidate => candidate.taskType === taskType);
+    if (!entry) return [{ taskType, reason: 'unavailable in Scheduled Tasks', unavailable: true }];
+    const settings = {
+      ...(!entry.enabled ? { enabled: true } : {}),
+      ...(taskType === 'claim-issue' && entry.config.perpetual !== true ? { perpetual: true } : {}),
+    };
+    const enableApp = !entry.appIds.includes(appId);
+    const reasons = [
+      !entry.enabled && 'disabled globally',
+      enableApp && 'disabled for this app',
+      settings.perpetual && 'must use perpetual mode',
+    ].filter(Boolean);
+    return reasons.length ? [{ taskType, reason: reasons.join('; '), settings, enableApp }] : [];
+  });
+}
+
 /** Populate references only; preserve the source tasks and their configured filters. */
 export function maintenanceSequence(groups, appId, idPrefix) {
   const entries = flattenTaskCatalog(groups);
   const types = MAINTENANCE_TASK_ORDER.flatMap((type, index) =>
     index ? ['claim-issue', type] : [type]);
   const picked = types.map(type => entries.find(entry => entry.taskType === type));
-  if (!appId || picked.some(entry => !entry || entry.blockedReason || !entry.appIds.includes(appId))) return null;
-  if (picked.find(entry => entry.taskType === 'claim-issue').config.perpetual !== true) return null;
+  if (!appId || maintenancePrerequisites(groups, appId).length) return null;
   return picked.map((entry, index) => ({
     ...stepFromTaskEntry(entry, { id: `${idPrefix}-${index}`, appId }),
     runOnce: true,
