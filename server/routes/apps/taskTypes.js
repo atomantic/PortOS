@@ -23,8 +23,8 @@ import { PORTOS_APP_ID } from '../../services/apps.js';
 import { sanitizeTaskMetadata, ISSUE_AUTHOR_FILTERS } from '../../lib/validation.js';
 import { listWorkItems } from '../../services/workItems.js';
 import { resolveClaimWorkMetadata, resolveClaimAuthorFilter, resolveAppClaimReviewers } from '../../services/cosTaskGenerator.js';
-import { parseCronToNextRun } from '../../services/eventScheduler.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../../services/taskScheduleConstants.js';
+import { findCronExpressionError } from '../../lib/cronValidation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from '../../services/taskScheduleRegistry.js';
 import { summarizeOutcomeStats, computePostApprovalCompletion, computeProposalOutcomeMetrics, computeApprovalFunnel } from '../../services/layeredIntelligence.js';
@@ -298,9 +298,14 @@ router.put('/:id/task-types/:taskType', asyncHandler(async (req, res) => {
     }
     if (typeof interval === 'string') {
       if (isCronExpression(interval)) {
-        // Validate syntax and field ranges (parseCronToNextRun throws on invalid expressions)
-        // Note: null return means no match within search window (e.g. leap day) -- not invalid
-        parseCronToNextRun(interval.trim(), new Date(), 'UTC');
+        // Syntax + field ranges only. The walker returns null (never throws) for
+        // an out-of-range field, so the old `parseCronToNextRun` call could not
+        // reject one; and a null result also means 'no occurrence in the bounded
+        // search window' (a leap-day cron), which is still valid syntax (#6634).
+        const cronError = findCronExpressionError(interval);
+        if (cronError) {
+          throw new ServerError(`interval is invalid: ${cronError}`, { status: 400, code: 'VALIDATION_ERROR' });
+        }
         interval = interval.trim();
       } else {
         // An unrecognized string is rejected rather than decoded — silently

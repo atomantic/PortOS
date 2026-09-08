@@ -30,6 +30,9 @@ export * as catalogValidation from './catalogValidation.js';
 export * as characterAugmentValidation from './characterAugmentValidation.js';
 export * as characterEvolutionValidation from './characterEvolutionValidation.js';
 export * as cosValidation from './cosValidation.js';
+// Flat: validation.js re-exports these same bindings, and the barrel's collision
+// check treats an identical identity as a re-export rather than a clash.
+export * from './cronValidation.js';
 export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
 export * as creativeDirectorValidation from './creativeDirectorValidation.js';

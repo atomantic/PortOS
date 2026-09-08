@@ -669,6 +669,25 @@ describe('validation.js', () => {
       expect(result.success).toBe(true);
     });
 
+    it('rejects a cron-shaped taskTypeOverrides interval that is out of range', () => {
+      // #6634: this generic entry point accepted any string, so an out-of-range
+      // cron could be persisted here even after the dedicated per-app route
+      // learned to reject it. A non-cron-shaped cadence name and a null clear
+      // still pass through untouched.
+      for (const interval of ['99 9 * * *', '0 25 * * *']) {
+        const result = appUpdateSchema.safeParse({
+          taskTypeOverrides: { 'layered-intelligence': { interval } }
+        });
+        expect(result.success, interval).toBe(false);
+      }
+      for (const interval of ['0 7 * * *', '0 0 29 2 *', '6h', 'on-demand', null]) {
+        const result = appUpdateSchema.safeParse({
+          taskTypeOverrides: { 'layered-intelligence': { interval } }
+        });
+        expect(result.success, String(interval)).toBe(true);
+      }
+    });
+
     it('accepts partial managed-app feature overrides', () => {
       expect(appUpdateSchema.safeParse({ featureOverrides: { jira: false } }).success).toBe(true);
       expect(appUpdateSchema.safeParse({ featureOverrides: { gsd: null } }).success).toBe(true);

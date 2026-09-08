@@ -1,6 +1,7 @@
 /** Dependency-free task scheduling constants shared by registry and runtime modules. */
 
 import { QUOTA_BURN_REQUEST_ORIGIN } from '../lib/quotaBurnOrigin.js';
+import { isCronShaped } from '../lib/cronValidation.js';
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -67,10 +68,12 @@ export const isUserOriginRequest = (request) =>
 const RECONCILE_DRAIN_TASK_TYPES = new Set(['branch-reconcile', 'issue-reconcile']);
 export const isReconcileDrainTaskType = (taskType) => RECONCILE_DRAIN_TASK_TYPES.has(taskType);
 
-/** A 5-field cron expression (the only string cadence the scheduler accepts). */
-export function isCronExpression(value) {
-  return typeof value === 'string' && value.trim().split(/\s+/).length === 5;
-}
+/**
+ * A 5-field cron expression (the only string cadence the scheduler accepts).
+ * SHAPE only — it distinguishes a cron from a named cadence and says nothing
+ * about validity; `isValidCronExpression` is what save boundaries gate on.
+ */
+export const isCronExpression = isCronShaped;
 
 /**
  * Approximate a numeric interval as a 5-field cron expression. Used by the

@@ -23,6 +23,7 @@ import {
   isFederatedMediaAudioPrompt,
 } from './federatedMediaWire.js';
 import { isPlainObject } from './objects.js';
+import { isValidCronExpression, isCronShaped } from './cronValidation.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from './userActionTypes.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -260,7 +261,14 @@ export const appSchema = z.object({
   disabledTaskTypes: z.array(z.string()).optional(), // Legacy: migrated to taskTypeOverrides
   taskTypeOverrides: z.record(z.object({
     enabled: z.boolean().optional(),
-    interval: z.string().nullable().optional(),
+    // A cron-SHAPED override must also be in range, or this generic PUT would
+    // persist an enabled schedule the walker can never match (#6634). A
+    // non-cron-shaped string is a named/legacy cadence the route decodes, and
+    // null clears the override back to inherit — both pass through untouched.
+    interval: z.string().refine(
+      (v) => !isCronShaped(v) || isValidCronExpression(v),
+      'interval must be a valid 5-field cron expression'
+    ).nullable().optional(),
     // Per-app scheduling fields for handler-backed tasks (e.g. layered-intelligence);
     // persisted by updateAppTaskTypeOverride. Nullable = "clear back to inherit/default".
     // Declared here so a generic PUT /api/apps/:id can't silently strip them (Zod drops
@@ -892,37 +900,15 @@ export const backupConfigSchema = z.object({
 // empty string. Other autopilot run options are intentionally NOT accepted here:
 // there's no UI producing them, so a scheduled run uses the series' persisted
 // defaults for those (add a field only when a control exists to set it).
-// Structural cron validator, self-contained so validation.js stays a leaf lib
-// (importing the scheduler's isValidCron would pull the eventScheduler graph into
-// every suite that mocks validation's deps). Rejects a 5-token-but-out-of-range
-// cron like `99 99 * * *` at the PUT boundary (a 400 the UI surfaces) instead of
-// letting it be saved+enabled and then silently dropped by activeSchedules —
-// which would leave the user with an "enabled" schedule that never fires (#2174).
-// Deliberately no less permissive than the scheduler's parser (`*`, ranges,
-// lists, steps) so a cron it accepts is never rejected here.
-const CRON_FIELD_BOUNDS = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
-const isCronPartValid = (part, min, max) => {
-  const [range, step] = part.split('/');
-  if (step !== undefined && !(/^\d+$/.test(step) && Number(step) >= 1)) return false;
-  if (range === '*') return true;
-  const [a, b] = range.split('-');
-  if (!/^\d+$/.test(a)) return false;
-  const av = Number(a);
-  if (av < min || av > max) return false;
-  if (b !== undefined) {
-    if (!/^\d+$/.test(b)) return false;
-    const bv = Number(b);
-    if (bv < min || bv > max || bv < av) return false;
-  }
-  return true;
-};
-export const isValidCronExpression = (expr) => {
-  if (typeof expr !== 'string') return false;
-  const fields = expr.trim().split(/\s+/);
-  if (fields.length !== 5) return false;
-  return fields.every((field, i) =>
-    field.split(',').every((part) => isCronPartValid(part, CRON_FIELD_BOUNDS[i][0], CRON_FIELD_BOUNDS[i][1])));
-};
+// Cron syntax/range validation lives in the pure leaf `cronValidation.js` so the
+// scheduler, every save boundary, and the browser cron editor share ONE
+// implementation (#6634). Re-exported here because callers already reach for
+// `isValidCronExpression` through validation.js. Rejects a 5-token-but-out-of-
+// range cron like `99 99 * * *` at the PUT boundary (a 400 the UI surfaces)
+// instead of letting it be saved+enabled and then silently dropped by
+// activeSchedules — which would leave the user with an "enabled" schedule that
+// never fires (#2174).
+export { isValidCronExpression, isCronShaped, findCronExpressionError } from './cronValidation.js';
 
 export const seriesAutopilotScheduleSchema = z.object({
   seriesId: z.string().min(1).max(64),
