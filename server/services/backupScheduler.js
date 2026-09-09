@@ -70,6 +70,8 @@ function attemptRegistration(inputs, timezone, signature) {
   // the Settings UI take effect on the next scheduled run.
   // schedule() cancels the old event before validating its replacement.
   // A throw or missing next run leaves no confirmed state to cache.
+  // This catch owns failures at boot / on the settings event bus, outside
+  // the request lifecycle where errors would otherwise propagate to a caller.
   let event;
   try {
     event = schedule({
