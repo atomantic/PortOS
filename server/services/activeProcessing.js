@@ -8,17 +8,17 @@ import * as cos from './cos.js';
 const LIVE_STATUSES = new Set(['queued', 'running']);
 
 export async function getActiveProcessing() {
-  const [capability, jobs, models, loadedModels, taskData, cosStatus, agents] = await Promise.all([
+  const [capability, jobs, models, loadedModels, taskData, agents] = await Promise.all([
     getCudaCapability(),
     Promise.resolve(listJobs()).then((items) => items.filter((job) => LIVE_STATUSES.has(job.status))),
     listModels().catch(() => []),
     getLoadedModels().catch(() => []),
     cos.getAllTasks().catch(() => ({ user: {}, cos: {} })),
-    cos.getStatus().catch(() => null),
     // `null` = the read FAILED, distinct from `[]` = read fine, no agents. The
     // counts below degrade differently for the two, so they must stay separable.
     cos.getAgents().catch(() => null),
   ]);
+  const cosStatus = agents === null ? await cos.getStatus().catch(() => null) : null;
   const utilization = capability.status === 'available' ? await getCudaUtilization() : { status: capability.status, gpus: [] };
   // A task stays 'pending' until spawnAgentForTask flips it to 'in_progress',
   // which happens AFTER its agent is registered as running — so a snapshot taken

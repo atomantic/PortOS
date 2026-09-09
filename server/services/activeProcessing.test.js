@@ -37,6 +37,7 @@ describe('active processing snapshot', () => {
     expect(snapshot.extras.imageTo3d).toEqual([{ id: 'mesh-1', name: 'Fake mesh' }]);
     expect(snapshot.extras.ollama).toEqual([{ id: 'model-1', name: 'Fake model' }]);
     expect(snapshot.agents).toEqual({ active: 2, queued: 1 });
+    expect(deps.status).not.toHaveBeenCalled();
   });
 
   it('preserves an absent GPU as a real negative state without probing utilization', async () => {
@@ -95,14 +96,25 @@ describe('queued agent count', () => {
     deps.agents.mockRejectedValue(new Error('state unreadable'));
     const snapshot = await getActiveProcessing();
     expect(snapshot.agents).toEqual({ active: 3, queued: 1 });
+    expect(deps.status).toHaveBeenCalledTimes(1);
   });
 
   // ...and a successful read of an EMPTY list still means zero, not the fallback.
-  it('reports zero active from a successfully empty agent list', async () => {
-    deps.status.mockResolvedValue({ activeAgents: 7 });
+  it('reports zero active from an empty agent list without waiting for status', async () => {
+    deps.status.mockImplementation(() => new Promise(() => {}));
     deps.tasks.mockResolvedValue({ user: { tasks: [{ id: 'task-1', status: 'pending' }] }, cos: { tasks: [] } });
     deps.agents.mockResolvedValue([]);
     const snapshot = await getActiveProcessing();
     expect(snapshot.agents).toEqual({ active: 0, queued: 1 });
+    expect(deps.status).not.toHaveBeenCalled();
+  });
+
+  it('preserves pending tasks when both agent and fallback status reads fail', async () => {
+    deps.tasks.mockResolvedValue({ user: { tasks: [{ id: 'task-1', status: 'pending' }] }, cos: { tasks: [] } });
+    deps.agents.mockRejectedValue(new Error('state unreadable'));
+    deps.status.mockRejectedValue(new Error('status unavailable'));
+    const snapshot = await getActiveProcessing();
+    expect(snapshot.agents).toEqual({ active: 0, queued: 1 });
+    expect(deps.status).toHaveBeenCalledTimes(1);
   });
 });
