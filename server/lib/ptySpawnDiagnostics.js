@@ -31,6 +31,7 @@
  */
 
 import { existsSync } from 'fs';
+import { withSpawnCwdEnv } from './spawnCwd.js';
 
 /**
  * Message prefix marking a broken PTY runtime. `agentTuiSpawning.js` matches it
@@ -77,7 +78,12 @@ export function probePtyRuntime(pty, probeCwd) {
       cols: 80,
       rows: 24,
       cwd: probeCwd,
-      env: process.env,
+      // The probe's child is a bare `echo`, which never reads PWD — but the
+      // tree-wide guard in spawnCwd.test.js rightly refuses to special-case that
+      // judgment, since it is the kind of thing that stops being true when
+      // someone swaps the probe command. Pin it like every other cwd-passing
+      // spawn rather than claiming an exemption (#3193).
+      env: withSpawnCwdEnv(process.env, probeCwd),
     });
     try {
       probe.kill();
