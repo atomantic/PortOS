@@ -230,7 +230,13 @@ const INPUT_LOADERS = {
         }, forge.env)
       : await deps.listIssues({ cli: forge.cli, cwd: app.repoPath, env: forge.env });
     return result.ok
-      ? renderForgeItems(result.issues, { emptyMessage: configured ? 'No open issues match this task’s configured filters.' : 'No open issues.' })
+      ? renderForgeItems(
+          // Human-gated work is never a scheduled agent input. Keep the raw
+          // listing intact for callers that need it for duplicate detection.
+          result.issues.filter((issue) => !normalizeLabels(issue.labels)
+            .some((label) => label.trim().toLowerCase() === 'help wanted')),
+          { emptyMessage: 'No open issues match this task’s configured filters (help wanted is excluded).' }
+        )
         + (result.truncated ? TRUNCATION_NOTICE : '')
       : unavailableMessage('Open issues');
   },

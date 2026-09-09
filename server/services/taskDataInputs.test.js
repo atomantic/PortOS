@@ -65,7 +65,7 @@ describe('taskDataInputs', () => {
 
     common.dependencies.listIssues.mockResolvedValue({ ok: true, issues: [] });
     const empty = await resolveTaskDataInputs(['open-issues'], common);
-    expect(empty[0].content).toBe('No open issues.');
+    expect(empty[0].content).toContain('No open issues match');
   });
 
   it('uses task policy for issue context and fails closed when policy resolution fails', async () => {
@@ -88,6 +88,32 @@ describe('taskDataInputs', () => {
     await resolveTaskDataInputs(['open-issues'], options);
     expect(listConfiguredIssues).toHaveBeenLastCalledWith('gh', APP, { issueAuthorFilter: 'self', issueExcludeLabels: [] }, expect.any(Object));
     expect(listIssues).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('omits human-gated issues from scheduled context (configured: %s)', async (configured) => {
+    const issues = [
+      { number: 1, title: 'Human hardware validation', labels: [' Help Wanted '] },
+      { number: 2, title: 'Human perspectives', labels: [{ name: 'help wanted' }] },
+      { number: 3, title: 'Automatable work', labels: ['bug'] },
+    ];
+    const list = vi.fn().mockResolvedValue({ ok: true, issues });
+    const options = {
+      app: APP,
+      taskMetadata: configured ? { issueExcludeLabels: ['human-only'] } : {},
+      dependencies: {
+        resolveTracker: vi.fn().mockResolvedValue({ forge: 'gh', host: 'github.com' }),
+        resolveTokenEnv: vi.fn().mockResolvedValue({}),
+        listIssues: list, listConfiguredIssues: list,
+      },
+    };
+    const [section] = await resolveTaskDataInputs(['open-issues'], options);
+    expect(section.content).toContain('#3 Automatable work');
+    expect(section.content).not.toContain('Human hardware');
+    expect(section.content).not.toContain('Human perspectives');
+    expect(issues).toHaveLength(3);
+    list.mockResolvedValue({ ok: true, issues: issues.slice(0, 2) });
+    expect((await resolveTaskDataInputs(['open-issues'], options))[0].content)
+      .toContain('help wanted is excluded');
   });
 
   it('reports a discovered document that could not be read', async () => {
