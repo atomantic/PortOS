@@ -9,7 +9,7 @@ import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
-import { formatBytes } from '../lib/fileUtils.js';
+import { formatBytes, formatDuration } from '../lib/fileUtils.js';
 import { validateRequest, systemHealthWarningParamsSchema, systemHealthWarningDismissSchema } from '../lib/validation.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import { checkGhHealth } from '../services/github.js';
@@ -303,19 +303,8 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     queuedTasks: cosStatus.queueLength || 0
   } : null;
 
-  // Format uptime for display
   const uptime = process.uptime();
-  const days = Math.floor(uptime / 86400);
-  const hours = Math.floor((uptime % 86400) / 3600);
-  const minutes = Math.floor((uptime % 3600) / 60);
-  let uptimeFormatted;
-  if (days > 0) {
-    uptimeFormatted = `${days}d ${hours}h`;
-  } else if (hours > 0) {
-    uptimeFormatted = `${hours}h ${minutes}m`;
-  } else {
-    uptimeFormatted = `${minutes}m`;
-  }
+  const uptimeFormatted = formatDuration(uptime * 1000);
 
   const responseTime = Date.now() - startTime;
 
