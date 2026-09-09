@@ -11,7 +11,7 @@ import { getProfileForSynthesis, profileArtifactDirectory } from './profiles.js'
 import { whichFirst } from '../../lib/processEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
-import { VALID_ENGINES } from '../../lib/voiceEngines.js';
+import { TTS_ENGINE_IDS, TTS_ENGINE_REGISTRY, VALID_ENGINES } from '../../lib/voiceEngines.js';
 export { VALID_ENGINES } from '../../lib/voiceEngines.js';
 
 // Qwen3 preset ids shipped with the shorter prefix before the engine registry
@@ -35,38 +35,12 @@ export const listVoiceEngines = async () => {
   const unavailableControls = transforms.rubberband
     ? 'Rubber Band is installed, but PortOS has no approved formant-preserving adapter yet. Pitch and formant controls remain disabled until that adapter is enabled.'
     : 'Install Rubber Band to enable a future formant-preserving transform. Pitch and formant controls remain disabled rather than approximated by sample-rate changes.';
-  return [
-    {
-      id: 'kokoro',
-      capabilities: {
-        preset: true, voiceDesign: false, instantClone: false, fineTune: false,
-        streaming: false, instructionControl: false, emotionControl: false,
-        seed: false, wordTimings: false, rate: true, pitch: false, formant: false,
-      },
-      unavailableControls,
-      transformProbe: transforms,
-    },
-    {
-      id: 'piper',
-      capabilities: {
-        preset: true, voiceDesign: false, instantClone: false, fineTune: false,
-        streaming: false, instructionControl: false, emotionControl: false,
-        seed: false, wordTimings: false, rate: true, pitch: false, formant: false,
-      },
-      unavailableControls,
-      transformProbe: transforms,
-    },
-    {
-      id: 'qwen3-tts',
-      capabilities: {
-        preset: true, voiceDesign: true, instantClone: true, fineTune: true,
-        streaming: true, instructionControl: true, emotionControl: true,
-        seed: true, wordTimings: true, rate: true, pitch: false, formant: false,
-      },
-      unavailableControls,
-      transformProbe: transforms,
-    },
-  ];
+  return TTS_ENGINE_IDS.map((id) => ({
+    id,
+    ...TTS_ENGINE_REGISTRY[id],
+    unavailableControls,
+    transformProbe: transforms,
+  }));
 };
 
 // Normalize `engine` against the allowlist so an invalid value can't silently

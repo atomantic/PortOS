@@ -323,6 +323,22 @@ describe('Voice Routes', () => {
       expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
     });
 
+    it('accepts Qwen3-TTS engine and voice configuration', async () => {
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const patch = {
+        tts: {
+          engine: 'qwen3-tts',
+          qwen3: { modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', voice: 'warm-narrator' },
+        },
+      };
+
+      const res = await request(buildApp()).put('/api/voice/config').send(patch);
+
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
+    });
+
     it('accepts a facetime.autoAnswer patch', async () => {
       config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
       bootstrap.reconcile.mockResolvedValue({ skipped: true });

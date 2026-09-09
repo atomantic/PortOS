@@ -11,12 +11,13 @@ vi.mock('./piper-voices.js', () => ({ findPiperVoice: vi.fn() }));
 vi.mock('./kokoro-voices.js', () => ({ isKokoroVoice: vi.fn(() => true) }));
 vi.mock('./profiles.js', () => ({ getProfileForSynthesis: vi.fn() }));
 vi.mock('./bootstrap.js', () => ({ which: vi.fn() }));
+vi.mock('../../lib/processEnv.js', () => ({ whichFirst: vi.fn().mockResolvedValue(null) }));
 
 import { getVoiceConfig } from './config.js';
 import { synthesizeKokoro } from './tts-kokoro.js';
 import { synthesizeQwen3 } from './tts-qwen3.js';
 import { getProfileForSynthesis } from './profiles.js';
-import { normalizeVoiceEngine, synthesize } from './tts.js';
+import { listVoiceEngines, normalizeVoiceEngine, synthesize } from './tts.js';
 
 const CONFIG = {
   tts: {
@@ -33,6 +34,16 @@ describe('voice engine normalization', () => {
     expect(normalizeVoiceEngine('piper')).toBe('piper');
     expect(normalizeVoiceEngine('qwen3-tts')).toBe('qwen3-tts');
     expect(normalizeVoiceEngine('qwen3')).toBe('qwen3-tts');
+  });
+
+  it('publishes registry display and configuration metadata for every engine', async () => {
+    const engines = await listVoiceEngines();
+
+    expect(engines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'kokoro', configKey: 'kokoro', label: 'Kokoro' }),
+      expect.objectContaining({ id: 'piper', configKey: 'piper', label: 'Piper' }),
+      expect.objectContaining({ id: 'qwen3-tts', configKey: 'qwen3', label: 'Qwen3-TTS' }),
+    ]));
   });
 });
 

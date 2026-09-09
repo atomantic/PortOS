@@ -4,7 +4,7 @@ import { Save, Mic, Play, Zap, RefreshCw, Globe } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import {
-  getVoiceStatus, getVoiceConfig, updateVoiceConfig, listVoices, testTts, fetchPiperVoice, getFaceTimeStatus, controlFaceTime,
+  getVoiceStatus, getVoiceConfig, updateVoiceConfig, listVoices, listVoiceEngines, testTts, fetchPiperVoice, getFaceTimeStatus, controlFaceTime,
 } from '../../services/apiVoice';
 import { getProviders, refreshProviderModels } from '../../services/apiProviders';
 import { playWav, webSpeechSupported } from '../../services/voiceClient';
@@ -25,11 +25,6 @@ const SERVICE_LABELS = {
 const STT_ENGINES = [
   { value: 'whisper', label: 'Whisper (local, accurate, works offline)' },
   { value: 'web-speech', label: 'Web Speech API (browser-native, zero latency)' },
-];
-
-const TTS_ENGINES = [
-  { value: 'kokoro', label: 'Kokoro (in-process, high quality)' },
-  { value: 'piper', label: 'Piper (CLI binary, lightweight)' },
 ];
 
 const KOKORO_DTYPES = [
@@ -81,6 +76,8 @@ export function VoiceTab() {
   const [cfg, setCfg] = useState(null);
   const [status, setStatus] = useState(null);
   const [voiceList, setVoiceList] = useState({ engine: null, voices: [] });
+  const [ttsEngines, setTtsEngines] = useState([]);
+  const [ttsEngineError, setTtsEngineError] = useState(null);
   const [testing, setTesting] = useState(false);
   const [previewingVoice, setPreviewingVoice] = useState(null);
   const [downloadingVoice, setDownloadingVoice] = useState(null);
@@ -102,6 +99,15 @@ export function VoiceTab() {
   };
 
   const currentEngine = cfg?.tts?.engine;
+
+  useEffect(() => {
+    if (!currentEngine || ttsEngines.length === 0) return;
+    const registered = ttsEngines.find((item) => (
+      item.id === currentEngine || item.aliases?.includes(currentEngine)
+    ));
+    if (!registered || registered.id === currentEngine) return;
+    setCfg((current) => ({ ...current, tts: { ...current.tts, engine: registered.id } }));
+  }, [currentEngine, ttsEngines]);
 
   const refreshStatus = useCallback(() => {
     return Promise.all([
@@ -129,6 +135,16 @@ export function VoiceTab() {
         setCodeProviders(all.filter((p) => p.type === 'cli' || p.type === 'tui'));
       })
       .catch(() => { setApiProviders([]); setCodeProviders([]); });
+    listVoiceEngines({ silent: true })
+      .then((data) => {
+        const engines = Array.isArray(data?.engines) ? data.engines : [];
+        setTtsEngines(engines);
+        setTtsEngineError(engines.length > 0 ? null : 'No TTS engines were returned by this server.');
+      })
+      .catch(() => {
+        setTtsEngines([]);
+        setTtsEngineError('Could not load the TTS engine registry. The saved engine remains selected.');
+      });
   }, []);
 
   // Refetch the voice catalog whenever the user flips TTS engine so the picker
@@ -266,10 +282,18 @@ export function VoiceTab() {
   const facetime = cfg.facetime || {};
   const faceTimeDirty = !facetime.targetHandle?.trim() || !facetime.targetName?.trim();
 
-  const engine = cfg.tts.engine || 'kokoro';
+  const configuredEngine = cfg.tts.engine || 'kokoro';
   const sttEngine = cfg.stt.engine || 'whisper';
-  const activeVoice = engine === 'kokoro' ? cfg.tts.kokoro?.voice : cfg.tts.piper?.voice;
+  const engineMeta = ttsEngines.find((item) => (
+    item.id === configuredEngine || item.aliases?.includes(configuredEngine)
+  ));
+  const engine = engineMeta?.id || configuredEngine;
   const voices = voiceList.voices || [];
+  const engineConfigKey = typeof engineMeta?.configKey === 'string' ? engineMeta.configKey : null;
+  const fallbackConfigKey = [configuredEngine, configuredEngine.replace(/-tts$/, '')]
+    .find((key) => cfg.tts[key] && typeof cfg.tts[key] === 'object');
+  const activeVoice = cfg.tts[engineConfigKey || fallbackConfigKey]?.voice;
+  const selectedEngineMetadataMissing = Boolean(engineMeta && !engineConfigKey);
 
   // LLM provider/model pickers. The saved provider/model are always shown even
   // when missing from the registry (e.g. provider deleted, or a model not in
@@ -308,7 +332,7 @@ export function VoiceTab() {
         <h2 className="text-lg font-semibold">Local Voice Chief-of-Staff</h2>
       </div>
       <p className="text-xs text-gray-500 -mt-4">
-        Hands-free or push-to-talk voice. Whisper (STT) + Kokoro/Piper (TTS) + your chosen LLM
+        Hands-free or push-to-talk voice. Whisper (STT) + local TTS + your chosen LLM
         provider with tool calling for real actions (brain capture, goal updates, PM2 control, feed
         digests, time, and more). Pick a local provider (LM Studio, Ollama) to keep everything on
         this machine, or any OpenAI-compatible API.
@@ -435,32 +459,40 @@ export function VoiceTab() {
           />
         </FormField>
 
-        <FormField label="TTS engine" hint="Kokoro is higher quality and runs in-process. Piper is a small CLI binary.">
+        <FormField label="TTS engine" hint={ttsEngineError
+          || (selectedEngineMetadataMissing
+            ? 'This server returned legacy engine metadata. Voice selection stays read-only until the server is updated.'
+            : engineMeta?.description || 'Choose a locally available speech engine.')}>
           <select
             value={engine}
             onChange={(e) => patch('tts.engine', e.target.value)}
             className={inputCls}
           >
-            {TTS_ENGINES.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            {!ttsEngines.some((item) => item.id === engine) && (
+              <option value={engine}>{engine} (current)</option>
+            )}
+            {ttsEngines.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label || opt.id}{opt.description ? ` (${opt.description})` : ''}
+              </option>
             ))}
           </select>
         </FormField>
 
-        <FormField label={`${engine === 'kokoro' ? 'Kokoro' : 'Piper'} voice`} hint={
-          engine === 'kokoro'
-            ? 'Grade letter = Kokoro author\'s quality rating. ❤️ 🔥 🎧 mark the best-sounding voices. Click ▶ to preview without saving.'
-            : 'Curated Piper catalog — selecting a ⬇ voice fetches it immediately so you can preview. Click ▶ to audition.'
-        }>
+        <FormField label={`${engineMeta?.label || engine} voice`} hint={engineConfigKey
+          ? engineMeta?.voiceHint
+          : 'Voice selection is read-only until engine configuration metadata is available.'}>
           <div className="flex items-center gap-2">
             <select
               value={activeVoice || ''}
               aria-label="Voice"
+              disabled={!engineConfigKey}
               onChange={(e) => {
                 const val = e.target.value;
-                if (engine === 'kokoro') { patch('tts.kokoro.voice', val); return; }
+                if (!engineConfigKey) return;
+                patch(`tts.${engineConfigKey}.voice`, val);
+                if (engine !== 'piper') return;
                 const v = voices.find((x) => x.name === val);
-                patch('tts.piper.voice', val);
                 if (v?.path) patch('tts.piper.voicePath', v.path);
                 patch('tts.piper.speakerId', null);
                 // Fetch voice on select so ▶ preview works without a save.
