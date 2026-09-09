@@ -23,6 +23,13 @@ import { useCallback, useState, useEffect } from 'react';
 import { Sparkles, Star } from 'lucide-react';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 
+const THUMB_DIMENSIONS = {
+  sm: 'w-12 h-20',
+  lg: 'w-16 h-24',
+  xl: 'w-40 h-60',
+  sheet: 'w-20 h-30 xl:w-40 xl:h-60',
+};
+
 export default function EntryThumbSlot({
   inFlightJobId = null,
   imageRefs = null,
@@ -49,6 +56,7 @@ export default function EntryThumbSlot({
   // `'lg'` renders the empty-state box at 64x96 with a bigger Sparkles
   // affordance (reserved for slots that ride a wider card). `'xl'` is the
   // 160x240 hero footprint used by the base-style probe on the universe page.
+  // 'sheet' keeps a compact portrait on phones and the hero size on desktop.
   // Defaults to the compact 48x80 (w-12 h-20) portrait footprint shared with
   // variation + canon avatar rows — matched to the 2:3 aspect of typical
   // 1024x1536 universe renders so the slot doesn't crop the subject.
@@ -112,7 +120,7 @@ export default function EntryThumbSlot({
   // (48x80 / 64x96 / 160x240) matches the 2:3 aspect of typical universe
   // renders so the row reserves the same vertical space as WalkBackThumb's
   // completed image, eliminating row jitter across the three states.
-  const dim = size === 'xl' ? 'w-40 h-60' : size === 'lg' ? 'w-16 h-24' : 'w-12 h-20';
+  const dim = THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm;
   const iconSize = size === 'xl' ? 32 : size === 'lg' ? 18 : 14;
   return (
     <button
@@ -146,7 +154,7 @@ function WalkBackThumb({ filename, alt, onClick, isPrimary = false, fallbackRefs
   const candidateKey = candidates.join('|');
   const [idx, setIdx] = useState(0);
   useEffect(() => { setIdx(0); }, [candidateKey]);
-  const dim = size === 'xl' ? 'w-40 h-60' : size === 'lg' ? 'w-16 h-24' : 'w-12 h-20';
+  const dim = THUMB_DIMENSIONS[size] || THUMB_DIMENSIONS.sm;
   if (!candidates.length || idx >= candidates.length) {
     // All candidates failed to load — collapse to empty (no render button
     // here; the user can re-render from the action column).

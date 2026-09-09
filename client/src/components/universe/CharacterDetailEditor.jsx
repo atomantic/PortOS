@@ -10,7 +10,7 @@
  * only knows the field shape.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import {
   Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity, Users, Swords,
@@ -50,7 +50,8 @@ import {
   startFineTuningJob,
 } from '../../services/apiVoice';
 import VoicePicker from '../voice/VoicePicker';
-import CollapsibleSection from '../ui/CollapsibleSection';
+import TabPills from '../ui/TabPills';
+import useDrawerTab from '../../hooks/useDrawerTab';
 
 const SECTIONS = Object.freeze([
   {
@@ -245,22 +246,18 @@ function ListRow({ row, idx, columns, swatchHex, onChange, onDelete, disabled })
   );
 }
 
-// Local wrapper over the shared primitive so the three call sites below keep
-// their boxed chrome (bordered card, header/body padding) in one place.
-function BoxedSection({ icon, label, summary, defaultOpen = false, children }) {
+// Sheet cards stay open: navigation groups the form instead of nesting disclosures.
+function BoxedSection({ icon: Icon, label, summary, children }) {
+  const headingId = useId();
   return (
-    <CollapsibleSection
-      size="md"
-      icon={icon}
-      label={label}
-      summary={summary ? `— ${summary}` : ''}
-      defaultOpen={defaultOpen}
-      className="rounded border border-port-border bg-port-bg/50"
-      buttonClassName="px-2 py-1.5"
-      bodyClassName="px-2.5 pb-2.5 pt-1 space-y-2"
-    >
-      {children}
-    </CollapsibleSection>
+    <section aria-labelledby={headingId} className="min-w-0 rounded-lg border border-port-border bg-port-bg/50 overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2 border-b border-port-border bg-port-card px-3 py-2.5">
+        {Icon ? <Icon size={14} className="shrink-0 text-port-accent" /> : null}
+        <h4 id={headingId} className="text-xs font-semibold text-gray-200">{label}</h4>
+        {summary ? <span className="ml-auto text-[10px] text-gray-500">{summary}</span> : null}
+      </div>
+      <div className="p-3 space-y-3">{children}</div>
+    </section>
   );
 }
 
@@ -1379,93 +1376,120 @@ function IdentityPackSection({ entry, onPatch, disabled }) {
   );
 }
 
-export default function CharacterDetailEditor({ entry, universeId = null, onPatch, onExpand, expanding = false, disabled = false, characters = [] }) {
+const SHEET_PAGES = [
+  { id: 'attributes', label: 'Attributes', icon: Activity },
+  { id: 'story', label: 'Story', icon: BookOpen },
+  { id: 'appearance', label: 'Appearance', icon: Eye },
+  { id: 'voice', label: 'Voice', icon: Mic },
+];
+const SHEET_PAGE_IDS = SHEET_PAGES.map((page) => page.id);
+
+export default function CharacterDetailEditor({ entry, universeId = null, onPatch, onExpand, expanding = false, disabled = false, characters = [], portrait = null, children }) {
+  const [activePage, setActivePage] = useDrawerTab(`castSheet-${entry?.id}`, 'attributes', SHEET_PAGE_IDS);
+  // Keep visited pages mounted so pending list rows and local voice drafts survive
+  // navigation. Unvisited production tools do not load until explicitly opened.
+  const [visited, setVisited] = useState({});
+  useEffect(() => {
+    setVisited((previous) => previous[activePage] ? previous : { ...previous, [activePage]: true });
+  }, [activePage]);
   if (!entry) return null;
 
   const patchField = (name, value) => onPatch?.({ [name]: value });
-  const patchList = (field, next) => onPatch?.({ [field]: next });
-
-  const sectionSummary = (section) => {
-    const filled = section.fields.filter((f) => (entry[f.name] || '').trim()).length;
-    return filled ? `${filled}/${section.fields.length} filled` : 'empty';
+  const renderFields = (fields) => fields.map((field) => (
+    <DraftField key={field.name} field={field} value={entry[field.name]}
+      onCommit={(value) => patchField(field.name, value)} disabled={disabled} idPrefix={entry.id} />
+  ));
+  const proseSection = (key) => {
+    const section = SECTIONS.find((item) => item.key === key);
+    const filled = section.fields.filter((field) => (entry[field.name] || '').trim()).length;
+    return <BoxedSection icon={section.icon} label={section.label} summary={`${filled}/${section.fields.length} filled`}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">{renderFields(section.fields)}</div>
+    </BoxedSection>;
   };
+  const listSection = (key) => <ListSectionEditor section={LIST_SECTIONS.find((item) => item.key === key)}
+    entry={entry} onPatchList={patchField} disabled={disabled} />;
 
   return (
-    <div className="mt-2 space-y-1.5">
-      {onExpand ? (
-        <button
-          type="button"
-          onClick={onExpand}
-          disabled={expanding || disabled}
-          className="inline-flex items-center gap-1.5 px-2 py-1 text-[10px] rounded border border-port-accent/40 bg-port-accent/10 text-port-accent hover:bg-port-accent/20 disabled:opacity-40"
-          title={`Fill blank fields on ${entry.name} via one LLM call. Populated fields are preserved.`}
-        >
-          {expanding ? <Loader2 size={10} className="animate-spin" /> : <WandSparkles size={10} />}
-          AI: expand character
-        </button>
-      ) : null}
-
-      {SECTIONS.map((section) => (
-        <BoxedSection
-          key={section.key}
-          icon={section.icon}
-          label={section.label}
-          summary={sectionSummary(section)}
-        >
-          {section.fields.map((field) => (
-            <DraftField
-              key={field.name}
-              field={field}
-              value={entry[field.name]}
-              onCommit={(v) => patchField(field.name, v)}
-              disabled={disabled}
-              idPrefix={entry.id}
-            />
+    <div className="mt-3 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-port-border pt-3">
+        <h3 className="text-sm font-semibold text-port-accent">Character sheet</h3>
+        {onExpand ? (
+          <button type="button" onClick={onExpand} disabled={expanding || disabled}
+            className="inline-flex min-h-[40px] items-center gap-1.5 px-3 py-2 text-xs rounded border border-port-accent/40 bg-port-accent/10 text-port-accent hover:bg-port-accent/20 disabled:opacity-40"
+            title={`Fill blank fields on ${entry.name} via one LLM call. Populated fields are preserved.`}>
+            {expanding ? <Loader2 size={14} className="animate-spin" /> : <WandSparkles size={14} />}
+            AI: expand character
+          </button>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[240px_minmax(0,1fr)] items-start">
+        <aside className="min-w-0 space-y-3" aria-label={`${entry.name} identity`}>
+          <div className={`rounded-lg border border-port-accent/30 bg-port-accent/5 p-3 xl:p-4 grid gap-3 ${portrait ? 'grid-cols-[80px_minmax(0,1fr)] xl:grid-cols-1' : 'grid-cols-1'}`}>
+            {portrait ? <div className="flex justify-center">{portrait}</div> : null}
+            <div className="space-y-3">
+              <div className="xl:text-center">
+                <p className="text-[10px] uppercase tracking-widest text-port-accent">Universe cast</p>
+                <p className="text-lg font-semibold text-white">Identity</p>
+                <p className="text-xs text-gray-500">{disabled ? 'Locked character' : 'Edits save when you leave a field'}</p>
+              </div>
+              {renderFields(SECTIONS[0].fields.slice(0, 3))}
+            </div>
+          </div>
+          {listSection('stats')}
+        </aside>
+        <div className="min-w-0 space-y-3">
+          <TabPills tabs={SHEET_PAGES} activeTab={activePage} onChange={setActivePage}
+            variant="pills" size="sm" mobileDropdown ariaLabel={`${entry.name} sheet page`} />
+          {SHEET_PAGES.map((page) => (
+            <div key={page.id} role="tabpanel" aria-label={page.label} hidden={activePage !== page.id}>
+              {activePage === page.id || visited[page.id] ? (
+                <div className="space-y-3">
+                  {page.id === 'attributes' ? <>
+                    {proseSection('personality')}
+                    <ArcFrameworkControls entry={entry} onPatch={onPatch} disabled={disabled} idPrefix={entry.id} />
+                  </> : null}
+                  {page.id === 'story' ? <>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
+                      {proseSection('framework')}
+                      <div className="min-w-0 space-y-3">
+                        <RelationshipsSection entry={entry} characters={characters} onPatch={onPatch} disabled={disabled} />
+                        {listSection('secrets')}
+                      </div>
+                    </div>
+                    <PsychologySection entry={entry} onPatch={onPatch} disabled={disabled} />
+                  </> : null}
+                  {page.id === 'appearance' ? <>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
+                      <div className="min-w-0 space-y-3">
+                        {proseSection('visualIdentity')}
+                        <BoxedSection icon={Eye} label="Visual notes">{renderFields([SECTIONS[0].fields[5]])}</BoxedSection>
+                        {listSection('colorPalette')}
+                        {listSection('props')}
+                      </div>
+                      <div className="min-w-0 space-y-3">
+                        {listSection('expressions')}
+                        {listSection('handGestures')}
+                        <IdentityPackSection entry={entry} onPatch={onPatch} disabled={disabled} />
+                      </div>
+                    </div>
+                    {children}
+                  </> : null}
+                  {page.id === 'voice' ? <>
+                    <BoxedSection icon={Mic} label="Speech & delivery">
+                      {renderFields(SECTIONS[0].fields.slice(3, 5))}
+                      <VoicePicker label="Voice (TTS)" value={entry.voiceId || null}
+                        onChange={(value) => patchField('voiceId', value)} disabled={disabled}
+                        placeholder="Project default voice" previewText={entry.name ? `Hi, I'm ${entry.name}. This is how I sound.` : undefined} />
+                    </BoxedSection>
+                    <VoiceCanonSection entry={entry} onPatch={onPatch} disabled={disabled} />
+                    <VoiceProfileSection universeId={universeId} entry={entry} disabled={disabled} />
+                  </> : null}
+                </div>
+              ) : null}
+            </div>
           ))}
-          {section.key === 'identity' ? (
-            <VoicePicker
-              label="Voice (TTS)"
-              value={entry.voiceId || null}
-              onChange={(v) => patchField('voiceId', v)}
-              disabled={disabled}
-              placeholder="Project default voice"
-              previewText={entry.name ? `Hi, I'm ${entry.name}. This is how I sound.` : undefined}
-            />
-          ) : null}
-        </BoxedSection>
-      ))}
-
-      <ArcFrameworkControls
-        entry={entry}
-        onPatch={onPatch}
-        disabled={disabled}
-        idPrefix={entry.id}
-      />
-
-      <PsychologySection entry={entry} onPatch={onPatch} disabled={disabled} />
-
-      <VoiceCanonSection entry={entry} onPatch={onPatch} disabled={disabled} />
-
-      <VoiceProfileSection universeId={universeId} entry={entry} disabled={disabled} />
-
-      <IdentityPackSection entry={entry} onPatch={onPatch} disabled={disabled} />
-
-      <RelationshipsSection
-        entry={entry}
-        characters={characters}
-        onPatch={onPatch}
-        disabled={disabled}
-      />
-
-      {LIST_SECTIONS.map((section) => (
-        <ListSectionEditor
-          key={section.key}
-          section={section}
-          entry={entry}
-          onPatchList={patchList}
-          disabled={disabled}
-        />
-      ))}
+        </div>
+      </div>
     </div>
   );
 }
