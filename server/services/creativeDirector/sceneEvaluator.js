@@ -43,11 +43,12 @@ import { enqueueEvaluateTask } from './agentBridge.js';
 // body, so a large batch balloons the prompt and a local VLM's context window.
 // 5 samples across the timeline is plenty to judge a short clip.
 const MAX_EVAL_FRAMES = 5;
-// Local VLMs on modest hardware can be slow to first token; give them room.
+// Local VLMs on modest hardware can be slow to first token; honor the
+// configured provider timeout and use this default only when it is absent.
 // This timeout is the only bound on generation length — the toolkit's api
 // runner does not send `max_tokens`, so a verbose model is capped by time, not
 // tokens (the structured-JSON prompt keeps a compliant model's reply short).
-const VISION_EVAL_TIMEOUT_MS = 180000;
+const DEFAULT_VISION_EVAL_TIMEOUT_MS = 180000;
 
 // Local backends served by an aiToolkit `api`-type provider. Auto-resolution
 // only picks from these — the whole point is a LOCAL vision model. An explicit
@@ -191,7 +192,7 @@ export async function evaluateSceneWithVision(project, scene) {
     return { ok: false, fallbackToAgent: true, reason: 'no evaluation frames on disk' };
   }
 
-  // Record a RUNNING evaluate run BEFORE the (up-to-180s) vision call so a
+  // Record a RUNNING evaluate run BEFORE the bounded vision call so a
   // concurrent advanceAfterSceneSettled (user clicks Start/Resume, or a stale
   // completion fires) sees a live run via completionHook's `noLiveEvaluateRun`
   // check and won't dispatch a second evaluation of the same render. This
@@ -216,7 +217,7 @@ export async function evaluateSceneWithVision(project, scene) {
       prompt,
       source: 'cd-scene-evaluate',
       screenshots: frames,
-      timeout: VISION_EVAL_TIMEOUT_MS,
+      timeout: target.provider.timeout ?? DEFAULT_VISION_EVAL_TIMEOUT_MS,
       ...(project.workspace === 'video' ? { allowFallback: false } : {}),
     });
 
