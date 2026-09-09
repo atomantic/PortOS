@@ -1,56 +1,74 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useSyncExternalStore } from 'react';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 import * as api from '../services/api';
 
-// Shared read of Settings > Features (`GET /api/settings/features`), with one
-// module-level cache so the sidebar, the ⌘K palette, and the Features tab
-// collapse to a single fetch per page load.
-//
-// Change notification rides the EXISTING `INSTANCE_FEATURES_CHANGED` window
-// event rather than a second broadcast channel — the engagement-reminder toast
-// already publishes on it and three dashboard widgets already listen, so a
-// private subscriber list here would have left those halves able to drift.
-// A publisher that already holds the server's fresh list passes it as
-// `detail.features` to skip the refetch; the `{ featureId, enabled }` shape the
-// existing publisher sends still works and simply triggers one.
-//
-// `null` features means NOT LOADED — deliberately distinct from `[]`, which
-// means loaded and this version registers no optional features.
-let cached = null;
+// One snapshot and event bridge for every mounted consumer. `null` means not
+// loaded (or failed), while [] is a successfully loaded empty feature list.
+const INITIAL_STATE = { features: null, error: null };
+let snapshot = INITIAL_STATE;
 let inFlight = null;
-let inFlightGeneration = null;
-// Bumped whenever something newer than an outstanding request lands (a toggle
-// publishing the server's fresh list, or an invalidation). A response that read
-// the OLD state must not overwrite it just because it resolved later — without
-// this, saving a JIRA instance while the initial fetch is still in flight leaves
-// the sidebar and ⌘K showing the pre-save answer until a reload.
 let generation = 0;
+const subscribers = new Set();
+
+const getSnapshot = () => snapshot;
+const commitSnapshot = (result) => {
+  snapshot = result;
+  subscribers.forEach((notify) => notify());
+};
 
 const loadInstanceFeatures = () => {
-  if (!inFlight || inFlightGeneration !== generation) {
+  if (!inFlight) {
     const requested = generation;
     const request = api.getInstanceFeatures({ silent: true })
       .then((data) => ({ features: Array.isArray(data?.features) ? data.features : [], error: null }))
       .catch((error) => {
-        // Fail OPEN: an unreadable feature list must not blank out navigation.
         console.warn(`⚠️ instance features fetch failed: ${error?.message || error}`);
         return { features: null, error };
       })
       .then((result) => {
-        if (inFlight === request) {
-          inFlight = null;
-          inFlightGeneration = null;
-        }
-        // Superseded while in flight — hand the caller what IS current instead
-        // of the answer it asked for, so no consumer renders the stale one.
-        if (requested !== generation) return cached || result;
-        cached = result;
-        return result;
+        if (inFlight === request) inFlight = null;
+        // A superseded request never publishes, even while its replacement is
+        // pending. Subscribers receive only the current generation's result.
+        if (requested === generation) commitSnapshot(result);
       });
     inFlight = request;
-    inFlightGeneration = requested;
   }
   return inFlight;
+};
+
+const onFeaturesChanged = (event) => {
+  generation += 1;
+  inFlight = null;
+  const features = event?.detail?.features;
+  if (Array.isArray(features)) {
+    commitSnapshot({ features, error: null });
+  } else {
+    loadInstanceFeatures();
+  }
+};
+
+const subscribe = (notify) => {
+  if (subscribers.size === 0) {
+    window.addEventListener(INSTANCE_FEATURES_CHANGED, onFeaturesChanged);
+  }
+  subscribers.add(notify);
+  if (snapshot === INITIAL_STATE) loadInstanceFeatures();
+  return () => {
+    subscribers.delete(notify);
+    if (subscribers.size === 0) {
+      window.removeEventListener(INSTANCE_FEATURES_CHANGED, onFeaturesChanged);
+    }
+  };
+};
+
+const reload = () => {
+  generation += 1;
+  const requested = generation;
+  inFlight = null;
+  return loadInstanceFeatures().then(() => {
+    // Preserve the public success announcement for non-hook event listeners.
+    if (requested === generation && snapshot.features) publishInstanceFeatures(snapshot.features);
+  });
 };
 
 /**
@@ -68,34 +86,7 @@ const loadInstanceFeatures = () => {
  *   - errored → true, so a server hiccup shows everything instead of hiding it
  */
 export function useInstanceFeatures() {
-  const [state, setState] = useState(() => cached || { features: null, error: null });
-
-  useEffect(() => {
-    let active = true;
-    const sync = (result) => { if (active) setState(result); };
-
-    if (cached) sync(cached); else loadInstanceFeatures().then(sync);
-
-    const onFeaturesChanged = (event) => {
-      const features = event?.detail?.features;
-      generation += 1;
-      if (Array.isArray(features)) {
-        cached = { features, error: null };
-        sync(cached);
-        return;
-      }
-      cached = null;
-      loadInstanceFeatures().then(sync);
-    };
-
-    window.addEventListener(INSTANCE_FEATURES_CHANGED, onFeaturesChanged);
-    return () => {
-      active = false;
-      window.removeEventListener(INSTANCE_FEATURES_CHANGED, onFeaturesChanged);
-    };
-  }, []);
-
-  const { features, error } = state;
+  const { features, error } = useSyncExternalStore(subscribe, getSnapshot);
 
   const isFeatureEnabled = useCallback((featureId) => {
     if (!featureId) return true;
@@ -104,18 +95,6 @@ export function useInstanceFeatures() {
     const feature = features.find((item) => item?.id === featureId);
     return feature ? feature.enabled !== false : true;
   }, [features, error]);
-
-  // Announced rather than applied locally: after a failed first fetch every
-  // consumer is sitting in the fail-open error state, and a retry that updated
-  // only the Settings tab would leave the sidebar and ⌘K stale until a reload.
-  const reload = useCallback(() => {
-    generation += 1;
-    cached = null;
-    return loadInstanceFeatures().then((result) => {
-      if (result.features) publishInstanceFeatures(result.features);
-      else setState(result);
-    });
-  }, []);
 
   return { features, error, isFeatureEnabled, reload };
 }
@@ -134,7 +113,7 @@ export const publishInstanceFeatures = (features, { featureId, enabled } = {}) =
  * Announce that the state a feature's AUTO-detection reads has changed — the
  * integration pages call this after adding or removing an instance, because the
  * DataDog/JIRA gates are derived from whether one is configured. Carries no
- * feature list, so every listener re-fetches the freshly-resolved answer.
+ * feature list, so the store re-fetches the freshly-resolved answer once.
  */
 export const invalidateInstanceFeatures = (featureId) => {
   publishInstanceFeatures(null, { featureId });
@@ -142,8 +121,7 @@ export const invalidateInstanceFeatures = (featureId) => {
 
 // Test-only: drop the module cache so suites don't leak state between tests.
 export const __resetInstanceFeatureCache = () => {
-  cached = null;
+  snapshot = INITIAL_STATE;
   inFlight = null;
-  inFlightGeneration = null;
   generation += 1;
 };
