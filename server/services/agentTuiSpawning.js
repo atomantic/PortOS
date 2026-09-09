@@ -21,7 +21,7 @@ import { PATHS, watchForFile } from '../lib/fileUtils.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { doneSentinelName, doneSentinelPath as resolveDoneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
-import { PTY_UNAVAILABLE_PREFIX, PTY_WORKSPACE_MISSING_PREFIX } from '../lib/ptySpawnDiagnostics.js';
+import { PTY_UNAVAILABLE_PREFIX } from '../lib/ptySpawnDiagnostics.js';
 import { finalizeAgentRunCommon, shouldAbandonAgentRun } from './agentRunFinalize.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 import { prClaimWasVerified, leavesPrForHuman } from '../lib/prDisposition.js';
@@ -1581,14 +1581,21 @@ export async function spawnTuiAgent({
     // pre-spawn resolve in createAgentTuiSession's restricted branch (#6159) —
     // so the test is no longer gated on the runner.
     //
-    // The runner's PTY-layer diagnoses get the same treatment for the same
-    // reason: a broken node-pty install or a workspace that vanished fails
-    // identically on every attempt, so retrying it as a transient rejection just
-    // burns MAX_TASK_RETRIES on every task in the fleet and buries the one line
-    // that names the repair (see lib/ptySpawnDiagnostics.js).
+    // An unusable PTY LAYER joins that actionable set for the same reason: it
+    // reproduces on every attempt, so retrying it as a transient rejection burns
+    // MAX_TASK_RETRIES on every task in the fleet and buries the one line naming
+    // the repair (see lib/ptySpawnDiagnostics.js).
+    //
+    // The runner's OTHER named fault — a workspace that vanished — deliberately
+    // does NOT join it. Each retry provisions a fresh worktree at a fresh path, so
+    // a reaped one is exactly the transient case `spawn-rejected` exists for;
+    // blocking on it would park work a retry fixes. A cwd that is missing because
+    // it is misconfigured (a managed app whose directory is gone) still surfaces —
+    // it fails identically every attempt and blocks on MAX_TASK_RETRIES carrying
+    // the runner's message, which is that reason's documented behavior.
     const reason = /^Command executable unavailable:/i.test(message)
       ? 'command-not-found'
-      : message.startsWith(PTY_UNAVAILABLE_PREFIX) || message.startsWith(PTY_WORKSPACE_MISSING_PREFIX)
+      : message.startsWith(PTY_UNAVAILABLE_PREFIX)
         ? 'runner-pty-unavailable'
         : useDurableRunner ? 'spawn-rejected' : 'spawn-error';
     if (useDurableRunner) {

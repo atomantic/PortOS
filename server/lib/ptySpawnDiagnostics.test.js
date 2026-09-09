@@ -21,13 +21,13 @@ describe('diagnosePtySpawnFailure', () => {
     // The outage this module was written for: `server/node_modules` emptied out
     // from under a live runner, so node-pty's `spawn-helper` is gone and every
     // fork fails — while the requested cwd and command are both perfectly fine.
-    const { retryable, message } = diagnosePtySpawnFailure(POSIX_SPAWN_ENOENT, {
+    const { diagnosed, message } = diagnosePtySpawnFailure(POSIX_SPAWN_ENOENT, {
       cwd: tmpdir(),
       probeCwd: tmpdir(),
       runtimeProbe: brokenProbe,
     });
 
-    expect(retryable).toBe(false);
+    expect(diagnosed).toBe(true);
     expect(message.startsWith(PTY_UNAVAILABLE_PREFIX)).toBe(true);
     // The repair command is the payload — a diagnosis that omits it leaves the
     // reader exactly where the raw node-pty string did.
@@ -39,31 +39,30 @@ describe('diagnosePtySpawnFailure', () => {
     const missing = join(tmpdir(), 'portos-pty-diagnostics-absent-dir');
     let probed = false;
 
-    const { retryable, message } = diagnosePtySpawnFailure(POSIX_SPAWN_ENOENT, {
+    const { diagnosed, message } = diagnosePtySpawnFailure(POSIX_SPAWN_ENOENT, {
       cwd: missing,
       probeCwd: tmpdir(),
       runtimeProbe: () => { probed = true; return true; },
     });
 
-    expect(retryable).toBe(false);
+    expect(diagnosed).toBe(true);
     expect(message.startsWith(PTY_WORKSPACE_MISSING_PREFIX)).toBe(true);
     // A reaped worktree says nothing about the runtime; forking to ask would be
     // a wasted process on the one path that already has its answer.
     expect(probed).toBe(false);
   });
 
-  it('stays retryable when the workspace exists and the PTY layer still forks', () => {
-    // Neither known fault applies, so the failure is specific to this request and
-    // may well be transient. Reporting it as unrecoverable would block a task
-    // that a plain retry fixes.
+  it('declines to diagnose when the workspace exists and the PTY layer still forks', () => {
+    // Neither known fault applies. Returning a confident explanation here would be
+    // worse than saying nothing — the caller re-throws the original instead.
     const err = new Error('resource temporarily unavailable');
-    const { retryable, message } = diagnosePtySpawnFailure(err, {
+    const { diagnosed, message } = diagnosePtySpawnFailure(err, {
       cwd: tmpdir(),
       probeCwd: tmpdir(),
       runtimeProbe: workingProbe,
     });
 
-    expect(retryable).toBe(true);
+    expect(diagnosed).toBe(false);
     expect(message).toBe('resource temporarily unavailable');
   });
 
