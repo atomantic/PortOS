@@ -123,6 +123,37 @@ describe('manual maintenance run', () => {
     expect((await listMaintenanceRuns()).map((entry) => entry.id)).toEqual([run.id]);
   });
 
+  it('lets a Stop or a completion that lands mid-evaluation win over the stale walk snapshot', async () => {
+    const { run } = await start();
+    // A completion arrives while a sweep is mid-walk holding on the in-flight task.
+    state.tasks = [{ id: 'task-0', status: 'in_progress', metadata: { quotaBurnFamily: 'codex', quotaBurnMaintenanceRunId: run.id } }];
+    const sweep = evaluateMaintenanceRun(run.id);
+    const completion = __onMaintenanceAgentCompleted(agentFor(run, 0));
+    await Promise.all([sweep, completion]);
+    const afterCompletion = await getMaintenanceRun(run.id);
+    expect(afterCompletion.completed).toHaveProperty(run.steps[0].id);
+    expect(dispatchedTypes()).toEqual(['better-structural-drift', 'claim-issue']);
+    // A Stop clicked while a dispatch is in flight sticks: the walk cannot write
+    // the snapshot status back over it.
+    state.tasks = [];
+    let finishDispatch;
+    invokeQuotaBurnStep.mockImplementationOnce(() => new Promise((resolve) => { finishDispatch = resolve; }));
+    const walk = evaluateMaintenanceRun(run.id);
+    const stop = stopMaintenanceRun(run.id);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    finishDispatch({ dispatched: true, summary: 'ran', awaiting: { requestId: 'demand-late' } });
+    await Promise.all([walk, stop]);
+    expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', active: { requestId: 'demand-late' } });
+    expect(await evaluateMaintenanceRun(run.id)).toEqual({ skipped: 'stopped' });
+  });
+
+  it('records a walk that throws as the hold reason instead of leaving a phantom running record', async () => {
+    invokeQuotaBurnStep.mockRejectedValueOnce(new Error('schedule unreadable'));
+    const { run, result } = await start();
+    expect(result).toEqual({ dispatched: false, reason: 'schedule unreadable' });
+    expect(run).toMatchObject({ status: 'running', reason: 'schedule unreadable' });
+  });
+
   it('refuses an unknown app or a provider outside every subscription family before writing anything', async () => {
     await expect(startMaintenanceRun({ appId: 'nope', providerId: 'codex', model: 'gpt-5' })).rejects.toMatchObject({ status: 400, code: 'MAINTENANCE_RUN_APP_UNAVAILABLE' });
     await expect(startMaintenanceRun({ appId: 'app-1', providerId: 'ollama', model: 'llama' })).rejects.toMatchObject({ status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });

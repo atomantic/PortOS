@@ -67,10 +67,11 @@ export const MAINTENANCE_RUN_STATUS = Object.freeze({ RUNNING: 'running', COMPLE
 const activeRunError = (appId, runId) => new ServerError(`a maintenance run is already in progress for "${appId}" (${runId})`, { status: 409, code: 'MAINTENANCE_RUN_ACTIVE' });
 
 const writeQueue = createFileWriteQueue();
-// One evaluation at a time PER RUN: a completion and the interval can land
-// together, and two concurrent walks of one ladder would dispatch its next
-// step twice.
-const evaluations = createKeyCachedQueue();
+// One operation at a time PER RUN — evaluations, the completion ledger, stop
+// and resume all queue here. A completion and the interval can land together,
+// and two concurrent walks of one ladder would dispatch its next step twice; a
+// Stop landing mid-walk must take effect before the walk's next dispatch.
+const perRun = createKeyCachedQueue();
 let retryTimer = null;
 
 export async function listMaintenanceRuns() {
@@ -79,26 +80,45 @@ export async function listMaintenanceRuns() {
 }
 
 /**
- * Persist a run: replace it in place, or prepend a new one, then prune finished
- * history past the cap. Running records are never pruned — a run the user can
- * still see progressing must not vanish because twenty others finished.
+ * Persist the list, pruning finished history past the cap. Running records are
+ * never pruned — a run the user can still see progressing must not vanish
+ * because twenty others finished.
  */
-function writeRun(run) {
-  return writeQueue(async () => {
-    const runs = await listMaintenanceRuns();
-    const next = runs.some((entry) => entry.id === run.id) ? runs.map((entry) => (entry.id === run.id ? run : entry)) : [run, ...runs];
-    let finished = 0;
-    const kept = next.filter((entry) => entry.status === MAINTENANCE_RUN_STATUS.RUNNING || ++finished <= RUN_HISTORY_LIMIT);
-    await atomicWrite(runsFile(), { runs: kept });
-    return run;
-  });
+async function writeRuns(runs) {
+  let finished = 0;
+  await atomicWrite(runsFile(), { runs: runs.filter((entry) => entry.status === MAINTENANCE_RUN_STATUS.RUNNING || ++finished <= RUN_HISTORY_LIMIT) });
 }
+
+const insertRun = (run) => writeQueue(async () => {
+  await writeRuns([run, ...(await listMaintenanceRuns())]);
+  return run;
+});
+
+/**
+ * Apply a PATCH to the stored record — re-read inside the write queue and
+ * merged, never a whole-record replace from a caller's snapshot. An evaluation
+ * holds its snapshot across several awaits (task read, catalog, claim probe,
+ * dispatch), and a replace from that snapshot would carry a stale `status` or
+ * `completed` back over a Stop or a completion that landed meanwhile. The
+ * completion ledger merges key-wise for the same reason: it only ever grows.
+ */
+const patchRun = (id, patch) => writeQueue(async () => {
+  const runs = await listMaintenanceRuns();
+  const current = runs.find((entry) => entry.id === id);
+  if (!current) return null;
+  const updated = {
+    ...current,
+    ...patch,
+    completed: { ...current.completed, ...(patch.completed || {}) },
+    updatedAt: new Date().toISOString(),
+  };
+  await writeRuns(runs.map((entry) => (entry.id === id ? updated : entry)));
+  return updated;
+});
 
 export async function getMaintenanceRun(id) {
   return (await listMaintenanceRuns()).find((run) => run.id === id) || null;
 }
-
-const stamp = (run, patch) => ({ ...run, ...patch, updatedAt: new Date().toISOString() });
 
 /** Two ladders against one app would file and claim each other's findings. */
 async function assertNoRunningRun(appId) {
@@ -130,7 +150,7 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const id = `maint-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const now = new Date().toISOString();
   const pins = { providerId, model: model || null, effort: effort || null };
-  const run = await writeRun({
+  const run = await insertRun({
     id, appId, familyId, ...pins,
     status: MAINTENANCE_RUN_STATUS.RUNNING,
     steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins }),
@@ -140,41 +160,62 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
     startedAt: now, updatedAt: now, finishedAt: null,
   });
   console.log(`🧹 Maintenance run ${id} started for ${appId} via ${providerId}`);
-  const result = await evaluateMaintenanceRun(id);
+  const result = await evaluateOrHold(id);
   return { run: await getMaintenanceRun(id) || run, result };
 }
+
+/**
+ * The evaluation a route awaits. A throw inside the walk (an unreadable
+ * schedule, a failed request write) is recorded as the run's hold instead of
+ * escaping: the record is already on disk as `running`, so a 500 here would
+ * leave a run the page never showed, that the sweep then dispatches.
+ */
+const evaluateOrHold = (id) => evaluateMaintenanceRun(id).catch(async (err) => {
+  console.error(`❌ Maintenance run ${id} evaluation failed: ${err.message}`);
+  await patchRun(id, { reason: err.message });
+  return { dispatched: false, reason: err.message };
+});
 
 /**
  * Stop dispatching. A task already queued or running is NOT recalled — the
  * daemon owns it — so the run's last step may still finish; it just advances
  * nothing afterwards. `resume` picks the ladder up from its completion ledger.
  */
-export async function stopMaintenanceRun(id) {
-  const run = await getMaintenanceRun(id);
-  if (!run) return null;
-  if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING) return run;
-  console.log(`🧹 Maintenance run ${id} stopped by the user`);
-  return writeRun(stamp(run, { status: MAINTENANCE_RUN_STATUS.STOPPED, finishedAt: new Date().toISOString(), reason: 'stopped by the user' }));
+export function stopMaintenanceRun(id) {
+  return perRun(id, async () => {
+    const run = await getMaintenanceRun(id);
+    if (!run) return null;
+    if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING) return run;
+    console.log(`🧹 Maintenance run ${id} stopped by the user`);
+    return patchRun(id, { status: MAINTENANCE_RUN_STATUS.STOPPED, finishedAt: new Date().toISOString(), reason: 'stopped by the user' });
+  });
 }
 
 export async function resumeMaintenanceRun(id) {
-  const run = await getMaintenanceRun(id);
-  if (!run) return null;
-  if (run.status === MAINTENANCE_RUN_STATUS.RUNNING) return { run, result: await evaluateMaintenanceRun(id) };
-  await assertNoRunningRun(run.appId);
-  await writeRun(stamp(run, { status: MAINTENANCE_RUN_STATUS.RUNNING, finishedAt: null, reason: null }));
-  console.log(`🧹 Maintenance run ${id} resumed`);
-  const result = await evaluateMaintenanceRun(id);
+  const resumed = await perRun(id, async () => {
+    const run = await getMaintenanceRun(id);
+    if (!run || run.status === MAINTENANCE_RUN_STATUS.RUNNING) return run;
+    await assertNoRunningRun(run.appId);
+    console.log(`🧹 Maintenance run ${id} resumed`);
+    return patchRun(id, { status: MAINTENANCE_RUN_STATUS.RUNNING, finishedAt: null, reason: null });
+  });
+  if (!resumed) return null;
+  const result = await evaluateOrHold(id);
   return { run: await getMaintenanceRun(id), result };
 }
 
 /**
  * Evaluate one run: dispatch its next step if nothing of its own is still
  * queued, running or blocked, mark a drained claim step done, or record why it
- * is holding. Serialized per run; the returned promise is the outcome of THIS
- * caller's evaluation.
+ * is holding. Serialized per run with every other transition; the returned
+ * promise is the outcome of THIS caller's evaluation. `completeStepId` records
+ * an audit step's successful agent in the same queued turn, so no walk can read
+ * the ledger between the completion and the evaluation it triggers.
  */
-export const evaluateMaintenanceRun = (id, { ignoreTaskId = null } = {}) => evaluations(id, () => evaluate(id, { ignoreTaskId }));
+export const evaluateMaintenanceRun = (id, { ignoreTaskId = null, completeStepId = null } = {}) => perRun(id, async () => {
+  if (completeStepId) await patchRun(id, { completed: { [completeStepId]: new Date().toISOString() }, active: null });
+  return evaluate(id, { ignoreTaskId });
+});
 
 async function evaluate(id, { ignoreTaskId }) {
   const run = await getMaintenanceRun(id);
@@ -182,7 +223,7 @@ async function evaluate(id, { ignoreTaskId }) {
   if (run.status !== MAINTENANCE_RUN_STATUS.RUNNING) return { skipped: run.status };
 
   const hold = async (reason, patch = null) => {
-    if (patch || run.reason !== reason) await writeRun(stamp(run, { ...patch, reason }));
+    if (patch || run.reason !== reason) await patchRun(id, { ...patch, reason });
     return { dispatched: false, reason };
   };
 
@@ -211,18 +252,18 @@ async function evaluate(id, { ignoreTaskId }) {
     const result = await invokeQuotaBurnStep({ step, family: { id: run.familyId }, catalog, maintenanceRunId: id });
     if (!result.dispatched) return hold(result.reason, { completed });
     const taskType = step.taskRef.taskType;
-    await writeRun(stamp(run, {
+    await patchRun(id, {
       completed,
       reason: null,
       active: { stepId: step.id, taskType, requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
-    }));
+    });
     console.log(`🧹 Maintenance run ${id}: dispatched ${taskType} (${step.id})`);
     return { dispatched: true, stepId: step.id, taskType, summary: result.summary };
   }
-  await writeRun(stamp(run, {
+  await patchRun(id, {
     completed, active: null, reason: 'maintenance sequence complete',
     status: MAINTENANCE_RUN_STATUS.COMPLETED, finishedAt: new Date().toISOString(),
-  }));
+  });
   console.log(`🧹 Maintenance run ${id} complete for ${run.appId}`);
   return { dispatched: false, completed: true, reason: 'maintenance sequence complete' };
 }
@@ -239,13 +280,11 @@ function onMaintenanceAgentCompleted(agent) {
   const stepId = agent.metadata?.taskQuotaBurnStepId;
   const success = agent.result?.success === true;
   return getMaintenanceRun(id)
-    .then(async (run) => {
+    .then((run) => {
       if (!run) return { skipped: 'unknown run' };
       const step = run.steps.find((entry) => entry.id === stepId);
-      if (success && step && !step.drain && !run.completed[step.id]) {
-        await writeRun(stamp(run, { completed: { ...run.completed, [step.id]: new Date().toISOString() }, active: null }));
-      }
-      return evaluateMaintenanceRun(id, { ignoreTaskId: success ? agent.taskId || null : null });
+      const completeStepId = success && step && !step.drain ? step.id : null;
+      return evaluateMaintenanceRun(id, { ignoreTaskId: success ? agent.taskId || null : null, completeStepId });
     })
     .catch((err) => console.error(`❌ Maintenance run ${id} continuation failed: ${err.message}`));
 }
@@ -277,5 +316,5 @@ export function __resetMaintenanceRunScheduler() {
   if (retryTimer) clearInterval(retryTimer);
   retryTimer = null;
   cosEvents.off('agent:completed', onMaintenanceAgentCompleted);
-  evaluations.clear();
+  perRun.clear();
 }

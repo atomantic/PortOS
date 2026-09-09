@@ -358,6 +358,13 @@ describe('built-in agent task invocation', () => {
     overrides: { effort: 'high', params: { fileIssues: false } },
   });
 
+  it('stamps a manual maintenance run id on the request only when one is given', async () => {
+    await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate, maintenanceRunId: 'maint-1' });
+    expect(state.triggered[0].options.burn).toMatchObject({ family: 'grok', stepId: 'step-1', maintenanceRunId: 'maint-1' });
+    await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
+    expect(state.triggered[1].options.burn).not.toHaveProperty('maintenanceRunId');
+  });
+
   it('routes through the schedule\'s on-demand lane with quota-burn provenance', async () => {
     const result = await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
     expect(result.dispatched).toBe(true);

@@ -41,7 +41,9 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
 
   const fetchRuns = useCallback(async () => {
     const response = await api.getMaintenanceRuns({ silent: true }).catch(() => null);
-    setRuns(response?.runs || (current => current || []));
+    // A failed read stays `null` so the poll keeps trying; only a real answer
+    // settles the list.
+    if (response) setRuns(response.runs || []);
   }, []);
   const anyRunning = (runs || []).some(run => run.status === 'running');
   // One read on mount, then polling only while a run is in flight — an idle

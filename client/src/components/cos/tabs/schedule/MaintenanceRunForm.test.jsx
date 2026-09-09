@@ -50,8 +50,6 @@ describe('maintenance launch', () => {
     await user.click(screen.getByRole('button', { name: 'Run now' }));
     expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
     expect(api.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'example', providerId: 'claude', model: 'sonnet', effort: 'high' }, { silent: true });
-    // The poll re-fires once a run is in flight and reads the persisted record back.
-    api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord()] });
     finishStart({ run: runRecord(), result: { dispatched: true, taskType: 'better-structural-drift' } });
     expect(await screen.findByText(/Maintenance started with better-structural-drift/)).toBeInTheDocument();
     const row = screen.getByRole('list', { name: 'Maintenance runs' });

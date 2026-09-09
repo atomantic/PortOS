@@ -27,6 +27,16 @@ describe('normalizeQuotaBurnProvenance', () => {
     });
   });
 
+  it('carries a manual maintenance run id through, and omits it on an automatic burn', () => {
+    // The only hop where the request's run id survives into task metadata — the
+    // engines spread the normalized block. Dropping it would put the burn plan
+    // back to walking on a manual run's completions with the suite still green.
+    expect(normalizeQuotaBurnProvenance(provenance({ maintenanceRunId: 'maint-1' })).maintenanceRunId).toBe('maint-1');
+    expect(normalizeQuotaBurnProvenance(provenance())).not.toHaveProperty('maintenanceRunId');
+    expect(onDemandRequestMetadata({ id: 'demand-9', origin: 'quota-burn', burn: provenance({ maintenanceRunId: 'maint-1' }) }))
+      .toMatchObject({ quotaBurnFamily: 'grok', quotaBurnMaintenanceRunId: 'maint-1' });
+  });
+
   it('drops a non-scalar run param rather than carrying a blob into task metadata', () => {
     const block = normalizeQuotaBurnProvenance(provenance({ overrides: { params: { fileIssues: true, nested: { a: 1 } } } }));
     expect(block.overrides.params).toEqual({ fileIssues: true });
