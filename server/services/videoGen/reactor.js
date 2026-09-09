@@ -172,6 +172,9 @@ function captureClip(entry, input, pythonPath, job, jobId) {
           const message = JSON.parse(line);
           if (message.type === 'complete' && typeof message.clipId === 'string' && Number.isFinite(message.seconds)) complete = message;
           if (message.type === 'error' && message.code === 'INVALID_FRAME_BUFFER') failure = new Error('Reactor supplied an invalid video frame buffer; expected width × height × 4 bytes');
+          if (message.type === 'error' && message.phase === 'connecting' && message.errorType === 'TimeoutError') {
+            failure = new Error('Reactor connection timed out before any clip was submitted; check provider availability and network access, then retry');
+          }
           if (!failure && message.type === 'error' && /^[a-z]+$/.test(message.phase) && /^[A-Za-z]+$/.test(message.errorType)) failure = new Error(`Reactor ${message.phase} failed (${message.errorType})`);
           if (message.type === 'status') {
             if (typeof message.message === 'string' && /^Captured [0-9.]+ of [0-9.]+ frames; audio=(True|False)$/.test(message.message)) console.log(`🎬 ${message.message}`);

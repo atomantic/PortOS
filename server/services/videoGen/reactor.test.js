@@ -72,6 +72,19 @@ describe('Reactor SDK adapter', () => {
     await vi.waitFor(() => expect(mocks.finalize).toHaveBeenCalledWith(expect.objectContaining({ jobId: job.jobId, meta: expect.objectContaining({ clipId: 'clip-example', seconds: 6 }) })));
   });
 
+  it('identifies connection timeouts before submission without exposing SDK diagnostics', async () => {
+    await started();
+    const failed = once(videoGenEvents, 'failed');
+    child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'error', phase: 'connecting', errorType: 'TimeoutError', message: 'private SDK diagnostics' }) + '\n'));
+    child.emit('close', 1);
+    const [event] = await failed;
+    expect(event.error).toContain('connection timed out before any clip was submitted');
+    expect(event.error).toContain('check provider availability and network access, then retry');
+    expect(event.error).not.toContain('private SDK diagnostics');
+    expect(mocks.finalize).not.toHaveBeenCalled();
+    expect(reactor.getActiveJob()).toBeNull();
+  });
+
   it('rejects all blank samples before history publication and removes the output', async () => {
     const sharp = (await import('sharp')).default;
     await sharp({ create: { width: 32, height: 32, channels: 3, background: '#000000' } }).png().toFile(join(root, 'blank.png'));
