@@ -483,7 +483,6 @@ for (const cmd of NAV_COMMANDS) {
     if (!aliasToPath[alias]) aliasToPath[alias] = cmd.path;
   }
 }
-const ALIAS_KEYS = Object.keys(aliasToPath);
 
 export const getNavAliasMap = () => ({ ...aliasToPath });
 
@@ -493,9 +492,19 @@ export const normalizeLabel = (s) => (s || '')
   .trim()
   .replace(/[.!?:;,"']+$/, '');
 
+// Derive lookup keys using the same normalization as spoken input. Keep the
+// original alias for getNavAliasMap(), matched, and command ownership lookup.
+const normalizeNavAlias = (alias) => normalizeLabel(alias).replace(/\s+/g, '-');
+const normalizedAliases = new Map();
+for (const alias of Object.keys(aliasToPath)) {
+  const key = normalizeNavAlias(alias);
+  if (!normalizedAliases.has(key)) normalizedAliases.set(key, alias);
+}
+const ALIAS_KEYS = [...normalizedAliases.keys()];
+
 export const resolveNavCommand = (input) => {
   if (!input || typeof input !== 'string') return null;
-  const norm = normalizeLabel(input).replace(/\s+/g, '-');
+  const norm = normalizeNavAlias(input);
   if (!norm) return null;
 
   const tail = norm.split('-').filter(Boolean).pop();
@@ -529,6 +538,7 @@ export const resolveNavCommand = (input) => {
   }
   if (!matched) return null;
 
+  matched = normalizedAliases.get(matched);
   const path = aliasToPath[matched];
   const command = NAV_COMMANDS.find((c) => c.path === path && (c.aliases || []).includes(matched))
     || NAV_COMMANDS.find((c) => c.path === path);
