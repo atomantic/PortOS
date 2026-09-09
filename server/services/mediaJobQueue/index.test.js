@@ -1824,9 +1824,10 @@ describe('local video failure holds', () => {
     const remoteJob = () => submit('example-mlx', { remoteMedia: remoteVideoMediaParams() });
     const gpu = [submit('example-other')];
     const cloud = [cloudJob()];
-    // Keep all concurrent remote dispatches on the generator stub.
+    // Concurrent dynamic imports can bypass the module mock in this test runner;
+    // without this adapter stub, 19 of 20 dispatches reach the real peer lookup.
     const { REMOTE_MEDIA_MODULES } = await import('./remoteMediaJob.js');
-    vi.spyOn(REMOTE_MEDIA_MODULES, 'video').mockResolvedValue({
+    const remoteAdapter = vi.spyOn(REMOTE_MEDIA_MODULES, 'video').mockResolvedValue({
       generateVideo: stubs.generateVideoRemote,
     });
     const remoteLimit = mediaJobQueue.getQueueCapacity().lanes.remote.limit;
@@ -1881,6 +1882,7 @@ describe('local video failure holds', () => {
     expect(mediaJobQueue.getJob(heldBatch[3])).toMatchObject({
       status: 'queued', hold: { heldJobCount: 1 },
     });
+    remoteAdapter.mockRestore();
   });
 
   it('lets other local models, image, audio, training, cloud and remote work pass a hold', async () => {
