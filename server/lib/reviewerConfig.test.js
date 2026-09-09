@@ -203,6 +203,7 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
   it('DROPS rather than clamps a level the reviewer rejects — a displayed effort must be the one it runs', () => {
     // `agy` really does reject `--effort max`; clamping it to `high` would review
     // at a different effort than the picker shows.
+    expect(normalizeReviewerEfforts({ 'provider:codex-tui': 'ultra', 'provider:custom': 'invalid' })).toEqual({ 'provider:codex-tui': 'ultra' });
     expect(normalizeReviewerEfforts({ antigravity: 'max' })).toEqual({});
     // grok rejects `max` the way agy rejects it — dropped, not clamped.
     expect(normalizeReviewerEfforts({ grok: 'max' })).toEqual({});

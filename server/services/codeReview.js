@@ -12,6 +12,7 @@
  * has to fit inside the agent's `curl` step.
  */
 
+import { effortLevelsForProvider } from '../lib/providerModels.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
 import { commandExists } from '../lib/commandExists.js'
@@ -434,13 +435,13 @@ async function resolveServedModel(backend, baseUrl) {
 
 // Resolve the exact record the user selected. Never fall back to the active
 // provider, another account, or a replacement model for a pinned reviewer.
-async function runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, timeoutMs }) {
+async function runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, effort, timeoutMs }) {
   const { getProviderById } = await import('./providers.js')
   const { getAIToolkitInstance } = await import('../lib/aiToolkitState.js')
   const providerId = backend.slice('provider:'.length)
   // The auth-independent claim bridge has no server bootstrap. Use the same
   // provider-store reader there without starting a server or creating runners.
-  const provider = getAIToolkitInstance()
+  let provider = getAIToolkitInstance()
     ? await getProviderById(providerId)
     : await import('../lib/aiToolkit/providers.js').then(async ({ createProviderService }) => {
       const { PATHS } = await import('../lib/paths.js')
@@ -448,6 +449,10 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     })
   if (!provider || provider.enabled === false) return { ok: false, error: 'Reviewer provider is missing or disabled.' }
   const model = pinnedModel || provider.defaultModel
+  if (effort && !effortLevelsForProvider(provider, model)?.includes(effort)) {
+    return { ok: false, error: 'The selected reviewer model does not support this reasoning effort.' }
+  }
+  if (effort) provider = { ...provider, effort }
   const prompt = messages.map(message => message.content).join('\n\n')
   const { isCodexTextTransportEnabled } = await import('../lib/codexTurn.js')
   let result
@@ -480,11 +485,11 @@ async function runConfiguredProviderCompletion({ backend, model: pinnedModel, me
     }
   }
   if (result.error || !result.text?.trim()) return { ok: false, error: result.error || 'Reviewer returned no content.' }
-  return { ok: true, backend, model, effort: null, content: result.text.trim() }
+  return { ok: true, backend, model, effort: effort || provider.effort || null, content: result.text.trim() }
 }
 
 async function runToolFreeLocalCompletion({ backend, model: pinnedModel, messages, effort, timeoutMs, baseUrl: requestedBaseUrl = null }) {
-  if (isProviderReviewer(backend)) return runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, timeoutMs })
+  if (isProviderReviewer(backend)) return runConfiguredProviderCompletion({ backend, model: pinnedModel, messages, effort, timeoutMs })
   if (!isLocalLlmReviewer(backend)) {
     return { ok: false, error: `Unsupported reviewer backend: ${backend}` }
   }
