@@ -31,6 +31,14 @@ vi.mock('../services/voice/tts.js', () => ({
 }));
 vi.mock('../services/voice/profiles.js', () => ({
   listVoiceProfiles: vi.fn(),
+  parsePresetVoiceId: (voiceId) => {
+    const match = /^([a-z][a-z0-9-]*):([^:\s]+)$/i.exec(voiceId);
+    if (!match) return null;
+    const engine = match[1].toLowerCase() === 'qwen3' ? 'qwen3-tts' : match[1].toLowerCase();
+    return ['kokoro', 'piper', 'qwen3-tts'].includes(engine)
+      ? { engine, voice: match[2], voiceId: `${engine}:${match[2]}` }
+      : null;
+  },
   promotePresetProfile: vi.fn(),
   createVoiceDesignCandidate: vi.fn(),
   createClonedVoiceCandidate: vi.fn(),
@@ -43,6 +51,7 @@ vi.mock('../services/voice/profileBenchmarks.js', () => ({
 vi.mock('../services/voice/qwen3TtsRuntime.js', () => ({
   getQwen3RuntimeStatus: vi.fn(),
   downloadQwen3Model: vi.fn(),
+  DEFAULT_DESIGN_MODEL: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
 }));
 vi.mock('../services/voice/fineTuning.js', () => ({
   startFineTuningJob: vi.fn(),
@@ -145,6 +154,21 @@ describe('Voice Routes', () => {
         modelRevision: 'kokoro-test:q8', delivery: { rate: 1 },
       }));
       expect(res.body).toEqual({ profile: { id: 'voice-profile-1' } });
+    });
+
+    it.each([
+      ['piper:en_GB-jenny_dioco-medium', 'piper:en_GB-jenny_dioco-medium'],
+      ['qwen3:warm-narrator', 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'],
+      ['qwen3-tts:warm-narrator', 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign'],
+    ])('preserves the model revision for %s preset promotion', async (voiceId, modelRevision) => {
+      voiceProfiles.promotePresetProfile.mockResolvedValue({ id: 'voice-profile-1' });
+      const res = await request(buildApp()).post('/api/voice/profiles/preset').send({
+        universeId: 'uni-1', characterId: 'char-1', voiceId,
+      });
+      expect(res.status).toBe(201);
+      expect(voiceProfiles.promotePresetProfile).toHaveBeenCalledWith(expect.objectContaining({
+        modelRevision,
+      }));
     });
 
     it('creates a candidate voice design profile without altering approved binding', async () => {

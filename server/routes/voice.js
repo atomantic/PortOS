@@ -17,13 +17,14 @@ import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice, startWhisp
 import { synthesize, listVoices, listVoiceEngines, VALID_ENGINES } from '../services/voice/tts.js';
 import {
   listVoiceProfiles,
+  parsePresetVoiceId,
   promotePresetProfile,
   createVoiceDesignCandidate,
   createClonedVoiceCandidate,
   promoteVoiceProfile,
 } from '../services/voice/profiles.js';
 import { renderProfileBenchmark, benchmarkProfileInteractive } from '../services/voice/profileBenchmarks.js';
-import { getQwen3RuntimeStatus, downloadQwen3Model } from '../services/voice/qwen3TtsRuntime.js';
+import { getQwen3RuntimeStatus, downloadQwen3Model, DEFAULT_DESIGN_MODEL } from '../services/voice/qwen3TtsRuntime.js';
 import {
   startFineTuningJob,
   getFineTuningJobStatus,
@@ -280,11 +281,13 @@ router.get('/profiles', asyncHandler(async (req, res) => {
 router.post('/profiles/preset', asyncHandler(async (req, res) => {
   const body = validateRequest(promotePresetProfileSchema, req.body || {});
   const cfg = await getVoiceConfig();
+  const preset = parsePresetVoiceId(body.voiceId);
+  const modelRevision = preset?.engine === 'kokoro'
+    ? `${cfg.tts.kokoro?.modelId || 'configured'}:${cfg.tts.kokoro?.dtype || 'configured'}`
+    : (preset?.engine === 'qwen3-tts' ? DEFAULT_DESIGN_MODEL : `piper:${preset?.voice || ''}`);
   const profile = await promotePresetProfile({
     ...body,
-    modelRevision: /^kokoro:/i.test(body.voiceId)
-      ? `${cfg.tts.kokoro?.modelId || 'configured'}:${cfg.tts.kokoro?.dtype || 'configured'}`
-      : `piper:${body.voiceId.slice('piper:'.length)}`,
+    modelRevision,
     delivery: { rate: cfg.tts?.rate },
   });
   res.status(201).json({ profile });
