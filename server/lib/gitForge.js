@@ -1,8 +1,8 @@
 // Pure helpers for resolving forge (GitHub/GitLab) identity from git remote
 // and PR/MR URLs. No child-process or network access — these are string
 // parsers and selectors. The orchestration that shells out to `gh`/`glab`
-// (resolveForgeForRepo, createPR, requestCopilotReview) lives in
-// server/services/git.js and composes these.
+// lives in server/services/forgeAuth.js (account/token resolution) and
+// server/services/git.js (PR operations); both compose these helpers.
 
 /**
  * Parse a git remote URL into `{ host, owner }`. Returns null for unparseable input.

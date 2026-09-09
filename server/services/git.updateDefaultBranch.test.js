@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const execGitMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../lib/execGit.js', () => ({ execGit: execGitMock }));
+vi.mock('../lib/execGit.js', () => ({ execGit: execGitMock,
+  execGitSafe: (...args) => execGitMock(...args).catch(err => ({ exitCode: 1, stdout: '', stderr: err.message })) }));
 
 import { updateDefaultBranch } from './git.js';
 

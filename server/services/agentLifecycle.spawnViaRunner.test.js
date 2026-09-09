@@ -67,7 +67,7 @@ vi.mock('./cos.js', () => ({
   getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('./git.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: vi.fn(),

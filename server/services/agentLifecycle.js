@@ -76,7 +76,7 @@ import { loadPublicReviewSpawnInput } from './publicReviewSpawnInput.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { ensureInstanceId } from './instances.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from './cosTaskClaim.js';
-import { resolveForgeTokenEnv } from './git.js';
+import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { runnerAgents, pausedAgents, consumePausedAgentExit, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { withSpawnDedupGuard, withMapEntryCleanup, withUpdateInProgressGuard, SPAWN_DEDUP_SKIP, SPAWN_UPDATE_SKIP } from './agentGuards.js';
 import { isUpdateInProgress } from './updateChecker.js';

@@ -12,7 +12,7 @@ import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { DISPATCH_HINT_READING_GUIDANCE } from '../lib/dispatchLabels.js';
 import { TASK_DATA_INPUT_DEFINITIONS } from '../lib/taskDataInputCatalog.js';
 import { githubApiHost, resolveAppWorkTracker } from '../lib/workTracker.js';
-import { resolveForgeTokenEnv } from './git.js';
+import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { execGh } from './github.js';
 import { execGlabJson } from './gitlab.js';
 

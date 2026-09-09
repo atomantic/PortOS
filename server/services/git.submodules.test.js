@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Drive updateSubmodule off a scripted git, so the test asserts the exact
 // command sequence (and the commit guard) rather than re-implementing it.
-vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
+vi.mock('../lib/execGit.js', () => {
+  const execGit = vi.fn();
+  return {
+    execGit,
+    execGitSafe: (...args) => execGit(...args).catch(err => ({ exitCode: 1, stdout: '', stderr: err.message }))
+  };
+});
 
 import { execGit } from '../lib/execGit.js';
 
