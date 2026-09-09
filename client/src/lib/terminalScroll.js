@@ -88,10 +88,14 @@ const wheelDeltaLines = (event, rowHeightPx) => {
 };
 
 const wheelScrollResetters = new WeakMap();
+const touchScrollResetters = new WeakMap();
 
-/** Clear fractional wheel state before a reused terminal starts a new session. */
+/** Clear pending scroll gestures before a reused terminal starts a new session. */
 export const resetTerminalWheelScroll = (terminal) => {
-  if (terminal && typeof terminal === 'object') wheelScrollResetters.get(terminal)?.();
+  if (terminal && typeof terminal === 'object') {
+    wheelScrollResetters.get(terminal)?.();
+    touchScrollResetters.get(terminal)?.();
+  }
 };
 
 /**
@@ -201,22 +205,76 @@ export const attachTerminalTouchScroll = (terminal) => {
   let lastY = null;
   let accumPx = 0;
   let geometry = null;
+  let lastMoveAt = 0;
+  let velocity = 0;
+  let momentumFrame = null;
 
-  const end = () => { lastY = null; accumPx = 0; geometry = null; };
+  const stopMomentum = () => {
+    if (momentumFrame !== null) cancelAnimationFrame(momentumFrame);
+    momentumFrame = null;
+  };
+
+  const end = () => {
+    stopMomentum();
+    lastY = null;
+    accumPx = 0;
+    geometry = null;
+    velocity = 0;
+  };
+
+  const onEnd = () => {
+    // Only local scrollback can coast safely. Sending delayed keys or mouse
+    // reports could operate a different TUI after the finger has left the screen.
+    const buffer = terminal.buffer?.active;
+    if (lastY === null || isAltBuffer(terminal)
+      || terminal.modes?.mouseTrackingMode !== 'none'
+      || performance.now() - lastMoveAt > 80 || Math.abs(velocity) < 0.1) return end();
+    lastY = null;
+    let previousFrameAt = performance.now();
+    const coast = (now) => {
+      momentumFrame = null;
+      if (terminal.buffer?.active !== buffer || isAltBuffer(terminal)
+        || terminal.modes?.mouseTrackingMode !== 'none') return end();
+      const elapsed = now - previousFrameAt;
+      // A suspended tab must not replay a flick when it becomes visible again.
+      if (elapsed > 80) return end();
+      previousFrameAt = now;
+      accumPx += velocity * elapsed;
+      velocity *= Math.exp(-elapsed / 180);
+      const { steps, remainderPx } = planTouchScrollSteps(accumPx, geometry.rowHeightPx);
+      accumPx = remainderPx;
+      if (steps) {
+        const before = buffer.viewportY;
+        terminal.scrollLines(steps);
+        if (buffer.viewportY === before) return end();
+      }
+      if (Math.abs(velocity) < 0.1) return end();
+      momentumFrame = requestAnimationFrame(coast);
+    };
+    momentumFrame = requestAnimationFrame(coast);
+  };
 
   const onStart = (ev) => {
+    end();
     // Two fingers is a pinch-zoom, which belongs to the browser.
     if (ev.touches?.length !== 1) return end();
     lastY = ev.touches[0].clientY;
     accumPx = 0;
     geometry = measureTerminalGeometry(terminal);
+    lastMoveAt = performance.now();
   };
 
   const onMove = (ev) => {
     if (lastY == null) return;
     if (ev.touches?.length !== 1) return end();
     const y = ev.touches[0].clientY;
-    accumPx += lastY - y;
+    const now = performance.now();
+    const delta = lastY - y;
+    const elapsed = now - lastMoveAt;
+    // Cap release speed so a sparse event stream cannot fling thousands of rows.
+    velocity = elapsed > 0 ? Math.max(-3, Math.min(3, delta / elapsed)) : 0;
+    lastMoveAt = now;
+    accumPx += delta;
     lastY = y;
     // Cancel even sub-row movement: it still belongs to this terminal gesture.
     if (ev.cancelable) ev.preventDefault();
@@ -251,17 +309,21 @@ export const attachTerminalTouchScroll = (terminal) => {
     }
   };
 
+  touchScrollResetters.set(terminal, end);
   el.addEventListener('touchstart', onStart, { passive: true });
   el.addEventListener('touchmove', onMove, { passive: false });
-  el.addEventListener('touchend', end, { passive: true });
+  el.addEventListener('touchend', onEnd, { passive: true });
+  el.addEventListener('wheel', stopMomentum, { passive: true });
   el.addEventListener('touchcancel', end, { passive: true });
 
   return () => {
     end();
+    if (touchScrollResetters.get(terminal) === end) touchScrollResetters.delete(terminal);
     el.style.touchAction = previousTouchAction;
     el.removeEventListener('touchstart', onStart);
     el.removeEventListener('touchmove', onMove);
-    el.removeEventListener('touchend', end);
+    el.removeEventListener('touchend', onEnd);
+    el.removeEventListener('wheel', stopMomentum);
     el.removeEventListener('touchcancel', end);
   };
 };
