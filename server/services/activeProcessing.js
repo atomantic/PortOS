@@ -1,7 +1,7 @@
 import { getCudaCapability, getCudaUtilization } from '../lib/cudaCapability.js';
 import { listJobs, getRunningJob } from './mediaJobQueue/index.js';
 import { sanitizeJob } from './mediaJobQueue/sanitizeJob.js';
-import { listModels } from './imageTo3d/models.js';
+import { listGeneratingModelSummaries } from './imageTo3d/models.js';
 import { getLoadedModels } from './ollamaManager.js';
 import * as cos from './cos.js';
 
@@ -11,7 +11,7 @@ export async function getActiveProcessing() {
   const [capability, jobs, models, loadedModels, taskData, agents] = await Promise.all([
     getCudaCapability(),
     Promise.resolve(listJobs()).then((items) => items.filter((job) => LIVE_STATUSES.has(job.status))),
-    listModels().catch(() => []),
+    listGeneratingModelSummaries().catch(() => []),
     getLoadedModels().catch(() => []),
     cos.getAllTasks().catch(() => ({ user: {}, cos: {} })),
     // `null` = the read FAILED, distinct from `[]` = read fine, no agents. The
@@ -51,7 +51,7 @@ export async function getActiveProcessing() {
     },
     jobs: jobs.map(sanitizeJob),
     extras: {
-      imageTo3d: models.filter((model) => model.status === 'generating').map((model) => ({ id: model.id, name: model.name || model.id })),
+      imageTo3d: models.map((model) => ({ id: model.id, name: model.name || model.id })),
       ollama: loadedModels,
     },
     agents: {

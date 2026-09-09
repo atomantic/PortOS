@@ -43,6 +43,7 @@ vi.mock('../../lib/heavyJobClaim.js', () => ({
 
 vi.mock('./db.js', () => ({
   listModels: vi.fn(),
+  listGeneratingModelSummaries: vi.fn(),
   getModel: vi.fn(),
   createModel: vi.fn(),
   mutateModel: vi.fn(),

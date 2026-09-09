@@ -6,7 +6,7 @@ const deps = vi.hoisted(() => ({
 vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: deps.capability, getCudaUtilization: deps.utilization }));
 vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob: deps.running }));
 vi.mock('./mediaJobQueue/sanitizeJob.js', () => ({ sanitizeJob: (job) => ({ id: job.id, kind: job.kind, status: job.status, params: { musicStudio: job.params.musicStudio } }) }));
-vi.mock('./imageTo3d/models.js', () => ({ listModels: deps.models }));
+vi.mock('./imageTo3d/models.js', () => ({ listGeneratingModelSummaries: deps.models }));
 vi.mock('./ollamaManager.js', () => ({ getLoadedModels: deps.loaded }));
 vi.mock('./cos.js', () => ({ getAllTasks: deps.tasks, getStatus: deps.status, getAgents: deps.agents }));
 
@@ -22,7 +22,7 @@ describe('active processing snapshot', () => {
     deps.utilization.mockResolvedValue({ status: 'available', gpus: [{ name: 'Example GPU', utilizationPercent: 44, memoryUsedMib: 1000, memoryTotalMib: 24000 }] });
     deps.jobs.mockReturnValue([{ id: 'audio-1', kind: 'audio', status: 'running', params: { prompt: 'fake', musicStudio: { trackId: 'track-1' }, secretPath: '/private' } }]);
     deps.running.mockReturnValue({ kind: 'audio' });
-    deps.models.mockResolvedValue([{ id: 'mesh-1', name: 'Fake mesh', status: 'generating' }]);
+    deps.models.mockResolvedValue([{ id: 'mesh-1', name: 'Fake mesh' }, { id: 'mesh-2', name: '' }]);
     deps.loaded.mockResolvedValue([{ id: 'model-1', name: 'Fake model' }]);
     deps.tasks.mockResolvedValue({ user: { tasks: [{ id: 'task-1', status: 'pending' }] }, cos: { tasks: [{ id: 'cos-task-1', status: 'completed' }] } });
     deps.status.mockResolvedValue({ activeAgents: 99 });
@@ -34,7 +34,7 @@ describe('active processing snapshot', () => {
     expect(snapshot.jobs).toHaveLength(1);
     expect(snapshot.gpu).toMatchObject({ status: 'available', laneBusy: true, laneKind: 'audio' });
     expect(snapshot.gpu.gpus[0]).toMatchObject({ utilizationPercent: 44, memoryUsedMib: 1000 });
-    expect(snapshot.extras.imageTo3d).toEqual([{ id: 'mesh-1', name: 'Fake mesh' }]);
+    expect(snapshot.extras.imageTo3d).toEqual([{ id: 'mesh-1', name: 'Fake mesh' }, { id: 'mesh-2', name: 'mesh-2' }]);
     expect(snapshot.extras.ollama).toEqual([{ id: 'model-1', name: 'Fake model' }]);
     expect(snapshot.agents).toEqual({ active: 2, queued: 1 });
     expect(deps.status).not.toHaveBeenCalled();
@@ -51,6 +51,9 @@ describe('active processing snapshot', () => {
     deps.agents.mockResolvedValue([]);
     const snapshot = await getActiveProcessing();
     expect(snapshot.gpu).toMatchObject({ status: 'absent', laneBusy: false, laneKind: null, gpus: [] });
+    expect(snapshot.extras.imageTo3d).toEqual([]);
+    deps.models.mockRejectedValueOnce(new Error('store unavailable'));
+    expect((await getActiveProcessing()).extras.imageTo3d).toEqual([]);
     expect(deps.utilization).not.toHaveBeenCalled();
   });
 });
