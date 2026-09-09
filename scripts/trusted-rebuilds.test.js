@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
+import { tmpdir } from 'os';
 
 import { TRUSTED_REBUILDS, discoverWorkspaces, workspaceDir, rebuildTrusted, runCli } from './trusted-rebuilds.js';
 import { prepareCliSpawn } from '../server/lib/bufferedSpawn.js';
@@ -246,19 +247,6 @@ describe('rebuildTrusted failure semantics', () => {
     if (args.some((arg) => arg === needle)) throw new Error(`boom: ${needle}`);
   };
 
-  it('spawns one npm rebuild per group, with the group\'s packages', () => {
-    const calls = [];
-    rebuildTrusted('/tmp', 'server', { spawn: (bin, args) => calls.push([bin, args]) });
-    // Compared against prepareCliSpawn rather than a hardcoded `npm` + args pair:
-    // the launchable form is platform-dependent (on Windows npm is a `.cmd` shim
-    // that has to be wrapped), so pinning the POSIX shape would fail the suite on
-    // a Windows checkout.
-    expect(calls).toEqual(TRUSTED_REBUILDS.server.map((group) => {
-      const { command, args } = prepareCliSpawn('npm', ['rebuild', ...group.pkgs]);
-      return [command, args];
-    }));
-  });
-
   it('fails when a fatal group fails', () => {
     expect(rebuildTrusted('/tmp', 'server', { spawn: failFor('node-pty') })).toBe(false);
   });
@@ -290,6 +278,31 @@ describe('rebuildTrusted failure semantics', () => {
 // way to clear it by updating again. bufferedSpawn owns the wrap; this asserts
 // the end-to-end property that regressed, on whatever platform CI runs.
 describe('npm spawn shape', () => {
+  it('runs only allowlisted lifecycle hooks despite the workspace script block', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-trusted-rebuild-'));
+    try {
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'example-workspace', version: '1.0.0' }));
+      writeFileSync(join(dir, '.npmrc'), 'ignore-scripts=true\naudit=false\n');
+      // Synthetic installed packages: no registry, native compiler, or download.
+      // The non-allowlisted package must remain untouched by the explicit rebuild.
+      for (const name of ['node-pty', 'example-untrusted']) {
+        const pkgDir = join(dir, 'node_modules', name);
+        mkdirSync(pkgDir, { recursive: true });
+        writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({
+          name, version: '1.0.0', scripts: { install: 'node install.cjs' },
+        }));
+        writeFileSync(join(pkgDir, 'install.cjs'), "require('fs').writeFileSync('built.txt', 'built');\n");
+      }
+
+      expect(rebuildTrusted(dir, 'server')).toBe(true);
+      expect(existsSync(join(dir, 'node_modules', 'node-pty', 'built.txt'))).toBe(true);
+      expect(existsSync(join(dir, 'node_modules', 'example-untrusted', 'built.txt'))).toBe(false);
+      expect(readFileSync(join(dir, '.npmrc'), 'utf8')).toContain('ignore-scripts=true');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('never hands a bare .cmd/.bat to a shell-less spawn', () => {
     const { command } = prepareCliSpawn('npm', ['rebuild', 'node-pty']);
     expect(command, 'a .cmd target under shell:false throws EINVAL').not.toMatch(/\.(cmd|bat)$/i);
