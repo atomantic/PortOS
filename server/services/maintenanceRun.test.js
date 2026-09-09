@@ -201,7 +201,7 @@ it('runs fixes consecutively and drains remaining issues only after documentatio
 });
 
 it('files findings consecutively and finishes without claiming when claims are disabled', async () => {
-  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'file-issues', claimBetweenAudits: false });
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'file-issues', claimBetweenAudits: false, claimHandler: { providerId: 'unavailable', model: 'example' } });
   expect(run.steps.map(step => step.taskRef.taskType)).toEqual(MAINTENANCE_TASK_ORDER);
   for (let index = 0; index < run.steps.length; index++) {
     expect(state.invoked.at(-1).step.overrides.params.fileIssues).toBe(index < run.steps.length - 1);
