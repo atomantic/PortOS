@@ -85,6 +85,7 @@ export const CREATIVE_PREFIXES = Object.freeze([
 export const CREATIVE_NAMES = Object.freeze([
   'catalog-extract-ideas-scenes-concepts', // pulls scenes/ideas out of a source work
   'catalog-ideas-scenes-concepts',
+  'catalog-babble-prune',
   'chiptune-score',
   'game-asset-feedback',
   'manuscript-reformat',

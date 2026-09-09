@@ -26,6 +26,7 @@ import {
   catalogScrapCommitSchema,
   catalogSyncEnvelopeSchema,
   catalogExtractRequestSchema,
+  catalogPruneRequestSchema,
   catalogEmbeddingsBackfillSchema,
   catalogMigrationRerunSchema,
   catalogBulkImportSchema,
@@ -114,6 +115,16 @@ router.post('/scraps/:id/extract', asyncHandler(async (req, res) => {
     scrapId: scrap.id,
     providerOverride: req.body?.providerOverride,
   });
+  res.json({ scrap, draft });
+}));
+
+router.post('/scraps/:id/prune', asyncHandler(async (req, res) => {
+  const options = validateRequest(catalogPruneRequestSchema, req.body);
+  const scrap = await catalogDB.getScrap(req.params.id);
+  if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
+  if (scrap.parentScrapId) throw new ServerError('Prune the parent scrap, not a chunk', { status: 400 });
+  const { pruneCatalogBabble } = await import('../services/catalogPrune.js');
+  const draft = await pruneCatalogBabble({ rawText: scrap.rawText, ...options });
   res.json({ scrap, draft });
 }));
 
