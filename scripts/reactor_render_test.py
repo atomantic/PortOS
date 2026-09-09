@@ -154,6 +154,27 @@ class CaptureLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(Path(str(self.output) + ".capture").exists())
                 spawn.assert_not_awaited()
 
+    async def test_connection_rejection_reports_only_safe_http_status_without_submitting(self):
+        for status in (400, 402, 503, None, "private-status", True, 200, 600):
+            with self.subTest(status=status):
+                reactor = FakeReactor()
+                error = type("BadRequestError", (Exception,), {})("private response body")
+                error.status = status
+                reactor.connect = AsyncMock(side_effect=error)
+                log = io.StringIO()
+                with patch.object(self.runner, "Reactor", return_value=reactor), redirect_stdout(log):
+                    with self.assertRaises(type(error)):
+                        await self.runner.render(self.params)
+                events = [json.loads(line) for line in log.getvalue().splitlines()]
+                expected = {"type": "error", "phase": "connecting", "errorType": "BadRequestError"}
+                if type(status) is int and 400 <= status <= 599:
+                    expected["httpStatus"] = status
+                self.assertEqual(events[-1], expected)
+                self.assertNotIn("private", log.getvalue())
+                self.assertEqual(reactor.commands, [])
+                self.assertTrue(reactor.disconnected)
+                self.assertFalse(Path(str(self.output) + ".capture").exists())
+
     async def test_canvas_opens_on_the_requested_aspect_and_rejects_one_fast_h3_cannot_render(self):
         reactor = FakeReactor()
 
