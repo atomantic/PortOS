@@ -798,13 +798,13 @@ export default function VideoGen() {
     {
       key: 'shared-encoder', id: TEXT_ENCODER_DOWNLOAD_ID, label: 'shared text encoder',
       applies: usesSharedTextEncoder, status: textEncoderStatus, keyPrefix: 'text-encoder',
-      name: `The shared text encoder (${textEncoderStatus?.repo})`, repairLabel: 'Repair encoder',
+      name: `The shared text encoder${textEncoderStatus?.repo ? ` (${textEncoderStatus.repo})` : ''}`, repairLabel: 'Repair encoder',
     },
     {
       key: 'encoder-option', id: textEncoderOptionDownloadId,
       label: `${selectedTextEncoder?.label || 'selected'} text encoder`,
       applies: !!textEncoderOptionDownloadId, status: textEncoderOptionStatus, keyPrefix: textEncoderOptionDownloadId,
-      name: `The ${selectedTextEncoder?.label} text encoder`, repairLabel: 'Repair text encoder',
+      name: `The ${selectedTextEncoder?.label || 'selected'} text encoder`, repairLabel: 'Repair text encoder',
     },
     {
       key: 'ic-lora', id: icSpec?.mode, label: `${icSpec?.label || 'IC-LoRA'} weight`,
@@ -1739,7 +1739,7 @@ export default function VideoGen() {
               className="flex items-center gap-2 px-4 py-2 border border-port-border text-gray-200 hover:text-white hover:bg-port-border/40 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium rounded-lg min-h-[40px]"
               title={canEnqueue ? 'Submit this configuration to its server queue; local, Grok, and remote lanes run independently'
                 : blockedAsset ? `Download the ${blockedAsset.label} before queueing`
-                    : 'Complete the required inputs before queueing'}
+                  : 'Complete the required inputs before queueing'}
             >
               <ListPlus className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Add ${effectiveBatchSize} videos to queue` : 'Add to queue'}
             </button>

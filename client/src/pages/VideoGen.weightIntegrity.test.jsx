@@ -51,8 +51,8 @@ describe('VideoGen downloadable asset integrity', () => {
   it.each(ASSETS)('isolates $repair dismissal and re-shows changed damage', async (asset) => {
     for (const entry of ASSETS) setStatus(entry.id, bad(['one.safetensors', 'two.safetensors']));
     await mountAssets();
-    const repair = await screen.findByRole('button', { name: asset.repair, exact: true });
-    const banner = repair.parentElement.parentElement;
+    await screen.findByRole('button', { name: asset.repair, exact: true });
+    const banner = screen.getByRole('group', { name: asset.repair, exact: true });
     expect(banner).toHaveTextContent('2 damaged');
     fireEvent.click(within(banner).getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByRole('button', { name: asset.repair, exact: true })).toBeNull();
@@ -65,9 +65,44 @@ describe('VideoGen downloadable asset integrity', () => {
     setStatus(asset.id, bad(['changed.safetensors']));
     refreshRender();
     const changedRepair = await screen.findByRole('button', { name: asset.repair, exact: true });
-    expect(changedRepair.parentElement.parentElement).toHaveTextContent('1 damaged');
+    expect(screen.getByRole('group', { name: asset.repair, exact: true })).toHaveTextContent('1 damaged');
     fireEvent.click(changedRepair);
     expect(state.repair).toHaveBeenCalledWith(asset.id);
+  });
+
+  it('suppresses repair banners during downloads without dismissing the damage', async () => {
+    for (const asset of ASSETS) setStatus(asset.id, bad(['one.safetensors']));
+    await mountAssets();
+    state.modelDownloading = true;
+    refreshRender();
+    expect(screen.queryByRole('button', { name: /^Repair/ })).toBeNull();
+    state.modelDownloading = false;
+    refreshRender();
+    expect(screen.getAllByRole('button', { name: /^Repair/ })).toHaveLength(4);
+  });
+
+  it('keeps the same download priority for Generate and Add to queue', async () => {
+    for (const asset of ASSETS) setStatus(asset.id, { cached: false });
+    await mountAssets();
+    for (const asset of ASSETS) {
+      expect(generate()).toHaveAttribute('title', `Download the ${asset.label} before generating`);
+      expect(enqueue()).toHaveAttribute('title', `Download the ${asset.label} before queueing`);
+      setStatus(asset.id, ready());
+      refreshRender();
+    }
+  });
+
+  it('bypasses local download gates on Grok while keeping local repair available', async () => {
+    state.settings = { imageGen: { grok: { enabled: true } } };
+    for (const asset of ASSETS) setStatus(asset.id, { cached: false });
+    setStatus('__text_encoder__', { ...bad(['one.safetensors']), cached: false, repo: undefined });
+    await renderVideoGenPage();
+    refreshRender();
+    fireEvent.click(await screen.findByRole('button', { name: 'Grok', exact: true }));
+    await waitFor(() => expect(generate()).toBeEnabled());
+    const banner = screen.getByRole('group', { name: 'Repair encoder', exact: true });
+    expect(banner).toHaveTextContent('shared text encoder');
+    expect(banner).not.toHaveTextContent('undefined');
   });
 
   it.each(ASSETS)('names missing $label before generating', async (asset) => {

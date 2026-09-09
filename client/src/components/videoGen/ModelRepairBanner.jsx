@@ -8,7 +8,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 // button label/disabled/spinner state come from the caller.
 export default function ModelRepairBanner({ message, repairLabel, onRepair, onDismiss, disabled, repairing, disabledReasonId }) {
   return (
-    <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+    <div role="group" aria-label={repairLabel} className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
       <div className="flex items-start gap-2">
         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
         <div>{message}</div>
