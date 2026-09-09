@@ -890,19 +890,21 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
 // Run an async close but resolve anyway after `ms` — so a close that never
 // settles (e.g. a WebSocket-upgraded socket the server no longer tracks, or a
 // leaked DB client) can't hang shutdown; process.exit() reclaims the resources at
-// the OS level. `run(finish)` receives a settle-once callback: finish() /
-// finish(successMsg) / finish(errMsg, true). The backstop is .unref()'d so it
-// never keeps the event loop alive on its own.
+// the OS level. Both callbacks passed to run resolve the same settle-once
+// promise: finish logs success, finishWithError logs an error and continues.
+// The backstop is .unref()'d so it never keeps the event loop alive on its own.
 const withGrace = (label, ms, run) => new Promise((resolve) => {
   let settled = false;
-  const finish = (msg, isErr) => {
+  const complete = (msg, log) => {
     if (settled) return;
     settled = true;
-    if (msg) (isErr ? console.error : console.log)(msg);
+    if (msg) log(msg);
     resolve();
   };
-  run(finish);
-  setTimeout(() => finish(`⚠️ ${label} close exceeded ${ms}ms — proceeding`, true), ms).unref?.();
+  const finish = (msg) => complete(msg, console.log);
+  const finishWithError = (msg) => complete(msg, console.error);
+  run({ finish, finishWithError });
+  setTimeout(() => finishWithError(`⚠️ ${label} close exceeded ${ms}ms — proceeding`), ms).unref?.();
 });
 
 // graceMs is deliberately short: closeAllConnections() force-drops every
@@ -912,10 +914,10 @@ const withGrace = (label, ms, run) => new Promise((resolve) => {
 // the TCP remnant on process.exit). So don't tax every restart waiting on it.
 // ERR_SERVER_NOT_RUNNING means it was already closed (io.close() closes whichever
 // server is its current this.httpServer) — success for us, not a failure.
-const closeServer = (server, label, graceMs = 250) => withGrace(label, graceMs, (finish) => {
+const closeServer = (server, label, graceMs = 250) => withGrace(label, graceMs, ({ finish, finishWithError }) => {
   if (!server) return finish();
   server.close((err) => {
-    if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finish(`⚠️ Error closing ${label}: ${err.message}`, true);
+    if (err && err.code !== 'ERR_SERVER_NOT_RUNNING') finishWithError(`⚠️ Error closing ${label}: ${err.message}`);
     else finish(`✅ ${label} closed`);
   });
   // Order matters: close() above stops accepting NEW connections; NOW force-drop
@@ -997,18 +999,18 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // both outcomes and never rejects (hence `finish()` with no message), the
     // `.catch` is the belt-and-suspenders for an out-of-lifecycle rejection, and a
     // marker we fail to write only degrades recovery to the pre-existing orphan path.
-    const markerWritten = withGrace('Host-shutdown marker', 1500, (finish) =>
+    const markerWritten = withGrace('Host-shutdown marker', 1500, ({ finish, finishWithError }) =>
       writeHostShutdownMarker({ agentIds: [...activeAgents.keys()], signal })
-        .then(() => finish(), (err) => finish(`⚠️ Host-shutdown marker failed: ${err.message}`, true)));
+        .then(() => finish(), (err) => finishWithError(`⚠️ Host-shutdown marker failed: ${err.message}`)));
 
     // Terminate the Codex app-server child before the socket teardown below.
     // pm2's TreeKill would reap it anyway, but a direct SIGTERM keeps a manual
     // `kill` of the server from orphaning a Codex process holding the user's
     // sign-in, and it is a no-op when nothing was ever spawned.
-    await withGrace('Codex app-server', 2000, (finish) =>
+    await withGrace('Codex app-server', 2000, ({ finish, finishWithError }) =>
       stopCodexAppServer().then(
         () => finish(),
-        (err) => finish(`⚠️ Codex app-server stop failed: ${err.message}`, true),
+        (err) => finishWithError(`⚠️ Codex app-server stop failed: ${err.message}`),
       ));
 
     // Drop existing long-lived sockets (SSE + keep-alive) up front so the closes
@@ -1023,8 +1025,11 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     // time on that already-closed server: Node registers the callback as a one-time
     // 'close' listener for an event that already fired, so it never runs and shutdown
     // hangs forever — the real cause of the reconcile "stopping apps" hang.
-    await withGrace('Socket.IO', 3000, (finish) =>
-      io.close((err) => finish(err ? `⚠️ Error closing Socket.IO: ${err.message}` : '✅ Socket.IO closed', !!err)));
+    await withGrace('Socket.IO', 3000, ({ finish, finishWithError }) =>
+      io.close((err) => {
+        if (err) finishWithError(`⚠️ Error closing Socket.IO: ${err.message}`);
+        else finish('✅ Socket.IO closed');
+      }));
     await import('./tailcatIngress.js').then(({ stopTailcatIngress }) => stopTailcatIngress())
       .catch(() => console.error('❌ Tailcat ingress shutdown failed'));
     // Close BOTH servers explicitly. Whichever one io.close() already closed resolves
@@ -1041,8 +1046,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
       // Bound the DB pool close: pool.end() waits for every checked-out client to
       // be released, so one hung/leaked connection (e.g. a LISTEN channel) would
       // otherwise stall shutdown until the force-exit timer.
-      await withGrace('DB pool', 3000, (finish) =>
-        close().then(() => finish('✅ DB pool closed'), (err) => finish(`⚠️ DB pool close failed: ${err.message}`, true)));
+      await withGrace('DB pool', 3000, ({ finish, finishWithError }) =>
+        close().then(() => finish('✅ DB pool closed'), (err) => finishWithError(`⚠️ DB pool close failed: ${err.message}`)));
     } else {
       console.warn('ℹ️ DB pool close not available; skipping DB shutdown');
     }
