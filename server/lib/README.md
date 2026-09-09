@@ -625,3 +625,5 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `creativeDirectorVideoCompiler.js` | `compileVideoArtifact` and `validateVideoShot` — pure timed-shot/source-reference compilation and pinned-backend compatibility shared by Creative Director project mutations and Video execution preflight. Storage, history and approval remain with their existing owners. |
 
 | `providerTypes.js` | Pure shared `isCliProvider`, `isTuiProvider`, `isApiProvider`, `isProcessProvider`, and type-gated `isClaudeHarnessProvider` predicates. |
+
+| `videoTimelineFades.js` | Browser-safe `fitFades()` proportionally fits a fade pair to its visible duration. Shared by timeline normalization/export and the editor preview/trim controls; legacy import paths re-export it. |

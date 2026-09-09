@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { fitFades as sharedFitFades } from '../../lib/videoTimelineFades.js';
 import {
   TIMELINE_SCHEMA_VERSION,
   normalizeProject,
@@ -244,6 +245,10 @@ describe('assetPathFor — a valid gallery basename must stay usable', () => {
 });
 
 describe('fitFades', () => {
+  it('preserves the legacy export as the shared fade implementation', () => {
+    expect(fitFades).toBe(sharedFitFades);
+  });
+
   it('leaves a fitting pair alone', () => {
     expect(fitFades(1, 1, 4)).toEqual({ fadeInSec: 1, fadeOutSec: 1 });
   });
