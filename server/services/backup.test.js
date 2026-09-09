@@ -1024,6 +1024,25 @@ describe('restoreSnapshot subdirFilter guard', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
+  it('preserves complete restore preview paths across stdout byte boundaries', async () => {
+    const proc = fakeProc();
+    spawn.mockReturnValue(proc);
+    const restore = restoreSnapshot('/dest', 'snap-1');
+    await flush();
+
+    proc.stdout.emit('data', Buffer.from('>f+++++++++ example'));
+    const tail = Buffer.from('-settings.json\ncd+++++++++ ignored/\n<f.st...... café.json');
+    const split = tail.indexOf(Buffer.from('é')) + 1;
+    proc.stdout.emit('data', tail.subarray(0, split));
+    proc.stdout.emit('data', tail.subarray(split));
+    proc.emit('close', 0);
+
+    await expect(restore).resolves.toMatchObject({
+      dryRun: true,
+      changedFiles: ['>f+++++++++ example-settings.json', '<f.st...... café.json'],
+    });
+  });
+
   it('uses PORTOS_RSYNC when configured and keeps shell execution disabled', async () => {
     const previous = process.env.PORTOS_RSYNC;
     process.env.PORTOS_RSYNC = '/custom/bin/rsync';

@@ -14,6 +14,7 @@ import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, atomicWrite, sha256File } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
 import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
@@ -212,14 +213,12 @@ function runRsync(srcDir, destDir, flags = []) {
     const changed = [];
     let stderr = '';
 
-    proc.stdout.on('data', (chunk) => {
-      const lines = chunk.toString().split('\n').filter(Boolean);
-      for (const line of lines) {
-        if (line.startsWith('>') || line.startsWith('<')) {
-          changed.push(line);
-        }
+    const stdoutReader = createLineReader((line) => {
+      if (line.startsWith('>') || line.startsWith('<')) {
+        changed.push(line);
       }
     });
+    proc.stdout.on('data', stdoutReader.push);
 
     proc.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
@@ -228,6 +227,7 @@ function runRsync(srcDir, destDir, flags = []) {
     proc.on('close', (code) => {
       // Exit code 24 = some files vanished mid-transfer (normal for active system)
       if (code === 0 || code === 24) {
+        stdoutReader.flush();
         resolve(changed);
       } else {
         reject(new Error(`rsync exited with code ${code}: ${stderr.trim()}`));
