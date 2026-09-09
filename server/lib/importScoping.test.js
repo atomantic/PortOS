@@ -147,6 +147,12 @@ describe('Tailcat shared owners stay independent of forwarding (#6570)', () => {
 // [entry, target, why, specifier] — same first three columns as NARROWED above,
 // plus the specifier the call site must still name in its `await import()`.
 const DEFERRED = [
+  ['services/codeReview.js', 'services/lmStudioManager.js',
+    'reads the live endpoint only for a selected LM Studio review', './lmStudioManager.js'],
+  ['services/codeReview.js', 'services/ollamaManager.js',
+    'reads endpoints and model capabilities only for an Ollama review', './ollamaManager.js'],
+  ['services/codeReview.js', 'services/mtplxServerManager.js',
+    'resolves the managed daemon only for an MTPLX review', './mtplxServerManager.js'],
   ['services/agentManagement.js', 'lib/privateSecuritySandbox.js',
     'loads sandbox cleanup only for private assessments', '../lib/privateSecuritySandbox.js'],
   ['services/cos.js', 'services/persistentMindAdapter.js',
