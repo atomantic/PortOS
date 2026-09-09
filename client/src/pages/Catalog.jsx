@@ -718,6 +718,10 @@ export default function Catalog() {
 
       {showForm && (
         <form onSubmit={handleCreate} className="mb-6 p-4 bg-port-card border border-port-border rounded-lg space-y-3">
+          <button type="button" onClick={() => navigate('/catalog/ingest?mode=babble')}
+            className="text-sm text-port-accent hover:underline">
+            Babble and Prune — turn a brainstorm into multiple entries
+          </button>
           <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3">
             <div>
               <label htmlFor="catalog-new-type" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">

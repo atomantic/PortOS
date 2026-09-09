@@ -8,6 +8,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Sparkles, Loader2, CheckCircle2, AlertCircle, ArrowLeft, RotateCcw, Circle, Upload, Link2, FileText, Mic, Square } from 'lucide-react';
+import useProviderModels from '../hooks/useProviderModels';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import Modal from '../components/ui/Modal';
@@ -15,6 +17,7 @@ import socket from '../services/socket';
 import { startMemoRecording } from '../lib/audioRecorder';
 import {
   createCatalogScrap,
+  pruneCatalogScrap,
   extractFromCatalogScrap,
   commitCatalogScrapDraft,
   bulkImportCatalogIngredients,
@@ -65,6 +68,9 @@ function StageIcon({ status }) {
 export default function CatalogIngest() {
   const navigate = useNavigate();
   const location = useLocation();
+  const babble = new URLSearchParams(location.search).get('mode') === 'babble';
+  const picker = useProviderModels({ withEffort: true, enabled: babble });
+  const [effort, setEffort] = useState('');
   const [phase, setPhase] = useState('paste'); // 'paste' | 'extracting' | 'review'
   const [title, setTitle] = useState('');
   const [rawText, setRawText] = useState('');
@@ -124,6 +130,7 @@ export default function CatalogIngest() {
   // model still applies, but tab refresh + a slow extract overlap is real).
   const activeRunIdRef = useRef(null);
   useEffect(() => {
+    if (babble) return;
     const onProgress = (ev) => {
       if (!ev || typeof ev !== 'object') return;
       if (ev.type === 'start') {
@@ -145,7 +152,7 @@ export default function CatalogIngest() {
     };
     socket.on('catalog:extract:progress', onProgress);
     return () => socket.off('catalog:extract:progress', onProgress);
-  }, []);
+  }, [babble]);
 
   const reset = () => {
     activeRunIdRef.current = null;
@@ -205,7 +212,7 @@ export default function CatalogIngest() {
     if (!text) { toast.error('Paste some text first.'); return; }
     setSubmitting(true);
     setPhase('extracting');
-    setStages(INITIAL_STAGES);
+    setStages(babble ? [{ id: 'prune', label: 'Prune brainstorm', status: 'running' }] : INITIAL_STAGES);
     // silent: own error handling below — avoids double-toast.
     const created = await createCatalogScrap({ rawText: text, title: title.trim() || undefined }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Failed to save scrap'); return null; });
@@ -214,7 +221,9 @@ export default function CatalogIngest() {
     // Bind any pending Brain handoff ids to THIS scrap, so only a commit of the
     // scrap built from the prefilled text consumes them (not a later URL/file/voice).
     if (creativeNoteIdsRef.current.length) creativeNoteScrapIdRef.current = created.scrap.id;
-    const result = await extractFromCatalogScrap(created.scrap.id, {}, { silent: true })
+    const result = await (babble
+      ? pruneCatalogScrap(created.scrap.id, { providerId: picker.selectedProviderId, model: picker.selectedModel, ...(effort ? { effort } : {}) }, { silent: true })
+      : extractFromCatalogScrap(created.scrap.id, {}, { silent: true }))
       .catch((err) => { toast.error(err?.message || 'Extraction failed'); return null; });
     setSubmitting(false);
     enterReviewFromResult(result);
@@ -434,10 +443,9 @@ export default function CatalogIngest() {
           <div className="flex items-start gap-3">
             <Sparkles className="w-7 h-7 text-port-accent mt-1" aria-hidden="true" />
             <div>
-              <h1 className="text-2xl font-bold text-white">Catalog Ingest</h1>
+              <h1 className="text-2xl font-bold text-white">{babble ? 'Babble and Prune' : 'Catalog Ingest'}</h1>
               <p className="text-sm text-gray-400 mt-1">
-                Paste prose, notes, or a synopsis. The LLM extracts characters, places, and objects
-                alongside ideas, scenes, and concepts; review and commit only what you want to keep.
+                {babble ? 'Write freely first. Then choose an AI provider to refine the useful fragments into catalog suggestions.' : 'Paste prose, notes, or a synopsis. Extract characters, places, objects, ideas, scenes, and concepts; review and commit only what you want to keep.'}
               </p>
             </div>
           </div>
@@ -446,7 +454,7 @@ export default function CatalogIngest() {
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-gray-400 hover:text-white">
               <ArrowLeft size={14} aria-hidden="true" /> Back to Catalog
             </button>
-            {phase === 'paste' && (
+            {phase === 'paste' && !babble && (
               <button type="button" onClick={() => setBulkOpen((v) => !v)}
                 disabled={recording}
                 title={recording ? 'Stop the voice recording first' : undefined}
@@ -536,7 +544,7 @@ export default function CatalogIngest() {
             {/* Source picker — paste / URL / file / voice all funnel into the
                 same review phase. File + voice fire immediately; paste + URL
                 have their own input rows. */}
-            <div className="flex flex-wrap items-center gap-2">
+            <div hidden={babble} className={babble ? 'hidden' : 'flex flex-wrap items-center gap-2'}>
               <button type="button" onClick={() => setSourceMode('paste')}
                 className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border ${sourceMode === 'paste' ? 'border-port-accent text-white bg-port-accent/10' : 'border-port-border text-gray-300 hover:text-white'}`}>
                 <Sparkles size={14} aria-hidden="true" /> Paste
@@ -593,17 +601,25 @@ export default function CatalogIngest() {
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm focus:outline-none focus:border-port-accent" />
                 </div>
                 <div>
-                  <label htmlFor="ingest-text" className="block text-sm font-medium mb-1 text-white">Raw text</label>
-                  <textarea id="ingest-text" rows={12} value={rawText} onChange={(e) => setRawText(e.target.value)}
+                  <label htmlFor="ingest-text" className="block text-sm font-medium mb-1 text-white">{babble ? 'Babble freely — no need to organize or judge yet' : 'Raw text'}</label>
+                  <textarea id="ingest-text" maxLength={babble ? 30000 : undefined} rows={12} value={rawText} onChange={(e) => setRawText(e.target.value)}
                     placeholder="Paste prose, scene notes, character sketches — anything you want catalogued."
                     className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm font-mono focus:outline-none focus:border-port-accent" />
-                  <p className="text-xs text-gray-500 mt-1">{rawText.length.toLocaleString()} chars</p>
+                  <p className="text-xs text-gray-500 mt-1">{rawText.length.toLocaleString()}{babble ? ' / 30,000 chars' : ' chars'}</p>
                 </div>
+                {babble && <>
+                  <p className="text-sm text-gray-400">One AI pass refines your brainstorm into distinct suggestions: story ideas, character journeys, alternate realities, scenes, dialogue, and concepts. Review and edit before saving. Your original text is preserved as a scrap.</p>
+                  <ProviderModelSelector providers={picker.providers} selectedProviderId={picker.selectedProviderId}
+                    selectedModel={picker.selectedModel} availableModels={picker.availableModels}
+                    onProviderChange={(id) => { picker.setSelectedProviderId(id); setEffort(''); }}
+                    onModelChange={(model) => { picker.setSelectedModel(model); setEffort(''); }}
+                    effort={effort} onEffortChange={setEffort} loading={picker.loading} />
+                </>}
                 <div className="flex items-center justify-end">
-                  <button type="submit" disabled={submitting || !rawText.trim()}
+                  <button type="submit" disabled={submitting || !rawText.trim() || (babble && (picker.loading || !picker.selectedProviderId || !picker.selectedModel))}
                     className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
                     {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                    {submitting ? 'Ingesting…' : 'Ingest'}
+                    {submitting ? 'Working…' : babble ? 'Prune into suggestions' : 'Ingest'}
                   </button>
                 </div>
               </form>
@@ -615,7 +631,7 @@ export default function CatalogIngest() {
           <div className="bg-port-card border border-port-border rounded-lg p-6 space-y-3">
             <p className="text-sm font-medium text-white flex items-center gap-2">
               <Loader2 className="w-4 h-4 animate-spin text-port-accent" aria-hidden="true" />
-              Extracting ingredients — this runs several AI passes.
+              {babble ? 'Pruning your brainstorm — one AI pass.' : 'Extracting ingredients — this runs several AI passes.'}
             </p>
             <ul className="space-y-1.5 mt-2">
               {stages.map((s) => (
