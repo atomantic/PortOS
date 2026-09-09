@@ -14,6 +14,7 @@ import {HardDrive,
 import BrailleSpinner from './BrailleSpinner';
 import toast from './ui/Toast';
 import * as api from '../services/api';
+import { useBackupRun } from '../hooks/useBackupRun';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
@@ -293,7 +294,7 @@ const BackupWidget = memo(function BackupWidget() {
       ]),
     },
   );
-  const [triggering, setTriggering] = useState(false);
+  const [handleBackupNow, triggering] = useBackupRun();
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   // Tick every minute so the dedup-skipped widget still recomputes
   // `relativeTime(lastRun/nextRun)` labels and the `computeHealth` 25h/49h
@@ -303,18 +304,6 @@ const BackupWidget = memo(function BackupWidget() {
 
   const health = computeHealth(status);
   const { dot, text, icon: HealthIcon } = HEALTH_STYLES[health];
-
-  const handleBackupNow = useCallback(async () => {
-    setTriggering(true);
-    await api.triggerBackup({ silent: true }).catch(err => {
-      toast.error(`Backup failed: ${err.message}`);
-    }).then(result => {
-      if (result) {
-        toast.success('Backup started', { icon: '💾' });
-      }
-    });
-    setTriggering(false);
-  }, []);
 
   const isRunning = status?.status === 'running';
   const isNever = status?.status === 'never';

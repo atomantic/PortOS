@@ -484,9 +484,50 @@ describe('BackupTab', () => {
 
       expect(toast).not.toHaveBeenCalledWith('Backup already running');
       expect(toast.success).toHaveBeenCalledWith('Backup complete — 3 files changed', { icon: '💾' });
+      expect(screen.getByText(/7 tables/i)).toBeInTheDocument();
       // A real run refetches AND applies the result — the new snapshot renders.
       expect(getBackupSnapshots).toHaveBeenCalledTimes(2);
       await waitFor(() => expect(screen.getByText('snap-fresh')).toBeTruthy());
+    });
+  });
+
+  describe('manual backup failures', () => {
+    it('updates the rendered degraded status and snapshots without an extra error toast', async () => {
+      getBackupSnapshots.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'snap-degraded' }]);
+      triggerBackup.mockResolvedValue({
+        status: 'degraded', filesChanged: 3, pgBackup: { status: 'failed', reason: 'version_mismatch' },
+      });
+      await renderTab();
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+      });
+
+      expect(toast).toHaveBeenCalledWith('Backup complete — 3 files changed; database dump failed', { icon: '⚠️' });
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(screen.getByText(/Last backup degraded/i)).toBeInTheDocument();
+      expect(screen.getByText(/Dump failed: version_mismatch/i)).toBeInTheDocument();
+      expect(await screen.findByText('snap-degraded')).toBeInTheDocument();
+    });
+
+    it('clears pending state with one error and preserves prior status on rejection', async () => {
+      getBackupStatus.mockResolvedValue({ status: 'ok', defaultExcludes: [], pgBackup: { status: 'ok', sizeBytes: 1024, tableCount: 7 } });
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-existing' }]);
+      let rejectRun;
+      triggerBackup.mockReturnValue(new Promise((_, reject) => { rejectRun = reject; }));
+      await renderTab();
+      fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+      expect(screen.getByRole('button', { name: /Running…/i })).toBeDisabled();
+
+      await act(async () => { rejectRun(new Error('Connection lost')); });
+
+      expect(triggerBackup).toHaveBeenCalledWith({ silent: true });
+      expect(toast.error).toHaveBeenCalledExactlyOnceWith('Connection lost');
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /Run Backup Now/i })).toBeEnabled();
+      expect(screen.getByText(/7 tables/i)).toBeInTheDocument();
+      expect(screen.getByText('snap-existing')).toBeInTheDocument();
+      expect(getBackupSnapshots).toHaveBeenCalledTimes(1);
     });
   });
 

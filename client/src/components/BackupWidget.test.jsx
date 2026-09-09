@@ -1,5 +1,5 @@
 import { MemoryRouter } from 'react-router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
@@ -93,5 +93,54 @@ describe('BackupWidget snapshots', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Download snapshot 2026-08-25T11-00-00/ }));
 
     await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Download failed: Connection lost'));
+  });
+});
+
+describe('BackupWidget manual backup', () => {
+  it('announces an already-running backup without success feedback', async () => {
+    mockTriggerBackup.mockResolvedValue({ skipped: true });
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup Now' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('Backup already running'));
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(mockToast.error).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Backup Now' })).toBeEnabled();
+  });
+
+  it('reports the completed file count for a healthy backup', async () => {
+    mockTriggerBackup.mockResolvedValue({ status: 'ok', filesChanged: 3, pgBackup: { status: 'ok' } });
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup Now' }));
+
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith('Backup complete — 3 files changed', { icon: '💾' }));
+    expect(mockToast.success).toHaveBeenCalledTimes(1);
+    expect(mockTriggerBackup).toHaveBeenCalledWith({ silent: true });
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('qualifies file completion when the database dump failed', async () => {
+    mockTriggerBackup.mockResolvedValue({ status: 'degraded', filesChanged: 3, pgBackup: { status: 'failed' } });
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup Now' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('Backup complete — 3 files changed; database dump failed', { icon: '⚠️' }));
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('disables the pending action and clears it with one error on rejection', async () => {
+    let rejectRun;
+    mockTriggerBackup.mockReturnValue(new Promise((_, reject) => { rejectRun = reject; }));
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup Now' }));
+    expect(screen.getByRole('button', { name: /Backup Now/ })).toBeDisabled();
+
+    await act(async () => { rejectRun(new Error('Connection lost')); });
+
+    expect(mockTriggerBackup).toHaveBeenCalledWith({ silent: true });
+    expect(mockToast.error).toHaveBeenCalledExactlyOnceWith('Connection lost');
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Backup Now' })).toBeEnabled();
   });
 });
