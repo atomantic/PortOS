@@ -50,7 +50,7 @@ vi.mock('./userTimezone.js', () => ({
 import { schedule, cancel } from './eventScheduler.js';
 import { getSettings } from './settings.js';
 import { runBackup } from './backup.js';
-import { startBackupScheduler, stopBackupScheduler } from './backupScheduler.js';
+import { startBackupScheduler, stopBackupScheduler, syncBackupSchedule } from './backupScheduler.js';
 
 describe('startBackupScheduler', () => {
   beforeEach(() => {
@@ -292,5 +292,39 @@ describe('backup schedule defaults (#6632)', () => {
     expect(runBackup).toHaveBeenCalledWith('/example-backups', null, {
       excludePaths: [], disabledDefaultExcludes: []
     });
+  });
+});
+
+describe('confirmed backup schedule lifecycle', () => {
+  beforeEach(() => {
+    stopBackupScheduler();
+    vi.clearAllMocks();
+  });
+
+  it('applies disable once and retries the same schedule after stopping', async () => {
+    const settings = { backup: { enabled: true, destPath: '/dest' } };
+    getSettings.mockResolvedValue(settings);
+    expect(await startBackupScheduler()).toBe(true);
+    expect(await syncBackupSchedule({ backup: { enabled: false } })).toBe(false);
+    expect(await syncBackupSchedule({ backup: { enabled: false } })).toBe(false);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(await startBackupScheduler()).toBe(true);
+    stopBackupScheduler();
+    expect(await startBackupScheduler()).toBe(true);
+    expect(schedule).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(['throw', 'no next run'])('forgets a successful signature after replacement fails with %s', async (failure) => {
+    const original = { backup: { enabled: true, destPath: '/dest', cronExpression: '0 1 * * *' } };
+    expect(await syncBackupSchedule(original)).toBe(true);
+    schedule.mockImplementationOnce(() => {
+      if (failure === 'throw') throw new Error('Rejected replacement');
+      return { id: 'backup-daily', nextRunAt: null };
+    });
+    expect(await syncBackupSchedule({
+      backup: { ...original.backup, cronExpression: '0 2 * * *' }
+    })).toBe(false);
+    expect(await syncBackupSchedule(original)).toBe(true);
+    expect(schedule).toHaveBeenCalledTimes(3);
   });
 });
