@@ -19,7 +19,7 @@ Parity with `server/scripts/init-db.sql` (the fresh-install path) is locked by
 | Module | Export(s) | Domain |
 |---|---|---|
 | `core.js` | `coreDdl` | Memory sync columns + the `schema_migrations` version tracker |
-| `tribe.js` | `tribeDdl` | Tribe CRM — people, touchpoints, memory links (machine-local) |
+| `tribe.js` | `tribeDdl` | Tribe CRM — people, network-scoped identities (`tribe_identities`, the durable-handle truth table behind Beeper linking), touchpoints, memory links (machine-local) |
 | `humanActivity.js` | `humanActivityDdl` | Human-activity timeline event store (machine-local) |
 | `post.js` | `postDdl` | MeatSpace POST normalized runs and attempts (machine-local) |
 | `commissions.js` | `commissionsDdl` | Creative Commissions + feedback (machine-local) |
@@ -35,6 +35,7 @@ Parity with `server/scripts/init-db.sql` (the fresh-install path) is locked by
 | `privacy.js` | `privacyDdl` | Privacy suite — vault, consents, orgs, brokers, change events |
 | `stackerNews.js` | `stackerNewsDdl` | Stacker News accounts, territories, untrusted-content analyses, and review-gated actions |
 | `x.js` | `xDdl` | X account diagnostics, public post metrics, and review-gated drafts |
+| `beeper.js` | `beeperDdl` | Beeper conversation mirror — accounts, the vault-encrypted access credential, conversations, messages, participants, attachment metadata, sync cursors, and the outbound send outbox (machine-local, never federated) |
 | `audit.js` | `auditDdl`, `auditedTables`, `buildAuditTriggers()` | `record_audit` table/function + per-table audit triggers |
 
 ### Composer (`index.js`)
@@ -42,7 +43,7 @@ Parity with `server/scripts/init-db.sql` (the fresh-install path) is locked by
 - `buildUpgradeDdl()` → phase-1 list (`core` → `tribe` → `humanActivity` → `post` → `commissions` → `userActions` → `aiGraph`).
 - `buildCatalogDdl()` → phase-2 list (`catalog` → `media` → `catalogUserTypes` →
   `universes` → `library` → `pipeline` → `writersRoom` → `lora` → `privacy` → `stackerNews` → `x` →
-  `audit` DDL → audit triggers).
+  `beeper` → `audit` DDL → audit triggers).
 
 `ensureSchemaImpl()` calls these two builders and runs each list through
 `pool.query` in order.

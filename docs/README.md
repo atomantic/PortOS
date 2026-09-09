@@ -49,7 +49,7 @@ Knowledge: [brain-system](./features/brain-system.md) · [untrusted messages and
 
 Create: [writers-room](./features/writers-room.md) · [fableloom](./features/fableloom.md) · [Eidoverse Worlds integration](./features/eidoverse.md) · [OpenWorld historical reference](./features/openworld.md) · [sprite-export-contract](./features/sprite-export-contract.md) · [video-text-encoders](./features/video-text-encoders.md) · [video-speed-profiles](./features/video-speed-profiles.md) · [video-render-batches](./features/video-render-batches.md) · [video-upscale](./features/video-upscale.md)
 
-Comms & voice: [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md)
+Comms & voice: [beeper](./features/beeper.md) · [openclaw-operator-chat](./features/openclaw-operator-chat.md) ([pre-build audit](./research/2026-03-31-openclaw-operator-chat-audit.md)) · [stacker-news](./features/stacker-news.md) · [voice](./features/voice.md)
 
 ## Point-in-time records
 

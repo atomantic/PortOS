@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import {
   AlertTriangle,
   Calendar,
@@ -163,7 +163,7 @@ function RingMeter({ ring, contacts, active, onClick }) {
   );
 }
 
-function ContactCard({ contact, active, onSelect, onLogTouch }) {
+function ContactCard({ contact, active, onSelect, onLogTouch, cardRef }) {
   const ring = ringFor(contact.ring);
   const energy = energyFor(contact.energy);
   const status = contactStatus(contact);
@@ -171,6 +171,7 @@ function ContactCard({ contact, active, onSelect, onLogTouch }) {
 
   return (
     <article
+      ref={cardRef}
       className={`w-full text-left border rounded p-4 transition-colors bg-port-card ${
         active ? 'border-port-accent/70 ring-1 ring-port-accent/30' : 'border-port-border hover:border-port-accent/40'
       }`}
@@ -559,6 +560,95 @@ function TouchpointsPanel({ personId }) {
         )) : (
           <p className="text-sm text-gray-500">No touchpoints logged yet.</p>
         )}
+      </div>
+    </section>
+  );
+}
+
+// One "Linked on Beeper" chip per identity claim (#99). The network shown is
+// the CONVERSATION's network for a beeper-user claim (the claim's own
+// `network` column is a Beeper ACCOUNT id, not a network name — see #96), the
+// claim's own `network` for a handle claim, and the literal 'phone' for a
+// phone claim (phones are network-less by design). The label is the
+// participant's display name for a beeper-user claim (its `handle` is an
+// opaque source_user_id, not human-readable) and the durable handle itself
+// for a handle/phone claim. Every conversation the identity appears in gets
+// its own thread link, ordered most-recent-first by the server.
+function BeeperIdentityChip({ identity, onUnlink }) {
+  const conversations = identity.conversations || [];
+  const isBeeperUser = identity.kind === 'beeper-user';
+  const network = identity.kind === 'phone'
+    ? 'phone'
+    : isBeeperUser
+      ? (conversations[0]?.network || identity.network || 'beeper')
+      : (identity.network || 'beeper');
+  const label = isBeeperUser ? (conversations[0]?.displayName || identity.handle) : identity.handle;
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-full border border-port-border bg-port-bg px-3 py-1.5 text-xs text-gray-300">
+      <span className="font-medium text-white">{network}</span>
+      <span className="text-gray-600">&middot;</span>
+      <span className="max-w-[10rem] truncate" title={label}>{label}</span>
+      {conversations.map((conversation) => (
+        <Link
+          key={conversation.conversationId}
+          to={`/messages/beeper/${conversation.conversationId}`}
+          title={conversation.title ? `Open "${conversation.title}"` : 'Open Beeper thread'}
+          aria-label={conversation.title ? `Open "${conversation.title}"` : 'Open Beeper thread'}
+          className="text-port-accent hover:underline"
+        >
+          <MessageCircle size={13} aria-hidden="true" />
+        </Link>
+      ))}
+      <button
+        type="button"
+        onClick={onUnlink}
+        title="Unlink"
+        aria-label={`Unlink ${label}`}
+        className="text-gray-500 hover:text-rose-300"
+      >
+        <X size={12} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+// The Tribe person form's "Linked on Beeper" block (#99). The roster row from
+// `getTribePeople` never carries `identities` — that join only runs on the
+// single-person read (`GET /tribe/people/:id`) — so this fetches the full
+// person on mount/personId change, the same pattern `MemoryLinksPanel` and
+// `TouchpointsPanel` already use. Renders nothing when the person has no
+// Beeper claims (no empty heading).
+function BeeperIdentitiesPanel({ personId }) {
+  const [identities, setIdentities] = useState([]);
+
+  useEffect(() => {
+    if (!personId) { setIdentities([]); return; }
+    let cancelled = false;
+    api.getTribePerson(personId, { silent: true })
+      .then((person) => { if (!cancelled) setIdentities(person?.identities || []); })
+      .catch(() => { if (!cancelled) setIdentities([]); });
+    return () => { cancelled = true; };
+  }, [personId]);
+
+  const unlink = async (identityId) => {
+    const result = await api.unlinkBeeperIdentity(identityId, { silent: true }).catch((err) => {
+      toast.error(err.message || 'Failed to unlink Beeper identity');
+      return null;
+    });
+    if (!result?.success) return;
+    setIdentities((current) => current.filter((identity) => identity.id !== identityId));
+  };
+
+  if (identities.length === 0) return null;
+
+  return (
+    <section className="mt-4 border border-port-border bg-port-card rounded p-4">
+      <h2 className="text-sm font-semibold text-white">Linked on Beeper</h2>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {identities.map((identity) => (
+          <BeeperIdentityChip key={identity.id} identity={identity} onUnlink={() => unlink(identity.id)} />
+        ))}
       </div>
     </section>
   );
@@ -1061,6 +1151,45 @@ export default function Tribe() {
     cadenceDays: contact.cadenceDays || ringFor(contact.ring).cadenceDays,
   });
 
+  // Deep link from Beeper's Tribe chip and linked-participant rows (#98 part
+  // C): `?person=<id>` selects that Tribe person on the Circle tab, the exact
+  // same path a click on their card takes (`selectContact`), and scrolls the
+  // card into view — the `OutreachQueue`'s `?outreach=` handling above is the
+  // sibling pattern this follows.
+  //
+  // `appliedPersonRef` fires this at most once per distinct `person` value —
+  // never on every `contacts` refresh a `tribe:changed` broadcast triggers —
+  // but still re-fires "on load AND when the param changes" per the spec,
+  // since a change to `personParam` itself resets it. An id the roster does
+  // not recognize (deleted, or someone else's stale bookmark) is marked
+  // applied and otherwise ignored: no error toast, since nothing here is a
+  // genuine fault to report.
+  const personParam = searchParams.get('person');
+  const appliedPersonRef = useRef(null);
+  const pendingScrollPersonRef = useRef(null);
+  const cardRefs = useRef({});
+
+  useEffect(() => {
+    if (!personParam) { appliedPersonRef.current = null; return; }
+    if (appliedPersonRef.current === personParam || loading) return;
+    const target = contacts.find((contact) => contact.id === personParam);
+    appliedPersonRef.current = personParam;
+    if (!target) return;
+    selectContact(target);
+    setActiveTab('circle');
+    pendingScrollPersonRef.current = personParam;
+  }, [personParam, contacts, loading]);
+
+  useEffect(() => {
+    if (!pendingScrollPersonRef.current || activeTab !== 'circle') return;
+    const id = pendingScrollPersonRef.current;
+    const frame = requestAnimationFrame(() => {
+      cardRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      pendingScrollPersonRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeTab, filteredContacts]);
+
   const saveDraft = async () => {
     // Send only the editable fields the schema accepts. The PUT route rejects a
     // body `id` (`z.never()`) — it comes from the URL — and `lastContact` must be
@@ -1309,6 +1438,7 @@ export default function Tribe() {
                         active={selectedId === contact.id}
                         onSelect={() => selectContact(contact)}
                         onLogTouch={() => logTouch(contact.id)}
+                        cardRef={(el) => { cardRefs.current[contact.id] = el; }}
                       />
                     ))}
                     {filteredContacts.length === 0 && (
@@ -1332,6 +1462,7 @@ export default function Tribe() {
                   nameInputRef={nameInputRef}
                   formRef={formRef}
                 />
+                {draft.id && <BeeperIdentitiesPanel personId={draft.id} />}
                 {draft.id && <MemoryLinksPanel personId={draft.id} />}
                 {draft.id && <TouchpointsPanel personId={draft.id} />}
               </aside>

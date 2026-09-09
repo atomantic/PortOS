@@ -141,7 +141,16 @@ export const DEFAULT_EXCLUDES = [
   // machine's conditioning bytes, staged for one federated render and swept on
   // a TTL measured in hours. Nothing here is this install's data to keep, and a
   // restored inbox entry is either already expired or already rendered.
-  { path: '/federated-media-inbox/', reason: 'Conditioning images an allowlisted peer uploaded for one federated render — TTL-swept, and another machine\'s data rather than this install\'s', overridable: false }
+  { path: '/federated-media-inbox/', reason: 'Conditioning images an allowlisted peer uploaded for one federated render — TTL-swept, and another machine\'s data rather than this install\'s', overridable: false },
+  // Anchored, like every entry here. The Beeper attachment mirror (#37) is a
+  // lazy CACHE of bytes Beeper Desktop can re-supply, re-fetched on first view
+  // and rendered as a labelled reference when it cannot — so a snapshot that
+  // skips it loses no record, only a re-download. It is also by far the largest
+  // thing the Comms feature puts on disk, which is exactly the kind of
+  // directory that turns a nightly snapshot into an hour.
+  // Overridable, because an archive of a conversation is more useful with its
+  // photos in it, and someone keeping one may well want to pay for them.
+  { path: '/beeper/attachments/', reason: 'Beeper attachment byte mirror — a lazy cache re-fetchable from Beeper Desktop; the message bodies and attachment metadata live in Postgres and ARE backed up', overridable: true }
   // NOTE: legacy file→Postgres migration artifacts (`.imported` / `.bak-NNN`)
   // are intentionally NOT excluded here. They are deleted on disk by the
   // boot-time prune (pruneImportedLegacyFiles.js) the same boot the migration
