@@ -206,7 +206,11 @@ async def render(params):
         shutil.rmtree(scratch_path)
         emit("complete", clipId=clip["clip_id"], seconds=expected / 24, frames=state["frames"])
     except Exception as error:
+        # Only the numeric HTTP status crosses stdio. SDK messages, codes and
+        # operation details may contain response bodies or credentials.
+        status = getattr(error, "status", None)
         emit("error", phase=phase, errorType=type(error).__name__,
+             **({"httpStatus": status} if type(status) is int and 400 <= status <= 599 else {}),
              **({"code": "INVALID_FRAME_BUFFER"} if state["error"] == "Invalid Reactor video frame buffer" else {}))
         raise
     finally:
