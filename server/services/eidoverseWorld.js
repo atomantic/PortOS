@@ -689,6 +689,11 @@ function createWorldConnection({ world, id, avatar, agent = true, guest = false,
     resolveSnapshot = resolve;
     rejectSnapshot = reject;
   });
+  // Opening can fail before a caller reaches the snapshot await, or after
+  // cancellation detaches it. Own both rejections for the connection lifetime;
+  // callers still await the original promises and receive the same errors.
+  openPromise.catch(() => {});
+  snapshotPromise.catch(() => {});
 
   const settleOpen = (error = null) => {
     if (openSettled) return;
