@@ -74,6 +74,23 @@ describe('cloneRepo', () => {
     );
   });
 
+  it('clones a requested branch as a literal argument and surfaces a missing branch failure', async () => {
+    const child = createChild();
+    spawn.mockReturnValue(child);
+    const pending = cloneRepo('https://github.com/acme/widgets', { branch: 'feature/worlds' });
+    const rejected = expect(pending).rejects.toThrow('Remote branch feature/worlds not found');
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+    expect(spawn).toHaveBeenCalledWith('git', [
+      'clone', '--depth', '1', '--single-branch', '--branch', 'feature/worlds',
+      'https://github.com/acme/widgets.git', STAGING_PATH
+    ], expect.objectContaining({ shell: false }));
+    child.stderr.emit('data', Buffer.from('Remote branch feature/worlds not found'));
+    child.emit('close', 128);
+    await rejected;
+    expect(rename).not.toHaveBeenCalled();
+    expect(rm).toHaveBeenCalledWith(STAGING_ROOT, { recursive: true, force: true });
+  });
+
   it('removes a legacy partial destination only for a recovered attempt', async () => {
     const child = createChild();
     spawn.mockReturnValue(child);

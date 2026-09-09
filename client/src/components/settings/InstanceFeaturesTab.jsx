@@ -65,6 +65,7 @@ export function InstanceFeaturesTab() {
   const { features, groups, error, reload } = useInstanceFeatures();
   const [savingId, setSavingId] = useState(null);
   const [eidoverseRepoUrl, setEidoverseRepoUrl] = useState(null);
+  const [eidoverseBranch, setEidoverseBranch] = useState(null);
   const [updatingEidoverseSource, setUpdatingEidoverseSource] = useState(false);
   const [recheckingEidoverse, setRecheckingEidoverse] = useState(false);
 
@@ -126,7 +127,7 @@ export function InstanceFeaturesTab() {
     const worldsRepoUrl = eidoverseRepoUrl ?? feature?.setup?.worldsRepoUrl;
     if (!worldsRepoUrl) return;
     setSavingId(feature.id);
-    const result = await installEidoverseFeature(worldsRepoUrl, { silent: true }).catch((err) => {
+    const result = await installEidoverseFeature(worldsRepoUrl, { silent: true }, eidoverseBranch ?? feature?.setup?.worldsBranch ?? '').catch((err) => {
       toast.error(err.message || 'Could not install Eidoverse Worlds');
       return null;
     });
@@ -304,6 +305,23 @@ export function InstanceFeaturesTab() {
                   placeholder="https://github.com/example-owner/eidoverse-worlds"
                 />
               </div>
+              {needsInstall && (
+                <div className="pt-2">
+                  <label className="block text-gray-300 mb-1" htmlFor="eidoverse-worlds-branch">Worlds clone branch</label>
+                  <input
+                    id="eidoverse-worlds-branch"
+                    type="text"
+                    value={eidoverseBranch ?? setup?.worldsBranch ?? ''}
+                    onChange={(event) => setEidoverseBranch(event.target.value)}
+                    disabled={savingId !== null}
+                    maxLength={255}
+                    placeholder="Repository default branch"
+                    aria-describedby="eidoverse-worlds-branch-help"
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
+                  />
+                  <p id="eidoverse-worlds-branch-help" className="mt-1">Leave blank to use the repository’s default branch. Applies to new clones; existing checkouts keep their current branch.</p>
+                </div>
+              )}
               {!repoIsValid && (
                 <p id="eidoverse-worlds-repo-error" role="alert" className="text-port-error">
                   {selectedRepoUrl === ''
