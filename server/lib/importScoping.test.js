@@ -39,6 +39,10 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 // Each row: the entry that was narrowed, the module it must no longer
 // statically reach, and why the entry only ever needed a slice of it.
 const NARROWED = [
+  ['services/mtplxModelManager.js', 'services/huggingFaceCatalog.js',
+    'reads repository ages through shared metadata without catalog selection'],
+  ['services/huggingFaceMetadata.js', 'services/pipeline/musicGen.js',
+    'owns Hub transport and caching independently of audio rendering'],
   ['lib/providerFamilies.js', 'lib/grok.js',
     'shares browser-safe family identity without Grok filesystem helpers'],
   ['services/promptSections/instructions.js', 'services/taskScheduleRegistry.js',
@@ -83,6 +87,9 @@ describe('narrowed imports stay narrow (#6009)', () => {
   // Positive controls. Without these the negatives above would also pass if
   // `staticImportClosure` stopped resolving these files at all.
   it('still sees the modules the narrowed entries were pointed AT', () => {
+    expect(reaches('services/mtplxModelManager.js', 'services/huggingFaceMetadata.js')).toBe(true);
+    expect(reaches('services/huggingFaceCatalog.js', 'services/huggingFaceMetadata.js')).toBe(true);
+    expect(reaches('services/huggingFaceMetadata.js', 'services/huggingFaceRepoCache.js')).toBe(true);
     expect(reaches('services/promptSections/instructions.js', 'lib/scheduledTaskTypes.js')).toBe(true);
     expect(reaches('services/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('lib/pipelineValidation.js', 'lib/editorial/checkInfra/taxonomy.js')).toBe(true);

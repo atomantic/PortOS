@@ -28,7 +28,7 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { getHfCacheRoot } from '../lib/hfCache.js';
 import { listMtplxCachedModels } from '../lib/mtplxModels.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
-import { fetchRepoPublishedDates } from './huggingFaceCatalog.js';
+import { fetchRepoPublishedDates } from './huggingFaceMetadata.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 
 /** A Hugging Face search is one API call — short, and worth failing fast. */

@@ -10,7 +10,7 @@ import * as bufferedSpawnModule from '../lib/bufferedSpawn.js';
 import * as mtplxModels from '../lib/mtplxModels.js';
 import * as processEnv from '../lib/processEnv.js';
 import * as streamingSpawn from '../lib/streamingSpawn.js';
-import * as hfCatalog from './huggingFaceCatalog.js';
+import * as hfMetadata from './huggingFaceMetadata.js';
 import * as huggingfaceLora from '../lib/huggingfaceLora.js';
 import * as hfToken from './hfToken.js';
 
@@ -24,7 +24,7 @@ describe('mtplxModelManager', () => {
     vi.spyOn(processEnv, 'findCommandOnPath').mockReturnValue(BINARY);
     vi.spyOn(mtplxModels, 'listMtplxCachedModels').mockResolvedValue({ models: [], error: null });
     // Publish dates come from the Hub — no suite may reach it.
-    vi.spyOn(hfCatalog, 'fetchRepoPublishedDates').mockResolvedValue({});
+    vi.spyOn(hfMetadata, 'fetchRepoPublishedDates').mockResolvedValue({});
     vi.spyOn(hfToken, 'getHfToken').mockResolvedValue(null);
     vi.spyOn(huggingfaceLora, 'fetchHuggingfaceModel').mockResolvedValue({ usedStorage: 0 });
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -86,14 +86,14 @@ describe('mtplxModelManager', () => {
         { repo: 'Example/Qwen-MTP', downloads: 42 },
         { repo: 'Example/Unlisted', downloads: 1 },
       ])));
-      hfCatalog.fetchRepoPublishedDates.mockResolvedValue({ 'Example/Qwen-MTP': '2026-01-02T00:00:00.000Z' });
+      hfMetadata.fetchRepoPublishedDates.mockResolvedValue({ 'Example/Qwen-MTP': '2026-01-02T00:00:00.000Z' });
 
       const { models } = await searchMtplxCatalog({});
 
       expect(models[0].publishedAt).toBe('2026-01-02T00:00:00.000Z');
       // A repo the Hub has no answer for still lists — the card just omits the age.
       expect(models[1].publishedAt).toBeNull();
-      expect(hfCatalog.fetchRepoPublishedDates).toHaveBeenCalledWith(['Example/Qwen-MTP', 'Example/Unlisted']);
+      expect(hfMetadata.fetchRepoPublishedDates).toHaveBeenCalledWith(['Example/Qwen-MTP', 'Example/Unlisted']);
     });
 
     it('refuses before spawning when MTPLX is not installed', async () => {
