@@ -190,7 +190,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
 
       <Banner size="md" title="Recommended maintenance order">
         <p className="text-sm break-words">{MAINTENANCE_ORDER_GUIDANCE}</p>
-        <p className="text-xs mt-1">Resolve findings between audits, then document the resulting code. Run the whole sequence now from here, or schedule it under quota gates in Quota Burn; both drain claim-issue between steps.</p>
+        <p className="text-xs mt-1">Resolve findings between audits, then document the resulting code. Run the whole sequence now from here, or schedule it under quota gates in Quota Burn; Run now offers issue filing with claim-issue between audits, or audit and fix with one final claim-issue drain.</p>
         <details className="mt-2">
           <summary className="cursor-pointer text-sm font-medium">Run maintenance now</summary>
           <MaintenanceRunForm schedule={{ ...schedule, tasks }} apps={apps} providers={providers} providersLoaded={providersLoaded} improvementDisabled={improvementDisabled} daemonRunning={daemonRunning} onRefresh={fetchSchedule} />

@@ -35,6 +35,7 @@ const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
 // model up front (AGENTS.md AI-policy: the click IS the consent). Blank effort
 // inherits each scheduled task's saved effort.
 const maintenanceRunStartSchema = z.object({
+  mode: z.enum(['file-issues', 'fix']).optional(),
   appId: z.string().trim().min(1),
   providerId: z.string().trim().min(1),
   model: z.string().trim().min(1),
