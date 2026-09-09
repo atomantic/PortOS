@@ -3029,6 +3029,31 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
       vi.mocked(getToolsSummaryForPrompt).mockResolvedValue('');
     });
 
+    it('keeps API briefing instructions when optional context retrieval fails, preserving budget fallbacks', async () => {
+      vi.mocked(getMemorySection).mockRejectedValueOnce(new Error('memory unavailable'));
+      vi.mocked(getDigitalTwinForPrompt).mockRejectedValueOnce(new Error('twin unavailable'));
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await buildAgentPrompt(makeTask(), {
+          memory: { maxContextTokens: 0 },
+          digitalTwin: { maxContextTokens: 0 },
+          soul: { maxContextTokens: 1200 },
+        }, '/r', null, isTruthyMeta, { providerType: 'api' });
+        const [, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+        expect(context.memorySection).toBeNull();
+        expect(context.digitalTwinSection).toBeNull();
+        expect(context.agentInstructionsSection).toContain('Example Global Instructions');
+        expect(context.claudeMdSection).toBe(context.agentInstructionsSection);
+        expect(context.soulSection).toBeNull();
+        expect(getMemorySection).toHaveBeenLastCalledWith(expect.anything(), { maxTokens: 2000 });
+        expect(getDigitalTwinForPrompt).toHaveBeenLastCalledWith({ maxTokens: 1200, personaId: 'active' });
+        expect(log).toHaveBeenCalledWith('⚠️ Memory retrieval failed: memory unavailable');
+        expect(log).toHaveBeenCalledWith('⚠️ Digital twin context retrieval failed: twin unavailable');
+      } finally {
+        log.mockRestore();
+      }
+    });
+
     it('a non-CD api task still loads memory, digital-twin, and onboard-tools sections', async () => {
       vi.mocked(getMemorySection).mockClear().mockResolvedValue('## Memory Context\nNONCD_MEMORY_SENTINEL');
       vi.mocked(getDigitalTwinForPrompt).mockClear().mockResolvedValue('## Digital Twin\nNONCD_TWIN_SENTINEL');
