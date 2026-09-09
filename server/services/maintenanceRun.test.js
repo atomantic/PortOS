@@ -201,7 +201,7 @@ it('runs fixes consecutively and drains remaining issues only after documentatio
 });
 
 it('files findings consecutively and finishes without claiming when claims are disabled', async () => {
-  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'file-issues', claimBetweenAudits: false });
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'file-issues', claimBetweenAudits: false, claimHandler: { providerId: 'unavailable', model: 'example' } });
   expect(run.steps.map(step => step.taskRef.taskType)).toEqual(MAINTENANCE_TASK_ORDER);
   for (let index = 0; index < run.steps.length; index++) {
     expect(state.invoked.at(-1).step.overrides.params.fileIssues).toBe(index < run.steps.length - 1);
@@ -210,4 +210,30 @@ it('files findings consecutively and finishes without claiming when claims are d
   expect(dispatchedTypes()).toEqual(MAINTENANCE_TASK_ORDER);
   expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'completed' });
   expect((await listMaintenanceRuns())[0].steps).toHaveLength(7);
+});
+
+// A different subscription family must survive storage and dispatch, including
+// repeated claim passes, without changing the audit pins.
+it('dispatches claims with their own provider family, model and effort', async () => {
+  const { getProviderById } = await import('./providers.js');
+  const { resolveBurnProvider } = await import('./scheduledHandlers/providerPick.js');
+  getProviderById.mockImplementationOnce(async id => ({ id, type: 'cli', command: id, enabled: true }));
+  getProviderById.mockImplementationOnce(async id => ({ id, type: 'cli', command: id, enabled: true }));
+  resolveBurnProvider.mockResolvedValueOnce({ id: 'codex' });
+  resolveBurnProvider.mockImplementationOnce(async ({ job, family }) => job.providerId === family.id ? { id: job.providerId } : null);
+  const claimHandler = { providerId: 'claude', model: 'sonnet', effort: 'low' };
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', claimHandler });
+  expect((await getMaintenanceRun(run.id)).steps[1].overrides).toEqual({ ...claimHandler, params: {} });
+  await evaluateMaintenanceRun(run.id, { completeStepId: run.steps[0].id });
+  await evaluateMaintenanceRun(run.id);
+  expect(state.invoked.slice(1)).toHaveLength(2);
+  for (const call of state.invoked.slice(1)) expect(call).toMatchObject({ family: { id: 'claude' }, step: { overrides: claimHandler } });
+  state.probe = { drained: true };
+  await evaluateMaintenanceRun(run.id);
+  expect(state.invoked.at(-1)).toMatchObject({ family: { id: 'codex' }, step: { overrides: { providerId: 'codex', model: 'gpt-5', effort: 'high' } } });
+});
+
+it('rejects an unavailable claim provider before starting any work', async () => {
+  await expect(startMaintenanceRun({ appId: 'app-1', providerId: 'codex', claimHandler: { providerId: 'unavailable', model: 'example' } })).rejects.toMatchObject({ code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
+  expect(state.invoked).toEqual([]);
 });

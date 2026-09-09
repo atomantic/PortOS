@@ -51,9 +51,10 @@ export const maintenanceStepParams = (taskType, mode = 'file-issues') => (taskTy
  * Build the ladder as run-once steps targeting `appId`, every one pinned to the
  * provider/model/effort the user chose. `effort: null` inherits each scheduled
  * task's saved effort. Ids are `${idPrefix}-${index}`, so a fresh prefix per
- * invocation yields fresh step identities.
+ * invocation yields fresh step identities. An optional claimHandler replaces
+ * the provider/model/effort bundle for drains only; omitted keeps legacy pins.
  */
-export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true }) {
+export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null }) {
   const types = mode === 'fix' ? [...MAINTENANCE_TASK_ORDER, MAINTENANCE_DRAIN_TASK] : claimBetweenAudits ? MAINTENANCE_SEQUENCE_TYPES : MAINTENANCE_TASK_ORDER;
   return types.map((taskType, index) => ({
     id: `${idPrefix}-${index}`,
@@ -63,6 +64,6 @@ export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, mode
     jobType: null,
     runOnce: true,
     drain: taskType === MAINTENANCE_DRAIN_TASK,
-    overrides: { providerId, model, effort, params: maintenanceStepParams(taskType, mode) },
+    overrides: { ...(taskType === MAINTENANCE_DRAIN_TASK && claimHandler ? claimHandler : { providerId, model, effort }), params: maintenanceStepParams(taskType, mode) },
   }));
 }

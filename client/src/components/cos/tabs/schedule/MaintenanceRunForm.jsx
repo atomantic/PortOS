@@ -19,6 +19,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
   const [providerId, setProviderId] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
+  const [claimHandler, setClaimHandler] = useState({ providerId: '', model: '', effort: '' });
   const [mode, setMode] = useState('file-issues');
   const [claimBetweenAudits, setClaimBetweenAudits] = useState(true);
   const [consent, setConsent] = useState(false);
@@ -34,6 +35,9 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
   const groups = buildQuotaBurnTaskCatalog({ schedule, apps });
   const prerequisites = maintenancePrerequisites(groups, appId, { mode, claimBetweenAudits });
   const plannedSteps = buildMaintenanceSteps({ appId, idPrefix: 'preview', mode, claimBetweenAudits });
+  const hasClaims = plannedSteps.some(step => step.drain);
+  const claimProvider = availableProviders.find(entry => entry.id === claimHandler.providerId);
+  const claimReady = !hasClaims || !claimHandler.providerId || Boolean(claimProvider && claimHandler.model);
   const ready = Boolean(appId) && prerequisites.length === 0;
   const blocked = improvementDisabled || daemonRunning === false;
 
@@ -105,10 +109,10 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
     : `Maintenance run saved; holding: ${result?.reason || 'nothing dispatched'}. It retries on its own.`);
 
   const run = async () => {
-    if (busy || blocked || !ready || !provider || !model || !consent) return;
+    if (busy || blocked || !ready || !claimReady || !provider || !model || !consent) return;
     setBusy(true);
     setMessage('Starting maintenance…');
-    const response = await api.startMaintenanceRun({ appId, providerId, model, effort: effort || null, mode, claimBetweenAudits }, { silent: true }).catch(error => {
+    const response = await api.startMaintenanceRun({ appId, providerId, model, effort: effort || null, mode, claimBetweenAudits, ...(hasClaims && claimHandler.providerId ? { claimHandler: { ...claimHandler, effort: claimHandler.effort || null } } : {}) }, { silent: true }).catch(error => {
       setMessage(`Could not start maintenance: ${error.message}`);
       return null;
     });
@@ -165,21 +169,41 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
         <p className="font-medium">Planned steps · {plannedSteps.length}</p>
         <MaintenanceStepChecklist steps={plannedSteps} label="Planned maintenance steps" />
       </div>
+      <p className="font-medium">Audit and documentation handler</p>
       <ProviderModelSelector
         providers={availableProviders}
         selectedProviderId={providerId}
         selectedModel={model}
         availableModels={provider ? effortAwareModelOptions(provider, model) : []}
-        onProviderChange={next => { setProviderId(next); setModel(''); setEffort(''); }}
-        onModelChange={setModel}
+        onProviderChange={next => { setProviderId(next); setModel(''); setEffort(''); setConsent(false); }}
+        onModelChange={next => { setModel(next); setConsent(false); }}
         effort={effort}
-        onEffortChange={setEffort}
+        onEffortChange={next => { setEffort(next); setConsent(false); }}
         emptyProviderOption="Select a subscription provider"
         emptyModelOption="Select a model"
         alwaysShowModel
         loading={!providersLoaded}
         disabled={busy}
       />
+      {hasClaims && <fieldset className="space-y-2">
+        <legend className="font-medium">Claim-issue handler</legend>
+        <ProviderModelSelector
+          providers={availableProviders}
+          label="Claim provider"
+          selectedProviderId={claimHandler.providerId}
+          selectedModel={claimHandler.model}
+          availableModels={claimProvider ? effortAwareModelOptions(claimProvider, claimHandler.model) : []}
+          onProviderChange={next => { setClaimHandler({ providerId: next, model: '', effort: '' }); setConsent(false); }}
+          onModelChange={next => { setClaimHandler(current => ({ ...current, model: next })); setConsent(false); }}
+          effort={claimHandler.effort}
+          onEffortChange={next => { setClaimHandler(current => ({ ...current, effort: next })); setConsent(false); }}
+          emptyProviderOption="Same as audit handler"
+          emptyModelOption="Select a model"
+          alwaysShowModel={Boolean(claimHandler.providerId)}
+          loading={!providersLoaded}
+          disabled={busy}
+        />
+      </fieldset>}
       {appId && !ready && <div className="space-y-2">
         <p role="status">Run now needs these saved task settings:</p>
         <ul className="list-disc pl-5 space-y-1">
@@ -198,10 +222,10 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
       <p className="text-xs">Runs sequentially, without Quota Burn gates. Blank effort uses each task’s saved setting.</p>
       <label className="flex items-start gap-2" htmlFor="maintenance-run-consent">
         <input id="maintenance-run-consent" type="checkbox" checked={consent} disabled={busy} onChange={event => setConsent(event.target.checked)} />
-        <span>Run these steps now using the selected provider’s quota.</span>
+        <span>Run these steps now using the selected providers’ quota.</span>
       </label>
       <div className="flex items-center gap-3 flex-wrap">
-        <button type="button" onClick={run} disabled={busy || blocked || !ready || !provider || !model || !consent || !providersLoaded} className="px-3 py-1.5 bg-port-accent text-white rounded disabled:opacity-50">
+        <button type="button" onClick={run} disabled={busy || blocked || !ready || !claimReady || !provider || !model || !consent || !providersLoaded} className="px-3 py-1.5 bg-port-accent text-white rounded disabled:opacity-50">
           {busy && !preparing ? 'Starting…' : 'Run now'}
         </button>
         <Link className="underline" to="/devtools/quota-burn">Schedule this sequence in Quota Burn instead</Link>
