@@ -103,7 +103,7 @@ function readSidebarTab() {
   return STORYBOARD_TAB_VALUES.includes(stored) ? stored : STORYBOARD_TAB.BOARDS;
 }
 
-export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen, onDirtyChange }) {
+export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen, onDirtyChange, headerCollapsed = false }) {
   const navigate = useNavigate();
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
@@ -734,20 +734,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const runObjects = useCallback(() => runAnalysis(ANALYSIS_KIND.OBJECTS), [runAnalysis]);
 
   return (
-    <div className="flex flex-col h-full">
-      {/*
-        Header — one wrapping row on desktop, two compact rows on phones (#3568).
-        Under `sm` the status select and view-mode toggle move to a full-width
-        sub-bar of their own (`order-last`) so the first row is just title, Save,
-        Snapshot and the Work menu; at `sm+` the sub-bar is `display: contents`,
-        generating no box, so its children are direct flex items of the header
-        row again. DOM order is therefore the desktop order — no `order` classes
-        on the controls themselves — which keeps desktop tab order matching what
-        is on screen. Every control stays visible at every width; nothing was
-        pushed into the overflow menu to buy the space.
-      */}
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Keep the editor mounted when collapsing controls so unsaved prose,
+          selection and active view survive focused writing. */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-port-border bg-port-card">
+        {headerCollapsed && <span className="flex-1 min-w-0 truncate text-sm font-semibold text-white">{title}</span>}
         <input
+          hidden={headerCollapsed}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={commitTitle}
@@ -758,7 +751,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         {/* Secondary controls. `w-full order-last` gives them their own compact
             row below the primary actions under `sm`; `sm:contents` dissolves the
             wrapper so they sit inline — in this DOM order — on desktop. */}
-        <div className="w-full order-last flex items-center gap-2 sm:contents" data-testid="work-header-secondary">
+        <div className={headerCollapsed ? 'hidden' : 'w-full order-last flex items-center gap-2 sm:contents'} data-testid="work-header-secondary">
           <select
             value={status}
             onChange={(e) => commitStatus(e.target.value)}
@@ -793,23 +786,25 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         <button
           onClick={handleSave}
           disabled={!dirty || saving}
-          className={`flex items-center gap-1 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded ${
-            dirty && !saving ? 'bg-port-accent text-white hover:bg-port-accent/80' : 'bg-port-bg text-gray-500'
+          className={`flex shrink-0 items-center justify-center gap-1 w-24 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded ${
+            dirty ? 'bg-port-accent text-white hover:bg-port-accent/80' : 'bg-port-bg text-gray-500'
           }`}
-          title={dirty ? `Save (${modKey}+S)` : 'Up to date'}
+          aria-busy={saving}
+          title={saving ? 'Saving draft…' : dirty ? `Save (${modKey}+S)` : 'Up to date'}
         >
-          <Save size={12} /> {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
+          <Save size={12} className="shrink-0" />
+          <span key={saving ? 'saving' : dirty ? 'dirty' : 'saved'}>{saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}</span>
         </button>
         <button
           onClick={handleSnapshot}
           disabled={dirty}
           aria-label="Snapshot"
-          className="flex items-center gap-1 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:text-gray-600 disabled:cursor-not-allowed"
+          className={`${headerCollapsed ? 'hidden' : 'flex'} items-center gap-1 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:text-gray-600 disabled:cursor-not-allowed`}
           title="Snapshot the active draft as a new version"
         >
           <GitCommit size={12} /> <span className="hidden sm:inline">Snapshot</span>
         </button>
-        <div className="relative" ref={overflowRef}>
+        <div className={headerCollapsed ? 'hidden' : 'relative'} ref={overflowRef}>
           <button
             onClick={() => setOverflowOpen((v) => !v)}
             className="flex items-center justify-center px-3 sm:px-2 py-1 min-h-[44px] sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white"
