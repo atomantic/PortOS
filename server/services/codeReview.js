@@ -51,11 +51,6 @@ import {
   resolveGoalFidelityConfig,
 } from '../lib/goalFidelity.js'
 import { getSettings, settingsEvents } from './settings.js'
-import { getBaseUrl as getLmStudioBaseUrl } from './lmStudioManager.js'
-import {
-  getBaseUrl as getOllamaBaseUrl,
-  getModelCapabilities as getOllamaModelCapabilities,
-} from './ollamaManager.js'
 
 // LM Studio (`:1234`), Ollama (`:11434`) and MTPLX (`:8000/v1`) all ship
 // OpenAI-compatible `/v1/chat/completions`. Resolve through each manager's live
@@ -64,16 +59,13 @@ import {
 // otherwise the catalog UI and the reviewer would silently desync when a user
 // relocates their install.
 //
-// Every entry is awaited at the call site, which lets MTPLX's stay a DYNAMIC
-// import. That is deliberate: `mtplxServerManager.js` pulls in the managed-daemon
-// watcher and its PM2/filesystem graph, and this module is imported by the agent
-// spawn path — a static import would put that whole graph behind every one of its
-// importers (and did break suites that partially mock `lib/fileUtils.js`). The
-// review request is a one-off HTTP call, so paying the resolve lazily costs
-// nothing.
+// Every entry is awaited at the call site. Keep all manager imports lazy:
+// defaults-only callers (agent prompting, task generation and cleanup) must not
+// load model download/install or daemon-management dependencies. Each manager
+// remains the owner of its live endpoint; only a selected backend loads it.
 const BACKEND_BASE_URLS = {
-  lmstudio: () => getLmStudioBaseUrl(),
-  ollama: () => getOllamaBaseUrl(),
+  lmstudio: async () => (await import('./lmStudioManager.js')).getBaseUrl(),
+  ollama: async () => (await import('./ollamaManager.js')).getBaseUrl(),
   mtplx: async () => (await import('./mtplxServerManager.js')).getMtplxServerEndpoint(),
 }
 
@@ -368,7 +360,8 @@ async function modelRejectsThinking(backend, model) {
   const cacheKey = thinkingCacheKey(backend, model)
   if (thinkingUnsupportedModels.get(cacheKey) === true) return true
   if (backend !== 'ollama') return false
-  const capabilities = await getOllamaModelCapabilities(model).catch(() => null)
+  const { getModelCapabilities } = await import('./ollamaManager.js')
+  const capabilities = await getModelCapabilities(model).catch(() => null)
   if (!Array.isArray(capabilities) || capabilities.length === 0) return false
   if (capabilities.includes('thinking')) return false
   thinkingUnsupportedModels.set(cacheKey, true)
