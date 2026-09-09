@@ -80,12 +80,12 @@ describe('UpdateBanners', () => {
     expect(screen.queryByRole('status')).toBeNull();
 
     getActiveProcessing.mockResolvedValue({ agents: { active: 0 }, jobs: [] });
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
     expect(screen.getByRole('button', { name: 'Reconcile' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Update' })).toBeTruthy();
 
     getActiveProcessing.mockResolvedValue(busy);
-    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
     expect(screen.queryByRole('status')).toBeNull();
     expect(localStorage.getItem(__internal.OUT_OF_SYNC_DISMISS_KEY)).toBeNull();
     expect(ignoreUpdateVersion).not.toHaveBeenCalled();
