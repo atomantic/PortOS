@@ -496,7 +496,7 @@ async function handleRenderFailed(projectId, sceneId, errorMsg, { retry = true, 
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
   if (!scene || (workRevision !== undefined && workRevision !== (scene.workRevision || 0))) return;
   const nextRetry = (scene.retryCount || 0) + 1;
-  if (fresh.workspace === 'video' && /quota|credit|balance|429|timeout|timed out|interrupted|runtime (?:preparation|verification) failed|custom Reactor Python runtime/i.test(errorMsg)) {
+  if (fresh.workspace === 'video' && /quota|credit|balance|429|timeout|timed out|interrupted|runtime (?:preparation|verification) failed|custom Reactor Python runtime|Reactor (?:connecting|session connection) failed/i.test(errorMsg)) {
     const { pauseVideoExecution } = await import('./videoExecution.js');
     await pauseVideoExecution(projectId, `Render blocked: ${errorMsg}. Review the provider and saved job before Resume.`);
     return;

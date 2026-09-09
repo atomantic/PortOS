@@ -267,7 +267,7 @@ describe('runSceneRender — Reactor and fal pins', () => {
 
 
 describe('Video production review boundary', () => {
-  it('renders native audio despite the legacy muted default and pauses on shared runtime setup failure', async () => {
+  it.each(['Automatic Reactor runtime preparation failed', 'Reactor connecting failed (BadRequestError)', 'Reactor session connection failed (BadRequestError; HTTP 400)'])('preserves native audio and pauses without retrying shared failure: %s', async error => {
     reviewState.allowsDispatch = true;
     const shot = scene({ workRevision: 0, status: 'pending' });
     const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner', disableAudio: true,
@@ -283,7 +283,7 @@ describe('Video production review boundary', () => {
     expect(await runSceneRender(video, shot)).toBe('job-1');
     expect(enqueuedParams()).toMatchObject({ mode: 'reactor', seconds: 8 });
     expect(enqueuedParams().disableAudio).not.toBe(true);
-    mediaJobEvents.on.mock.calls.find(([event]) => event === 'failed')[1]({ id: 'job-1', error: 'Automatic Reactor runtime preparation failed' });
+    mediaJobEvents.on.mock.calls.find(([event]) => event === 'failed')[1]({ id: 'job-1', error });
     await vi.waitFor(async () => expect((await getProject()).status).toBe('paused'));
     expect(enqueueJob).toHaveBeenCalledTimes(1);
   });
