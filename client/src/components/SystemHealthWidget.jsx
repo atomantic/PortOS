@@ -8,8 +8,6 @@ import {
   Database,
   ChevronRight,
   AlertTriangle,
-  CheckCircle,
-  XCircle,
   Clock,
   Zap,
   RefreshCw,
@@ -17,6 +15,7 @@ import {
 } from 'lucide-react';
 import { MicroGlyph } from './micrographics';
 import { useHealthWarningDismiss } from '../hooks/useHealthWarningDismiss.jsx';
+import { HEALTH_STYLE, pctTone, barTone, resolveHealthThresholds } from '../lib/healthStyle.js';
 
 /**
  * SystemHealthWidget - Compact system health overview for the Dashboard
@@ -70,36 +69,9 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
 
   const { overallHealth, warnings, system, processes, apps, cos } = health;
 
-  // Get status color and icon
-  const getHealthStyle = () => {
-    switch (overallHealth) {
-      case 'healthy':
-        return { color: 'text-port-success', bg: 'bg-port-success/10', icon: CheckCircle };
-      case 'warning':
-        return { color: 'text-port-warning', bg: 'bg-port-warning/10', icon: AlertTriangle };
-      case 'critical':
-        return { color: 'text-port-error', bg: 'bg-port-error/10', icon: XCircle };
-      default:
-        return { color: 'text-gray-400', bg: 'bg-gray-400/10', icon: Activity };
-    }
-  };
-
-  const healthStyle = getHealthStyle();
+  const healthStyle = HEALTH_STYLE[overallHealth] || { color: 'text-gray-400', bg: 'bg-gray-400/10', icon: Activity };
   const HealthIcon = healthStyle.icon;
-
-  // Get color for usage percentage
-  const getUsageColor = (percent) => {
-    if (percent >= 90) return 'text-port-error';
-    if (percent >= 75) return 'text-port-warning';
-    return 'text-port-success';
-  };
-
-  // Get progress bar color
-  const getBarColor = (percent) => {
-    if (percent >= 90) return 'bg-port-error';
-    if (percent >= 75) return 'bg-port-warning';
-    return 'bg-port-success';
-  };
+  const thresholds = resolveHealthThresholds(health.thresholds);
 
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6">
@@ -182,7 +154,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             <HardDrive size={14} className="text-purple-400" />
             <span className="text-xs text-gray-500">Memory</span>
           </div>
-          <div className={`text-lg sm:text-xl font-bold ${getUsageColor(system.memory.usagePercent)}`}>
+          <div className={`text-lg sm:text-xl font-bold ${pctTone(system.memory.usagePercent, thresholds.memoryWarn, thresholds.memoryCritical)}`}>
             {system.memory.usagePercent}%
           </div>
           <div className="text-xs text-gray-500">
@@ -190,7 +162,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
           </div>
           <div className="mt-2 h-1.5 bg-port-border rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${getBarColor(system.memory.usagePercent)}`}
+              className={`h-full rounded-full transition-all ${barTone(system.memory.usagePercent, thresholds.memoryWarn, thresholds.memoryCritical)}`}
               style={{ width: `${system.memory.usagePercent}%` }}
             />
           </div>
@@ -202,7 +174,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             <Cpu size={14} className="text-blue-400" />
             <span className="text-xs text-gray-500">CPU</span>
           </div>
-          <div className={`text-lg sm:text-xl font-bold ${getUsageColor(system.cpu.usagePercent)}`}>
+          <div className={`text-lg sm:text-xl font-bold ${pctTone(system.cpu.usagePercent, thresholds.cpuWarn, thresholds.cpuCritical)}`}>
             {system.cpu.usagePercent}%
           </div>
           <div className="text-xs text-gray-500">
@@ -210,7 +182,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
           </div>
           <div className="mt-2 h-1.5 bg-port-border rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all ${getBarColor(Math.min(100, system.cpu.usagePercent))}`}
+              className={`h-full rounded-full transition-all ${barTone(Math.min(100, system.cpu.usagePercent), thresholds.cpuWarn, thresholds.cpuCritical)}`}
               style={{ width: `${Math.min(100, system.cpu.usagePercent)}%` }}
             />
           </div>
@@ -289,7 +261,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
               <Database size={14} className="text-cyan-400" />
               <span className="text-xs text-gray-500">Disk</span>
             </div>
-            <div className={`text-lg sm:text-xl font-bold ${getUsageColor(system.disk.usagePercent)}`}>
+            <div className={`text-lg sm:text-xl font-bold ${pctTone(system.disk.usagePercent, thresholds.diskWarn, thresholds.diskCritical)}`}>
               {system.disk.usagePercent}%
             </div>
             <div className="text-xs text-gray-500">
@@ -297,7 +269,7 @@ const SystemHealthWidget = memo(function SystemHealthWidget({ dashboardState }) 
             </div>
             <div className="mt-2 h-1.5 bg-port-border rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all ${getBarColor(system.disk.usagePercent)}`}
+                className={`h-full rounded-full transition-all ${barTone(system.disk.usagePercent, thresholds.diskWarn, thresholds.diskCritical)}`}
                 style={{ width: `${system.disk.usagePercent}%` }}
               />
             </div>

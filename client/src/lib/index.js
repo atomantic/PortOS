@@ -113,6 +113,7 @@ export * from './firstRunMissions.js';
 export * from './genUtils.js';
 export * from './repoUrl.js';
 export * from './healthProvenance.js';
+export * from './healthStyle.js';
 export * from './joinInfluenceList.js';
 export * from './kanbanColumns.js';
 export * from './localLlmBackends.js';

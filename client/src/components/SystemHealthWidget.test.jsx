@@ -18,6 +18,7 @@ vi.mock('./ui/Toast', () => {
 const HEALTH = {
   overallHealth: 'warning',
   warnings: [{ type: 'disk', severity: 'warning', message: 'Disk usage at or above 90%' }],
+  thresholds: { memoryWarn: 85, memoryCritical: 95, diskWarn: 90, diskCritical: 98 },
   system: {
     uptimeFormatted: '3h 12m',
     memory: { usagePercent: 40, usedFormatted: '12 GB', totalFormatted: '32 GB' },
@@ -70,6 +71,33 @@ describe('SystemHealthWidget', () => {
     renderWidget({ health: HEALTH, refetchHealth: vi.fn() });
     expect(screen.getByRole('link', { name: 'Open disk usage report' })).toHaveAttribute('href', '/system-resources/storage');
     expect(screen.getByRole('link', { name: /Details/ })).toHaveAttribute('href', '/system-resources/overview');
+  });
+
+  it('uses configured health thresholds for metric colors', () => {
+    const health = {
+      ...HEALTH,
+      system: {
+        ...HEALTH.system,
+        memory: { ...HEALTH.system.memory, usagePercent: 80 },
+        disk: { ...HEALTH.system.disk, usagePercent: 91 },
+      },
+      thresholds: { memoryWarn: 70, memoryCritical: 90, diskWarn: 95, diskCritical: 99 },
+    };
+    renderWidget({ health, refetchHealth: vi.fn() });
+
+    expect(screen.getByText('80%')).toHaveClass('text-port-warning');
+    expect(screen.getByText('91%')).toHaveClass('text-port-success');
+  });
+
+  it('uses the server defaults when threshold data is absent', () => {
+    const health = {
+      ...HEALTH,
+      system: { ...HEALTH.system, memory: { ...HEALTH.system.memory, usagePercent: 80 } },
+      thresholds: undefined,
+    };
+    renderWidget({ health, refetchHealth: vi.fn() });
+
+    expect(screen.getByText('80%')).toHaveClass('text-port-success');
   });
 
   it('dismisses a warning as resolved and refetches health', async () => {
