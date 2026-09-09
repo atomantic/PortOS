@@ -452,7 +452,8 @@ router.post('/:id/start', asyncHandler(async (req, res) => {
 router.post('/:id/pause', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
   if (project?.workspace === 'video') {
-    await stopProject(project.id, { reason: 'Paused by the user.' });
+    const { pauseVideoExecution } = await import('../services/creativeDirector/videoExecution.js');
+    await pauseVideoExecution(project.id, 'Paused by the user.');
     return res.json(await getProject(project.id));
   }
   const updated = await updateProject(req.params.id, { status: 'paused' });

@@ -77,8 +77,8 @@ import * as creativeTools from '../services/creative/toolRegistry.js';
 import { CREATIVE_DIRECTOR_IDS_BATCH_MAX } from '../lib/creativeDirectorValidation.js';
 vi.mock('../services/creativeDirector/videoReview.js', () => ({ reviewVideo: vi.fn(async () => ({ checkpoints: [], feedback: [] })), getVideoReview: vi.fn(async () => ({ checkpoints: [], canReview: true })) }));
 import { reviewVideo } from '../services/creativeDirector/videoReview.js';
-vi.mock('../services/creativeDirector/videoExecution.js', () => ({ getVideoExecutionPreview: vi.fn(async () => ({ canStart: true })), startVideoExecution: vi.fn(async () => ({ status: 'planning' })) }));
-const { getVideoExecutionPreview, startVideoExecution } = await import('../services/creativeDirector/videoExecution.js');
+vi.mock('../services/creativeDirector/videoExecution.js', () => ({ getVideoExecutionPreview: vi.fn(async () => ({ canStart: true })), startVideoExecution: vi.fn(async () => ({ status: 'planning' })), pauseVideoExecution: vi.fn(async () => ({})) }));
+const { getVideoExecutionPreview, startVideoExecution, pauseVideoExecution } = await import('../services/creativeDirector/videoExecution.js');
 import creativeDirectorRoutes from './creativeDirector.js';
 
 describe('creativeDirector routes', () => {
@@ -91,7 +91,7 @@ describe('creativeDirector routes', () => {
     vi.clearAllMocks();
   });
 
-  it('previews choices, validates explicit Start limits, and cancels owned work on Video Pause', async () => {
+  it('previews choices, validates explicit Start limits, and preserves in-flight work on Video Pause', async () => {
     cdService.getProject.mockResolvedValue({ id: 'cd-video', workspace: 'video', status: 'draft' });
     expect((await request(app).get('/api/creative-director/cd-video/execution')).body.canStart).toBe(true);
     expect(getVideoExecutionPreview).toHaveBeenCalledWith('cd-video');
@@ -101,7 +101,8 @@ describe('creativeDirector routes', () => {
     expect((await request(app).post('/api/creative-director/cd-video/start').send(input)).status).toBe(200);
     expect(startVideoExecution).toHaveBeenCalledWith('cd-video', expect.objectContaining({ configurationRevision: input.configurationRevision, limits: expect.objectContaining({ maxClips: 2 }) }));
     await request(app).post('/api/creative-director/cd-video/pause').send({});
-    expect(stop.stopProject).toHaveBeenCalledWith('cd-video', { reason: 'Paused by the user.' });
+    expect(pauseVideoExecution).toHaveBeenCalledWith('cd-video', 'Paused by the user.');
+    expect(stop.stopProject).not.toHaveBeenCalled();
   });
 
   it('validates review revisions and feedback before the owner mutation', async () => {
