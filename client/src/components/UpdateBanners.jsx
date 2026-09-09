@@ -1,6 +1,7 @@
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import Banner from './ui/Banner';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useUpdateChecker } from '../hooks/useUpdateChecker';
 import * as api from '../services/api';
 
@@ -13,7 +14,16 @@ export default function UpdateBanners() {
     update, outOfSync, ignoreUpdate, dismissUpdate, clearOutOfSync, dismissOutOfSync
   } = useUpdateChecker();
 
-  if (!update && !outOfSync) return null;
+  const hasAdvisory = Boolean(update || outOfSync);
+  const { data: processing } = useAutoRefetch(() => api.getActiveProcessing({ silent: true }), 3000, {
+    enabled: hasAdvisory,
+  });
+  // Keep advisories pending until activity is known and jobs have drained.
+  // Hiding must not dismiss them: they become actionable again when idle.
+  const jobsActive = processing?.agents?.active > 0
+    || processing?.jobs?.length > 0
+    || processing?.extras?.imageTo3d?.length > 0;
+  if (!hasAdvisory || !processing || jobsActive) return null;
 
   const goToUpdate = () => navigate(`/apps/${api.PORTOS_APP_ID}/update`);
 
