@@ -86,7 +86,7 @@ describe.skipIf(!runDb)('ensureSchema() boot DDL advisory lock (#5977)', () => {
     await withLockHolder(async (holder) => {
       await holder.query('SELECT pg_advisory_lock($1)', [SCHEMA_DDL_ADVISORY_LOCK_KEY]);
 
-      schemaPromise = ensureSchema().then(() => { resolved = true; });
+      schemaPromise = ensureSchema({ force: true }).then(() => { resolved = true; });
 
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(resolved).toBe(false);
@@ -98,7 +98,7 @@ describe.skipIf(!runDb)('ensureSchema() boot DDL advisory lock (#5977)', () => {
 
   it('releases the lock (and rejects) when the DDL block throws', async () => {
     injectionState.badUpgradeDdl = true;
-    await expect(ensureSchema()).rejects.toThrow();
+    await expect(ensureSchema({ force: true })).rejects.toThrow();
     injectionState.badUpgradeDdl = false;
 
     await withLockHolder(async (holder) => {
@@ -106,8 +106,7 @@ describe.skipIf(!runDb)('ensureSchema() boot DDL advisory lock (#5977)', () => {
       expect(rows[0].locked).toBe(true);
     });
 
-    // The DDL block still runs on every call — a genuine schema error on one
-    // call must not leave a later, valid call permanently blocked or skipped.
+    // A failed forced repair clears readiness, so a later valid call retries.
     await expect(ensureSchema()).resolves.toBeUndefined();
   });
 });
