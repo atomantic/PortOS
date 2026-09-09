@@ -78,6 +78,12 @@ describe('cosValidation pipeline stage metadata', () => {
     precondition: { fileExists: 'screened-input.json' },
   };
 
+  it('round-trips the optional large-input fallback and rejects malformed pins', () => {
+    const largeInputFallback = { providerId: 'large-provider', model: 'large-model', effort: 'high' };
+    expect(sanitizeTaskMetadata({ pipeline: { stages: [{ ...validStage, largeInputFallback }] } }).pipeline.stages[0].largeInputFallback).toEqual(largeInputFallback);
+    expect(sanitizeTaskMetadata({ pipeline: { stages: [{ ...validStage, largeInputFallback: { model: 123 } }] } })).toBeNull();
+  });
+
   it('keeps the validated stage contract and drops unknown fields', () => {
     expect(sanitizeTaskMetadata({
       pipeline: {

@@ -715,6 +715,12 @@ function safePipelinePrecondition(raw) {
   return { [keys[0]]: path };
 }
 
+const largeInputFallbackSchema = z.object({
+  providerId: z.string().trim().min(1).max(200).optional(),
+  model: z.string().trim().min(1).max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+
 function sanitizePipelineStage(raw) {
   if (!isPlainObject(raw)) return null;
   const clean = Object.create(null);
@@ -725,6 +731,11 @@ function sanitizePipelineStage(raw) {
     const value = raw[field].trim();
     if (!value || value.length > maxLength) return null;
     clean[field] = value;
+  }
+  if (Object.hasOwn(raw, 'largeInputFallback') && raw.largeInputFallback !== null) {
+    const fallback = largeInputFallbackSchema.safeParse(raw.largeInputFallback);
+    if (!fallback.success) return null;
+    clean.largeInputFallback = fallback.data;
   }
   if (Object.prototype.hasOwnProperty.call(raw, 'role')) {
     if (!PIPELINE_STAGE_ROLES.includes(raw.role)) return null;

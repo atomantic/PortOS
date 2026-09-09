@@ -103,8 +103,27 @@ describe('pr-reviewer model-abuse preflight', () => {
     ])
   })
 
+  it('screens and retains complete oversized intent only with an explicit fallback', async () => {
+    const body = `${'Requirement. '.repeat(800)}Final acceptance criterion.`
+    const target = {
+      ok: true, repoFullName: 'example/repo', repoSpec: 'github.com/example/repo', defaultBranch: 'main',
+      prs: [{ number: 12, title: 'Update', body: '', headRefOid: 'a'.repeat(40), linkedIssues: [{ number: 101, title: 'Feature', body }] }],
+    }
+    execGhMock.mockResolvedValue('diff --git a/example b/example\n+change')
+    expect(await runPrReviewerSecurityScan({ target })).toMatchObject({ ok: false, code: 'security-scan-linked-issue-too-large' })
+    expect(runModelAbuseScanMock).not.toHaveBeenCalled()
+    const result = await runPrReviewerSecurityScan({ target, largeInputFallback: { providerId: 'large-provider', model: 'large-model' } })
+    expect(result).toMatchObject({ ok: true, passed: true, usedLargeInputFallback: true })
+    expect(runModelAbuseScanMock.mock.calls[0][0].content).toContain(body)
+    expect(result.reviewInputs[0].linkedIssues[0].body).toBe(body)
+    runModelAbuseScanMock.mockResolvedValue(guardVerdict(false))
+    const blocked = await runPrReviewerSecurityScan({ target, largeInputFallback: { providerId: 'large-provider', model: 'large-model' } })
+    expect(blocked).toMatchObject({ ok: true, passed: false, reviewInputs: [], usedLargeInputFallback: false })
+    expect(await runPrReviewerSecurityScan({ target, largeInputFallback: {} })).toMatchObject({ ok: false, code: 'security-scan-large-input-fallback-unconfigured' })
+  })
+
   it('refuses linked requirements that were clipped before screening', async () => {
-    const result = await runPrReviewerSecurityScan({ app, target: {
+    const result = await runPrReviewerSecurityScan({ app, largeInputFallback: { providerId: 'large-provider', model: 'large-model' }, target: {
       ok: true, repoFullName: 'example/repo', repoSpec: 'github.com/example/repo', defaultBranch: 'main',
       prs: [{ number: 12, authorLogin: 'external', headRefOid: 'a'.repeat(40), inputComplete: false }],
     } })

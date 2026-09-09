@@ -663,7 +663,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // upgrades.
   // v8 = provider:<id> reviewers. Older peers drop these identities and could
   // execute a task without its required review. Gate only task synchronization.
-  cosTasks: 8,
+  // v9 = strict large-input PR review fallback pins and complete linked issue
+  // evidence. Older peers may clip that evidence or substitute a smaller model.
+  cosTasks: 9,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would
