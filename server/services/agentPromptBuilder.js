@@ -219,6 +219,60 @@ PortOS launched you autonomously. Nobody is watching this session and nothing ca
 - **Ambiguous task?** Pick the most reasonable reading, do the work, and note the alternatives you rejected in your completion summary.
 - **Genuinely blocked** (missing credential, contradictory requirements)? Write why to the completion sentinel and stop. Do NOT wait for a reply.`;
 
+/** Load and safely stage the review recipe shared by full and light prompts. */
+async function prepareReviewLoopRecipe(task, {
+  providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
+  codeReviewDefaults, defaultReviewers,
+}) {
+  // Preload slashdo's local-agent review-loop recipe once for review-loop
+  // follow-up tasks; both the light/TUI path (via lightOptions) and the full
+  // path (the verbose builder below) reuse this single value to inline the exact
+  // CLI-reviewer invocation. Cheap + cached; only read for follow-ups — and not
+  // for a merge-only follow-up, which has no reviewer to invoke and renders a
+  // section that ignores this body entirely.
+  const isFollowUpNeedingRecipes = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp)
+    && !isMergeOnlyFollowUp(task.metadata || {});
+  // …and a slashdo-free harness driving its OWN review loop inline needs the
+  // identical recipe (`buildInlineReviewLoopSection`). Same predicate the render
+  // side uses, so a run whose section never materializes — read-only,
+  // leave-open, JIRA, or a merge gate with no reviewer to invoke — doesn't pay
+  // for the read and the staging write. The reviewer-list term matters too: the
+  // section only inlines the recipe when a SPAWNABLE CLI reviewer resolves, so a
+  // copilot-only or username-only list (including an unconfigured install)
+  // would otherwise
+  // read + `atomicWrite` 56KB and then render nothing from it.
+  const isInlineNeedingRecipes = inlinePrLifecycleSection(task, {
+    providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
+  }) === 'review-loop'
+    && resolveReviewerConfig(task.metadata, codeReviewDefaults, defaultReviewers).reviewers.some(isCliReviewer);
+  const localAgentLoopBody = (isFollowUpNeedingRecipes || isInlineNeedingRecipes)
+    ? await loadSlashdoLib('local-agent-review-loop').catch(() => null)
+    : null;
+  const inlineOnly = isInlineNeedingRecipes && !isFollowUpNeedingRecipes;
+  const localAgentLoopBodyForInline = inlineOnly
+    ? prepareLocalReviewLoopBody(prepareSandboxedReviewLoopBody(localAgentLoopBody))
+    : localAgentLoopBody;
+  // The recipe is ~40KB. A follow-up agent inlines it — driving the loop is that
+  // agent's entire job, so it will read all of it anyway. An INLINE loop is a
+  // later phase of a run whose context is already carrying the actual task, so an
+  // over-budget recipe is sanitized, then staged on disk and pointed at instead
+  // (#3110's split, applied to the same body). Every host that reaches here has
+  // file tools. Sanitizing before the write is load-bearing: otherwise the file
+  // pointer would bypass the public-content sandbox applied during rendering.
+  const localAgentLoopBodyPath = (inlineOnly
+    && localAgentLoopBodyForInline && localAgentLoopBodyForInline.length > SLASHDO_INLINE_BUDGET_CHARS)
+    ? await writeResolvedSlashdoBody('local-agent-review-loop', localAgentLoopBodyForInline).catch((err) => {
+        console.warn(`⚠️ Could not stage the CLI-reviewer recipe, inlining instead: ${err.message}`);
+        return null;
+      })
+    : null;
+
+  return {
+    isFollowUpNeedingRecipes, localAgentLoopBody,
+    localAgentLoopBodyForInline, localAgentLoopBodyPath,
+  };
+}
+
 /**
  * Build the agent prompt.
  *
@@ -320,47 +374,13 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     defaultReviewers, codeReviewDefaults,
   });
 
-  // Preload slashdo's local-agent review-loop recipe once for review-loop
-  // follow-up tasks; both the light/TUI path (via lightOptions) and the full
-  // path (the verbose builder below) reuse this single value to inline the exact
-  // CLI-reviewer invocation. Cheap + cached; only read for follow-ups — and not
-  // for a merge-only follow-up, which has no reviewer to invoke and renders a
-  // section that ignores this body entirely.
-  const isFollowUpNeedingRecipes = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp)
-    && !isMergeOnlyFollowUp(task.metadata || {});
-  // …and a slashdo-free harness driving its OWN review loop inline needs the
-  // identical recipe (`buildInlineReviewLoopSection`). Same predicate the render
-  // side uses, so a run whose section never materializes — read-only,
-  // leave-open, JIRA, or a merge gate with no reviewer to invoke — doesn't pay
-  // for the read and the staging write. The reviewer-list term matters too: the
-  // section only inlines the recipe when a SPAWNABLE CLI reviewer resolves, so a
-  // copilot-only or username-only list (including an unconfigured install)
-  // would otherwise
-  // read + `atomicWrite` 56KB and then render nothing from it.
-  const isInlineNeedingRecipes = inlinePrLifecycleSection(task, {
+  const {
+    isFollowUpNeedingRecipes, localAgentLoopBody,
+    localAgentLoopBodyForInline, localAgentLoopBodyPath,
+  } = await prepareReviewLoopRecipe(task, {
     providerType, providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
-  }) === 'review-loop'
-    && resolveReviewerConfig(task.metadata, codeReviewDefaults, defaultReviewers).reviewers.some(isCliReviewer);
-  const localAgentLoopBody = (isFollowUpNeedingRecipes || isInlineNeedingRecipes)
-    ? await loadSlashdoLib('local-agent-review-loop').catch(() => null)
-    : null;
-  const localAgentLoopBodyForInline = (isInlineNeedingRecipes && !isFollowUpNeedingRecipes)
-    ? prepareLocalReviewLoopBody(prepareSandboxedReviewLoopBody(localAgentLoopBody))
-    : localAgentLoopBody;
-  // The recipe is ~40KB. A follow-up agent inlines it — driving the loop is that
-  // agent's entire job, so it will read all of it anyway. An INLINE loop is a
-  // later phase of a run whose context is already carrying the actual task, so an
-  // over-budget recipe is sanitized, then staged on disk and pointed at instead
-  // (#3110's split, applied to the same body). Every host that reaches here has
-  // file tools. Sanitizing before the write is load-bearing: otherwise the file
-  // pointer would bypass the public-content sandbox applied during rendering.
-  const localAgentLoopBodyPath = (isInlineNeedingRecipes && !isFollowUpNeedingRecipes
-    && localAgentLoopBodyForInline && localAgentLoopBodyForInline.length > SLASHDO_INLINE_BUDGET_CHARS)
-    ? await writeResolvedSlashdoBody('local-agent-review-loop', localAgentLoopBodyForInline).catch((err) => {
-        console.warn(`⚠️ Could not stage the CLI-reviewer recipe, inlining instead: ${err.message}`);
-        return null;
-      })
-    : null;
+    codeReviewDefaults, defaultReviewers,
+  });
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
     const forgeCli = await resolveManualForgeCli(workspaceDir, worktreeInfo, task);

@@ -3594,6 +3594,33 @@ describe('buildAgentPrompt — slashdo prompt-size controls', () => {
     expect(stagedBody).not.toMatch(/^\s*(?:git pull --rebase --autostash && )?git push\b/m);
   });
 
+  it('keeps the sanitized reviewer recipe inline when staging fails', async () => {
+    vi.mocked(loadSlashdoLib).mockResolvedValue([
+      'RECIPE FALLBACK HEADER',
+      '5. **Push verified changes**:',
+      '   git push origin {BRANCH_NAME}',
+      '6. **Re-loop or stop**:',
+      '   continue',
+      'x'.repeat(SLASHDO_INLINE_BUDGET_CHARS + 500),
+    ].join('\n'));
+    vi.mocked(writeResolvedSlashdoBody).mockRejectedValue(new Error('EACCES'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: { openPR: true, reviewLoop: true, reviewers: ['codex'] } }),
+      {}, '/r',
+      { branchName: 'claim/issue-1', worktreePath: '/tmp/wt', baseBranch: 'main' },
+      isTruthyMeta,
+      { providerType: 'tui', providerId: 'opencode-tui', providerCommand: 'opencode' });
+
+    expect(prompt).toContain('RECIPE FALLBACK HEADER');
+    expect(prompt).toContain('Keep verified changes local');
+    expect(prompt).not.toContain('git push origin {BRANCH_NAME}');
+    expect(prompt).not.toContain('/install/data/cos/slashdo-resolved/');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('inlining instead: EACCES'));
+    warn.mockRestore();
+  });
+
   // A pinned reviewer list carries the effort as slashdo's own `~effort=<level>`
   // suffix, so the section states it ONCE — on the pin. The prose instruction is
   // for the unpinned case, where the workflow resolves reviewers itself.

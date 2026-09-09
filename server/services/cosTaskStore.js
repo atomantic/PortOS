@@ -223,6 +223,24 @@ export async function getAllTasks() {
 }
 
 /**
+ * Lightweight live-activity input. Derive once per task-file snapshot, so a
+ * three-second poll never clones prompts or groups completed history.
+ * Keep duplicates and source order, matching getAllTasks() counting semantics.
+ */
+export async function getPendingTaskIds() {
+  const { config } = await loadState();
+  const sources = await Promise.all([config.userTasksFile, config.cosTasksFile].map(async (file) => {
+    const filePath = join(ROOT_DIR, file);
+    if (!existsSync(filePath)) return [];
+    const snapshot = await readTaskSnapshot(filePath);
+    snapshot.pendingIds ??= snapshot.tasks.filter(task => task.status === 'pending').map(task => task.id);
+    return snapshot.pendingIds;
+  }));
+  // Never expose the cached arrays to callers.
+  return sources.flat();
+}
+
+/**
  * Alias for backward compatibility
  */
 export const getTasks = getUserTasks;

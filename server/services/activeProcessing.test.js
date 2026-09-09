@@ -8,7 +8,7 @@ vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob:
 vi.mock('./mediaJobQueue/sanitizeJob.js', () => ({ sanitizeJob: (job) => ({ id: job.id, kind: job.kind, status: job.status, params: { musicStudio: job.params.musicStudio } }) }));
 vi.mock('./imageTo3d/models.js', () => ({ listGeneratingModelSummaries: deps.models }));
 vi.mock('./ollamaManager.js', () => ({ getLoadedModels: deps.loaded }));
-vi.mock('./cos.js', () => ({ getAllTasks: deps.tasks, getStatus: deps.status, getAgents: deps.agents }));
+vi.mock('./cos.js', () => ({ getPendingTaskIds: deps.tasks, getStatus: deps.status, getAgents: deps.agents }));
 
 const { getActiveProcessing } = await import('./activeProcessing.js');
 
@@ -24,7 +24,7 @@ describe('active processing snapshot', () => {
     deps.running.mockReturnValue({ kind: 'audio' });
     deps.models.mockResolvedValue([{ id: 'mesh-1', name: 'Fake mesh' }, { id: 'mesh-2', name: '' }]);
     deps.loaded.mockResolvedValue([{ id: 'model-1', name: 'Fake model' }]);
-    deps.tasks.mockResolvedValue({ user: { tasks: [{ id: 'task-1', status: 'pending' }] }, cos: { tasks: [{ id: 'cos-task-1', status: 'completed' }] } });
+    deps.tasks.mockResolvedValue(['task-1']);
     deps.status.mockResolvedValue({ activeAgents: 99 });
     deps.agents.mockResolvedValue([
       { id: 'agent-1', status: 'running', taskId: 'task-a' },
@@ -46,7 +46,7 @@ describe('active processing snapshot', () => {
     deps.running.mockReturnValue(null);
     deps.models.mockResolvedValue([]);
     deps.loaded.mockResolvedValue([]);
-    deps.tasks.mockResolvedValue({ user: {}, cos: {} });
+    deps.tasks.mockResolvedValue([]);
     deps.status.mockResolvedValue({ activeAgents: 0 });
     deps.agents.mockResolvedValue([]);
     const snapshot = await getActiveProcessing();
@@ -74,17 +74,14 @@ describe('queued agent count', () => {
   });
 
   it('does not count a pending task a running agent already holds', async () => {
-    deps.tasks.mockResolvedValue({
-      user: { tasks: [{ id: 'task-spawning', status: 'pending' }, { id: 'task-waiting', status: 'pending' }] },
-      cos: { tasks: [] },
-    });
+    deps.tasks.mockResolvedValue(['task-spawning', 'task-waiting']);
     deps.agents.mockResolvedValue([{ id: 'agent-1', status: 'running', taskId: 'task-spawning' }]);
     const snapshot = await getActiveProcessing();
     expect(snapshot.agents).toEqual({ active: 1, queued: 1 });
   });
 
   it('still counts a pending task whose agent already completed', async () => {
-    deps.tasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [{ id: 'cos-task-1', status: 'pending' }] } });
+    deps.tasks.mockResolvedValue(['cos-task-1']);
     deps.agents.mockResolvedValue([{ id: 'agent-1', status: 'completed', taskId: 'cos-task-1' }]);
     const snapshot = await getActiveProcessing();
     expect(snapshot.agents).toEqual({ active: 0, queued: 1 });
@@ -95,7 +92,7 @@ describe('queued agent count', () => {
   // numbers at once — so the failure path falls back to getStatus()'s own tally.
   it('falls back to the status tally when the agent read fails, without dropping pending tasks', async () => {
     deps.status.mockResolvedValue({ activeAgents: 3 });
-    deps.tasks.mockResolvedValue({ user: { tasks: [{ id: 'task-1', status: 'pending' }] }, cos: { tasks: [] } });
+    deps.tasks.mockResolvedValue(['task-1']);
     deps.agents.mockRejectedValue(new Error('state unreadable'));
     const snapshot = await getActiveProcessing();
     expect(snapshot.agents).toEqual({ active: 3, queued: 1 });
@@ -105,7 +102,7 @@ describe('queued agent count', () => {
   // ...and a successful read of an EMPTY list still means zero, not the fallback.
   it('reports zero active from an empty agent list without waiting for status', async () => {
     deps.status.mockImplementation(() => new Promise(() => {}));
-    deps.tasks.mockResolvedValue({ user: { tasks: [{ id: 'task-1', status: 'pending' }] }, cos: { tasks: [] } });
+    deps.tasks.mockResolvedValue(['task-1']);
     deps.agents.mockResolvedValue([]);
     const snapshot = await getActiveProcessing();
     expect(snapshot.agents).toEqual({ active: 0, queued: 1 });
@@ -113,7 +110,7 @@ describe('queued agent count', () => {
   });
 
   it('preserves pending tasks when both agent and fallback status reads fail', async () => {
-    deps.tasks.mockResolvedValue({ user: { tasks: [{ id: 'task-1', status: 'pending' }] }, cos: { tasks: [] } });
+    deps.tasks.mockResolvedValue(['task-1']);
     deps.agents.mockRejectedValue(new Error('state unreadable'));
     deps.status.mockRejectedValue(new Error('status unavailable'));
     const snapshot = await getActiveProcessing();
