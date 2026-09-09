@@ -106,6 +106,10 @@ async function resolvePublicReviewAgentProvider(task, posture) {
     return { ok: false, permanent: true, error: resolved.error, providerId: task.metadata?.provider || undefined };
   }
   const { provider } = resolved;
+  const strictFallback = task.metadata?.pipeline?.securityScan?.usedLargeInputFallback === true;
+  if (strictFallback && !resolved.pinHonored) {
+    return { ok: false, permanent: true, error: 'Configured large-input review fallback provider is unavailable' };
+  }
   if (task.metadata?.provider && !resolved.pinHonored) {
     emitLog('warn', `Public-review stage provider ${task.metadata.provider} is not eligible for the ${posture} posture — using ${provider.id}`, {
       taskId: task.id,
@@ -129,6 +133,9 @@ async function resolvePublicReviewAgentProvider(task, posture) {
   // pass-throughs (see its doc comment).
   const honorPin = pinnedForThisProvider && modelPinIsOffered(provider, pinnedModel);
   const pinRejected = pinnedForThisProvider && !honorPin;
+  if (strictFallback && !honorPin) {
+    return { ok: false, permanent: true, error: 'Configured large-input review fallback model is unavailable' };
+  }
   // Strip a pin that will NOT be honored, BEFORE model selection.
   // `selectModelForTask` returns `metadata.model` verbatim as its
   // highest-priority answer, so leaving it on the task defeats both guards

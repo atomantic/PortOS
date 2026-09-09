@@ -19,6 +19,7 @@ import {
   MODEL_ABUSE_GUARD,
   MODEL_ABUSE_GUARD_MAX_INPUT_CHARS,
   LINKED_ISSUE_MAX_COUNT,
+  LINKED_ISSUE_STANDARD_BODY_MAX_CHARS,
   linkedIssueIntentContent,
   linkedIssueIntentFingerprint,
   modelAbuseContentFingerprint,
@@ -294,11 +295,17 @@ const reportFor = (pr, diff, verdict) => ({
  * or malformed verdict fails closed; reports collected before that point remain
  * generic and are useful to the human-facing status view only.
  */
-export async function runPrReviewerSecurityScan({ app, target = null } = {}) {
+export async function runPrReviewerSecurityScan({ app, target = null, largeInputFallback = null } = {}) {
   const resolvedTarget = target || await listExternalOpenPullRequests(app);
   if (!resolvedTarget.ok) return resolvedTarget;
   const scanKey = securityScanFingerprint(resolvedTarget);
   if (!scanKey) return failure('security-scan-target-unidentifiable');
+
+  const requiresLargeInputFallback = resolvedTarget.prs.some(pr =>
+    pr.linkedIssues?.some(issue => issue.body.length > LINKED_ISSUE_STANDARD_BODY_MAX_CHARS));
+  if (requiresLargeInputFallback && (!largeInputFallback?.providerId || !largeInputFallback?.model)) {
+    return failure('security-scan-linked-issue-too-large', { scanKey });
+  }
 
   const reviewedPrs = [];
   const reviewInputs = [];
@@ -373,6 +380,7 @@ export async function runPrReviewerSecurityScan({ app, target = null } = {}) {
     reviewedPrs,
     reports: reviewedPrs,
     reviewInputs,
+    usedLargeInputFallback: requiresLargeInputFallback,
   };
 }
 

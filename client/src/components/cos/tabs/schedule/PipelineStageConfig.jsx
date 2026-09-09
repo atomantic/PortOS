@@ -149,14 +149,15 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
       )}
       <div className="space-y-3">
         {stages.map((stage, i) => {
-          const stageProvider = providers?.find(p => p.id === stage.providerId);
           const role = needsSecurityModelPolicy
             ? (prReviewerStageRole(stage) || (i === 0 ? 'security' : i === 1 ? 'eligibility' : 'actions'))
             : null;
           const isSecurityStage = role === 'security';
+          const selection = isSecurityStage ? stage.largeInputFallback || {} : stage;
+          const stageProvider = providers?.find(p => p.id === selection.providerId);
           // PR roles reassert the server's no-tool contract even for legacy
           // profiles or position-only stages. Other pipelines keep their profile.
-          const posture = isSecurityStage ? null : stagePublicReviewPosture(role ? { ...stage, role } : stage);
+          const posture = isSecurityStage ? (stage.largeInputFallback ? PUBLIC_REVIEW_NO_TOOL_POSTURE : null) : stagePublicReviewPosture(role ? { ...stage, role } : stage);
           const isNoToolStage = posture === PUBLIC_REVIEW_NO_TOOL_POSTURE;
           const isActionsStage = Boolean(posture) && !isNoToolStage;
           const eligibleProviders = posture ? eligibleProvidersFor(providers, selectionPolicies[posture]) : null;
@@ -172,13 +173,24 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
           }));
           const stageModels = posture && localBackend && (isNoToolStage || localStageModels.length > 0)
             ? localStageModels
-            : effortAwareModelOptions(stageProvider, stage.model);
+            : effortAwareModelOptions(stageProvider, selection.model);
           const selectionPolicy = posture ? selectionPolicies[posture] : undefined;
-          const stageProviderId = stage.providerId || '';
-          const stageModel = stage.model || '';
-          const stageEffort = stage.effort || '';
+          const stageProviderId = selection.providerId || '';
+          const stageModel = selection.model || '';
+          const stageEffort = selection.effort || '';
 
-          const updateStage = (field, value) => handleStageUpdate(i, field, value || null);
+          const updateStage = (field, value) => {
+            if (!isSecurityStage) return handleStageUpdate(i, field, value || null);
+            const fallback = { ...selection };
+            if (value) fallback[field] = value;
+            else delete fallback[field];
+            if (field === 'providerId') {
+              delete fallback.model;
+              delete fallback.effort;
+            }
+            if (field === 'model' && !effortSurvivingModel(stageProvider, value, fallback.effort)) delete fallback.effort;
+            return handleStageUpdate(i, 'largeInputFallback', fallback);
+          };
           return (
             <div key={i} className="bg-port-card border border-port-border rounded-lg p-3">
               <div className="flex items-center gap-2 mb-3">
@@ -186,7 +198,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                 {stage.readOnly && (
                   <span className="text-[10px] px-1 py-0.5 bg-gray-600/30 text-gray-400 rounded">read-only</span>
                 )}
-                {isNoToolStage && (
+                {isNoToolStage && !isSecurityStage && (
                   <span className="text-[10px] px-1 py-0.5 bg-port-accent/15 text-port-accent rounded">{role === 'actions' ? 'tool-free review' : 'tool-free gate'}</span>
                 )}
                 {isActionsStage && (
@@ -207,7 +219,22 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                   </p>
                 </div>
               )}
-              {!isSecurityStage && (
+              {isSecurityStage && (
+                <div className="my-3">
+                  <ToggleSwitch
+                    enabled={Boolean(stage.largeInputFallback)}
+                    onChange={() => handleStageUpdate(i, 'largeInputFallback', stage.largeInputFallback ? null : {})}
+                    disabled={updating}
+                    ariaLabel="Enable larger-model fallback for oversized linked issues"
+                    size="sm"
+                  />
+                  <p className="text-xs text-gray-400 mt-2">Larger-model fallback for oversized linked issues. Choose a provider and a model with enough context for the complete PR and issues. Issues over 8,000 characters (up to 65,536 each) use this selection for the eligibility gate and final review. Security screening still runs on all content; flagged or incomplete input stays blocked.</p>
+                  {stage.largeInputFallback && (!selection.providerId || !selection.model) && (
+                    <p className="text-xs text-port-warning mt-2">Select both a provider and a model to enable fallback runs.</p>
+                  )}
+                </div>
+              )}
+              {(!isSecurityStage || stage.largeInputFallback) && (
                 <ProviderModelSelector
                   loading={!providersLoaded}
                   providers={providers || []}
@@ -218,10 +245,10 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                   onModelChange={(model) => updateStage('model', model)}
                   effort={stageEffort}
                   onEffortChange={(effort) => updateStage('effort', effort)}
-                  emptyProviderOption={posture
+                  emptyProviderOption={isSecurityStage ? 'Select fallback provider' : posture
                     ? 'First eligible provider on this install'
                     : 'Default (task-level)'}
-                  emptyModelOption={posture ? 'Use provider default model' : 'Default (task-level)'}
+                  emptyModelOption={isSecurityStage ? 'Select larger model' : posture ? 'Use provider default model' : 'Default (task-level)'}
                   alwaysShowModel
                   selectionPolicy={selectionPolicy}
                   disabled={updating}
@@ -235,7 +262,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                   <Link to="/ai" className="underline hover:text-port-accent">Settings → Providers</Link>.
                 </p>
               )}
-              {isNoToolStage && eligibleProviders?.length > 0 && (
+              {isNoToolStage && !isSecurityStage && eligibleProviders?.length > 0 && (
                 <p className="text-xs text-gray-500 mt-2">
                   {localModelsLoading
                     ? 'Loading installed local model capability reports…'

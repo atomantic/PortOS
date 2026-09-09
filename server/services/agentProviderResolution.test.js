@@ -395,6 +395,17 @@ describe('resolveAgentProviderAndModel — public-review stages', () => {
     expect(getAllProviders).not.toHaveBeenCalled();
   });
 
+  it('never substitutes an unavailable large-input fallback provider or model', async () => {
+    const pipeline = { securityScan: { usedLargeInputFallback: true } };
+    getAllProviders.mockResolvedValue({ providers: [{ ...CLAUDE, models: ['available-model'] }], activeProvider: null });
+    expect(await resolveAgentProviderAndModel(gateTask({ pipeline, provider: 'missing', model: 'large-model' })))
+      .toMatchObject({ ok: false, permanent: true });
+    expect(await resolveAgentProviderAndModel(gateTask({ pipeline, provider: CLAUDE.id, model: 'missing-model' })))
+      .toMatchObject({ ok: false, permanent: true });
+    expect(await resolveAgentProviderAndModel(gateTask({ pipeline, provider: CLAUDE.id, model: 'available-model' })))
+      .toMatchObject({ ok: true, selectedModel: 'available-model' });
+  });
+
   it('ignores a stage pin that is not eligible for the posture', async () => {
     getAllProviders.mockResolvedValue({ providers: [OPENCODE, CLAUDE], activeProvider: null });
     const r = await resolveAgentProviderAndModel(gateTask({ provider: 'opencode' }));

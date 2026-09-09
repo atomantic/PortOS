@@ -32,6 +32,7 @@ const pullRequests = [{
   headSha,
   title: 'docs: example change',
   body: '',
+  linkedIssues: [{ number: 101, title: 'Complete requirement', body: `${'Acceptance criterion. '.repeat(900)}Final requirement.` }],
   // Trailing newline already stripped, as the gh wrapper's stdout trim leaves it.
   diff: 'diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+example',
 }];
@@ -50,6 +51,7 @@ describe('materializing the screened public-review snapshot', () => {
     expect(await materializePublicReviewInput({ scanKey, workspacePath: workspace })).toBe(true);
     const input = JSON.parse(await readFile(join(workspace, PUBLIC_REVIEW_INPUT_FILENAME), 'utf8'));
     expect(input.pullRequests.map((pr) => pr.number)).toEqual([42]);
+    expect(input.pullRequests[0].linkedIssues[0]).toEqual({ ...pullRequests[0].linkedIssues[0], truncated: false });
     expect((await stat(join(workspace, PUBLIC_REVIEW_INPUT_FILENAME))).mode & 0o222).toBe(0);
 
     expect(await materializePublicReviewPatches({ scanKey, workspacePath: workspace, allowedPullRequestNumbers: [42] })).toBe(true);

@@ -517,6 +517,24 @@ describe('runPrReviewerSecurityPreflight', () => {
     expect(securityMock.runPrReviewerSecurityScan).not.toHaveBeenCalled();
   });
 
+  it('uses the configured fallback for both reasoning stages after complete screening', async () => {
+    listed(externalPr(12, HEAD_12));
+    securityMock.runPrReviewerSecurityScan.mockResolvedValue(scanResult({ usedLargeInputFallback: true }));
+    const metadata = preflightMetadata();
+    const fallback = { providerId: 'large-provider', model: 'large-model' };
+    metadata.pipeline.stages[0].largeInputFallback = fallback;
+    metadata.pipeline.stages.push({ role: 'actions', providerId: 'old-provider', model: 'old-model', effort: 'high' });
+    metadata.effort = 'high';
+    await runPrReviewerSecurityPreflight('pr-reviewer', APP, metadata, null, schedule());
+    expect(securityMock.runPrReviewerSecurityScan).toHaveBeenCalledWith(expect.objectContaining({ largeInputFallback: fallback }));
+    expect(metadata).toMatchObject({ provider: fallback.providerId, model: fallback.model });
+    expect(metadata.effort).toBeUndefined();
+    expect(metadata.pipeline.stages.slice(1)).toEqual([
+      expect.objectContaining({ ...fallback, effort: null }), expect.objectContaining({ ...fallback, effort: null }),
+    ]);
+    expect(metadata.pipeline.securityScan.usedLargeInputFallback).toBe(true);
+  });
+
   it('writes a synthetic stage-0 result that hands only safe PRs to the gate and applies the next stage as a real hand-off would', async () => {
     listed(externalPr(12, HEAD_12), externalPr(13, HEAD_13));
     const reports = [report(12, HEAD_12, true), report(13, HEAD_13, false)];

@@ -246,6 +246,14 @@ describe('linked-issue intent evidence', () => {
     expect(normalizeLinkedIssues(null)).toEqual([]);
   });
 
+  it('keeps oversized intent intact across normalization and detects edits past the old limit', () => {
+    const issues = [{ number: 101, title: 'Feature', body: `${'x'.repeat(9000)}original` }];
+    expect(linkedIssueIntentContent(normalizeLinkedIssues(issues))).toContain(issues[0].body);
+    expect(linkedIssueIntentFingerprint(issues)).not.toBe(linkedIssueIntentFingerprint([{ ...issues[0], body: `${'x'.repeat(9000)}changed` }]));
+    const clipped = normalizeLinkedIssues([{ ...issues[0], body: 'x'.repeat(LINKED_ISSUE_BODY_MAX_CHARS + 1) }]);
+    expect(normalizeLinkedIssues(clipped)[0].truncated).toBe(true);
+  });
+
   it('fingerprints the exact screened text, and reports no evidence as null', () => {
     const issues = [{ number: 101, title: 'Crash on empty import', body: 'Importing an empty file throws.' }];
     const content = linkedIssueIntentContent(issues);

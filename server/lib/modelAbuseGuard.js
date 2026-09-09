@@ -214,7 +214,11 @@ const normalizeIssueNumbers = (value) => Array.isArray(value)
 // prose.
 export const LINKED_ISSUE_MAX_COUNT = 10;
 export const LINKED_ISSUE_TITLE_MAX_CHARS = 300;
-export const LINKED_ISSUE_BODY_MAX_CHARS = 8_000;
+// Above the standard budget, pr-reviewer requires an explicit larger-model
+// fallback. Normalization retains the bounded full text for screening, snapshots
+// and freshness checks; it must not clip back to the standard budget on read.
+export const LINKED_ISSUE_STANDARD_BODY_MAX_CHARS = 8_000;
+export const LINKED_ISSUE_BODY_MAX_CHARS = 65_536;
 
 /**
  * The intent evidence for one PR: the open issues it links, reduced to number,
@@ -237,7 +241,7 @@ export function normalizeLinkedIssues(value) {
       number,
       title: title.slice(0, LINKED_ISSUE_TITLE_MAX_CHARS),
       body: body.slice(0, LINKED_ISSUE_BODY_MAX_CHARS),
-      truncated: title.length > LINKED_ISSUE_TITLE_MAX_CHARS || body.length > LINKED_ISSUE_BODY_MAX_CHARS,
+      truncated: raw.truncated === true || title.length > LINKED_ISSUE_TITLE_MAX_CHARS || body.length > LINKED_ISSUE_BODY_MAX_CHARS,
     });
   }
   return issues.sort((a, b) => a.number - b.number).slice(0, LINKED_ISSUE_MAX_COUNT);
