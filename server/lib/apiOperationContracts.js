@@ -5,6 +5,7 @@ import {
   voiceSynthesizeBodySchema,
   zodToOpenApiSchema,
 } from './apiContractSchemas.js';
+import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { cosToolCallSchema } from './cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agentContextValidation.js';
 
@@ -62,7 +63,7 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
     get: {
       summary: 'List voices',
       description: 'Enumerate available voices for an engine. Defaults to the active engine.',
-      parameters: [{ name: 'engine', in: 'query', required: false, schema: { type: 'string', enum: ['kokoro', 'piper'] } }],
+      parameters: [{ name: 'engine', in: 'query', required: false, schema: { type: 'string', enum: [...TTS_ENGINE_IDS] } }],
       responses: { 200: { description: 'Voice list', content: { 'application/json': { schema: { type: 'object' } } } } },
       'x-portos-tool': { name: 'voice.list-voices', version: 1, policy: { privacy: 'internal', sideEffect: 'read', async: false } },
     },
