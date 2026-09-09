@@ -420,7 +420,12 @@ export async function buildSystemResourceReport() {
     downloadedModels,
     npmCacheBytes,
   });
-  const mediaQueue = getQueueCapacity();
+  const capacity = getQueueCapacity();
+  const mediaQueue = {
+    queued: capacity.totals.queued,
+    running: capacity.totals.running,
+    byKind: capacity.byKind,
+  };
   const agentQueue = agentQueueSummary(cosTasks, cosStatus);
   const modelBytes = sumKnownBytes([hf?.totalBytes, loraStorage?.totalBytes, ollamaBytes, lmStudioBytes]);
   const storageAreas = [
@@ -517,8 +522,8 @@ export async function buildSystemResourceReport() {
       modelBytes,
       managedReclaimableBytes,
       loadedModels: loadedModels.length,
-      queuedJobs: agentQueue ? mediaQueue.totals.queued + queuedAgents : null,
-      runningJobs: agentQueue ? mediaQueue.totals.running + agentQueue.inProgress : null,
+      queuedJobs: agentQueue ? mediaQueue.queued + queuedAgents : null,
+      runningJobs: agentQueue ? mediaQueue.running + agentQueue.inProgress : null,
     },
     storageAreas,
     dataCategories: categories,

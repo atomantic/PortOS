@@ -72,7 +72,7 @@ vi.mock('./lmStudioManager.js', () => ({
 }));
 vi.mock('./mediaJobQueue/index.js', () => ({
   getQueueCapacity: vi.fn(() => ({
-    totals: { queued: 1, running: 1 },
+    totals: { queued: 3, running: 1 },
     byKind: {
       image: { queued: 1, running: 0 },
       video: { queued: 0, running: 1 },
@@ -144,10 +144,11 @@ describe('system resource reporting', () => {
       freeBytes: 25000,
       usagePercent: 75,
     });
-    expect(report.summary).toMatchObject({ loadedModels: 1, queuedJobs: 3, runningJobs: 1 });
+    expect(report.summary).toMatchObject({ loadedModels: 1, queuedJobs: 5, runningJobs: 1 });
     expect(report.queues.media).toMatchObject({
+      queued: 3,
+      running: 1,
       byKind: expect.objectContaining({ 'video-upscale': { queued: 2, running: 0 } }),
-      totals: { queued: 1, running: 1 },
     });
     expect(report.queues.agents).toMatchObject({ pendingSystem: 1, awaitingApproval: 1 });
     expect(report.models.downloaded.map((model) => model.backend)).toEqual(
