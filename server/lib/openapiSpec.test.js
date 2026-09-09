@@ -38,6 +38,7 @@ describe('buildOpenApiSpec', () => {
     expect(body.properties.text).toBeDefined();
     expect(body.required).toContain('text');
     expect(body.properties.engine.enum).toEqual([...VALID_ENGINES]);
+    expect(body.properties.engine.enum).toContain('qwen3-tts');
     // OpenAPI path schemas must not carry the JSON-Schema dialect marker.
     expect(body.$schema).toBeUndefined();
   });
