@@ -13,7 +13,7 @@ vi.mock('../services/socket', () => ({
 }));
 
 const toastSpy = vi.fn();
-vi.mock('../components/ui/Toast', () => ({ default: (...a) => toastSpy(...a) }));
+vi.mock('../components/ui/Toast', () => ({ default: Object.assign((...a) => toastSpy(...a), { dismiss: vi.fn() }) }));
 
 const { useOnDemandTaskToast } = await import('./useOnDemandTaskToast.js');
 const fire = (payload) => handlers.get('cos:schedule:on-demand-empty')?.(payload);
@@ -224,4 +224,20 @@ describe('useOnDemandTaskToast — programmatic handler results', () => {
     expect(msg).toMatch(/no bible entries are missing images/);
     expect(opts.icon).toBe('💤');
   });
+});
+
+it('updates one maintenance notification with an agent link and expires terminal progress', () => {
+  toastSpy.mockClear();
+  const { unmount } = renderHook(() => useOnDemandTaskToast());
+  const update = handlers.get('cos:maintenance:updated');
+  const run = { id: 'maint-example', status: 'running', completed: {}, steps: [{ id: 'step-1' }], active: { agentId: 'agent-example', status: 'running' } };
+  update(run);
+  update(run);
+  expect(toastSpy).toHaveBeenCalledTimes(1);
+  expect(toastSpy.mock.calls[0][1]).toMatchObject({ id: 'maintenance-maint-example', duration: Infinity });
+  expect(toastSpy.mock.calls[0][0]().props.run.active.agentId).toBe('agent-example');
+  update({ ...run, status: 'completed', active: null, completed: { 'step-1': 'done' }, updatedAt: 'finished' });
+  expect(toastSpy.mock.calls[1][1]).toMatchObject({ duration: 8000, label: 'Maintenance · 1/1 · completed' });
+  unmount();
+  expect(handlers.has('cos:maintenance:updated')).toBe(false);
 });

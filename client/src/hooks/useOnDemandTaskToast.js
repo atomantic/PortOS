@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { createElement, useEffect } from 'react';
+import MaintenanceRunStatus from '../components/cos/tabs/schedule/MaintenanceRunStatus';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { timeUntil } from '../utils/formatters';
@@ -45,7 +46,22 @@ const PR_REVIEWER_REASON_LABELS = {
  */
 export function useOnDemandTaskToast() {
   useEffect(() => {
-    socket.emit('cos:subscribe');
+    const subscribe = () => socket.emit('cos:subscribe');
+    subscribe();
+    socket.on('connect', subscribe);
+    const maintenanceStates = new Map();
+    const handleMaintenance = run => {
+      const label = `Maintenance · ${Object.keys(run.completed || {}).length}/${run.steps?.length || 0} · ${run.status}`;
+      const signature = JSON.stringify([run.status, run.completed, run.active, run.reason]);
+      if (maintenanceStates.get(run.id) === signature) return;
+      maintenanceStates.set(run.id, signature);
+      if (maintenanceStates.size > 100) maintenanceStates.delete(maintenanceStates.keys().next().value);
+      if (run.status !== 'running') toast.dismiss(`maintenance-${run.id}`);
+      toast(() => createElement(MaintenanceRunStatus, { run }), {
+        id: run.status === 'running' ? `maintenance-${run.id}` : `maintenance-${run.id}-${run.updatedAt}`, label, duration: run.status === 'running' ? Infinity : 8000,
+      });
+    };
+    socket.on('cos:maintenance:updated', handleMaintenance);
 
     const handleEmpty = (data) => {
       const task = data?.taskType || 'task';
@@ -146,6 +162,8 @@ export function useOnDemandTaskToast() {
     socket.on('cos:schedule:on-demand-empty', handleEmpty);
     socket.on('cos:schedule:on-demand-handled', handleHandled);
     return () => {
+      socket.off('connect', subscribe);
+      socket.off('cos:maintenance:updated', handleMaintenance);
       socket.off('cos:schedule:on-demand-empty', handleEmpty);
       socket.off('cos:schedule:on-demand-handled', handleHandled);
       // Don't unsubscribe from cos — other components share the room.

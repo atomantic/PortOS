@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Routes, Route } from 'react-router';
 
 vi.mock('../../../services/api', () => ({
   getCosLearningDurations: vi.fn(),
+  getCosAgent: vi.fn(),
   getCosAgentDates: vi.fn(),
   getCosAgentsByDate: vi.fn(),
   clearCompletedCosAgents: vi.fn(),
@@ -331,4 +332,13 @@ describe('AgentsTab feedback review queue', () => {
     });
     expect(onRefresh).toHaveBeenCalledTimes(1);
   });
+});
+
+it('opens an agent deep link even after it has left the recent agent list', async () => {
+  api.getCosAgent.mockResolvedValue({ id: 'archived-example', status: 'completed', metadata: { taskDescription: 'Example maintenance audit' } });
+  render(<MemoryRouter initialEntries={['/cos/agents/archived-example']}><Routes>
+    <Route path="/cos/:tab/:agentId" element={<AgentsTab agents={[]} onRefresh={vi.fn()} liveOutputs={{}} providers={[]} apps={[]} />} />
+  </Routes></MemoryRouter>);
+  expect(await screen.findByTestId('agent-archived-example')).toBeInTheDocument();
+  expect(api.getCosAgent).toHaveBeenCalledWith('archived-example', { silent: true });
 });

@@ -214,8 +214,8 @@ function GoalFidelityPanel({ review }) {
   );
 }
 
-export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, onRelaunch, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName }) {
-  const [expanded, setExpanded] = useState(false);
+export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, onRelaunch, completed, paused = false, liveOutput, durations, onFeedbackChange, remote, peerName, initiallyExpanded = false }) {
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const [now, setNow] = useState(Date.now());
   const [fullOutput, setFullOutput] = useState(null);
   const [loadingOutput, setLoadingOutput] = useState(false);

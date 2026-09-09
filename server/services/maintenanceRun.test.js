@@ -8,6 +8,7 @@ const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-mai
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 
 const state = vi.hoisted(() => ({ tasks: [], requests: [], invoked: [], dispatch: null, probe: null }));
+vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => ({ agents: {} })) }));
 vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.tasks }, user: { tasks: [] } })) }));
 vi.mock('./taskSchedule.js', () => ({ getOnDemandRequests: vi.fn(async () => state.requests) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async (id) => (id === 'app-1' ? { id, name: 'Example App' } : null)) }));
@@ -31,7 +32,7 @@ const { getQuotaBurnConfig } = await import('./quotaBurnStore.js');
 const { invokeQuotaBurnStep } = await import('./quotaBurnInvoke.js');
 const {
   startMaintenanceRun, stopMaintenanceRun, resumeMaintenanceRun, evaluateMaintenanceRun, getMaintenanceRun, listMaintenanceRuns,
-  __onMaintenanceAgentCompleted, __retryMaintenanceRuns, __resetMaintenanceRunScheduler,
+  __onMaintenanceAgentSpawned, __onMaintenanceAgentCompleted, __retryMaintenanceRuns, __resetMaintenanceRunScheduler,
 } = await import('./maintenanceRun.js');
 
 const start = () => startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high' });
@@ -164,4 +165,22 @@ describe('manual maintenance run', () => {
     expect(await listMaintenanceRuns()).toEqual([]);
     expect(state.invoked).toEqual([]);
   });
+});
+
+// Regression: queued maintenance must identify its real agent immediately and
+// publish persisted transitions, without waiting for the retry sweep.
+it('publishes queued, running, and completed progress with the active agent link identity', async () => {
+  const { cosEvents } = await import('./cosEvents.js');
+  const updates = [];
+  const listener = run => updates.push(run);
+  cosEvents.on('maintenance:updated', listener);
+  const { run } = await start();
+  expect(updates.at(-1).active.status).toBe('queued');
+  await __onMaintenanceAgentSpawned({ ...agentFor(run, 0), id: 'agent-example' });
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ active: { agentId: 'agent-example', status: 'running' } });
+  expect(updates.at(-1).active.agentId).toBe('agent-example');
+  await __onMaintenanceAgentCompleted(agentFor(run, 0));
+  expect(updates.at(-1).completed).toHaveProperty(run.steps[0].id);
+  expect(updates.at(-1).active).not.toHaveProperty('agentId');
+  cosEvents.off('maintenance:updated', listener);
 });

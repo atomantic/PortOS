@@ -309,6 +309,7 @@ export default function App() {
           <Route path="cos" element={<Navigate to="/cos/tasks" replace />} />
           <Route path="cos/mind/tools" element={<Navigate to="/cos/mind?panel=tools" replace />} />
           <Route path="cos/tools" element={<Navigate to="/cos/mind?panel=tools" replace />} />
+          <Route path="cos/:tab/:agentId" element={<ChiefOfStaff />} />
           <Route path="cos/:tab" element={<ChiefOfStaff />} />
           <Route path="calendar" element={<Navigate to="/calendar/agenda" replace />} />
           <Route path="calendar/:tab" element={<CalendarPage />} />

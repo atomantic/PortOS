@@ -185,7 +185,7 @@ export const forceHealthCheck = (options = {}) => request('/cos/health/check', {
 export const getCosAgents = (options) => request('/cos/agents', options);
 export const getCosAgentDates = () => request('/cos/agents/history');
 export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
-export const getCosAgent = (id) => request(`/cos/agents/${id}`);
+export const getCosAgent = (id, options) => request(`/cos/agents/${id}`, options);
 export const pauseCosAgent = (id, reason, options = {}) => request(`/cos/agents/${id}/pause`, {
   method: 'POST',
   body: JSON.stringify({ reason }),
