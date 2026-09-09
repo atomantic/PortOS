@@ -548,9 +548,9 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
       <div className={completed ? "p-3 [overflow-wrap:anywhere]" : "p-4"}>
         {/* Top row: Agent ID, badges, and actions */}
         <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1 mb-2">
-          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1 basis-64">
+          <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1 basis-0 sm:basis-64">
             <Cpu size={16} aria-hidden="true" className={`shrink-0 ${inactive ? 'text-gray-500' : 'text-port-accent animate-pulse'}`} />
-            <span className="font-mono text-sm text-gray-400 truncate">{agent.id}</span>
+            <span className="font-mono text-sm text-gray-400 truncate min-w-0">{agent.id}</span>
             <button
               type="button"
               onClick={(event) => {
@@ -611,7 +611,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             )}
           </div>
           {/* Actions - right side */}
-          <div className="flex items-center gap-2 shrink-0 ml-auto">
+          <div className="flex items-center gap-2 shrink-0 ml-0 sm:ml-auto">
             {(output.length > 0 || inactive) && (
               <button
                 onClick={() => setExpanded(!expanded)}
