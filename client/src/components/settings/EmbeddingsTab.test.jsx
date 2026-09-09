@@ -9,6 +9,7 @@ vi.mock('../../services/apiSystem', () => ({
 vi.mock('../../services/apiLocalLlm', () => ({
   getLocalLlmStatus: vi.fn()
     .mockResolvedValueOnce({ ollama: { models: [{ id: 'custom-embed:latest' }] }, lmstudio: { models: [] } })
+    .mockResolvedValueOnce({ ollama: { models: [] }, lmstudio: { models: [] } })
     .mockResolvedValueOnce({ ollama: { models: [] }, lmstudio: { models: [{ id: 'example/custom-embedding' }] } }),
 }));
 vi.mock('../ui/Toast', () => ({
@@ -23,6 +24,12 @@ describe('EmbeddingsTab', () => {
 
     const datalist = () => document.getElementById('embeddings-model-options');
     await waitFor(() => expect(datalist().querySelector('option[value="custom-embed:latest"]')).toBeTruthy());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(datalist().querySelector('option[value="custom-embed:latest"]')).toBeFalsy());
+    expect(datalist().querySelector('option[value="nomic-embed-text"]')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Model'), { target: { value: 'manual-embedding-model' } });
+    expect(screen.getByLabelText('Model')).toHaveValue('manual-embedding-model');
 
     fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'lmstudio' } });
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
