@@ -425,10 +425,7 @@ export default function AIProviders() {
     toast.success('ChatGPT subscription signed out');
   };
 
-  const handleCopyCodexDeviceCode = async (code) => {
-    if (await copyToClipboard(code)) toast.success('Device code copied');
-    else toast.error('Could not copy the device code');
-  };
+  const handleCopyCodexDeviceCode = (code) => copyToClipboard(code, 'Device code copied');
 
   // llama.cpp (and similar local daemons) answer as a single model id — the
   // server's `--alias`, not the preset name on this card. Matching the
