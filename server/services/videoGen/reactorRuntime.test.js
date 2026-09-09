@@ -51,4 +51,16 @@ describe('automatic Reactor runtime preparation', () => {
     await expect(ensureReactorRuntime()).rejects.toThrow('remove the custom override');
     expect(mocks.execFile).toHaveBeenCalledOnce();
   });
+
+  it('preserves the safe Python preparation failure through the subprocess boundary', async () => {
+    mocks.execFile.mockImplementationOnce(reply(new Error('missing SDK')))
+      .mockImplementationOnce(reply(Object.assign(new Error('private installer details'), { code: 23 })));
+    await expect(ensureReactorRuntime()).rejects.toThrow('Reactor Python environment preparation failed; check uv access to Python downloads on GitHub releases');
+  });
+
+  it.each([1, 'ENOENT', 'toString'])('keeps unknown setup code %s private', async (code) => {
+    mocks.execFile.mockImplementationOnce(reply(new Error('missing SDK')))
+      .mockImplementationOnce(reply(Object.assign(new Error('private installer details'), { code })));
+    await expect(ensureReactorRuntime()).rejects.toThrow('Automatic Reactor runtime preparation failed; check network access and disk space, then retry the render');
+  });
 });
