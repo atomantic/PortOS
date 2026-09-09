@@ -6,7 +6,7 @@ vi.mock('./childProcess.js', () => ({
 }));
 
 import { spawn } from './childProcess.js';
-import { execGit } from './execGit.js';
+import { execGit, execGitSafe } from './execGit.js';
 
 const makeChild = () => {
   const child = new EventEmitter();
@@ -81,6 +81,18 @@ describe('execGit', () => {
     vi.advanceTimersByTime(500);
     await expect(promise).rejects.toThrow(/timed out after 0\.5s/);
     expect(child.kill).toHaveBeenCalled();
+  });
+
+  it('execGitSafe converts a timeout into a complete failed result even with ignoreExitCode', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const promise = execGitSafe(['fetch'], '/repo', { timeout: 500, ignoreExitCode: true });
+    vi.advanceTimersByTime(500);
+    await expect(promise).resolves.toEqual({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'git command timed out after 0.5s: git fetch'
+    });
   });
 
   it('rejects when output exceeds maxBuffer', async () => {
