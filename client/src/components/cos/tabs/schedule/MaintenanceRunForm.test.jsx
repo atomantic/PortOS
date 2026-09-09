@@ -51,7 +51,7 @@ describe('maintenance launch', () => {
     await select(user);
     await user.click(screen.getByRole('button', { name: 'Run now' }));
     expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
-    expect(api.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'example', providerId: 'claude', model: 'sonnet', effort: 'high', mode: 'file-issues' }, { silent: true });
+    expect(api.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'example', providerId: 'claude', model: 'sonnet', effort: 'high', mode: 'file-issues', claimBetweenAudits: true }, { silent: true });
     finishStart({ run: runRecord(), result: { dispatched: true, taskType: 'better-structural-drift' } });
     expect(await screen.findByText(/Maintenance started with better-structural-drift/)).toBeInTheDocument();
     const row = screen.getByRole('list', { name: 'Maintenance runs' });
@@ -181,8 +181,24 @@ it('launches fix mode only after renewed consent', async () => {
   await select(user);
   await user.selectOptions(screen.getByLabelText('Audit mode'), 'fix');
   expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
-  expect(screen.getByText(/one final claim-issue drain/)).toBeInTheDocument();
+  expect(screen.getByText(/one final claim pass/)).toBeInTheDocument();
+  expect(screen.getByText('Planned steps · 8')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Issue handling')).not.toBeInTheDocument();
   await user.click(screen.getByRole('checkbox'));
   await user.click(screen.getByRole('button', { name: 'Run now' }));
   expect(api.startMaintenanceRun).toHaveBeenCalledWith(expect.objectContaining({ mode: 'fix' }), { silent: true });
+});
+
+it('previews and starts issue filing without requiring claim jobs', async () => {
+  const user = userEvent.setup();
+  show({ schedule: { tasks: { ...tasks, 'claim-issue': { enabled: false } } } });
+  await select(user);
+  await user.selectOptions(screen.getByLabelText('Issue handling'), 'false');
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(screen.getByText('Planned steps · 7')).toBeInTheDocument();
+  expect(screen.getByRole('list', { name: 'Planned maintenance steps' })).not.toHaveTextContent('claim-issue');
+  expect(screen.queryByText(/Run now needs these saved task settings/)).not.toBeInTheDocument();
+  await user.click(screen.getByRole('checkbox'));
+  await user.click(screen.getByRole('button', { name: 'Run now' }));
+  expect(api.startMaintenanceRun).toHaveBeenCalledWith(expect.objectContaining({ mode: 'file-issues', claimBetweenAudits: false }), { silent: true });
 });

@@ -1,9 +1,11 @@
+import MaintenanceStepChecklist from './MaintenanceStepChecklist';
+
 /** Shared live progress content for the schedule card and corner notification. */
-export default function MaintenanceRunStatus({ run }) {
+export default function MaintenanceRunStatus({ run, showSteps = false }) {
   const done = Object.keys(run.completed || {}).length;
   const total = run.steps?.length || 0;
   const step = run.active?.taskType || run.steps?.find(entry => !run.completed?.[entry.id])?.taskRef?.taskType;
-  return <div className="space-y-1 text-xs" role="status">
+  return <div className={`space-y-1 text-xs min-w-0 ${showSteps ? 'w-full' : ''}`} role="status">
     <p>{run.status} · {done}/{total} steps{run.status === 'running' && step ? ` · ${step}` : ''}</p>
     <progress aria-label="Maintenance steps completed" value={done} max={total || 1} className="w-full h-1 accent-port-accent" />
     {run.active && <p className="flex items-center gap-2">
@@ -11,6 +13,7 @@ export default function MaintenanceRunStatus({ run }) {
       {run.active.status || 'queued'}
       {run.active.agentId && <a className="underline" href={`/cos/agents/${encodeURIComponent(run.active.agentId)}`} target="_blank" rel="noopener noreferrer">Open agent in new tab</a>}
     </p>}
-    {run.reason && <p>{run.reason}</p>}
+    {run.reason && <details><summary className="cursor-pointer">Run details</summary><p className="break-all">{run.reason}</p></details>}
+    {showSteps && <MaintenanceStepChecklist steps={run.steps} completed={run.completed} activeStepId={run.active?.stepId} />}
   </div>;
 }

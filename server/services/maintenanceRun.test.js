@@ -199,3 +199,15 @@ it('runs fixes consecutively and drains remaining issues only after documentatio
   await __onMaintenanceAgentCompleted(agentFor(run, MAINTENANCE_TASK_ORDER.length));
   expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'completed' });
 });
+
+it('files findings consecutively and finishes without claiming when claims are disabled', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'file-issues', claimBetweenAudits: false });
+  expect(run.steps.map(step => step.taskRef.taskType)).toEqual(MAINTENANCE_TASK_ORDER);
+  for (let index = 0; index < run.steps.length; index++) {
+    expect(state.invoked.at(-1).step.overrides.params.fileIssues).toBe(index < run.steps.length - 1);
+    await __onMaintenanceAgentCompleted(agentFor(run, index));
+  }
+  expect(dispatchedTypes()).toEqual(MAINTENANCE_TASK_ORDER);
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'completed' });
+  expect((await listMaintenanceRuns())[0].steps).toHaveLength(7);
+});
