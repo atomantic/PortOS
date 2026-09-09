@@ -29,16 +29,9 @@ vi.mock('../services/voice/tts.js', () => ({
   listVoiceEngines: vi.fn(),
   VALID_ENGINES: new Set(['kokoro', 'piper', 'qwen3-tts']),
 }));
-vi.mock('../services/voice/profiles.js', () => ({
+vi.mock('../services/voice/profiles.js', async (importActual) => ({
+  ...(await importActual()),
   listVoiceProfiles: vi.fn(),
-  parsePresetVoiceId: (voiceId) => {
-    const match = /^([a-z][a-z0-9-]*):([^:\s]+)$/i.exec(voiceId);
-    if (!match) return null;
-    const engine = match[1].toLowerCase() === 'qwen3' ? 'qwen3-tts' : match[1].toLowerCase();
-    return ['kokoro', 'piper', 'qwen3-tts'].includes(engine)
-      ? { engine, voice: match[2], voiceId: `${engine}:${match[2]}` }
-      : null;
-  },
   promotePresetProfile: vi.fn(),
   createVoiceDesignCandidate: vi.fn(),
   createClonedVoiceCandidate: vi.fn(),
