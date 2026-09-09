@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { MAINTENANCE_TASK_ORDER } from '../../../../lib/quotaBurnTasks';
 import { MAINTENANCE_SEQUENCE_TYPES } from '../../../../../../server/lib/maintenanceSequence';
 import MaintenanceRunForm from './MaintenanceRunForm';
 
+const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
+vi.mock('../../../../services/socket', () => ({ default: socket }));
 const api = vi.hoisted(() => ({
   getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn(),
   updateCosTaskInterval: vi.fn(), updateAppTaskTypeOverride: vi.fn(),
@@ -144,4 +146,31 @@ it('refreshes partial setup after failure without starting work', async () => {
   expect(screen.getByText(/Refreshing the schedule also failed/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
   expect(api.startMaintenanceRun).not.toHaveBeenCalled();
+});
+
+it('streams agent activity and completed steps, and removes listeners on unmount', async () => {
+  api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord({ completed: {} })] });
+  const view = show();
+  await screen.findByRole('list', { name: 'Maintenance runs' });
+  const update = socket.on.mock.calls.find(([name]) => name === 'cos:maintenance:updated')[1];
+  act(() => update(runRecord({ completed: {}, active: { taskType: 'better-structural-drift', status: 'running', agentId: 'agent-example' } })));
+  expect(screen.getByRole('link', { name: 'Open agent in new tab' })).toHaveAttribute('href', '/cos/agents/agent-example');
+  expect(screen.getByRole('link', { name: 'Open agent in new tab' })).toHaveAttribute('target', '_blank');
+  act(() => update(runRecord()));
+  expect(screen.getByRole('progressbar')).toHaveAttribute('value', '1');
+  view.unmount();
+  expect(socket.off).toHaveBeenCalledWith('cos:maintenance:updated', update);
+});
+
+it('keeps a newer live update when an older initial fetch resolves late, and refreshes on reconnect', async () => {
+  let resolveRead;
+  api.getMaintenanceRuns.mockReturnValueOnce(new Promise(resolve => { resolveRead = resolve; }));
+  show();
+  const update = socket.on.mock.calls.find(([name]) => name === 'cos:maintenance:updated')[1];
+  act(() => update(runRecord()));
+  await act(async () => resolveRead({ runs: [runRecord({ completed: {} })] }));
+  expect(screen.getByRole('progressbar')).toHaveAttribute('value', '1');
+  api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord({ status: 'completed', active: null })] });
+  await act(async () => socket.on.mock.calls.find(([name]) => name === 'connect')[1]());
+  expect(screen.getByText(/completed · 1\/13 steps/)).toBeInTheDocument();
 });

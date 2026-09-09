@@ -344,6 +344,8 @@ function setupCosEventForwarding() {
   cosEvents.on('tasks:user:completed', (data) => broadcastToCos('cos:tasks:user:completed', data));
   cosEvents.on('tasks:cos:changed', (data) => broadcastToCos('cos:tasks:cos:changed', data));
 
+  cosEvents.on('maintenance:updated', (data) => broadcastToCos('cos:maintenance:updated', data));
+
   // Agent events
   cosEvents.on('agent:spawned', (data) => broadcastToCos('cos:agent:spawned', data));
   cosEvents.on('agent:updated', (data) => broadcastToCos('cos:agent:updated', data));
