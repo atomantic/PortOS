@@ -57,10 +57,19 @@ if (typeof HTMLCanvasElement !== 'undefined') {
     rotate: () => {},
     arc: () => {},
     fill: () => {},
-    measureText: () => ({ width: 0 }),
+    measureText: (text) => ({ width: String(text ?? '').length * 6 }),
     transform: () => {},
     rect: () => {},
     clip: () => {},
+    // Path/text/gradient members the graph + poster canvases use. A gradient
+    // has to be an object with addColorStop, because callers assign it to
+    // fillStyle and keep drawing.
+    roundRect: () => {},
+    quadraticCurveTo: () => {},
+    strokeText: () => {},
+    setLineDash: () => {},
+    createLinearGradient: () => ({ addColorStop: () => {} }),
+    createRadialGradient: () => ({ addColorStop: () => {} }),
   });
 }
 
