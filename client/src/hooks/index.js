@@ -103,6 +103,7 @@ export { default as useTokenPopover } from './useTokenPopover.js';
 // === Mixed (both default and named) — surface both ===
 export { default as useAsyncAction } from './useAsyncAction.js';
 export * from './useAsyncAction.js';
+export * from './useBackupRun.js';
 
 // === Notifications & toasts ===
 export * from './useAIStatusNotifications.js';

@@ -4,9 +4,9 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import ToggleSwitch from '../ToggleSwitch';
 import FolderPicker from '../FolderPicker';
-import useAsyncAction from '../../hooks/useAsyncAction';
+import { useBackupRun } from '../../hooks/useBackupRun';
 import Modal from '../ui/Modal';
-import { getSettings, updateSettings, getBackupStatus, triggerBackup, getBackupSnapshots, restoreDatabase } from '../../services/api';
+import { getSettings, updateSettings, getBackupStatus, getBackupSnapshots, restoreDatabase } from '../../services/api';
 import { formatBytes } from '../../utils/formatters';
 import CronSchedulePicker from '../CronSchedulePicker';
 
@@ -120,27 +120,11 @@ export function BackupTab() {
       : [...prev, path]);
   };
 
-  const [handleRunNow, running] = useAsyncAction(async () => {
-    const result = await triggerBackup({ silent: true });
-    if (result?.skipped) {
-      toast('Backup already running');
-    } else {
-      setPgBackup(result?.pgBackup ?? null);
-      setBackupStatus(result?.status ?? 'ok');
-      const filesChanged = result?.filesChanged ?? 0;
-      if (result?.pgBackup?.status === 'failed') {
-        // Degraded run: the file backup succeeded but the DB dump didn't. Don't
-        // dress it up as a success — and don't double-announce the DB failure,
-        // which the BACKUP_DB_DUMP_FAILED socket error toast already surfaces
-        // (useErrorNotifications). This toast just acknowledges the file portion.
-        toast(`Backup complete — ${filesChanged} files changed; database dump failed`, { icon: '⚠️' });
-      } else {
-        toast.success(`Backup complete — ${filesChanged} files changed`, { icon: '💾' });
-      }
-      getBackupSnapshots({ silent: true }).then(s => setSnapshots(Array.isArray(s) ? s : [])).catch((err) => { console.warn(`⚠️ Failed to refresh snapshots: ${err?.message || err}`); });
-    }
-    return result;
-  }, { errorMessage: 'Backup failed' });
+  const [handleRunNow, running] = useBackupRun((result) => {
+    setPgBackup(result?.pgBackup ?? null);
+    setBackupStatus(result?.status ?? 'ok');
+    getBackupSnapshots({ silent: true }).then(s => setSnapshots(Array.isArray(s) ? s : [])).catch((err) => { console.warn(`⚠️ Failed to refresh snapshots: ${err?.message || err}`); });
+  });
 
   const addExclude = () => {
     const trimmed = newExclude.trim();
