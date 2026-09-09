@@ -195,11 +195,18 @@ export function BackupTab() {
 
   const handleRestoreDb = async (snapshotId) => {
     setRestorePreview(null);
+    setRestoreTarget(null);
     // Dry-run first to show what would restore, then open the confirm modal.
     const preview = await restoreDatabase({ snapshotId, dryRun: true }, { silent: true })
       .catch(() => null);
     if (!preview || preview.status === 'skipped') {
       toast.error(preview?.reason === 'no_dump' ? 'No DB dump in this snapshot' : 'DB restore unavailable');
+      return;
+    }
+    if (preview.status !== 'ok') {
+      toast.error(preview.reason === 'manifest_mismatch'
+        ? 'Snapshot dump failed integrity verification'
+        : `DB restore unavailable: ${preview.reason || 'unknown'}`);
       return;
     }
     setRestorePreview(preview);
