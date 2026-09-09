@@ -111,7 +111,7 @@ export default function Dashboard() {
       .finally(() => setAppsReadSettled(true));
     const secondaryRead = Promise.all([
       refreshHealth(),
-      api.getUsage().catch(() => null).then(setUsage),
+      api.getHourlyUsage({ silent: true }).catch(() => null).then(setUsage),
       api.getTribeCareSummary({ silent: true }).catch(() => null).then(setTribeCare),
       api.getFeedStats({ silent: true }).catch(() => null).then(setFeeds),
       api.getMeatspaceLoggingStats({ silent: true }).catch(() => null).then(setMeatspaceLogging),
