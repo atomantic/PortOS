@@ -11,8 +11,8 @@ import { getProfileForSynthesis, profileArtifactDirectory } from './profiles.js'
 import { whichFirst } from '../../lib/processEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
-// Single source of truth for the supported TTS engine names.
-export const VALID_ENGINES = new Set(['kokoro', 'piper', 'qwen3-tts']);
+import { VALID_ENGINES } from '../../lib/voiceEngines.js';
+export { VALID_ENGINES } from '../../lib/voiceEngines.js';
 
 // Qwen3 preset ids shipped with the shorter prefix before the engine registry
 // standardized on `qwen3-tts`. Keep those persisted ids readable while every

@@ -6,12 +6,13 @@
  */
 
 import { z } from 'zod';
+import { TTS_ENGINE_IDS } from './voiceEngines.js';
 
 export const VOICE_TEXT_MAX_CHARS = 4000;
 
 export const voiceSynthesizeBodySchema = z.object({
   text: z.string().trim().min(1).max(VOICE_TEXT_MAX_CHARS),
-  engine: z.enum(['kokoro', 'piper']).optional(),
+  engine: z.enum(TTS_ENGINE_IDS).optional(),
   voice: z.string().max(128).optional(),
   rate: z.number().min(0.25).max(4).optional()
     .describe('Speech rate. Validated 0.25-4 (Piper). Kokoro clamps to 0.5-2.0.'),
