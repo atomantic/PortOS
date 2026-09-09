@@ -62,7 +62,7 @@ export const VOICE_DEFAULTS = Object.freeze({
   },
 
   tts: {
-    engine: 'kokoro', // 'kokoro' | 'piper'
+    engine: 'kokoro', // 'kokoro' | 'piper' | 'qwen3-tts'
     rate: 1.0,
     kokoro: {
       modelId: 'onnx-community/Kokoro-82M-v1.0-ONNX',
@@ -75,6 +75,10 @@ export const VOICE_DEFAULTS = Object.freeze({
       // Null = use the catalog default (set per-voice in piper-voices.js).
       // Override here when experimenting with other VCTK speaker indices.
       speakerId: null,
+    },
+    qwen3: {
+      modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+      voice: 'warm-narrator',
     },
   },
 

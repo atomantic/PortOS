@@ -45,6 +45,12 @@ describe('formatVoiceLabel', () => {
       .toBe('lessac-medium — American');
   });
 
+  it('formats Qwen3 voices with their display label, language, and gender', () => {
+    expect(formatVoiceLabel({
+      engine: 'qwen3-tts', label: 'Warm Narrator (1.7B Design)', language: 'en', gender: 'neutral',
+    })).toBe('Warm Narrator (1.7B Design) — English — neutral');
+  });
+
   it('falls back to label / voice / id when engine is unrecognised', () => {
     expect(formatVoiceLabel({ engine: 'elevenlabs', label: 'Rachel' })).toBe('Rachel');
     expect(formatVoiceLabel({ engine: 'elevenlabs', voice: 'rachel' })).toBe('rachel');
