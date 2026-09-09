@@ -2,7 +2,8 @@
  * The maintenance ladder: the ordered audits PortOS recommends running against a
  * managed app, with a perpetual `claim-issue` drain between every pair so each
  * audit's findings are resolved before the next audit reads the code. Fix mode
- * instead resolves findings in each audit and runs one final drain.
+ * instead resolves findings in each audit and runs one final drain. Issue-only
+ * runs can skip all drains to leave findings open for human review.
  *
  * ONE definition, shared by both runners. `services/maintenanceRun.js` walks
  * these steps directly for the Schedule tab's "Run now" — no quota gates, no
@@ -48,8 +49,8 @@ export const maintenanceStepParams = (taskType, mode = 'file-issues') => (taskTy
  * task's saved effort. Ids are `${idPrefix}-${index}`, so a fresh prefix per
  * invocation yields fresh step identities.
  */
-export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues' }) {
-  const types = mode === 'fix' ? [...MAINTENANCE_TASK_ORDER, MAINTENANCE_DRAIN_TASK] : MAINTENANCE_SEQUENCE_TYPES;
+export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true }) {
+  const types = mode === 'fix' ? [...MAINTENANCE_TASK_ORDER, MAINTENANCE_DRAIN_TASK] : claimBetweenAudits ? MAINTENANCE_SEQUENCE_TYPES : MAINTENANCE_TASK_ORDER;
   return types.map((taskType, index) => ({
     id: `${idPrefix}-${index}`,
     enabled: true,

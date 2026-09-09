@@ -12,7 +12,7 @@
  * inheritance display and the PUT payload without a server.
  */
 
-import { MAINTENANCE_DRAIN_TASK, MAINTENANCE_SEQUENCE_TYPES, MAINTENANCE_TASK_ORDER, maintenanceStepParams } from '../../../server/lib/maintenanceSequence.js';
+import { buildMaintenanceSteps, MAINTENANCE_DRAIN_TASK, MAINTENANCE_SEQUENCE_TYPES, maintenanceStepParams } from '../../../server/lib/maintenanceSequence.js';
 
 /** Mirrors `QUOTA_BURN_TASK_REF_KIND` in `server/lib/quotaBurnTaskRef.js`. */
 export const QUOTA_BURN_TASK_REF_KIND = Object.freeze({ BUILTIN: 'builtin', CUSTOM: 'custom' });
@@ -263,10 +263,11 @@ export const CREATE_TASK_HREF = '/cos/jobs';
 export { MAINTENANCE_TASK_ORDER, MAINTENANCE_ORDER_GUIDANCE } from '../../../server/lib/maintenanceSequence.js';
 
 /** Saved settings required by the maintenance ladder, including actionable patches. */
-export function maintenancePrerequisites(groups, appId) {
+export function maintenancePrerequisites(groups, appId, options = {}) {
   if (!appId) return [];
   const entries = flattenTaskCatalog(groups);
-  return [...MAINTENANCE_TASK_ORDER, MAINTENANCE_DRAIN_TASK].flatMap(taskType => {
+  const types = buildMaintenanceSteps({ appId, ...options }).map(step => step.taskRef.taskType);
+  return [...new Set(types)].flatMap(taskType => {
     const entry = entries.find(candidate => candidate.taskType === taskType);
     if (!entry) return [{ taskType, reason: 'unavailable in Scheduled Tasks', unavailable: true }];
     const settings = {

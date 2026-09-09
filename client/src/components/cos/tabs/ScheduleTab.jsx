@@ -5,7 +5,6 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { formatDateTime, formatTimeOfDaySeconds, timeAgo } from '../../../utils/formatters';
 import Banner from '../../ui/Banner';
-import { MAINTENANCE_ORDER_GUIDANCE } from '../../../lib/quotaBurnTasks';
 import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults';
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
@@ -189,8 +188,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
       </div>
 
       <Banner size="md" title="Recommended maintenance order">
-        <p className="text-sm break-words">{MAINTENANCE_ORDER_GUIDANCE}</p>
-        <p className="text-xs mt-1">Resolve findings between audits, then document the resulting code. Run the whole sequence now from here, or schedule it under quota gates in Quota Burn; Run now offers issue filing with claim-issue between audits, or audit and fix with one final claim-issue drain.</p>
+        <p className="text-xs">Choose how to handle findings, then review the steps before starting.</p>
         <details className="mt-2">
           <summary className="cursor-pointer text-sm font-medium">Run maintenance now</summary>
           <MaintenanceRunForm schedule={{ ...schedule, tasks }} apps={apps} providers={providers} providersLoaded={providersLoaded} improvementDisabled={improvementDisabled} daemonRunning={daemonRunning} onRefresh={fetchSchedule} />

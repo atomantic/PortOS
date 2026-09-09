@@ -36,6 +36,7 @@ const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
 // inherits each scheduled task's saved effort.
 const maintenanceRunStartSchema = z.object({
   mode: z.enum(['file-issues', 'fix']).optional(),
+  claimBetweenAudits: z.boolean().optional(),
   appId: z.string().trim().min(1),
   providerId: z.string().trim().min(1),
   model: z.string().trim().min(1),
