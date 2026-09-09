@@ -183,6 +183,21 @@ describe('BackupTab', () => {
       expect(toast.error).toHaveBeenCalledWith('No DB dump in this snapshot');
       expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
+
+    it('aborts and reports an integrity failure before confirmation', async () => {
+      withSnapshot();
+      restoreDatabase.mockResolvedValue({ status: 'failed', reason: 'manifest_mismatch' });
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+
+      expect(restoreDatabase).toHaveBeenCalledTimes(1);
+      expect(restoreDatabase).toHaveBeenCalledWith({ snapshotId: 'snap-2026-06-09', dryRun: true }, { silent: true });
+      expect(toast.error).toHaveBeenCalledWith('Snapshot dump failed integrity verification');
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
+    });
   });
 
   describe('Run Now gating (saved state)', () => {
