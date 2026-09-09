@@ -13,7 +13,6 @@ import { effortAwareModelOptions, isProcessProvider } from '../../../../utils/pr
 import { familyForProvider } from '../../../../../../server/lib/providerFamilies';
 
 const RUNS_POLL_MS = 15_000;
-const FINISHED_RUNS_SHOWN = 3;
 
 export default function MaintenanceRunForm({ schedule, apps = [], providers = [], providersLoaded, improvementDisabled, daemonRunning, onRefresh }) {
   const [appId, setAppId] = useState('');
@@ -122,11 +121,10 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
     setBusy(false);
   };
 
-  const applyRun = (updated, result) => {
+  const applyRun = updated => {
     if (!updated) return;
     revision.current += 1;
     setRuns(current => (current || []).map(entry => (entry.id === updated.id ? updated : entry)));
-    if (result) setMessage(describe(result));
   };
   const stop = async id => {
     const response = await api.stopMaintenanceRun(id, { silent: true }).catch(error => {
@@ -135,18 +133,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
     });
     applyRun(response?.run);
   };
-  const resume = async id => {
-    const response = await api.resumeMaintenanceRun(id, { silent: true }).catch(error => {
-      setMessage(`Could not resume the run: ${error.message}`);
-      return null;
-    });
-    applyRun(response?.run, response?.result);
-  };
-
-  const visibleRuns = [
-    ...(runs || []).filter(entry => entry.status === 'running'),
-    ...(runs || []).filter(entry => entry.status !== 'running').slice(0, FINISHED_RUNS_SHOWN),
-  ];
+  const visibleRuns = (runs || []).filter(entry => entry.status === 'running');
 
   return (
     <div className="mt-3 space-y-3 text-sm">
@@ -226,9 +213,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
             <span className="font-medium">{getAppName(entry.appId, apps, entry.appId)}</span>
             <span className="text-xs">{entry.providerId}{entry.model ? ` · ${entry.model}` : ''}</span>
             <MaintenanceRunStatus run={entry} showSteps />
-            {entry.status === 'running'
-              ? <button type="button" onClick={() => stop(entry.id)} className="px-2 py-1 text-xs bg-port-border rounded">Stop</button>
-              : entry.status === 'stopped' && <button type="button" onClick={() => resume(entry.id)} className="px-2 py-1 text-xs bg-port-border rounded">Resume</button>}
+            <button type="button" onClick={() => stop(entry.id)} className="px-2 py-1 text-xs bg-port-border rounded">Stop</button>
           </li>;
         })}
       </ul>}
