@@ -37,7 +37,7 @@ import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 // if-chain — see providerVendors.js for the vendor rows.
 import { buildVendorSpawnConfig } from '../lib/providerVendors.js';
 import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../lib/providerModels.js';
-import { resolveForgeTokenEnv } from './git.js';
+import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { prepareCliSpawn, killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';

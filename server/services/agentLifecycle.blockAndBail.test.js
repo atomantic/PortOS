@@ -81,7 +81,7 @@ vi.mock('./cos.js', () => ({
   getTaskById: vi.fn().mockResolvedValue(null),
   getAgentRecord: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('./git.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentCliSpawning.js', () => ({
   buildCliSpawnConfig: vi.fn(),
   isClaudeCliProvider: vi.fn().mockReturnValue(false),

@@ -48,10 +48,10 @@ const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () =>
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn().mockResolvedValue(undefined) }));
-// Mock git.js directly so spawnDirectly's GH_TOKEN pinning is exercised without
+// Mock forgeAuth.js directly so spawnDirectly's GH_TOKEN pinning is exercised without
 // pulling in the real worktreeManager → instances module graph. Default: no
 // owner-matched account → empty overlay (ambient gh auth untouched).
-vi.mock('./git.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
+vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn(),
@@ -1105,7 +1105,7 @@ describe('stream error containment', () => {
   });
 
   it('injects the repo-owner-pinned GH_TOKEN into the spawn env so the agent\'s own `gh` uses the right account', async () => {
-    const { resolveForgeTokenEnv } = await import('./git.js');
+    const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
     vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({ GH_TOKEN: 'ghp_pinned_owner_token' });
 
     const spawnPromise = spawnDirectly(minimalArgs);
@@ -1147,7 +1147,7 @@ describe('stream error containment', () => {
   });
 
   it('leaves the spawn env\'s ambient GH_TOKEN untouched when there is no owner match', async () => {
-    const { resolveForgeTokenEnv } = await import('./git.js');
+    const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
     vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({});
     const prev = process.env.GH_TOKEN;
     process.env.GH_TOKEN = 'ghp_ambient';
@@ -1167,7 +1167,7 @@ describe('stream error containment', () => {
   });
 
   it('skips the owner-token probe when the provider supplies its own GITHUB_TOKEN', async () => {
-    const { resolveForgeTokenEnv } = await import('./git.js');
+    const { resolveForgeTokenEnv } = await import('./forgeAuth.js');
     vi.mocked(resolveForgeTokenEnv).mockClear();
     vi.mocked(spawn).mockClear();
 
