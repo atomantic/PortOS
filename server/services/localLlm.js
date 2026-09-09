@@ -715,6 +715,8 @@ export async function getStatus() {
       baseUrl: ollamaStatus.baseUrl,
       modelCount: ollamaStatus.modelCount,
       models: ollamaModels,
+      contextLength: ollamaStatus.contextLength,
+      modelsError: ollamaManager.getLastInstalledModelsError(),
       // Best installed model for editorial review/editing, surfaced so the
       // manuscript editor can suggest it (and warn against the embedding model).
       recommendations: { editorial: recommendEditorialModel(ollamaModels, { measured: measuredOllama }) },
