@@ -21,7 +21,7 @@ import { getDataOverview } from './dataManager.js';
 import { listHfModelStorage, listLoraStorage } from './mediaModelStorage.js';
 import * as ollamaManager from './ollamaManager.js';
 import * as lmStudioManager from './lmStudioManager.js';
-import { listJobs } from './mediaJobQueue/index.js';
+import { getQueueCapacity } from './mediaJobQueue/index.js';
 import * as cos from './cos.js';
 import { getSettings } from './settings.js';
 
@@ -314,18 +314,14 @@ function loadedModelInventory({ ollamaLoaded, lmStudioLoaded }) {
   ];
 }
 
-function mediaQueueSummary(jobs) {
-  const live = jobs.filter((job) => job.status === 'queued' || job.status === 'running');
-  const byKind = Object.fromEntries(['image', 'video', 'training', 'audio'].map((kind) => {
-    const matching = live.filter((job) => job.kind === kind);
-    return [kind, {
-      queued: matching.filter((job) => job.status === 'queued').length,
-      running: matching.filter((job) => job.status === 'running').length,
-    }];
-  }));
+function mediaQueueSummary(capacity) {
+  const byKind = Object.fromEntries(['image', 'video', 'training', 'audio'].map((kind) => [
+    kind,
+    capacity?.byKind?.[kind] || { queued: 0, running: 0 },
+  ]));
   return {
-    queued: live.filter((job) => job.status === 'queued').length,
-    running: live.filter((job) => job.status === 'running').length,
+    queued: capacity?.totals?.queued || 0,
+    running: capacity?.totals?.running || 0,
     byKind,
   };
 }
@@ -436,7 +432,7 @@ export async function buildSystemResourceReport() {
     downloadedModels,
     npmCacheBytes,
   });
-  const mediaQueue = mediaQueueSummary(listJobs());
+  const mediaQueue = mediaQueueSummary(getQueueCapacity());
   const agentQueue = agentQueueSummary(cosTasks, cosStatus);
   const modelBytes = sumKnownBytes([hf?.totalBytes, loraStorage?.totalBytes, ollamaBytes, lmStudioBytes]);
   const storageAreas = [
