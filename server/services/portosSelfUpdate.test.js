@@ -10,7 +10,7 @@ vi.mock('./updateChecker.js', () => ({
   setUpdateInProgress: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('./updateExecutor.js', () => ({
-  executeUpdate: vi.fn().mockResolvedValue({ success: true, version: '1.26.0' }),
+  launchUpdate: vi.fn().mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) }),
 }));
 const { mockSpawningTasks } = vi.hoisted(() => ({ mockSpawningTasks: new Set() }));
 vi.mock('./agentState.js', () => ({
@@ -27,7 +27,7 @@ vi.mock('./cosState.js', () => ({
 }));
 
 import * as updateChecker from './updateChecker.js';
-import { executeUpdate } from './updateExecutor.js';
+import { launchUpdate } from './updateExecutor.js';
 import { startPortosSelfUpdate } from './portosSelfUpdate.js';
 
 // An install with nothing pending and no newer release — the state a reconcile
@@ -50,13 +50,7 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     mockSpawningTasks.clear();
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
     updateChecker.getUpdateStatus.mockResolvedValue(inSyncStatus());
-    // Signal the launch the way the real executeUpdate does — the launcher holds
-    // its return until the spawn, so a mock that never signals is a mock of a
-    // launch that never happened.
-    executeUpdate.mockImplementation(async (_tag, _emit, opts) => {
-      opts?.onLaunched?.();
-      return { success: true, version: '1.26.0' };
-    });
+    launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) });
   });
 
   it('runs on an in-sync install, where a reconcile would refuse', async () => {
@@ -71,7 +65,7 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     const result = await startPortosSelfUpdate({ io, mode: 'refresh' });
 
     expect(result).toEqual({ started: true, tag: 'v1.26.0' });
-    expect(executeUpdate).toHaveBeenCalledOnce();
+    expect(launchUpdate).toHaveBeenCalledOnce();
   });
 
   it('force-cleans the workspaces whose deps are stale, since update.sh sees no commit diff', async () => {
@@ -95,7 +89,7 @@ describe('startPortosSelfUpdate — refresh mode', () => {
 
     await startPortosSelfUpdate({ io, mode: 'refresh' });
 
-    expect(executeUpdate).toHaveBeenCalledWith(
+    expect(launchUpdate).toHaveBeenCalledWith(
       'v1.26.0',
       expect.any(Function),
       expect.objectContaining({ forceCleanWorkspaces: ['.', 'client'] }),
@@ -107,10 +101,9 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     // the launcher has to feed both sinks — otherwise the Git tab's progress
     // row stays empty for the whole update.
     const onStep = vi.fn();
-    executeUpdate.mockImplementation(async (_tag, emit, opts) => {
-      opts?.onLaunched?.();
+    launchUpdate.mockImplementation(async (_tag, emit) => {
       emit('pm2-stop', 'running', 'Stopping PortOS apps...');
-      return { success: true, version: '1.26.0' };
+      return { started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) };
     });
 
     await startPortosSelfUpdate({ io, mode: 'refresh', onStep });
@@ -124,22 +117,24 @@ describe('startPortosSelfUpdate — refresh mode', () => {
   });
 
   it('refuses rather than reporting a start when a prior script is still running', async () => {
-    // executeUpdate's still-running guard RESOLVES `success: false` without ever
+    // launchUpdate's still-running guard returns `started: false` without ever
     // spawning. Returning `started: true` for that leaves App Management's
     // operation registered forever (its handler skips cleanup on a real
     // handoff), so every later update is refused as a duplicate while the UI
     // waits for a restart that is not coming.
-    executeUpdate.mockResolvedValue({
-      success: false, failedStep: 'starting',
-      errorMessage: 'A previous update script is still running',
+    launchUpdate.mockResolvedValue({
+      started: false, result: {
+        success: false, failedStep: 'starting',
+        errorMessage: 'A previous update script is still running',
+      },
     });
 
     await expect(startPortosSelfUpdate({ io, mode: 'refresh' }))
-      .rejects.toThrow(/still running/i);
+      .rejects.toMatchObject({ status: 409, code: 'UPDATE_LAUNCH_FAILED' });
   });
 
   it('reports a launch that threw, instead of claiming the script started', async () => {
-    executeUpdate.mockRejectedValue(new Error('spawn EACCES'));
+    launchUpdate.mockRejectedValue(new Error('spawn EACCES'));
 
     await expect(startPortosSelfUpdate({ io, mode: 'refresh' }))
       .rejects.toThrow('spawn EACCES');
@@ -150,9 +145,8 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     // return at the spawn. A promise that only settles when the script is done
     // would never resolve here — the pm2 delete kills the awaiting process.
     let finish;
-    executeUpdate.mockImplementation((_tag, _emit, { onLaunched }) => {
-      onLaunched();
-      return new Promise((resolve) => { finish = resolve; });
+    launchUpdate.mockResolvedValue({
+      started: true, completion: new Promise((resolve) => { finish = resolve; }),
     });
 
     await expect(startPortosSelfUpdate({ io, mode: 'refresh' }))
@@ -167,11 +161,25 @@ describe('startPortosSelfUpdate — refresh mode', () => {
     ));
   });
 
+  it('observes a rejected completion after returning the successful handoff', async () => {
+    let fail;
+    launchUpdate.mockResolvedValue({
+      started: true, completion: new Promise((_resolve, reject) => { fail = reject; }),
+    });
+    await expect(startPortosSelfUpdate({ io, mode: 'refresh' }))
+      .resolves.toEqual({ started: true, tag: 'v1.26.0' });
+    fail(new Error('completion failed'));
+    await vi.waitFor(() => expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false));
+    expect(io.emit).toHaveBeenCalledWith('portos:update:error', {
+      message: 'completion failed', step: 'unknown',
+    });
+  });
+
   it('releases the update lock when the launch itself rejects', async () => {
-    // executeUpdate clears the flag through recordUpdateResult on both of its
-    // RESOLVED outcomes; a rejection reports none, and the stuck flag then
+    // The executor clears the flag through recordUpdateResult on refusal and
+    // completion; a rejection reports none, and the stuck flag then
     // wedges every later update and every CoS agent spawn (#6036).
-    executeUpdate.mockRejectedValue(new Error('spawn EACCES'));
+    launchUpdate.mockRejectedValue(new Error('spawn EACCES'));
 
     await startPortosSelfUpdate({ io, mode: 'refresh' }).catch(() => {});
 

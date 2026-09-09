@@ -3,7 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware, errorEvents } from '../lib/errorHandler.js';
 
-// Mock the services the execute route depends on. executeUpdate is fire-and-
+// Mock the services the execute route depends on. Completion is fire-and-
 // forget in the route (not awaited), so a resolved stub is enough.
 vi.mock('../services/updateChecker.js', () => ({
   getUpdateStatus: vi.fn(),
@@ -16,7 +16,7 @@ vi.mock('../services/updateChecker.js', () => ({
   setUpdateInProgress: vi.fn().mockResolvedValue(true)
 }));
 vi.mock('../services/updateExecutor.js', () => ({
-  executeUpdate: vi.fn().mockResolvedValue({ success: true, version: '1.26.0' })
+  launchUpdate: vi.fn().mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) })
 }));
 // getActiveAgentIds reads live-process maps and spawningTasks holds in-flight
 // spawns; mock both so tests control the "are CoS agents running?" signal
@@ -47,7 +47,7 @@ vi.mock('../services/cosState.js', () => ({
 }));
 
 import * as updateChecker from '../services/updateChecker.js';
-import { executeUpdate } from '../services/updateExecutor.js';
+import { launchUpdate } from '../services/updateExecutor.js';
 import { getActiveAgentIds } from '../services/agentState.js';
 import { readPersistentMindStateForSafetyCheck } from '../services/cosState.js';
 import { filterLiveAgentIds } from '../services/cosAgentLifecycle.js';
@@ -89,7 +89,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
-    executeUpdate.mockResolvedValue({ success: true, version: '1.26.0' });
+    launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) });
     getActiveAgentIds.mockReturnValue([]);
     vi.mocked(filterLiveAgentIds).mockImplementation(async (ids) => ids);
     mockCosState.persistentMind = { queuedMessages: [], activeTurn: null };
@@ -104,7 +104,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     const res = await request(makeApp()).post('/api/update/execute').send({ reconcile: true });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('ALREADY_IN_SYNC');
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
   it('rejects reconcile when install state could not be determined (null)', async () => {
@@ -112,7 +112,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     const res = await request(makeApp()).post('/api/update/execute').send({ reconcile: true });
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('INSTALL_STATE_UNAVAILABLE');
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
   it('runs the reconcile when out of sync, targeting the current version and forcing clean of stale workspaces', async () => {
@@ -130,7 +130,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ started: true, tag: 'v1.26.0' });
     // Only the stale workspaces, with 'root' mapped to update.sh's '.' token.
-    expect(executeUpdate).toHaveBeenCalledWith('v1.26.0', expect.any(Function), expect.objectContaining({ forceCleanWorkspaces: ['.', 'server'] }));
+    expect(launchUpdate).toHaveBeenCalledWith('v1.26.0', expect.any(Function), expect.objectContaining({ forceCleanWorkspaces: ['.', 'server'] }));
   });
 
   it('reconcile with no stale deps (build/migration staleness) forces no clean', async () => {
@@ -139,7 +139,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     }));
     const res = await request(makeApp()).post('/api/update/execute').send({ reconcile: true });
     expect(res.status).toBe(200);
-    expect(executeUpdate).toHaveBeenCalledWith('v1.26.0', expect.any(Function), expect.objectContaining({ forceCleanWorkspaces: [] }));
+    expect(launchUpdate).toHaveBeenCalledWith('v1.26.0', expect.any(Function), expect.objectContaining({ forceCleanWorkspaces: [] }));
   });
 
   it('reconcile runs even with NO cached release (out of sync)', async () => {
@@ -160,7 +160,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     const res = await request(makeApp()).post('/api/update/execute').send({ reconcile: true });
     expect(res.status).toBe(412);
     expect(res.body.code).toBe('FORK_SYNC_REQUIRED');
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
   it('a non-reconcile update still requires a cached release tag', async () => {
@@ -175,7 +175,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     const res = await request(makeApp()).post('/api/update/execute').send({});
     expect(res.status).toBe(200);
     expect(res.body.tag).toBe('v1.27.0');
-    expect(executeUpdate).toHaveBeenCalledWith('v1.27.0', expect.any(Function), expect.objectContaining({ forceCleanWorkspaces: undefined }));
+    expect(launchUpdate).toHaveBeenCalledWith('v1.27.0', expect.any(Function), expect.objectContaining({ forceCleanWorkspaces: undefined }));
   });
 });
 
@@ -185,7 +185,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     mockSpawningTasks.clear();
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
     updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
-    executeUpdate.mockResolvedValue({ success: true, version: '1.26.0' });
+    launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) });
     getActiveAgentIds.mockReturnValue([]);
     vi.mocked(filterLiveAgentIds).mockImplementation(async (ids) => ids);
     mockCosState.persistentMind = { queuedMessages: [], activeTurn: null };
@@ -200,7 +200,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     const res = await request(makeApp()).post('/api/update/execute').send({});
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('AGENTS_ACTIVE');
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
     // Guard runs before the in-progress lock is acquired.
     expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
   });
@@ -213,7 +213,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     const res = await request(makeApp()).post('/api/update/execute').send({});
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('AGENTS_ACTIVE');
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
   it('re-checks after acquiring the lock and releases it if an agent started during the git/fork awaits', async () => {
@@ -224,7 +224,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     const res = await request(makeApp()).post('/api/update/execute').send({});
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('AGENTS_ACTIVE');
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
     // Lock was acquired then released (true, then false), leaving no stuck lock.
     expect(updateChecker.setUpdateInProgress).toHaveBeenNthCalledWith(1, true);
     expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false);
@@ -238,14 +238,14 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     expect(res.body.code).toBe('AGENTS_ACTIVE');
     // Pluralized message names both agents.
     expect(res.body.error).toMatch(/2 CoS agents are running/);
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
   it('proceeds normally when no agents are running', async () => {
     getActiveAgentIds.mockReturnValue([]);
     const res = await request(makeApp()).post('/api/update/execute').send({});
     expect(res.status).toBe(200);
-    expect(executeUpdate).toHaveBeenCalled();
+    expect(launchUpdate).toHaveBeenCalled();
   });
 
   it('rejects before locking when queued image work cannot survive an older reader', async () => {
@@ -260,7 +260,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     expect(res.body.code).toBe('PERSISTENT_MIND_IMAGES_IN_FLIGHT');
     expect(res.body.error).toMatch(/Drain the image-bearing work, or create a backup/);
     expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
   it('re-checks image work after locking and releases the update lock on a race', async () => {
@@ -289,7 +289,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     expect(res.body.code).toBe('PERSISTENT_MIND_IMAGES_IN_FLIGHT');
     expect(updateChecker.setUpdateInProgress).toHaveBeenNthCalledWith(1, true);
     expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false);
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
   it('releases the update lock when the post-lock safety read fails', async () => {
@@ -302,7 +302,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     expect(res.status).toBe(500);
     expect(updateChecker.setUpdateInProgress).toHaveBeenNthCalledWith(1, true);
     expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false);
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
   it('fails closed when persisted Persistent Mind state is untrusted', async () => {
@@ -313,7 +313,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('PERSISTENT_MIND_STATE_UNTRUSTED');
     expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
   it('allows an explicit backup acknowledgement when queued image work cannot drain', async () => {
@@ -327,7 +327,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(executeUpdate).toHaveBeenCalled();
+    expect(launchUpdate).toHaveBeenCalled();
   });
 
   // The phantom that pinned the Update page: the CoS Runner kept advertising
@@ -340,7 +340,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     const res = await request(makeApp()).post('/api/update/execute').send({});
 
     expect(res.status).toBe(200);
-    expect(executeUpdate).toHaveBeenCalled();
+    expect(launchUpdate).toHaveBeenCalled();
   });
 });
 
@@ -350,7 +350,7 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
     mockSpawningTasks.clear();
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
     updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
-    executeUpdate.mockResolvedValue({ success: true, version: '1.27.0' });
+    launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.27.0' }) });
     getActiveAgentIds.mockReturnValue([]);
     vi.mocked(filterLiveAgentIds).mockImplementation(async (ids) => ids);
     mockCosState.persistentMind = { queuedMessages: [], activeTurn: null };
@@ -368,7 +368,7 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
     const res = await request(makeApp()).post('/api/update/execute').send({});
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('UPDATE_IN_PROGRESS');
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
     // A lost race must not release the lock the winner holds.
     expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalledWith(false);
   });
@@ -383,15 +383,15 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_TAG');
     expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
-    expect(executeUpdate).not.toHaveBeenCalled();
+    expect(launchUpdate).not.toHaveBeenCalled();
   });
 
-  // Regression for issue #6036: executeUpdate rejecting (e.g. spawnDetached
+  // Regression for issue #6036: launchUpdate rejecting (e.g. spawnDetached
   // throwing before any child listener is attached) skips recordUpdateResult,
   // so the launcher is the only place left that can release the lock. Leaving
   // it set wedges every later update at 409 and blocks all CoS agent spawns.
-  it('releases the update lock and emits an error when executeUpdate rejects', async () => {
-    executeUpdate.mockRejectedValue(new Error('spawn EACCES'));
+  it('releases the update lock and emits an error when launchUpdate rejects', async () => {
+    launchUpdate.mockRejectedValue(new Error('spawn EACCES'));
     const res = await request(makeApp()).post('/api/update/execute').send({});
     // NOT 200: the rejection happens during the LAUNCH, before any script is
     // running, so the caller is told the update never started rather than being
@@ -410,7 +410,7 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
   // The response is already sent by then, so the socket is the client's only
   // channel for the outcome and the version it should now expect.
   it('emits portos:update:complete with the version the script actually landed on', async () => {
-    executeUpdate.mockResolvedValue({ success: true, version: '1.28.3' });
+    launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.28.3' }) });
     await request(makeApp()).post('/api/update/execute').send({});
     await vi.waitFor(() => {
       expect(mockIo.emit).toHaveBeenCalledWith('portos:update:complete', {
@@ -424,7 +424,7 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
   // No marker version: fall back to the triggering tag, but flag it as a guess
   // so the UI doesn't present it as the confirmed installed version.
   it('falls back to the triggering tag with versionKnown=false when no version is resolved', async () => {
-    executeUpdate.mockResolvedValue({ success: true });
+    launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true }) });
     await request(makeApp()).post('/api/update/execute').send({});
     await vi.waitFor(() => {
       expect(mockIo.emit).toHaveBeenCalledWith('portos:update:complete', {
@@ -437,11 +437,13 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
 
   // A resolved failure is a different code path from a rejection and must still
   // surface the failing step rather than the generic 'unknown'.
-  it('emits portos:update:error with the failed step when executeUpdate resolves unsuccessfully', async () => {
-    executeUpdate.mockResolvedValue({
-      success: false,
-      failedStep: 'install',
-      errorMessage: 'Update failed at step "install" (exit code 1)',
+  it('emits portos:update:error with the failed step when launchUpdate resolves unsuccessfully', async () => {
+    launchUpdate.mockResolvedValue({
+      started: true, completion: Promise.resolve({
+        success: false,
+        failedStep: 'install',
+        errorMessage: 'Update failed at step "install" (exit code 1)',
+      }),
     });
     await request(makeApp()).post('/api/update/execute').send({});
     await vi.waitFor(() => {
@@ -452,12 +454,12 @@ describe('POST /api/update/execute — lock handling and socket progress', () =>
     });
   });
 
-  // The `emit` callback the route hands executeUpdate is what turns update.sh's
+  // The `emit` callback the route hands launchUpdate is what turns update.sh's
   // STEP: lines into the client's progress bar.
-  it('forwards executeUpdate progress callbacks as portos:update:step events', async () => {
-    executeUpdate.mockImplementation(async (_tag, emit) => {
+  it('forwards launchUpdate progress callbacks as portos:update:step events', async () => {
+    launchUpdate.mockImplementation(async (_tag, emit) => {
       emit('pull', 'running', 'Pulling latest code...');
-      return { success: true, version: '1.27.0' };
+      return { started: true, completion: Promise.resolve({ success: true, version: '1.27.0' }) };
     });
     await request(makeApp()).post('/api/update/execute').send({});
     expect(mockIo.emit).toHaveBeenCalledWith('portos:update:step', {

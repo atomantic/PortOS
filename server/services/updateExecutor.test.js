@@ -25,7 +25,7 @@ vi.mock('./updateChecker.js', () => ({
 import { spawnDetached, isDetachedRunning } from '../lib/detachedSpawn.js';
 import { readFile } from 'fs/promises';
 import { getCurrentVersion, recordUpdateResult } from './updateChecker.js';
-import { executeUpdate } from './updateExecutor.js';
+import { executeUpdate, launchUpdate } from './updateExecutor.js';
 
 // The spawnDetached handle deliberately has NO unref (its launcher already
 // unref'd), so executeUpdate must never call one.
@@ -115,7 +115,9 @@ describe('executeUpdate', () => {
     const child = createMockChild();
     spawnDetached.mockResolvedValue(child);
 
-    const { promise } = await startUpdate('v1.0.0', () => {});
+    const onLaunched = vi.fn();
+    const { promise } = await startUpdate('v1.0.0', () => {}, { onLaunched });
+    expect(onLaunched).toHaveBeenCalledExactlyOnceWith();
     emitStep(child);
     child.emit('close', 0);
     await promise;
@@ -159,9 +161,11 @@ describe('executeUpdate', () => {
     isDetachedRunning.mockResolvedValue(true);
 
     const emits = [];
-    const { promise } = await startUpdate('v1.0.0', (...args) => emits.push(args));
+    const onLaunched = vi.fn();
+    const { promise } = await startUpdate('v1.0.0', (...args) => emits.push(args), { onLaunched });
     const result = await promise;
 
+    expect(onLaunched).not.toHaveBeenCalled();
     expect(result.success).toBe(false);
     expect(result.failedStep).toBe('starting');
     expect(spawnDetached).not.toHaveBeenCalled();
@@ -357,5 +361,37 @@ describe('executeUpdate', () => {
     await promise;
     const env = spawnDetached.mock.calls[0][2].env;
     expect(env.PORTOS_FORCE_CLEAN_WORKSPACES).toBeUndefined();
+  });
+});
+
+// Pins the public two-phase boundary using process events rather than a mocked
+// executor: launch must settle while the child is still alive and observed.
+describe('launchUpdate', () => {
+  it('returns at spawn with progress listeners ready and completion still pending', async () => {
+    const child = createMockChild();
+    spawnDetached.mockResolvedValue(child);
+    const emit = vi.fn();
+    const launch = await launchUpdate('v1.0.0', emit);
+    expect(launch.started).toBe(true);
+    const completed = vi.fn();
+    launch.completion.then(completed);
+    await flush();
+    expect(completed).not.toHaveBeenCalled();
+    emitStep(child);
+    child.emit('close', 1);
+    await expect(launch.completion).resolves.toMatchObject({ success: false, failedStep: 'git-pull' });
+    expect(emit).toHaveBeenCalledWith('starting', 'done', 'Update script running');
+  });
+
+  it('distinguishes a recorded refusal from a rejected spawn', async () => {
+    isDetachedRunning.mockResolvedValueOnce(true);
+    await expect(launchUpdate('v1.0.0', () => {})).resolves.toMatchObject({
+      started: false, result: { success: false, failedStep: 'starting' },
+    });
+    expect(spawnDetached).not.toHaveBeenCalled();
+    spawnDetached.mockRejectedValueOnce(new Error('spawn EACCES'));
+    const onLaunched = vi.fn();
+    await expect(executeUpdate('v1.0.0', () => {}, { onLaunched })).rejects.toThrow('spawn EACCES');
+    expect(onLaunched).not.toHaveBeenCalled();
   });
 });

@@ -27,7 +27,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { withStateLock } from './cosState.js';
-import { executeUpdate } from './updateExecutor.js';
+import { launchUpdate } from './updateExecutor.js';
 import * as updateChecker from './updateChecker.js';
 import {
   agentsActiveError,
@@ -181,26 +181,28 @@ export async function startPortosSelfUpdate({
 
   const forceCleanWorkspaces = mode === 'release' ? undefined : forceCleanWorkspacesFor(status);
 
-  // `executeUpdate` is two phases behind one promise: a LAUNCH (the
-  // still-running guard, then the double-fork spawn) that can refuse or throw,
-  // and then the script's whole lifetime. Only the second is fire-and-forget.
-  // Reporting `started: true` for a script that never spawned is what would
-  // leave a caller waiting for a restart that is not coming — and on the App
-  // Management path it also leaves the operation registered forever, since that
-  // handler deliberately skips its cleanup for a real handoff, so every later
-  // update is then refused as a duplicate. So hold the return until the spawn.
-  let launchedFlag = false;
-  let markLaunched;
-  const launched = new Promise((resolve) => {
-    markLaunched = () => { launchedFlag = true; resolve(); };
+  const reportFailure = async (err) => {
+    console.error(`❌ Update launch failed for ${tag}: ${err.message}`);
+    io?.emit('portos:update:error', { message: err.message, step: 'unknown' });
+    // Rejections bypass recordUpdateResult, which normally releases the lock.
+    await updateChecker.setUpdateInProgress(false).catch(releaseErr => {
+      console.error(`❌ Failed to release update lock after launch failure: ${releaseErr.message}`);
+    });
+  };
+  const launch = await launchUpdate(tag, emit, { forceCleanWorkspaces }).catch(async err => {
+    await reportFailure(err);
+    throw err;
   });
+  if (!launch.started) {
+    const result = launch.result;
+    io?.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
+    throw new ServerError(result.errorMessage || 'PortOS update failed to launch',
+      { status: 409, code: 'UPDATE_LAUNCH_FAILED' });
+  }
 
-  // The script writes the true post-update version to data/update-complete.json,
-  // which the server reads on boot, so `tag` is only the label this launch is
-  // reported under.
-  const run = executeUpdate(tag, emit, { forceCleanWorkspaces, onLaunched: markLaunched });
-
-  run.then(result => {
+  // Observe the lifetime without awaiting it: the script normally kills this
+  // server at pm2-stop, then the restarted server reads its completion marker.
+  launch.completion.then(result => {
     // May never fire: update.sh's PM2 delete usually kills this process first.
     // The client polls /api/system/health instead of relying on it.
     if (!io) return;
@@ -213,35 +215,7 @@ export async function startPortosSelfUpdate({
     } else {
       io.emit('portos:update:error', { message: result.errorMessage ?? 'Update failed', step: result.failedStep ?? 'unknown' });
     }
-  }).catch(async err => {
-    console.error(`❌ Update launch failed for ${tag}: ${err.message}`);
-    io?.emit('portos:update:error', { message: err.message, step: 'unknown' });
-    // A rejection means executeUpdate never reached `recordUpdateResult`, which
-    // is what normally clears the lock on both its resolved outcomes. Without
-    // this release the lock stays set until the 30-minute stale timeout —
-    // wedging every later update at 409 UPDATE_IN_PROGRESS and blocking every
-    // CoS agent spawn in the meantime (issue #6036).
-    await updateChecker.setUpdateInProgress(false).catch(releaseErr => {
-      console.error(`❌ Failed to release update lock after launch failure: ${releaseErr.message}`);
-    });
-  });
-
-  // Settling before the launch signal means the LAUNCH failed: the
-  // still-running guard refused (a resolved `success: false`) or the spawn threw
-  // (a rejection). Both are the caller's to report. After the signal this
-  // resolves regardless — a script that fails later is the fire-and-forget
-  // handler's business, and re-throwing it here would be an unhandled rejection
-  // (fatal on Node >= 15) because the race below has already settled.
-  const launchFailure = run.then(
-    (result) => {
-      if (!launchedFlag && !result.success) {
-        throw new ServerError(result.errorMessage || 'PortOS update failed to launch',
-          { status: 409, code: 'UPDATE_LAUNCH_FAILED' });
-      }
-    },
-    (err) => { if (!launchedFlag) throw err; },
-  );
-  await Promise.race([launched, launchFailure]);
+  }).catch(reportFailure);
 
   return { started: true, tag };
 }
