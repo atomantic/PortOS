@@ -178,3 +178,55 @@ it('keeps Video as a browsing surface and sends production actions to Creative D
   expect(cdApi.createCreativeDirectorProject).not.toHaveBeenCalled();
   expect(cdApi.startCreativeDirectorProject).not.toHaveBeenCalled();
 });
+
+describe('Project library discovery', () => {
+  const projects = [
+    { id: 'finished', name: 'Alpha finished', status: 'complete', createdAt: '2026-09-08', updatedAt: '2026-09-09' },
+    { id: 'older', name: 'Beta paused', status: 'paused', createdAt: '2026-09-01', updatedAt: '2026-09-08', userStory: 'Mountain traveler' },
+    { id: 'new', name: 'Zeta draft', status: 'draft', createdAt: '2026-09-07', updatedAt: '2026-09-07' },
+    { id: 'legacy', name: 'Legacy project', status: 'failed' },
+  ];
+  const names = () => screen.getAllByRole('link', { name: /^Open (Alpha|Beta|Zeta|Legacy)/ }).map(link => link.getAttribute('aria-label'));
+  beforeEach(() => { vi.clearAllMocks(); cdApi.listCreativeDirectorProjects.mockResolvedValue(projects); });
+
+  it('prioritizes new unfinished work and supports alternate ordering and a compact view', async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    expect(names()).toEqual(['Open Zeta draft', 'Open Beta paused', 'Open Legacy project', 'Open Alpha finished']);
+    await user.selectOptions(screen.getByLabelText('Sort projects'), 'newest');
+    expect(names()[0]).toBe('Open Alpha finished');
+    await user.selectOptions(screen.getByLabelText('Sort projects'), 'updated');
+    expect(names().slice(0, 3)).toEqual(['Open Alpha finished', 'Open Beta paused', 'Open Zeta draft']);
+    await user.selectOptions(screen.getByLabelText('Sort projects'), 'name');
+    await user.selectOptions(screen.getByLabelText('View'), 'list');
+    expect(names()).toEqual(['Open Alpha finished', 'Open Beta paused', 'Open Legacy project', 'Open Zeta draft']);
+    expect(screen.queryByText('no render yet')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open Zeta draft' })).toHaveAttribute('href', '/creative-director/new/overview');
+  });
+
+  it('combines bookmarkable text and status filters and recovers from no matches', async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={['/creative-director?q=TRAVELER%20mountain&status=unfinished&layout=list']}><CreativeDirector /></MemoryRouter>);
+    await screen.findByText('Showing 1 of 4 projects');
+    expect(names()).toEqual(['Open Beta paused']);
+    await user.selectOptions(screen.getByLabelText('Status'), 'draft');
+    expect(screen.getByText('No projects match your search and filters.')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(names()).toHaveLength(4);
+    expect(screen.getByLabelText('View')).toHaveValue('list');
+    expect(cdApi.listCreativeDirectorProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows newly created work even when the previous filters hid drafts', async () => {
+    const user = userEvent.setup();
+    cdApi.createCreativeDirectorProject.mockResolvedValue({ id: 'created', name: 'Newly created', status: 'draft', createdAt: '2026-09-09' });
+    render(<MemoryRouter initialEntries={['/creative-director?status=complete&sort=name&q=Alpha']}><CreativeDirector /></MemoryRouter>);
+    await user.click(await screen.findByRole('button', { name: 'New project' }));
+    await user.type(screen.getByLabelText('Name'), 'Newly created');
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+    await screen.findByRole('link', { name: 'Open Newly created' });
+    expect(screen.getAllByRole('link', { name: /^Open / })[0]).toHaveAttribute('aria-label', 'Open Newly created');
+    expect(screen.getByLabelText('Search projects')).toHaveValue('');
+    expect(screen.getByLabelText('Status')).toHaveValue('all');
+  });
+});

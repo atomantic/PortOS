@@ -23,6 +23,7 @@ import Drawer from '../components/Drawer';
 import DirectiveComposer from '../components/creative-director/DirectiveComposer.jsx';
 import CreativeDirectorModelsDrawer from '../components/creative-director/CreativeDirectorModelsDrawer.jsx';
 import VideoDraftDrawer from '../components/creative-director/VideoDraftDrawer.jsx';
+import ProjectLibrary from '../components/creative-director/ProjectLibrary.jsx';
 import ProjectPreview from '../components/creative-director/ProjectPreview.jsx';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
@@ -161,7 +162,12 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
     };
     try {
       const created = await createCreativeDirectorProject(payload, { silent: true });
-      setProjects((prev) => [...prev, created]);
+      setProjects((prev) => [created, ...prev]);
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev);
+        ['q', 'status', 'sort'].forEach(key => next.delete(key));
+        return next;
+      }, { replace: true });
       setShowForm(false);
       setForm((f) => ({ ...f, name: '', styleSpec: '', userStory: '', startingImageFile: '' }));
       toast.success(`Created "${created.name}"`);
@@ -493,12 +499,12 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
             No projects yet. Open <Link to="/creative-director?new=video" className="text-port-accent">Creative Director</Link> to create a video draft.
           </div>
         )}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {projects.map((p) => (
+        <ProjectLibrary projects={projects}>
+          {(p, compact) => (
             <div key={p.id} className="bg-port-card border border-port-border rounded p-3 flex flex-col gap-2">
-              <ProjectPreview project={p} to={`${basePath}/${p.id}/overview`} />
+              {!compact && <ProjectPreview project={p} to={`${basePath}/${p.id}/overview`} />}
               <div className="flex items-start justify-between gap-2">
-                <Link to={`${basePath}/${p.id}/overview`} className="flex-1 min-w-0">
+                <Link to={`${basePath}/${p.id}/overview`} aria-label={compact ? `Open ${p.name}` : undefined} className="flex-1 min-w-0">
                   <div className="font-medium truncate">{p.name}</div>
                   <div className="text-xs text-port-text-muted truncate">{p.id}</div>
                 </Link>
@@ -530,8 +536,8 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
                 </button>}
               </div>
             </div>
-          ))}
-        </div>
+          )}
+        </ProjectLibrary>
       </div>
 
       <Drawer
