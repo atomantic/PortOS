@@ -430,6 +430,13 @@ export const applyCharacterAugmentation = (universeId, entryId, { fields, finger
 export const getUniverseCanonUsage = (universeId) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/canon-usage`);
 
+// Relationship graph for the Graph tab: `{ name, nodes, edges, series, issues,
+// totalIssues, appear }`. Nodes are namespaced by kind (`character:<entryId>`)
+// and every `since` / `firstIssue` is an index into `issues`. Read-only
+// aggregation over canon + canon-usage; no writes, no LLM calls.
+export const getUniverseGraph = (universeId, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/graph`, options);
+
 // Thin lookup: every series that links to this universe as `[{ id, name }]`.
 // Use this when only the seriesId → seriesName mapping is needed — the full
 // /canon-usage endpoint also runs prose-matching scans across every issue.

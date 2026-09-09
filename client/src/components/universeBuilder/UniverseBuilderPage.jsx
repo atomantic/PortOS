@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router';
 import {
   ArrowLeft, BookOpen, FolderTree, ImagePlus, Layers, Loader2,
-  MapPin, Package, Plus, Save, Trash2, Users,
+  MapPin, Network, Package, Plus, Save, Trash2, Users,
 } from 'lucide-react';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import toast from '../ui/Toast';
@@ -35,6 +35,7 @@ import ShareToButton from '../sharing/ShareToButton';
 import SyncToPeerButton from '../sharing/SyncToPeerButton';
 import TabPills from '../ui/TabPills';
 import CompositeSheetsEditor from './CompositeSheetsEditor';
+import UniverseGraphTab from './graph/UniverseGraphTab';
 import RenderTab from './RenderTab';
 import UniverseBibleTab from './UniverseBibleTab';
 import { OtherTab, TrunkView } from './UniverseTrunkPanels';
@@ -46,6 +47,7 @@ import {
   TAB_BIBLE,
   TAB_CAST,
   TAB_COMPOSITES,
+  TAB_GRAPH,
   TAB_OBJECTS,
   TAB_OTHER,
   TAB_PLACES,
@@ -456,6 +458,7 @@ export default function UniverseBuilder() {
             hasOtherBuckets && { id: TAB_OTHER, label: 'Other', icon: FolderTree, count: bucketsByKind.other.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
             { id: TAB_COMPOSITES, label: 'Composites', icon: Layers, count: totalSheets },
             { id: TAB_RENDER, label: 'Render', icon: ImagePlus },
+            { id: TAB_GRAPH, label: 'Graph', icon: Network },
           ]}
         />
 
@@ -608,6 +611,10 @@ export default function UniverseBuilder() {
             rendering={rendering}
             runs={runs}
           />
+        )}
+
+        {activeTab === TAB_GRAPH && (
+          <UniverseGraphTab universeId={selectedId} universeName={draft.name} />
         )}
       </section>
 

@@ -28,6 +28,7 @@ import exportRoutes from './export.js';
 import crudRoutes from './crud.js';
 import renderRoutes from './render.js';
 import canonRoutes from './canon.js';
+import graphRoutes from './graph.js';
 
 const router = Router();
 
@@ -40,5 +41,6 @@ router.use(exportRoutes);
 router.use(crudRoutes);
 router.use(renderRoutes);
 router.use(canonRoutes);
+router.use(graphRoutes);
 
 export default router;
