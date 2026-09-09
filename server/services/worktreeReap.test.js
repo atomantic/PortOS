@@ -2,7 +2,7 @@
  * Integration tests for merge-verified worktree reaping.
  *
  * These exercise REAL git (in a throwaway temp repo) rather than mirroring the
- * logic inline, because the squash-merge detection in isBranchMergedInto relies
+ * logic inline, because the squash-merge detection in hasBranchMergeEvidence relies
  * on git's own `commit-tree` + `cherry` patch-id behavior — a hand-mirrored copy
  * wouldn't catch git-version quirks, and that detection is the safety gate the
  * reaper trusts before deleting anything.
@@ -22,7 +22,7 @@ import {
   resetGitWorktreeSandbox,
   SKIP_HEAVY_INTEGRATION,
 } from '../lib/gitTestRepo.js';
-import { isBranchMergedInto } from './git.js';
+import { hasBranchMergeEvidence } from './git.js';
 import { reapMergedWorktrees } from './worktreeManager.js';
 
 /**
@@ -66,7 +66,7 @@ async function initRepo() {
   return { dir, safePath };
 }
 
-describe.skipIf(SKIP_HEAVY_INTEGRATION)('isBranchMergedInto', () => {
+describe.skipIf(SKIP_HEAVY_INTEGRATION)('hasBranchMergeEvidence', () => {
   let dir;
   let safePath;
   let initialHead;
@@ -87,7 +87,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('isBranchMergedInto', () => {
     await execGit(['checkout', 'main'], dir);
     await execGit(['merge', '--no-ff', 'feat', '--no-edit'], dir);
 
-    expect(await isBranchMergedInto(dir, 'feat', 'main')).toBe(true);
+    expect(await hasBranchMergeEvidence(dir, 'feat', 'main')).toBe(true);
   });
 
   it('detects a squash merge (branch tip is NOT an ancestor)', async () => {
@@ -102,7 +102,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('isBranchMergedInto', () => {
     const ancestor = await execGit(['merge-base', '--is-ancestor', 'squashed', 'main'], dir, { ignoreExitCode: true });
     expect(ancestor.exitCode).not.toBe(0);
 
-    expect(await isBranchMergedInto(dir, 'squashed', 'main')).toBe(true);
+    expect(await hasBranchMergeEvidence(dir, 'squashed', 'main')).toBe(true);
   });
 
   it('detects a multi-commit rebase merge after the target branch advanced', async () => {
@@ -121,7 +121,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('isBranchMergedInto', () => {
     const ancestor = await execGit(['merge-base', '--is-ancestor', 'rebased', 'main'], dir, { ignoreExitCode: true });
     expect(ancestor.exitCode).not.toBe(0);
 
-    expect(await isBranchMergedInto(dir, 'rebased', 'main')).toBe(true);
+    expect(await hasBranchMergeEvidence(dir, 'rebased', 'main')).toBe(true);
   });
 
   it('returns false for an unmerged branch with unique work', async () => {
@@ -129,13 +129,13 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('isBranchMergedInto', () => {
     await commitFile(dir, 'pending.txt', 'wip\n', 'wip');
     await execGit(['checkout', 'main'], dir);
 
-    expect(await isBranchMergedInto(dir, 'pending', 'main')).toBe(false);
+    expect(await hasBranchMergeEvidence(dir, 'pending', 'main')).toBe(false);
   });
 
   it('returns false for missing refs and self-comparison', async () => {
-    expect(await isBranchMergedInto(dir, 'nope', 'main')).toBe(false);
-    expect(await isBranchMergedInto(dir, 'main', 'nope')).toBe(false);
-    expect(await isBranchMergedInto(dir, 'main', 'main')).toBe(false);
+    expect(await hasBranchMergeEvidence(dir, 'nope', 'main')).toBe(false);
+    expect(await hasBranchMergeEvidence(dir, 'main', 'nope')).toBe(false);
+    expect(await hasBranchMergeEvidence(dir, 'main', 'main')).toBe(false);
   });
 });
 

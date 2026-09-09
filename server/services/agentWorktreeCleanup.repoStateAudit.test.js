@@ -29,7 +29,7 @@ vi.mock('./git.js', () => ({
   generatePRDescription: vi.fn(),
   suggestPRTitle: vi.fn(),
   requestCopilotReview: vi.fn(),
-  isBranchMergedInto: vi.fn().mockResolvedValue(true),
+  hasBranchMergeEvidence: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('./worktreeManager.js', () => ({
   removeWorktree: vi.fn().mockResolvedValue({ removed: true, warnings: [] }),

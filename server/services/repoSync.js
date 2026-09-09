@@ -47,7 +47,7 @@ import { existsSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import {
   execGitSafe, fetchOrigin, findActiveAgentInWorkspace, getBranch, getBranches,
-  getDefaultBranch, getStatusPorcelain, isBranchMergedInto, isRepo
+  getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence, isRepo
 } from './git.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
@@ -414,11 +414,11 @@ async function collectRepoState(repoPath) {
     // CURRENT branch is always reported unmerged. Ask directly, against origin's
     // copy of the default branch when we have one (the local copy may not have
     // been fast-forwarded yet, which would read a landed branch as unmerged).
-    // `isBranchMergedInto` also covers squash- and rebase-merges, and returns
+    // `hasBranchMergeEvidence` also covers squash- and rebase-merges, and returns
     // true for a branch carrying no unique commits at all (a bare pointer
     // someone branched and never committed on).
     currentBranch && currentBranch !== defaultBranch
-      ? isBranchMergedInto(repoPath, currentBranch, remoteDefault || defaultBranch).catch(() => false)
+      ? hasBranchMergeEvidence(repoPath, currentBranch, remoteDefault || defaultBranch).catch(() => false)
       : Promise.resolve(false)
   ]);
 

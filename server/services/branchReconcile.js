@@ -23,7 +23,7 @@
  */
 
 import { stat } from 'node:fs/promises';
-import { getBranches, getDefaultBranch, isBranchMergedInto, deleteBranch } from './git.js';
+import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteBranch } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees } from './worktreeManager.js';
 import { isAgentWorktreeId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
@@ -648,8 +648,8 @@ export async function reapOrphanedRemotes(repoPath, defaultBranch, { reap = fals
   const reaped = [];
   const reported = [];
   for (const { branch, sha } of orphans) {
-    const merged = await isBranchMergedInto(repoPath, sha, defaultBranch).catch(() => false);
-    if (!merged) {
+    const hasMergeEvidence = await hasBranchMergeEvidence(repoPath, sha, defaultBranch).catch(() => false);
+    if (!hasMergeEvidence) {
       reported.push({ branch, reason: 'unmerged-remote-only' });
       continue;
     }
@@ -767,9 +767,9 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     const worktreeDirty = dirtyPaths.length > 0;
     const divergence = await gatherDivergence(repoPath, b.name, defaultBranch, dirtyPaths);
     // getBranches' `merged` is ancestor-based (misses squash/rebase); confirm
-    // the harder cases via isBranchMergedInto (covers squash + rebase). Short
+    // the harder cases via hasBranchMergeEvidence (covers squash + rebase). Short
     // -circuit when the cheap check already proved it merged.
-    const isMerged = b.merged || await isBranchMergedInto(repoPath, b.name, defaultBranch);
+    const hasMergeEvidence = b.merged || await hasBranchMergeEvidence(repoPath, b.name, defaultBranch);
     // Tip SHA is the primary cache key for a recorded SUPERSEDED verdict (see
     // supersededLedger.js) — a branch that moved must be re-analyzed. `null` on
     // failure so an unreadable tip can never match a recorded one.
@@ -792,7 +792,7 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
       // remote (`null`) yields false — "we could not ask" must not read as
       // "the remote branch is gone". See the SHIPPED_CLAIM note on cleanupMerged.
       upstreamGone: Boolean(remoteHeads) && upstreamName !== null && !remoteHeads.has(upstreamName),
-      isMerged,
+      isMerged: hasMergeEvidence,
       hasWorktree: Boolean(worktreePath),
       worktreePath,
       worktreeLocked,
@@ -855,7 +855,7 @@ export function describeIdleReconcilePark(skipped = [], heldLive = []) {
 /**
  * Deterministically clean up fully-merged branches: remove the lingering
  * worktree, then delete the local branch. Safety gates (ALL must hold):
- *   1. `isBranchMergedInto(default)` re-verified true (fail closed).
+ *   1. `hasBranchMergeEvidence(default)` re-verified true (fail closed).
  *   2. the branch's worktree (if any) has no real uncommitted changes.
  * A failed gate skips the branch (with a reason) — never a force-delete of
  * unmerged or dirty work.
@@ -867,7 +867,7 @@ export function describeIdleReconcilePark(skipped = [], heldLive = []) {
  * "merged branches held back" — the exact stall this reconcile exists to clear.
  *
  * A shipped claim is one where all three hold, established here in order:
- *   1. `stillMerged` — re-verified against the default branch just above.
+ *   1. Merge evidence — re-verified against the default branch just above.
  *   2. `upstreamGone` — the branch was pushed and its remote ref is no longer on
  *      origin, i.e. its PR merged with `--delete-branch`.
  *   3. clean worktree — the dirty gate below, which this never overrides.
@@ -895,13 +895,13 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
   const skipped = [];
   for (const b of merged) {
     // Re-verify at action time — state may have shifted since the gather.
-    const stillMerged = await isBranchMergedInto(repoPath, b.branch, defaultBranch);
-    if (!stillMerged) {
+    const hasMergeEvidence = await hasBranchMergeEvidence(repoPath, b.branch, defaultBranch);
+    if (!hasMergeEvidence) {
       skipped.push({ branch: b.branch, reason: 'not-merged-on-recheck' });
       continue;
     }
     // A SHIPPED claim (see SHIPPED_CLAIM above) waits out the short window instead
-    // of the week-long one — `stillMerged` is proven above, and retireBranch's
+    // of the week-long one — merge evidence was established above, and retireBranch's
     // dirty gate is still ahead of the removal.
     const retired = await retireBranch(repoPath, b, {
       activeAgentIds,
