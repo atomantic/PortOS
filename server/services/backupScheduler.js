@@ -16,10 +16,9 @@ import { resolveBackupConfig } from '../lib/backupConfig.js';
 
 const EVENT_ID = 'backup-daily';
 
-// Registration state, so an unrelated settings save is a cheap no-op and a
-// cancel only fires when a cron is actually registered.
-let registered = false;
-let lastSignature = null;
+// Only confirmed disabled or runnable configurations are cached.
+// null means stopped or failed, so identical inputs can retry.
+let reconciliationState = null;
 
 /**
  * The registration-affecting slice of settings: `null` when backup scheduling
@@ -47,31 +46,30 @@ export async function syncBackupSchedule(settings) {
   // Only `cron` + `timezone` + active/inactive are baked into the registration;
   // destPath and the exclude lists are re-read by the handler on every run.
   const signature = JSON.stringify({ active: Boolean(inputs), cron: inputs?.cron ?? null, tz: timezone });
-  if (signature === lastSignature) return registered;
+  if (signature === reconciliationState?.signature) return reconciliationState.kind === 'scheduled';
 
   if (!inputs) {
-    lastSignature = signature;
-    if (registered) {
+    if (reconciliationState?.kind === 'scheduled') {
       cancel(EVENT_ID);
-      registered = false;
       console.log('💾 Backup scheduler: disabled or destPath cleared — cron cancelled');
     } else {
       console.log('💾 Backup scheduler: disabled or no destPath configured — nothing scheduled');
     }
+    reconciliationState = { kind: 'disabled', signature };
     return false;
   }
 
+  reconciliationState = attemptRegistration(inputs, timezone, signature);
+  return reconciliationState?.kind === 'scheduled';
+}
+
+function attemptRegistration(inputs, timezone, signature) {
   // `schedule()` replaces an event with the same id, so a changed cron
   // expression cleanly re-registers. destPath, excludePaths and
   // disabledDefaultExcludes are re-read inside the handler so toggles saved in
   // the Settings UI take effect on the next scheduled run.
-  //
-  // try/catch (allowed here — this runs on the settings event bus / at boot,
-  // outside the request lifecycle): schedule() CANCELS the existing event
-  // before it validates the new cron, so a malformed expression tears down a
-  // working timer and throws. Leave `lastSignature` unset in that case so the
-  // next save — even one that re-submits the same value — retries instead of
-  // short-circuiting on a registration that never happened.
+  // schedule() cancels the old event before validating its replacement.
+  // A throw or missing next run leaves no confirmed state to cache.
   let event;
   try {
     event = schedule({
@@ -98,10 +96,8 @@ export async function syncBackupSchedule(settings) {
       metadata: { source: 'backupScheduler' }
     });
   } catch (err) {
-    registered = false;
-    lastSignature = null;
     console.error(`❌ Backup scheduler: cron "${inputs.cron}" rejected — no backup scheduled: ${err.message}`);
-    return false;
+    return null;
   }
 
   // Not every bad expression throws: a five-field cron with an out-of-range
@@ -110,16 +106,11 @@ export async function syncBackupSchedule(settings) {
   // retry once the user corrects it.
   if (!event?.nextRunAt) {
     cancel(EVENT_ID);
-    registered = false;
-    lastSignature = null;
     console.error(`❌ Backup scheduler: cron "${inputs.cron}" has no next run time — no backup scheduled`);
-    return false;
+    return null;
   }
-
-  registered = true;
-  lastSignature = signature;
   console.log(`💾 Backup scheduler: registered daily backup at cron "${inputs.cron}"`);
-  return true;
+  return { kind: 'scheduled', signature };
 }
 
 // Re-sync on every settings save rather than from the settings route — keeps
@@ -144,7 +135,6 @@ export async function startBackupScheduler() {
  */
 export function stopBackupScheduler() {
   cancel(EVENT_ID);
-  registered = false;
-  lastSignature = null;
+  reconciliationState = null;
   console.log('💾 Backup scheduler: stopped');
 }
