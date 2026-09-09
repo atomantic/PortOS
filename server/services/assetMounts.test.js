@@ -31,7 +31,7 @@ afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
 // Dynamic, not a static import: the `vi.mock` factory above closes over
 // `tempRoot`, and a static import would be hoisted above that binding.
-const { ASSET_DIR_ROUTES, ASSET_MOUNTS, mountAssetRoutes } = await import('./assetMounts.js');
+const { ASSET_DIR_ROUTES, ASSET_MOUNTS, mountAssetRoutes, mountClientDist } = await import('./assetMounts.js');
 
 // Stand-in for the SPA fallback `server/index.js` installs after the asset
 // mounts — same extension guard, so the test exercises the real interaction
@@ -169,5 +169,58 @@ describe('ASSET_MOUNTS', () => {
     // throws at boot.)
     expect([...ASSET_DIR_ROUTES].sort()).toEqual([...ASSET_MOUNTS.map((m) => m.route)].sort());
     expect(ASSET_MOUNTS.every(({ dir }) => typeof dir === 'function')).toBe(true);
+  });
+});
+
+// The built client is served in two cache tiers. Vite content-hashes everything
+// under `dist/assets/`, so a URL there can never change bytes and is safe to
+// mark immutable — serve-static's default `max-age=0` had the browser re-send
+// every one of the dashboard's 186 chunks as a conditional GET on each warm
+// load (no service worker registers over plain HTTP, the default posture).
+// Everything else in `dist/` is `client/public/` copied under a STABLE name and
+// must keep revalidating, `sw.js` above all: a worker script pinned for a year
+// would keep a stale caching strategy in every browser that had it.
+describe('the built client mount', () => {
+  const dist = join(tempRoot, 'client-dist');
+  let clientApp;
+
+  beforeAll(() => {
+    mkdirSync(join(dist, 'assets'), { recursive: true });
+    writeFileSync(join(dist, 'assets', 'index-B5J1S4I5.js'), 'CHUNKBYTES');
+    writeFileSync(join(dist, 'sw.js'), 'WORKERBYTES');
+    writeFileSync(join(dist, 'manifest.json'), '{"name":"PortOS"}');
+    writeFileSync(join(dist, 'index.html'), '<!DOCTYPE html><html><body>RAW</body></html>');
+    clientApp = express();
+    mountClientDist(clientApp, dist);
+    clientApp.use(spaFallback);
+  });
+
+  it('serves a hashed chunk as immutable for a year', async () => {
+    const res = await request(clientApp).get('/assets/index-B5J1S4I5.js');
+    expect(res.status).toBe(200);
+    expect(res.text).toBe('CHUNKBYTES');
+    expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+  });
+
+  it('keeps the service worker and the other stable-named files revalidating per load', async () => {
+    for (const path of ['/sw.js', '/manifest.json']) {
+      const res = await request(clientApp).get(path);
+      expect(res.status, path).toBe(200);
+      expect(res.headers['cache-control'], path).toBe('public, max-age=0');
+      expect(res.headers.etag, path).toBeTruthy();
+    }
+  });
+
+  it('lets / through to the SPA fallback instead of the raw index.html', async () => {
+    const res = await request(clientApp).get('/');
+    expect(res.text).toContain('PortOS');
+    expect(res.text).not.toContain('RAW');
+    expect(res.headers['cache-control']).toBeUndefined();
+  });
+
+  it('404s a chunk the current build no longer ships instead of answering with the SPA index', async () => {
+    const res = await request(clientApp).get('/assets/index-STALEHASH.js');
+    expect(res.status).toBe(404);
+    expect(res.text).not.toContain('PortOS');
   });
 });
