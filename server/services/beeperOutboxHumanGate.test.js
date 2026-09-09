@@ -19,7 +19,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -34,7 +34,7 @@ function collectSources(dir, out = []) {
       continue;
     }
     if (!entry.name.endsWith('.js')) continue;
-    out.push({ path: relative(SERVER_ROOT, full), source: readFileSync(full, 'utf8') });
+    out.push({ path: relative(SERVER_ROOT, full).split(sep).join('/'), source: readFileSync(full, 'utf8') });
   }
   return out;
 }
