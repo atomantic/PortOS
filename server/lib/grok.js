@@ -34,10 +34,8 @@ export const GROK_API_ID = 'grok';
 export const GROK_CLI_ID = 'grok-cli';
 export const GROK_TUI_ID = 'grok-tui';
 export const GROK_API_ENDPOINT = 'https://api.x.ai/v1';
-// Model selection for Grok Build CLI/TUI mirrors Antigravity: PortOS does not
-// pick a model. The stored sentinel lives in providerModels.js
-// (`GROK_CONFIGURED_DEFAULT`); spawn paths omit `--model` so the local `grok`
-// binary uses its own latest default.
+// Shipped CLI/TUI providers pin a concrete model for accurate attribution.
+// Legacy configured-default selections still omit --model for compatibility.
 
 // grok reads a single-turn prompt from a file path. On POSIX we hand it
 // /dev/stdin so the existing stdin write feeds it unchanged at every spawn site.
