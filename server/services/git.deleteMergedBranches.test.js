@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../lib/execGit.js', () => ({
-  execGit: vi.fn()
-}));
+vi.mock('../lib/execGit.js', () => {
+  const execGit = vi.fn();
+  return {
+    execGit,
+    execGitSafe: (...args) => execGit(...args).catch(err => ({ exitCode: 1, stdout: '', stderr: err.message }))
+  };
+});
 
 vi.mock('./worktreeManager.js', () => ({
   isGitLockError: vi.fn(),
