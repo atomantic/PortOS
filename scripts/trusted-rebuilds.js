@@ -103,7 +103,9 @@ export function rebuildTrusted(dir, label, { spawn = execFileSync } = {}) {
       // build and the pm2 restart, leaving the UI permanently reporting a stale
       // client build. See server/lib/bufferedSpawn.js for why the fix is a
       // `cmd.exe /c` wrap and not `shell:true` (which does not escape args).
-      const { command, args } = prepareCliSpawn('npm', ['rebuild', ...pkgs]);
+      // npm rebuild still honors ignore-scripts=true from the workspace .npmrc.
+      // Override it for these named packages only; ordinary installs stay blocked.
+      const { command, args } = prepareCliSpawn('npm', ['rebuild', '--ignore-scripts=false', ...pkgs]);
       spawn(command, args, { cwd: dir, stdio: 'inherit', windowsHide: true });
     } catch (err) {
       console.error(`⚠️  npm rebuild ${pkgs.join(' ')} failed for ${label}: ${err.message ?? err}`);
