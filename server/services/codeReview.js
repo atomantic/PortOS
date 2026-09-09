@@ -360,8 +360,9 @@ async function modelRejectsThinking(backend, model) {
   const cacheKey = thinkingCacheKey(backend, model)
   if (thinkingUnsupportedModels.get(cacheKey) === true) return true
   if (backend !== 'ollama') return false
-  const { getModelCapabilities } = await import('./ollamaManager.js')
-  const capabilities = await getModelCapabilities(model).catch(() => null)
+  const capabilities = await import('./ollamaManager.js')
+    .then(({ getModelCapabilities }) => getModelCapabilities(model))
+    .catch(() => null)
   if (!Array.isArray(capabilities) || capabilities.length === 0) return false
   if (capabilities.includes('thinking')) return false
   thinkingUnsupportedModels.set(cacheKey, true)
