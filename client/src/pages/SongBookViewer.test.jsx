@@ -1010,6 +1010,15 @@ K:  o - - - - - o -`;
       expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
     });
 
+    it('uses the saved capo normalization when deciding whether View needs confirmation', async () => {
+      await renderEditPage();
+      fireEvent.change(screen.getByLabelText('Capo'), { target: { value: '2.9' } });
+      fireEvent.click(screen.getByRole('button', { name: 'View' }));
+      await waitFor(() => expect(screen.queryByLabelText('Content')).toBeNull());
+      expect(screen.queryByText(/Discard your unsaved changes/)).toBeNull();
+      expect(api.updateSong).not.toHaveBeenCalled();
+    });
+
     it('treats tag whitespace and a trailing comma as clean (parseTags round-trip)', async () => {
       api.getSong.mockResolvedValue(song({ tags: ['campfire', 'fingerstyle'] }));
       await renderEditPage();

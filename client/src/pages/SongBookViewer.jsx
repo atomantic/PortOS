@@ -90,6 +90,7 @@ import useDrumPlayer from '../hooks/useDrumPlayer';
 import useChordPlayer from '../hooks/useChordPlayer';
 import useWakeLock from '../hooks/useWakeLock';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
+import { buildSongBookPatch, songBookDraftsEqual, SCROLL_DURATION_MIN, SCROLL_DURATION_MAX } from '../lib/songBookDraft.js';
 import { transposeText } from '../lib/tabNotation.js';
 import { VOICING_INSTRUMENTS, toVoicingInstrument } from '../lib/chordShapes.js';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
@@ -109,23 +110,6 @@ const FONT_MAX = 1.75;
 const FONT_STEP = 0.125;
 const SPEED_MIN = 5;
 const SPEED_MAX = 150;
-// "Fit to duration" target bounds — client mirror of `scrollDurationSec` in
-// server/lib/brainValidation.js (songInputSchema). Keep the two in step: a value
-// the input accepts but the schema rejects 400s the whole save.
-const SCROLL_DURATION_MIN = 15;
-const SCROLL_DURATION_MAX = 3600;
-
-// Scroll-duration input (a string, like every number input) → what a save sends:
-// null for "no target" (blank, or anything non-numeric), otherwise a whole
-// second count inside the schema bounds. null is a real value here — it CLEARS a
-// stored target on PATCH — so it must never collapse into "field absent".
-const parseScrollDurationSec = (raw) => {
-  if (raw === '' || raw === null || raw === undefined) return null;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return null;
-  return Math.max(SCROLL_DURATION_MIN, Math.min(SCROLL_DURATION_MAX, Math.trunc(n)));
-};
-
 // Song record → flat editable draft (tags joined for the text input).
 const toDraft = (song) => ({
   title: song.title || '',
@@ -148,44 +132,6 @@ const toDraft = (song) => ({
   format: song.content?.format || 'tab',
   text: song.content?.text || '',
 });
-
-const parseTags = (raw) => raw.split(',').map((t) => t.trim()).filter(Boolean);
-
-// Draft-vs-saved comparison for the unsaved-changes guard. It compares what a
-// SAVE would send, not the raw form text — otherwise edits the save normalizes
-// away read as unsaved work and prompt for nothing. Each field is normalized
-// exactly as `save` normalizes it: trimmed strings, `parseTags` for the tag
-// input ('a,b' and 'a, b,' both save as ['a','b']), and a numeric capo (the
-// number input hands back a STRING, and an emptied field clamps to 0).
-// `notes`/`text` go to the server verbatim, so they compare verbatim.
-const TRIMMED_DRAFT_FIELDS = ['title', 'artist', 'key', 'tuning', 'sourceUrl'];
-const normalizeDraftField = (draft, k) => {
-  if (k === 'capo') return Number(draft.capo || 0);
-  // The one array field: compare by VALUE, not by reference (`===` on two equal
-  // arrays is always false, so every open of Edit would read as dirty). Order
-  // matters (adding a link is an edit), and the label rides along because it is
-  // stored on the record — swapping it is a real change to save.
-  //
-  // Serialized as JSON over per-link ARRAYS, not by joining on a delimiter: a
-  // label is free text (it comes from another record's title), so any separator
-  // could appear inside one and let two different link lists collapse to the
-  // same string — an unsaved edit the guard would never see. Arrays rather than
-  // the objects themselves because JSON.stringify is key-ORDER sensitive, and a
-  // record synced from a peer can carry the same keys in a different order.
-  if (k === 'links') return JSON.stringify((draft.links || []).map((l) => [l.type, l.id, l.label || '']));
-  // Compare the SAVED value, not the raw text: '210' and '0210' (and '' vs a
-  // sub-minimum '3', which clamps) both save the same, so retyping one isn't
-  // unsaved work. Null (no target) compares equal to itself.
-  if (k === 'scrollDurationSec') return parseScrollDurationSec(draft.scrollDurationSec);
-  // Joined on a comma — the one character parseTags strips from every tag, so
-  // two different tag lists can never normalize to the same string.
-  if (k === 'tags') return parseTags(draft.tags).join(',');
-  if (TRIMMED_DRAFT_FIELDS.includes(k)) return (draft[k] || '').trim();
-  return draft[k];
-};
-const draftsEqual = (a, b) => Object.keys(a).every(
-  (k) => normalizeDraftField(a, k) === normalizeDraftField(b, k),
-);
 
 // Instrument-view toggle tabs (chord-diagram rendering — never mutates the record).
 const VIEW_TABS = VOICING_INSTRUMENTS.map((viewId) => ({ id: viewId, label: instrumentLabel(viewId) }));
@@ -462,35 +408,7 @@ export default function SongBookViewer() {
   const [save, saving] = useAsyncAction(async () => {
     const title = draft.title.trim();
     if (!title) { toast.error('Title is required'); return null; }
-    const capo = Math.max(0, Math.min(12, Math.trunc(Number(draft.capo) || 0)));
-    // `links` is sent only when the user actually CHANGED it. An untouched array
-    // would otherwise be re-validated against this version's bounds on every
-    // save, so a song synced from a NEWER peer (a raised link cap, a longer
-    // label than this version allows) would 400 the whole save on a field the
-    // user never touched — the same forward-compat hazard the link-type slug
-    // guards, applied to the bounds. Omitting the key takes the schema's
-    // absent-preserves branch instead. When it IS changed the array always goes
-    // whole, including as an empty one: clearing the last link must clear the
-    // stored list, and an omitted key would preserve it.
-    const linksChanged = normalizeDraftField(draft, 'links') !== normalizeDraftField(toDraft(song), 'links');
-    // Always the WHOLE content object — a partial { text } would reset format.
-    const updated = await updateSong(id, {
-      title,
-      artist: draft.artist.trim(),
-      instrument: draft.instrument,
-      stage: draft.stage,
-      key: draft.key.trim(),
-      capo,
-      tuning: draft.tuning.trim(),
-      tags: parseTags(draft.tags),
-      sourceUrl: draft.sourceUrl.trim(),
-      ...(linksChanged ? { links: draft.links } : {}),
-      notes: draft.notes,
-      // Always sent, including as an explicit null — clearing the input has to
-      // clear the stored target, and an omitted key would preserve it instead.
-      scrollDurationSec: parseScrollDurationSec(draft.scrollDurationSec),
-      content: { format: draft.format, text: draft.text },
-    }, { silent: true });
+    const updated = await updateSong(id, buildSongBookPatch(draft, toDraft(song)), { silent: true });
     setSong(updated);
     setDraft(toDraft(updated));
     toast.success('Song saved');
@@ -503,7 +421,7 @@ export default function SongBookViewer() {
   // holds a deferred IN-PAGE exit (the View toggle) while the inline discard
   // confirm is up; `routeGuard` below parks anything that leaves the route.
   const isDirty = useMemo(
-    () => !!song && !!draft && !draftsEqual(draft, toDraft(song)),
+    () => !!song && !!draft && !songBookDraftsEqual(draft, toDraft(song)),
     [song, draft],
   );
   const [pendingExit, setPendingExit] = useState(null);
