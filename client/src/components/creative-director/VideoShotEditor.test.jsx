@@ -14,7 +14,7 @@ it('keeps unsaved reference edits after a failed save and submits the displayed 
   render(<VideoShotEditor project={{ id: 'cd-example', status: 'paused' }} scene={{ sceneId: 'shot-2', order: 1, prompt: 'A garden path', workRevision: 3, useContinuationFromPrior: true }} onChange={onChange} />);
   await user.click(screen.getByRole('button', { name: 'Choose reference frame' }));
   await user.click(screen.getByRole('button', { name: 'Example reference' }));
-  expect(screen.getByRole('checkbox')).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: /Continue from/ })).not.toBeChecked();
   updateCreativeDirectorScene.mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValueOnce({});
   await user.click(screen.getByRole('button', { name: 'Save shot' }));
   await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Unavailable'));
@@ -22,5 +22,15 @@ it('keeps unsaved reference edits after a failed save and submits the displayed 
   expect(screen.getByRole('img', { name: 'Shot reference frame' })).toHaveAttribute('src', '/data/images/example-frame.png');
   await user.click(screen.getByRole('button', { name: 'Save shot' }));
   await waitFor(() => expect(onChange).toHaveBeenCalledOnce());
-  expect(updateCreativeDirectorScene).toHaveBeenLastCalledWith('cd-example', 'shot-2', { prompt: 'A garden path', sourceImageFile: 'example-frame.png', useContinuationFromPrior: false, expectedWorkRevision: 3 }, { silent: true });
+  expect(updateCreativeDirectorScene).toHaveBeenLastCalledWith('cd-example', 'shot-2', { prompt: 'A garden path', sourceImageFile: 'example-frame.png', muteAudio: false, useContinuationFromPrior: false, expectedWorkRevision: 3 }, { silent: true });
+});
+
+
+it('saves a mute-only repair with the displayed shot revision', async () => {
+  const user = userEvent.setup();
+  updateCreativeDirectorScene.mockClear().mockResolvedValue({});
+  render(<VideoShotEditor project={{ id: 'cd-example', status: 'paused' }} scene={{ sceneId: 'shot-3', order: 2, prompt: 'An empty garden', workRevision: 4 }} />);
+  await user.click(screen.getByRole('checkbox', { name: 'Mute generated audio in the final cut' }));
+  await user.click(screen.getByRole('button', { name: 'Save shot' }));
+  expect(updateCreativeDirectorScene).toHaveBeenCalledWith('cd-example', 'shot-3', expect.objectContaining({ muteAudio: true, expectedWorkRevision: 4 }), { silent: true });
 });

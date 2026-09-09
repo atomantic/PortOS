@@ -128,3 +128,20 @@ describe('Video review workflow', () => {
     await expect(reviewVideo('example-video', await inputFor('script-shot-plan', 'approve'))).rejects.toMatchObject({ code: 'VIDEO_OWNER_REQUIRED' });
   });
 });
+
+
+it('preserves paid clips and continuation frames when only the cut audio changes, and invalidates review', async () => {
+  mocks.project.status = 'paused';
+  await reviewVideo('example-video', await inputFor('script-shot-plan', 'approve'));
+  mocks.project.status = 'paused';
+  const before = structuredClone(mocks.project.treatment.scenes);
+  mocks.project = applySceneUpdate(mocks.project, 'one', { muteAudio: true, expectedWorkRevision: 0 }).project;
+  expect(mocks.project.treatment.scenes.map(s => s.renderedJobId)).toEqual(before.map(s => s.renderedJobId));
+  expect(mocks.project.treatment.scenes.map(s => s.status)).toEqual(['accepted', 'accepted', 'accepted']);
+  expect(mocks.project.treatment.scenes.map(s => s.workRevision)).toEqual([1, 0, 0]);
+  expect(mocks.project.videoRoughCut).toBeNull();
+  expect(mocks.project.videoFinalCut).toBeNull();
+  expect(await videoReviewAllowsDispatch('example-video', ['script-shot-plan'])).toBe(false);
+  mocks.project.status = 'rendering';
+  expect(() => applySceneUpdate(mocks.project, 'one', { muteAudio: false, expectedWorkRevision: 1 })).toThrow('Pause production');
+});

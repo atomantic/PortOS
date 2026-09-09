@@ -9,8 +9,11 @@ const fingerprint = value => canonicalSnapshotChecksum(value);
 
 /** Creative inputs only: runtime status/evaluation changes cannot stale script approval. */
 export function videoSceneInputs(scene) {
-  return Object.fromEntries(['sceneId', 'order', 'durationSeconds', 'intent', 'prompt', 'negativePrompt',
+  const inputs = Object.fromEntries(['sceneId', 'order', 'durationSeconds', 'intent', 'prompt', 'negativePrompt',
     'sourceImageFile', 'imageStrength', 'useContinuationFromPrior', 'cast'].map(key => [key, scene?.[key] ?? null]));
+  // Leave existing approval fingerprints unchanged until a shot is muted.
+  if (scene?.muteAudio) inputs.muteAudio = true;
+  return inputs;
 }
 
 export function assertVideoOwner(project, instanceId) {

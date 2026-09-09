@@ -33,7 +33,7 @@ async function prepareClips(project, history) {
     })
     : [...(project.treatment?.scenes || [])].sort((a, b) => a.order - b.order).map(scene => {
       if (scene.status !== 'accepted' || !scene.renderedJobId) throw fail('Every shot must be accepted before assembly. Partial clips remain available in Artifacts.');
-      return { clipId: scene.renderedJobId, outSec: scene.durationSeconds };
+      return { clipId: scene.renderedJobId, outSec: scene.durationSeconds, muteAudio: Boolean(scene.muteAudio) };
     });
   if (!requested.length) throw fail('No completed clips are available to assemble.');
   const segments = [];
@@ -46,12 +46,12 @@ async function prepareClips(project, history) {
     if (!playable.ok) throw fail(`A required clip is not playable: ${playable.reason}. Revise or render that shot again.`);
     const [duration, stream, audio] = await Promise.all([probeVideoDuration(path), probeVideoStreamInfo(path), hasAudioStream(path)]);
     if (!(duration > 0 && stream.fps > 0)) throw fail('A source clip duration could not be verified. Check ffprobe and the source file.');
-    if (project.videoExecution.choices.audio.mode === 'native' && !audio) throw fail('A source clip has no native audio. Select silent or a soundtrack before resuming.');
+    if (project.videoExecution.choices.audio.mode === 'native' && !clip.muteAudio && !audio) throw fail('A source clip has no native audio. Select silent or a soundtrack before resuming.');
     if (!(clip.outSec > 0) || clip.outSec > duration + 1 / stream.fps + 1e-6) throw fail('A rendered clip is shorter than its planned shot. Revise the timing or render the shot again.');
     if (remaining <= 0) throw fail('The planned shots exceed the exact target before the last shot. Revise their timing so every shot fits the final cut.');
     const outSec = Math.min(clip.outSec, duration, remaining);
     const fadeSec = project.videoDraft.transition === 'fade' ? Math.min(0.25, outSec / 2) : 0;
-    segments.push({ type: 'clip', clipId: clip.clipId, inSec: 0, outSec, fadeInSec: fadeSec, fadeOutSec: fadeSec });
+    segments.push({ type: 'clip', clipId: clip.clipId, inSec: 0, outSec, fadeInSec: fadeSec, fadeOutSec: fadeSec, ...(clip.muteAudio ? { volume: 0 } : {}) });
     remaining -= outSec;
   }
   if (!segments.length) throw fail('The requested cut has no playable duration.');

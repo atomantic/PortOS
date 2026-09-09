@@ -598,6 +598,11 @@ export function applySceneUpdate(project, sceneId, patch) {
   const treatment = { ...project.treatment, scenes };
   const creativeEdit = project.workspace === 'video' && treatment.artifact
     && ['prompt', 'imageStrength', 'sourceImageFile', 'useContinuationFromPrior'].some((key) => key in patch && patch[key] !== previousScene[key]);
+  const audioEdit = project.workspace === 'video' && 'muteAudio' in patch && Boolean(patch.muteAudio) !== Boolean(previousScene.muteAudio);
+  if (audioEdit && ['planning', 'rendering', 'stitching'].includes(project.status)) {
+    throw new ServerError('Pause production before changing shot audio.', { status: 409, code: 'VIDEO_ACTIVE' });
+  }
+  if (audioEdit && !creativeEdit) updated.workRevision = (previousScene.workRevision || 0) + 1;
   if (creativeEdit) {
     validateVideoShot(project, updated, sceneId === [...scenes].sort((a, b) => a.order - b.order)[0].sceneId);
     updated.workRevision = (previousScene.workRevision || 0) + 1;
@@ -623,7 +628,7 @@ export function applySceneUpdate(project, sceneId, patch) {
     ...project,
     treatment,
     ...(creativeEdit && project.plan?.steps ? { plan: retireVideoPlan(project.plan) } : {}),
-    ...(creativeEdit ? { status: 'paused', videoWorkRevision: (project.videoWorkRevision || 0) + 1, videoCutHistory: retainVideoCuts(project), videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
+    ...((creativeEdit || audioEdit) ? { status: 'paused', videoWorkRevision: (project.videoWorkRevision || 0) + 1, videoCutHistory: retainVideoCuts(project), videoRoughCut: null, videoFinalCut: null, finalVideoId: null } : {}),
     updatedAt: new Date().toISOString(),
   };
   return { project: next, updated };
