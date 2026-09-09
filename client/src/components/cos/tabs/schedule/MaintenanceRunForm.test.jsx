@@ -10,7 +10,7 @@ import MaintenanceRunForm from './MaintenanceRunForm';
 const socket = vi.hoisted(() => ({ on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
 vi.mock('../../../../services/socket', () => ({ default: socket }));
 const api = vi.hoisted(() => ({
-  getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn(),
+  getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(),
   updateCosTaskInterval: vi.fn(), updateAppTaskTypeOverride: vi.fn(),
 }));
 vi.mock('../../../../services/api', () => api);

@@ -5,13 +5,17 @@
  * the ffmpeg export make the SAME cut, geometry, and mix decisions — the whole
  * point of the lane model is that what the editor shows is what renders. When
  * a rule changes on one side (fade curve, overlay placement, asset kinds),
- * change it on the other in the same commit.
+ * change it on the other in the same commit. Fade fitting is shared through
+ * server/lib/videoTimelineFades.js rather than mirrored.
  *
  * No React, no I/O — safe to import from the page, its child components, and
  * tests alike.
  */
 
 import { clamp } from '../utils/formatters';
+import { fitFades } from '../../../server/lib/videoTimelineFades.js';
+
+export { fitFades } from '../../../server/lib/videoTimelineFades.js';
 
 export const IMAGE_ASSET_KINDS = ['images', 'video-thumbnails'];
 export const AUDIO_ASSET_KINDS = ['audio', 'music'];
@@ -74,21 +78,6 @@ export const fadeMultiplier = (fadeInSec, fadeOutSec, duration, within) => {
   if (fadeOutSec > 0) m *= Math.min(1, (duration - clamped) / fadeOutSec);
   return Math.min(1, Math.max(0, m));
 };
-
-/**
- * Shrink a fade pair that no longer fits `duration`, scaling both
- * proportionally so the author's balance survives. Mirrors `fitFades` in
- * server/services/videoTimeline/segments.js — the export and the preview must
- * compress an over-long pair the same way or they ramp differently.
- */
-export function fitFades(fadeInSec, fadeOutSec, duration) {
-  const fin = Math.max(0, Number(fadeInSec) || 0);
-  const fout = Math.max(0, Number(fadeOutSec) || 0);
-  const span = fin + fout;
-  if (span <= duration || span === 0) return { fadeInSec: fin, fadeOutSec: fout };
-  const scale = Math.max(0, duration) / span;
-  return { fadeInSec: fin * scale, fadeOutSec: fout * scale };
-}
 
 /**
  * Effective opacity of an overlay at project-time `t` — 0 outside its window,
@@ -183,8 +172,8 @@ export const withKeys = (entries, prefix) => (entries || []).map((e, idx) => ({ 
 
 /**
  * Shrink a fade pair that no longer fits its own duration, scaling both
- * proportionally so the author's balance survives. Mirrors the server's
- * `fitFades` (`server/services/videoTimeline/local.js`) — ffmpeg's `fade`
+ * proportionally so the author's balance survives. Uses the shared
+ * `fitFades` (`server/lib/videoTimelineFades.js`) — ffmpeg's `fade`
  * renders the whole segment black when its start time goes negative, and the
  * persist-time validator rejects an over-long pair outright, so the editor
  * shrinks rather than letting the PATCH 400 mid-edit.

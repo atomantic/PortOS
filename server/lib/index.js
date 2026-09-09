@@ -606,3 +606,4 @@ export * from './creativeDirectorVideoReview.js';
 export * from './creativeDirectorVideoCompiler.js';
 export * from './providerTypes.js';
 export * from './notificationTypes.js';
+export * from './videoTimelineFades.js';

@@ -314,7 +314,6 @@ export const startMaintenanceRun = ({ appId, providerId, model, effort = null, m
   ...options
 });
 export const stopMaintenanceRun = (id, options = {}) => request(`/cos/schedule/maintenance-runs/${id}/stop`, { method: 'POST', ...options });
-export const resumeMaintenanceRun = (id, options = {}) => request(`/cos/schedule/maintenance-runs/${id}/resume`, { method: 'POST', ...options });
 
 export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => request('/cos/schedule/trigger', {
   method: 'POST',

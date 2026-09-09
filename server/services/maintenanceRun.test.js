@@ -189,7 +189,7 @@ it('runs fixes consecutively and drains remaining issues only after documentatio
   const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'fix' });
   expect(run.steps.map(step => step.taskRef.taskType)).toEqual([...MAINTENANCE_TASK_ORDER, 'claim-issue']);
   for (let index = 0; index < MAINTENANCE_TASK_ORDER.length; index++) {
-    expect(state.invoked.at(-1).step.overrides.params).toEqual({ fileIssues: false });
+    expect(state.invoked.at(-1).step.overrides.params).toEqual({ fileIssues: false, useWorktree: true, openPR: true });
     await __onMaintenanceAgentCompleted(agentFor(run, index));
   }
   expect(dispatchedTypes()).toEqual([...MAINTENANCE_TASK_ORDER, 'claim-issue']);

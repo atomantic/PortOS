@@ -231,7 +231,7 @@ it('populates the canonical audit ladder with perpetual drains and refuses incom
   expect(jobs.filter(job => job.drain)).toHaveLength(6);
   expect(jobs.every(job => job.runOnce && job.taskRef.appId === 'app1')).toBe(true);
   expect(jobs[0].overrides.params).toEqual({ fileIssues: true });
-  expect(jobs.at(-1).overrides.params).toEqual({ fileIssues: false });
+  expect(jobs.at(-1).overrides.params).toEqual({ fileIssues: false, useWorktree: true, openPR: true });
   expect(maintenanceSequence(groups, 'app2', 'sequence')).toBeNull();
   tasks['claim-issue'].perpetual = false;
   expect(maintenanceSequence(buildQuotaBurnTaskCatalog({ schedule: { tasks } }), 'app1', 'sequence')).toBeNull();
