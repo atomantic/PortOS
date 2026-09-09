@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from '../../lib/childProcess.js';
 import { PATHS } from '../../lib/fileUtils.js';
+import { REACTOR_SETUP_ERRORS } from '../../../scripts/lib/reactorSetupErrors.js';
 
 const execute = promisify(execFile);
 let preparation;
@@ -30,7 +31,12 @@ async function prepareRuntime(python, expected) {
   if (await probe(python, expected)) return python;
   await execute(process.execPath, [join(PATHS.root, 'scripts', 'setup-reactor.js')], {
     env: { ...process.env, PORTOS_REACTOR_DATA: PATHS.data }, timeout: 1_200_000, maxBuffer: 8192,
-  }).catch(() => { throw new Error('Automatic Reactor runtime preparation failed; check network access and disk space, then retry the render'); });
+  }).catch((error) => {
+    const message = Number.isInteger(error.code) && Object.hasOwn(REACTOR_SETUP_ERRORS, error.code)
+      ? REACTOR_SETUP_ERRORS[error.code]
+      : 'Automatic Reactor runtime preparation failed; check network access and disk space, then retry the render';
+    throw new Error(message);
+  });
   if (!await probe(python, expected)) throw new Error('Reactor runtime verification failed; retry the render to repair the installation');
   return python;
 }
