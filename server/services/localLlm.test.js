@@ -938,6 +938,46 @@ describe('localLlm', () => {
     });
   });
 
+  describe('getStatus Ollama diagnostics', () => {
+    it('preserves the manager context-window diagnostics', async () => {
+      const contextLength = { runtime: 32768, applied: 65536, agentMinimum: 65536 };
+      mocks.ollama.getStatus.mockResolvedValueOnce({
+        available: true,
+        baseUrl: 'x',
+        version: '0.5.7',
+        modelCount: 0,
+        models: [],
+        contextLength,
+      });
+
+      const status = await svc.getStatus();
+
+      expect(status.ollama.contextLength).toEqual(contextLength);
+    });
+
+    it('keeps a null runtime and separates a failed model read from an empty list', async () => {
+      mocks.ollama.getStatus.mockResolvedValueOnce({
+        available: true,
+        baseUrl: 'x',
+        version: '0.5.7',
+        modelCount: 0,
+        models: [],
+        contextLength: { runtime: null, applied: 65536, agentMinimum: 65536 },
+      });
+      mocks.ollama.getLastInstalledModelsError.mockReturnValueOnce('Ollama model list failed');
+
+      const failedStatus = await svc.getStatus();
+
+      expect(failedStatus.ollama.contextLength.runtime).toBeNull();
+      expect(failedStatus.ollama.models).toEqual([]);
+      expect(failedStatus.ollama.modelsError).toBe('Ollama model list failed');
+
+      const emptyStatus = await svc.getStatus();
+      expect(emptyStatus.ollama.models).toEqual([]);
+      expect(emptyStatus.ollama.modelsError).toBeNull();
+    });
+  });
+
   describe('getStatus editorial recommendation with measured evidence', () => {
     const installed = [
       { id: 'qwen3.6:35b', name: 'qwen3.6:35b', params: '35B' },
