@@ -164,6 +164,25 @@ vi.mock('../../lib/mediaModels.js', async () => {
       memoryProfiles: [{ id: 'int8-lean', name: 'int8, leaf-level', minMemoryGb: 1, minVramGb: 12, unified: false }],
     },
     {
+      id: 'minimax_h3_ref2va_8bit', name: 'MiniMax H3 Ref2VA MLX 8-bit', runtime: 'minimax_h3_ref2va',
+      repo: 'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
+      revision: '61dc387ef1a7166425cdacd63c2340598dcc364f',
+      supportedModes: ['a2v'], requiresSourceImageForA2v: true,
+      defaultFrames: 124, frameOptions: [107, 124, 141, 158], fpsOptions: [24],
+      defaultWidth: 512, defaultHeight: 320, resolutionStep: 32,
+      steps: 9, guidance: 0, samplerLocked: true,
+      supportsNegativePrompt: false, supportsTiling: false, supportsDisableAudio: false,
+    },
+    {
+      id: 'fasth3_dense_datafree_int8', name: 'FastH3 Preview v1 Dense Data-Free', runtime: 'fastvideo',
+      repo: 'FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree',
+      revision: 'f624f08c6c279ab43534c003e556fc5b295b6558',
+      fastvideoFamily: 'fasth3', fastvideoMlxFormat: 'int8', supportedModes: ['text'],
+      defaultWidth: 832, defaultHeight: 480, defaultFrames: 124,
+      frameOptions: [107, 124, 141, 158], fpsOptions: [24],
+      steps: 4, guidance: 1, samplerLocked: true, supportsNegativePrompt: false,
+    },
+    {
       id: 'ltx25_cuda_distilled', name: 'LTX-2.5 CUDA Distilled', runtime: 'ltx25_cuda',
       repo: 'Lightricks/LTX-2.5',
       revision: 'bf86adedf518142442575d1ce2e767b7d01c8c76',
@@ -1966,6 +1985,131 @@ describe('generateVideo — LTX-2.5 sibling runtime spawn', () => {
       prompt: 'a quiet street at dusk',
       width: 512, height: 512, numFrames: 25, fps: 24,
     })).rejects.toMatchObject({ code: 'LTX2_MODEL_NOT_CACHED' });
+    expect(spawnDetached).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateVideo — pinned snapshot policies', () => {
+  const withModel = async (modelId, update, run) => {
+    const mediaModels = await import('../../lib/mediaModels.js');
+    const getVideoModelsMock = vi.mocked(mediaModels.getVideoModels);
+    const catalog = getVideoModelsMock();
+    getVideoModelsMock.mockReturnValue(catalog.map((model) => (
+      model.id === modelId ? update(model) : model
+    )));
+    try {
+      return await run();
+    } finally {
+      getVideoModelsMock.mockReturnValue(catalog);
+    }
+  };
+
+  const fastvideoRender = (fields = {}) => generateVideo({
+    jobId: 'fastvideo-snapshot-policy',
+    modelId: 'fasth3_dense_datafree_int8',
+    prompt: 'a quiet street at dusk',
+    width: 832, height: 480, numFrames: 124, fps: 24, mode: 'text',
+    ...fields,
+  });
+
+  const ref2vaRender = () => generateVideo({
+    jobId: 'ref2va-snapshot-policy',
+    modelId: 'minimax_h3_ref2va_8bit',
+    prompt: 'a fox listens to the rain',
+    width: 512, height: 320, numFrames: 124, fps: 24, mode: 'a2v',
+    sourceImagePath: '/mock/source.png', audioFilePath: '/mock/audio.wav',
+  });
+
+  it('passes a cached pinned FastVideo snapshot to the runner', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    mockInspectModelCache.mockResolvedValueOnce({
+      cached: true,
+      snapshotPath: '/mock/hf/fastvideo-snapshot',
+      sizeBytes: 1000,
+    });
+
+    await fastvideoRender();
+
+    expect(mockInspectModelCache).toHaveBeenCalledWith(
+      'FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree',
+      { revision: 'f624f08c6c279ab43534c003e556fc5b295b6558' },
+    );
+    const call = spawnMock.mock.calls.find(([, args]) => (
+      Array.isArray(args) && args.some((arg) => basename(String(arg)) === 'generate_fastvideo.py')
+    ));
+    expect(call).toBeDefined();
+    expect(call[1][call[1].indexOf('--model-root') + 1])
+      .toBe('/mock/hf/fastvideo-snapshot');
+  });
+
+  it('rejects a pinned FastVideo model when its snapshot is not cached', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    mockInspectModelCache.mockResolvedValueOnce({ cached: false, snapshotPath: null, sizeBytes: 0 });
+
+    await expect(fastvideoRender()).rejects.toMatchObject({
+      message: 'FastH3 Preview v1 Dense Data-Free revision f624f08c is not fully cached. Download or repair it in Video Gen before rendering.',
+      status: 400,
+      code: 'FASTVIDEO_MODEL_NOT_CACHED',
+    });
+    expect(mockInspectModelCache).toHaveBeenCalledWith(
+      'FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree',
+      { revision: 'f624f08c6c279ab43534c003e556fc5b295b6558' },
+    );
+    expect(spawnDetached).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unpinned, uncached FastVideo model on its best-effort repo fallback', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    const spawnMock = vi.mocked(spawnDetached);
+    spawnMock.mockClear();
+    mockInspectModelCache.mockResolvedValueOnce({ cached: false, snapshotPath: null, sizeBytes: 0 });
+
+    await withModel('fasth3_dense_datafree_int8', ({ revision: _revision, ...model }) => model, fastvideoRender);
+
+    expect(mockInspectModelCache).toHaveBeenCalledWith(
+      'FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree',
+    );
+    const call = spawnMock.mock.calls.find(([, args]) => (
+      Array.isArray(args) && args.some((arg) => basename(String(arg)) === 'generate_fastvideo.py')
+    ));
+    expect(call).toBeDefined();
+    expect(call[1][call[1].indexOf('--model-root') + 1])
+      .toBe('FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree');
+  });
+
+  it('rejects a Ref2VA model with no immutable revision', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+
+    await withModel(
+      'minimax_h3_ref2va_8bit',
+      ({ revision: _revision, ...model }) => model,
+      async () => expect(ref2vaRender()).rejects.toMatchObject({
+        message: 'MiniMax H3 Ref2VA model "minimax_h3_ref2va_8bit" is missing an immutable Hugging Face revision.',
+        status: 500,
+        code: 'VIDEO_MODEL_MISCONFIGURED',
+      }),
+    );
+    expect(spawnDetached).not.toHaveBeenCalled();
+  });
+
+  it('rejects a pinned Ref2VA model when its snapshot is not cached', async () => {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockClear();
+    mockInspectModelCache.mockResolvedValueOnce({ cached: false, snapshotPath: null, sizeBytes: 0 });
+
+    await expect(ref2vaRender()).rejects.toMatchObject({
+      message: 'MiniMax H3 Ref2VA MLX 8-bit revision 61dc387e is not fully cached. Download or repair it in Video Gen before rendering.',
+      status: 400,
+      code: 'MINIMAX_H3_REF2VA_MODEL_NOT_CACHED',
+    });
+    expect(mockInspectModelCache).toHaveBeenCalledWith(
+      'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
+      { revision: '61dc387ef1a7166425cdacd63c2340598dcc364f' },
+    );
     expect(spawnDetached).not.toHaveBeenCalled();
   });
 });
