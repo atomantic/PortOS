@@ -164,7 +164,7 @@ describe('PortOS update preflight parity — route vs. socket', () => {
     const ackRouteRes = await request(makeRouteApp()).post('/api/update/execute').send({ acknowledgeFork: true });
     expect(ackRouteRes.status).toBe(200);
 
-    appUpdaterUpdateApp.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, steps: [] }) });
+    appUpdaterUpdateApp.mockResolvedValue({ success: true, steps: [] });
     const { fireUpdate: fireAckUpdate } = makeSocketHarness();
     await fireAckUpdate({ appId: PORTOS_APP_ID, acknowledgeFork: true });
     expect(appUpdaterUpdateApp).toHaveBeenCalledWith(portosApp, expect.any(Function), {
@@ -176,7 +176,7 @@ describe('PortOS update preflight parity — route vs. socket', () => {
     const { getAppById } = await import('../services/apps.js');
     getAppById.mockResolvedValueOnce({ id: 'some-other-app', name: 'Other App', repoPath: '/other' });
     getActiveAgentIds.mockReturnValue(['agent-1']); // would refuse a PortOS update
-    appUpdaterUpdateApp.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, steps: [] }) });
+    appUpdaterUpdateApp.mockResolvedValue({ success: true, steps: [] });
 
     const { fireUpdate, emitted } = makeSocketHarness();
     await fireUpdate({ appId: 'some-other-app' });
