@@ -218,7 +218,7 @@ describe('the built client mount', () => {
     expect(res.headers['cache-control']).toBeUndefined();
   });
 
-  it('404s a chunk the current build no longer ships rather than answering with HTML', async () => {
+  it('404s a chunk the current build no longer ships instead of answering with the SPA index', async () => {
     const res = await request(clientApp).get('/assets/index-STALEHASH.js');
     expect(res.status).toBe(404);
     expect(res.text).not.toContain('PortOS');
