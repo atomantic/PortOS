@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import { buildInternalOpenApiSpec, buildOpenApiSpec } from './openapiSpec.js';
 import { synthesizeBodySchema as routeSchema } from '../routes/voicePublic.js';
+import { VALID_ENGINES } from './voiceEngines.js';
 import { voiceSynthesizeBodySchema } from './apiContractSchemas.js';
 
 const exposed = (apiAccess) => ({ apiAccess });
@@ -36,7 +37,8 @@ describe('buildOpenApiSpec', () => {
     expect(body.type).toBe('object');
     expect(body.properties.text).toBeDefined();
     expect(body.required).toContain('text');
-    expect(body.properties.engine.enum).toEqual(['kokoro', 'piper']);
+    expect(body.properties.engine.enum).toEqual([...VALID_ENGINES]);
+    expect(body.properties.engine.enum).toContain('qwen3-tts');
     // OpenAPI path schemas must not carry the JSON-Schema dialect marker.
     expect(body.$schema).toBeUndefined();
   });

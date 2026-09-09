@@ -6,6 +6,7 @@
  */
 
 import { Router } from 'express';
+import { TTS_ENGINE_IDS } from '../lib/voiceEngines.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
@@ -67,7 +68,7 @@ const voiceConfigPatchSchema = z.object({
     vocabularyPrompt: z.string().max(4000).optional(),
   }).partial().optional(),
   tts: z.object({
-    engine: z.enum(['kokoro', 'piper', 'qwen3-tts']).optional(),
+    engine: z.enum(TTS_ENGINE_IDS).optional(),
     rate: z.number().min(0.25).max(4).optional(),
     kokoro: z.object({
       modelId: z.string().max(128).optional(),
