@@ -715,7 +715,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/memory` | Memory CRUD / search |
 | `/api/brain`, `/api/brain/import` | Brain (second brain) and document import |
 | `/api/media` | Media library |
-| `/api/imessage`, `/api/contacts`, `/api/signal`, `/api/spotify`, `/api/youtube` | Personal-data ingest |
+| `/api/imessage`, `/api/contacts`, `/api/signal`, `/api/beeper`, `/api/spotify`, `/api/youtube` | Personal-data ingest |
 | `/api/notifications` | Notification stream |
 | `/api/standardize` | App PM2 standardizer |
 | `/api/stacker-news`, `/api/x` | Social integrations |

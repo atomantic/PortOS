@@ -32,6 +32,12 @@ vi.mock('./agentActivity.js', () => ({ activityEvents: { on: vi.fn() } }));
 vi.mock('./brainStorage.js', () => ({ brainEvents: { on: vi.fn() } }));
 vi.mock('./moltworldWs.js', () => ({ moltworldWsEvents: { on: vi.fn() } }));
 vi.mock('./moltworldQueue.js', () => ({ queueEvents: { on: vi.fn() } }));
+// The Beeper realtime bus is a real EventEmitter here — the relay boundary test
+// below drives it directly to prove where its frames land (and where they don't).
+vi.mock('./beeperSocketEvents.js', async () => {
+  const { EventEmitter } = await import('events');
+  return { beeperSocketEvents: new EventEmitter() };
+});
 vi.mock('./instanceEvents.js', () => ({ instanceEvents: { on: vi.fn() } }));
 vi.mock('./review.js', () => ({ reviewEvents: { on: vi.fn() } }));
 vi.mock('./loops.js', () => ({ loopEvents: { on: vi.fn() } }));
@@ -78,6 +84,7 @@ import { spawnPm2 } from './pm2.js';
 import { getAppById, notifyAppsChanged, resolvePm2HomeForProcess } from './apps.js';
 import { logAction } from './history.js';
 import { cosEvents } from './cosEvents.js';
+import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { detachSocketSessions } from './shell.js';
@@ -161,6 +168,8 @@ describe('socket.js — initSocket', () => {
       'instances:unsubscribe',
       'loops:subscribe',
       'loops:unsubscribe',
+      'beeper:subscribe',
+      'beeper:unsubscribe',
       'error:recover',
       'app:update',
       'app:standardize',
@@ -201,6 +210,35 @@ describe('socket.js — initSocket', () => {
     expect(JSON.stringify(socket.emitted)).not.toContain('main');
     expect(JSON.stringify(socket.emitted)).not.toContain('abc1234');
     expect(Object.keys(socket.handlers)).not.toContain('build:identity');
+  });
+
+  // ===========================================================================
+  // beeper:* — the Beeper relay boundary (#33, decided on #12)
+  // ===========================================================================
+  it('relays Beeper frames only to beeper subscribers, never through a global emit (#33)', () => {
+    // Same federation boundary as the build:id test above, from the other
+    // direction: `ioInstance.emit` reaches peerSocketRelay's client sockets, so
+    // a global Beeper emit would push another install's frames onto this one's
+    // wire. Message content is machine-local PII, so the relay is a subscriber
+    // Set — and even the frames it carries are ids-only.
+    const subscriber = makeSocket('beeper-sub');
+    const bystander = makeSocket('beeper-bystander');
+    createdSockets.push(subscriber, bystander);
+    io.connect(subscriber);
+    io.connect(bystander);
+    subscriber.handlers['beeper:subscribe']();
+
+    beeperSocketEvents.emit('invalidate', { kind: 'message.upserted', chatID: 'chat-1', ids: ['m1'], seq: 7, ts: null });
+    beeperSocketEvents.emit('state', { state: 'connected', lastEventAt: null, lastPingAt: null });
+
+    expect(subscriber.emitted.filter(([ev]) => ev === 'beeper:invalidate')).toHaveLength(1);
+    expect(subscriber.emitted.filter(([ev]) => ev === 'beeper:realtime')).toHaveLength(1);
+    // A connected socket that never subscribed sees nothing — that is what a
+    // peer relay's socket looks like from here.
+    expect(bystander.emitted.some(([ev]) => String(ev).startsWith('beeper:'))).toBe(false);
+    // And nothing Beeper-shaped ever went through io.emit.
+    expect(io.emitted.some(([ev]) => String(ev).startsWith('beeper:'))).toBe(false);
+    expect(JSON.stringify(io.emitted)).not.toContain('chat-1');
   });
 
   it('socket receives cos:subscribed ack after emitting cos:subscribe', () => {

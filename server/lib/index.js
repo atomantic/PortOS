@@ -312,6 +312,8 @@ export * from './persistentMindUsageLimit.js';
 export * from './agentScratchPaths.js';
 export * from './agentSentinel.js';
 export * from './bareUrl.js';
+export * from './beeperAttachmentPaths.js';
+export * from './beeperOAuthOrigin.js';
 export * from './bashResolver.js';
 export * from './branchUpstreamGuard.js';
 export * from './bufferedSpawn.js';

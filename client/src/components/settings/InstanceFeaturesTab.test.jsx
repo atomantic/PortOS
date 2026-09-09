@@ -1,10 +1,11 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const mock = vi.hoisted(() => ({
   getInstanceFeatures: vi.fn(),
   updateInstanceFeature: vi.fn(),
+  updateInstanceFeatureGroup: vi.fn(),
   installEidoverseFeature: vi.fn(),
   updateEidoverseWorldsSource: vi.fn(),
 }));
@@ -49,6 +50,37 @@ const EIDOVERSE_FEATURE = {
     worldsRepoUrl: 'https://github.com/anima-research/eidoverse-worlds',
     sourceOwners: { self: 'example-owner', upstream: 'anima-research' },
   },
+};
+
+// #40 — Comms feature group fixtures: FaceTime Audio, iMessage and Signal
+// bucketed under one `comms` group toggle with per-feature tri-state overrides.
+const COMMS_GROUP = { id: 'comms', label: 'Comms', description: 'Chat and calling integrations.', enabled: true };
+
+const IMESSAGE_FEATURE = {
+  id: 'imessage',
+  label: 'iMessage',
+  description: 'Machine-local iMessage and SMS reading.',
+  enabled: true,
+  source: 'default',
+  group: 'comms',
+};
+
+const SIGNAL_FEATURE = {
+  id: 'signal',
+  label: 'Signal',
+  description: 'Machine-local Signal Desktop message reading.',
+  enabled: true,
+  source: 'default',
+  group: 'comms',
+};
+
+const FACETIME_FEATURE = {
+  id: 'facetime',
+  label: 'FaceTime Audio',
+  description: 'Machine-local FaceTime Audio call controls.',
+  enabled: false,
+  source: 'default',
+  group: 'comms',
 };
 
 describe('InstanceFeaturesTab', () => {
@@ -299,5 +331,132 @@ describe('InstanceFeaturesTab', () => {
     fireEvent.click(retry);
 
     expect(await screen.findByRole('switch', { name: 'Disable POST on this instance' })).toBeInTheDocument();
+  });
+
+  // #40 — Comms feature group: a group row with its own toggle, member rows
+  // beneath it with a three-way override control; ungrouped rows unchanged.
+  describe('feature groups', () => {
+    beforeEach(() => {
+      mock.getInstanceFeatures.mockResolvedValue({
+        features: [POST_FEATURE, IMESSAGE_FEATURE, SIGNAL_FEATURE, FACETIME_FEATURE],
+        groups: [COMMS_GROUP],
+      });
+    });
+
+    it('renders a group toggle and a per-feature override control for each member, leaving ungrouped rows unchanged', async () => {
+      render(<InstanceFeaturesTab />);
+
+      // Ungrouped POST keeps its plain on/off switch, untouched by grouping.
+      expect(await screen.findByRole('switch', { name: 'Disable POST on this instance' })).toBeInTheDocument();
+
+      // The group itself gets one toggle, labeled by the group (not a member).
+      const groupToggle = screen.getByRole('switch', { name: 'Disable the Comms feature group' });
+      expect(groupToggle).toHaveAttribute('aria-checked', 'true');
+
+      // Every member gets a three-way override control instead of a switch.
+      for (const label of ['iMessage', 'Signal', 'FaceTime Audio']) {
+        const control = screen.getByRole('group', { name: `${label} override` });
+        expect(within(control).getByRole('button', { name: 'Inherit' })).toBeInTheDocument();
+        expect(within(control).getByRole('button', { name: 'On' })).toBeInTheDocument();
+        expect(within(control).getByRole('button', { name: 'Off' })).toBeInTheDocument();
+        expect(screen.queryByRole('switch', { name: new RegExp(label, 'i') })).toBeNull();
+      }
+
+      // Effective state and the inherited default both show through.
+      expect(screen.getByText('FaceTime Audio')).toBeInTheDocument();
+      const facetimeRow = screen.getByRole('group', { name: 'FaceTime Audio override' }).closest('div.flex');
+      expect(within(facetimeRow).getByRole('button', { name: 'Inherit' })).toHaveAttribute('aria-pressed', 'true');
+      const imessageRow = screen.getByRole('group', { name: 'iMessage override' }).closest('div.flex');
+      expect(within(imessageRow).getByText('Active on this instance')).toBeInTheDocument();
+    });
+
+    it('toggles the feature group off and persists it', async () => {
+      mock.updateInstanceFeatureGroup.mockResolvedValue({
+        features: [
+          POST_FEATURE,
+          { ...IMESSAGE_FEATURE, enabled: false, source: 'group-off' },
+          { ...SIGNAL_FEATURE, enabled: false, source: 'group-off' },
+          { ...FACETIME_FEATURE, enabled: false, source: 'group-off' },
+        ],
+        groups: [{ ...COMMS_GROUP, enabled: false }],
+      });
+      render(<InstanceFeaturesTab />);
+
+      const groupToggle = await screen.findByRole('switch', { name: 'Disable the Comms feature group' });
+      fireEvent.click(groupToggle);
+
+      await waitFor(() => expect(mock.updateInstanceFeatureGroup).toHaveBeenCalledWith('comms', false, { silent: true }));
+      expect(await screen.findByRole('switch', { name: 'Enable the Comms feature group' })).toHaveAttribute('aria-checked', 'false');
+      // All three members are hidden by the off group with no override of their own.
+      expect(screen.getAllByText('hidden by the group toggle above', { exact: false })).toHaveLength(3);
+    });
+
+    it('sets a grouped feature override to On', async () => {
+      mock.updateInstanceFeature.mockResolvedValue({
+        features: [POST_FEATURE, IMESSAGE_FEATURE, SIGNAL_FEATURE, { ...FACETIME_FEATURE, enabled: true, source: 'explicit' }],
+        groups: [COMMS_GROUP],
+      });
+      render(<InstanceFeaturesTab />);
+
+      const control = await screen.findByRole('group', { name: 'FaceTime Audio override' });
+      fireEvent.click(within(control).getByRole('button', { name: 'On' }));
+
+      await waitFor(() => expect(mock.updateInstanceFeature).toHaveBeenCalledWith('facetime', true, { silent: true }));
+      expect(within(control).getByRole('button', { name: 'On' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('sets a grouped feature override to Off', async () => {
+      mock.updateInstanceFeature.mockResolvedValue({
+        features: [POST_FEATURE, { ...IMESSAGE_FEATURE, enabled: false, source: 'explicit' }, SIGNAL_FEATURE, FACETIME_FEATURE],
+        groups: [COMMS_GROUP],
+      });
+      render(<InstanceFeaturesTab />);
+
+      const control = await screen.findByRole('group', { name: 'iMessage override' });
+      fireEvent.click(within(control).getByRole('button', { name: 'Off' }));
+
+      await waitFor(() => expect(mock.updateInstanceFeature).toHaveBeenCalledWith('imessage', false, { silent: true }));
+      expect(within(control).getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    it('clears an explicit override back to Inherit with enabled: null', async () => {
+      mock.getInstanceFeatures.mockResolvedValue({
+        features: [POST_FEATURE, { ...IMESSAGE_FEATURE, enabled: false, source: 'explicit' }, SIGNAL_FEATURE, FACETIME_FEATURE],
+        groups: [COMMS_GROUP],
+      });
+      mock.updateInstanceFeature.mockResolvedValue({
+        features: [POST_FEATURE, IMESSAGE_FEATURE, SIGNAL_FEATURE, FACETIME_FEATURE],
+        groups: [COMMS_GROUP],
+      });
+      render(<InstanceFeaturesTab />);
+
+      const control = await screen.findByRole('group', { name: 'iMessage override' });
+      expect(within(control).getByRole('button', { name: 'Off' })).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.click(within(control).getByRole('button', { name: 'Inherit' }));
+
+      await waitFor(() => expect(mock.updateInstanceFeature).toHaveBeenCalledWith('imessage', null, { silent: true }));
+      expect(within(control).getByRole('button', { name: 'Inherit' })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    // Regression: a response that carries grouped features but an
+    // empty/missing `groups` list must not silently drop those features from
+    // the tab. `renderGroupCard` returns null for an unresolved group, so
+    // without the row-building fallback every comms member vanished here.
+    it('falls back to rendering a grouped feature as its own ungrouped card when the groups list is empty', async () => {
+      mock.getInstanceFeatures.mockResolvedValue({
+        features: [POST_FEATURE, IMESSAGE_FEATURE, SIGNAL_FEATURE, FACETIME_FEATURE],
+        groups: [],
+      });
+      render(<InstanceFeaturesTab />);
+
+      // Every grouped member still renders — as a plain on/off switch, since
+      // there's no resolved group to attach a three-way override control to.
+      expect(await screen.findByRole('switch', { name: 'Disable POST on this instance' })).toBeInTheDocument();
+      expect(screen.getByRole('switch', { name: 'Disable iMessage on this instance' })).toBeInTheDocument();
+      expect(screen.getByRole('switch', { name: 'Disable Signal on this instance' })).toBeInTheDocument();
+      expect(screen.getByRole('switch', { name: 'Enable FaceTime Audio on this instance' })).toBeInTheDocument();
+      // No group toggle or group heading rendered — there's no group record to render one from.
+      expect(screen.queryByRole('switch', { name: /the Comms feature group/ })).not.toBeInTheDocument();
+    });
   });
 });

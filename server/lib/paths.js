@@ -131,6 +131,14 @@ export const PATHS = {
   // only the metadata syncs inside the brain `songs` record; peers lacking a
   // file render "not on this machine". Covered by backup via data/brain/.
   brainSongbook: join(INSTALL_ROOT, 'data/brain/songbook'),
+  // Beeper attachment BYTES (#37) — content-addressed as
+  // `<sha256[0..2]>/<sha256>.<ext>`, mirrored lazily on first human view and
+  // bounded by `settings.beeper.attachmentBudgetGb`. Machine-local and never
+  // federated, like every other Beeper mirror row; excluded from backups by
+  // default (overridable) because it is re-fetchable from Beeper for as long
+  // as the source network still holds the media, and the mirror renders the
+  // reference when it does not.
+  beeperAttachments: join(INSTALL_ROOT, 'data/beeper/attachments'),
   slashdo: join(CODE_ROOT, 'lib/slashdo'),
   // Fully-resolved slashdo command bodies written for CoS agents to READ on
   // demand instead of receiving them pasted into the prompt (issue #3110).

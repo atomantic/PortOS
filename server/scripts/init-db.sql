@@ -174,6 +174,21 @@ CREATE TABLE IF NOT EXISTS tribe_memory_links (
 );
 CREATE INDEX IF NOT EXISTS idx_tribe_memory_links_memory ON tribe_memory_links (memory_id);
 
+-- Network-scoped identity claims (#34, decided on #10). Mirrors the block in
+-- server/lib/db/schema/tribe.js — see there for the `kind` rationale.
+CREATE TABLE IF NOT EXISTS tribe_identities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  person_id UUID NOT NULL REFERENCES tribe_people(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  network TEXT NOT NULL DEFAULT '',
+  handle TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT '',
+  linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (kind, network, handle)
+);
+CREATE INDEX IF NOT EXISTS idx_tribe_identities_person ON tribe_identities (person_id);
+
 -- Human activity timeline (#2150) — unified, machine-local event store fed by
 -- message/calendar syncs (later: iMessage, Spotify, YouTube, Signal). Metadata +
 -- short summary only; full bodies stay in per-source caches. Idempotent via the
@@ -1633,6 +1648,180 @@ CREATE TABLE IF NOT EXISTS x_drafts (
 );
 CREATE INDEX IF NOT EXISTS idx_x_drafts_account_state ON x_drafts (account_id, state, created_at DESC);
 
+-- Beeper conversation mirror (#27). Machine-local mirror of the Beeper Desktop
+-- API — accounts, conversations, messages, participants, attachment metadata,
+-- and per-chat sync cursors. NEVER FEDERATED: no sync_sequence column, no
+-- PEER_SUBSCRIBABLE_KINDS entry, no dataSync category, no PORTOS_SCHEMA_VERSIONS
+-- entry (guarded by server/services/sharing/beeperNeverFederates.test.js).
+-- Deletions from the source are tombstones, not removals — a message the
+-- source unsends keeps its row/body/attachments and gains `unsent_at` (never
+-- `deleted_at`, which collides with the federation guard's column list).
+-- Mirrors the beeper.js block in server/lib/db/schema/.
+CREATE TABLE IF NOT EXISTS beeper_accounts (
+  account_id TEXT PRIMARY KEY,
+  network TEXT NOT NULL DEFAULT '',
+  display_name TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  bridge_id TEXT NOT NULL DEFAULT '',
+  last_seen_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- The ONE Beeper credential this install holds (#31), AES-256-GCM encrypted by
+-- server/lib/vaultCrypto.js. Single-row by construction (id = 'default'): PortOS
+-- models one Beeper account per install. token_expires_at NULL = never expires
+-- (only Beeper's own UI can mint that); there is no refresh grant, so an expired
+-- token is re-connected, never refreshed. scopes/client_id exist for the
+-- disconnect-time revocation call and never reach a client payload.
+CREATE TABLE IF NOT EXISTS beeper_credentials (
+  id TEXT PRIMARY KEY,
+  token_enc TEXT NOT NULL,
+  token_expires_at TIMESTAMPTZ,
+  scopes TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'pasted' CHECK (source IN ('oauth','pasted')),
+  client_id TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS beeper_conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_id TEXT NOT NULL REFERENCES beeper_accounts (account_id) ON DELETE CASCADE,
+  network TEXT NOT NULL DEFAULT '',
+  source_chat_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL DEFAULT 'single',
+  is_group BOOLEAN NOT NULL DEFAULT FALSE,
+  is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
+  is_archived BOOLEAN NOT NULL DEFAULT FALSE,
+  is_low_priority BOOLEAN NOT NULL DEFAULT FALSE,
+  is_muted BOOLEAN NOT NULL DEFAULT FALSE,
+  last_activity TIMESTAMPTZ,
+  unread_count INTEGER NOT NULL DEFAULT 0,
+  -- LOCAL "seen in PortOS" watermark (#83). Never mirrored from Beeper and
+  -- never written by the sweep — opening a thread stamps it with NOW(), and
+  -- the read model compares it against COALESCE(last_activity, created_at)
+  -- to decide whether the unread badge still shows. Mirrors the ALTER in
+  -- server/lib/db/schema/beeper.js (for existing installs).
+  seen_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (account_id, source_chat_id)
+);
+-- Repointed at the ordering expression the keyset walk actually uses — no
+-- query filters on account_id. #81: the ORDER BY / cursor predicate sort on
+-- COALESCE(last_activity, 'epoch'::timestamptz), never the raw column and
+-- never a created_at fallback — created_at is the MIRROR ROW's mint time,
+-- not chat activity, so falling back to it sorted a batch of activity-less
+-- chats swept in the same pass at the top of the Inbox by their shared,
+-- recent creation time. The epoch sentinel keeps the row-value keyset tuple
+-- shape (a real NULLS LAST cannot) while sorting every activity-less chat
+-- LAST under DESC instead. Mirrors the block in server/lib/db/schema/beeper.js.
+CREATE INDEX IF NOT EXISTS idx_beeper_conversations_activity_epoch_keyset ON beeper_conversations ((COALESCE(last_activity, 'epoch'::timestamptz)) DESC, id DESC);
+CREATE TABLE IF NOT EXISTS beeper_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id UUID NOT NULL REFERENCES beeper_conversations (id) ON DELETE CASCADE,
+  sender_id TEXT NOT NULL DEFAULT '',
+  body TEXT NOT NULL DEFAULT '',
+  sent_at TIMESTAMPTZ,
+  edited_at TIMESTAMPTZ,
+  unsent_at TIMESTAMPTZ,
+  sort_key TEXT NOT NULL DEFAULT '',
+  -- Mirrors the API's own Message.isSender. senderID cannot be compared
+  -- against the local user (accounts[].user.id differs from senderID on every
+  -- network), so this is the only reliable inbound/outbound signal.
+  is_sender BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+-- Repointed: sort_key is written on ingest and never read back. A thread page
+-- and the "latest message" preview LATERAL both order on
+-- COALESCE(sent_at, created_at) DESC, id DESC within one conversation_id, so
+-- one index serves both (audit cluster 06). Mirrors beeper.js.
+CREATE INDEX IF NOT EXISTS idx_beeper_messages_conversation_order ON beeper_messages (conversation_id, (COALESCE(sent_at, created_at)) DESC, id DESC);
+CREATE TABLE IF NOT EXISTS beeper_participants (
+  conversation_id UUID NOT NULL REFERENCES beeper_conversations (id) ON DELETE CASCADE,
+  source_user_id TEXT NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  handle TEXT NOT NULL DEFAULT '',
+  tribe_person_id UUID REFERENCES tribe_people (id) ON DELETE SET NULL,
+  observed_via TEXT NOT NULL CHECK (observed_via IN ('participant-list','message-sender')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (conversation_id, source_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_beeper_participants_tribe_person ON beeper_participants (tribe_person_id) WHERE tribe_person_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS beeper_attachments (
+  conversation_id UUID NOT NULL REFERENCES beeper_conversations (id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES beeper_messages (id) ON DELETE CASCADE,
+  idx INTEGER NOT NULL,
+  mxc_id TEXT,
+  mime_type TEXT NOT NULL DEFAULT '',
+  byte_length BIGINT,
+  file_name TEXT NOT NULL DEFAULT '',
+  width INTEGER,
+  height INTEGER,
+  last_viewed_at TIMESTAMPTZ,
+  keep BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Byte-mirror columns (#37). `local_path` is the store-relative path of the
+  -- mirrored bytes (`<sha256 prefix>/<sha256>.<ext>`), NULL while only the
+  -- reference is held — that NULL is the lazy mirror's state machine, never ''.
+  -- `unavailable_at`/`fetch_error` record a TERMINAL refusal from the source,
+  -- which both stops a re-fetch loop and exempts the row from eviction.
+  local_path TEXT,
+  fetched_at TIMESTAMPTZ,
+  unavailable_at TIMESTAMPTZ,
+  fetch_error TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (conversation_id, message_id, idx)
+);
+-- Every attachment route addresses one row by (message_id, idx) — the PK
+-- above leads with conversation_id, which none of those callers have on
+-- hand, so every lookup scanned the table (audit cluster 06).
+CREATE INDEX IF NOT EXISTS idx_beeper_attachments_message ON beeper_attachments (message_id, idx);
+CREATE INDEX IF NOT EXISTS idx_beeper_attachments_local ON beeper_attachments (local_path) WHERE local_path IS NOT NULL;
+-- evictToBudget's candidate query filters local_path IS NOT NULL AND
+-- keep = FALSE AND unavailable_at IS NULL AND mxc_id IS NOT NULL, and orders
+-- by last_viewed_at ASC NULLS FIRST, fetched_at ASC NULLS FIRST (a
+-- never-viewed row is the BEST eviction candidate, ordered first on purpose).
+-- Predicate and NULLS placement match that query exactly (audit cluster 06).
+-- `sha256` (and its index) is dropped, not shipped fresh: it was written on
+-- every fetch but never read back — the content-addressed path is built from
+-- the freshly computed hash, not from this column (decision 3).
+CREATE INDEX IF NOT EXISTS idx_beeper_attachments_eviction_candidates ON beeper_attachments (last_viewed_at ASC NULLS FIRST, fetched_at ASC NULLS FIRST) WHERE keep = FALSE AND local_path IS NOT NULL;
+CREATE TABLE IF NOT EXISTS beeper_sync_cursors (
+  account_id TEXT NOT NULL REFERENCES beeper_accounts (account_id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL,
+  cursor TEXT,
+  last_activity TIMESTAMPTZ,
+  last_swept_at TIMESTAMPTZ,
+  PRIMARY KEY (account_id, chat_id)
+);
+
+-- Outbound outbox (#36). A row is written BEFORE the send POST, so intent
+-- survives a crash between the click and the POST and one row is the
+-- serialization point that stops a double-click double-posting. `state` is
+-- PortOS's own machine (not a Beeper vocabulary), so the CHECK is deliberate;
+-- a failed row is never retried in place — a re-send is a NEW row, because
+-- Beeper has no idempotency key on send. Mirrors the beeper.js block in
+-- server/lib/db/schema/.
+CREATE TABLE IF NOT EXISTS beeper_outbox (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL REFERENCES beeper_conversations (id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN ('draft','approved','sending','awaiting-confirmation','sent','failed')),
+  pending_message_id TEXT,
+  message_id TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  approved_at TIMESTAMPTZ,
+  sent_at TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_beeper_outbox_conversation_state ON beeper_outbox (conversation_id, state, created_at DESC);
+
 -- Deletion audit log (incident #1248-follow-up). Append-only forensic trail of
 -- every tombstone / un-tombstone / hard-delete of user-authored records, written
 -- by a DB trigger so it captures deletions from ANY source (app, a test suite's
@@ -1753,3 +1942,5 @@ DROP TRIGGER IF EXISTS trg_tribe_people_audit ON tribe_people;
 CREATE TRIGGER trg_tribe_people_audit AFTER UPDATE OR DELETE ON tribe_people FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_tribe_touchpoints_audit ON tribe_touchpoints;
 CREATE TRIGGER trg_tribe_touchpoints_audit AFTER UPDATE OR DELETE ON tribe_touchpoints FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_tribe_identities_audit ON tribe_identities;
+CREATE TRIGGER trg_tribe_identities_audit AFTER UPDATE OR DELETE ON tribe_identities FOR EACH ROW EXECUTE FUNCTION record_audit_log();

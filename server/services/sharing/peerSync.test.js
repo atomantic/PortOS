@@ -3959,12 +3959,12 @@ describe('peerSync', () => {
         //   record of a button someone pressed on another install.
         // This guard pins that decision: federating any of them later is a conscious
         // act — wire the kind AND update this assertion + the ADR together.
-        const localOnlyKinds = ['tribe', 'tribePerson', 'tribeTouchpoint', 'tribeMemoryLink', 'universeRun', 'humanActivityEvent', 'userActionEvent'];
+        const localOnlyKinds = ['tribe', 'tribePerson', 'tribeTouchpoint', 'tribeMemoryLink', 'tribeIdentity', 'universeRun', 'humanActivityEvent', 'userActionEvent'];
         for (const kind of localOnlyKinds) {
           expect(PEER_SUBSCRIBABLE_KINDS).not.toContain(kind);
           expect(RECORD_KIND_SCHEMA_CATEGORIES[kind]).toBeUndefined();
         }
-        const localOnlyCategories = ['tribe', 'tribePeople', 'tribeTouchpoints', 'tribeMemoryLinks', 'universeRuns', 'humanActivityEvents', 'userActionEvents'];
+        const localOnlyCategories = ['tribe', 'tribePeople', 'tribeTouchpoints', 'tribeMemoryLinks', 'tribeIdentities', 'universeRuns', 'humanActivityEvents', 'userActionEvents'];
         for (const category of localOnlyCategories) {
           expect(PORTOS_SCHEMA_VERSIONS[category]).toBeUndefined();
           expect(NON_RECORD_SCHEMA_CATEGORIES.has(category)).toBe(false);

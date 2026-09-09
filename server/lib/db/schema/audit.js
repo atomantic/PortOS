@@ -91,6 +91,7 @@ export const auditedTables = [
     'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
     'catalog_user_types', 'creative_director_projects', 'threejs_models', 'image_to_3d_models', 'sprite_records', 'games', 'mood_boards', 'fableloom_stories',
     'lora_training_runs', 'authors', 'artists', 'albums', 'tracks', 'tribe_people', 'tribe_touchpoints',
+    'tribe_identities',
 ];
 
 // Build the per-table DROP/CREATE audit-trigger statements in the original

@@ -158,6 +158,17 @@ describe('dataManager purge scope (#3327)', () => {
     expect(CATEGORIES.screenshots.purgeScope).toBe('category');
   });
 
+  // Audit cluster 04, decision 2: `data/beeper/` holds one subdirectory
+  // (`attachments/`), so neither purge form was ever reachable — a category
+  // wipe needs `purgeScope: 'category'` and a per-item purge refuses a
+  // directory entry outright. The visible purge control was dead either way;
+  // this category now reports size only and reclamation happens through the
+  // attachment budget sweep and the per-conversation purge instead.
+  it('reports the Beeper attachment mirror as size-only — no purge control that was never reachable', () => {
+    expect(CATEGORIES.beeper.deletable).toBe(false);
+    expect(CATEGORIES.beeper.purgeScope).toBeUndefined();
+  });
+
   // These only exercise the refusal paths, which all return before purgeCategory
   // touches the filesystem — no test here may reach `rm` against the real data/.
   it('refuses a category-wide purge for item-scoped and protected categories', async () => {
@@ -165,6 +176,8 @@ describe('dataManager purge scope (#3327)', () => {
     await expect(purgeCategory('videos')).rejects.toThrow(/only supports per-item purge/);
     await expect(purgeCategory('loras')).rejects.toThrow(/is not purgeable/);
     await expect(purgeCategory('loras', { subPath: 'anything' })).rejects.toThrow(/is not purgeable/);
+    await expect(purgeCategory('beeper')).rejects.toThrow(/is not purgeable/);
+    await expect(purgeCategory('beeper', { subPath: 'attachments' })).rejects.toThrow(/is not purgeable/);
   });
 
   it('fails closed when a deletable category has no recognized purgeScope', async () => {

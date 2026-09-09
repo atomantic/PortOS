@@ -10,6 +10,7 @@ import { scheduleEvents } from './automationScheduler.js';
 import { activityEvents } from './agentActivity.js';
 import { brainEvents } from './brainStorage.js';
 import { moltworldWsEvents } from './moltworldWs.js';
+import { beeperSocketEvents } from './beeperSocketEvents.js';
 import { queueEvents } from './moltworldQueue.js';
 import { instanceEvents } from './instanceEvents.js';
 import { sanitizePeerForClient } from './instances.js';
@@ -52,6 +53,10 @@ const agentSubscribers = new Set();
 const instanceSubscribers = new Set();
 // Store loop subscribers
 const loopSubscribers = new Set();
+// Store Beeper realtime subscribers (#33). Invalidation frames and transport
+// liveness ONLY — see setupBeeperEventForwarding for why this may never be a
+// global emit.
+const beeperSubscribers = new Set();
 // Store io instance for broadcasting
 let ioInstance = null;
 
@@ -64,7 +69,7 @@ export function getIo() {
   return ioInstance;
 }
 
-const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers];
+const ALL_SUBSCRIBER_SETS = [cosSubscribers, errorSubscribers, notificationSubscribers, agentSubscribers, instanceSubscribers, loopSubscribers, beeperSubscribers];
 
 function broadcastToSet(set, event, data) {
   const disconnected = [];
@@ -126,6 +131,7 @@ function registerSubscriptionHandlers(socket, _io) {
   registerSubscriber(socket, 'agents', agentSubscribers);
   registerSubscriber(socket, 'instances', instanceSubscribers);
   registerSubscriber(socket, 'loops', loopSubscribers);
+  registerSubscriber(socket, 'beeper', beeperSubscribers);
 }
 
 function registerErrorHandlers(socket, io) {
@@ -210,6 +216,7 @@ function setupEventForwarding() {
   setupProactiveSpeechForwarding();
   setupPersistentMindEventForwarding();
   setupCallStateEventForwarding();
+  setupBeeperEventForwarding();
 }
 
 let persistentMindEventForwardingSetup = false;
@@ -543,6 +550,25 @@ function setupUpdateEventForwarding() {
 
 // Broadcast to loop subscribers only
 function broadcastToLoops(event, data) { broadcastToSet(loopSubscribers, event, data); }
+
+// Broadcast to Beeper subscribers only
+function broadcastToBeeper(event, data) { broadcastToSet(beeperSubscribers, event, data); }
+
+// Bridge the server's Beeper WebSocket onto Socket.IO (#33, decided on #12).
+//
+// THIS MUST NEVER BE `ioInstance.emit`. `peerSocketRelay.js` opens a Socket.IO
+// CLIENT to every online peer, so a global emit crosses the wire to other
+// installs — the boundary pinned at socket.test.js (#4694). Beeper message
+// content is PII and machine-local (#7's ADR), so the frames here carry
+// invalidation only: ids, kinds and transport liveness, never bodies, display
+// names or handles. The browser refetches from the PortOS mirror.
+let beeperForwardingSetup = false;
+function setupBeeperEventForwarding() {
+  if (beeperForwardingSetup) return;
+  beeperForwardingSetup = true;
+  beeperSocketEvents.on('invalidate', (data) => broadcastToBeeper('beeper:invalidate', data));
+  beeperSocketEvents.on('state', (data) => broadcastToBeeper('beeper:realtime', data));
+}
 
 // Set up loop event forwarding (idempotent)
 let loopForwardingSetup = false;

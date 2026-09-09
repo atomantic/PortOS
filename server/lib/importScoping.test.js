@@ -309,7 +309,12 @@ describe('deferred imports stay deferred (#6156)', () => {
 // `normalizeReviewers` through the 123-module `validation.js` catch-all — is
 // narrowed to its declaring leaf, `reviewerConfig.js`, so it contributes
 // nothing. Restore the ~1.5k allowance.
-const MAX_STATIC_INSTANTIATIONS = 100000;
+// Beeper adds 22 server suites (1,045 instantiations) and 933 instantiations
+// across existing suites, primarily dependency-free validation/attachment
+// leaves. Measured against current main: 99,794 -> 101,772. No new heavy eager
+// subtree is introduced; retain the standard roughly 1,500 allowance.
+const MAX_STATIC_INSTANTIATIONS = 103272;
+
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {

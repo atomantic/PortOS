@@ -38,6 +38,7 @@ export const USER_ACTION_TYPES = Object.freeze([
   'cos.schedule.update',
   'settings.update',
   'instance-feature.toggle',
+  'instance-feature-group.toggle',
   'media.image.enqueue',
   'media.video.enqueue',
   'brain.capture',

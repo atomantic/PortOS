@@ -215,6 +215,7 @@ export const NAV_PRESENTATION = {
   '/cos/jobs': { icon: Bot },
   '/cos/tasks': { icon: FileText },
   '/cos/workflow': { icon: ChartGantt },
+  '/messages/beeper': { icon: MessageCircle },
   '/messages/config': { icon: Settings },
   '/messages/contacts': { icon: Users },
   '/messages/drafts': { icon: FilePen },
