@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from '../../lib/childProcess.js';
 import { PATHS } from '../../lib/fileUtils.js';
+import { readPortosEnvValue } from '../../lib/portosEnv.js';
 import { REACTOR_SETUP_ERRORS } from '../../../scripts/lib/reactorSetupErrors.js';
 
 const execute = promisify(execFile);
@@ -14,7 +15,7 @@ export async function ensureReactorRuntime() {
   const requirements = await readFile(join(PATHS.root, 'scripts', 'requirements-reactor.txt'), 'utf8');
   const expected = requirements.match(/^reactor-sdk==([0-9.]+)\r?$/m)?.[1];
   if (!expected) throw new Error('Reactor SDK version pin is missing');
-  const override = process.env.REACTOR_PYTHON_PATH;
+  const override = process.env.REACTOR_PYTHON_PATH || readPortosEnvValue('REACTOR_PYTHON_PATH');
   const python = override || join(PATHS.data, 'venvs', 'reactor', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
   if (override) {
     // Preserve custom environments; never install into an operator-owned path.

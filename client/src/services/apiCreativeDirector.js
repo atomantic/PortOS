@@ -26,6 +26,11 @@ export const updateCreativeDirectorProject = (id, patch, options = {}) => reques
   body: JSON.stringify(patch),
   ...options,
 });
+export const updateCreativeDirectorScene = (id, sceneId, patch, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/scene/${encodeURIComponent(sceneId)}`, {
+  method: 'PATCH',
+  body: JSON.stringify(patch),
+  ...options,
+});
 export const deleteCreativeDirectorProject = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}`, {
   method: 'DELETE',
   ...options,

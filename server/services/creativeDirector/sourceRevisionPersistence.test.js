@@ -21,14 +21,42 @@ vi.mock('../../lib/conflictJournal.js', () => ({
 }));
 vi.mock('../catalogDB/ingredients.js', () => ({ getIngredient: vi.fn() }));
 import { getIngredient } from '../catalogDB/ingredients.js';
-import { setTreatment, getProject } from './projectsDB.js';
+import { setTreatment, getProject, updateProject } from './projectsDB.js';
 import { getVideoSourceStatus } from './videoSources.js';
 
 describe('Video source revision persistence through the PostgreSQL adapter', () => {
+  it('preserves approved work when a settings save only changes JSON object key order', async () => {
+    state.project = {
+      id: 'cd-settings', workspace: 'video', status: 'paused', videoWorkRevision: 3,
+      renderBackend: { video: { modelId: 'fast-h3', mode: 'reactor' }, image: { mode: 'local' } },
+      treatment: { artifact: { revision: 2 }, scenes: [{ sceneId: 'shot-1', workRevision: 3 }] },
+      videoFinalCut: { videoId: 'approved-cut' }, finalVideoId: 'approved-cut',
+    };
+    const saved = await updateProject(state.project.id, {
+      renderBackend: { image: { mode: 'local' }, video: { mode: 'reactor', modelId: 'fast-h3' } },
+    });
+    expect(saved.treatment.artifact.stale).not.toBe(true);
+    expect(saved.videoWorkRevision).toBe(3);
+    expect(saved.finalVideoId).toBe('approved-cut');
+    const reviewerChanged = await updateProject(state.project.id, {
+      modelOverrides: { evaluation: { providerId: 'local-vision', model: 'small-vision' } },
+    });
+    expect(reviewerChanged.treatment.artifact.stale).not.toBe(true);
+    expect(reviewerChanged.videoWorkRevision).toBe(3);
+    expect(reviewerChanged.finalVideoId).toBe('approved-cut');
+    const revised = await updateProject(state.project.id, {
+      renderBackend: { image: { mode: 'local' }, video: { mode: 'reactor', modelId: 'quality-h3' } },
+    });
+    expect(revised.treatment.artifact.stale).toBe(true);
+    expect(revised.videoWorkRevision).toBe(4);
+    expect(revised.finalVideoId).toBeNull();
+  });
+
   it('awaits source resolution, preserves the captured stamp across reads, and refuses an unavailable source', async () => {
     state.project = {
       id: 'cd-example', workspace: 'video', status: 'draft', targetDurationSeconds: 60, aspectRatio: '16:9',
       videoDraft: { sources: [{ kind: 'catalog', id: 'example-catalog', revision: 'user-label' }] },
+      plan: { steps: [{ stepId: 'old-shot', status: 'succeeded', args: { prompt: 'Previous story' } }] },
     };
     state.writes = 0;
     const source = { id: 'example-catalog', updatedAt: '2026-09-01T00:00:00.000Z', payload: { description: 'Example scene' } };
@@ -40,6 +68,8 @@ describe('Video source revision persistence through the PostgreSQL adapter', () 
     };
     await setTreatment(state.project.id, treatment);
     const saved = await getProject(state.project.id);
+    expect(saved.plan.steps).toBeUndefined();
+    expect(saved.plan.history[0].steps[0]).toMatchObject({ stepId: 'old-shot', status: 'succeeded' });
     expect(saved.treatment.artifact.references[0]).toEqual({
       kind: 'catalog', id: 'example-catalog', revision: 'user-label', referenceId: 'catalog:example-catalog', sourceRevision: expect.stringMatching(/^[a-f0-9]{32}$/),
     });

@@ -85,6 +85,33 @@ it('refuses stale choices, unavailable pinned credentials and unenforceable doll
   expect(startCreativeDirectorProject).not.toHaveBeenCalled();
 });
 
+it('resumes a shot whose preflight failed before creating a submission receipt', async () => {
+  state.project.status = 'paused';
+  state.project.treatment.scenes[0].status = 'rendering';
+  state.project.treatment.scenes[0].renderedJobId = null;
+  await startVideoExecution('example-video', await startInput());
+  expect(state.project.treatment.scenes[0].status).toBe('pending');
+  expect(startCreativeDirectorProject).toHaveBeenCalledTimes(1);
+  expect(await enqueue()).toMatchObject({ jobId: 'example-job-1' });
+});
+
+it('resumes failed shots without erasing retries, receipts or accepted work', async () => {
+  await startVideoExecution('example-video', await startInput({ maxRetries: 0 }));
+  const queued = await enqueue();
+  state.jobs[0].status = 'failed';
+  state.project.status = 'paused';
+  Object.assign(state.project.treatment.scenes[0], { status: 'failed', retryCount: 1, renderedJobId: queued.jobId });
+  state.project.treatment.scenes.push({ sceneId: 'accepted', status: 'accepted', renderedJobId: 'saved-clip' },
+    { sceneId: 'legacy-failed', status: 'failed', retryCount: 1 });
+  await startVideoExecution('example-video', await startInput({ maxRetries: 0 }));
+  expect(state.project.treatment.scenes[0]).toMatchObject({ status: 'pending', retryCount: 1, renderedJobId: null });
+  expect(state.project.treatment.scenes[1]).toMatchObject({ status: 'accepted', renderedJobId: 'saved-clip' });
+  expect(state.project.treatment.scenes[2]).toMatchObject({ status: 'pending', retryCount: 1 });
+  expect(await enqueue()).toBeNull();
+  expect(state.project.videoExecution.blocker).toMatch(/retry limit/);
+  expect(state.project.videoExecution.attempts).toHaveLength(1);
+});
+
 it('reserves before enqueue, binds one queue ID, enforces retry bounds and pauses dispatch', async () => {
   await startVideoExecution('example-video', await startInput({ maxClips: 2, maxRetries: 0 }));
   const queued = await enqueue();
@@ -100,6 +127,21 @@ it('reserves before enqueue, binds one queue ID, enforces retry bounds and pause
   await startVideoExecution('example-video', await startInput({ maxClips: 2, maxRetries: 0 }));
   expect(await enqueue()).toBeNull();
   expect(state.project.videoExecution.blocker).toMatch(/retry limit/);
+  expect(enqueueUnattendedMediaJob).toHaveBeenCalledTimes(1);
+});
+
+it('parks new dispatch on Pause while retaining the in-flight clip for Resume', async () => {
+  await startVideoExecution('example-video', await startInput());
+  const queued = await enqueue();
+  await assertVideoAttemptDispatch('example-video', queued.attemptId, { jobId: queued.jobId });
+  state.project.treatment.scenes[0].status = 'rendering';
+  await pauseVideoExecution('example-video', 'Paused by the user.');
+  expect(await enqueue()).toBeNull();
+  expect(state.project.treatment.scenes[0].workRevision).toBe(0);
+  state.jobs[0].status = 'completed';
+  await settleVideoAttempt('example-video', queued.attemptId, { status: 'completed' });
+  await startVideoExecution('example-video', await startInput());
+  expect(state.project.treatment.scenes[0]).toMatchObject({ status: 'evaluating', renderedJobId: queued.jobId, workRevision: 0 });
   expect(enqueueUnattendedMediaJob).toHaveBeenCalledTimes(1);
 });
 

@@ -57,6 +57,7 @@ function MediaCard({
         <button
           type="button"
           onClick={() => handleTileClick(item)}
+          aria-label={prompt || `Select ${isVideo ? 'video' : 'image'}`}
           disabled={disabled}
           className="block w-full h-full disabled:cursor-not-allowed disabled:opacity-40"
         >

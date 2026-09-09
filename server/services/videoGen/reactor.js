@@ -175,6 +175,9 @@ function captureClip(entry, input, pythonPath, job, jobId) {
           if (message.type === 'error' && message.phase === 'connecting' && message.errorType === 'TimeoutError') {
             failure = new Error('Reactor connection timed out before any clip was submitted; check provider availability and network access, then retry');
           }
+          if (message.type === 'error' && message.httpStatus === 402) {
+            failure = new Error('Reactor requires payment or additional credits (HTTP 402). Check the Reactor account balance before resuming.');
+          }
           if (!failure && message.type === 'error' && message.phase === 'connecting' && /^[A-Za-z]+$/.test(message.errorType)) {
             const status = Number.isInteger(message.httpStatus) && message.httpStatus >= 400 && message.httpStatus <= 599
               ? `; HTTP ${message.httpStatus}` : '';

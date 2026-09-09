@@ -3,8 +3,9 @@ import { Bot } from 'lucide-react';
 import { extractKind } from './ActiveAgentsBanner.jsx';
 import ScenePreview from './ScenePreview.jsx';
 import { SCENE_STATUS_BADGE } from './sceneStatus.js';
+import VideoShotEditor from './VideoShotEditor.jsx';
 
-export default function SegmentsTab({ project, activeAgents = [], basePath = '/creative-director' }) {
+export default function SegmentsTab({ project, activeAgents = [], basePath = '/creative-director', onChange }) {
   const { sceneId: selectedSceneId } = useParams();
   const scenes = project.treatment?.scenes;
   if (!scenes?.length) {
@@ -46,7 +47,7 @@ export default function SegmentsTab({ project, activeAgents = [], basePath = '/c
   return (
     <div>
       {selectedSceneId && <Link to={`${basePath}/${project.id}/segments`} className="block mb-3 text-port-accent">View all shots</Link>}
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+    <div className={selectedSceneId ? 'max-w-4xl' : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3'}>
       {sorted.filter(s => !selectedSceneId || s.sceneId === selectedSceneId).map((s) => {
         const isInflight = isSceneInflight(s.sceneId);
         const decoratedStatus = isInflight && s.status === 'pending' ? 'rendering' : s.status;
@@ -54,6 +55,8 @@ export default function SegmentsTab({ project, activeAgents = [], basePath = '/c
           <div key={s.sceneId} className={`bg-port-card border rounded overflow-hidden ${isInflight ? 'border-port-accent/60' : 'border-port-border'}`}>
             {s.renderedJobId ? (
               <ScenePreview jobId={s.renderedJobId} label={`Scene ${s.order + 1}`} />
+            ) : s.sourceImageFile ? (
+              <img src={`/data/images/${encodeURIComponent(s.sourceImageFile)}`} alt={`Scene ${s.order + 1} reference frame`} className="aspect-video w-full object-contain bg-port-bg" />
             ) : (
               <div className="bg-port-bg aspect-video flex items-center justify-center text-port-text-muted text-xs">
                 {isInflight ? (
@@ -90,6 +93,7 @@ export default function SegmentsTab({ project, activeAgents = [], basePath = '/c
                   {s.evaluation.notes}
                 </div>
               )}
+              {selectedSceneId && project.workspace === 'video' && <VideoShotEditor key={`${s.sceneId}:${s.workRevision || 0}`} project={project} scene={s} onChange={onChange} />}
             </div>
           </div>
         );

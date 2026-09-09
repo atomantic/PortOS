@@ -85,7 +85,7 @@ describe('Reactor SDK adapter', () => {
     expect(reactor.getActiveJob()).toBeNull();
   });
 
-  it.each([400, 402, undefined, 'private-status', 600])('reports session rejection with safe status %s before clip submission', async (httpStatus) => {
+  it.each([400, undefined, 'private-status', 600])('reports session rejection with safe status %s before clip submission', async (httpStatus) => {
     await started();
     const failed = once(videoGenEvents, 'failed');
     child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'error', phase: 'connecting', errorType: 'BadRequestError', httpStatus, message: 'private response body' }) + '\n'));
@@ -93,12 +93,23 @@ describe('Reactor SDK adapter', () => {
     const [event] = await failed;
     expect(event.error).toContain('before any clip was submitted');
     expect(event.error).toContain('check the provider account and model availability');
-    if (httpStatus === 400 || httpStatus === 402) expect(event.error).toContain(`HTTP ${httpStatus}`);
+    if (httpStatus === 400) expect(event.error).toContain(`HTTP ${httpStatus}`);
     else expect(event.error).not.toContain('HTTP');
     expect(event.error).not.toContain('private');
     expect(mocks.spawn).toHaveBeenCalledOnce();
     expect(mocks.finalize).not.toHaveBeenCalled();
     expect(reactor.getActiveJob()).toBeNull();
+  });
+
+  it('reports credit rejection without exposing remote diagnostics', async () => {
+    await started();
+    const failed = once(videoGenEvents, 'failed');
+    child.stdout.emit('data', Buffer.from(JSON.stringify({ type: 'error', phase: 'connecting', errorType: 'BadRequestError', httpStatus: 402, message: 'private account details' }) + '\n'));
+    child.emit('close', 1);
+    const [event] = await failed;
+    expect(event.error).toContain('additional credits (HTTP 402)');
+    expect(event.error).not.toContain('private account details');
+    expect(mocks.finalize).not.toHaveBeenCalled();
   });
 
   it('rejects all blank samples before history publication and removes the output', async () => {

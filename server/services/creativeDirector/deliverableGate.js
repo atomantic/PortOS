@@ -59,7 +59,7 @@ export function deliverableMark(project, kind) {
   if (kind === 'treatment') {
     const scenes = project?.treatment?.scenes;
     if (!Array.isArray(scenes)) return null;
-    return `treatment:${scenes.length}:${project.treatment.logline || ''}`;
+    return `treatment:${scenes.length}:${project.treatment.logline || ''}${project.workspace === 'video' ? `:${project.treatment.artifact?.revision || 0}` : ''}`;
   }
   return null;
 }
@@ -78,6 +78,10 @@ export function deliverableLanded(project, kind, markBefore) {
   const after = deliverableMark(project, kind);
   if (after === null) return false;
   if (markBefore === undefined) return true;
+  // An in-flight run from an older version recorded no artifact revision.
+  // Adding that suffix on read is not evidence that the run wrote anything.
+  if (kind === 'treatment' && project.workspace === 'video'
+      && markBefore === `treatment:${project.treatment.scenes.length}:${project.treatment.logline || ''}`) return false;
   return after !== markBefore;
 }
 
