@@ -135,6 +135,9 @@ describe('BackupWidget snapshots', () => {
     }, { silent: true });
     expect(filter).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Preview changes' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Snapshots' })).toBeDisabled();
 
     await act(async () => {
       finishRestore({ changedFiles: ['brain/example.json'] });
@@ -189,6 +192,34 @@ describe('BackupWidget snapshots', () => {
     });
     expect(screen.queryByText('brain/example.json')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Restore \d+ file/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview changes' })).toBeEnabled();
+  });
+
+  it('reports a current preview failure and re-enables previewing', async () => {
+    mockRestoreBackup.mockRejectedValueOnce(new Error('disk offline'));
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Preview failed: disk offline'));
+    expect(screen.getByRole('button', { name: 'Preview changes' })).toBeEnabled();
+  });
+
+  it('suppresses a late preview failure after the filter changes', async () => {
+    let rejectPreview;
+    mockRestoreBackup.mockReturnValue(new Promise((_, reject) => { rejectPreview = reject; }));
+    renderWidget();
+
+    const filter = await openRestorePanel();
+    fireEvent.change(filter, { target: { value: 'brain' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    fireEvent.change(filter, { target: { value: 'media' } });
+
+    await act(async () => {
+      rejectPreview(new Error('disk offline'));
+    });
+    expect(mockToast.error).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Preview changes' })).toBeEnabled();
   });
 });

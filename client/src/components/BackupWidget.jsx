@@ -59,12 +59,11 @@ const HEALTH_STYLES = {
 // RestorePanel
 // ---------------------------------------------------------------------------
 
-function RestorePanel({ snapshot, onClose }) {
+function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
   const filterId = useId();
   const [filter, setFilter] = useState('');
   const [acceptedPreview, setAcceptedPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
-  const [restoring, setRestoring] = useState(false);
   const previewGenerationRef = useRef(0);
 
   const currentRequest = {
@@ -111,7 +110,7 @@ function RestorePanel({ snapshot, onClose }) {
   const handleRestore = useCallback(async () => {
     if (!previewMatchesCurrentRequest || restoring) return;
 
-    setRestoring(true);
+    onRestoreStateChange(snapshot.id);
     const result = await api.restoreBackup({
       ...acceptedPreview.request,
       dryRun: false,
@@ -119,12 +118,12 @@ function RestorePanel({ snapshot, onClose }) {
       toast.error(`Restore failed: ${err.message}`);
       return null;
     });
-    setRestoring(false);
+    onRestoreStateChange(null);
     if (result) {
       toast.success(`Restore complete — ${result.changedFiles?.length ?? 0} file(s) restored`);
       onClose();
     }
-  }, [acceptedPreview, onClose, previewMatchesCurrentRequest, restoring]);
+  }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot.id]);
 
   const preview = previewMatchesCurrentRequest ? acceptedPreview.result : null;
 
@@ -136,7 +135,8 @@ function RestorePanel({ snapshot, onClose }) {
         </span>
         <button
           onClick={onClose}
-          className="text-gray-500 hover:text-gray-300 transition-colors text-xs min-h-[32px] px-1"
+          disabled={restoring}
+          className="text-gray-500 hover:text-gray-300 transition-colors text-xs min-h-[32px] px-1 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Cancel
         </button>
@@ -218,7 +218,7 @@ function RestorePanel({ snapshot, onClose }) {
 // SnapshotList
 // ---------------------------------------------------------------------------
 
-function SnapshotList() {
+function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
   // Let errors throw — `useAutoRefetch` preserves the last-good data on
   // transient failures. A `.catch(() => null)` here would wipe the snapshot
   // list on every blip per the hook's documented gotcha.
@@ -285,7 +285,7 @@ function SnapshotList() {
               </button>
               <button
                 onClick={() => setSelectedId(selectedId === snap.id ? null : snap.id)}
-                disabled={snap.incomplete}
+                disabled={snap.incomplete || restoringSnapshotId !== null}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
               >
                 <RotateCcw size={12} />
@@ -297,6 +297,8 @@ function SnapshotList() {
             <RestorePanel
               snapshot={snap}
               onClose={() => setSelectedId(null)}
+              restoring={restoringSnapshotId === snap.id}
+              onRestoreStateChange={onRestoreStateChange}
             />
           )}
         </div>
@@ -327,6 +329,7 @@ const BackupWidget = memo(function BackupWidget() {
   );
   const [handleBackupNow, triggering] = useBackupRun();
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
+  const [restoringSnapshotId, setRestoringSnapshotId] = useState(null);
   // Tick every minute so the dedup-skipped widget still recomputes
   // `relativeTime(lastRun/nextRun)` labels and the `computeHealth` 25h/49h
   // thresholds when wall-clock time crosses a boundary even though the poll
@@ -438,7 +441,8 @@ const BackupWidget = memo(function BackupWidget() {
         {/* Toggle snapshots */}
         <button
           onClick={() => setSnapshotsOpen(prev => !prev)}
-          className="flex items-center gap-1.5 px-3 py-2 bg-port-border/50 hover:bg-port-border text-gray-300 rounded-lg text-sm transition-colors min-h-[40px]"
+          disabled={restoringSnapshotId !== null}
+          className="flex items-center gap-1.5 px-3 py-2 bg-port-border/50 hover:bg-port-border text-gray-300 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[40px]"
         >
           <ChevronDown
             size={14}
@@ -451,7 +455,10 @@ const BackupWidget = memo(function BackupWidget() {
       {/* Snapshots section */}
       {snapshotsOpen && (
         <div className="mt-4 pt-4 border-t border-port-border">
-          <SnapshotList />
+          <SnapshotList
+            restoringSnapshotId={restoringSnapshotId}
+            onRestoreStateChange={setRestoringSnapshotId}
+          />
         </div>
       )}
     </div>
