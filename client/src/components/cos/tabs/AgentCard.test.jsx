@@ -226,6 +226,26 @@ describe('AgentCard agent ID', () => {
   });
 });
 
+describe('AgentCard responsive header', () => {
+  it('keeps the identity and actions rails flexible on narrow cards', () => {
+    const onDelete = vi.fn();
+    const onResume = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <AgentCard agent={agent} completed onDelete={onDelete} onResume={onResume} />
+      </MemoryRouter>
+    );
+
+    const actions = screen.getByRole('button', { name: 'Show' }).parentElement;
+    const identity = actions.previousElementSibling;
+
+    expect(identity).toHaveClass('basis-0', 'sm:basis-64');
+    expect(screen.getByText(agent.id)).toHaveClass('min-w-0');
+    expect(actions).toHaveClass('ml-0', 'sm:ml-auto');
+  });
+});
+
 describe('AgentCard transcript truncation (#3498)', () => {
   it('says the transcript was clipped when the server returns a capped tail', async () => {
     const user = userEvent.setup();
