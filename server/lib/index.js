@@ -342,6 +342,7 @@ export * from './npmGlobalBin.js';
 export * from './openFolder.js';
 export * from './processEnv.js';
 export * from './primaryCheckoutGuard.js';
+export * from './ptySpawnDiagnostics.js';
 export * from './pythonSetup.js';
 export * from './vttTranscript.js';
 export * as youtubeIngestFormat from './youtubeIngestFormat.js';

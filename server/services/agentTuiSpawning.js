@@ -21,6 +21,7 @@ import { PATHS, watchForFile } from '../lib/fileUtils.js';
 import { resolveAgentCliCwd } from '../lib/spawnCwd.js';
 import { doneSentinelName, doneSentinelPath as resolveDoneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
+import { PTY_UNAVAILABLE_PREFIX, PTY_WORKSPACE_MISSING_PREFIX } from '../lib/ptySpawnDiagnostics.js';
 import { finalizeAgentRunCommon, shouldAbandonAgentRun } from './agentRunFinalize.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 import { prClaimWasVerified, leavesPrForHuman } from '../lib/prDisposition.js';
@@ -1579,9 +1580,17 @@ export async function spawnTuiAgent({
     // A LOCAL direct PTY raises the SAME failure with the same prefix — see the
     // pre-spawn resolve in createAgentTuiSession's restricted branch (#6159) —
     // so the test is no longer gated on the runner.
+    //
+    // The runner's PTY-layer diagnoses get the same treatment for the same
+    // reason: a broken node-pty install or a workspace that vanished fails
+    // identically on every attempt, so retrying it as a transient rejection just
+    // burns MAX_TASK_RETRIES on every task in the fleet and buries the one line
+    // that names the repair (see lib/ptySpawnDiagnostics.js).
     const reason = /^Command executable unavailable:/i.test(message)
       ? 'command-not-found'
-      : useDurableRunner ? 'spawn-rejected' : 'spawn-error';
+      : message.startsWith(PTY_UNAVAILABLE_PREFIX) || message.startsWith(PTY_WORKSPACE_MISSING_PREFIX)
+        ? 'runner-pty-unavailable'
+        : useDurableRunner ? 'spawn-rejected' : 'spawn-error';
     if (useDurableRunner) {
       // A handoff that did not land (#4540), recorded like the CLI path's. A
       // LOCAL PTY that won't open is a host problem, not a handoff, so it is

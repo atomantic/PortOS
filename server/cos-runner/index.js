@@ -23,6 +23,7 @@ import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { commandExists } from '../lib/commandExists.js';
 import { adoptNpmGlobalBinDir } from '../lib/npmGlobalBin.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { diagnosePtySpawnFailure, probePtyRuntime, PTY_WORKSPACE_MISSING_PREFIX } from '../lib/ptySpawnDiagnostics.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { isKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
 import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
@@ -206,6 +207,15 @@ app.post('/spawn-tui', async (req, res) => {
   }
 
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
+  // Ahead of the executable checks below, because both of them run the child IN
+  // this directory: a worktree reaped before the spawn makes the `--version`
+  // probe fail too, and the runner would then blame the provider CLI and tell a
+  // human to reinstall a binary that is sitting right there on PATH.
+  if (!existsSync(cwd)) {
+    return res.status(422).json({
+      error: `${PTY_WORKSPACE_MISSING_PREFIX} the workspace for this spawn does not exist. Its worktree was probably removed before the agent launched.`
+    });
+  }
   const childEnv = buildCliChildEnv({ before: envVars, provider: providerAuth, cwd });
   // node-pty reports a missing executable as an immediate exit with no data.
   // Check the exact child PATH first so the caller gets a usable configuration
@@ -235,13 +245,30 @@ app.post('/spawn-tui', async (req, res) => {
   // Use the same safe wrapper for the actual PTY launch. In particular, this
   // preserves the shared escaping contract for paths/args passed to cmd.exe.
   const { command: ptyCommand, args: ptyArgs } = prepareCliSpawn(executable, args, childEnv);
-  const tuiProcess = pty.spawn(ptyCommand, ptyArgs, {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd,
-    env: childEnv,
-  });
+  // Both checks above cleared the executable, so a throw here is about the PTY
+  // layer or the workspace — not the command. node-pty collapses those into one
+  // opaque `posix_spawn failed: No such file or directory`, which read as a
+  // transient runner refusal and sent the whole fleet into a retry storm. Name
+  // the actual fault instead, and let the caller block on the unrecoverable ones.
+  let tuiProcess;
+  try {
+    tuiProcess = pty.spawn(ptyCommand, ptyArgs, {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: childEnv,
+    });
+  } catch (err) {
+    const { retryable, message } = diagnosePtySpawnFailure(err, {
+      cwd,
+      probeCwd: ROOT_DIR,
+      runtimeProbe: (probeCwd) => probePtyRuntime(pty, probeCwd),
+    });
+    if (retryable) throw err;
+    console.error(`❌ PTY spawn failed for ${agentId}: ${message}`);
+    return res.status(422).json({ error: message });
+  }
   const startedAt = Date.now();
   const agent = {
     kind: 'tui',
