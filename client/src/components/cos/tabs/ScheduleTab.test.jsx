@@ -8,6 +8,9 @@ const api = vi.hoisted(() => ({
   getCodeReviewDefaults: vi.fn(),
   getCosSchedule: vi.fn(),
   triggerCosOnDemandTask: vi.fn(),
+  updateCosTaskInterval: vi.fn(),
+  getLocalLlmStatus: vi.fn().mockResolvedValue(null),
+  getProviders: vi.fn().mockResolvedValue({ providers: [] }),
 }));
 
 vi.mock('../../ui/Toast', () => ({ default: toast }));
@@ -152,4 +155,44 @@ describe('ScheduleTab on-demand feedback', () => {
     );
     expect(await screen.findByText(/CoS daemon is stopped/)).toBeVisible();
   });
+});
+
+
+describe('Schedule labels', () => {
+  it('filters by a linked label, searches legacy names, and saves custom labels through the drawer', async () => {
+    const user = userEvent.setup();
+    api.getCodeReviewDefaults.mockResolvedValue({});
+    api.getCosSchedule.mockResolvedValue({ tasks: {
+      security: { type: 'on-demand', enabled: false, displayName: 'better-security', defaultLabels: ['slashdo'], labels: [], description: 'Security audit' },
+      'claim-issue': { type: 'on-demand', enabled: false, description: 'Claim work' },
+    } });
+    api.updateCosTaskInterval.mockResolvedValue({ success: true, interval: { labels: ['backend'] } });
+    render(<MemoryRouter initialEntries={['/cos/schedule?label=slashdo']}><ScheduleTab apps={[]} providers={[]} providersLoaded /></MemoryRouter>);
+    expect(await screen.findByText('better-security')).toBeTruthy();
+    expect(screen.queryByText('claim-issue')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Clear label' }));
+    expect(screen.getByText('claim-issue')).toBeTruthy();
+    await user.type(screen.getByRole('textbox', { name: 'Filter tasks by name' }), 'security');
+    expect(screen.queryByText('claim-issue')).toBeNull();
+    await user.click(screen.getByText('better-security'));
+    const labels = await screen.findByRole('textbox', { name: 'Custom labels' });
+    await user.type(labels, 'backend');
+    await user.tab();
+    await waitFor(() => expect(api.updateCosTaskInterval).toHaveBeenCalledWith('security', { labels: ['backend'] }, { silent: true }));
+    expect(await screen.findByRole('option', { name: 'backend (1)' })).toBeTruthy();
+  });
+});
+
+it('keeps maintenance selections and the last saved schedule after a refresh failure', async () => {
+  const user = userEvent.setup();
+  api.getCodeReviewDefaults.mockResolvedValue({});
+  api.getCosSchedule.mockReset().mockResolvedValueOnce({ tasks: {} }).mockRejectedValueOnce(new Error('offline'));
+  render(<MemoryRouter><ScheduleTab apps={[{ id: 'example', name: 'Example App' }]} providers={[]} providersLoaded /></MemoryRouter>);
+  await user.click(await screen.findByText('Run maintenance now'));
+  await user.selectOptions(screen.getByLabelText('App'), 'example');
+  await user.click(screen.getByRole('button', { name: 'Refresh' }));
+  await waitFor(() => expect(api.getCosSchedule).toHaveBeenCalledTimes(2));
+  expect(screen.getByLabelText('App')).toHaveValue('example');
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(screen.queryByText('Failed to load task schedule')).not.toBeInTheDocument();
 });

@@ -25,6 +25,9 @@ export const createCatalogScrap = (body = {}, options) =>
 export const extractFromCatalogScrap = (id, body = {}, options) =>
   request(`/catalog/scraps/${enc(id)}/extract`, { method: 'POST', body: JSON.stringify(body), ...options });
 
+export const pruneCatalogScrap = (id, body, options) =>
+  request(`/catalog/scraps/${enc(id)}/prune`, { method: 'POST', body: JSON.stringify(body), ...options });
+
 export const commitCatalogScrapDraft = (id, accepted, options) =>
   request(`/catalog/scraps/${enc(id)}/commit`, { method: 'POST', body: JSON.stringify({ accepted }), ...options });
 

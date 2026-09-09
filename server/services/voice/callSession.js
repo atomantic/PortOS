@@ -166,14 +166,33 @@ export const isCallActive = () => publicState().active;
 export const getCallContext = () => (publicState().active ? session.context : null);
 
 /**
+ * Read the pending opening line without consuming it.
+ *
+ * Non-destructive on purpose: the delivery it feeds can fail (the TTS provider
+ * is down, rate-limited, or times out), and clearing before the line has
+ * actually been spoken loses it for good — the call then connects to silence
+ * permanently, which is the exact failure the opening line exists to prevent.
+ * The caller clears it with `clearCallOpeningLine` once delivery succeeded.
+ */
+export function peekCallOpeningLine() {
+  if (!publicState().active) return '';
+  return session.openingLine;
+}
+
+/** Retire the opening line once it has actually been delivered. */
+export function clearCallOpeningLine() {
+  session.openingLine = '';
+}
+
+/**
  * Take the pending opening line, clearing it. Consume-once on purpose: the
  * host speaks it on the first `connected` observation, and `voice:call:state`
  * is broadcast more than once per call.
  */
 export function takeCallOpeningLine() {
   if (!publicState().active) return '';
-  const line = session.openingLine;
-  session.openingLine = '';
+  const line = peekCallOpeningLine();
+  clearCallOpeningLine();
   return line;
 }
 

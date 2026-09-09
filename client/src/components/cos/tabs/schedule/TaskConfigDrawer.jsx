@@ -35,6 +35,7 @@ export default function TaskConfigDrawer({
   onUpdateOverride,
   onBulkToggleOverride,
   allTaskTypes,
+  orderStep,
   improvementDisabled,
   dataInputCatalog,
 }) {
@@ -60,7 +61,7 @@ export default function TaskConfigDrawer({
     <Drawer
       open={open && !!config}
       onClose={onClose}
-      title={taskType || 'Task'}
+      title={config?.displayName || taskType || 'Task'}
       size="md"
       tabs={tabs}
       activeTab={activeTab}
@@ -70,7 +71,7 @@ export default function TaskConfigDrawer({
     >
       {config && (
         <div className="space-y-6">
-          <TaskHeader taskType={taskType} config={config} />
+          <TaskHeader taskType={taskType} config={config} orderStep={orderStep} />
 
           {activeTab === 'stages' && hasStages && (
             <PipelineStageConfig
@@ -86,6 +87,7 @@ export default function TaskConfigDrawer({
 
           {activeTab === 'global' && (
             <GlobalConfigControls
+              key={taskType}
               taskType={taskType}
               config={config}
               onUpdate={onUpdate}

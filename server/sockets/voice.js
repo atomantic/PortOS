@@ -30,6 +30,7 @@ import { transcribe } from '../services/voice/stt.js';
 import { CALL_AUDIO_SAMPLE_RATE, createCallEndpointer, pcmToFloat } from '../services/voice/callEndpointing.js';
 import {
   attachHost,
+  clearCallOpeningLine,
   detachHost,
   endCall,
   getCallContext,
@@ -39,9 +40,9 @@ import {
   markListening,
   markSpeaking,
   noteCallerSpeech,
+  peekCallOpeningLine,
   recordTurn,
   setCallStateListener,
-  takeCallOpeningLine,
 } from '../services/voice/callSession.js';
 import { synthesize } from '../services/voice/tts.js';
 import {
@@ -54,6 +55,12 @@ import {
   setCaptureStateListener,
   startCapture,
 } from '../services/voice/captureSession.js';
+
+// Attempts allowed at the same call opening line before it is given up on.
+// The retry rides the recurring `voice:call:state` broadcast rather than a
+// timer, so this is what keeps a dead TTS provider from being hammered for the
+// whole call.
+const OPENING_LINE_MAX_ATTEMPTS = 3;
 
 // Cap by messages (each user utterance + assistant reply is ~2). 24 → ~12 turns.
 const HISTORY_MESSAGES = 24;
@@ -98,6 +105,25 @@ const audioByteLength = (audio) => {
   if (audio instanceof ArrayBuffer) return audio.byteLength;
   if (ArrayBuffer.isView(audio)) return audio.byteLength;
   return 0;
+};
+
+// Reinterpret an incoming audio payload as Int16 samples WITHOUT aliasing a
+// misaligned backing store. A websocket frame's payload is a subarray of the
+// receiver's read buffer, so its byteOffset is routinely ODD — `ws` advances
+// the offset by each frame's payload plus its 2–14 byte header — and
+// `new Int16Array(buffer, byteOffset, …)` THROWS a RangeError on an odd
+// offset rather than failing soft. The caller's catch would swallow that and
+// the frame's audio would simply vanish from the endpointer, so copy the
+// bytes on the misaligned path instead; a 640-byte copy per 20 ms frame is
+// negligible next to STT. A trailing odd byte is truncated either way.
+const toInt16Samples = (audio) => {
+  if (!Buffer.isBuffer(audio) && !ArrayBuffer.isView(audio)) {
+    if (!(audio instanceof ArrayBuffer)) return new Int16Array(0);
+    return new Int16Array(audio, 0, Math.floor(audio.byteLength / 2));
+  }
+  const samples = Math.floor(audio.byteLength / 2);
+  if (audio.byteOffset % 2 === 0) return new Int16Array(audio.buffer, audio.byteOffset, samples);
+  return new Int16Array(audio.buffer.slice(audio.byteOffset, audio.byteOffset + samples * 2));
 };
 
 export const registerVoiceHandlers = (socket) => {
@@ -398,7 +424,7 @@ export const registerVoiceHandlers = (socket) => {
   // `runTurn` utterances the microphone produces, and the destination of the
   // reply, which is played into the call rather than out of the speakers.
   // ---------------------------------------------------------------------------
-  const call = { endpointer: null, busy: false, ctrl: null };
+  const call = { endpointer: null, busy: false, ctrl: null, openingLine: '', openingLineFailures: 0 };
 
   // Speak the line the caller was rung to hear, once, as soon as the far end
   // picks up. Without this a mind-placed call connects to silence and the user
@@ -408,14 +434,32 @@ export const registerVoiceHandlers = (socket) => {
     // flight would drop it for good. Leaving it pending means the next state
     // emit (that turn's own markListening) retries it.
     if (call.busy) return;
-    const line = takeCallOpeningLine();
+    const line = peekCallOpeningLine();
     if (!line) return;
+    // A different line means a different call — restart the failure budget.
+    if (call.openingLine !== line) {
+      call.openingLine = line;
+      call.openingLineFailures = 0;
+    }
+    // Retrying on every later state emit is free while the provider is merely
+    // slow, but a provider that is down would retry for the life of the call;
+    // stop after a bounded number of attempts at the same line.
+    if (call.openingLineFailures >= OPENING_LINE_MAX_ATTEMPTS) return;
     call.busy = true;
     markSpeaking();
     try {
       const { wav, latencyMs } = await synthesize(line);
       socket.emit('voice:call:tts', { sentence: line, wav, latencyMs });
+      // Consume only now that the line has actually been delivered. Clearing
+      // it before synthesize resolved is what turned one TTS failure into a
+      // call that connects to silence for good.
+      clearCallOpeningLine();
       recordTurn('assistant', line);
+    } catch (error) {
+      // Deliberately does NOT clear: the line stays pending so the
+      // markListening() below re-broadcasts and this retries it.
+      call.openingLineFailures += 1;
+      console.error(`❌ voice call: opening line attempt ${call.openingLineFailures}/${OPENING_LINE_MAX_ATTEMPTS} failed: ${error.message}`);
     } finally {
       call.busy = false;
       markListening();
@@ -425,8 +469,9 @@ export const registerVoiceHandlers = (socket) => {
   const emitCallState = (snapshot) => {
     socket.emit('voice:call:state', snapshot);
     // 'listening' is the first state the poll reaches once the helper reports a
-    // connected call. `takeCallOpeningLine` is consume-once, so the repeated
-    // state emits this broadcast produces cannot repeat the line.
+    // connected call. The line is consumed only on a delivery that succeeded,
+    // so the repeated state emits this broadcast produces retry a failed line
+    // and cannot repeat a delivered one.
     if (snapshot?.state === 'listening') {
       deliverOpeningLine().catch((err) => console.error(`❌ voice call: opening line failed: ${err.message}`));
     }
@@ -509,9 +554,7 @@ export const registerVoiceHandlers = (socket) => {
       const { pcm } = payload || {};
       const bytes = audioByteLength(pcm);
       if (!bytes || bytes > MAX_CALL_FRAME_BYTES) return;
-      const view = Buffer.isBuffer(pcm) || ArrayBuffer.isView(pcm)
-        ? new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2))
-        : new Int16Array(pcm);
+      const view = toInt16Samples(pcm);
 
       if (asCallHost) {
         const utterance = call.endpointer.push(view);

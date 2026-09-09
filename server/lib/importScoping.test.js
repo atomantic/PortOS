@@ -39,6 +39,20 @@ const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs
 // Each row: the entry that was narrowed, the module it must no longer
 // statically reach, and why the entry only ever needed a slice of it.
 const NARROWED = [
+  ['services/mtplxModelManager.js', 'services/huggingFaceCatalog.js',
+    'reads repository ages through shared metadata without catalog selection'],
+  ['services/huggingFaceMetadata.js', 'services/pipeline/musicGen.js',
+    'owns Hub transport and caching independently of audio rendering'],
+  ['lib/providerFamilies.js', 'lib/grok.js',
+    'shares browser-safe family identity without Grok filesystem helpers'],
+  ['services/promptSections/instructions.js', 'services/taskScheduleRegistry.js',
+    'needs task names, which scheduledTaskTypes.js declares'],
+  ['services/agentAppWorkspace.js', 'services/promptRunner.js',
+    'resolves app records without AI-backed JIRA title generation'],
+  ['services/agentAppWorkspace.js', 'services/jira.js',
+    'reads workspace metadata without ticket creation'],
+  ['services/agentAppWorkspace.js', 'services/agentPromptBuilder.js',
+    'owns workspace resolution independently of prompt assembly'],
   ['services/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
     'loads version and catalog parsers only when probing a harness'],
   ['lib/db.js', 'lib/db/schema/index.js',
@@ -61,6 +75,8 @@ const NARROWED = [
     'needs inferTuiCommand, which providerVendors.js declares'],
   ['services/voice/tools/pipeline.js', 'services/pipeline/issues.js',
     'needs NAVIGABLE_STAGE_IDS, which issuesShared.js declares'],
+  ['services/cosTaskIntake.js', 'lib/validation.js',
+    'needs SWARM_COUNT_* and the reviewer normalizers, which cosValidation.js / reviewerConfig.js declare'],
 ];
 
 describe('narrowed imports stay narrow (#6009)', () => {
@@ -71,6 +87,11 @@ describe('narrowed imports stay narrow (#6009)', () => {
   // Positive controls. Without these the negatives above would also pass if
   // `staticImportClosure` stopped resolving these files at all.
   it('still sees the modules the narrowed entries were pointed AT', () => {
+    expect(reaches('services/mtplxModelManager.js', 'services/huggingFaceMetadata.js')).toBe(true);
+    expect(reaches('services/huggingFaceCatalog.js', 'services/huggingFaceMetadata.js')).toBe(true);
+    expect(reaches('services/huggingFaceMetadata.js', 'services/huggingFaceRepoCache.js')).toBe(true);
+    expect(reaches('services/promptSections/instructions.js', 'lib/scheduledTaskTypes.js')).toBe(true);
+    expect(reaches('services/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('lib/pipelineValidation.js', 'lib/editorial/checkInfra/taxonomy.js')).toBe(true);
     expect(reaches('services/apps.js', 'lib/cosValidation.js')).toBe(true);
     expect(reaches('services/memoryEmbeddings.js', 'services/memoryConfig.js')).toBe(true);
@@ -283,7 +304,24 @@ describe('deferred imports stay deferred (#6156)', () => {
 // and it pulls in nothing new (its only import, `generationModes.js`, was
 // already in every one of them). A leaf with nothing behind it to defer is the
 // tolerated shape. The allowance had drifted to ~30 again, so restore the ~1.5k.
-const MAX_STATIC_INSTANTIATIONS = 98500;
+//
+// #6617 is that shape once more: collapsing `runAgentSpawn`'s eight hand-copied
+// block-and-bail epilogues into one helper meant lifting the steps they were
+// tangled with out of the orchestrator — `lib/publicReviewSpawnGate.js`,
+// `lib/agentRegistrationRecord.js`, `lib/taskGenerationOverrides.js` and
+// `services/publicReviewSpawnInput.js`. Measured 98,642 (+142 over main's
+// 98,500): four modules appearing as +1 each in the closures that already
+// reached `agentLifecycle.js`, pulling in nothing those closures lacked. The
+// one edge that WOULD have been new — `agentRegistrationRecord.js` reaching
+// `normalizeReviewers` through the 123-module `validation.js` catch-all — is
+// narrowed to its declaring leaf, `reviewerConfig.js`, so it contributes
+// nothing. Restore the ~1.5k allowance.
+// Beeper adds 22 server suites (1,045 instantiations) and 933 instantiations
+// across existing suites, primarily dependency-free validation/attachment
+// leaves. Measured against current main: 99,794 -> 101,772. No new heavy eager
+// subtree is introduced; retain the standard roughly 1,500 allowance.
+const MAX_STATIC_INSTANTIATIONS = 103272;
+
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
 const serverTestFiles = (dir = SERVER_DIR, out = []) => {
@@ -371,4 +409,13 @@ it('keeps Video compilation independent of project storage and execution', () =>
   expect(closure.has(abs('services/creativeDirector/projectsLogic.js'))).toBe(false);
   expect(closure.has(abs('services/creativeDirector/videoExecution.js'))).toBe(false);
   expect(closure.has(abs('lib/validation.js'))).toBe(false);
+});
+
+describe('shared provider type leaf', () => {
+  it('keeps provider models independent of the type leaf and browser-safe', () => {
+    expect(reaches('lib/providerModels.js', 'lib/providerTypes.js')).toBe(false);
+    const closure = staticImportClosure(abs('lib/providerTypes.js'));
+    expect(closure.packages.size).toBe(0);
+    expect(reaches('lib/providerTypes.js', 'lib/providerModels.js')).toBe(true);
+  });
 });

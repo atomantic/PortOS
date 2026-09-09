@@ -355,7 +355,14 @@ describe('refusal paths', () => {
 describe('built-in agent task invocation', () => {
   const uxStep = () => step({
     taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' },
-    overrides: { effort: 'high' },
+    overrides: { effort: 'high', params: { fileIssues: false } },
+  });
+
+  it('stamps a manual maintenance run id on the request only when one is given', async () => {
+    await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate, maintenanceRunId: 'maint-1' });
+    expect(state.triggered[0].options.burn).toMatchObject({ family: 'grok', stepId: 'step-1', maintenanceRunId: 'maint-1' });
+    await invokeQuotaBurnStep({ step: uxStep(), family: grok, candidate });
+    expect(state.triggered[1].options.burn).not.toHaveProperty('maintenanceRunId');
   });
 
   it('routes through the schedule\'s on-demand lane with quota-burn provenance', async () => {
@@ -372,10 +379,11 @@ describe('built-in agent task invocation', () => {
           limitingResetAt: candidate.limitingResetAt,
           // The RESOLVED provider, and the family's TUI at that — an unpinned
           // step must not fall through to whatever the daemon is running.
-          // The step's effective run params ride along too: they have to reach
+          // Only explicit run params ride along; saved global defaults must not
+          // overwrite the app's own metadata. Explicit false must reach
           // the PROMPT, so the engines hand them to the generator as
           // `runOverrides` before the mode banner is chosen (#6381).
-          overrides: { providerId: 'grok-tui', model: 'saved-model', effort: 'high', params: { fileIssues: true, depth: 'full' } },
+          overrides: { providerId: 'grok-tui', model: 'saved-model', effort: 'high', params: { fileIssues: false } },
         },
       },
     }]);

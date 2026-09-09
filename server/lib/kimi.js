@@ -44,6 +44,7 @@
  * parses kimi's stdout programmatically today, so `text` stays the default.
  */
 
+import { isCliProvider, isTuiProvider } from './providerTypes.js';
 import { argvHasFlag, commandBasename, hasModelFlag } from './providerModels.js';
 
 const NOOP_CLEANUP = () => {};
@@ -81,13 +82,13 @@ export function isKimiCommand(command) {
 /** True for the CLI (headless) Kimi provider. */
 export function isKimiCliProvider(provider) {
   return provider?.id === KIMI_CLI_ID
-    || (provider?.type === 'cli' && isKimiCommand(provider?.command));
+    || (isCliProvider(provider) && isKimiCommand(provider?.command));
 }
 
 /** True for the TUI (interactive) Kimi provider. */
 export function isKimiTuiProvider(provider) {
   return provider?.id === KIMI_TUI_ID
-    || (provider?.type === 'tui' && isKimiCommand(provider?.command));
+    || (isTuiProvider(provider) && isKimiCommand(provider?.command));
 }
 
 /**

@@ -41,7 +41,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiApps.js` | App CRUD + PM2 ops (start/stop/restart) + local open actions (editor, folder, Xcode) + `getAppIssues` (open GitHub/GitLab issues for the Issues tab). |
 | `apiWorkspaceContexts.js` | Per-project working-context save/restore (branch, shells, tasks). |
 | `apiAccounts.js` | Platform accounts. |
-| `apiAgents.js` | Running-agent process management, CoS run-event diagnostics, and persistent-mind conversation, lifecycle, context, and runtime-telemetry calls. |
+| `apiAgents.js` | Running-agent process management, CoS run-event diagnostics, the CoS task schedule (intervals, on-demand triggers, manual maintenance runs via `getMaintenanceRuns`/`startMaintenanceRun`/`stopMaintenanceRun`/`resumeMaintenanceRun`), and persistent-mind conversation, lifecycle, context, and runtime-telemetry calls. |
 | `apiCommands.js` | CLI command dispatch. |
 | `apiDashboard.js` | Dashboard state. |
 | `apiDatabase.js` | Database introspection. |
@@ -91,6 +91,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiX.js` | X account diagnostics, public post metrics, review-gated drafts, and manual browser handoffs. |
 | `apiContacts.js` | macOS Contacts sync + identity resolve + Tribe enrich (#2415). |
 | `apiSignal.js` | Signal Desktop ingestion status / setup-check / sync. |
+| `apiBeeper.js` | Beeper Desktop bridge: status card and live connectivity check (#30), the connect flow (#31) — OAuth start, paste-a-token, disconnect — the mirrored chat surface (#35): conversations, thread pages, rail networks, archive/low-priority — the durable send outbox (#36): create an entry, send it (with the first-contact confirmation), list a conversation's entries, clear the runaway breaker; write paths never retry — and the attachment byte mirror (#37): `beeperAttachmentUrl` (a relative `/api/...` src, so an `<img loading="lazy">` IS the fetch-on-view), `fetchBeeperAttachment` ("fetch anyway"), `setBeeperAttachmentKeep`, the backfill census + run, and the per-conversation mirror purge. |
 | `apiSpotify.js` | Spotify OAuth + listening-history and playlist-library sync. |
 | `apiYoutube.js` | YouTube watch-history scrape, playlist/video library sync, and setup check. |
 | `apiPersonalities.js` | Agent personality profiles. |

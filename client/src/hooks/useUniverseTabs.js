@@ -5,6 +5,7 @@ import {
   TAB_BIBLE,
   TAB_CAST,
   TAB_COMPOSITES,
+  TAB_GRAPH,
   TAB_OBJECTS,
   TAB_OTHER,
   TAB_PLACES,
@@ -31,7 +32,7 @@ export default function useUniverseTabs(categories) {
   const requestedTab = searchParams.get('tab');
   const isValidTab = (tab) => (
     tab === TAB_BIBLE || tab === TAB_CAST || tab === TAB_PLACES || tab === TAB_OBJECTS
-    || tab === TAB_COMPOSITES || tab === TAB_RENDER
+    || tab === TAB_COMPOSITES || tab === TAB_RENDER || tab === TAB_GRAPH
     || (tab === TAB_OTHER && hasOtherBuckets)
   );
   const activeTab = isValidTab(requestedTab) ? requestedTab : TAB_BIBLE;
@@ -85,7 +86,8 @@ export default function useUniverseTabs(categories) {
   // explicit allow, the chip's `setBucket(BUCKET_CANON)` flashed in the URL
   // then immediately got stripped by this effect, hiding the canon-only view.
   // Other tab buckets must validate against `bucketsByKind.other`; non-trunk
-  // non-Other tabs (Bible / Composites / Render) have no valid bucket scope.
+  // non-Other tabs (Bible / Composites / Render / Graph) have no valid bucket
+  // scope.
   useEffect(() => {
     if (!activeBucket) return;
     const trunk = TRUNK_BY_ID[activeTab];

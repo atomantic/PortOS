@@ -7,6 +7,7 @@
  */
 
 import { PLANNED_WORK_GUIDANCE, LI_PROPOSAL_PLAYBOOK, LI_PLAYBOOK_GUIDANCE } from './constants.js';
+import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../../lib/dispatchLabels.js';
 import { isScopeAllowed } from './config.js';
 import { extractSlugFromBody } from './dedup.js';
 
@@ -169,7 +170,9 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? `\n### liHardExclusions\n${hardExclusionNotice.trim()}\n`
     : '';
 
-  return `You are the Layered Intelligence reasoner for the app "${app.name}". Your purpose is to turn evidence about how THIS app performs against its OWN goals${isPortos ? '' : ', not how well PortOS\'s tooling manages it'} into AT MOST ONE decision-complete tracker issue that improves the app. Start with the app's own performance metrics (user success, KPIs, production telemetry), not a generic code-quality audit. You never write code; you return structured JSON that a deterministic system validates, deduplicates, and files. Optional \`model\` / \`effort\` dispatch hints and \`goodFirstIssue\` / \`helpWanted\` labels are independent of each other and of \`complexity\` — set them only when justified; omit rather than guessing; never stamp medium on both axes; never mark a wide mechanical sweep as a good first issue.
+  return `You are the Layered Intelligence reasoner for the app "${app.name}". Your purpose is to turn evidence about how THIS app performs against its OWN goals${isPortos ? '' : ', not how well PortOS\'s tooling manages it'} into AT MOST ONE decision-complete tracker issue that improves the app. Start with the app's own performance metrics (user success, KPIs, production telemetry), not a generic code-quality audit. You never write code; you return structured JSON that a deterministic system validates, deduplicates, and files. Choose the proposal's model, effort, and contributor flags using the shared contract below. Return JSON only; the deterministic filer performs the label commands and planner attribution. Do not execute them yourself.
+
+${MANDATORY_DISPATCH_HINT_GUIDANCE}
 
 Decision path (follow in order):
 1. If a metric shows a meaningful gap, identify the single highest-value app improvement that can plausibly move that metric and file that proposal.
@@ -200,10 +203,10 @@ Respond with JSON only (no markdown fences):
     "value": "why this is the single highest-value item now",
     "complexity": "trivial | moderate | complex",   // honest effort/risk estimate
     "safe": false,           // true ONLY if a coding agent could implement it end-to-end with no regression/data-loss risk
-    "model": "light | medium | heavy",   // optional dispatch capability; omit if unjustified. Independent of complexity.
-    "effort": "low | medium | high | xhigh | max",   // optional reasoning budget; independent of model AND of complexity
+    "model": "light | medium | heavy | ultra",   // REQUIRED dispatch capability. Independent of complexity.
+    "effort": "low | medium | high | xhigh | max",   // REQUIRED reasoning budget; independent of model AND of complexity
     "goodFirstIssue": false, // true ONLY if a new contributor can ship this without deep repo context (not implied by model:light)
-    "helpWanted": false      // true ONLY if extra hands are welcome and the body is scoped enough to pick up cold
+    "helpWanted": false      // true ONLY under the shared help wanted criteria above
   },
   "pause": {                 // null if not pausing
     "blockOnIssue": "this" or <existing issue number>,

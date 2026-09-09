@@ -28,15 +28,17 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 `DEFAULT_EXCLUDES` (in `backup.js`) skips ephemeral/cache data and large re-downloadable assets — all anchored with a leading `/` (rsync filter syntax). Two tiers:
 
 - **Non-overridable** (`overridable: false`): browser CDP profile, agent worktrees — caches with no irreplaceable user data; never backed up.
-- **Overridable** (`overridable: true`): LoRA weight files, cloned repos, reference repos, browser downloads — re-downloadable; the user can opt back in from the Backup settings UI via `disabledDefaultExcludes`.
+- **Overridable** (`overridable: true`): LoRA weight files, cloned repos, reference repos, browser downloads — re-downloadable; the user can disable these built-in exclusion rules from the Backup settings UI via `disabledDefaultExcludes`.
 
 The effective exclude list is computed by the pure `computeEffectiveExcludes()` helper (unit-tested in `backup.test.js`). The scheduled cron handler in `backupScheduler.js` re-reads settings on every run, so `destPath`, `excludePaths`, `disabledDefaultExcludes`, and `enabled` all take effect on the next run without a restart. See [Scheduling & status](#scheduling--status) for how the cron registration itself tracks settings.
 
-#### Why every exclude must be anchored with a leading `/`
+#### Why every default exclude must be anchored with a leading `/`
 
 `DEFAULT_EXCLUDES` is **rsync filter syntax** — the leading `/` means "relative to the transfer root". Without the anchor, `loras/*.safetensors` also matches any `loras/` directory nested anywhere under `data/`, silently dropping unrelated user data (e.g. `brain/.../loras/`). An unanchored pattern is a data-loss bug, not a style nit.
 
-The two `overridable` tiers are enforced, not advisory. A hand-edited `settings.json` that lists a non-overridable path in `disabledDefaultExcludes` is silently dropped server-side; `computeEffectiveExcludes()` enforces both the overridable allow-list and `Array.isArray` guards for hand-edited settings. The Backup tab's toggle UI uses a `shadowsDefault()` helper that also catches broader custom patterns (`loras/`, `loras/**`, `/cos/`) so the "included" state never lies about rsync's actual behavior.
+The two `overridable` tiers are enforced, not advisory. A hand-edited `settings.json` that lists a non-overridable path in `disabledDefaultExcludes` is silently dropped server-side; `computeEffectiveExcludes()` enforces both the overridable allow-list and `Array.isArray` guards for hand-edited settings. The Backup tab switches describe default rule state: switching on disables that default exclusion, and switching off re-enables it. The summary counts enabled and disabled default rules, not included files.
+
+Additional Exclude Paths is independent: toggling a default never removes custom patterns, and custom rsync patterns remain accepted even when they overlap defaults. Additional rules still apply when a default is disabled, so disabling `/loras/*.safetensors` does not guarantee weights will be backed up: `*.safetensors` or `/lo*/` can still exclude them. `computeEffectiveExcludes()` produces the filter list; rsync alone decides which paths match. The UI does not predict snapshot contents.
 
 ## The Postgres dump is mandatory, not optional
 
@@ -87,6 +89,20 @@ Separate from snapshot restore: `server/routes/database.js` can copy data **betw
 - Daily backups are driven by `backupScheduler.js` via the `backup-daily` cron event; `getNextRunTime()` reports the next run.
 - **The registration tracks settings — no restart needed.** `syncBackupSchedule()` runs at boot *and* on every settings save (subscribed to `settingsEvents`' `settings:updated`), so enabling backups or setting `destPath` when scheduling was previously inactive registers the cron immediately, editing `cronExpression` re-registers it, and disabling backups (or clearing `destPath`) cancels it. A save that doesn't change the registration inputs (cron expression, timezone, active/inactive) is a no-op — `destPath` and the exclude lists are re-read by the handler per run, so changing them never churns the registration.
 - `GET /api/backup/status` surfaces the persisted state including the last `pgBackup` outcome, so the Backup settings tab shows whether the last DB dump succeeded, its size, and table count.
+
+### Omitted schedule fields
+
+The backup settings slice is stored **sparsely** — an install where the user only ever typed a destination has no `enabled` and no `cronExpression` on disk. `server/lib/backupConfig.js` is the single module that says what those omissions mean, and every consumer resolves through it:
+
+| Stored | Effective |
+| --- | --- |
+| `enabled` absent | **enabled** — an omitted toggle has never meant "off" on the server, and changing that would silently stop nightly backups on existing installs |
+| `cronExpression` absent or blank | `0 0 * * *` (midnight, in the user's timezone) |
+| `destPath` absent or blank | **nothing is scheduled**, whatever `enabled` says |
+
+`GET /api/settings` projects these effective values over the stored slice, so the Backup settings tab renders exactly what the scheduler will do. **The client owns no fallback of its own** — it used to read the same sparse config as "disabled at 02:00" while the scheduler read it as "enabled at midnight", so saving an unrelated preference wrote that misreading back and cancelled a live schedule (#6632). If a settings response ever arrives without a resolved schedule the tab shows a load error instead of a form, rather than saving invented values.
+
+This is **read-time resolution only**: nothing on disk changes, sparse configurations stay valid, and older clients can keep submitting the same partial shape.
 
 ## See also
 

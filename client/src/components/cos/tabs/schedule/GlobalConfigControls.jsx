@@ -16,6 +16,7 @@ import useTaskModelPins from '../../../../hooks/useTaskModelPins';
 import { effectiveModelFor, selectableProviders } from '../../../../utils/providers';
 import EffortSelect from '../../EffortSelect';
 import PromptEditor from './PromptEditor';
+import TaskDependencyPicker from './TaskDependencyPicker';
 import RunTaskButton from './RunTaskButton';
 import TaskDataInputs from '../../TaskDataInputs';
 import { INTERVAL_DESCRIPTIONS, PERPETUAL_DESCRIPTION, toggleMetadataField, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata } from './scheduleConstants';
@@ -50,6 +51,11 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   const [selectedType, setSelectedType] = useState(config.type);
   const [editingPrompt, setEditingPrompt] = useState(false);
   const [promptValue, setPromptValue] = useState(config.prompt || '');
+  const labelsDraft = useFieldDraft((config.labels || []).join(', '), async next => {
+    setUpdating(true);
+    await onUpdate(taskType, { labels: next.split(',').map(label => label.trim()).filter(Boolean) })
+      .finally(() => setUpdating(false));
+  });
   const descriptionDraft = useFieldDraft(
     config.description || '',
     async (next) => {
@@ -257,6 +263,13 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           All scheduled runs are paused for this task
         </Banner>
       )}
+
+      <FormField label="Custom labels" labelClassName="text-sm text-gray-400 block mb-2">
+        <input id={`schedule-labels-${taskType}`} value={labelsDraft.value}
+          onChange={labelsDraft.onChange} onBlur={labelsDraft.onBlur} disabled={updating}
+          placeholder="maintenance, frontend" className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm" />
+        <p className="text-xs text-gray-500 mt-1">Comma-separated; up to 20 labels, 40 characters each. Shipped labels remain available. Saves on blur.</p>
+      </FormField>
 
       <FormField label="Summary / byline" labelClassName="text-sm text-gray-400 block mb-2">
         <input
@@ -706,35 +719,38 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       </div>
 
       {allTaskTypes?.length > 1 && (
-        <div>
-          <span className="text-sm text-gray-400 block mb-2">Run After (dependencies)</span>
-          <div className="flex flex-wrap gap-2">
-            {allTaskTypes.filter(t => t !== taskType).map(dep => {
-              const isSelected = (config.runAfter || []).includes(dep);
-              return (
-                <button
-                  key={dep}
-                  onClick={() => {
-                    const current = config.runAfter || [];
-                    const updated = isSelected
-                      ? current.filter(d => d !== dep)
-                      : [...current, dep];
-                    onUpdate(taskType, { runAfter: updated.length > 0 ? updated : null });
-                  }}
-                  disabled={updating}
-                  className={`text-xs px-2 py-1 rounded border transition-colors ${
-                    isSelected
-                      ? 'bg-port-accent/20 border-port-accent/50 text-port-accent'
-                      : 'bg-port-card border-port-border text-gray-400 hover:border-gray-500'
-                  }`}
-                >
-                  {dep}
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-xs text-gray-500 mt-1">This task will wait for selected tasks to complete first within the same cycle</p>
-        </div>
+        <>
+          {/* Advisory first: it answers "which of these do I run first?", which
+              is the question most users open this panel with. The enforced gate
+              below it is the rarer, heavier choice. */}
+          <TaskDependencyPicker
+            label="Suggested order (advisory)"
+            hint="Tasks worth running before this one. Advisory only — nothing is blocked, and this task still runs whether or not they have. Use Run After below for a hard gate."
+            taskType={taskType}
+            options={allTaskTypes}
+            value={config.suggestedAfter || []}
+            disabled={updating}
+            onChange={(next) => {
+              setUpdating(true);
+              // Sent as-is: an emptied list saves `[]`, which the server reads
+              // back as a deliberate clear rather than re-inheriting the
+              // shipped order (see normalizeSuggestedAfter).
+              onUpdate(taskType, { suggestedAfter: next }).finally(() => setUpdating(false));
+            }}
+          />
+          <TaskDependencyPicker
+            label="Run After (enforced dependencies)"
+            hint="This task waits for the selected tasks to complete first within the same cycle."
+            taskType={taskType}
+            options={allTaskTypes}
+            value={config.runAfter || []}
+            disabled={updating}
+            onChange={(next) => {
+              setUpdating(true);
+              onUpdate(taskType, { runAfter: next.length > 0 ? next : null }).finally(() => setUpdating(false));
+            }}
+          />
+        </>
       )}
 
       <div className="flex gap-2">

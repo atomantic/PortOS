@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useSearchParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 import { Trash2, Search, X, ChevronDown, MessageSquare } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -40,6 +40,18 @@ const needsAgentFeedback = (agent) => {
 };
 
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, providersLoaded, apps }) {
+  const { agentId } = useParams();
+  const [focusedAgent, setFocusedAgent] = useState(null);
+  const [focusLoading, setFocusLoading] = useState(false);
+  useEffect(() => {
+    if (!agentId) return;
+    let cancelled = false;
+    setFocusedAgent(null);
+    setFocusLoading(true);
+    api.getCosAgent(agentId, { silent: true }).then(agent => { if (!cancelled) setFocusedAgent(agent); })
+      .catch(() => {}).finally(() => { if (!cancelled) setFocusLoading(false); });
+    return () => { cancelled = true; };
+  }, [agentId]);
   const [searchParams, setSearchParams] = useSearchParams();
   const [resumingAgent, setResumingAgent] = useState(null);
   const [relaunchingAgent, setRelaunchingAgent] = useState(null);
@@ -241,6 +253,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
     [allCompleted]
   );
 
+  const selectedAgent = agents.find(agent => agent.id === agentId) || (focusedAgent?.id === agentId ? focusedAgent : null);
   const hasMoreDates = dateBuckets.some(d => !loadedDates.has(d.date));
   const remainingCount = dateBuckets
     .filter(d => !loadedDates.has(d.date))
@@ -248,6 +261,14 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
 
   return (
     <div className="space-y-6">
+      {agentId && <section aria-label="Selected agent" className="space-y-2">
+        <h3 className="text-lg font-semibold">Selected agent</h3>
+        {selectedAgent ? <AgentCard key={agentId} agent={selectedAgent}
+          initiallyExpanded liveOutput={liveOutputs[agentId]} completed={selectedAgent.status === 'completed'}
+          paused={selectedAgent.status === 'paused'} durations={durations} onFeedbackChange={handleFeedbackChange}
+          onPause={handlePause} onKill={handleKill} onResume={handleResumeClick} onDelete={handleDelete} onRelaunch={handleRelaunchClick} />
+          : <p role="status">{focusLoading ? 'Loading agent…' : 'Agent not found or unavailable.'}</p>}
+      </section>}
       {/* Active Agents */}
       <div>
         <div className="flex items-center justify-between mb-3">
@@ -394,12 +415,12 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
               {filteredCompleted.length} of {allCompleted.length} loaded agents shown
             </div>
           )}
-          <div className="space-y-2">
+          <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-[repeat(auto-fit,minmax(32rem,1fr))]">
             {filteredCompleted.map(agent => (
               <AgentCard key={agent.id} agent={agent} completed onDelete={handleDelete} onResume={handleResumeClick} onFeedbackChange={handleFeedbackChange} />
             ))}
             {filteredCompleted.length === 0 && (feedbackFilter !== 'all' || searchQuery) && (
-              <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
+              <div className="col-span-full bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
                 {feedbackFilter === 'needs-feedback' && !searchQuery
                   ? 'All loaded agent runs have feedback.'
                   : `No loaded agents match "${searchQuery}"`}
@@ -414,7 +435,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, p
               <button
                 onClick={handleLoadMore}
                 disabled={loadingMore}
-                className="w-full py-2 text-sm text-port-accent hover:text-white bg-port-card border border-port-border rounded-lg transition-colors flex items-center justify-center gap-1 disabled:opacity-50"
+                className="col-span-full w-full py-2 text-sm text-port-accent hover:text-white bg-port-card border border-port-border rounded-lg transition-colors flex items-center justify-center gap-1 disabled:opacity-50"
               >
                 {loadingMore ? (
                   <BrailleSpinner text="Loading" />

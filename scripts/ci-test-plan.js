@@ -714,15 +714,16 @@ function fullPlan(changedFiles, reason, options) {
   }, options);
 }
 
-const gitLines = (args) => execFileSync('git', args, { encoding: 'utf8' })
-  .split('\n')
-  .map((line) => line.trim())
+// Git's display output quotes non-ASCII/control characters; trimming also
+// changes valid paths. Read raw NUL-delimited paths so selectors stay exact.
+const gitPaths = (args) => execFileSync('git', args, { encoding: 'utf8' })
+  .split('\0')
   .filter(Boolean);
 
 /** Tracked test files whose text matches `pattern`; `git grep` exit 1 is "none". */
 const gitGrepFiles = (pattern, pathspecs) => {
   try {
-    return gitLines(['grep', '-l', '-E', pattern, '--', ...pathspecs]);
+    return gitPaths(['grep', '-z', '-l', '-E', pattern, '--', ...pathspecs]);
   } catch (err) {
     if (err.status === 1) return [];
     throw err;
@@ -788,8 +789,8 @@ function main() {
   }
   const changedFiles = forceFull
     ? []
-    : gitLines(['diff', '--name-only', '--diff-filter=ACMRD', `${base}...HEAD`]);
-  const trackedFiles = gitLines(['ls-files']);
+    : gitPaths(['diff', '-z', '--name-only', '--diff-filter=ACMRD', `${base}...HEAD`]);
+  const trackedFiles = gitPaths(['ls-files', '-z']);
   const appDiff = forceFull || !changedFiles.includes('client/src/App.jsx')
     ? null
     : execFileSync('git', ['diff', '--unified=0', `${base}...HEAD`, '--', 'client/src/App.jsx'], { encoding: 'utf8' });

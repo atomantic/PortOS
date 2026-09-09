@@ -35,13 +35,24 @@ vi.mock(import('../services/voice/callSession.js'), async (importOriginal) => {
   return { ...actual, detachHost: vi.fn(actual.detachHost) };
 });
 
+// Partial-mock the endpointer factory so the frame-alignment tests can observe
+// exactly which sample views voice:call:audio handed to endpointer.push().
+// The default implementation is still the real endpointer, so every other case
+// in this file exercises genuine endpointing.
+vi.mock(import('../services/voice/callEndpointing.js'), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, createCallEndpointer: vi.fn(actual.createCallEndpointer) };
+});
+
 const { truncateOnWordBoundary, registerVoiceHandlers } = await import('./voice.js');
+const { createCallEndpointer } = await import('../services/voice/callEndpointing.js');
 const {
   getVoiceOutputSocket,
   emitVoiceOutput,
   __resetVoiceOutput,
 } = await import('../services/voice/voiceOutput.js');
 const { transcribe } = await import('../services/voice/stt.js');
+const { synthesize } = await import('../services/voice/tts.js');
 const { runTurn } = await import('../services/voice/pipeline.js');
 const {
   attachHost: attachCallHost,
@@ -325,6 +336,10 @@ describe('call host opening line', () => {
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   beforeEach(() => {
+    // The failure cases below install rejecting implementations; restore the
+    // shared stub so ordering between cases cannot matter.
+    synthesize.mockReset();
+    synthesize.mockImplementation(async (text) => ({ wav: Buffer.from(`wav:${text}`), latencyMs: 1 }));
     __resetCallSession();
     __setCallSessionDeps({
       probe: vi.fn(async () => ({ state: 'connected' })),
@@ -354,6 +369,49 @@ describe('call host opening line', () => {
     await pollCall();
     await flush();
     expect(host.emitted.filter((e) => e.event === 'voice:call:tts')).toHaveLength(1);
+  });
+
+  it('retries the line on the next state broadcast when synthesis fails, and speaks it exactly once', async () => {
+    // A call bridge fails TTS routinely (provider down, rate-limited, timed
+    // out). Consuming the line before synthesize resolved left the call
+    // connected to permanent silence, because every later state emit found
+    // nothing pending to say.
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    await host.fire('voice:call:attach');
+
+    synthesize.mockRejectedValueOnce(new Error('tts provider unavailable'));
+
+    await startCall({ openingLine: 'This is PortOS about your backups.', origin: 'mind' });
+    await pollCall();
+    await flush();
+    await pollCall();
+    await flush();
+
+    const spoken = host.emitted.filter((e) => e.event === 'voice:call:tts');
+    expect(spoken).toHaveLength(1);
+    expect(spoken[0].payload.sentence).toBe('This is PortOS about your backups.');
+    // recordTurn ran only for the attempt that actually emitted the audio —
+    // the failed attempt must not leave a spoken turn in the transcript.
+    expect(getCallState().turns).toBe(1);
+  });
+
+  it('gives up on the line after three failed attempts rather than hammering a dead provider', async () => {
+    const host = makeFakeSocket();
+    registerVoiceHandlers(host);
+    await host.fire('voice:call:attach');
+
+    synthesize.mockRejectedValue(new Error('tts provider unavailable'));
+
+    await startCall({ openingLine: 'This is PortOS about your backups.', origin: 'mind' });
+    await pollCall();
+    await flush();
+    await pollCall();
+    await flush();
+
+    expect(synthesize).toHaveBeenCalledTimes(3);
+    expect(host.emitted.filter((e) => e.event === 'voice:call:tts')).toHaveLength(0);
+    expect(getCallState().turns).toBe(0);
   });
 
   it('says nothing extra on a call the user placed themselves', async () => {
@@ -646,5 +704,103 @@ describe('voice:capture socket handlers (meeting capture)', () => {
 
     releaseFirstTurn({});
     await flushMicrotasks();
+  });
+});
+
+describe('voice:call:audio frame alignment', () => {
+  // ~20 ms of 16 kHz mono, matching the call-host page's frame size.
+  const FRAME_SAMPLES = 320;
+  const FRAME_BYTES = FRAME_SAMPLES * 2;
+
+  const sourceSamples = () => {
+    const frame = new Int16Array(FRAME_SAMPLES);
+    for (let i = 0; i < FRAME_SAMPLES; i += 1) frame[i] = Math.round(Math.sin(i / 8) * 20000);
+    return frame;
+  };
+
+  // How `ws` actually hands a frame over: a subarray of the receiver's read
+  // buffer. The offset advances by each frame's payload PLUS its 2–14 byte
+  // header, so an odd byteOffset is the common case, not a corner case.
+  const frameAt = (byteOffset, byteLength = FRAME_BYTES) => {
+    const backing = Buffer.alloc(byteOffset + byteLength + 8);
+    Buffer.from(sourceSamples().buffer).copy(backing, byteOffset);
+    return backing.subarray(byteOffset, byteOffset + byteLength);
+  };
+
+  // The real endpointer, wrapped so a test can see exactly which sample views
+  // the handler pushed. `speaking` is a getter on the real object, so forward
+  // it rather than spreading (a spread would snapshot it once).
+  const realCreateCallEndpointer = createCallEndpointer.getMockImplementation();
+  const attachRecordingHost = async (pushed) => {
+    createCallEndpointer.mockImplementationOnce((...args) => {
+      const endpointer = realCreateCallEndpointer(...args);
+      return {
+        get speaking() { return endpointer.speaking; },
+        push(chunk) { pushed.push(chunk); return endpointer.push(chunk); },
+        flush: () => endpointer.flush(),
+        reset: () => endpointer.reset(),
+      };
+    });
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    await socket.fire('voice:call:attach');
+    return socket;
+  };
+
+  beforeEach(() => __resetCallSession());
+  afterEach(() => __resetCallSession());
+
+  it('decodes a frame that landed at an odd byteOffset instead of silently dropping its audio', async () => {
+    // Regression: the handler built its Int16Array view straight over the
+    // incoming Buffer's backing store, and `new Int16Array(buffer, byteOffset,
+    // …)` THROWS a RangeError on an odd offset. The handler's own catch
+    // swallowed it, so the frame's audio never reached the endpointer and a
+    // live call lost a large share of its samples with only console spam.
+    const pushed = [];
+    const socket = await attachRecordingHost(pushed);
+    const misaligned = frameAt(1);
+    expect(misaligned.byteOffset % 2).toBe(1);
+
+    socket.fire('voice:call:audio', { pcm: misaligned });
+
+    expect(pushed).toHaveLength(1);
+    // The copy must not shift or drop values: identical to the same bytes
+    // delivered at an aligned offset.
+    expect(Array.from(pushed[0])).toEqual(Array.from(sourceSamples()));
+  });
+
+  it('keeps an even-offset frame on the zero-copy path', async () => {
+    const pushed = [];
+    const socket = await attachRecordingHost(pushed);
+    const aligned = frameAt(2);
+
+    socket.fire('voice:call:audio', { pcm: aligned });
+
+    expect(pushed).toHaveLength(1);
+    expect(Array.from(pushed[0])).toEqual(Array.from(sourceSamples()));
+    // Same backing store — no copy was made for an already-aligned frame.
+    expect(pushed[0].buffer).toBe(aligned.buffer);
+    expect(pushed[0].byteOffset).toBe(aligned.byteOffset);
+  });
+
+  it('truncates a trailing odd byte at a misaligned offset rather than throwing', async () => {
+    const pushed = [];
+    const socket = await attachRecordingHost(pushed);
+
+    socket.fire('voice:call:audio', { pcm: frameAt(3, FRAME_BYTES + 1) });
+
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toHaveLength(FRAME_SAMPLES);
+    expect(Array.from(pushed[0])).toEqual(Array.from(sourceSamples()));
+  });
+
+  it('decodes a bare ArrayBuffer payload', async () => {
+    const pushed = [];
+    const socket = await attachRecordingHost(pushed);
+
+    socket.fire('voice:call:audio', { pcm: sourceSamples().buffer });
+
+    expect(pushed).toHaveLength(1);
+    expect(Array.from(pushed[0])).toEqual(Array.from(sourceSamples()));
   });
 });

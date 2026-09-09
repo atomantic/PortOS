@@ -107,7 +107,7 @@ export default function Drawer({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`fixed inset-y-0 right-0 z-50 w-full max-w-full ${resolvedWidth} bg-port-card border-l border-port-border shadow-2xl flex flex-col`}
+        className={`port-opaque-surface fixed inset-y-0 right-0 z-50 w-full max-w-full ${resolvedWidth} bg-port-card border-l border-port-border shadow-2xl flex flex-col`}
       >
         <header className="flex items-center justify-between px-4 py-3 border-b border-port-border">
           <div className="min-w-0 pr-2">

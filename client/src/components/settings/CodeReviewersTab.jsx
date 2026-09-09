@@ -10,16 +10,7 @@ import { reviewerModelsFromDefaults, reviewerModelsToDefaults, reviewerEffortsFr
 import {
   DEFAULT_REVIEWERS,
   DEFAULT_REVIEW_STOP_MODE,
-  MODEL_CAPABLE_CLI_REVIEWERS,
-  reviewerLabel,
 } from '../cos/constants';
-
-// The CLI reviewers named in the help text below, derived from the roster the
-// schema and `pickCodeReviewDefaults` generate from rather than spelled out — the
-// literal sentence drifted twice as reviewers shipped (#3839). Adding a reviewer
-// to MODEL_CAPABLE_CLI_REVIEWERS now updates this copy with no edit here.
-const CLI_REVIEWER_LIST = new Intl.ListFormat('en', { style: 'long', type: 'conjunction' })
-  .format(MODEL_CAPABLE_CLI_REVIEWERS.map(reviewerLabel));
 
 // Global Code Review Defaults — the chain the Review Loop uses when a task or
 // task-type config didn't pin its own reviewers. Owns the Settings › Code
@@ -124,7 +115,7 @@ export default function CodeReviewersTab() {
         <h2 className="text-base font-semibold text-white">Code Review Defaults</h2>
       </div>
       <p className="text-xs text-gray-500">
-        Default Review Loop reviewer chain — used by ad-hoc CoS tasks and task-type schedules that haven't pinned their own. Leave it empty to keep code review disabled by default. Local-LLM reviewers route the diff through PortOS's local code-review endpoint; the {CLI_REVIEWER_LIST} reviewers invoke their CLI directly. Each runs the model picked on its row — choose <span className="font-mono">Custom…</span> to type an id its catalog doesn't list, such as an installed Ollama model for an Ollama-backed Claude.
+        Choose providers and models for the default review chain used by CoS tasks and schedules without their own override. Leave the chain empty to disable code review by default. Provider reviews retain the selected provider's configuration; existing harness and GitHub reviewer choices remain available below. Choose <span className="font-mono">Custom…</span> on a reviewer row to enter a model absent from its catalog.
       </p>
 
       {loadError && (

@@ -8,9 +8,8 @@ vi.mock('../../services/api', () => ({
   updateSettings: vi.fn(),
 }));
 
-vi.mock('../../hooks/useReviewerModelOptions', () => ({
-  default: () => ({ ctxById: {} }),
-}));
+const pickerData = vi.hoisted(() => ({ current: { ctxById: {} } }));
+vi.mock('../../hooks/useReviewerModelOptions', () => ({ default: () => pickerData.current }));
 
 vi.mock('../ui/Toast', () => ({
   default: {
@@ -22,10 +21,43 @@ vi.mock('../ui/Toast', () => ({
 describe('CodeReviewersTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pickerData.current = { ctxById: {} };
   });
 
   afterEach(() => {
     cleanup();
+  });
+
+  it('adds an arbitrary enabled provider, saves its model, reloads it and clears the pin on removal', async () => {
+    pickerData.current = {
+      loaded: true,
+      providers: [
+        { id: 'example-gpu', name: 'Example GPU', type: 'api', enabled: true, models: ['coder-a', 'coder-b'] },
+        { id: 'disabled-api', name: 'Disabled API', type: 'api', enabled: false, models: ['other'] },
+      ],
+      optionsByReviewer: { 'provider:example-gpu': ['coder-a', 'coder-b'] },
+      freeText: { 'provider:example-gpu': true },
+    };
+    api.getCodeReviewDefaults.mockResolvedValue({ reviewers: ['copilot'], codexModel: 'legacy-model' });
+    api.updateSettings.mockResolvedValue({});
+    const view = render(<CodeReviewersTab />);
+    const provider = await screen.findByLabelText('Provider');
+    expect(screen.queryByRole('option', { name: 'Disabled API' })).not.toBeInTheDocument();
+    fireEvent.change(provider, { target: { value: 'example-gpu' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Model', exact: true }), { target: { value: 'coder-b' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider reviewer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(1));
+    const saved = api.updateSettings.mock.calls[0][0].codeReview;
+    expect(saved).toMatchObject({ reviewers: ['copilot', 'provider:example-gpu'], providerModels: { 'provider:example-gpu': 'coder-b' }, codexModel: 'legacy-model' });
+    view.unmount();
+    api.getCodeReviewDefaults.mockResolvedValue(saved);
+    render(<CodeReviewersTab />);
+    expect(await screen.findByLabelText('Model for Example GPU')).toHaveValue('coder-b');
+    fireEvent.click(screen.getByLabelText('Remove Example GPU'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save defaults' }));
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalledTimes(2));
+    expect(api.updateSettings.mock.calls[1][0].codeReview).toMatchObject({ reviewers: ['copilot'], providerModels: {} });
   });
 
   it('renders loading state initially and populates panel when fetch succeeds', async () => {

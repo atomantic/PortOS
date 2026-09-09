@@ -1,4 +1,4 @@
-import { useState, memo, useCallback, useId } from 'react';
+import { useState, memo, useCallback, useId, useRef } from 'react';
 import { Link } from 'react-router';
 import {HardDrive,
   ChevronDown,
@@ -14,6 +14,7 @@ import {HardDrive,
 import BrailleSpinner from './BrailleSpinner';
 import toast from './ui/Toast';
 import * as api from '../services/api';
+import { useBackupRun } from '../hooks/useBackupRun';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useTimeTick } from '../hooks/useTimeTick';
 import { equalByKeys, equalListByKeys } from '../lib/compareHelpers';
@@ -58,44 +59,73 @@ const HEALTH_STYLES = {
 // RestorePanel
 // ---------------------------------------------------------------------------
 
-function RestorePanel({ snapshot, onClose }) {
+function RestorePanel({ snapshot, onClose, restoring, onRestoreStateChange }) {
   const filterId = useId();
   const [filter, setFilter] = useState('');
-  const [preview, setPreview] = useState(null);
+  const [acceptedPreview, setAcceptedPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
-  const [restoring, setRestoring] = useState(false);
+  const previewGenerationRef = useRef(0);
+
+  const currentRequest = {
+    snapshotId: snapshot.id,
+    subdirFilter: filter.trim() || null,
+  };
+  const previewMatchesCurrentRequest = acceptedPreview
+    && acceptedPreview.request.snapshotId === currentRequest.snapshotId
+    && acceptedPreview.request.subdirFilter === currentRequest.subdirFilter;
+
+  const handleFilterChange = useCallback((event) => {
+    previewGenerationRef.current += 1;
+    setFilter(event.target.value);
+    setAcceptedPreview(null);
+    setPreviewing(false);
+  }, []);
 
   const handlePreview = useCallback(async () => {
-    setPreviewing(true);
-    setPreview(null);
-    const result = await api.restoreBackup({
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    const request = {
       snapshotId: snapshot.id,
+      subdirFilter: filter.trim() || null,
+    };
+    setPreviewing(true);
+    setAcceptedPreview(null);
+    const outcome = await api.restoreBackup({
+      ...request,
       dryRun: true,
-      subdirFilter: filter.trim() || null
-    }, { silent: true }).catch(err => {
-      toast.error(`Preview failed: ${err.message}`);
-      return null;
-    });
+    }, { silent: true }).then(
+      previewResult => ({ previewResult }),
+      previewError => ({ previewError }),
+    );
+
+    if (previewGenerationRef.current !== generation) return;
     setPreviewing(false);
-    if (result) setPreview(result);
+    if (outcome.previewError) {
+      toast.error(`Preview failed: ${outcome.previewError.message}`);
+      return;
+    }
+    if (outcome.previewResult) setAcceptedPreview({ request, result: outcome.previewResult });
   }, [snapshot.id, filter]);
 
   const handleRestore = useCallback(async () => {
-    setRestoring(true);
+    if (!previewMatchesCurrentRequest || restoring) return;
+
+    onRestoreStateChange(snapshot.id);
     const result = await api.restoreBackup({
-      snapshotId: snapshot.id,
+      ...acceptedPreview.request,
       dryRun: false,
-      subdirFilter: filter.trim() || null
     }, { silent: true }).catch(err => {
       toast.error(`Restore failed: ${err.message}`);
       return null;
     });
-    setRestoring(false);
+    onRestoreStateChange(null);
     if (result) {
       toast.success(`Restore complete — ${result.changedFiles?.length ?? 0} file(s) restored`);
       onClose();
     }
-  }, [snapshot.id, filter, onClose]);
+  }, [acceptedPreview, onClose, onRestoreStateChange, previewMatchesCurrentRequest, restoring, snapshot.id]);
+
+  const preview = previewMatchesCurrentRequest ? acceptedPreview.result : null;
 
   return (
     <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-border space-y-3">
@@ -105,7 +135,8 @@ function RestorePanel({ snapshot, onClose }) {
         </span>
         <button
           onClick={onClose}
-          className="text-gray-500 hover:text-gray-300 transition-colors text-xs min-h-[32px] px-1"
+          disabled={restoring}
+          className="text-gray-500 hover:text-gray-300 transition-colors text-xs min-h-[32px] px-1 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Cancel
         </button>
@@ -120,7 +151,8 @@ function RestorePanel({ snapshot, onClose }) {
           id={filterId}
           type="text"
           value={filter}
-          onChange={e => setFilter(e.target.value)}
+          onChange={handleFilterChange}
+          disabled={restoring}
           placeholder="e.g., brain"
           className="w-full bg-port-card border border-port-border rounded px-3 py-1.5 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent"
         />
@@ -132,7 +164,7 @@ function RestorePanel({ snapshot, onClose }) {
       {/* Preview button */}
       <button
         onClick={handlePreview}
-        disabled={previewing}
+        disabled={previewing || restoring}
         className="flex items-center gap-2 px-3 py-1.5 bg-port-border hover:bg-port-border/70 text-gray-300 rounded text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[36px]"
       >
         {previewing ? (
@@ -186,7 +218,7 @@ function RestorePanel({ snapshot, onClose }) {
 // SnapshotList
 // ---------------------------------------------------------------------------
 
-function SnapshotList() {
+function SnapshotList({ restoringSnapshotId, onRestoreStateChange }) {
   // Let errors throw — `useAutoRefetch` preserves the last-good data on
   // transient failures. A `.catch(() => null)` here would wipe the snapshot
   // list on every blip per the hook's documented gotcha.
@@ -253,7 +285,7 @@ function SnapshotList() {
               </button>
               <button
                 onClick={() => setSelectedId(selectedId === snap.id ? null : snap.id)}
-                disabled={snap.incomplete}
+                disabled={snap.incomplete || restoringSnapshotId !== null}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-port-accent hover:text-port-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[32px]"
               >
                 <RotateCcw size={12} />
@@ -265,6 +297,8 @@ function SnapshotList() {
             <RestorePanel
               snapshot={snap}
               onClose={() => setSelectedId(null)}
+              restoring={restoringSnapshotId === snap.id}
+              onRestoreStateChange={onRestoreStateChange}
             />
           )}
         </div>
@@ -293,8 +327,9 @@ const BackupWidget = memo(function BackupWidget() {
       ]),
     },
   );
-  const [triggering, setTriggering] = useState(false);
+  const [handleBackupNow, triggering] = useBackupRun();
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
+  const [restoringSnapshotId, setRestoringSnapshotId] = useState(null);
   // Tick every minute so the dedup-skipped widget still recomputes
   // `relativeTime(lastRun/nextRun)` labels and the `computeHealth` 25h/49h
   // thresholds when wall-clock time crosses a boundary even though the poll
@@ -303,18 +338,6 @@ const BackupWidget = memo(function BackupWidget() {
 
   const health = computeHealth(status);
   const { dot, text, icon: HealthIcon } = HEALTH_STYLES[health];
-
-  const handleBackupNow = useCallback(async () => {
-    setTriggering(true);
-    await api.triggerBackup({ silent: true }).catch(err => {
-      toast.error(`Backup failed: ${err.message}`);
-    }).then(result => {
-      if (result) {
-        toast.success('Backup started', { icon: '💾' });
-      }
-    });
-    setTriggering(false);
-  }, []);
 
   const isRunning = status?.status === 'running';
   const isNever = status?.status === 'never';
@@ -418,7 +441,8 @@ const BackupWidget = memo(function BackupWidget() {
         {/* Toggle snapshots */}
         <button
           onClick={() => setSnapshotsOpen(prev => !prev)}
-          className="flex items-center gap-1.5 px-3 py-2 bg-port-border/50 hover:bg-port-border text-gray-300 rounded-lg text-sm transition-colors min-h-[40px]"
+          disabled={restoringSnapshotId !== null}
+          className="flex items-center gap-1.5 px-3 py-2 bg-port-border/50 hover:bg-port-border text-gray-300 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed min-h-[40px]"
         >
           <ChevronDown
             size={14}
@@ -431,7 +455,10 @@ const BackupWidget = memo(function BackupWidget() {
       {/* Snapshots section */}
       {snapshotsOpen && (
         <div className="mt-4 pt-4 border-t border-port-border">
-          <SnapshotList />
+          <SnapshotList
+            restoringSnapshotId={restoringSnapshotId}
+            onRestoreStateChange={setRestoringSnapshotId}
+          />
         </div>
       )}
     </div>

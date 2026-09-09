@@ -15,7 +15,9 @@ import {
   reviewerLabel,
   sanitizeReviewerModelInput
 } from './constants';
-import { normalizeReviewerSlug } from '../../lib/reviewerPins';
+import ProviderModelSelector from '../ProviderModelSelector';
+import { selectableModelsForProvider, effortLevelsForProvider, effectiveModelFor } from '../../utils/providers';
+import { isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
 
 const normalizeReviewerValue = (value) => normalizeReviewerSlug(value);
 
@@ -145,6 +147,14 @@ export default function ReviewerPicker({
   showRunFlags = true
 }) {
   const id = useId();
+  const [addProviderId, setAddProviderId] = useState('');
+  const [addProviderModel, setAddProviderModel] = useState('');
+  const [addProviderEffort, setAddProviderEffort] = useState('');
+  const providerRecords = modelOptions?.providers || [];
+  const addProvider = providerRecords.find(provider => provider.id === addProviderId);
+  const labelFor = (token) => isProviderReviewer(token)
+    ? providerRecords.find(provider => `provider:${provider.id}` === token)?.name || token.slice(9)
+    : reviewerLabel(token);
   const [usernameInput, setUsernameInput] = useState('');
   const [usernameError, setUsernameError] = useState('');
   // Reviewers whose Model cell the user switched to free text by picking the
@@ -226,16 +236,22 @@ export default function ReviewerPicker({
   //   `/api/providers` that failed or hasn't landed reports nothing (see the
   //   hook), so this never fires on a slow page.
   const unavailability = (token) => {
+    if (isProviderReviewer(token)) {
+      const provider = providerRecords.find(record => `provider:${record.id}` === token);
+      if (modelOptions?.loaded && !provider) return { label: 'missing', title: 'This reviewer provider is no longer configured on this machine.' };
+      if (provider?.enabled === false) return { label: 'disabled', title: 'Enable this provider in AI Providers before running its review.' };
+      return null;
+    }
     if (installed?.[token] === false) {
       return {
         label: 'not installed',
-        title: `${reviewerLabel(token)}'s CLI binary wasn't found on this machine. It still runs (federation-wide config), but the review loop here will report it unsatisfied until it's installed.`
+        title: `${labelFor(token)}'s CLI binary wasn't found on this machine. It still runs (federation-wide config), but the review loop here will report it unsatisfied until it's installed.`
       };
     }
     if (modelOptions?.providerDisabled?.[token]) {
       return {
         label: 'disabled',
-        title: `${reviewerLabel(token)}'s provider records are all switched off in Settings → AI Providers, so this machine isn't set up to use it. Adding it still works — the review loop spawns its CLI directly, and a federated peer may have it enabled.`
+        title: `${labelFor(token)}'s provider records are all switched off in Settings → AI Providers, so this machine isn't set up to use it. Adding it still works — the review loop spawns its CLI directly, and a federated peer may have it enabled.`
       };
     }
     return null;
@@ -411,9 +427,8 @@ export default function ReviewerPicker({
     </select>
   );
 
-  // The Effort cell. Only EFFORT_SELECTABLE_REVIEWERS get one, and each offers
-  // only its own CLI's ladder — copilot has no CLI, grok's takes no effort flag,
-  // and a `@username` reviewer is a person.
+  // The Effort cell uses the configured provider catalog for provider identities
+  // and the built-in reviewer ladder for legacy CLI tokens.
   //
   // The ladder is narrowed by the row's PINNED MODEL where the CLI validates the
   // pair: `agy` rejects `gemini-3.1-pro --effort medium`, so offering `medium`
@@ -422,11 +437,12 @@ export default function ReviewerPicker({
   // the static ladder when it didn't, so a caller that passes no `modelOptions`
   // keeps a working (just unnarrowed) select rather than losing the cell.
   const renderEffortCell = (token) => {
-    const subject = reviewerLabel(token);
+    const subject = labelFor(token);
     const stored = efforts.get(token) ?? '';
-    const ladder = reviewerEffortLevels(token);
-    if (!ladder?.length) return renderNoPinCell(`${subject} has no reasoning-effort control`);
-    const levels = modelOptions?.modelEffortLevels?.(token, models.get(token)) ?? ladder;
+    const provider = providerRecords.find(record => `provider:${record.id}` === token);
+    const levels = isProviderReviewer(token)
+      ? effortLevelsForProvider(provider, effectiveModelFor(provider, models.get(token))) || []
+      : modelOptions?.modelEffortLevels?.(token, models.get(token)) ?? reviewerEffortLevels(token, models.get(token)) ?? [];
     // A pinned model whose catalog lists NO tiers still renders the select when
     // something is stored, so a pin made before the model changed (or on another
     // machine) stays visible and clearable rather than vanishing behind the dash.
@@ -526,8 +542,8 @@ export default function ReviewerPicker({
   // `loaded` gates the "nothing installed" messaging so a pre-fetch render
   // doesn't accuse a healthy backend of being empty.
   const renderModelCell = (token) => {
-    if (!MODEL_SELECTABLE_REVIEWERS.includes(token)) return renderNoPinCell(`${reviewerLabel(token)} takes no model`);
-    const subject = reviewerLabel(token);
+    if (!MODEL_SELECTABLE_REVIEWERS.includes(token) && !isProviderReviewer(token)) return renderNoPinCell(`${labelFor(token)} takes no model`);
+    const subject = labelFor(token);
     const pinnedValue = models.get(token);
     const value = pinnedValue ?? '';
     const defaultModel = modelOptions?.defaultModels?.[token] || '';
@@ -663,6 +679,32 @@ export default function ReviewerPicker({
 
   return (
     <div className="@container flex flex-col gap-2 w-full">
+      {providerRecords.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <ProviderModelSelector
+            providers={providerRecords}
+            selectedProviderId={addProviderId}
+            selectedModel={addProviderModel}
+            availableModels={addProvider ? selectableModelsForProvider(addProvider, addProvider.models || []) : []}
+            onProviderChange={value => { setAddProviderId(value); setAddProviderModel(''); setAddProviderEffort(''); }}
+            onModelChange={setAddProviderModel}
+            effort={addProviderEffort}
+            onEffortChange={setAddProviderEffort}
+            emptyProviderOption="Choose a reviewer provider"
+            emptyModelOption="Provider default"
+            alwaysShowModel
+            disabled={disabled}
+          />
+          <button type="button" disabled={disabled || !addProviderId || selected.includes(`provider:${addProviderId}`)}
+            className="text-sm text-port-accent disabled:opacity-50 self-start"
+            onClick={() => {
+              const token = `provider:${addProviderId}`;
+              emit({ reviewers: [...selected, token], reviewerModels: { ...modelsMap, ...(addProviderModel ? { [token]: addProviderModel } : {}) }, reviewerEfforts: { ...effortsMap, ...(addProviderEffort ? { [token]: addProviderEffort } : {}) } });
+              setAddProviderId(''); setAddProviderModel(''); setAddProviderEffort('');
+            }}>Add provider reviewer</button>
+          <p className="text-xs text-gray-500">Choose from your enabled AI providers. Providers need an API text transport or an enforced tool-free harness to run reviews.</p>
+        </div>
+      )}
       <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-500">Reviewers (in order):</span>
         {selected.length > 0 && (
@@ -690,7 +732,7 @@ export default function ReviewerPicker({
                       disabled={disabled || index === 0}
                       onClick={() => move(index, -1)}
                       className="text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
-                      aria-label={`Move ${reviewerLabel(value)} earlier`}
+                      aria-label={`Move ${labelFor(value)} earlier`}
                     >
                       <ChevronUp size={12} />
                     </button>
@@ -699,13 +741,13 @@ export default function ReviewerPicker({
                       disabled={disabled || index === selected.length - 1}
                       onClick={() => move(index, 1)}
                       className="text-gray-500 hover:text-white disabled:opacity-30 disabled:hover:text-gray-500"
-                      aria-label={`Move ${reviewerLabel(value)} later`}
+                      aria-label={`Move ${labelFor(value)} later`}
                     >
                       <ChevronDown size={12} />
                     </button>
                   </div>
                   <span className="flex items-center gap-1 min-w-0 col-span-2 @xl:col-span-1">
-                    <span className="text-xs text-gray-300 truncate">{reviewerLabel(value)}</span>
+                    <span className="text-xs text-gray-300 truncate">{labelFor(value)}</span>
                     {renderUnavailableBadge(value)}
                   </span>
                   <span className={CELL_LABEL_CLASS}>Model</span>
@@ -714,19 +756,19 @@ export default function ReviewerPicker({
                   <div className="min-w-0">{renderEffortCell(value)}</div>
                   <span className={CELL_LABEL_CLASS}>Optional</span>
                   <div>
-                    {renderOptToggle(value, reviewerLabel(value), isOptional(value)
-                      ? `${reviewerLabel(value)} is non-blocking (~opt): an inconclusive verdict from it won't block the merge. Click to make it blocking.`
-                      : `${reviewerLabel(value)} gates the merge. Click to make it non-blocking (~opt) — its inconclusive verdicts won't block the merge (a hard failure still does).`)}
+                    {renderOptToggle(value, labelFor(value), isOptional(value)
+                      ? `${labelFor(value)} is non-blocking (~opt): an inconclusive verdict from it won't block the merge. Click to make it blocking.`
+                      : `${labelFor(value)} gates the merge. Click to make it non-blocking (~opt) — its inconclusive verdicts won't block the merge (a hard failure still does).`)}
                   </div>
                   <span className={CELL_LABEL_CLASS}>Max iterations</span>
-                  <div>{renderMaxRounds(value, reviewerLabel(value))}</div>
+                  <div>{renderMaxRounds(value, labelFor(value))}</div>
                   <div className="col-span-2 @xl:col-span-1 justify-self-end">
                     <button
                       type="button"
                       disabled={disabled}
                       onClick={() => remove(value)}
                       className="text-gray-500 hover:text-port-error"
-                      aria-label={`Remove ${reviewerLabel(value)}`}
+                      aria-label={`Remove ${labelFor(value)}`}
                     >
                       <X size={12} />
                     </button>

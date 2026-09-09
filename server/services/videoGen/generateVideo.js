@@ -29,7 +29,7 @@ import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../.
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { resolveVideoModelSelection } from './modelSelection.js';
 import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
-import { inspectModelCache, findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
+import { findCachedRepoFile, findCachedRepoFiles } from '../../lib/hfCache.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { describeRenderConditioning, RENDER_INPUTS_VERSION } from './generateVideoHelpers.js';
 import { readTriggerWordsByFilename, readLoraLicensesByFilename } from '../loras.js';
@@ -66,6 +66,7 @@ import {
   resolveT2vTwoStageOverride,
 } from './renderArgs.js';
 import { spawnAndWatchVideo } from './spawnWatch.js';
+import { resolvePinnedSnapshotPath } from './pinnedSnapshot.js';
 import {
   resolveVideoSpeedProfile, speedProfileDeclineReason, resolveVideoSampler,
   inferEffectiveVideoMode,
@@ -207,20 +208,11 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
         { status: 400, code: 'WAN22_INVALID_FRAME_COUNT' },
       );
     }
-    if (typeof model.revision !== 'string' || !model.revision) {
-      throw new ServerError(
-        `Wan model "${modelId}" is missing an immutable Hugging Face revision.`,
-        { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
-      );
-    }
-    const baseCache = await inspectModelCache(model.repo, { revision: model.revision });
-    if (!baseCache.cached || !baseCache.snapshotPath) {
-      throw new ServerError(
-        `${model.name} revision ${model.revision.slice(0, 8)} is not fully cached. Download or repair it in Video Gen before rendering.`,
-        { status: 400, code: 'WAN22_MODEL_NOT_CACHED' },
-      );
-    }
-    wanModelPath = baseCache.snapshotPath;
+    wanModelPath = await resolvePinnedSnapshotPath(model, {
+      notCachedCode: 'WAN22_MODEL_NOT_CACHED',
+      onMissingRevision: 'throw',
+      missingRevisionMessage: `Wan model "${modelId}" is missing an immutable Hugging Face revision.`,
+    });
     for (const dep of Array.isArray(model.requiredWeights) ? model.requiredWeights : []) {
       const files = Array.isArray(dep?.files) ? dep.files : [];
       const roles = Array.isArray(dep?.targetRoles) ? dep.targetRoles : [];
@@ -244,54 +236,34 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       }
     }
   }
+  let fastvideoModelPath = null;
   if (model.runtime === 'fastvideo') {
-    if (typeof model.revision === 'string' && model.revision) {
-      const baseCache = await inspectModelCache(model.repo, { revision: model.revision });
-      if (!baseCache.cached || !baseCache.snapshotPath) {
-        throw new ServerError(
-          `${model.name} revision ${model.revision.slice(0, 8)} is not fully cached. Download or repair it in Video Gen before rendering.`,
-          { status: 400, code: 'FASTVIDEO_MODEL_NOT_CACHED' },
-        );
-      }
-      wanModelPath = baseCache.snapshotPath;
-    } else {
-      const baseCache = await inspectModelCache(model.repo);
-      if (baseCache.cached && baseCache.snapshotPath) {
-        wanModelPath = baseCache.snapshotPath;
-      }
-    }
+    fastvideoModelPath = await resolvePinnedSnapshotPath(model, {
+      notCachedCode: 'FASTVIDEO_MODEL_NOT_CACHED',
+      onMissingRevision: 'best-effort',
+      // A null miss preserves the legacy handoff: buildFastVideoArgs falls
+      // back to the repo id only when no unpinned snapshot is resident.
+    });
   }
   // Pinned LTX family entries (LTX-2.5 today) must render the verified
   // snapshot, not whatever `main` snapshot_download would follow. Unpinned
   // 2.3 entries keep passing the repo id so the helper's existing Hub resolve
   // stays unchanged.
   let ltxModelPath = model.repo;
-  if (isLtx2FamilyRuntime(model.runtime) && typeof model.revision === 'string' && model.revision) {
-    const cache = await inspectModelCache(model.repo, { revision: model.revision });
-    if (!cache.cached || !cache.snapshotPath) {
-      throw new ServerError(
-        `${model.name} revision ${model.revision.slice(0, 8)} is not fully cached. Download or repair it in Video Gen before rendering.`,
-        { status: 400, code: 'LTX2_MODEL_NOT_CACHED' },
-      );
-    }
-    ltxModelPath = cache.snapshotPath;
+  if (isLtx2FamilyRuntime(model.runtime)) {
+    ltxModelPath = await resolvePinnedSnapshotPath(model, {
+      notCachedCode: 'LTX2_MODEL_NOT_CACHED',
+      onMissingRevision: 'passthrough-repo',
+      fallback: model.repo,
+    });
   }
   let ref2vaModelPath = null;
   if (model.runtime === 'minimax_h3_ref2va') {
-    if (typeof model.revision !== 'string' || !model.revision) {
-      throw new ServerError(
-        `MiniMax H3 Ref2VA model "${modelId}" is missing an immutable Hugging Face revision.`,
-        { status: 500, code: 'VIDEO_MODEL_MISCONFIGURED' },
-      );
-    }
-    const cache = await inspectModelCache(model.repo, { revision: model.revision });
-    if (!cache.cached || !cache.snapshotPath) {
-      throw new ServerError(
-        `${model.name} revision ${model.revision.slice(0, 8)} is not fully cached. Download or repair it in Video Gen before rendering.`,
-        { status: 400, code: 'MINIMAX_H3_REF2VA_MODEL_NOT_CACHED' },
-      );
-    }
-    ref2vaModelPath = cache.snapshotPath;
+    ref2vaModelPath = await resolvePinnedSnapshotPath(model, {
+      notCachedCode: 'MINIMAX_H3_REF2VA_MODEL_NOT_CACHED',
+      onMissingRevision: 'throw',
+      missingRevisionMessage: `MiniMax H3 Ref2VA model "${modelId}" is missing an immutable Hugging Face revision.`,
+    });
   }
   // Substituted prompt conditioner (#4081). `resolveVideoTextEncoder` returns
   // null for the stock choice — the whole override path stays dormant then —
@@ -844,6 +816,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       modelId,
       model: loraCapableModel,
       wanModelPath,
+      fastvideoModelPath,
       wanRequiredWeights,
       ltxModelPath,
       ref2vaModelPath,

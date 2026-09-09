@@ -27,12 +27,21 @@ vi.mock('../../services/socket', () => ({
 
 vi.mock('../../services/apiWritersRoom', async (importOriginal) => ({
   ...(await importOriginal()),
+  listWritersRoomFolders: vi.fn(async () => []),
+  listWritersRoomWorks: vi.fn(async () => []),
+  getWritersRoomWork: vi.fn(),
+  saveWritersRoomDraft: vi.fn(),
   listWritersRoomCharacters: vi.fn(async () => []),
   listWritersRoomPlaces: vi.fn(async () => []),
   listWritersRoomObjects: vi.fn(async () => []),
 }));
 
+vi.mock('../CatalogCastPanel', () => ({ default: () => <div>Catalog cast controls</div> }));
+vi.mock('./LibraryPane', () => ({ default: () => <div>Library controls</div> }));
+
 import WorkEditor from './WorkEditor';
+import WritersRoom from '../../pages/WritersRoom';
+import { getWritersRoomWork, saveWritersRoomDraft } from '../../services/apiWritersRoom';
 
 const work = {
   id: 'wr-work-1',
@@ -98,6 +107,9 @@ describe('WorkEditor header layout (#3568)', () => {
     const secondary = screen.getByTestId('work-header-secondary');
 
     expect([...header.children]).toEqual([title, secondary, save, snapshot, menu]);
+    // Let a long title yield to the fixed-width Save control on narrow phones.
+    expect(title).toHaveClass('min-w-0', 'w-0');
+    expect(save).toHaveClass('w-24', 'shrink-0');
     // Only the sub-bar is re-ordered; anything else carrying an `order-*` class
     // would either break the row split or desync tab order from the layout.
     for (const el of [title, save, snapshot, menu]) {
@@ -268,5 +280,50 @@ describe('WorkEditor server-pushed draft body (#5300)', () => {
 
     await rerenderWith(rerender, { ...work, activeDraftBody: 'The hero wakes.\n\nThen he runs.\n' });
     expect(container.querySelector('textarea').value).toBe('The hero waits.');
+  });
+});
+
+
+describe('Writers Room focused writing', () => {
+  it('preserves edits through header collapse and shows accurate save states during continued typing and retry', async () => {
+    getWritersRoomWork.mockResolvedValue(work);
+    const router = createMemoryRouter([
+      { path: '/writers-room/works/:workId', element: <WritersRoom /> },
+    ], { initialEntries: ['/writers-room/works/wr-work-1'] });
+    const { container } = render(<RouterProvider router={router} />);
+    await act(async () => {});
+    const area = container.querySelector('textarea');
+    await act(async () => { fireEvent.change(area, { target: { value: 'First edit.' } }); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Collapse writing header' })); });
+    expect(screen.getByRole('button', { name: 'Expand writing header' })).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('Catalog cast controls').parentElement).toHaveClass('hidden');
+    expect(screen.queryByText('Library controls')).not.toBeInTheDocument();
+    expect(screen.getByTestId('work-header-secondary')).toHaveClass('hidden');
+    expect(container.querySelector('textarea')).toBe(area);
+    expect(area.value).toBe('First edit.');
+
+    let finishSave;
+    saveWritersRoomDraft.mockImplementationOnce(() => new Promise((resolve) => { finishSave = resolve; }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Saving…' })).toHaveAttribute('aria-busy', 'true');
+    await act(async () => { fireEvent.change(area, { target: { value: 'Second edit.' } }); });
+    await act(async () => { finishSave({ ...work, activeDraftBody: 'First edit.' }); });
+    expect(area.value).toBe('Second edit.');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+
+    saveWritersRoomDraft.mockRejectedValueOnce(new Error('Example failure'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(area.value).toBe('Second edit.');
+    saveWritersRoomDraft.mockResolvedValueOnce({ ...work, activeDraftBody: 'Second edit.' });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeDisabled();
+    expect(saveWritersRoomDraft).toHaveBeenLastCalledWith(work.id, 'Second edit.', { silent: true });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Expand writing header' })); });
+    expect(screen.getByText('Catalog cast controls').parentElement).not.toHaveClass('hidden');
+    expect(screen.getByTestId('work-header-secondary')).not.toHaveClass('hidden');
+    expect(container.querySelector('textarea')).toBe(area);
+    expect(area.value).toBe('Second edit.');
   });
 });

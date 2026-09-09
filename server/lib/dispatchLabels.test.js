@@ -265,14 +265,17 @@ describe('label specs and CLI formatting', () => {
 });
 
 describe('shared guidance', () => {
-  it('names both vocabularies and the omit-rather-than-guess rule', () => {
+  it('requires both axes without guessing and restricts contributor invitations', () => {
     expect(ISSUE_QUALITY_GUIDANCE).toContain('current, evidenced work');
     expect(ISSUE_QUALITY_GUIDANCE).toContain('future-only/speculative refactors');
     expect(ISSUE_QUALITY_GUIDANCE).toContain('current refactors that pay off now are valid');
     expect(DISPATCH_HINT_GUIDANCE).toContain('model:light|medium|heavy');
     expect(DISPATCH_HINT_GUIDANCE).toContain('effort:low|medium|high|xhigh|max');
-    expect(DISPATCH_HINT_GUIDANCE).toContain('Omit an axis rather than guessing');
-    expect(DISPATCH_HINT_GUIDANCE).toContain('Do NOT stamp `medium` on both');
+    expect(DISPATCH_HINT_GUIDANCE).toBe(MANDATORY_DISPATCH_HINT_GUIDANCE);
+    expect(DISPATCH_HINT_GUIDANCE).toContain('specific hardware');
+    expect(DISPATCH_HINT_GUIDANCE).toContain('multiple real users');
+    expect(DISPATCH_HINT_GUIDANCE).toContain('read back again');
+    expect(DISPATCH_HINT_GUIDANCE).toMatch(/[Dd]o NOT stamp `medium` on both/);
     expect(DISPATCH_HINT_GUIDANCE).toContain('repeated `--label`');
     expect(DISPATCH_HINT_GUIDANCE).toContain('Never relabel a deduplicated existing issue');
     expect(DISPATCH_HINT_GUIDANCE).toContain('good first issue');

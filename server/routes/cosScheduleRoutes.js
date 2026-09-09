@@ -11,6 +11,9 @@ import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagin
 import { promptSourceSchema, PROMPT_SOURCES } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
+import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
+import { findCronExpressionError } from '../lib/cronValidation.js';
+import { listMaintenanceRuns, resumeMaintenanceRun, startMaintenanceRun, stopMaintenanceRun } from '../services/maintenanceRun.js';
 
 const templateTaskSchema = z.object({
   name: z.string().min(1),
@@ -21,9 +24,29 @@ const templateTaskSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
+const scheduleLabelsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
+  .transform(labels => [...new Set(labels.map(label => label.toLowerCase()))]);
+
+// Shape only — normalizeSuggestedAfter does the trimming, self-drop and dedupe
+// so the storage rules live with the field's own helper, not in the route.
+const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
+
+// A manual maintenance run names the app, the subscription provider and the
+// model up front (AGENTS.md AI-policy: the click IS the consent). Blank effort
+// inherits each scheduled task's saved effort.
+const maintenanceRunStartSchema = z.object({
+  appId: z.string().trim().min(1),
+  providerId: z.string().trim().min(1),
+  model: z.string().trim().min(1),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+}).strict();
+
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'dataInputs', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
+  // Advisory run order — which OTHER scheduled tasks a user should generally run
+  // first. Editable and unenforced; `runAfter` above is the enforced gate.
+  'suggestedAfter',
   // Perpetual (drain-until-done) recheck cadence: after a perpetual task drains
   // its backlog and parks, it re-probes its work-detector on this cadence.
   // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
@@ -34,9 +57,11 @@ const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpr
   'promptSource'];
 
 /**
- * Pick only defined values from body for schedule settings updates
+ * Pick only defined values from body for schedule settings updates. `taskType`
+ * is the row being written, so a field that must not name itself (the advisory
+ * `suggestedAfter`) can be cleaned here rather than again at the call site.
  */
-function pickScheduleSettings(body) {
+function pickScheduleSettings(body, taskType) {
   const settings = {};
   for (const key of SCHEDULE_FIELDS) {
     if (body[key] !== undefined) settings[key] = body[key];
@@ -63,8 +88,21 @@ function pickScheduleSettings(body) {
       settings.cronExpression = decoded.cronExpression;
     }
   }
-  if (settings.cronExpression !== undefined && settings.cronExpression !== null && !isCronExpression(settings.cronExpression)) {
-    throw new ServerError('cronExpression must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek) or null', { status: 400, code: 'VALIDATION_ERROR' });
+  // Field RANGES, not just the 5-token shape: an out-of-range expression saved
+  // on an enabled schedule would be silently dropped by the walker and never
+  // fire (#6634).
+  if (settings.cronExpression !== undefined && settings.cronExpression !== null) {
+    const cronError = findCronExpressionError(settings.cronExpression);
+    if (cronError) {
+      throw new ServerError(`cronExpression is invalid: ${cronError}`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+  }
+  if (settings.labels !== undefined) {
+    const parsed = scheduleLabelsSchema.safeParse(settings.labels);
+    if (!parsed.success) {
+      throw new ServerError('labels must be at most 20 non-empty strings of at most 40 characters', { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.labels = parsed.data;
   }
   if (settings.description !== undefined) {
     if (settings.description !== null && typeof settings.description !== 'string') {
@@ -90,9 +128,14 @@ function pickScheduleSettings(body) {
     // Empty string clears it; otherwise require a 5-field cron expression.
     if (trimmed === '') {
       settings.recheckCron = null;
-    } else if (trimmed.split(/\s+/).length !== 5) {
-      throw new ServerError('recheckCron must be a 5-field cron expression (minute hour dayOfMonth month dayOfWeek)', { status: 400, code: 'VALIDATION_ERROR' });
     } else {
+      // An invalid recheck cron does not merely 'not fire' —
+      // computePerpetualRecheckAt silently falls back to another cadence — so
+      // reject it here with the same shared validator (#6634).
+      const recheckError = findCronExpressionError(trimmed);
+      if (recheckError) {
+        throw new ServerError(`recheckCron is invalid: ${recheckError}`, { status: 400, code: 'VALIDATION_ERROR' });
+      }
       settings.recheckCron = trimmed;
     }
   }
@@ -122,6 +165,16 @@ function pickScheduleSettings(body) {
   }
   if (settings.effort !== undefined && settings.effort !== null && !EFFORT_LEVELS.includes(settings.effort)) {
     throw new ServerError(`effort must be one of ${EFFORT_LEVELS.join(', ')} or null`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  // Advisory ordering. `normalizeSuggestedAfter` owns the shape rules (self,
+  // blanks, duplicates, cap) and why an emptied list stays `[]` rather than
+  // becoming null the way `runAfter` does.
+  if (settings.suggestedAfter !== undefined) {
+    const parsed = suggestedAfterSchema.safeParse(settings.suggestedAfter ?? []);
+    if (!parsed.success) {
+      throw new ServerError(`suggestedAfter must be at most ${SUGGESTED_AFTER_MAX} task type strings, or null`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    settings.suggestedAfter = normalizeSuggestedAfter(parsed.data, taskType);
   }
   if (settings.runAfter !== undefined && settings.runAfter !== null) {
     if (!Array.isArray(settings.runAfter)) {
@@ -161,7 +214,7 @@ router.get('/schedule/task/:taskType', asyncHandler(async (req, res) => {
 // PUT /api/cos/schedule/task/:taskType - Update interval for a task type (unified)
 router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;
-  const settings = pickScheduleSettings(req.body);
+  const settings = pickScheduleSettings(req.body, taskType);
   // Filter self-references from runAfter to prevent permanent blocking
   if (Array.isArray(settings.runAfter)) {
     settings.runAfter = settings.runAfter.filter(dep => dep !== taskType);
@@ -202,6 +255,29 @@ router.post('/schedule/trigger', asyncHandler(async (req, res) => {
     throw new ServerError(request.error, { status: 409, code: 'TRIGGER_REJECTED' });
   }
   res.json({ success: true, request });
+}));
+
+// Manual maintenance runs — the Schedule tab's "Run maintenance now"; see
+// services/maintenanceRun.js for why this is not a quota burn.
+router.get('/schedule/maintenance-runs', asyncHandler(async (_req, res) => {
+  res.json({ runs: await listMaintenanceRuns() });
+}));
+
+router.post('/schedule/maintenance-runs', asyncHandler(async (req, res) => {
+  const body = validateRequest(maintenanceRunStartSchema, req.body || {});
+  res.status(201).json(await startMaintenanceRun(body));
+}));
+
+router.post('/schedule/maintenance-runs/:id/stop', asyncHandler(async (req, res) => {
+  const run = await stopMaintenanceRun(req.params.id);
+  if (!run) throw new ServerError('Maintenance run not found', { status: 404, code: 'NOT_FOUND' });
+  res.json({ run });
+}));
+
+router.post('/schedule/maintenance-runs/:id/resume', asyncHandler(async (req, res) => {
+  const resumed = await resumeMaintenanceRun(req.params.id);
+  if (!resumed) throw new ServerError('Maintenance run not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(resumed);
 }));
 
 // GET /api/cos/schedule/on-demand - Get pending on-demand requests

@@ -37,15 +37,16 @@ Your deliverable is tracker items, not code. The run must end with the same \`gi
 ## How to run this audit
 
 1. **Pick a bounded slice and say so first.** Do NOT attempt the whole repository. Choose one coherent area (a feature directory, a route group, a handful of related screens) — prefer one that recent audit issues have not already covered — and open your report by naming the slice in one line.
-2. **Read the actual code.** Every finding must cite \`path/to/file.js:LINE\` and describe a concrete, reproducible impact: a reachable runtime/data failure, a CI or release failure, or recurring manual churn demonstrated by repository history. Delete subjective style preferences and any finding whose consequence you cannot prove.
-3. **De-duplicate before filing.** Follow the Inventory step under "Where to record findings" above. If it is already filed, skip it; comment on the existing item only when you have genuinely new evidence.
-4. **File each surviving finding as its own item.** One problem per item — never a bundle. Cap yourself at 5. Bodies must be decision-complete:
+2. **Complete a substantive review before filing.** Spend most of the available run budget investigating and validating candidates, reserving time for de-duplication, filing, and the final report. Within the bounded slice, inventory at least three distinct relevant paths or components (or all of them if fewer exist), then inspect their callers, consumers, tests, and relevant history. Finding or filing the first issue is NOT a stopping condition: continue through the remaining inventory, including when the first candidate is a duplicate or rejected. Stop when the inventory is reviewed, the configured run budget is nearly exhausted, or a concrete blocker prevents further review; do not idle to fill time or exceed the run budget.
+3. **Read the actual code.** Every finding must cite \`path/to/file.js:LINE\` and describe a concrete, reproducible impact: a reachable runtime/data failure, a CI or release failure, or recurring manual churn demonstrated by repository history. Delete subjective style preferences and any finding whose consequence you cannot prove.
+4. **De-duplicate before filing.** Follow the Inventory step under "Where to record findings" above. If it is already filed, skip it; comment on the existing item only when you have genuinely new evidence.
+5. **File the highest-value surviving findings as separate items after the review.** One root cause per item — never split one problem to inflate the count. Cap yourself at 5 (or a lower mission-specific cap); this is a filing ceiling, not a review limit or a quota. Zero or one issue is valid after a substantive review. Bodies must be decision-complete:
    - **Problem** — what is wrong, with file:line references.
    - **Impact** — the observable consequence (runtime, data, CI/release, or recurring maintenance), not a code-smell label.
    - **Fix** — the approach you have DECIDED on, with the files it touches. If the only obstacle was a design choice, make the call and state it. Do not file a question.
    - **Acceptance criteria** — checkboxes another agent can verify cold.
-5. **Redact before you publish.** An issue is world-readable the moment it is filed. Never paste a secret, credential, token, hostname, IP address, absolute path containing a username, or any personal record into a title or body.
-6. **Report at the end**: the slice you audited, each item you filed, and anything you deliberately did not file and why.
+6. **Redact before you publish.** An issue is world-readable the moment it is filed. Never paste a secret, credential, token, hostname, IP address, absolute path containing a username, or any personal record into a title or body.
+7. **Report at the end**: the slice and paths reviewed, each item you filed, candidates you deliberately did not file and why, any unreviewed inventory, and the reason you stopped.
 
 Read this repository's \`AGENTS.md\` (and any nested per-directory ones covering the slice) before you start, and honor its conventions and its explicitly declared non-issues.`;
 
@@ -319,6 +320,98 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'copy finding(s)',
     }),
   },
+  // The six types below give every `do:better` audit lens a scheduled
+  // counterpart (DO_BETTER_LENS_COVERAGE, at the bottom of this file). They
+  // are refactor- or defect-hunting lanes carved out of the broader
+  // code-quality / module-hygiene / test-coverage bodies so each can be
+  // scheduled, pinned to a provider, and toggled between filing and fixing on
+  // its own. Every one files under an existing label rather than minting a
+  // near-duplicate category, and the refactor lanes require a managed
+  // worktree in do-work mode: a mechanical restructuring of a hot function or
+  // a dependency swap is exactly the edit that must never land in the user's
+  // live checkout.
+  'better-complexity': {
+    quotaBurnId: null,
+    label: 'Cyclomatic complexity',
+    description: 'Complexity-reduction audit — configurable: file issues (default) or implement one refactor',
+    defaultFileIssues: true,
+    doWorkRequiresWorktree: true,
+    filing: filing({
+      slugPrefix: 'complexity-',
+      label: 'complexity-audit',
+      issueLabel: 'code-quality',
+      labelDescription: 'Proposed from a cyclomatic-complexity audit',
+      noun: 'complexity finding(s)',
+    }),
+  },
+  'better-cognitive-load': {
+    quotaBurnId: null,
+    label: 'Cognitive load & readability',
+    description: 'Reader-cost audit — configurable: file issues (default) or implement one refactor',
+    defaultFileIssues: true,
+    doWorkRequiresWorktree: true,
+    filing: filing({
+      slugPrefix: 'cognitive-load-',
+      label: 'cognitive-load-audit',
+      issueLabel: 'code-quality',
+      labelDescription: 'Proposed from a cognitive-load/readability audit',
+      noun: 'cognitive-load finding(s)',
+    }),
+  },
+  'better-structural-drift': {
+    quotaBurnId: null,
+    label: 'Structural drift & sources of truth',
+    description: 'Generated-artifact / hand-synced-registry drift audit — configurable: file issues (default) or implement one consolidation',
+    defaultFileIssues: true,
+    doWorkRequiresWorktree: true,
+    filing: filing({
+      slugPrefix: 'structural-drift-',
+      label: 'structural-drift-audit',
+      issueLabel: 'code-quality',
+      labelDescription: 'Proposed from a structural-drift audit',
+      noun: 'structural-drift finding(s)',
+    }),
+  },
+  'better-runtime-safety': {
+    quotaBurnId: null,
+    label: 'Runtime safety & async correctness',
+    description: 'Latent-defect audit — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'runtime-safety-',
+      label: 'runtime-safety-audit',
+      issueLabel: 'bug',
+      labelDescription: 'Proposed from a runtime-safety audit',
+      noun: 'runtime-safety finding(s)',
+    }),
+  },
+  'better-dependency-freedom': {
+    quotaBurnId: null,
+    label: 'Dependency freedom',
+    description: 'Dependency-necessity audit — configurable: file issues (default) or implement one removal',
+    defaultFileIssues: true,
+    doWorkRequiresWorktree: true,
+    filing: filing({
+      slugPrefix: 'depfree-',
+      label: 'dependency-freedom-audit',
+      issueLabel: 'dependencies',
+      labelDescription: 'Proposed from a dependency-freedom audit',
+      noun: 'dependency finding(s)',
+    }),
+  },
+  'better-test-quality': {
+    quotaBurnId: null,
+    label: 'Test quality',
+    description: 'Vacuous/weak/redundant-test audit — configurable: file issues (default) or implement one cleanup',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'test-quality-',
+      label: 'test-quality-audit',
+      issueLabel: 'tests',
+      labelDescription: 'Proposed from a test-quality audit',
+      noun: 'test-quality finding(s)',
+    }),
+  },
 });
 
 export const AUDIT_TASK_TYPES = new Set(Object.keys(AUDIT_DEFINITIONS));
@@ -470,3 +563,113 @@ export function applyAuditModeWrapper(promptTemplate, modeInstructions) {
   if (prompt.includes('{modeInstructions}')) return prompt;
   return `${modeInstructions}\n\n---\n\n${prompt}`;
 }
+
+/**
+ * Which scheduled audit types cover each `do:better` audit lens
+ * (lib/slashdo/lib/better-audit.md, the `For \`<lens>\`:` list). The slashdo
+ * command fans the same lenses out to sub-agents in one run; PortOS exposes
+ * each as its own schedulable, provider-pinnable task so a managed app can run
+ * every category of self-improvement on its own cadence. Keys are the lens
+ * slugs slashdo uses; values are the AUDIT_DEFINITIONS types that own that
+ * lens's findings, in no significant order — the relation is many-to-many both
+ * ways (`security` answers three lenses; `bugs-perf` has four owners), which
+ * is why this is a lens-keyed map rather than a field on each definition. A
+ * per-definition field could not answer the question the map exists for: did
+ * upstream add a lens that NOTHING here owns?
+ *
+ * It drives schedule discovery labels, never dispatch or execution ordering.
+ * auditCatalog.test.js checks it two ways: every
+ * listed type is a real audit type, and (when the submodule is checked out)
+ * every lens slashdo declares has an entry here, so a lens added upstream
+ * cannot silently go unschedulable.
+ */
+export const DO_BETTER_LENS_COVERAGE = Object.freeze({
+  security: ['security'],
+  'code-quality': ['code-quality', 'observability'],
+  dry: ['simplify'],
+  architecture: ['module-hygiene', 'api-contract'],
+  'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability'],
+  'stack-specific': ['react-lifecycle', 'accessibility', 'data-safety', 'security'],
+  deps: ['better-dependency-freedom', 'security'],
+  tests: ['test-coverage', 'better-test-quality'],
+  ux: ['ux', 'mobile-responsive', 'copy'],
+  structural: ['module-hygiene', 'better-structural-drift', 'simplify'],
+  'cognitive-load': ['better-cognitive-load', 'better-complexity'],
+});
+
+/** Display metadata is derived, so upgrades never rewrite durable task IDs. */
+export function getAuditScheduleMetadata(taskType) {
+  if (!isAuditTaskType(taskType)) return { displayName: taskType, defaultLabels: [] };
+  const lenses = Object.entries(DO_BETTER_LENS_COVERAGE)
+    .filter(([, types]) => types.includes(taskType)).map(([lens]) => lens);
+  return {
+    displayName: taskType.startsWith('better-') ? taskType : `better-${taskType}`,
+    defaultLabels: ['codebase-improvement', 'slashdo', ...lenses],
+  };
+}
+
+/**
+ * Shipped advisory run order for the audit types, named by SCHEDULED TASK TYPE.
+ *
+ * This is the default for each task's editable `suggestedAfter` array, layered
+ * at READ time by `getScheduleStatus` (services/taskSchedule.js) rather than
+ * seeded onto the stored rows — like `runGuidance` and `displayName` beside it,
+ * so an edit here reaches every existing install with no migration, while a
+ * user's stored list (an explicit `[]` included) still wins. It is ADVISORY:
+ * nothing in the scheduler reads it, and a task whose suggested predecessors
+ * haven't run still runs. The ENFORCED field is `runAfter`, which blocks
+ * dispatch until each named type has run since this task's last run.
+ *
+ * The prose it replaced ("After structural drift, remove dead code…") named the
+ * audits by their subject matter rather than by their task type, so a reader
+ * could not tell whether "structural drift" was another scheduled task or just
+ * a concept — which is the whole question the guidance exists to answer.
+ *
+ * Each entry lists only its IMMEDIATE predecessors; transitive order follows
+ * from the chain (better-cognitive-load comes after simplify because it comes
+ * after better-complexity, which comes after module-hygiene, which comes after
+ * simplify). Keeping the lists to one or two entries is deliberate — a list
+ * that restates the whole chain is unreadable and drifts on every edit.
+ *
+ * The safety audits (security, data-safety, better-runtime-safety,
+ * error-handling) and the broad code-quality triage seed EMPTY: they are the
+ * head of the order, and an exploitable defect outranks the sequence anyway.
+ */
+export const AUDIT_SUGGESTED_AFTER = Object.freeze({
+  // Broad triage first, then coverage, so the tests written next are aimed at
+  // the findings the triage surfaced.
+  'test-coverage': Object.freeze(['code-quality']),
+  'better-test-quality': Object.freeze(['test-coverage']),
+  // The restructuring ladder: consolidate sources of truth, delete what is
+  // dead, then draw module boundaries, then reduce what survives.
+  simplify: Object.freeze(['better-structural-drift']),
+  'module-hygiene': Object.freeze(['simplify']),
+  'better-dependency-freedom': Object.freeze(['module-hygiene']),
+  'better-complexity': Object.freeze(['module-hygiene']),
+  'better-cognitive-load': Object.freeze(['better-complexity']),
+  // Measure and describe the shape that survived the ladder.
+  performance: Object.freeze(['better-complexity']),
+  documentation: Object.freeze(['performance', 'better-cognitive-load']),
+});
+
+// WHY each audit sits where it does in the order above — rationale only. The
+// sequence itself is AUDIT_SUGGESTED_AFTER, which names real task types; this
+// text must never be the only place an ordering relationship is recorded.
+// Urgent bugs outrank the sequence; re-measure after each merged change.
+export const AUDIT_RUN_GUIDANCE = Object.freeze({
+  'better-test-quality': 'Assesses whether the tests you have detect the regressions the other audits found — so refactors that follow have a safety net.',
+  'test-coverage': 'Adds the missing boundary coverage a refactor needs before it starts; avoid duplicating assertions a stronger test already makes.',
+  security: 'Head of the order — an exploitable defect is fixed before any cleanup, whatever else is queued.',
+  'data-safety': 'Head of the order — data-loss and upgrade hazards are fixed before code moves around them.',
+  'better-runtime-safety': 'Head of the order — reachable runtime defects are fixed first; rerun once structure settles.',
+  'error-handling': 'Head of the order — safe failure behavior is established before the same code is restructured.',
+  'better-structural-drift': 'Start of the restructuring ladder: consolidating sources of truth first means every later refactor targets the surviving implementation.',
+  simplify: 'Dead and duplicate code is removed before modules are reorganized, so the reorganization only moves live code.',
+  'module-hygiene': 'Ownership and module boundaries are settled before function-level work, so complexity is measured on the final layout.',
+  'better-dependency-freedom': 'Unnecessary dependencies go once ownership is clear, so no effort is spent polishing code a removal deletes.',
+  'better-complexity': 'Remeasures the functions that survived the ladder and reduces the costliest branching.',
+  'better-cognitive-load': 'Reviews names, abstraction levels, and readability of the shape everything else left behind.',
+  'code-quality': 'Broad triage that points at the focused audit worth running; avoid overlapping fixes in the same slice.',
+  documentation: 'Describes the final result, so it runs once behavior and structure have settled.',
+  performance: 'Measure a real bottleneck before optimizing, and remeasure after structural and complexity changes.',
+});

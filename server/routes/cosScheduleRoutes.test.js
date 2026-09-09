@@ -5,6 +5,8 @@ import scheduleRoutes from './cosScheduleRoutes.js';
 
 const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+const maintenance = vi.hoisted(() => ({ listMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn() }));
+vi.mock('../services/maintenanceRun.js', () => maintenance);
 
 vi.mock('../services/taskSchedule.js', () => ({
   getScheduleStatus: vi.fn(),
@@ -69,6 +71,28 @@ describe('CoS Schedule Routes', () => {
       const response = await request(app).get('/api/cos/schedule');
 
       expect(response.status).toBe(200);
+    });
+  });
+
+  describe('manual maintenance runs', () => {
+    it('starts a run from a validated body and reports the first dispatch', async () => {
+      maintenance.startMaintenanceRun.mockResolvedValue({ run: { id: 'maint-1', status: 'running' }, result: { dispatched: true, taskType: 'better-structural-drift' } });
+      const response = await request(app).post('/api/cos/schedule/maintenance-runs').send({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: null });
+      expect(response.status).toBe(201);
+      expect(response.body.result.taskType).toBe('better-structural-drift');
+      expect(maintenance.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: null });
+      // The model is not optional: a run must name what it spends.
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ appId: 'app-1', providerId: 'codex' })).status).toBe(400);
+      expect(maintenance.startMaintenanceRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('lists, stops and resumes runs, and 404s an unknown id', async () => {
+      maintenance.listMaintenanceRuns.mockResolvedValue([{ id: 'maint-1' }]);
+      expect((await request(app).get('/api/cos/schedule/maintenance-runs')).body).toEqual({ runs: [{ id: 'maint-1' }] });
+      maintenance.stopMaintenanceRun.mockResolvedValue({ id: 'maint-1', status: 'stopped' });
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs/maint-1/stop')).body.run.status).toBe('stopped');
+      maintenance.resumeMaintenanceRun.mockResolvedValue(null);
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs/maint-1/resume')).status).toBe(404);
     });
   });
 
@@ -169,6 +193,40 @@ describe('CoS Schedule Routes', () => {
         }),
       }));
       expect(JSON.stringify(recordUserAction.mock.calls.at(-1)[0])).not.toContain(prompt);
+    });
+
+    it('keeps an emptied suggestedAfter as [], so the shipped default is not re-seeded', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'on-demand' });
+
+      const response = await request(app)
+        .put('/api/cos/schedule/task/review')
+        .send({ suggestedAfter: [] });
+
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('review', expect.objectContaining({
+        suggestedAfter: []
+      }));
+    });
+
+    it('normalizes suggestedAfter — self-reference and duplicates dropped, never nulled', async () => {
+      taskSchedule.updateTaskInterval.mockResolvedValue({ type: 'on-demand' });
+
+      const response = await request(app)
+        .put('/api/cos/schedule/task/review')
+        .send({ suggestedAfter: ['review', 'deploy', 'deploy'] });
+
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('review', expect.objectContaining({
+        suggestedAfter: ['deploy']
+      }));
+    });
+
+    it('rejects a suggestedAfter that is not a list of task type strings', async () => {
+      const response = await request(app)
+        .put('/api/cos/schedule/task/review')
+        .send({ suggestedAfter: [{ taskType: 'deploy' }] });
+
+      expect(response.status).toBe(400);
     });
 
     it('should set runAfter to null when only self-reference remains', async () => {
@@ -472,6 +530,70 @@ describe('CoS Schedule Routes', () => {
         .send({ type: 'cron', cronExpression: '0 9 * *' });
       expect(response.status).toBe(400);
     });
+
+    // #6634: a 5-token expression with an out-of-range field used to be saved
+    // and enabled, then silently dropped by the scheduler — an 'enabled'
+    // schedule that never fires. The store must not be written at all.
+    it('rejects an out-of-range cronExpression before persisting it', async () => {
+      for (const cronExpression of ['99 9 * * *', '0 25 * * *']) {
+        taskSchedule.updateTaskInterval.mockClear();
+        const response = await request(app)
+          .put('/api/cos/schedule/task/security')
+          .send({ type: 'cron', cronExpression });
+        expect(response.status, cronExpression).toBe(400);
+        expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+      }
+    });
+
+    it('rejects an out-of-range recheckCron before persisting it, and still clears on empty', async () => {
+      taskSchedule.updateTaskInterval.mockClear();
+      const bad = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ recheckCron: '99 9 * * *' });
+      expect(bad.status).toBe(400);
+      expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
+
+      taskSchedule.updateTaskInterval.mockClear();
+      const cleared = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ recheckCron: '  ' });
+      expect(cleared.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', { recheckCron: null });
+
+      taskSchedule.updateTaskInterval.mockClear();
+      const ok = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ recheckCron: ' 0 */6 * * * ' });
+      expect(ok.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', { recheckCron: '0 */6 * * *' });
+    });
+
+    // Syntax validity is not 'has an occurrence in the search window' — the
+    // scheduler's bounded walk finds no leap day within two years of this
+    // reference, but the expression is still savable.
+    it('accepts a leap-day cron that has no occurrence in the search window', async () => {
+      taskSchedule.updateTaskInterval.mockClear();
+      const response = await request(app)
+        .put('/api/cos/schedule/task/security')
+        .send({ type: 'cron', cronExpression: '0 0 29 2 *' });
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', expect.objectContaining({
+        type: 'cron', cronExpression: '0 0 29 2 *'
+      }));
+    });
+  });
+
+  it('normalizes labels, supports clearing, and rejects invalid labels before writing', async () => {
+    taskSchedule.updateTaskInterval.mockResolvedValue({ labels: ['backend'] });
+    const response = await request(app).put('/api/cos/schedule/task/security').send({ labels: [' Backend ', 'backend'] });
+    expect(response.status).toBe(200);
+    expect(taskSchedule.updateTaskInterval).toHaveBeenLastCalledWith('security', { labels: ['backend'] });
+    expect((await request(app).put('/api/cos/schedule/task/security').send({ labels: [] })).status).toBe(200);
+    taskSchedule.updateTaskInterval.mockClear();
+    for (const labels of [null, 'backend', [''], ['x'.repeat(41)], Array(21).fill('x')]) {
+      expect((await request(app).put('/api/cos/schedule/task/security').send({ labels })).status).toBe(400);
+    }
+    expect(taskSchedule.updateTaskInterval).not.toHaveBeenCalled();
   });
 
 });

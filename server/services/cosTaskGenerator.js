@@ -30,7 +30,7 @@ import { join } from 'path';
 import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
-import { hasQuotaBurnProvenance, onDemandRequestMetadata } from '../lib/quotaBurnOrigin.js';
+import { hasQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -38,10 +38,14 @@ import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { addTask, updateTask, reviveBlockedTask, getAllTasks, getCosTasks, firstLine, PRIORITY_VALUES } from './cosTaskStore.js';
+import { addTask, updateTask, getAllTasks, getCosTasks, firstLine } from './cosTaskStore.js';
+import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
+// The single Priority-0 on-demand loop body, shared with the dequeueNextTask
+// engine in cos.js so the two can no longer drift (#6618).
+import { drainOnDemandRequests } from './onDemandDrain.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
@@ -61,6 +65,10 @@ import {
   FILE_ISSUES_DELIVERY_SETTINGS,
 } from '../lib/auditCatalog.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
+// The claim marker this stamps is separate from `openPR: false`, which is the
+// CoS provisioning posture that prevents a nested worktree. agentPromptBuilder.js
+// reads the same set back via isClaimFlowTask().
+import { CLAIM_FLOW_TASK_TYPES } from '../lib/claimFlowTaskTypes.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { isReconcileDrainTaskType } from './taskScheduleConstants.js';
 import { isProgrammaticScheduledTaskType, requiresInstallWideTarget } from './taskScheduleRegistry.js';
@@ -113,14 +121,6 @@ export {
 // `buildSecurityScanPipelineOutput` was public here before the pr-reviewer
 // security preflight moved beside the rest of that pipeline's contract.
 export { buildSecurityScanPipelineOutput } from './prReviewerPipeline.js';
-
-// Claim prompts create and manage their own claim/<item> worktree and
-// push/PR/MR/review lifecycle. This marker is separate from `openPR: false`,
-// which is the CoS provisioning posture that prevents a nested worktree. Keep
-// the type list here as a backstop for old schedules that predate claimFlow.
-const CLAIM_FLOW_TASK_TYPES = new Set([
-  'plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work'
-]);
 
 /**
  * Block a task that has exceeded the max spawn limit. Returns true if blocked.
@@ -770,146 +770,14 @@ async function resolveAutonomyBudget(state, runningAgentEntries) {
 async function spawnPriority0OnDemand(ctx) {
   const { state, availableSlots, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
-  const taskSchedule = await import('./taskSchedule.js');
-  const liveSchedule = await taskSchedule.loadSchedule();
-  const onDemandRequests = await taskSchedule.getOnDemandRequests();
-
-  // Track apps already marked review-started this cycle so multiple on-demand
-  // requests for the same app don't each rewrite its activity record.
-  const reviewStartedApps = new Set();
-  // The app registry can't change mid-loop, so read it once per cycle rather
-  // than once per request (getActiveApps' 2s cache can miss at a boundary).
-  // `null` means the read FAILED, which is not the same as "no active apps":
-  // an empty list would make every app-targeted request below look like it
-  // names an unknown app and get cleared, silently dropping user-initiated
-  // work. On a failure we leave the requests queued for the next cycle.
-  const apps = onDemandRequests.length > 0 ? await getActiveApps().catch(() => null) : [];
-
-  // Programmatic handlers first, and outside the slot-bounded loop below: they
-  // spawn nothing, so a busy autonomy budget must not hold a user's Run Now.
-  const handledProgrammatically = await drainProgrammaticOnDemandRequests({
-    taskScheduleMod: taskSchedule, requests: onDemandRequests, schedule: liveSchedule, state
+  await drainOnDemandRequests({ state }, {
+    capacityExhausted: () => tasksToSpawn.length >= availableSlots,
+    canSpawn: (task) => canSpawnTask(task),
+    emitSpawn: (task) => {
+      tasksToSpawn.push(task);
+      trackSpawn(task);
+    },
   });
-
-  if (!apps) {
-    emitLog('warn', `On-demand requests deferred — the app registry could not be read this cycle`);
-  } else if (onDemandRequests.length > 0 && tasksToSpawn.length < availableSlots) {
-    for (const request of onDemandRequests) {
-      // Already handled above (and its request cleared) — `onDemandRequests` is
-      // a snapshot taken before that drain.
-      if (handledProgrammatically.has(request.id)) continue;
-      if (tasksToSpawn.length >= availableSlots) break;
-
-      if (!isImprovementEnabled(state)) {
-        emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
-        await taskSchedule.clearOnDemandRequest(request.id);
-        continue;
-      }
-
-      // Skip if the task type was disabled or removed after queuing — parity with dequeueNextTask.
-      if (!liveSchedule.tasks[request.taskType]?.enabled) {
-        emitLog('info', `On-demand request skipped — task type '${request.taskType}' is disabled`, { requestId: request.id });
-        await taskSchedule.clearOnDemandRequest(request.id);
-        continue;
-      }
-
-      let task = null;
-      // Determine target app (if any)
-      let targetApp = null;
-
-      if (request.appId) {
-        targetApp = apps.find(a => a.id === request.appId);
-        if (!targetApp) {
-          emitLog('warn', `On-demand request for unknown app: ${request.appId}`, { requestId: request.id });
-          await taskSchedule.clearOnDemandRequest(request.id);
-          continue;
-        }
-      }
-
-      await taskSchedule.clearOnDemandRequest(request.id);
-
-      // Only a human "Run" may clear the drain's brakes; an automated refill
-      // (origin: 'refill') inherits them. The policy — and the origin check — lives
-      // in applyOnDemandRunResets so this engine and its siblings can't drift.
-      const userInitiated = await taskSchedule.applyOnDemandRunResets(request, targetApp?.id ?? null);
-      const lane = userInitiated ? '' : ' (drain refill)';
-
-      if (targetApp) {
-        emitLog('info', `Processing on-demand improvement: ${request.taskType} for ${targetApp.name}${lane}`, { requestId: request.id, appId: targetApp.id });
-        // Advance the cooldown eagerly (deduped per app per cycle), but defer
-        // binding the active agent until a task is produced — a null result
-        // here must not strand `activeAgentId` (issue #978).
-        if (!reviewStartedApps.has(targetApp.id)) {
-          await markAppReviewCooldown(targetApp.id);
-          reviewStartedApps.add(targetApp.id);
-        }
-        await taskSchedule.recordExecution(`task:${request.taskType}`, targetApp.id);
-        task = await generateManagedAppImprovementTaskForType(request.taskType, targetApp, state, {
-          skipPreconditions: true,
-          deferPerpetualDispatch: true,
-          targetPullRequest: request.targetPullRequest ?? null,
-          providerOverride: request.providerOverride ?? null,
-          // A quota-burn step's per-invocation run parameters. They must reach
-          // the PROMPT, so unlike the provider/model/effort pins they cannot
-          // ride the post-generation `onDemandRequestMetadata` stamp below —
-          // the generator overlays them before it picks the mode banner.
-          // `normalizeQuotaBurnProvenance` (lib/quotaBurnOrigin.js) has to keep
-          // `overrides.params` for a step to reach this; it drops them today,
-          // so a burn currently runs the task's SAVED mode, which is correct
-          // for every step until the migration starts pinning one.
-          runOverrides: request.burn?.overrides?.params ?? null
-        });
-        if (task) {
-          await bindAppReviewAgent(targetApp.id, `on-demand-${Date.now()}`);
-        }
-      } else {
-        emitLog('info', `Processing on-demand improvement: ${request.taskType}${lane}`, { requestId: request.id });
-        await taskSchedule.recordExecution(`task:${request.taskType}`);
-        await withStateLock(async () => {
-          const s = await loadState();
-          s.stats.lastSelfImprovement = new Date().toISOString();
-          s.stats.lastSelfImprovementType = request.taskType;
-          await saveState(s);
-        });
-        task = await generateSelfImprovementTaskForType(request.taskType, state);
-      }
-
-      applyOnDemandConsent(task);
-      if (task && canSpawnTask(task)) {
-        // Mark this a MANUAL (on-demand) run so its perpetual drain continues in
-        // the on-demand lane (see perpetualRefillPlan in cos.js). BOTH on-demand
-        // engines must stamp it — either may drain a given request. Stamped before
-        // addTask so the blocked-revive branch inherits it via `task.metadata`.
-        // `onDemandRequestMetadata` also carries the request's ORIGIN, which
-        // `perpetualRefillPlan` reads to decide whether the completed run may
-        // continue its drain — and a quota burn's provenance when it is one.
-        task.metadata = { ...(task.metadata || {}), ...onDemandRequestMetadata(request) };
-        const persisted = await addTask(task, 'internal', { raw: true, suppressDequeue: true });
-        if (!persisted?.duplicate) {
-          await recordDeferredPerpetualDispatch(task, taskSchedule);
-          tasksToSpawn.push(task);
-          trackSpawn(task);
-        } else if (persisted.status === 'blocked') {
-          // Explicit user Run colliding with a failure-blocked twin (#2614):
-          // revive the existing task instead of silently dropping the Run and
-          // stranding the bound on-demand review marker. Mirrors the sibling
-          // dequeueNextTask on-demand engine in cos.js.
-          await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal', { suppressDequeue: true });
-          await recordDeferredPerpetualDispatch(task, taskSchedule);
-          const revived = { ...task, id: persisted.id };
-          tasksToSpawn.push(revived);
-          trackSpawn(revived);
-          emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
-        }
-      } else if (!task && userInitiated) {
-        // Explicit user Run produced no task on THIS engine too — same feedback
-        // as cos.dequeueNextTask so a request drained here isn't a silent no-op.
-        // An automated refill is skipped for the same reason it is there: it ends
-        // by converging, and nobody is waiting on the toast.
-        await emitOnDemandEmpty({ taskScheduleMod: taskSchedule, request, targetApp, taskConfig: liveSchedule.tasks[request.taskType] });
-      }
-    }
-  }
 }
 
 /**
@@ -2087,7 +1955,7 @@ async function generateManagedAppImprovementTask(app, state, { ignoreTaskId = nu
     await taskSchedule.clearOnDemandRequest(request.id);
     // Only a human "Run" may clear the drain's brakes (park state, dispatch
     // count); the policy lives in applyOnDemandRunResets so this idle-review
-    // path can't drift from its spawnPriority0OnDemand siblings — without it,
+    // path can't drift from the shared on-demand drain — without it,
     // a currently drain-capped or parked perpetual type dequeued here stays
     // capped/parked and the explicit "Run" silently produces no task.
     await taskSchedule.applyOnDemandRunResets(request, app.id);
@@ -2288,9 +2156,9 @@ export async function drainProgrammaticOnDemandRequests({ taskScheduleMod, reque
  *   - 'idle'      → a non-perpetual task produced no task: a genuine "nothing to
  *                   do", NOT a failure (e.g. pr-watcher with no new PRs).
  *
- * Called from BOTH on-demand drain engines (cos.dequeueNextTask and
- * spawnPriority0OnDemand below) so a user Run gets feedback no matter which one
- * drains the request. `taskConfig` is the already-loaded interval for the task,
+ * Called from the shared on-demand drain (onDemandDrain.js), which both
+ * Priority-0 engines delegate to, so a user Run gets the same feedback no matter
+ * which one drains the request. `taskConfig` is the already-loaded interval for the task,
  * passed in to avoid re-reading the schedule. The event fires ONLY on the
  * user-initiated on-demand path, so the client can toast it without
  * background-park noise.

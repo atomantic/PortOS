@@ -14,6 +14,7 @@
  * every stage call lands in `data/runs/<runId>/` for replay.
  */
 
+import { isProcessProvider } from '../lib/providerTypes.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
 import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint } from './promptRunner.js';
@@ -191,7 +192,7 @@ export { isLocalEndpoint };
 // non-local API providers are cloud. Local backends (ollama/lmstudio on
 // localhost) are the only genuinely small-window case.
 const isLikelyLargeContextProvider = (provider) => {
-  if (provider?.type === 'cli' || provider?.type === 'tui') return true;
+  if (isProcessProvider(provider)) return true;
   if (provider?.type === 'api') return !isLocalEndpoint(provider.endpoint);
   return false;
 };

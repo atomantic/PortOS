@@ -1,17 +1,19 @@
 import { MemoryRouter } from 'react-router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockGetBackupStatus,
   mockGetBackupSnapshots,
   mockDownloadBackupSnapshot,
+  mockRestoreBackup,
   mockTriggerBackup,
   mockToast,
 } = vi.hoisted(() => ({
   mockGetBackupStatus: vi.fn(),
   mockGetBackupSnapshots: vi.fn(),
   mockDownloadBackupSnapshot: vi.fn(),
+  mockRestoreBackup: vi.fn(),
   mockTriggerBackup: vi.fn(),
   mockToast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
 }));
@@ -20,6 +22,7 @@ vi.mock('../services/api', () => ({
   getBackupStatus: (...args) => mockGetBackupStatus(...args),
   getBackupSnapshots: (...args) => mockGetBackupSnapshots(...args),
   downloadBackupSnapshot: (...args) => mockDownloadBackupSnapshot(...args),
+  restoreBackup: (...args) => mockRestoreBackup(...args),
   triggerBackup: (...args) => mockTriggerBackup(...args),
 }));
 
@@ -32,6 +35,12 @@ const renderWidget = () => render(
     <BackupWidget />
   </MemoryRouter>,
 );
+
+const openRestorePanel = async () => {
+  fireEvent.click(await screen.findByRole('button', { name: 'Snapshots' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Restore' }));
+  return screen.findByRole('textbox', { name: 'Selective restore (optional)' });
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -93,5 +102,173 @@ describe('BackupWidget snapshots', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Download snapshot 2026-08-25T11-00-00/ }));
 
     await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Download failed: Connection lost'));
+  });
+
+  it('restores exactly the selective scope accepted by the preview', async () => {
+    let finishRestore;
+    mockRestoreBackup
+      .mockResolvedValueOnce({
+        dryRun: true,
+        snapshotId: '2026-08-25T11-00-00',
+        subdirFilter: 'brain',
+        changedFiles: ['brain/example.json'],
+      })
+      .mockReturnValueOnce(new Promise(resolve => { finishRestore = resolve; }));
+    renderWidget();
+
+    const filter = await openRestorePanel();
+    fireEvent.change(filter, { target: { value: ' brain ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    expect(await screen.findByText('brain/example.json')).toBeInTheDocument();
+    expect(mockRestoreBackup).toHaveBeenNthCalledWith(1, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: 'brain',
+      dryRun: true,
+    }, { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 1 file(s)' }));
+    expect(mockRestoreBackup).toHaveBeenNthCalledWith(2, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: 'brain',
+      dryRun: false,
+    }, { silent: true });
+    expect(filter).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Preview changes' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Snapshots' })).toBeDisabled();
+
+    await act(async () => {
+      finishRestore({ changedFiles: ['brain/example.json'] });
+    });
+    expect(mockToast.success).toHaveBeenCalledWith('Restore complete — 1 file(s) restored');
+  });
+
+  it('invalidates a selective preview when the filter is cleared', async () => {
+    mockRestoreBackup
+      .mockResolvedValueOnce({ changedFiles: ['brain/example.json'] })
+      .mockResolvedValueOnce({ changedFiles: ['brain/example.json', 'media/example.json'] })
+      .mockResolvedValueOnce({ changedFiles: ['brain/example.json', 'media/example.json'] });
+    renderWidget();
+
+    const filter = await openRestorePanel();
+    fireEvent.change(filter, { target: { value: 'brain' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByRole('button', { name: 'Restore 1 file(s)' })).toBeEnabled();
+
+    fireEvent.change(filter, { target: { value: '' } });
+    expect(screen.queryByText('brain/example.json')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Restore \d+ file/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByRole('button', { name: 'Restore 2 file(s)' })).toBeEnabled();
+    expect(mockRestoreBackup).toHaveBeenNthCalledWith(2, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: null,
+      dryRun: true,
+    }, { silent: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore 2 file(s)' }));
+    await waitFor(() => expect(mockRestoreBackup).toHaveBeenNthCalledWith(3, {
+      snapshotId: '2026-08-25T11-00-00',
+      subdirFilter: null,
+      dryRun: false,
+    }, { silent: true }));
+  });
+
+  it('ignores a late preview response after the filter changes', async () => {
+    let finishPreview;
+    mockRestoreBackup.mockReturnValue(new Promise(resolve => { finishPreview = resolve; }));
+    renderWidget();
+
+    const filter = await openRestorePanel();
+    fireEvent.change(filter, { target: { value: 'brain' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    fireEvent.change(filter, { target: { value: 'media' } });
+
+    await act(async () => {
+      finishPreview({ changedFiles: ['brain/example.json'] });
+    });
+    expect(screen.queryByText('brain/example.json')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Restore \d+ file/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview changes' })).toBeEnabled();
+  });
+
+  it('reports a current preview failure and re-enables previewing', async () => {
+    mockRestoreBackup.mockRejectedValueOnce(new Error('disk offline'));
+    renderWidget();
+
+    await openRestorePanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Preview failed: disk offline'));
+    expect(screen.getByRole('button', { name: 'Preview changes' })).toBeEnabled();
+  });
+
+  it('suppresses a late preview failure after the filter changes', async () => {
+    let rejectPreview;
+    mockRestoreBackup.mockReturnValue(new Promise((_, reject) => { rejectPreview = reject; }));
+    renderWidget();
+
+    const filter = await openRestorePanel();
+    fireEvent.change(filter, { target: { value: 'brain' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview changes' }));
+    fireEvent.change(filter, { target: { value: 'media' } });
+
+    await act(async () => {
+      rejectPreview(new Error('disk offline'));
+    });
+    expect(mockToast.error).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Preview changes' })).toBeEnabled();
+  });
+});
+
+describe('BackupWidget manual backup', () => {
+  it('announces an already-running backup without success feedback', async () => {
+    mockTriggerBackup.mockResolvedValue({ skipped: true });
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup Now' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('Backup already running'));
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(mockToast.error).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Backup Now' })).toBeEnabled();
+  });
+
+  it('reports the completed file count for a healthy backup', async () => {
+    mockTriggerBackup.mockResolvedValue({ status: 'ok', filesChanged: 3, pgBackup: { status: 'ok' } });
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup Now' }));
+
+    await waitFor(() => expect(mockToast.success).toHaveBeenCalledWith('Backup complete — 3 files changed', { icon: '💾' }));
+    expect(mockToast.success).toHaveBeenCalledTimes(1);
+    expect(mockTriggerBackup).toHaveBeenCalledWith({ silent: true });
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('qualifies file completion when the database dump failed', async () => {
+    mockTriggerBackup.mockResolvedValue({ status: 'degraded', filesChanged: 3, pgBackup: { status: 'failed' } });
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup Now' }));
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('Backup complete — 3 files changed; database dump failed', { icon: '⚠️' }));
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('disables the pending action and clears it with one error on rejection', async () => {
+    let rejectRun;
+    mockTriggerBackup.mockReturnValue(new Promise((_, reject) => { rejectRun = reject; }));
+    renderWidget();
+    fireEvent.click(await screen.findByRole('button', { name: 'Backup Now' }));
+    expect(screen.getByRole('button', { name: /Backup Now/ })).toBeDisabled();
+
+    await act(async () => { rejectRun(new Error('Connection lost')); });
+
+    expect(mockTriggerBackup).toHaveBeenCalledWith({ silent: true });
+    expect(mockToast.error).toHaveBeenCalledExactlyOnceWith('Connection lost');
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Backup Now' })).toBeEnabled();
   });
 });

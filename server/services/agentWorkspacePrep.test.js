@@ -40,9 +40,11 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   findAdoptableWorktreeForBranch: vi.fn().mockResolvedValue(null),
   mergeBaseIntoFeatureWorktree: vi.fn(),
 }));
-vi.mock('./agentPromptBuilder.js', () => ({
+vi.mock('./agentAppWorkspace.js', () => ({
   getAppWorkspace: vi.fn().mockResolvedValue('/repos/app-x'),
   getAppDataForTask: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('./promptSections/appContext.js', () => ({
   createJiraTicketForTask: vi.fn(),
 }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
@@ -58,7 +60,7 @@ import { updateTask, getAgents } from './cos.js';
 import { ensureLatest } from './git.js';
 import { execGit } from '../lib/execGit.js';
 import { detectConflicts } from './taskConflict.js';
-import { getAppWorkspace } from './agentPromptBuilder.js';
+import { getAppWorkspace } from './agentAppWorkspace.js';
 import { createWorktree, adoptWorktree, findAdoptableWorktreeForBranch } from './worktreeManager.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { creativeDirectorScratchCwd } from '../lib/spawnCwd.js';

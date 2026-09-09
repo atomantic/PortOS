@@ -31,6 +31,11 @@ import { CURSOR_COMMAND } from './cursor.js';
 // they are PORTOS_ONLY_REVIEWERS.
 // Mirrored in client/src/components/cos/constants.js → REVIEWER_OPTIONS.
 export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'cursor', 'pi', 'opencode', 'kimi', 'lmstudio', 'ollama', 'mtplx'];
+// Provider records retain their own identity instead of collapsing to a harness.
+export const isProviderReviewer = (value) => typeof value === 'string' && /^provider:[a-z0-9][a-z0-9-]{0,79}$/.test(value);
+export const isReviewer = (value) => REVIEWER_VALUES.includes(value) || isProviderReviewer(value);
+export const isToolFreeReviewer = (value) => LOCAL_LLM_REVIEWERS.includes(value) || isProviderReviewer(value);
+
 export const REVIEWER_ALIASES = { gemini: 'antigravity', 'cursor-agent': 'cursor' };
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = [];
@@ -134,7 +139,7 @@ export function reviewerModelFlag(reviewer) {
  * @returns {boolean}
  */
 export function isCliReviewer(reviewer) {
-  return reviewer !== DEFAULT_REVIEWER && !LOCAL_LLM_REVIEWERS.includes(reviewer);
+  return reviewer !== DEFAULT_REVIEWER && !isToolFreeReviewer(reviewer);
 }
 
 /**
@@ -287,7 +292,7 @@ function normalizeReviewerToken(raw) {
     return user ? `@${user}` : null;
   }
   const slug = REVIEWER_ALIASES[trimmed] ?? trimmed;
-  return REVIEWER_VALUES.includes(slug) ? slug : null;
+  return isReviewer(slug) ? slug : null;
 }
 
 /**
@@ -459,7 +464,7 @@ const REVIEWER_MODEL_FORBIDDEN_RE = /[[\],\r\n\t]/;
  * naming a reviewer that takes no model. Pass `reviewer` to apply that last check.
  */
 export function normalizeReviewerModel(raw, reviewer = null) {
-  if (reviewer !== null && !MODEL_SELECTABLE_REVIEWERS.includes(reviewer)) return undefined;
+  if (reviewer !== null && !MODEL_SELECTABLE_REVIEWERS.includes(reviewer) && !isProviderReviewer(reviewer)) return undefined;
   if (typeof raw !== 'string') return undefined;
   const model = raw.trim();
   if (!model || model.length > MAX_REVIEWER_MODEL_LENGTH) return undefined;
@@ -520,7 +525,7 @@ export const resolveReviewerModels = keyedReviewerPinResolver(normalizeReviewerM
  * map form.
  */
 export function reviewerModelsFromDefaults(defaults) {
-  const out = {};
+  const out = Object.fromEntries(Object.entries(normalizeReviewerModels(defaults?.providerModels) || {}).filter(([key]) => isProviderReviewer(key)));
   for (const r of MODEL_SELECTABLE_REVIEWERS) {
     // Re-checked here, not trusted: settings.json is hand-editable, and a value
     // stored before the scalars were validated must not surface as a pin the token
@@ -631,7 +636,10 @@ export function normalizeReviewerEffort(raw, reviewer, model = null) {
   if (typeof raw !== 'string') return undefined;
   const effort = raw.trim().toLowerCase();
   if (!effort) return undefined;
-  return reviewerEffortLevels(reviewer, model)?.includes(effort) ? effort : undefined;
+  // Provider identities are dynamic; their model-specific ladder is resolved from
+  // the provider catalog at selection/execution, while storage accepts known tiers.
+  const levels = isProviderReviewer(reviewer) ? EFFORT_LEVELS : reviewerEffortLevels(reviewer, model);
+  return levels?.includes(effort) ? effort : undefined;
 }
 
 /**
@@ -710,8 +718,8 @@ export function claimSafeReviewers(reviewers) {
 export function prioritizeToolFreeReviewers(reviewers) {
   const normalized = Array.isArray(reviewers) ? reviewers : [];
   return [
-    ...normalized.filter((reviewer) => LOCAL_LLM_REVIEWERS.includes(reviewer)),
-    ...normalized.filter((reviewer) => !LOCAL_LLM_REVIEWERS.includes(reviewer)),
+    ...normalized.filter((reviewer) => isToolFreeReviewer(reviewer)),
+    ...normalized.filter((reviewer) => !isToolFreeReviewer(reviewer)),
   ];
 }
 
@@ -1012,7 +1020,7 @@ export const reviewerTokenSlug = (token) => String(token).split('[')[0].split('~
  */
 export function splitSlashdoReviewerTokens(tokens) {
   const trimmed = (Array.isArray(tokens) ? tokens : []).map(t => String(t).trim()).filter(Boolean);
-  const isSlashdoToken = t => t.startsWith('@') || !PORTOS_ONLY_REVIEWERS.includes(reviewerTokenSlug(t));
+  const isSlashdoToken = t => t.startsWith('@') || (!PORTOS_ONLY_REVIEWERS.includes(reviewerTokenSlug(t)) && !isProviderReviewer(reviewerTokenSlug(t)));
   return {
     flagTokens: trimmed.filter(isSlashdoToken),
     portosOnly: [...new Set(trimmed.filter(t => !isSlashdoToken(t)).map(reviewerTokenSlug))],
@@ -1147,14 +1155,14 @@ export function normalizeReviewers(meta, fallback = DEFAULT_REVIEWERS) {
   const out = [];
   for (const r of source) {
     const normalized = REVIEWER_ALIASES[r] || r;
-    if (REVIEWER_VALUES.includes(normalized) && !seen.has(normalized)) { seen.add(normalized); out.push(normalized); }
+    if (isReviewer(normalized) && !seen.has(normalized)) { seen.add(normalized); out.push(normalized); }
   }
   if (out.length) return out;
   const fallbackList = [];
   const fallbackSeen = new Set();
   for (const r of Array.isArray(fallback) ? fallback : []) {
     const normalized = REVIEWER_ALIASES[r] || r;
-    if (REVIEWER_VALUES.includes(normalized) && !fallbackSeen.has(normalized)) {
+    if (isReviewer(normalized) && !fallbackSeen.has(normalized)) {
       fallbackSeen.add(normalized);
       fallbackList.push(normalized);
     }

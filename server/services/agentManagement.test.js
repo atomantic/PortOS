@@ -40,6 +40,7 @@ const normalizeEol = (s) => s.replace(/\r\n/g, '\n');
 const AGENT_CLI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentCliSpawning.js'), 'utf-8'));
 const AGENT_TUI_SRC = normalizeEol(readFileSync(join(__dirname, 'agentTuiSpawning.js'), 'utf-8'));
 const AGENT_LIFECYCLE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8'));
+const AGENT_RUN_FINALIZE_SRC = normalizeEol(readFileSync(join(__dirname, 'agentRunFinalize.js'), 'utf-8'));
 const AGENT_MANAGEMENT_SRC = normalizeEol(readFileSync(join(__dirname, 'agentManagement.js'), 'utf-8'));
 
 // The lifecycle ledger is a real file writer (data/cos/run-events.jsonl). Mocked
@@ -1425,10 +1426,16 @@ describe('pause-release adapter registration', () => {
 describe('close-handler skip-finalization — source contract', () => {
   // Helper: extract the body of a function from source text.
   // Returns everything from the function's opening brace to its matched closing brace.
-  function extractFunctionBody(src, fnSignatureSubstring) {
+  // `bodyAnchor` (optional) is a substring searched forward from the signature;
+  // the body's opening brace is the first `{` after IT rather than after the
+  // signature. Needed for a function whose parameter list is destructured — its
+  // `{` would otherwise brace-match as the whole body.
+  function extractFunctionBody(src, fnSignatureSubstring, bodyAnchor = null) {
     const fnStart = src.indexOf(fnSignatureSubstring);
     if (fnStart === -1) return null;
-    const braceStart = src.indexOf('{', fnStart);
+    const searchFrom = bodyAnchor ? src.indexOf(bodyAnchor, fnStart) : fnStart;
+    if (searchFrom === -1) return null;
+    const braceStart = src.indexOf('{', searchFrom);
     let depth = 0;
     for (let i = braceStart; i < src.length; i++) {
       if (src[i] === '{') depth++;
@@ -1437,66 +1444,56 @@ describe('close-handler skip-finalization — source contract', () => {
     return null;
   }
 
-  it('CLI close handler guards with pausedAgents.has and returns before finalizeAgent', () => {
-    // The real body lives in `handleClose`, not in the `claudeProcess.on('close')`
-    // registration — that registration is a forwarding shim attached in the same
-    // tick as spawn() so a fast-exiting child's close event isn't dropped while
-    // the async setup is still yielding (#5791).
-    const closeIdx = AGENT_CLI_SRC.indexOf('handleClose = async (code)');
-    expect(closeIdx, 'CLI handleClose handler must exist').toBeGreaterThan(-1);
+  // The pause guard moved out of both spawners into `finalizeAgentRunCommon`
+  // (#6619) — they used to hold two hand-mirrored copies of it, running their
+  // paused and host-shutdown gates in OPPOSITE order. The behavioral counterpart
+  // of these checks is the paired 'shared finalize sequence (#6619)' suite in
+  // agentCliSpawning.test.js / agentTuiSpawning.test.js, which drives a real
+  // paused exit through both spawners. What only a source check can pin is the
+  // ORDERING — that each spawner consults the shared sequence and bails on its
+  // 'paused' verdict BEFORE it can reach finalizeAgent.
+  for (const [label, src, signature, bodyAnchor] of [
+    ['CLI close handler', AGENT_CLI_SRC, 'handleClose = async (code)', null],
+    ['TUI finish()', AGENT_TUI_SRC, 'const finish = async', '=> '],
+  ]) {
+    it(`${label} routes through finalizeAgentRunCommon and returns on its paused verdict before finalizeAgent`, () => {
+      const body = extractFunctionBody(src, signature, bodyAnchor);
+      expect(body, `${label} body must be extractable`).toBeTruthy();
 
-    // Extract the full callback body via brace-balancing rather than a fixed
-    // slice — a try/catch crash-guard wrapper can push finalizeAgent past any
-    // fixed window (see #1825).
-    const closeBody = extractFunctionBody(AGENT_CLI_SRC, 'handleClose = async (code)');
-    expect(closeBody, 'CLI handleClose handler body must be extractable').toBeTruthy();
+      const sequencePos = body.indexOf('finalizeAgentRunCommon(');
+      expect(sequencePos, `${label} must run the shared finalize sequence`).toBeGreaterThan(-1);
 
-    // Guard present
-    expect(closeBody).toMatch(/pausedAgents\.has\(agentId\)/);
+      const finalizePos = body.indexOf('finalizeAgent(');
+      expect(finalizePos, `${label} must still call finalizeAgent`).toBeGreaterThan(-1);
+      expect(sequencePos, 'shared finalize sequence must precede finalizeAgent').toBeLessThan(finalizePos);
 
-    // Guard appears BEFORE finalizeAgent in the close body
-    const guardPos = closeBody.indexOf('pausedAgents.has(agentId)');
-    const finalizePos = closeBody.indexOf('finalizeAgent(');
-    expect(guardPos, 'pause guard must precede finalizeAgent call').toBeLessThan(finalizePos);
+      // The paused verdict is handled with an early return, before finalize.
+      const window = body.slice(sequencePos, finalizePos);
+      expect(window, `${label} must bail on the 'paused' outcome`).toMatch(/'paused'[\s\S]*?\breturn\b/);
+    });
+  }
 
-    // There is a `return` inside the pause guard block before finalizeAgent
-    // (the guard block ends with a bare `return;` or `return` before reaching finalize)
-    const guardBlock = closeBody.slice(guardPos, finalizePos);
-    expect(guardBlock).toMatch(/\breturn\b/);
-  });
+  // The canonical order the extraction made explicit: the paused return runs
+  // BEFORE the host-shutdown abandon gate, and both precede the lane release.
+  // Re-releasing an already-released executionId logs a spurious "Invalid state
+  // transition"; abandoning a paused run would skip the bookkeeping that the
+  // paused path owns. Nothing enforced this while the sequence was mirrored.
+  it('finalizeAgentRunCommon checks pausedAgents before the abandon gate and the lane release', () => {
+    const body = extractFunctionBody(AGENT_RUN_FINALIZE_SRC, 'export function finalizeAgentRunCommon(', '}) ');
+    expect(body, 'finalizeAgentRunCommon must exist and be extractable').toBeTruthy();
 
-  it('TUI finish() guards with pausedAgents.has and returns before finalizeAgent', () => {
-    // finish() is defined as a const arrow-function inside spawnTuiAgent.
-    // The signature is: const finish = async ({ ... }) => {
-    // We need the body that starts at `=> {`, not the destructured params `{`.
-    const finishIdx = AGENT_TUI_SRC.indexOf('const finish = async');
-    expect(finishIdx, 'finish function must exist in agentTuiSpawning').toBeGreaterThan(-1);
+    const guardPos = body.indexOf('pausedAgents.has(agentId)');
+    expect(guardPos, 'pause guard must be present').toBeGreaterThan(-1);
 
-    // Find the `=> {` that opens the arrow body (past the parameter list)
-    const arrowIdx = AGENT_TUI_SRC.indexOf('=> {', finishIdx);
-    expect(arrowIdx, "'=> {' of finish() must exist").toBeGreaterThan(finishIdx);
-
-    // Extract body from the arrow body's `{` to its matched closing `}`
-    const braceStart = arrowIdx + 3; // points at `{`
-    let depth = 0;
-    let bodyEnd = braceStart;
-    for (let i = braceStart; i < AGENT_TUI_SRC.length; i++) {
-      if (AGENT_TUI_SRC[i] === '{') depth++;
-      else if (AGENT_TUI_SRC[i] === '}') { depth--; if (depth === 0) { bodyEnd = i; break; } }
+    for (const [label, marker] of [
+      ['host-shutdown abandon gate', 'shouldAbandonAgentRun('],
+      ['lane release', 'releaseAgentLane('],
+    ]) {
+      const pos = body.indexOf(marker);
+      expect(pos, `${marker} must exist in finalizeAgentRunCommon`).toBeGreaterThan(-1);
+      expect(guardPos, `pause guard must precede the ${label}`).toBeLessThan(pos);
+      expect(body.slice(guardPos, pos), `pause guard must return before the ${label}`).toMatch(/\breturn\b/);
     }
-    const finishBody = AGENT_TUI_SRC.slice(braceStart, bodyEnd + 1);
-
-    // Guard present
-    expect(finishBody).toMatch(/pausedAgents\.has\(agentId\)/);
-
-    // Guard appears BEFORE finalizeAgent
-    const guardPos = finishBody.indexOf('pausedAgents.has(agentId)');
-    const finalizePos = finishBody.indexOf('finalizeAgent(');
-    expect(guardPos, 'pause guard must precede finalizeAgent in finish()').toBeLessThan(finalizePos);
-
-    // There is a return inside the guard block before reaching finalizeAgent
-    const guardBlock = finishBody.slice(guardPos, finalizePos);
-    expect(guardBlock).toMatch(/\breturn\b/);
   });
 
   // The behavioral counterpart of this guard lives in

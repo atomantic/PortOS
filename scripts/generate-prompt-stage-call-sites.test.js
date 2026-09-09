@@ -112,6 +112,37 @@ describe('prompt stage call-site scanner', () => {
     expect(index['demo-panel-one']).toBeUndefined();
   });
 
+  // #6624. The regex tokenizer this scanner replaced walked comments and
+  // quoted spans in one alternation, so a backtick it could not attribute
+  // opened a phantom template that ran to the NEXT backtick — here, one inside
+  // a `//` comment two lines later — swallowing every call site in between.
+  // The failure was stable rather than flaky, so the drift test reported it as
+  // "the manifest is stale" and its advice ("regenerate and commit") would
+  // have ACCEPTED a manifest missing a shipped stage's only reference.
+  it('finds a call site after a backtick the old tokenizer could not attribute', () => {
+    const desyncing = [
+      'const stripTicks = (s) => s.replace(/`/g, "");',
+      "export const build = (ctx) => buildPrompt('demo-alpha', ctx);",
+      '// The helper above removes every ` from the rendered prompt.',
+    ].join('\n');
+
+    const index = buildStageCallSites({
+      shippedStageKeys,
+      sources: [src('server/services/desync.js', desyncing)],
+    });
+
+    expect(index['demo-alpha']).toEqual(['server/services/desync.js']);
+  });
+
+  it('throws naming the file when a source will not parse', () => {
+    expect(() =>
+      buildStageCallSites({
+        shippedStageKeys,
+        sources: [src('server/services/broken.js', 'export const = ;')],
+      }),
+    ).toThrow(/server\/services\/broken\.js/);
+  });
+
   it('does not match a longer key that merely starts with a shorter one', () => {
     const index = buildStageCallSites({
       shippedStageKeys: ['demo-alpha', 'demo-alpha-extended'],
@@ -177,7 +208,10 @@ describe('prompt stage call-site scanner', () => {
 // literal-key call site (or renaming a file that has one) without rerunning
 // the generator leaves stages unprotected, and this fails until it's rerun.
 describe('prompt stage call-site manifest', () => {
-  it('matches a fresh scan of the tracked server sources', () => {
+  // Babel-parses every tracked non-test source under `server/` in one test —
+  // ~7s on a warm dev machine, and past the 10s default on a loaded CI runner.
+  // Raised so the scan's own cost cannot be misreported as manifest drift.
+  it('matches a fresh scan of the tracked server sources', { timeout: 60000 }, () => {
     const stale = `${MANIFEST_RELATIVE_PATH} is stale — run \`${REGENERATE_COMMAND}\` and commit the result.`;
     const fresh = generateStageCallSites();
 

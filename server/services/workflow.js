@@ -22,6 +22,7 @@
  */
 
 import { getScheduleStatus } from './taskSchedule.js';
+import { AUDIT_TASK_TYPES } from '../lib/auditCatalog.js';
 import * as autonomousJobs from './autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from './jobGates.js';
 import { parseCronToNextRun, parseRecurrenceToNextRun } from './eventScheduler.js';
@@ -63,28 +64,12 @@ export const WORKFLOW_STAGES = [
     id: 'audit',
     label: 'Audit',
     description: 'Quality, security, and accessibility audits. Independent of the plan, but typically scheduled lighter than build work.',
-    taskTypes: [
-      'security',
-      'code-quality',
-      'test-coverage',
-      'performance',
-      'accessibility',
-      'console-errors',
-      'dependency-updates',
-      'documentation',
-      'error-handling',
-      'typing',
-      'ui-bugs',
-      'mobile-responsive',
-      'ux',
-      'data-safety',
-      'simplify',
-      'module-hygiene',
-      'api-contract',
-      'react-lifecycle',
-      'observability',
-      'copy'
-    ],
+    // Derived, not restated: the audit stage IS the audit catalog. Listing the
+    // types by hand made this a fourth edit site per new audit type and needed
+    // a parity test whose only job was to catch the copy going stale.
+    // `dependency-updates` is the one deliberate extra — it audits the manifest
+    // but carries no file-issues/do-work toggle, so it is not a catalog type.
+    taskTypes: [...AUDIT_TASK_TYPES, 'dependency-updates'],
     jobIds: ['job-wiki-maintenance', 'job-refresh-local-llm-catalog', 'job-refresh-cli-provider-catalogs']
   },
   {

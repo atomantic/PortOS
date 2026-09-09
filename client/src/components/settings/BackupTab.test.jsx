@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -183,6 +183,21 @@ describe('BackupTab', () => {
       expect(toast.error).toHaveBeenCalledWith('No DB dump in this snapshot');
       expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
+
+    it('aborts and reports an integrity failure before confirmation', async () => {
+      withSnapshot();
+      restoreDatabase.mockResolvedValue({ status: 'failed', reason: 'manifest_mismatch' });
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+
+      expect(restoreDatabase).toHaveBeenCalledTimes(1);
+      expect(restoreDatabase).toHaveBeenCalledWith({ snapshotId: 'snap-2026-06-09', dryRun: true }, { silent: true });
+      expect(toast.error).toHaveBeenCalledWith('Snapshot dump failed integrity verification');
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
+    });
   });
 
   describe('Run Now gating (saved state)', () => {
@@ -349,41 +364,57 @@ describe('BackupTab', () => {
 
       const disclosure = screen.getByRole('button', { name: /Default exclusions/i });
       expect(disclosure.getAttribute('aria-expanded')).toBe('false');
-      expect(disclosure.textContent).toMatch(/2 paths skipped/);
+      expect(disclosure.textContent).toMatch(/2 enabled, 0 disabled/);
       // Collapsed: the per-path rows (and their toggles) are not in the DOM, so
       // the tab's actionable content isn't pushed below the fold.
-      expect(screen.queryByRole('switch', { name: /Include \/models in backups/i })).toBeNull();
+      expect(screen.queryByRole('switch', { name: /Disable default exclusion \/models/i })).toBeNull();
 
       fireEvent.click(disclosure);
       expect(disclosure.getAttribute('aria-expanded')).toBe('true');
-      expect(screen.getByRole('switch', { name: /Include \/models in backups/i })).toBeTruthy();
+      expect(screen.getByRole('switch', { name: /Disable default exclusion \/models/i })).toBeTruthy();
     });
 
-    it('counts a re-included default as no longer skipped in the collapsed summary', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: [], disabledDefaultExcludes: ['/models'] } });
-      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: EXCLUDES, pgBackup: null });
+    // Regression: wildcard rules must survive edits and reload without the UI
+    // promising that disabling a default includes the matching files.
+    it('preserves independent custom rules through default toggles, save, and reload', async () => {
+      const loraPath = '/loras/*.safetensors';
+      const custom = ['*.safetensors', '/lo*/', 'loras/'];
+      const backup = { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: custom, disabledDefaultExcludes: [loraPath, '/cache'] };
+      getSettings.mockResolvedValue({ backup });
+      getBackupStatus.mockResolvedValue({ defaultExcludes: [EXCLUDES[0], { path: loraPath, reason: 'LoRA weights', overridable: true }] });
+      updateSettings.mockImplementation(async payload => { getSettings.mockResolvedValue(payload); return {}; });
       await renderTab();
 
-      const disclosure = screen.getByRole('button', { name: /Default exclusions/i });
-      expect(disclosure.textContent).toMatch(/1 path skipped/);
-      expect(disclosure.textContent).toMatch(/1 re-included/);
-    });
-
-    // The switch reports the user's own override, not the effective rsync
-    // outcome: a custom exclude that shadows a re-included default still keeps
-    // the path out of the backup, but the toggle must stay ON so clicking it
-    // doesn't silently drop the override while appearing to do nothing.
-    it('keeps a re-included default toggled on even when a custom exclude shadows it', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/backups', enabled: false, cronExpression: '0 2 * * *', excludePaths: ['models/'], disabledDefaultExcludes: ['/models'] } });
-      getBackupStatus.mockResolvedValue({ status: 'never', defaultExcludes: EXCLUDES, pgBackup: null });
-      await renderTab();
-
-      fireEvent.click(screen.getByRole('button', { name: /Default exclusions/i }));
-
-      const toggle = screen.getByRole('switch', { name: /Include \/models in backups/i });
+      expect(screen.getByText(/Additional rules still apply/)).toBeTruthy();
+      expect(screen.getByRole('button', { name: /Default exclusions/ }).textContent).toMatch(/1 enabled, 1 disabled/);
+      fireEvent.click(screen.getByRole('button', { name: /Default exclusions/ }));
+      const toggle = screen.getByRole('switch', { name: `Disable default exclusion ${loraPath}` });
       expect(toggle.getAttribute('aria-checked')).toBe('true');
-      // The effective state is surfaced in prose instead.
-      expect(screen.getByText(/still excluded via Additional Exclude Paths/i)).toBeTruthy();
+      expect(screen.getByText('(Default exclusion disabled)')).toBeTruthy();
+      expect(screen.queryByText(/re-included|\(included\)|paths? skipped/)).toBeNull();
+      expect(screen.queryByRole('switch', { name: /default exclusion \/cache/ })).toBeNull();
+      expect(screen.getByTitle('Fixed default exclusion — always enabled')).toBeTruthy();
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
+      for (const pattern of custom) expect(screen.getByText(pattern)).toBeTruthy();
+
+      // Broader patterns used to be rejected by the prefix approximation.
+      fireEvent.change(screen.getByLabelText('Additional Exclude Paths'), { target: { value: 'loras/**' } });
+      fireEvent.click(screen.getByLabelText('Add exclude path'));
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Save$/ })); });
+      expect(updateSettings).toHaveBeenLastCalledWith({ backup: { ...backup, disabledDefaultExcludes: ['/cache', loraPath], excludePaths: [...custom, 'loras/**'] } }, { silent: true });
+      expect(toast.error).not.toHaveBeenCalled();
+
+      cleanup();
+      await renderTab();
+      for (const pattern of [...custom, 'loras/**']) expect(screen.getByText(pattern)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: /Default exclusions/ }));
+      expect(screen.getByRole('switch', { name: `Disable default exclusion ${loraPath}` }).getAttribute('aria-checked')).toBe('true');
+      expect(screen.getByText('(Default exclusion disabled)')).toBeTruthy();
+      expect(screen.getByText(/Disabling a default does not guarantee/)).toBeTruthy();
     });
   });
 
@@ -468,9 +499,50 @@ describe('BackupTab', () => {
 
       expect(toast).not.toHaveBeenCalledWith('Backup already running');
       expect(toast.success).toHaveBeenCalledWith('Backup complete — 3 files changed', { icon: '💾' });
+      expect(screen.getByText(/7 tables/i)).toBeInTheDocument();
       // A real run refetches AND applies the result — the new snapshot renders.
       expect(getBackupSnapshots).toHaveBeenCalledTimes(2);
       await waitFor(() => expect(screen.getByText('snap-fresh')).toBeTruthy());
+    });
+  });
+
+  describe('manual backup failures', () => {
+    it('updates the rendered degraded status and snapshots without an extra error toast', async () => {
+      getBackupSnapshots.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'snap-degraded' }]);
+      triggerBackup.mockResolvedValue({
+        status: 'degraded', filesChanged: 3, pgBackup: { status: 'failed', reason: 'version_mismatch' },
+      });
+      await renderTab();
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+      });
+
+      expect(toast).toHaveBeenCalledWith('Backup complete — 3 files changed; database dump failed', { icon: '⚠️' });
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(toast.error).not.toHaveBeenCalled();
+      expect(screen.getByText(/Last backup degraded/i)).toBeInTheDocument();
+      expect(screen.getByText(/Dump failed: version_mismatch/i)).toBeInTheDocument();
+      expect(await screen.findByText('snap-degraded')).toBeInTheDocument();
+    });
+
+    it('clears pending state with one error and preserves prior status on rejection', async () => {
+      getBackupStatus.mockResolvedValue({ status: 'ok', defaultExcludes: [], pgBackup: { status: 'ok', sizeBytes: 1024, tableCount: 7 } });
+      getBackupSnapshots.mockResolvedValue([{ id: 'snap-existing' }]);
+      let rejectRun;
+      triggerBackup.mockReturnValue(new Promise((_, reject) => { rejectRun = reject; }));
+      await renderTab();
+      fireEvent.click(screen.getByRole('button', { name: /Run Backup Now/i }));
+      expect(screen.getByRole('button', { name: /Running…/i })).toBeDisabled();
+
+      await act(async () => { rejectRun(new Error('Connection lost')); });
+
+      expect(triggerBackup).toHaveBeenCalledWith({ silent: true });
+      expect(toast.error).toHaveBeenCalledExactlyOnceWith('Connection lost');
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: /Run Backup Now/i })).toBeEnabled();
+      expect(screen.getByText(/7 tables/i)).toBeInTheDocument();
+      expect(screen.getByText('snap-existing')).toBeInTheDocument();
+      expect(getBackupSnapshots).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -500,6 +572,36 @@ describe('BackupTab', () => {
       await renderTab();
       expect(screen.getByText(/Last backup degraded/i)).toBeTruthy();
       expect(screen.getByText(/Dump failed: version_mismatch/i)).toBeTruthy();
+    });
+  });
+
+  describe('resolved schedule from the API (#6632)', () => {
+    // The regression: editing something unrelated and saving used to write the
+    // screen's own defaults over the schedule, cancelling it.
+    it('preserves the resolved schedule when only an exclusion is edited and saved', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/example-backups', enabled: true, cronExpression: '0 0 * * *', excludePaths: [], disabledDefaultExcludes: [] }
+      });
+      updateSettings.mockResolvedValue({});
+      await renderTab();
+
+      fireEvent.change(screen.getByPlaceholderText('repos/'), { target: { value: 'scratch/' } });
+      fireEvent.click(screen.getByLabelText('Add exclude path'));
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Save$/i })); });
+
+      expect(updateSettings).toHaveBeenCalledWith(
+        { backup: expect.objectContaining({ enabled: true, cronExpression: '0 0 * * *', excludePaths: ['scratch/'] }) },
+        { silent: true }
+      );
+    });
+
+    // An unresolved response is not 'the defaults': the form must not render, so
+    // nothing can be saved over a live schedule.
+    it('refuses to render the form when the response carries no resolved schedule', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/example-backups' } });
+      render(<BackupTab />);
+      await waitFor(() => expect(screen.getByText(/Failed to load backup settings/i)).toBeTruthy());
+      expect(screen.queryByRole('button', { name: /^Save$/i })).toBeNull();
     });
   });
 });

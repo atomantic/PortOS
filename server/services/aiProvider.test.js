@@ -380,6 +380,14 @@ describe('callProviderAISimple — malformed / non-2xx responses', () => {
     vi.unstubAllGlobals();
   });
 
+  it('does not load or substitute another local model when model recovery is disabled', async () => {
+    respondWithText('No models loaded', { ok: false, status: 400 });
+    const result = await callProviderAISimple(provider, 'pinned-model', 'review this diff', { allowModelRecovery: false });
+    expect(result.error).toContain('No models loaded');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(globalThis.fetch.mock.calls[0][1].body).model).toBe('pinned-model');
+  });
+
   it('returns an error, not an empty success, on a non-JSON 200 body', async () => {
     respondWithText('<html><body>502 Bad Gateway</body></html>');
 

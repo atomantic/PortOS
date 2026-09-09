@@ -1636,55 +1636,23 @@ describe('cos.js source — priority + capacity invariants', () => {
       .toMatch(/if\s*\(\s*canQueueImprovementTasks\(\s*state\s*\)\s*\)/);
   });
 
-  it('both on-demand loops dedupe the cooldown stamp per app via reviewStartedApps set', () => {
-    // Multiple on-demand requests targeting the same app should advance its
-    // cooldown only once per cycle — without the guard, each request rewrites
-    // the same record. BOTH on-demand loops carry the duplication: the
-    // startup/manual `evaluateTasks` loop AND the event-driven `dequeueNextTask`
-    // loop (the common "Run Now" path). Pin (a) the set is declared and (b) the
-    // cooldown stamp is gated on it in each.
-    // Both engines' Priority-0 on-demand loops are now extracted helpers:
-    // `spawnPriority0OnDemand` in cosTaskGenerator.js (issue #1082) and
-    // `spawnDequeuePriority0OnDemand` in cos.js (issue #2530).
-    for (const { fnName, src } of [
-      { fnName: 'async function spawnPriority0OnDemand', src: GEN_SRC },
-      { fnName: 'async function spawnDequeuePriority0OnDemand', src: COS_SRC },
+  it('the on-demand marker discipline lives in the shared drain, not in either engine', () => {
+    // Per-app cooldown dedupe (one markAppReviewCooldown per cycle however many
+    // requests name the app) and the #978 deferred bind (bindAppReviewAgent only
+    // once a task exists) used to be duplicated in both Priority-0 engines and
+    // guarded by grepping each body. Both are pinned behaviorally in
+    // onDemandDrain.test.js now; what matters here is that neither engine has
+    // grown its own copy back.
+    for (const [engine, src] of [
+      ['spawnPriority0OnDemand', GEN_SRC],
+      ['spawnDequeuePriority0OnDemand', COS_SRC],
     ]) {
-      const fnBody = extractFnBody(src, src.indexOf(fnName));
-      expect(
-        fnBody,
-        `${fnName} must declare a reviewStartedApps set to dedupe per-app marks`
-      ).toMatch(/const\s+reviewStartedApps\s*=\s*new\s+Set\(/);
-      expect(
-        fnBody,
-        `${fnName} must gate markAppReviewCooldown on !reviewStartedApps.has(targetApp.id)`
-      ).toMatch(/if\s*\(\s*!\s*reviewStartedApps\.has\(\s*targetApp\.id\s*\)\s*\)/);
-    }
-  });
-
-  it('on-demand loops defer bindAppReviewAgent until a task is produced (issue #978)', () => {
-    // The phantom-active-agent bug: binding activeAgentId before the per-app
-    // task generator runs strands the marker when the generator returns null.
-    // Pin that both on-demand loops (a) advance the cooldown with
-    // markAppReviewCooldown, NOT markAppReviewStarted, and (b) only bind the
-    // active agent inside an `if (task)` guard after generation.
-    for (const { fnName, src } of [
-      { fnName: 'async function spawnPriority0OnDemand', src: GEN_SRC },
-      { fnName: 'async function spawnDequeuePriority0OnDemand', src: COS_SRC },
-    ]) {
-      const fnBody = extractFnBody(src, src.indexOf(fnName));
-      expect(
-        fnBody,
-        `${fnName} must advance cooldown via markAppReviewCooldown (not the conflated markAppReviewStarted)`
-      ).toMatch(/markAppReviewCooldown\(\s*targetApp\.id\s*\)/);
-      expect(
-        fnBody,
-        `${fnName} must NOT call markAppReviewStarted (conflates cooldown + bind, the #978 bug)`
-      ).not.toMatch(/markAppReviewStarted\(/);
-      expect(
-        fnBody,
-        `${fnName} must bind the active agent only after a task exists`
-      ).toMatch(/if\s*\(\s*task\s*\)\s*\{\s*await\s+bindAppReviewAgent\(\s*targetApp\.id/);
+      const fnBody = extractFnBody(src, src.indexOf(`async function ${engine}`));
+      expect(fnBody, `${engine} must delegate to the shared drain`).toContain('drainOnDemandRequests(');
+      for (const marker of ['reviewStartedApps', 'markAppReviewCooldown', 'bindAppReviewAgent']) {
+        expect(fnBody, `${engine} must not re-implement ${marker} — it belongs to onDemandDrain.js`)
+          .not.toContain(marker);
+      }
     }
   });
 
@@ -2388,19 +2356,18 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     expect(returnAfterTrigger).toBeLessThan(queueIdx);
   });
 
-  it('the on-demand spawn engine forwards ignoreTaskId to addTask', () => {
+  it('the dequeue on-demand engine hands its ignoreTaskId to the shared drain', () => {
     // The completion-triggered re-issue must be dedup-safe against the
-    // still-in_progress completing task, so the engine's addTask must forward
-    // the dequeue's ignoreTaskId.
+    // still-in_progress completing task, so the dequeue engine forwards its
+    // ignoreTaskId into the addTask options the shared drain applies. That
+    // forwarding is one of the three real differences between the engines, and
+    // both sides of it are pinned behaviorally in onDemandDrain.test.js.
     const engIdx = COS_SRC.indexOf('async function spawnDequeuePriority0OnDemand');
     expect(engIdx, 'spawnDequeuePriority0OnDemand must exist').toBeGreaterThan(-1);
-    const engSlice = COS_SRC.slice(engIdx, engIdx + 6400);
-    // The metadata merge itself is pinned once, in cosTaskGenerator.test.js —
-    // that guard greps the full statement against BOTH engine sources, so
-    // repeating a weaker subset here would only ever fail alongside it.
+    const engBody = extractFnBody(COS_SRC, engIdx);
     expect(
-      /addTask\(\s*task\s*,\s*'internal'\s*,\s*\{[\s\S]*?raw:\s*true[\s\S]*?ignoreTaskId[\s\S]*?\}\s*\)/.test(engSlice),
-      'on-demand engine must forward ignoreTaskId to addTask'
+      /addTaskOptions:\s*\{\s*ignoreTaskId\s*\}/.test(engBody),
+      'the dequeue engine must pass ignoreTaskId through addTaskOptions'
     ).toBe(true);
   });
 

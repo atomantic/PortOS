@@ -295,3 +295,30 @@ export function useModelDownloadStatus({ kind = 'image' } = {}) {
     downloading: !!activeModelId,
   };
 }
+
+// Preserve the cache-status contract: null is unknown; an explicit cached:false
+// requires a download. Older payloads that omit cached retain their behavior.
+const weightsNotReady = (status, loading) => loading || status === null || status?.cached === false;
+
+// One dismissal slot per asset role, with the selected download + bad-file names
+// in its key. Switching selections or discovering different damage re-shows the
+// warning. Integrity remains visible independently of readiness applicability,
+// so a damaged shared cache can still be repaired from this surface.
+export function useDownloadableAssets(descriptors, { loading = false, downloading = false, enabled = true } = {}) {
+  const [dismissedKeys, setDismissedKeys] = useState({});
+  return descriptors.map((asset) => {
+    const integrity = asset.status && !asset.status.downloading ? asset.status.integrity : null;
+    const integrityBad = integrity?.status === 'bad';
+    const badFiles = integrity?.badFiles || [];
+    const integrityKey = integrityBad ? `${asset.keyPrefix}:${badFiles.map(file => file.name).join(',')}` : null;
+    return {
+      ...asset,
+      blocked: enabled && asset.applies && (asset.extraBlocked || weightsNotReady(asset.status, loading)),
+      missingWeights: weightsNotReady(asset.status, false),
+      integrityBadCount: integrityBad ? badFiles.length : 0,
+      integrityKey,
+      showBanner: integrityBad && dismissedKeys[asset.key] !== integrityKey && !downloading,
+      dismiss: () => setDismissedKeys(previous => ({ ...previous, [asset.key]: integrityKey })),
+    };
+  });
+}

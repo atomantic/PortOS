@@ -21,6 +21,7 @@
  * standalone autofixer process.
  */
 
+import { isCliProvider, isTuiProvider } from './providerTypes.js';
 import os from 'os';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
@@ -56,13 +57,13 @@ export function isGrokCommand(command) {
 /** True for the CLI (headless) Grok provider. */
 export function isGrokCliProvider(provider) {
   return provider?.id === GROK_CLI_ID
-    || (provider?.type === 'cli' && isGrokCommand(provider?.command));
+    || (isCliProvider(provider) && isGrokCommand(provider?.command));
 }
 
 /** True for the TUI (interactive) Grok provider. */
 export function isGrokTuiProvider(provider) {
   return provider?.id === GROK_TUI_ID
-    || (provider?.type === 'tui' && isGrokCommand(provider?.command));
+    || (isTuiProvider(provider) && isGrokCommand(provider?.command));
 }
 
 // A prompt source already declared (single-turn prompt, prompt file, or JSON

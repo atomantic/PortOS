@@ -5,11 +5,13 @@ import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { formatDateTime, formatTimeOfDaySeconds, timeAgo } from '../../../utils/formatters';
 import Banner from '../../ui/Banner';
+import { MAINTENANCE_ORDER_GUIDANCE } from '../../../lib/quotaBurnTasks';
 import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults';
 import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
 import TaskConfigDrawer from './schedule/TaskConfigDrawer';
-import { TASK_FILTERS, DEFAULT_FILTER_ID } from './schedule/scheduleConstants';
+import MaintenanceRunForm from './schedule/MaintenanceRunForm';
+import { TASK_FILTERS, DEFAULT_FILTER_ID, TASK_SORTS, DEFAULT_SORT_ID, suggestedOrderSteps } from './schedule/scheduleConstants';
 
 export function mergeUpdatedTaskInterval(schedule, taskType, interval) {
   if (!schedule) return schedule;
@@ -45,12 +47,31 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  const label = searchParams.get('label') || '';
+  const setLabel = next => {
+    const params = new URLSearchParams(searchParams);
+    if (next) params.set('label', next);
+    else params.delete('label');
+    setSearchParams(params, { replace: true });
+  };
+
   const filterParam = searchParams.get('filter');
   const filter = TASK_FILTERS.some(f => f.id === filterParam) ? filterParam : DEFAULT_FILTER_ID;
   const setFilter = useCallback((next) => {
     const params = new URLSearchParams(searchParams);
     if (next === DEFAULT_FILTER_ID) params.delete('filter');
     else params.set('filter', next);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  // Card ordering rides the URL like its neighbours in the same control row, so
+  // a link to "the schedule in run order" survives a reload and can be shared.
+  const sortParam = searchParams.get('sort');
+  const sort = TASK_SORTS.some(option => option.id === sortParam) ? sortParam : DEFAULT_SORT_ID;
+  const setSort = useCallback((next) => {
+    const params = new URLSearchParams(searchParams);
+    if (next === DEFAULT_SORT_ID) params.delete('sort');
+    else params.set('sort', next);
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -65,8 +86,9 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
 
   const fetchSchedule = useCallback(async () => {
     const data = await api.getCosSchedule().catch(() => null);
-    setSchedule(data);
+    setSchedule(current => data || current);
     setLoading(false);
+    return data;
   }, []);
 
   useEffect(() => {
@@ -144,16 +166,17 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
   const tasks = schedule.tasks || schedule.appImprovement || schedule.selfImprovement || {};
   const allTaskTypes = Object.keys(tasks);
   const selectedConfig = selectedTask ? tasks[selectedTask] : null;
+  // The drawer's header shows the same advisory step the card does, so it is
+  // ranked from the same graph rather than from the one open task.
+  const selectedOrderStep = selectedTask ? suggestedOrderSteps(tasks)[selectedTask] : undefined;
 
   return (
     <CodeReviewDefaultsProvider>
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-baseline gap-2 flex-wrap min-w-0">
           <h2 className="text-xl font-semibold text-white">Task Schedule</h2>
-          <p className="text-sm text-gray-400 mt-1">
-            Configure how often each task type runs.
-          </p>
+          <p className="text-sm text-gray-400">Configure how often each task type runs.</p>
         </div>
         <button
           onClick={fetchSchedule}
@@ -164,6 +187,15 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
           Refresh
         </button>
       </div>
+
+      <Banner size="md" title="Recommended maintenance order">
+        <p className="text-sm break-words">{MAINTENANCE_ORDER_GUIDANCE}</p>
+        <p className="text-xs mt-1">Resolve findings between audits, then document the resulting code. Run the whole sequence now from here, or schedule it under quota gates in Quota Burn; both drain claim-issue between steps.</p>
+        <details className="mt-2">
+          <summary className="cursor-pointer text-sm font-medium">Run maintenance now</summary>
+          <MaintenanceRunForm schedule={{ ...schedule, tasks }} apps={apps} providers={providers} providersLoaded={providersLoaded} improvementDisabled={improvementDisabled} daemonRunning={daemonRunning} onRefresh={fetchSchedule} />
+        </details>
+      </Banner>
 
       {improvementDisabled && (
         <Banner size="md" icon={AlertCircle} title="Improvement is disabled">
@@ -206,7 +238,11 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
         onSelectTask={setSelectedTask}
         improvementDisabled={improvementDisabled}
         filter={filter}
+        label={label}
+        onLabelChange={setLabel}
         onFilterChange={setFilter}
+        sort={sort}
+        onSortChange={setSort}
       />
 
       {schedule.lastUpdated && (
@@ -229,6 +265,7 @@ export default function ScheduleTab({ apps, providers, providersLoaded, activePr
         onUpdateOverride={handleUpdateOverride}
         onBulkToggleOverride={handleBulkToggleOverride}
         allTaskTypes={allTaskTypes}
+        orderStep={selectedOrderStep}
         improvementDisabled={improvementDisabled}
         dataInputCatalog={schedule.dataInputCatalog || []}
       />

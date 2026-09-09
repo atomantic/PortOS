@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   ALWAYS_RUN_TESTS,
@@ -57,6 +62,54 @@ const TRACKED = [
   'scripts/migrations/210-example.test.js',
   'scripts/fix-windows-console.js',
 ];
+
+it('preserves Git-quoted source and contract paths through the planner CLI', () => {
+  const root = mkdtempSync(join(tmpdir(), 'portos-ci-paths-'));
+  const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const source = 'server/lib/example.js';
+  const unicodeSource = 'server/lib/café.js';
+  const contract = 'server/lib/café.test.js';
+  const write = (path, body) => {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), body);
+  };
+  const commit = () => {
+    git('add', '--all');
+    git('-c', 'user.name=Example Contributor', '-c', 'user.email=contributor@example.com',
+      '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture');
+  };
+  const plan = (base) => JSON.parse(execFileSync(process.execPath, [planner], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, CI_BASE_SHA: base, CI_BASE_REF: 'main', CI_FORCE_FULL: 'false', GITHUB_OUTPUT: '' },
+  }));
+  try {
+    git('init', '-q');
+    git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+    git('config', 'core.quotePath', 'true');
+    write(source, 'export const value = 1;\n');
+    write(unicodeSource, 'export const value = 1;\n');
+    write(contract, '// Reads example.js as text rather than importing it.\n');
+    commit();
+    const base = git('rev-parse', 'HEAD');
+    write(source, 'export const value = 2;\n');
+    commit();
+    const sourcePlan = plan(base);
+    expect(sourcePlan.full).toBe(false);
+    expect(JSON.parse(sourcePlan.server_files)).toContain(contract);
+
+    write(unicodeSource, 'export const value = 2;\n');
+    commit();
+    const unicodePlan = plan(base);
+    expect(unicodePlan.full).toBe(false);
+    expect(unicodePlan.changed_files).toEqual([unicodeSource, source]);
+    expect(JSON.parse(unicodePlan.server_sources)).toContain(unicodeSource);
+    expect(JSON.parse(unicodePlan.server_files)).toContain(contract);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe('CI test impact planner', () => {
   it('skips all expensive jobs for documentation-only changes, keeping the always-run guards', () => {

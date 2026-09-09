@@ -13,7 +13,7 @@
  * follow-ups, an audit run files findings), and the section is four lines.
  */
 
-import { formatPlannerLabelGuidance, resolvePlannerId } from '../../lib/dispatchLabels.js';
+import { formatPlannerLabelGuidance, resolvePlannerId, MANDATORY_DISPATCH_HINT_GUIDANCE } from '../../lib/dispatchLabels.js';
 
 /**
  * The `## Planner Attribution` section for one run, or '' when PortOS could not
@@ -33,4 +33,10 @@ export function buildPlannerAttributionSection({ providerId = null, model = null
   );
   if (!guidance) return '';
   return `## Planner Attribution\n\n${guidance}`;
+}
+
+/** Runtime contract reaches stored/custom tasks and follow-ups, even without a planner identity. */
+export function buildIssueFilingSection(options = {}) {
+  const attribution = buildPlannerAttributionSection(options);
+  return `## Issue Filing Labels\n\n${MANDATORY_DISPATCH_HINT_GUIDANCE}${attribution ? `\n\n${attribution}` : ''}`;
 }

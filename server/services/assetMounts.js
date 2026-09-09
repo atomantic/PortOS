@@ -15,6 +15,7 @@
  * resolve after the mock, not at import.
  */
 import express from 'express';
+import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { ASSET_ROUTE_PREFIXES, SERVER_OWNED_PREFIXES } from '../lib/assetRoutePrefixes.js';
@@ -28,6 +29,23 @@ import { escapeRegExp } from '../lib/textUtils.js';
 // Tailnet links — losing range support here would silently force every
 // retry to restart from byte 0 on a multi-MB PNG / video.
 const ASSET_STATIC_OPTS = { acceptRanges: true };
+
+// Vite names every chunk, entry, stylesheet and imported asset it emits under
+// `dist/assets/` by content hash (`index-B5J1S4I5.js`), so the bytes behind one
+// of those URLs can never change — a rebuild produces new names, and the
+// `no-cache` index.html (served by the SPA fallback in `server/index.js`) is
+// what points the browser at them. Say so with `immutable` and the one-year
+// ceiling, and the browser stops asking. Without it serve-static's default
+// `max-age=0` made every hashed chunk stale the moment it landed: measured on
+// the dashboard with no service worker (the default plain-HTTP tailnet posture,
+// where none can register), a warm page load re-sent all 186 chunks as
+// conditional GETs and got 186 `304`s back — pure round trips, at HTTP/1.1's
+// six-per-host, before the app could start. The rest of `dist/` is
+// `client/public/` copied verbatim under STABLE names (`sw.js`, `manifest.json`,
+// `fonts/`, `sky/`, `hdri/`), whose bytes do change under the same URL, so
+// those keep the default and revalidate by ETag per load.
+const IMMUTABLE_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
+const CLIENT_ASSET_STATIC_OPTS = { immutable: true, maxAge: IMMUTABLE_MAX_AGE_MS, index: false };
 
 // Only `<workId>/drafts/<draftId>.md` is needed for federation body pulls.
 // Without this gate the static root would also serve adjacent work-metadata
@@ -146,4 +164,22 @@ export function mountAssetRoutes(app, ownedPrefixes = SERVER_OWNED_PREFIXES) {
       return sendErrorResponse(res, new ServerError('Not found', { status: 404 }));
     });
   });
+}
+
+/**
+ * Serve the built client (`client/dist`) in two tiers — see
+ * `CLIENT_ASSET_STATIC_OPTS`: the content-hashed `/assets/**` as immutable, and
+ * everything else in `dist/` with serve-static's revalidate-per-load default.
+ *
+ * `index: false` on both keeps express.static from short-circuiting `/` (and
+ * any bare directory) with the raw index.html — that request has to reach the
+ * SPA fallback in `server/index.js`, which serves the build-id-stamped copy
+ * with `Cache-Control: no-cache`. A chunk the current build no longer ships
+ * (a browser reloading across a rebuild) misses both tiers and falls through
+ * to that fallback's extension guard, which 404s it rather than answering with
+ * HTML — the stale-chunk reload in the client relies on that 404.
+ */
+export function mountClientDist(app, distDir) {
+  app.use('/assets', express.static(join(distDir, 'assets'), CLIENT_ASSET_STATIC_OPTS));
+  app.use(express.static(distDir, { index: false }));
 }

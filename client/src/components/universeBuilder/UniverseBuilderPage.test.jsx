@@ -41,13 +41,15 @@ vi.mock('../ui/TabPills', () => ({ default: () => null }));
 vi.mock('./CompositeSheetsEditor', () => ({ default: () => null }));
 vi.mock('./RenderTab', () => ({ default: () => null }));
 vi.mock('./UniverseBibleTab', () => ({ default: () => null }));
+vi.mock('./graph/UniverseGraphTab', () => ({ default: () => null }));
 vi.mock('./UniverseCategoryEditor', () => ({ CategoryEditor: () => null }));
 vi.mock('./UniverseTrunkPanels', () => ({ OtherTab: () => null, TrunkView: () => null }));
 vi.mock('lucide-react', () => {
   const Icon = () => null;
   return {
     ArrowLeft: Icon, BookOpen: Icon, FolderTree: Icon, ImagePlus: Icon, Layers: Icon,
-    Loader2: Icon, MapPin: Icon, Package: Icon, Plus: Icon, Save: Icon, Trash2: Icon, Users: Icon,
+    Loader2: Icon, MapPin: Icon, Network: Icon, Package: Icon, Plus: Icon, Save: Icon,
+    Trash2: Icon, Users: Icon,
   };
 });
 

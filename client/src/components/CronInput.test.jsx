@@ -43,6 +43,30 @@ describe('CronInput', () => {
     expect(screen.queryByText(/Unsaved changes/i)).toBeNull();
   });
 
+  it('blocks saving an out-of-range expression and says which field is wrong', () => {
+    // #6634: the editor used to enable Save on any 5-token expression, so the
+    // user could save a schedule the server now 400s and the scheduler could
+    // never fire.
+    const onSave = vi.fn();
+    render(<CronInput value="0 7 * * *" onSave={onSave} onCancel={vi.fn()} />);
+
+    const expression = screen.getByLabelText('Cron expression');
+    fireEvent.change(expression, { target: { value: '99 9 * * *' } });
+
+    const save = screen.getByRole('button', { name: 'Save schedule' });
+    expect(save).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Invalid minute field');
+    fireEvent.click(save);
+    expect(onSave).not.toHaveBeenCalled();
+
+    // A leap-day cron has no occurrence in the scheduler's search window but is
+    // valid syntax, so the editor must not block it.
+    fireEvent.change(expression, { target: { value: '0 0 29 2 *' } });
+    expect(screen.getByRole('button', { name: 'Save schedule' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }));
+    expect(onSave).toHaveBeenCalledWith('0 0 29 2 *');
+  });
+
   it('closes immediately when there are no edits', () => {
     const onCancel = vi.fn();
     render(<CronInput value="0 7 * * *" onSave={vi.fn()} onCancel={onCancel} />);

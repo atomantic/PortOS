@@ -14,6 +14,7 @@ import { ASSESSABLE_RUNTIMES } from './localProviderRuntime.js';
 import { SWEEP_SCOPES } from './localModelAssessment.js';
 import { CAPABILITY_TEST_IDS } from './modelCapabilityTests.js';
 import { HF_REPO_ID_RE } from './huggingfaceLora.js';
+import { isLoopbackHostname, parseBrowserOrigin } from './beeperOAuthOrigin.js';
 
 // iMessage ingestion config (#2151) — the `settings.imessage` slice. Sync is OFF
 // by default and only reads chat.db when enabled (needs macOS Full Disk Access).
@@ -53,6 +54,106 @@ export const youtubeConfigSchema = z.object({
   enabled: z.boolean().optional(),
   intervalMinutes: z.number().int().min(1).max(1440).optional()
 });
+
+// Beeper Desktop bridge ingestion + connection config (#30) — the
+// `settings.beeper` slice. Sync is OFF by default and only talks to the local
+// Beeper Desktop API (default http://127.0.0.1:23373) when enabled.
+// Deliberately excludes `token`/`tokenExpiresAt`: the credential is stored
+// AES-256-GCM encrypted in Postgres and written only through the connect routes
+// (`beeperPastedTokenSchema` below, #31). This slice's Settings surface may show
+// whether a token is configured but must never accept or persist one in
+// plaintext. `.strict()` so a client attempting to
+// smuggle a token through this generic route 400s instead of the value
+// silently reaching disk.
+// `baseUrl` is prefixed onto every Beeper API call AND the realtime WebSocket
+// URL with `Authorization: Bearer <vault token>` attached (SEC-2) — so a value
+// pointed at an attacker-controlled host turns one settings PUT into a
+// credential exfiltration (SSRF). Loopback-only by default: `baseUrl` must
+// parse as a bare `http(s)` origin (reusing `parseBrowserOrigin`, the same
+// "not a path, not a query, not credentials" parser the OAuth redirect-origin
+// gate uses) whose hostname is loopback (`isLoopbackHostname`, ditto reused
+// rather than duplicated). `allowNonLoopbackBaseUrl` is the explicit opt-in
+// for an install that genuinely runs Beeper Desktop elsewhere on the
+// network — off by default, so the dangerous posture is never the shipped one.
+// Both checks are re-applied inside `normalizeBaseUrl`
+// (`server/services/beeperClient.js`) because `getSettings()` reads
+// `settings.json` with no schema re-validation on read, so a hand-edited file
+// is a second path to the same value this schema exists to block.
+export const beeperSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMinutes: z.number().int().min(1).max(1440).optional(),
+  baseUrl: z.string().trim().min(1).max(500).optional(),
+  attachmentBudgetGb: z.number().min(0.1).max(1000).optional(),
+  allowNonLoopbackBaseUrl: z.boolean().optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.baseUrl === undefined) return;
+  const parsed = parseBrowserOrigin(value.baseUrl);
+  if (!parsed) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['baseUrl'],
+      message: 'baseUrl must be a bare http(s) origin (scheme, host, optional port — no path, query, or credentials)',
+    });
+    return;
+  }
+  if (!isLoopbackHostname(parsed.hostname) && value.allowNonLoopbackBaseUrl !== true) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['baseUrl'],
+      message: 'baseUrl must be a loopback origin unless allowNonLoopbackBaseUrl is set',
+    });
+  }
+});
+
+// Beeper connect flow (#31). The token NEVER rides the generic settings route
+// (`beeperSettingsSchema` above is `.strict()` with no token field) — it is
+// accepted here, on its own dedicated write path, and stored AES-256-GCM
+// encrypted in Postgres by `services/beeperCredentials.js`. The upper bound is
+// slack for an opaque bearer of unknown shape, not a claim about its format.
+export const beeperPastedTokenSchema = z.object({
+  token: z.string().trim().min(1).max(4096),
+}).strict();
+
+// The OAuth redirect target Beeper sends the browser back to. `state` is the
+// PKCE-flow correlator minted by `startBeeperOAuth`; `code` is single-use. Both
+// are validated before anything is looked up, and an authorization-server
+// `error` is accepted so the callback can report a user-side denial instead of
+// reading as a malformed request.
+export const beeperOAuthCallbackSchema = z.object({
+  code: z.string().trim().min(1).max(2048).optional(),
+  state: z.string().trim().min(1).max(512).optional(),
+  error: z.string().trim().max(256).optional(),
+}).passthrough();
+
+// The outbound outbox (#36, decided on #8). Two schemas for the two-step send:
+// creating the row from the composer body, then sending it.
+//
+// `confirmFirstContact` is NOT a UI nicety riding on the request — it is the
+// gate. The server refuses the first outbound message to a conversation unless
+// it is explicitly `true`, so the flag has to survive validation as its own
+// field rather than being inferred from anything else in the body. `.strict()`
+// on both: an unrecognized field on a send request is a client bug worth a 400,
+// not something to ignore on a path that talks to a real person.
+export const beeperOutboxCreateSchema = z.object({
+  conversationId: z.string().uuid(),
+  body: z.string().min(1).max(10000),
+}).strict();
+
+export const beeperOutboxSendSchema = z.object({
+  confirmFirstContact: z.boolean().optional(),
+}).strict();
+
+// The row id in the send path. Validated as a UUID before it reaches a query,
+// so a malformed id answers 400 rather than a Postgres cast error rendered as
+// a 500 — the same guard `routes/messages.js` puts on its draft ids.
+export const beeperOutboxParamsSchema = z.object({
+  id: z.string().uuid(),
+}).strict();
+
+export const beeperOutboxListSchema = z.object({
+  conversationId: z.string().uuid(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+}).strict();
 
 // Shared LoRA-training parameter bounds — used by both the settings-slice
 // defaults and the per-run override on POST /api/lora-training/runs.

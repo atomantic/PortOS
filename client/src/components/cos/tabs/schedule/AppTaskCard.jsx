@@ -9,7 +9,7 @@ import TaskModelQuickControls from './TaskModelQuickControls';
 // One scheduled task rendered as a status-rich card. Browsing plus the common
 // "retarget the model and run it" loop happen here; the rest of the
 // configuration lives in the slide-over drawer (opened via Configure).
-export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfigure, onUpdate, providers, providersLoaded = true, activeProviderId, improvementDisabled }) {
+export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfigure, onUpdate, providers, providersLoaded = true, activeProviderId, improvementDisabled, orderStep }) {
   // Owned here, not in the controls, so Run can gate on the same `saving` flag —
   // it reads the server-side config, so a run fired mid-write uses the old pins.
   const pins = useTaskModelPins({ taskType, config, providers, activeProviderId, onUpdate });
@@ -27,12 +27,15 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
 
   return (
     <div className="flex flex-col border border-port-border rounded-lg bg-port-card hover:border-port-border/60 transition-colors">
+      {/* `flex flex-col items-stretch` is load-bearing: a stretched <button> centers its
+          content box vertically, which floats a short card's body to the middle of the
+          card and breaks the top alignment across a row. */}
       <button
         type="button"
         onClick={() => onConfigure(taskType)}
-        className="flex-1 text-left p-4 space-y-3 rounded-t-lg hover:bg-port-card/60 transition-colors"
+        className="flex-1 flex flex-col items-stretch gap-3 text-left p-4 rounded-t-lg hover:bg-port-card/60 transition-colors"
       >
-        <TaskHeader taskType={taskType} config={config} />
+        <TaskHeader taskType={taskType} config={config} orderStep={orderStep} />
 
         {/* Next run */}
         <div className="flex items-center gap-1.5 text-xs min-w-0">
@@ -63,8 +66,11 @@ export default function AppTaskCard({ taskType, config, apps, onTrigger, onConfi
               ? `Last run ${timeAgo(config.globalLastRun)} · ${config.globalRunCount || 0}×`
               : 'Never run'}
           </div>
+          {/* "waits for" is the ENFORCED gate; the advisory order renders as
+              "Run first:" chips in TaskHeader above. Spelling out the
+              difference here keeps the two lines from reading as one. */}
           {config.runAfter?.length > 0 && (
-            <div className="truncate">after: {config.runAfter.join(', ')}</div>
+            <div className="truncate" title={`Blocked until these run: ${config.runAfter.join(', ')}`}>waits for: {config.runAfter.join(', ')}</div>
           )}
         </div>
       </button>

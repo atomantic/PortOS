@@ -391,13 +391,13 @@ async function queuedOnDemandReason(queued, taskType, appId) {
  * same step the dispatch would refuse — and a burn cannot be the one path that
  * spends a subscription while the user has CoS improvement switched off.
  */
-export async function invokeQuotaBurnStep({ step, family, candidate, context, force = false, catalog = null } = {}) {
+export async function invokeQuotaBurnStep({ step, family, candidate, context, force = false, catalog = null, maintenanceRunId = null } = {}) {
   const resolved = await resolveQuotaBurnStep(step, catalog);
   if (resolved.unavailable) return declined(resolved.unavailable.reason);
 
   if (resolved.kind === 'programmatic') return runProgrammaticStep({ resolved, family, context, force });
-  if (resolved.kind === 'custom') return runCustomJobStep({ resolved, step, family, candidate });
-  return runBuiltinTaskStep({ resolved, step, family, candidate });
+  if (resolved.kind === 'custom') return runCustomJobStep({ resolved, step, family, candidate, maintenanceRunId });
+  return runBuiltinTaskStep({ resolved, step, family, candidate, maintenanceRunId });
 }
 
 /**
@@ -429,7 +429,7 @@ async function runProgrammaticStep({ resolved, family, context, force }) {
  * `force` is NOT passed through: it means "past the quota gates", and the
  * schedule's gates are not quota gates.
  */
-async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
+async function runBuiltinTaskStep({ resolved, step, family, candidate, maintenanceRunId }) {
   // Re-checked HERE, not left to the probe: a forced run of a named step skips
   // the probe entirely (the click IS the selection), and `triggerOnDemandTask`
   // appends unconditionally — so without this, two forced clicks queue the same
@@ -449,6 +449,10 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
       family: family.id,
       stepId: step.id,
       limitingResetAt: candidate?.limitingResetAt ?? null,
+      // Set only by a MANUAL maintenance run (`maintenanceRun.js`): the mark
+      // that keeps the quota-burn loop from walking its plan on this agent's
+      // completion. Omitted, not null, on an automatic burn.
+      ...(maintenanceRunId ? { maintenanceRunId } : {}),
       overrides: {
         // The RESOLVED provider, not the step's pin: an unpinned step must still
         // land on this family's provider rather than the daemon's active one, or
@@ -462,7 +466,9 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
         // is what carries a migrated issues-only burn's explicit
         // `fileIssues: true` (#6381); without it the burn would run the
         // referenced task's SAVED mode and start writing code.
-        params: resolved.effective.params,
+        // The canonical generator merges saved global and app metadata itself.
+        // Re-sending the global defaults here would overwrite app-specific claim filters.
+        params: step.overrides?.params || {},
       },
     },
   });
@@ -500,7 +506,7 @@ async function runBuiltinTaskStep({ resolved, step, family, candidate }) {
  * `forceSpawnTask`, and a blocked twin is reported as a decline instead of
  * revived. See this module's header for why each of those matters.
  */
-async function runCustomJobStep({ resolved, step, family, candidate }) {
+async function runCustomJobStep({ resolved, step, family, candidate, maintenanceRunId }) {
   const approval = unattendedApprovalRefusal(resolved.job);
   if (approval) return declined(approval);
   // `addTask`'s duplicate detection catches an identical QUEUED twin below, but
@@ -537,6 +543,7 @@ async function runCustomJobStep({ resolved, step, family, candidate }) {
     quotaBurnFamily: family.id,
     quotaBurnLimitingResetAt: candidate?.limitingResetAt ?? null,
     quotaBurnStepId: step.id,
+    ...(maintenanceRunId ? { quotaBurnMaintenanceRunId: maintenanceRunId } : {}),
   }, 'internal', { suppressDequeue: true });
 
   if (!persisted?.id) return declined(`"${resolved.job.name}" was not queued`);

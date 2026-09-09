@@ -68,9 +68,12 @@ const load = async (taskType) =>
  * broken handler can't wedge a burn family's whole plan or blank a status page.
  */
 export async function countScheduledHandlerPending({ taskType, params, job, family } = {}) {
-  const mod = await load(taskType);
-  if (!mod) return { count: 0, detail: `unknown scheduled handler: ${taskType}` };
-  return mod.countPending({ params, job, family })
+  // Include lazy module initialization and synchronous handler throws in the
+  // same failure boundary as rejected handler promises.
+  return load(taskType)
+    .then((mod) => mod
+      ? mod.countPending({ params, job, family })
+      : { count: 0, detail: `unknown scheduled handler: ${taskType}` })
     .catch((err) => ({ count: 0, detail: `probe failed: ${err.message}` }));
 }
 
@@ -80,8 +83,9 @@ export async function countScheduledHandlerPending({ taskType, params, job, fami
  * to start must not charge a quota window's cap.
  */
 export async function runScheduledHandler({ taskType, params, job, family, context, force = false } = {}) {
-  const mod = await load(taskType);
-  if (!mod) return { dispatched: false, reason: `unknown scheduled handler: ${taskType}` };
-  return mod.run({ params, job, family, context, force })
+  return load(taskType)
+    .then((mod) => mod
+      ? mod.run({ params, job, family, context, force })
+      : { dispatched: false, reason: `unknown scheduled handler: ${taskType}` })
     .catch((err) => ({ dispatched: false, reason: `handler failed: ${err.message}` }));
 }

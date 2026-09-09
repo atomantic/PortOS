@@ -15,7 +15,7 @@
  */
 
 import { isLocalInstanceProvider, localBackendForProvider } from './providerEndpoints.js';
-import { AGENT_HARNESS_PROVIDER_TYPES, isApiProvider } from './providerTypes.js';
+import { isProcessProvider, isApiProvider } from './providerTypes.js';
 import { isHardwareCompatible } from './systemCapabilities.js';
 import { CALLER_MODE_POLICIES } from '../../../server/lib/callerModePolicy.js';
 
@@ -149,7 +149,7 @@ export const filterRunnableProviders = (providers, selectedProviderIds = []) => 
     (Array.isArray(selectedProviderIds) ? selectedProviderIds : [selectedProviderIds]).filter(Boolean)
   );
   return (Array.isArray(providers) ? providers : []).filter(provider =>
-    AGENT_HARNESS_PROVIDER_TYPES.includes(provider?.type) || preservedIds.has(provider?.id)
+    isProcessProvider(provider) || preservedIds.has(provider?.id)
   );
 };
 

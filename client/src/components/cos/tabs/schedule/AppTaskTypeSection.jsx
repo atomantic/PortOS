@@ -1,31 +1,37 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import AppTaskCard from './AppTaskCard';
-import { TASK_FILTERS, DEFAULT_FILTER_ID, taskSortKey } from './scheduleConstants';
+import { TASK_FILTERS, DEFAULT_FILTER_ID, TASK_SORTS, compareByStatus, compareBySuggestedOrder, suggestedOrderSteps, taskLabels } from './scheduleConstants';
 
-export default function AppTaskTypeSection({ tasks, apps, providers, providersLoaded, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange }) {
+export default function AppTaskTypeSection({ tasks, apps, providers, providersLoaded, activeProviderId, onTrigger, onUpdate, onSelectTask, improvementDisabled, filter, onFilterChange, label = '', onLabelChange, sort, onSortChange }) {
   const [search, setSearch] = useState('');
   const taskEntries = Object.entries(tasks || {});
+  // Ranked over every task, not just the visible ones, so filtering to one
+  // label doesn't renumber the sequence under the user.
+  const orderSteps = useMemo(() => suggestedOrderSteps(tasks), [tasks]);
 
   const activeFilter = TASK_FILTERS.find(f => f.id === filter) || TASK_FILTERS[0];
   const counts = Object.fromEntries(TASK_FILTERS.map(f => [f.id, taskEntries.filter(f.match).length]));
 
+  const labels = [...new Set(taskEntries.flatMap(([, config]) => taskLabels(config)))].sort();
   const query = search.trim().toLowerCase();
   const visibleEntries = taskEntries
     .filter(activeFilter.match)
-    .filter(([taskType]) => !query || taskType.toLowerCase().includes(query))
-    .sort(([aType, aConfig], [bType, bConfig]) => {
-      const a = taskSortKey(aType, aConfig);
-      const b = taskSortKey(bType, bConfig);
-      return a.order - b.order || a.next - b.next || a.taskType.localeCompare(b.taskType);
-    });
+    .filter(([, config]) => !label || taskLabels(config).includes(label))
+    .filter(([taskType, config]) => !query || [taskType, config.displayName, config.description, ...taskLabels(config)].filter(Boolean).join(' ').toLowerCase().includes(query))
+    .sort(sort === 'suggested-order' ? compareBySuggestedOrder(orderSteps) : compareByStatus);
 
   if (taskEntries.length === 0) return null;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <h3 className="text-lg font-semibold text-white">Improvement Tasks</h3>
+      <div className="flex items-start gap-2 flex-wrap">
+        <div className="min-w-0">
+          <h3 className="text-lg font-semibold text-white leading-tight">Improvement Tasks</h3>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Tasks that analyze and improve PortOS and managed apps. Click a card to configure its schedule and to turn it on or off per app.
+          </p>
+        </div>
         <div className="flex items-center gap-1 ml-auto flex-wrap">
           {TASK_FILTERS.map(f => {
             const active = activeFilter.id === f.id;
@@ -46,35 +52,48 @@ export default function AppTaskTypeSection({ tasks, apps, providers, providersLo
           })}
         </div>
       </div>
-      <p className="text-sm text-gray-400">
-        Tasks that analyze and improve PortOS and managed apps. Click a card to configure its schedule and to turn it on or off per app.
-      </p>
-
-      <div className="relative max-w-sm">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Filter tasks by name…"
-          aria-label="Filter tasks by name"
-          className="w-full bg-port-card border border-port-border rounded-lg pl-9 pr-9 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent/50"
-        />
-        {search && (
-          <button
-            type="button"
-            onClick={() => setSearch('')}
-            aria-label="Clear filter"
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white"
-          >
-            <X size={14} />
-          </button>
-        )}
+      {/* Label + search share one row so the card grid starts higher above the fold. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[14rem] max-w-sm">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search names, descriptions, labels…"
+            aria-label="Filter tasks by name"
+            className="w-full bg-port-card border border-port-border rounded-lg pl-9 pr-9 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent/50"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              aria-label="Clear filter"
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+        <label htmlFor="schedule-label-filter" className="text-sm text-gray-400">Label</label>
+        <select id="schedule-label-filter" value={label} onChange={event => onLabelChange(event.target.value)}
+          className="max-w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white">
+          <option value="">All labels</option>
+          {label && !labels.includes(label) && <option value={label}>{label} (unavailable)</option>}
+          {labels.map(value => <option key={value} value={value}>{value} ({taskEntries.filter(([, config]) => taskLabels(config).includes(value)).length})</option>)}
+        </select>
+        {label && <button onClick={() => onLabelChange('')} className="text-sm text-port-accent">Clear label</button>}
+        <label htmlFor="schedule-sort" className="text-sm text-gray-400">Sort</label>
+        <select id="schedule-sort" value={sort} onChange={event => onSortChange(event.target.value)}
+          className="max-w-full bg-port-card border border-port-border rounded px-3 py-2 text-sm text-white"
+          title="Suggested order sorts by each task's advisory position — what to run first">
+          {TASK_SORTS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+        </select>
       </div>
 
       {visibleEntries.length === 0 ? (
         <div className="text-center py-8 text-gray-500 border border-dashed border-port-border rounded-lg">
-          {query
+          {label ? <>No tasks match this label and the current filters. <button onClick={() => onLabelChange('')} className="text-port-accent">Clear label</button></> : query
             ? <>No tasks match “{search.trim()}”. <button onClick={() => setSearch('')} className="text-port-accent hover:underline">Clear filter</button></>
             : <>{activeFilter.emptyMessage}{' '}
                 {activeFilter.id !== DEFAULT_FILTER_ID && (
@@ -96,6 +115,7 @@ export default function AppTaskTypeSection({ tasks, apps, providers, providersLo
               onUpdate={onUpdate}
               onConfigure={onSelectTask}
               improvementDisabled={improvementDisabled}
+              orderStep={orderSteps[taskType]}
             />
           ))}
         </div>

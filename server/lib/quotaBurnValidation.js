@@ -101,8 +101,12 @@ const quotaBurnJobSchema = z.object({
   // rotation until the user re-arms it. Absent reads as `false`, so plans
   // written before this field keep repeating.
   runOnce: z.boolean().optional(),
+  drain: z.boolean().optional(),
   params: z.record(paramValueSchema).optional(),
 }).strict().superRefine((job, ctx) => {
+  if (job.drain && (job.taskRef?.kind !== 'builtin' || job.taskRef.taskType !== 'claim-issue' || job.runOnce !== true)) {
+    ctx.addIssue({ code: 'custom', path: ['drain'], message: 'A drain must reference claim-issue and run once until drained' });
+  }
   // Exactly one identity. Both would leave the normalizer choosing between a
   // reference and a copied prompt; neither is a step with no work at all.
   if (job.taskRef && job.jobType) {
@@ -129,6 +133,7 @@ const pinnedOutOfFamily = (familyId, pin) => {
 };
 
 const quotaBurnFamilySchema = z.object({
+  sequence: z.boolean().optional(),
   enabled: z.boolean().optional(),
   resetWithinHours: z.number().min(B.resetWithinHours.min).max(B.resetWithinHours.max).optional(),
   reservePercent: z.number().min(B.reservePercent.min).max(B.reservePercent.max).optional(),
@@ -152,6 +157,9 @@ const quotaBurnFamilySchema = z.object({
  */
 const familySchemaFor = (familyId) => quotaBurnFamilySchema.superRefine((family, ctx) => {
   (family.jobs || []).forEach((job, index) => {
+    if (family.sequence && (!job.runOnce || job.taskRef?.kind !== 'builtin' || (!job.taskRef.appId || requiresInstallWideTarget(job.taskRef.taskType)))) {
+      ctx.addIssue({ code: 'custom', path: ['jobs', index], message: 'Sequence steps must be run-once app scheduled tasks' });
+    }
     for (const [path, pin] of [
       [['jobs', index, 'providerId'], job.providerId],
       [['jobs', index, 'overrides', 'providerId'], job.overrides?.providerId],

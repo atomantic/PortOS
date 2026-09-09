@@ -6,6 +6,7 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normaliz
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow } from '../../lib/slashdoInvocation.js';
 import { shellQuote } from '../../lib/shellQuote.js';
+import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
 import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
@@ -18,19 +19,24 @@ function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
     : guidance;
 }
 
+const REASONING_ONLY_BULLET = '**This is a reasoning-only task.** The worktree is discarded on exit — do NOT commit, push, merge, or open a PR. Write your result to the completion sentinel (see the Completion section) and stop.';
+const DISCARD_WORKTREE_HYGIENE = '- **Do NOT commit, push, or open a PR.** This worktree is discarded on exit — your only output is the completion sentinel (see the Completion section above).';
+
 /**
  * Build the single "## Guidelines" completion-handoff bullet for the full
- * (api) prompt path. Mirrors the helper pattern the light path already uses
- * (`worktreeCommitGuidance`, `buildTuiCompletionSection`) — same 4-branch
- * decision tree (read-only / TUI / worktree+PR / worktree-only / default) but
- * flattened into a function so reading is linear instead of a nested ternary.
+ * (api) prompt path, and the `## Instructions` step 4 / `## Git Hygiene` /
+ * commit-target trio that has to agree with it.
+ *
+ * Both take the completion mode `resolveCompletionMode` already decided — they
+ * do not re-derive it. Everything else they take is RENDERING detail (which
+ * `/do:*` command this host can type, whether a PR is a human's to land), never
+ * a second opinion about the contract.
  *
  * Returns the bullet body WITHOUT the leading `- ` marker (caller prepends),
- * or `null` when the branch produces no text (the legacy empty-string tail).
+ * or `null` when the mode produces no text (the legacy empty-string tail).
  *
  * @param {Object} opts
- * @param {boolean} opts.isReadOnly
- * @param {boolean} opts.isTui
+ * @param {string} opts.mode - a `COMPLETION_MODES` key
  * @param {string|null} opts.tuiCompletionCommand - `/do:pr` or `/do:push`; `null`
  *   when PortOS merges the branch back itself and the workflow is commit-only
  *   (see `portosMergesBranchOnExit`)
@@ -44,75 +50,166 @@ function withNoChangeAuditGuidance(guidance, noChangeSuccess) {
  * @returns {string|null}
  */
 export function buildCompletionGuidelineBullet({
-  isReadOnly, isTui, tuiCompletionCommand, slashdoFree = false,
-  worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, discardWorktree = false, noCodeOutput = false,
-  leavePrOpen = false, isPrFollowUp = false, claimFlow = false, noChangeSuccess = false, whenDone = null,
-  toolFreeReasoning = false,
+  mode, tuiCompletionCommand, slashdoFree = false,
+  worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN,
+  leavePrOpen = false, noChangeSuccess = false, whenDone = null,
 }) {
-  // Checked before every other contract: a tool-free stage cannot write a
-  // sentinel, call an API, or run a command, so any of the bullets below would
-  // send it chasing an output channel it does not have.
-  if (toolFreeReasoning) return TOOL_FREE_REASONING_BULLET;
-  // A PR follow-up (review-loop or merge-only) already carries its own PRIMARY
-  // OBJECTIVE section with the full procedure, and its cleanup runs with
-  // `skipMerge`. The generic "your branch is merged back automatically" bullet
-  // would contradict both — and a merge-only run legitimately makes no commit.
-  if (isPrFollowUp && !discardWorktree && !noCodeOutput && !isReadOnly) {
-    return 'Follow the follow-up section above — it is the whole task. Commit and push only fixes you actually make; the deliverable is the PR\'s final state, not a commit. Do NOT open a new PR, and do NOT expect this branch to be merged back for you.';
-  }
-  // `noCodeOutput` is checked FIRST because the two flags answer different
-  // questions: `discardWorktree` decides what happens to the checkout, while
-  // `noCodeOutput` decides where the deliverable goes. A task that sets both —
-  // "do your work through an API/CLI action during the run, and never land
-  // code" — must be told its output channel is that action, NOT the sentinel.
-  // Telling it "write your result to the sentinel" is how a run files nothing
-  // and reports its findings into a file that gets thrown away (PLAN.md records
-  // this exact hazard from the 2026-07-16 codex review). No pre-existing task
-  // sets both, so this ordering changes nothing that shipped before it.
-  if (noCodeOutput) {
-    return '**This task produces no code output.** Its result is the API request or command your instructions describe (a PortOS endpoint call, a filed tracker issue, …) — do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a PR. Write the completion sentinel (see the Completion section) and stop.';
-  }
-  if (discardWorktree) {
-    return '**This is a reasoning-only task.** The worktree is discarded on exit — do NOT commit, push, merge, or open a PR. Write your result to the completion sentinel (see the Completion section) and stop.';
-  }
-  if (claimFlow) {
-    return '**This is a self-managed claim flow.** Follow the claim prompt above through its phase-specific worktree, PR/MR, review, merge or human-handoff, and cleanup steps. Do NOT stop after committing or hand the lifecycle back to PortOS.';
-  }
-  if (isReadOnly) {
-    return '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.';
-  }
-  if (isTui) {
-    // NOTE: in production this branch is only reachable from the full/api prompt
-    // path, where `isTui` is currently always false (TUI providers route through
-    // buildLightContextPrompt, which emits the live TUI completion via
-    // buildTuiCompletionSection — not this bullet). It's kept provider-aware and
-    // directly unit-tested so the guideline stays correct if that routing changes.
+  // NOTE: the TUI arms are only reachable from the full/api prompt path, where
+  // `isTui` is currently always false (TUI providers route through
+  // buildLightContextPrompt, which emits the live TUI completion via
+  // buildTuiCompletionSection — not this bullet). They're kept host-aware and
+  // directly unit-tested so the guideline stays correct if that routing changes.
+  const tuiBullet = () => {
     const howTo = slashdoFree
       ? 'the Completion Workflow above (plain `git` commit + PortOS handoff — this provider has no slashdo commands)'
       : tuiCompletionCommand
         ? `the Completion Workflow above (\`${tuiCompletionCommand}\`)`
         : 'the Completion Workflow above (commit only — no push; PortOS merges your branch back after you exit)';
     return withNoChangeAuditGuidance(`On successful completion, YOU run ${howTo}, then write the sentinel and stop — PortOS closes the session once it sees the sentinel; do NOT run \`/quit\`.`, noChangeSuccess);
-  }
-  if (worktreeInfo && willOpenPR) {
-    const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
-    const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
-    const reviewSuffix = policyLeavesOpen
-      ? ' This task is configured to leave the PR OPEN for you to inspect — no follow-up agent will review or merge it automatically.'
-      : leavePrOpen
-        ? ' This task is tracked in JIRA, so the PR is left OPEN for a human to land alongside the ticket — nothing merges it automatically.' + (runsReviewLoop ? ' A follow-up agent still runs the configured reviewers against it.' : '')
-      : runsReviewLoop
-        ? ' For GitHub PRs, a Copilot code review will also be requested automatically (skipped on GitLab and other non-GitHub forges) — do NOT run `/do:rpr` or attempt to address review comments yourself; you will have already exited.'
-        : ' No review was requested for this task, so a follow-up agent merges the PR once CI is green — do NOT try to merge it yourself; you will have already exited.';
-    return withNoChangeAuditGuidance(`On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${reviewSuffix}`, noChangeSuccess);
-  }
-  if (portosMergesBranchOnExit({ worktreeInfo, willOpenPR })) {
-    return withNoChangeAuditGuidance('Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.', noChangeSuccess);
-  }
+  };
+
+  const bullets = {
+    [COMPLETION_MODES.TOOL_FREE]: () => TOOL_FREE_REASONING_BULLET,
+    [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => REASONING_ONLY_BULLET,
+    [COMPLETION_MODES.ACTION_OUTPUT]: () => '**This task produces no code output.** Its result is the API request or command your instructions describe (a PortOS endpoint call, a filed tracker issue, …) — do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a PR. Write the completion sentinel (see the Completion section) and stop.',
+    [COMPLETION_MODES.DISCARD_WORKTREE]: () => REASONING_ONLY_BULLET,
+    [COMPLETION_MODES.CLAIM_FLOW]: () => '**This is a self-managed claim flow.** Follow the claim prompt above through its phase-specific worktree, PR/MR, review, merge or human-handoff, and cleanup steps. Do NOT stop after committing or hand the lifecycle back to PortOS.',
+    [COMPLETION_MODES.READ_ONLY]: () => '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.',
+    // A PR follow-up already carries its own PRIMARY OBJECTIVE section with the
+    // full procedure, and its cleanup runs with `skipMerge`. The generic "your
+    // branch is merged back automatically" bullet would contradict both — and a
+    // merge-only run legitimately makes no commit.
+    [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => 'Follow the follow-up section above — it is the whole task. Commit and push only fixes you actually make; the deliverable is the PR\'s final state, not a commit. Do NOT open a new PR, and do NOT expect this branch to be merged back for you.',
+    [COMPLETION_MODES.TUI_SLASHDO_FREE]: tuiBullet,
+    [COMPLETION_MODES.TUI]: tuiBullet,
+    [COMPLETION_MODES.PORTOS_MERGES]: () => withNoChangeAuditGuidance('Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.', noChangeSuccess),
+    [COMPLETION_MODES.WORKTREE_NO_PUSH]: () => {
+      const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
+      const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
+      const reviewSuffix = policyLeavesOpen
+        ? ' This task is configured to leave the PR OPEN for you to inspect — no follow-up agent will review or merge it automatically.'
+        : leavePrOpen
+          ? ' This task is tracked in JIRA, so the PR is left OPEN for a human to land alongside the ticket — nothing merges it automatically.' + (runsReviewLoop ? ' A follow-up agent still runs the configured reviewers against it.' : '')
+        : runsReviewLoop
+          ? ' For GitHub PRs, a Copilot code review will also be requested automatically (skipped on GitLab and other non-GitHub forges) — do NOT run `/do:rpr` or attempt to address review comments yourself; you will have already exited.'
+          : ' No review was requested for this task, so a follow-up agent merges the PR once CI is green — do NOT try to merge it yourself; you will have already exited.';
+      return withNoChangeAuditGuidance(`On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${reviewSuffix}`, noChangeSuccess);
+    },
+  };
+
+  const render = bullets[mode];
+  if (render) return render();
   return whenDone === null ? null : whenDone === 'commit-push'
     ? 'Commit and push your changes to the default branch (see Git Hygiene below).'
     : 'Leave your code changes uncommitted in the default branch; do not commit or push.';
 }
+
+
+// The modes whose contract forbids a commit outright, so the trailing
+// commit-target bullet ("your PR should contain only…" / "commit directly to
+// the current branch") has nothing to say. Without the tool-free and read-only
+// entries a no-worktree run of either shape was pointed at the checkout's own
+// default branch (#6616).
+const NO_COMMIT_TARGET_MODES = new Set([
+  COMPLETION_MODES.TOOL_FREE,
+  COMPLETION_MODES.SENTINEL_PAYLOAD,
+  COMPLETION_MODES.ACTION_OUTPUT,
+  COMPLETION_MODES.DISCARD_WORKTREE,
+  COMPLETION_MODES.CLAIM_FLOW,
+  COMPLETION_MODES.READ_ONLY,
+]);
+
+/**
+ * The full (api) fallback template's three completion instructions, as ONE
+ * per-mode record.
+ *
+ * `## Instructions` step 4, the `## Git Hygiene` bullet and the commit-target
+ * bullet used to be three independent ternary ladders over the same flags. They
+ * drifted: step 4 tested neither `toolFreeReasoning` nor `readOnly`, so both
+ * shapes rendered a prompt that told the agent to commit and, four lines later,
+ * that it had no git at all (#6616). Returning them together is what makes that
+ * unrepresentable — a new mode either fills all three fields or fills none.
+ *
+ * @param {Object} opts
+ * @param {string} opts.mode - a `COMPLETION_MODES` key
+ * @param {Object|null} [opts.worktreeInfo]
+ * @param {boolean} [opts.willOpenPR]
+ * @param {string|null} [opts.tuiCompletionCommand]
+ * @returns {{ step4: string, gitHygiene: string, commitTarget: string }}
+ */
+export function buildFallbackCompletionInstructions({
+  mode, worktreeInfo = null, willOpenPR = false, tuiCompletionCommand = null,
+}) {
+  const portosMergesStep4 = (where) => `Commit your changes (see ${where}) — do NOT push, PortOS merges this branch back on exit`;
+  const portosMergesHygiene = '- **Commit only — do NOT push.** Stage specific files (no `git add -A`), use `feat:`/`fix:`/`breaking:` prefix in the commit message, no Co-Authored-By annotations. PortOS merges this branch back into the source checkout after you exit and deletes it, so do NOT run `git push` or `/do:push` yourself — a pushed copy would only be left behind on origin.';
+  // A TUI host with no `/do:*` command to name is exactly the merge-back
+  // posture (`tuiCompletionCommand` is null only when PortOS lands the branch),
+  // so it gets the commit-only contract rather than "Use `null` to …".
+  const tuiEntry = () => (tuiCompletionCommand
+    ? {
+      step4: `Commit, push, and ${willOpenPR ? 'open the PR (see Completion Workflow above)' : 'push the branch (see Completion Workflow above)'}`,
+      gitHygiene: `- **Use \`${tuiCompletionCommand}\` to ${willOpenPR ? 'commit, push, and open the PR' : 'commit and push the branch'}** — see the Completion Workflow section above. Stage specific files (no \`git add -A\`), use \`feat:\`/\`fix:\`/\`breaking:\` prefix in the commit message, no Co-Authored-By annotations.`,
+    }
+    : { step4: portosMergesStep4('Completion Workflow above'), gitHygiene: portosMergesHygiene });
+
+  const entries = {
+    [COMPLETION_MODES.TOOL_FREE]: () => ({
+      step4: 'Answer in this reply — you have no tools to commit, push, or call an API with; the Completion section above is the whole contract',
+      gitHygiene: '- **No git at all.** You have no tools; the Completion section above is the whole contract.',
+    }),
+    [COMPLETION_MODES.SENTINEL_PAYLOAD]: () => ({
+      step4: 'Write your result to the completion sentinel in the payload format your task describes (see the Completion section above) — do NOT commit, push, or open a PR',
+      gitHygiene: DISCARD_WORKTREE_HYGIENE,
+    }),
+    [COMPLETION_MODES.ACTION_OUTPUT]: () => ({
+      step4: 'Deliver your result the way the task describes (the API call or command it names) — do NOT commit, push, or open a PR; this task changes no code',
+      gitHygiene: '- **Do NOT commit, push, or open a PR.** This task changes no code — its result is delivered by the API call or command described above. Without this, a no-worktree task of this shape was told to `/do:push` **directly to the branch it is standing on**, which for a task running in the app\'s live checkout is its default branch.',
+    }),
+    [COMPLETION_MODES.DISCARD_WORKTREE]: () => ({
+      step4: 'Write your result to the completion sentinel (see the Completion section above) — do NOT commit, push, or open a PR; this worktree is discarded on exit',
+      gitHygiene: DISCARD_WORKTREE_HYGIENE,
+    }),
+    [COMPLETION_MODES.CLAIM_FLOW]: () => ({
+      step4: 'Follow the claim workflow prompt above; it owns its worktree, PR/MR, review, merge or human-handoff, and cleanup. Do not stop after committing.',
+      gitHygiene: '- **Follow the claim workflow prompt above.** It owns the claim worktree and the full PR/MR lifecycle; do not stop after committing or hand push/PR/merge/cleanup back to PortOS.',
+    }),
+    [COMPLETION_MODES.READ_ONLY]: () => ({
+      step4: 'Do NOT commit, push, or modify any files — this is a read-only task; read what you need and report your findings',
+      gitHygiene: '- **Do NOT commit, push, or modify any files.** This is a read-only task — read what you need and report your findings.',
+    }),
+    [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => ({
+      step4: 'Follow the follow-up section above — push any fixes you make to the PR branch; a run that needed no fix makes no commit and that is a success, not a miss',
+      gitHygiene: '- **Push fixes straight to the PR branch you are on** (the follow-up section above is the procedure). Stage specific files, use a `fix:` prefix, no Co-Authored-By annotations. Do NOT open a new PR.',
+    }),
+    [COMPLETION_MODES.TUI_SLASHDO_FREE]: () => ({
+      step4: 'Commit your changes (see Completion Workflow above) — do NOT push; PortOS handles the branch after it closes the session',
+      gitHygiene: '- **Commit only — do NOT push.** Stage specific files, use `feat:`/`fix:`/`breaking:` prefix in the commit message, no Co-Authored-By annotations, then write the completion sentinel. PortOS will handle the branch after it closes the session.',
+    }),
+    [COMPLETION_MODES.TUI]: tuiEntry,
+    [COMPLETION_MODES.PORTOS_MERGES]: () => ({
+      step4: portosMergesStep4('Git Hygiene below'),
+      gitHygiene: portosMergesHygiene,
+    }),
+    [COMPLETION_MODES.WORKTREE_NO_PUSH]: () => ({
+      step4: 'Commit your changes (see Git Hygiene below) — do NOT push, the system handles that on exit',
+      gitHygiene: '- **Commit only — do NOT push.** Stage specific files, use `feat:`/`fix:`/`breaking:` prefix in the commit message, no Co-Authored-By annotations. The system will push your branch and open the PR after you exit, so do NOT run `git push` or `/do:push` yourself.',
+    }),
+  };
+
+  const entry = (entries[mode] || (() => ({
+    step4: 'Commit and push your changes (see Git Hygiene below)',
+    gitHygiene: '- **Commit and push using `/do:push`** — this handles changelog updates, staging specific files, writing a conventional commit message, and pushing safely. If `/do:push` is unavailable, follow its conventions manually: stage specific files, use `feat:`/`fix:`/`breaking:` prefix, no Co-Authored-By annotations, and push with `git pull --rebase && git push`.',
+  })))();
+
+  const commitTarget = NO_COMMIT_TARGET_MODES.has(mode)
+    ? ''
+    : worktreeInfo
+      ? '- **Your PR should contain only your task\'s commits.** If you see unrelated commits in your branch history, something is wrong — do not open a PR with other agents\' work.'
+      : '- **Commit directly to the current branch.** Do NOT create feature branches or PRs unless explicitly instructed.';
+
+  return { ...entry, commitTarget };
+}
+
 
 // One-line worktree note for a discard (reasoning-only) task, replacing the
 // "commit / push / auto-merge" guidance the normal worktree section emits. The
@@ -325,33 +422,10 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
   return lines.join('\n');
 }
 
-/**
- * Does PortOS land this run's branch ITSELF? True under the worktree-without-PR
- * posture (`useWorktree: true`, `openPR: false`): once the agent exits,
- * `agentWorktreeCleanup.js` merges the worktree branch into the source checkout
- * and deletes it (`removeWorktree` with `merge: true`). Nothing on that path
- * reads a remote copy of the branch, so a push has no consumer — and because
- * the local branch is deleted the moment the merge lands, a pushed copy becomes
- * an orphan that the post-completion audit (`agentRepoStateVerification.js`)
- * reports as "remote branch was never deleted" and hands to a recovery agent.
- * The `/do:push` completion step this posture used to get produced exactly
- * that, run after run (every module-hygiene audit on 2026-09-06/07, and user
- * tasks with the same posture before them — each followed by a recovery agent
- * that then pushed the merged commit straight to the default branch). So under
- * this posture the contract is commit-only, on every path that can type slashdo.
- *
- * The other worktree contracts (discard, claim flow, PR follow-up, no-code) are
- * decided BEFORE this question is asked — callers apply their precedence first,
- * the way `buildCompletionGuidelineBullet` does.
- *
- * @param {object} params
- * @param {object|null} params.worktreeInfo
- * @param {boolean} params.willOpenPR
- * @returns {boolean}
- */
-export function portosMergesBranchOnExit({ worktreeInfo, willOpenPR }) {
-  return Boolean(worktreeInfo) && !willOpenPR;
-}
+// `portosMergesBranchOnExit` moved to `lib/agentCompletionMode.js` (it is an
+// input to the one completion-mode decision); re-exported here so the prompt
+// sections that already import it from this module keep working.
+export { portosMergesBranchOnExit } from '../../lib/agentCompletionMode.js';
 
 // The one commit-hygiene sentence every manual commit step composes — the
 // slashdo-free TUI workflow, the PR-owning CLI workflow and the auto-merge

@@ -154,6 +154,69 @@ export function taskSortKey(taskType, config) {
   return { order: STATUS_GROUPS[group]?.order ?? 9, next: Number.isFinite(next) ? next : Infinity, taskType };
 }
 
+// The two card orderings the grid offers. "Status" is the long-standing
+// default; "Suggested order" answers "which of these do I run first?" using the
+// advisory `suggestedAfter` list each task carries.
+export const TASK_SORTS = [
+  { id: 'status', label: 'Status' },
+  { id: 'suggested-order', label: 'Suggested order' },
+];
+export const DEFAULT_SORT_ID = TASK_SORTS[0].id;
+
+/**
+ * Rank the tasks that PARTICIPATE in the advisory `suggestedAfter` graph into a
+ * 1-based step — one past the highest step among the predecessors present here.
+ *
+ * Derived on the client, over the tasks actually being shown, because the step
+ * is a property of the whole graph rather than of one task: a server-sent
+ * per-task number goes stale the instant any OTHER task's list is edited, and
+ * ranking server-side would also number a card whose step-1 predecessor is
+ * hidden by a disabled instance feature.
+ *
+ * A task nobody orders and that orders nothing gets NO step — it sits outside
+ * the sequence, and calling every unordered task "step 1" would drown the
+ * answer. Edges naming an absent task are ignored; a user-declared cycle simply
+ * stops improving once the pass budget runs out (nothing enforces these).
+ */
+export function suggestedOrderSteps(tasks) {
+  const entries = Object.entries(tasks || {});
+  const known = new Set(entries.map(([taskType]) => taskType));
+  const deps = new Map(entries.map(([taskType, config]) => [
+    taskType,
+    (Array.isArray(config?.suggestedAfter) ? config.suggestedAfter : []).filter(dep => dep !== taskType && known.has(dep)),
+  ]));
+  const participants = new Set([...deps].flatMap(([taskType, after]) => (after.length ? [taskType, ...after] : [])));
+
+  const steps = Object.fromEntries([...participants].map(taskType => [taskType, 1]));
+  let changed = true;
+  let passes = 0;
+  while (changed && passes <= participants.size) {
+    changed = false;
+    passes++;
+    for (const taskType of participants) {
+      const step = deps.get(taskType).reduce((max, dep) => Math.max(max, steps[dep] + 1), 1);
+      if (step !== steps[taskType]) {
+        steps[taskType] = step;
+        changed = true;
+      }
+    }
+  }
+  return steps;
+}
+
+// Comparator for the default "Status" view: group order, then soonest next run.
+export function compareByStatus([aType, aConfig], [bType, bConfig]) {
+  const a = taskSortKey(aType, aConfig);
+  const b = taskSortKey(bType, bConfig);
+  return a.order - b.order || a.next - b.next || a.taskType.localeCompare(b.taskType);
+}
+
+// Comparator for the "Suggested order" view, over a `suggestedOrderSteps` map.
+// Tasks OUTSIDE the advisory order sort last rather than first — they carry no
+// ordering claim, and putting them on top would bury the answer.
+export const compareBySuggestedOrder = (steps) => ([aType], [bType]) =>
+  (steps[aType] ?? Infinity) - (steps[bType] ?? Infinity) || aType.localeCompare(bType);
+
 // Tailwind tone for the per-task app-coverage bar/label (error none, success full, warning partial).
 export function coverageTone(enabled, total) {
   if (enabled === 0) return { text: 'text-port-error', bar: 'bg-port-error' };
@@ -295,3 +358,6 @@ export function toggleMetadataField(metadata, field) {
   }
   return newMeta;
 }
+
+// Shipped clusters remain discoverable alongside the operator's own labels.
+export const taskLabels = config => [...new Set([...(config.defaultLabels || []), ...(config.labels || [])])];

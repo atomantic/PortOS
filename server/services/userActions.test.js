@@ -88,7 +88,7 @@ describe('recordUserAction', () => {
   it('accepts the phase-3 types (#5596)', async () => {
     for (const type of [
       'media.image.enqueue', 'media.video.enqueue', 'brain.capture',
-      'instance-feature.toggle', 'cos.schedule.update',
+      'instance-feature.toggle', 'instance-feature-group.toggle', 'cos.schedule.update',
     ]) {
       await expect(recordUserAction(action({ type, dedupeKey: type }))).resolves.not.toBeNull();
     }

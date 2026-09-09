@@ -69,7 +69,14 @@ export const syncPortosFork = (opts = {}, requestOpts = {}) => request('/update/
 export const getSettings = (options) => request('/settings', options);
 export const getInstanceFeatures = (options) => request('/settings/features', options);
 export const getCredentialInventory = (options) => request('/settings/credentials', options);
+// `enabled` accepts `null` — the tri-state override going back to "inherit" for
+// a grouped feature (see instanceFeatureUpdateSchema on the server).
 export const updateInstanceFeature = (featureId, enabled, options = {}) => request(`/settings/features/${encodeURIComponent(featureId)}`, {
+  method: 'PUT',
+  body: JSON.stringify({ enabled }),
+  ...options,
+});
+export const updateInstanceFeatureGroup = (groupId, enabled, options = {}) => request(`/settings/features/groups/${encodeURIComponent(groupId)}`, {
   method: 'PUT',
   body: JSON.stringify({ enabled }),
   ...options,
@@ -286,7 +293,7 @@ export const deleteNotification = (id) => request(`/notifications/${id}`, { meth
 export const clearNotifications = () => request('/notifications', { method: 'DELETE' });
 
 // Telegram
-export const getTelegramStatus = () => request('/telegram/status');
+export const getTelegramStatus = (options) => request('/telegram/status', options);
 export const updateTelegramConfig = (data, options) => request('/telegram/config', {
   method: 'PUT',
   body: JSON.stringify(data),

@@ -20,7 +20,7 @@ import {
 } from '../lib/persistentMindCapabilities.js';
 import {
   isCliReviewer,
-  REVIEWER_VALUES,
+  isReviewer,
 } from '../lib/validation.js';
 import { compareVersions } from '../../scripts/checkNodeVersion.js';
 import * as codeReview from './codeReview.js';
@@ -564,7 +564,7 @@ const inspectReviewers = async (forge, dependencies, reviewerProbe = reviewerPro
       status: 'unknown',
     };
   }
-  const fixedReviewers = Array.isArray(defaults.reviewers) ? defaults.reviewers.filter((value) => REVIEWER_VALUES.includes(value)) : [];
+  const fixedReviewers = Array.isArray(defaults.reviewers) ? defaults.reviewers.filter((value) => isReviewer(value)) : [];
   const usernames = Array.isArray(defaults.usernames) ? defaults.usernames.filter((value) => typeof value === 'string' && value.trim()) : [];
   const optional = new Set(Array.isArray(defaults.optionalReviewers) ? defaults.optionalReviewers : []);
   const requiredEntries = fixedReviewers

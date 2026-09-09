@@ -245,3 +245,52 @@ describe('settings:updated re-sync', () => {
     expect(cancel).not.toHaveBeenCalled();
   });
 });
+
+describe('backup schedule defaults (#6632)', () => {
+  beforeEach(() => {
+    stopBackupScheduler();
+    vi.clearAllMocks();
+  });
+
+  // A destination-only config is the shape a user who never touched the toggle
+  // has on disk. It must schedule — that is the behavior the settings GET now
+  // reports, and the compatibility contract this change preserves.
+  it('registers midnight for a destination-only configuration', async () => {
+    getSettings.mockResolvedValue({ backup: { destPath: '/example-backups' } });
+    await startBackupScheduler();
+    expect(schedule).toHaveBeenCalledTimes(1);
+    expect(schedule.mock.calls[0][0]).toMatchObject({ cron: '0 0 * * *' });
+  });
+
+  // The regression itself: the Settings screen reads the resolved values and
+  // saves them back verbatim when the user edits something unrelated. Feeding
+  // that saved slice into registration must not change what is scheduled.
+  it('keeps the same registration when the resolved values are saved back', async () => {
+    getSettings.mockResolvedValue({ backup: { destPath: '/example-backups' } });
+    await startBackupScheduler();
+    const first = schedule.mock.calls[0][0].cron;
+
+    // What the settings GET now hands the screen, plus the unrelated edit.
+    settingsEvents.emit('settings:updated', {
+      backup: { destPath: '/example-backups', enabled: true, cronExpression: '0 0 * * *', excludePaths: ['/scratch'] }
+    });
+    // The re-sync runs on the event bus, so let its promise settle before asserting.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(first).toBe('0 0 * * *');
+    // Identical registration inputs → the signature guard makes this a no-op.
+    // A cancel here is the bug: the screen's save disabling a live schedule.
+    expect(cancel).not.toHaveBeenCalled();
+    expect(schedule).toHaveBeenCalledTimes(1);
+  });
+
+  // The handler re-reads settings, so it needs the same interpretation as
+  // registration — otherwise a sparse config registers but never runs.
+  it('runs the backup when the re-read settings omit enabled', async () => {
+    getSettings.mockResolvedValue({ backup: { destPath: '/example-backups' } });
+    await startBackupScheduler();
+    await schedule.mock.calls[0][0].handler();
+    expect(runBackup).toHaveBeenCalledWith('/example-backups', null, {
+      excludePaths: [], disabledDefaultExcludes: []
+    });
+  });
+});

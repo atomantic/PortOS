@@ -32,8 +32,6 @@
  *     with no limit window in flight is never mistaken for a broken fetch.
  */
 
-import { commandBasename, localRuntimeNamespace } from './providerModels.js';
-
 /**
  * The one invocation PortOS is allowed to spawn. Fixed argv, never assembled
  * from a provider record or a request: the app-server is a protocol endpoint,
@@ -92,28 +90,11 @@ export const CODEX_ERROR_CODES = Object.freeze({
 });
 
 /**
- * Which provider records this account state belongs to.
- *
- * Keyed on the COMMAND, not the id: a user who cloned `codex` into
- * `codex-review` still runs the same binary against the same ChatGPT sign-in,
- * and hard-coding two ids would leave that card blank. API providers are
- * excluded — an OpenAI API-key provider authenticates with its own stored key
- * and has nothing to do with a subscription.
+ * Which provider records this account state belongs to — the command-keyed,
+ * local-runtime-excluding rule. Declared in `providerModels.js`, the pure leaf
+ * the browser re-exports, so this module's protocol tables stay server-only.
  */
-export const isCodexSubscriptionProvider = (provider) => {
-  if (provider?.type !== 'cli' && provider?.type !== 'tui') return false;
-  const command = typeof provider?.command === 'string' ? provider.command.trim() : '';
-  if (command === '') return false;
-  if (commandBasename(command) !== CODEX_APP_SERVER_COMMAND) return false;
-  // A local-runtime-backed codex record (`codex --oss --local-provider ollama`)
-  // generates its tokens on this machine and authenticates against nothing, so
-  // the ChatGPT account is not one of its prerequisites. Without this it would
-  // paint "No ChatGPT account is signed in" on a provider that needs no account
-  // — and the card would sit in UNKNOWN until an account read that will never
-  // matter answers. MIRROR of `isCodexSubscriptionProvider` in
-  // client/src/utils/providerTypes.js.
-  return localRuntimeNamespace(provider) === null;
-};
+export { isCodexSubscriptionProvider } from './providerModels.js';
 
 /**
  * Keys whose VALUES may carry a credential. Matched case-insensitively as a

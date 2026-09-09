@@ -223,7 +223,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
 
   const stages = metadata.pipeline?.stages;
   const securityStage = stages?.[0];
-  const nextStage = stages?.[1];
+  let nextStage = stages?.[1];
   if (!securityStage || !nextStage) {
     const reason = 'pipeline-misconfigured';
     emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason} — security pipeline requires an eligibility gate`, { appId: app.id, analysisType: taskType });
@@ -277,12 +277,23 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
   const scan = await runPrReviewerSecurityScan({
     app,
     target,
+    largeInputFallback: securityStage.largeInputFallback,
   });
   const reports = securityScanReports(scan);
   if (!scan.ok && !reports.length) {
     const reason = scan.code || 'security-scan-not-passed';
     emitLog('warn', `Skipping pr-reviewer for ${app.name}: ${reason}`, { appId: app.id, analysisType: taskType });
     return { skipped: true, reason };
+  }
+
+  if (scan.ok && scan.usedLargeInputFallback) {
+    // A configured fallback replaces the reasoning stages only. The complete
+    // evidence has already passed the same mandatory security boundary.
+    const fallback = securityStage.largeInputFallback;
+    metadata.pipeline.stages = stages.map((stage, index) => index === 0 ? stage : {
+      ...stage, providerId: fallback.providerId, model: fallback.model, effort: fallback.effort || null,
+    });
+    nextStage = metadata.pipeline.stages[1];
   }
 
   const status = !scan.ok ? 'unavailable' : (scan.passed ? 'passed' : 'findings');
@@ -322,6 +333,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
     previousStageAgentId: null,
     previousStageOutput: reviewOutput,
     securityScan: {
+      usedLargeInputFallback: scan.usedLargeInputFallback === true,
       completed: scan.ok,
       status,
       code: scan.code || null,
@@ -368,6 +380,7 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
     metadata.provider = nextStage.providerId;
     metadata.providerId = nextStage.providerId;
   }
+  if (scan.usedLargeInputFallback) delete metadata.effort;
   if (nextStage.effort) metadata.effort = nextStage.effort;
   const nextStageReadOnly = nextStage.readOnly ?? false;
   const taskDefaults = metadata.pipeline.taskDefaults || {};

@@ -49,6 +49,18 @@ describe('GET /api/code-review/defaults', () => {
 })
 
 describe('POST /api/code-review/local', () => {
+  it('resolves a provider-backed model default and rejects unsafe provider identities', async () => {
+    settingsSvc.getSettings.mockResolvedValue({ codeReview: { providerModels: { 'provider:example-gpu': 'pinned-coder' } } });
+    codeReviewSvc.runLocalCodeReview.mockResolvedValue({ ok: true, findings: 'NO FINDINGS' });
+    const res = await request(makeApp()).post('/api/code-review/local')
+      .send({ backend: 'provider:example-gpu', diff: 'example diff' });
+    expect(res.status).toBe(200);
+    expect(codeReviewSvc.runLocalCodeReview).toHaveBeenCalledWith(expect.objectContaining({ backend: 'provider:example-gpu', model: 'pinned-coder' }));
+    const invalid = await request(makeApp()).post('/api/code-review/local')
+      .send({ backend: 'provider:example-gpu~opt', diff: 'example diff' });
+    expect(invalid.status).toBe(400);
+  });
+
   it('returns 400 when diff is empty (Zod min(1) rejection)', async () => {
     const res = await request(makeApp())
       .post('/api/code-review/local')

@@ -56,6 +56,8 @@ export { default as useMusicVideoModelSettings } from './useMusicVideoModelSetti
 export { default as useMusicVideoRenderJob } from './useMusicVideoRenderJob.js';
 export { default as useMusicVideoSceneMedia } from './useMusicVideoSceneMedia.js';
 export { default as useMusicVideoYoutubeImport } from './useMusicVideoYoutubeImport.js';
+export { default as useBeeperOutbox } from './useBeeperOutbox.js';
+export { default as useBeeperRealtime } from './useBeeperRealtime.js';
 export { default as useMoltworldWs } from './useMoltworldWs.js';
 export { default as useCharacterAugmentation } from './useCharacterAugmentation.js';
 export { default as useMounted } from './useMounted.js';
@@ -89,6 +91,7 @@ export { default as useWakeLock } from './useWakeLock.js';
 export { default as useYoutubeIngest } from './useYoutubeIngest.js';
 export { default as useYoutubeTrackImport } from './useYoutubeTrackImport.js';
 export * from './useSyncSourceSettings.js';
+export * from './useBeeperSettings.js';
 export { default as useReferenceAudioImport } from './useReferenceAudioImport.js';
 export { default as useMidiTranscription } from './useMidiTranscription.js';
 export { default as useMidiNotes } from './useMidiNotes.js';
@@ -103,6 +106,7 @@ export { default as useTokenPopover } from './useTokenPopover.js';
 // === Mixed (both default and named) — surface both ===
 export { default as useAsyncAction } from './useAsyncAction.js';
 export * from './useAsyncAction.js';
+export * from './useBackupRun.js';
 
 // === Notifications & toasts ===
 export * from './useAIStatusNotifications.js';

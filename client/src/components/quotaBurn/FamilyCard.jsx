@@ -15,13 +15,13 @@ import BrailleSpinner from '../BrailleSpinner';
 import JobRow from './JobRow';
 import TaskRefPicker from './TaskRefPicker';
 import { dispatchCapInput, isUnlimitedDispatchCap, quotaBurnJobIsSpent, UNLIMITED_DISPATCHES } from '../../lib/quotaBurnPatch';
-import { CREATE_TASK_HREF, flattenTaskCatalog, quotaBurnStepPayload, stepFromTaskEntry, taskEntryNeedsApp } from '../../lib/quotaBurnTasks';
+import { CREATE_TASK_HREF, maintenanceSequence, MAINTENANCE_ORDER_GUIDANCE, flattenTaskCatalog, quotaBurnStepPayload, stepFromTaskEntry, taskEntryNeedsApp } from '../../lib/quotaBurnTasks';
 import { formatDateTime } from '../../utils/formatters';
 import { NumberField } from './fields';
 
 export default function FamilyCard({
   familyId, config, status, catalog, taskGroups, catalogError, catalogRetrying, expanded, actionsBusy,
-  onToggleExpand, onPatch, onRunFamily, onRunJob, onRearm, onRetryCatalog,
+  onToggleExpand, onPatch, onStartSequence, onRunFamily, onRunJob, onRearm, onRetryCatalog,
 }) {
   const jobs = config.jobs || [];
   const hasEnabledJobs = jobs.some((job) => job.enabled !== false);
@@ -70,10 +70,10 @@ export default function FamilyCard({
   const addStep = (entry) => {
     const targeted = [...new Set(jobs.map((job) => job.taskRef?.appId).filter(Boolean))];
     const id = nextJobId();
-    patchJobs([...jobs, stepFromTaskEntry(entry, {
+    patchJobs([...jobs, { ...stepFromTaskEntry(entry, {
       id,
       appId: taskEntryNeedsApp(entry) && targeted.length === 1 ? targeted[0] : null,
-    })]);
+    }), ...(config.sequence ? { runOnce: true } : {}) }]);
     setExpandedJobIds((prev) => new Set(prev).add(id));
   };
 
@@ -94,6 +94,9 @@ export default function FamilyCard({
     });
   };
 
+  const [sequenceAppId, setSequenceAppId] = useState('');
+  const sequenceApps = catalog?.apps || [];
+  const sequenceJobs = maintenanceSequence(taskGroups, sequenceAppId, `maintenance-${Date.now().toString(36)}`);
   const hasTasks = flattenTaskCatalog(taskGroups).length > 0;
 
   return (
@@ -156,7 +159,7 @@ export default function FamilyCard({
             dispatch again. */}
         <span className="text-[11px] text-gray-500">
           {jobs.length
-            ? `${jobs.length} job${jobs.length === 1 ? '' : 's'} · ${jobs.filter((job) => job.enabled !== false).length} enabled${spentCount ? ` · ${spentCount} ran once` : ''}`
+            ? `${jobs.length} job${jobs.length === 1 ? '' : 's'} · ${jobs.filter((job) => job.enabled !== false).length} enabled${spentCount ? ` · ${spentCount} ${config.sequence ? 'completed' : 'ran once'}` : ''}`
             : 'no jobs'}
         </span>
 
@@ -226,6 +229,27 @@ export default function FamilyCard({
             <NumberField id={`burn-${familyId}-priority`} label="Priority" value={config.priority} onChange={(v) => onPatch({ priority: v })} min={0} max={100} hint="Lower wins when two windows reset together." />
           </div>
 
+          <div className="space-y-2 text-xs">
+            <p>{MAINTENANCE_ORDER_GUIDANCE}</p>
+            <p>Audit once, drain eligible issues between audits, then improve documentation. Requires enabled tasks for the app and perpetual claim-issue. Quota limits still apply.</p>
+            <label htmlFor={`maintenance-app-${familyId}`}>Maintenance sequence app</label>
+            <select id={`maintenance-app-${familyId}`} value={sequenceAppId} onChange={event => setSequenceAppId(event.target.value)} className="block w-full bg-port-bg border border-port-border rounded p-2">
+              <option value="">Select app</option>
+              {sequenceApps.map(app => <option key={app.id} value={app.id}>{app.name || app.id}</option>)}
+            </select>
+            {sequenceAppId && !sequenceJobs && <p>Enable the listed tasks for this app in <Link to="/cos/schedule" className="text-port-accent underline">Scheduled Tasks</Link>, including perpetual mode on claim-issue.</p>}
+            <button type="button" disabled={actionsBusy || !sequenceJobs || jobs.length > 0} className="text-port-accent disabled:opacity-40"
+              onClick={() => onPatch({ sequence: true, jobs: sequenceJobs.map(quotaBurnStepPayload) })}>
+              Populate maintenance sequence
+            </button>
+            <button type="button" disabled={actionsBusy || !sequenceJobs || jobs.length > 0} className="ml-3 text-port-accent disabled:opacity-40"
+              onClick={() => onStartSequence(familyId, sequenceJobs.map(quotaBurnStepPayload))}>
+              Populate and start sequence
+            </button>
+            <p>Start enables Quota Burn and this family, saves the plan, and evaluates it under the configured quota limits.</p>
+            {jobs.length > 0 && <p>Clear the existing plan to populate a new sequence.</p>}
+            {config.sequence && <p>Strict sequence: waits for each step; claim steps repeat until eligible work is drained. Enable Quota Burn and this family, then use Burn now to start.</p>}
+          </div>
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-xs uppercase tracking-wide text-gray-400">Burn plan — runs in order</h3>
@@ -287,6 +311,7 @@ export default function FamilyCard({
                 key={job.id}
                 job={job}
                 familyId={familyId}
+                sequence={config.sequence === true}
                 index={index}
                 total={jobs.length}
                 catalog={catalog}

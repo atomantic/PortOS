@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
-import { validateRequest, LOCAL_LLM_REVIEWERS, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
+import { validateRequest, isToolFreeReviewer, isProviderReviewer, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
 import { getSettings } from '../services/settings.js'
 import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled } from '../services/codeReview.js'
 
@@ -20,7 +20,7 @@ const router = Router()
 // silently drop it — a 200 with the effort ignored instead of a 400. Same
 // normalizer both places, so they can't disagree.
 const localReviewRequestSchema = z.object({
-  backend: z.enum(LOCAL_LLM_REVIEWERS),
+  backend: z.string().refine(isToolFreeReviewer),
   model: z.string().optional(),
   effort: z.string().optional(),
   diff: z.string().min(1, 'diff must be non-empty'),
@@ -60,7 +60,9 @@ router.post('/local', asyncHandler(async (req, res) => {
   // Keyed off the roster's `<reviewer>Model` scalar rather than a per-backend
   // branch, so a backend added to LOCAL_LLM_REVIEWERS reads its own configured
   // model instead of silently inheriting another backend's.
-  const configured = settings.codeReview?.[`${body.backend}Model`]
+  const configured = isProviderReviewer(body.backend)
+    ? reviewerModelsFromDefaults(settings.codeReview)[body.backend]
+    : settings.codeReview?.[`${body.backend}Model`]
   const model = body.model || configured
   // Per-request effort wins over the panel default; absent in both = omit the
   // field entirely so the model reasons however it normally would. The stored

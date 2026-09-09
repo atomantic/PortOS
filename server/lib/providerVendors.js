@@ -57,6 +57,7 @@
  * constant lives in providerModels.js beside its siblings.
  */
 
+import { isProcessProvider } from './providerTypes.js';
 import {
   resolveCliModel,
   resolveCliEffort,
@@ -144,17 +145,6 @@ function defaultSpawnArgs(cliArgsFn, fallbackCommand) {
     stdinMode: 'prompt',
   });
 }
-
-/**
- * A provider record that names a local binary PortOS can spawn. A TUI record of
- * a vendor (`codex-tui`, `grok-tui`, …) is spawned through that vendor's
- * headless public-review recipe exactly like its CLI sibling, so the user's
- * enabled TUI providers are legal stage choices. The one exception is a recipe
- * supplying `tuiSpawnArgs` (see `supportsTuiPublicReviewPosture`), which the
- * sandboxed-actions stage may run as an attachable session so an operator can
- * watch and steer it. API/custom providers have no binary and no recipe.
- */
-const isDirectBinaryProvider = (provider) => provider?.type === PROVIDER_TYPES.CLI || provider?.type === PROVIDER_TYPES.TUI;
 
 // ─── codex ──────────────────────────────────────────────────────────────────
 
@@ -317,7 +307,7 @@ const CODEX = {
     // Read-only filesystem access still exposes tools; it is not no-tool.
     [PUBLIC_REVIEW_ACTIONS_POSTURE]: {
       spawnArgs: codexPublicReviewActionsSpawnArgs,
-      matchProvider: (provider) => isDirectBinaryProvider(provider) && isCodexCommand(provider?.command),
+      matchProvider: (provider) => isProcessProvider(provider) && isCodexCommand(provider?.command),
     },
   },
 };
@@ -344,7 +334,7 @@ const ANTIGRAVITY = {
     // Plan mode is not an explicit empty-tool contract.
     [PUBLIC_REVIEW_ACTIONS_POSTURE]: {
       spawnArgs: antigravityPublicReviewActionsSpawnArgs,
-      matchProvider: (provider) => isDirectBinaryProvider(provider) && isAntigravityCommand(provider?.command),
+      matchProvider: (provider) => isProcessProvider(provider) && isAntigravityCommand(provider?.command),
     },
   },
 };
@@ -385,7 +375,7 @@ function opencodeCliArgs(baseArgs, { model, provider }) {
  *     unrepresentable.
  *   - **a spawnable binary**, as for every other vendor.
  */
-const matchOpencodeBinary = (provider) => isDirectBinaryProvider(provider) && isOpencodeCommand(provider?.command);
+const matchOpencodeBinary = (provider) => isProcessProvider(provider) && isOpencodeCommand(provider?.command);
 
 const isLocalOpencodeProvider = (provider) => matchOpencodeBinary(provider)
   && ['ollama', 'lmstudio'].includes(localRuntimeNamespace(provider))
@@ -480,11 +470,11 @@ const GROK = {
   publicReview: {
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
       spawnArgs: grokPublicReviewSpawnArgs,
-      matchProvider: (provider) => isDirectBinaryProvider(provider) && isGrokCommand(provider?.command),
+      matchProvider: (provider) => isProcessProvider(provider) && isGrokCommand(provider?.command),
     },
     [PUBLIC_REVIEW_ACTIONS_POSTURE]: {
       spawnArgs: grokPublicReviewActionsSpawnArgs,
-      matchProvider: (provider) => isDirectBinaryProvider(provider) && isGrokCommand(provider?.command),
+      matchProvider: (provider) => isProcessProvider(provider) && isGrokCommand(provider?.command),
     },
   },
 };
@@ -563,7 +553,7 @@ const PI = {
   spawnArgs: defaultSpawnArgs(piCliArgs, PI_COMMAND),
   publicReview: {
     [PUBLIC_REVIEW_NO_TOOL_POSTURE]: {
-      matchProvider: (provider) => isDirectBinaryProvider(provider) && isPiCommand(provider?.command),
+      matchProvider: (provider) => isProcessProvider(provider) && isPiCommand(provider?.command),
       spawnArgs: (provider, { effectiveModel, effort } = {}) => ({
         command: provider.command,
         args: ensurePiHeadlessArgs([
@@ -730,7 +720,7 @@ function claudePublicReviewArgs(postureArgs, provider, {
   };
 }
 
-const matchClaudeBinary = (provider) => isDirectBinaryProvider(provider) && isClaudeCommand(provider?.command);
+const matchClaudeBinary = (provider) => isProcessProvider(provider) && isClaudeCommand(provider?.command);
 
 const CLAUDE = {
   id: 'claude',
@@ -918,7 +908,7 @@ export function buildVendorSpawnConfig(provider, ctx) {
  * API/custom providers have no maintained recipe: a generic read-only prompt
  * is not enforcement, so they fail closed. A TUI record IS eligible — the
  * stage spawns its binary through the vendor's enforced recipe, headless unless
- * that recipe also supplies `tuiSpawnArgs` (see `isDirectBinaryProvider` and
+ * that recipe also supplies `tuiSpawnArgs` (see `isProcessProvider` and
  * `supportsTuiPublicReviewPosture`).
  */
 export function publicReviewPosturesForProvider(provider) {
@@ -939,7 +929,7 @@ export function enforcedPublicReviewPosturesForProvider(provider) {
 // still falls through to the vendor's ordinary argv and the schedule UI keeps
 // reporting that choice as worktree-only rather than OS-sandboxed.
 const enforcesPublicReviewPosture = (provider, posture) => (
-  isDirectBinaryProvider(provider) && Boolean(publicReviewRecipe(provider, posture)?.spawnArgs)
+  isProcessProvider(provider) && Boolean(publicReviewRecipe(provider, posture)?.spawnArgs)
 );
 
 /**

@@ -42,7 +42,7 @@ function providersForFamily(providers, familyId) {
 
 export default function JobRow({
   job, index, total, catalog, taskGroups, pending, ranAt, actionsBusy,
-  familyId,
+  familyId, sequence = false,
   expanded = false, onToggleExpand,
   onChange, onMove, onRemove, onRun, onRearm,
 }) {
@@ -242,12 +242,13 @@ export default function JobRow({
                   id={`${idPrefix}-run-once`}
                   type="checkbox"
                   checked={job.runOnce === true}
+                  disabled={sequence}
                   onChange={(event) => onChange({ ...job, runOnce: event.target.checked })}
                 />
                 <label htmlFor={`${idPrefix}-run-once`}>Run once</label>
               </div>
               <p className="text-[11px] text-gray-500 mt-1">
-                {job.runOnce
+                {sequence ? (job.drain ? 'Repeats claim-issue until eligible work is drained, then advances.' : 'Advances after successful completion; re-arm to repeat.') : job.runOnce
                   ? 'Dispatches once, then drops out of the rotation until you re-arm it.'
                   : 'Repeats every lap of the plan while the window still has quota.'}
               </p>
@@ -273,7 +274,7 @@ export default function JobRow({
       {spent ? (
         <p className="flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
           <span className="inline-flex items-center gap-1 text-sky-300">
-            <CheckCircle2 size={12} /> Ran once {timeAgo(ranAt)}
+            <CheckCircle2 size={12} /> {sequence ? 'Completed' : 'Ran once'} {timeAgo(ranAt)}
           </span>
           <button
             type="button"

@@ -464,7 +464,14 @@ export async function createCalendarTouchpoint(personId, { accountId, eventId, s
 // (the partial unique index idx_tribe_touchpoints_dedupe). Returns the created
 // touchpoint, or `null` when this person+dedupeKey was already logged (re-sync).
 // Only advances last_contact_on when a row is actually inserted.
-async function autoCreateTouchpoint(personId, data) {
+//
+// Exported (in addition to being used internally by autoLogTouchpoints below)
+// so a caller that has ALREADY resolved a personId through a different axis —
+// server/services/beeperTribe.js resolves via tribe_identities / the
+// beeper_participants cache, not the email/phone/name matcher in
+// tribeMatch.js — can reuse this exact dedupe-keyed insert + last_contact_on
+// advance instead of re-implementing it (#34).
+export async function autoCreateTouchpoint(personId, data) {
   const happenedAt = data.happenedAt || new Date().toISOString();
   return withTransaction(async (client) => {
     const result = await client.query(

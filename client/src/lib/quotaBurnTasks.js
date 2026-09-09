@@ -12,6 +12,8 @@
  * inheritance display and the PUT payload without a server.
  */
 
+import { MAINTENANCE_DRAIN_TASK, MAINTENANCE_SEQUENCE_TYPES, MAINTENANCE_TASK_ORDER, maintenanceStepParams } from '../../../server/lib/maintenanceSequence.js';
+
 /** Mirrors `QUOTA_BURN_TASK_REF_KIND` in `server/lib/quotaBurnTaskRef.js`. */
 export const QUOTA_BURN_TASK_REF_KIND = Object.freeze({ BUILTIN: 'builtin', CUSTOM: 'custom' });
 
@@ -218,6 +220,7 @@ export function quotaBurnStepPayload(job) {
       params: job.overrides?.params || {},
     },
     runOnce: job.runOnce === true,
+    ...(job.drain === true ? { drain: true } : {}),
   };
 }
 
@@ -250,3 +253,45 @@ export const taskSourceHref = (entry) => (entry?.kind === QUOTA_BURN_TASK_REF_KI
 
 /** Where a user goes to CREATE the on-demand scheduled task a new step would reference. */
 export const CREATE_TASK_HREF = '/cos/jobs';
+
+/**
+ * The maintenance ladder is declared ONCE, server-side (`server/lib/maintenanceSequence.js`),
+ * because two runners walk it — the Schedule tab's manual run builds its steps
+ * there, and this page saves the same steps into a family plan. Re-exported so
+ * the guidance banner and the prerequisite check read the same list.
+ */
+export { MAINTENANCE_TASK_ORDER, MAINTENANCE_ORDER_GUIDANCE } from '../../../server/lib/maintenanceSequence.js';
+
+/** Saved settings required by the maintenance ladder, including actionable patches. */
+export function maintenancePrerequisites(groups, appId) {
+  if (!appId) return [];
+  const entries = flattenTaskCatalog(groups);
+  return [...MAINTENANCE_TASK_ORDER, MAINTENANCE_DRAIN_TASK].flatMap(taskType => {
+    const entry = entries.find(candidate => candidate.taskType === taskType);
+    if (!entry) return [{ taskType, reason: 'unavailable in Scheduled Tasks', unavailable: true }];
+    const settings = {
+      ...(!entry.enabled ? { enabled: true } : {}),
+      ...(taskType === MAINTENANCE_DRAIN_TASK && entry.config.perpetual !== true ? { perpetual: true } : {}),
+    };
+    const enableApp = !entry.appIds.includes(appId);
+    const reasons = [
+      !entry.enabled && 'disabled globally',
+      enableApp && 'disabled for this app',
+      settings.perpetual && 'must use perpetual mode',
+    ].filter(Boolean);
+    return reasons.length ? [{ taskType, reason: reasons.join('; '), settings, enableApp }] : [];
+  });
+}
+
+/** Populate references only; preserve the source tasks and their configured filters. */
+export function maintenanceSequence(groups, appId, idPrefix) {
+  const entries = flattenTaskCatalog(groups);
+  const picked = MAINTENANCE_SEQUENCE_TYPES.map(type => entries.find(entry => entry.taskType === type));
+  if (!appId || maintenancePrerequisites(groups, appId).length) return null;
+  return picked.map((entry, index) => ({
+    ...stepFromTaskEntry(entry, { id: `${idPrefix}-${index}`, appId }),
+    runOnce: true,
+    drain: entry.taskType === MAINTENANCE_DRAIN_TASK,
+    overrides: { providerId: null, model: null, effort: null, params: maintenanceStepParams(entry.taskType) },
+  }));
+}

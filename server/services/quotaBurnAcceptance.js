@@ -5,7 +5,8 @@
  * task the user already owns (`quotaBurnInvoke.js` →
  * `taskSchedule.triggerOnDemandTask`). The request lands on the schedule now and
  * one of the two on-demand engines (`cos.js#spawnDequeuePriority0OnDemand`,
- * `cosTaskGenerator.js#spawnPriority0OnDemand`) generates the task later — or
+ * `cosTaskGenerator.js#spawnPriority0OnDemand` — both thin adapters over the
+ * shared `onDemandDrain.js` loop) generates the task later — or
  * refuses it: improvement switched off, the task type disabled since queuing, an
  * app that has gone away, a generator that produced nothing, an identical twin
  * already queued. So "we recorded a request" is NOT "work started", and charging

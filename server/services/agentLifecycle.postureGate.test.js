@@ -29,7 +29,7 @@
  * prep the gate cases deliberately stop at.
  */
 
-import { afterAll, describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { rmSync } from 'fs';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
@@ -150,7 +150,8 @@ import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { materializePublicReviewInput, materializePublicReviewPatches, readPublicReviewInputSnapshot } from './modelAbuseGuard.js';
 import { removeWorktree } from './worktreeManager.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
-import { buildAgentPrompt } from './agentPromptBuilder.js';
+import { buildAgentPrompt, isClaimFlowTask } from './agentPromptBuilder.js';
+import { registerAgent } from './cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { buildCliSpawnConfig, isTuiProvider, spawnDirectly } from './agentCliSpawning.js';
 import { spawnAgentViaRunner } from './cosRunnerClient.js';
@@ -493,5 +494,69 @@ describe('public-review dispatch — direct-only, never the CoS runner (#6105)',
     expect(spawnDirectly).not.toHaveBeenCalled();
     // spawnViaRunner arms a 3s "still initializing" timer on the live agent.
     for (const agent of runnerAgents.values()) clearTimeout(agent.initializationTimeout);
+  });
+});
+
+/**
+ * The branch posture the agent card badges.
+ *
+ * A claim run works inside the `claim/<item>` worktree the claim command cuts
+ * for itself; CoS deliberately leaves `useWorktree`/`openPR` off so it does not
+ * provision a second worktree around that one. `configCodingOnMain` read that
+ * false/false as "commits straight to the default branch", so every issue
+ * claimed from the app Issues page wore a `main` badge while it was in fact on
+ * an isolated branch.
+ *
+ * Behavioral, through the real orchestrator, because the projection is a single
+ * expression the sibling source-scrape guards cannot evaluate.
+ */
+describe('registerAgent branch posture for a claim run', () => {
+  const registeredMetadata = () => vi.mocked(registerAgent).mock.calls.at(-1)?.[2];
+
+  // `vi.clearAllMocks()` in the file-wide beforeEach clears call records but KEEPS
+  // implementations, so a `mockReturnValue` here would leak into every case added
+  // after this block. Restore the factory default explicitly.
+  afterEach(() => vi.mocked(isClaimFlowTask).mockReturnValue(false));
+
+  it('does not report a claim run as coding on the default branch', async () => {
+    vi.mocked(isClaimFlowTask).mockReturnValue(true);
+    reachDispatch();
+
+    await spawnAgentForTask({ id: 'task-claim', metadata: { claimFlow: true } });
+
+    expect(registeredMetadata()).toMatchObject({
+      configClaimFlow: true,
+      configUseWorktree: false,
+      configCodingOnMain: false,
+    });
+  });
+
+  // A read-only run is denied a worktree by agentWorkspacePrep on purpose and
+  // commits nothing, so the same warning badge was equally false for it —
+  // pr-reviewer and jira-status-report both ship `readOnly: true`.
+  it('does not report a read-only run as coding on the default branch', async () => {
+    reachDispatch();
+
+    await spawnAgentForTask({ id: 'task-read-only', metadata: { readOnly: true } });
+
+    expect(registeredMetadata()).toMatchObject({
+      configReadOnly: true,
+      configUseWorktree: false,
+      configCodingOnMain: false,
+    });
+  });
+  // The control: a task that really does commit to the default branch must keep
+  // its warning badge, so the fix above cannot be satisfied by always reporting
+  // false.
+  it('still reports an ordinary worktree-less run as coding on the default branch', async () => {
+    vi.mocked(isClaimFlowTask).mockReturnValue(false);
+    reachDispatch();
+
+    await spawnAgentForTask({ id: 'task-on-main', metadata: {} });
+
+    expect(registeredMetadata()).toMatchObject({
+      configClaimFlow: false,
+      configCodingOnMain: true,
+    });
   });
 });

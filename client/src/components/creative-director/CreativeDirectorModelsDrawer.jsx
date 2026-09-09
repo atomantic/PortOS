@@ -307,7 +307,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                       className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                     >
                       <option value="">{isGlobal ? 'System default' : 'Inherit default'}</option>
-                      {providerOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      {providerOptions.map((p) => <option key={p.id} value={p.id} disabled={p.enabled === false}>{p.name}</option>)}
                     </select>
                   </div>
 

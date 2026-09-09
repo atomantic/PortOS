@@ -24,6 +24,15 @@
  *   the sheet) —
  *   plus the attachments section (synced meta, machine-local
  *   bytes → "not on this machine" when absent).
+ *
+ *   The header band above the sheet is THREE collapsible cards, each with its
+ *   own remembered open state (`usePersistedDisclosure`) and a one-line summary
+ *   while closed: **Audio** (the sounding transport — drum kit or chord
+ *   play-along, collapsed by default, since it is the tallest band and a
+ *   set-once one), **Sheet controls** (autoscroll/transpose/size/view/stage),
+ *   and **Chords used** (the sheet's chord shapes, lifted out of
+ *   `<TabSheetView>` so they stay on screen instead of scrolling away after
+ *   bar 1).
  * - EDIT (?mode=edit): metadata form + font-mono content textarea with format
  *   select and live preview. Saves are explicit (single PATCH). The whole
  *   `content` object is always sent — the server fills nested content
@@ -62,6 +71,8 @@ import DrumPreview from '../components/songbook/DrumPreview';
 import DrumTransportBar from '../components/songbook/DrumTransportBar';
 import ChordPreview from '../components/songbook/ChordPreview';
 import ChordTransportBar from '../components/songbook/ChordTransportBar';
+import ChordsUsedCard from '../components/songbook/ChordsUsedCard';
+import CollapsibleSection from '../components/ui/CollapsibleSection';
 import PracticeLogger from '../components/songbook/PracticeLogger';
 import { SongLinkChips, SongLinksEditor } from '../components/songbook/SongLinks';
 import {
@@ -73,11 +84,13 @@ import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useDrawerTab from '../hooks/useDrawerTab';
 import useKeyboardShortcuts from '../hooks/useKeyboardShortcuts';
+import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import useAutoscroll from '../hooks/useAutoscroll';
 import useDrumPlayer from '../hooks/useDrumPlayer';
 import useChordPlayer from '../hooks/useChordPlayer';
 import useWakeLock from '../hooks/useWakeLock';
 import useUnsavedChangesGuard from '../hooks/useUnsavedChangesGuard';
+import { buildSongBookPatch, songBookDraftsEqual, SCROLL_DURATION_MIN, SCROLL_DURATION_MAX } from '../lib/songBookDraft.js';
 import { transposeText } from '../lib/tabNotation.js';
 import { VOICING_INSTRUMENTS, toVoicingInstrument } from '../lib/chordShapes.js';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
@@ -97,23 +110,6 @@ const FONT_MAX = 1.75;
 const FONT_STEP = 0.125;
 const SPEED_MIN = 5;
 const SPEED_MAX = 150;
-// "Fit to duration" target bounds — client mirror of `scrollDurationSec` in
-// server/lib/brainValidation.js (songInputSchema). Keep the two in step: a value
-// the input accepts but the schema rejects 400s the whole save.
-const SCROLL_DURATION_MIN = 15;
-const SCROLL_DURATION_MAX = 3600;
-
-// Scroll-duration input (a string, like every number input) → what a save sends:
-// null for "no target" (blank, or anything non-numeric), otherwise a whole
-// second count inside the schema bounds. null is a real value here — it CLEARS a
-// stored target on PATCH — so it must never collapse into "field absent".
-const parseScrollDurationSec = (raw) => {
-  if (raw === '' || raw === null || raw === undefined) return null;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return null;
-  return Math.max(SCROLL_DURATION_MIN, Math.min(SCROLL_DURATION_MAX, Math.trunc(n)));
-};
-
 // Song record → flat editable draft (tags joined for the text input).
 const toDraft = (song) => ({
   title: song.title || '',
@@ -136,44 +132,6 @@ const toDraft = (song) => ({
   format: song.content?.format || 'tab',
   text: song.content?.text || '',
 });
-
-const parseTags = (raw) => raw.split(',').map((t) => t.trim()).filter(Boolean);
-
-// Draft-vs-saved comparison for the unsaved-changes guard. It compares what a
-// SAVE would send, not the raw form text — otherwise edits the save normalizes
-// away read as unsaved work and prompt for nothing. Each field is normalized
-// exactly as `save` normalizes it: trimmed strings, `parseTags` for the tag
-// input ('a,b' and 'a, b,' both save as ['a','b']), and a numeric capo (the
-// number input hands back a STRING, and an emptied field clamps to 0).
-// `notes`/`text` go to the server verbatim, so they compare verbatim.
-const TRIMMED_DRAFT_FIELDS = ['title', 'artist', 'key', 'tuning', 'sourceUrl'];
-const normalizeDraftField = (draft, k) => {
-  if (k === 'capo') return Number(draft.capo || 0);
-  // The one array field: compare by VALUE, not by reference (`===` on two equal
-  // arrays is always false, so every open of Edit would read as dirty). Order
-  // matters (adding a link is an edit), and the label rides along because it is
-  // stored on the record — swapping it is a real change to save.
-  //
-  // Serialized as JSON over per-link ARRAYS, not by joining on a delimiter: a
-  // label is free text (it comes from another record's title), so any separator
-  // could appear inside one and let two different link lists collapse to the
-  // same string — an unsaved edit the guard would never see. Arrays rather than
-  // the objects themselves because JSON.stringify is key-ORDER sensitive, and a
-  // record synced from a peer can carry the same keys in a different order.
-  if (k === 'links') return JSON.stringify((draft.links || []).map((l) => [l.type, l.id, l.label || '']));
-  // Compare the SAVED value, not the raw text: '210' and '0210' (and '' vs a
-  // sub-minimum '3', which clamps) both save the same, so retyping one isn't
-  // unsaved work. Null (no target) compares equal to itself.
-  if (k === 'scrollDurationSec') return parseScrollDurationSec(draft.scrollDurationSec);
-  // Joined on a comma — the one character parseTags strips from every tag, so
-  // two different tag lists can never normalize to the same string.
-  if (k === 'tags') return parseTags(draft.tags).join(',');
-  if (TRIMMED_DRAFT_FIELDS.includes(k)) return (draft[k] || '').trim();
-  return draft[k];
-};
-const draftsEqual = (a, b) => Object.keys(a).every(
-  (k) => normalizeDraftField(a, k) === normalizeDraftField(b, k),
-);
 
 // Instrument-view toggle tabs (chord-diagram rendering — never mutates the record).
 const VIEW_TABS = VOICING_INSTRUMENTS.map((viewId) => ({ id: viewId, label: instrumentLabel(viewId) }));
@@ -333,10 +291,28 @@ export default function SongBookViewer() {
   // unconditionally (hooks rule) — a drum chart, and a `plain` sheet (the
   // explicit opt-out of all notation UI, chord tokens included), parse to zero
   // chords and stand up no player.
-  const chord = useChordPlayer(
-    isDrum || contentFormat === 'plain' ? '' : renderedText,
-    { songId: id },
-  );
+  // Chord voicings, the chord play-along and the chords-used card are all the
+  // same question: does this sheet have chords to work with at all?
+  const chordUiEnabled = !isDrum && contentFormat !== 'plain';
+  const chord = useChordPlayer(chordUiEnabled ? renderedText : '', { songId: id });
+
+  // --- Header cards. Each play-mode band above the sheet is a disclosure whose
+  // state is remembered globally (a practice posture carries across songs, the
+  // way font size does). Audio ships COLLAPSED: it is the tallest band and the
+  // one you set once, so the sheet starts higher up a phone screen.
+  const [audioOpen, setAudioOpen, toggleAudio] = useLocalStorageBool('songbook:audioOpen', false);
+  const [controlsOpen, , toggleControls] = useLocalStorageBool('songbook:controlsOpen', true);
+  const [chordsOpen, , toggleChords] = useLocalStorageBool('songbook:chordsOpen', true);
+
+  // What a collapsed card says about itself — the couple of values you would
+  // otherwise have to open it to read.
+  const transport = isDrum ? drum : chord;
+  const audioSummary = `${transport.playing ? 'playing · ' : ''}${transport.bpm} BPM`;
+  const controlsSummary = [
+    playing ? 'scrolling' : null,
+    transpose ? `${transpose > 0 ? '+' : ''}${transpose} semitones` : null,
+    isDrum ? null : instrumentLabel(instrumentView),
+  ].filter(Boolean).join(' · ');
 
   // The wake lock holds while any play-mode hands-free surface is running.
   // Edit-preview audio owns its lifecycle inside DrumPreview / ChordPreview.
@@ -373,8 +349,15 @@ export default function SongBookViewer() {
   // Play-mode shortcuts. A drum chart rebinds them onto the kit transport (space
   // play/stop, +/- BPM, [ ] loop ends, m mutes the click) since transpose/
   // scroll-speed don't apply.
+  // A shortcut that SOUNDS something opens the Audio card first: the card ships
+  // collapsed, and a kit starting with no transport on screen leaves the tempo,
+  // the kit and the loop unreachable by anyone who hasn't found the chevron.
+  const startTransport = (toggleTransport) => () => {
+    setAudioOpen(true);
+    toggleTransport();
+  };
   const drumShortcuts = {
-    ' ': drum.toggle,
+    ' ': startTransport(drum.toggle),
     m: () => drum.setClickEnabled(!drum.clickEnabled),
     '+': () => drum.setBpm(drum.bpm + 1),
     '=': () => drum.setBpm(drum.bpm + 1),
@@ -394,7 +377,7 @@ export default function SongBookViewer() {
     // The chord play-along gets `p`, not space: space already drives autoscroll
     // here, and the two are complementary (scroll the sheet while the backing
     // sounds) rather than rival meanings of "play".
-    p: chord.toggle,
+    p: startTransport(chord.toggle),
     // Only bound when the song HAS a target — otherwise the key would toast
     // "nothing to fit" at a user who never set one.
     ...(fitDurationSec != null ? { f: fitToSongDuration } : {}),
@@ -425,35 +408,7 @@ export default function SongBookViewer() {
   const [save, saving] = useAsyncAction(async () => {
     const title = draft.title.trim();
     if (!title) { toast.error('Title is required'); return null; }
-    const capo = Math.max(0, Math.min(12, Math.trunc(Number(draft.capo) || 0)));
-    // `links` is sent only when the user actually CHANGED it. An untouched array
-    // would otherwise be re-validated against this version's bounds on every
-    // save, so a song synced from a NEWER peer (a raised link cap, a longer
-    // label than this version allows) would 400 the whole save on a field the
-    // user never touched — the same forward-compat hazard the link-type slug
-    // guards, applied to the bounds. Omitting the key takes the schema's
-    // absent-preserves branch instead. When it IS changed the array always goes
-    // whole, including as an empty one: clearing the last link must clear the
-    // stored list, and an omitted key would preserve it.
-    const linksChanged = normalizeDraftField(draft, 'links') !== normalizeDraftField(toDraft(song), 'links');
-    // Always the WHOLE content object — a partial { text } would reset format.
-    const updated = await updateSong(id, {
-      title,
-      artist: draft.artist.trim(),
-      instrument: draft.instrument,
-      stage: draft.stage,
-      key: draft.key.trim(),
-      capo,
-      tuning: draft.tuning.trim(),
-      tags: parseTags(draft.tags),
-      sourceUrl: draft.sourceUrl.trim(),
-      ...(linksChanged ? { links: draft.links } : {}),
-      notes: draft.notes,
-      // Always sent, including as an explicit null — clearing the input has to
-      // clear the stored target, and an omitted key would preserve it instead.
-      scrollDurationSec: parseScrollDurationSec(draft.scrollDurationSec),
-      content: { format: draft.format, text: draft.text },
-    }, { silent: true });
+    const updated = await updateSong(id, buildSongBookPatch(draft, toDraft(song)), { silent: true });
     setSong(updated);
     setDraft(toDraft(updated));
     toast.success('Song saved');
@@ -466,7 +421,7 @@ export default function SongBookViewer() {
   // holds a deferred IN-PAGE exit (the View toggle) while the inline discard
   // confirm is up; `routeGuard` below parks anything that leaves the route.
   const isDirty = useMemo(
-    () => !!song && !!draft && !draftsEqual(draft, toDraft(song)),
+    () => !!song && !!draft && !songBookDraftsEqual(draft, toDraft(song)),
     [song, draft],
   );
   const [pendingExit, setPendingExit] = useState(null);
@@ -835,64 +790,94 @@ export default function SongBookViewer() {
       ) : (
         /* ============================== PLAY MODE ============================== */
         <>
-          {/* Drum play-along transport — its own bar above the shared controls,
-              so the kit's tempo/loop/click sit together rather than interleaved
-              with the sheet controls. */}
-          {isDrum && (
-            <DrumTransportBar
-              playing={drum.playing}
-              onToggle={drum.toggle}
-              hasMusic={drum.hasMusic}
-              bpm={drum.bpm}
-              onBpmChange={drum.setBpm}
-              onPercent={drum.setBpmPercent}
-              writtenTempo={drum.writtenTempo}
-              countInBars={drum.countInBars}
-              onCountInChange={drum.setCountInBars}
-              loopEnabled={drum.loopEnabled}
-              onLoopToggle={drum.setLoopEnabled}
-              loopFrom={drum.loopFrom}
-              loopTo={drum.loopTo}
-              onLoopRangeChange={drum.setLoopRange}
-              barCount={drum.barCount}
-              clickEnabled={drum.clickEnabled}
-              onClickToggle={drum.setClickEnabled}
-              clickVolume={drum.clickVolume}
-              onClickVolumeChange={drum.setClickVolume}
-              kitId={drum.kitId}
-              onKitChange={drum.setKitId}
-              beatsPerBar={drum.beatsPerBar}
-              pulse={drum.pulse}
-              currentBar={drum.currentBar}
-            />
+          {/* Audio playback — the transport that actually SOUNDS (kit synth or
+              chord strums). Collapsed by default: it is the tallest header
+              band and the one you set once per session, so the sheet starts
+              higher up the screen and the summary keeps tempo visible while
+              it is closed. */}
+          {(isDrum || chord.chordCount > 0) && (
+            <CollapsibleSection
+              id="song-audio-controls"
+              size="bar"
+              label="Audio"
+              summary={audioSummary}
+              open={audioOpen}
+              onOpenChange={toggleAudio}
+              className="shrink-0"
+              buttonClassName="border-b border-port-border bg-port-card/60 px-3"
+              // Kept mounted: a transport's own "More" disclosure (and the
+              // sound it is making) must survive a collapse.
+              keepMounted
+            >
+              {isDrum ? (
+                <DrumTransportBar
+                  playing={drum.playing}
+                  onToggle={drum.toggle}
+                  hasMusic={drum.hasMusic}
+                  bpm={drum.bpm}
+                  onBpmChange={drum.setBpm}
+                  onPercent={drum.setBpmPercent}
+                  writtenTempo={drum.writtenTempo}
+                  countInBars={drum.countInBars}
+                  onCountInChange={drum.setCountInBars}
+                  loopEnabled={drum.loopEnabled}
+                  onLoopToggle={drum.setLoopEnabled}
+                  loopFrom={drum.loopFrom}
+                  loopTo={drum.loopTo}
+                  onLoopRangeChange={drum.setLoopRange}
+                  barCount={drum.barCount}
+                  clickEnabled={drum.clickEnabled}
+                  onClickToggle={drum.setClickEnabled}
+                  clickVolume={drum.clickVolume}
+                  onClickVolumeChange={drum.setClickVolume}
+                  kitId={drum.kitId}
+                  onKitChange={drum.setKitId}
+                  beatsPerBar={drum.beatsPerBar}
+                  // The beat readout is the one prop that turns over per beat.
+                  // A collapsed card doesn't render it, so passing null there
+                  // lets the memoized bar skip reconciliation entirely.
+                  pulse={audioOpen ? drum.pulse : null}
+                  currentBar={drum.currentBar}
+                />
+              ) : (
+                <ChordTransportBar
+                  playing={chord.playing}
+                  onToggle={chord.toggle}
+                  hasChords={chord.hasChords}
+                  bpm={chord.bpm}
+                  onBpmChange={chord.setBpm}
+                  onPercent={chord.setBpmPercent}
+                  writtenTempo={chord.writtenTempo}
+                  beatsPerBar={chord.beatsPerBar}
+                  onBeatsPerBarChange={chord.setBeatsPerBar}
+                  countInBars={chord.countInBars}
+                  onCountInChange={chord.setCountInBars}
+                  clickEnabled={chord.clickEnabled}
+                  onClickToggle={chord.setClickEnabled}
+                  chordCount={chord.chordCount}
+                  pulse={audioOpen ? chord.pulse : null}
+                  // Play mode is the only host that binds a key for this transport.
+                  keyHint="(p)"
+                />
+              )}
+            </CollapsibleSection>
           )}
 
-          {/* Chord-sheet play-along transport (#4104) — the same slot one format
-              over, and only for a sheet that actually carries chords (a lyrics-
-              only or plain sheet has nothing to sound, so no bar appears). */}
-          {!isDrum && chord.chordCount > 0 && (
-            <ChordTransportBar
-              playing={chord.playing}
-              onToggle={chord.toggle}
-              hasChords={chord.hasChords}
-              bpm={chord.bpm}
-              onBpmChange={chord.setBpm}
-              onPercent={chord.setBpmPercent}
-              writtenTempo={chord.writtenTempo}
-              beatsPerBar={chord.beatsPerBar}
-              onBeatsPerBarChange={chord.setBeatsPerBar}
-              countInBars={chord.countInBars}
-              onCountInChange={chord.setCountInBars}
-              clickEnabled={chord.clickEnabled}
-              onClickToggle={chord.setClickEnabled}
-              chordCount={chord.chordCount}
-              pulse={chord.pulse}
-              // Play mode is the only host that binds a key for this transport.
-              keyHint="(p)"
-            />
-          )}
-
-          <div className="shrink-0 border-b border-port-border bg-port-card/60 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/* Sheet controls — what you drive the SHEET with (autoscroll,
+              transpose, size, instrument view, stage). Open by default: this is
+              the band you reach for mid-song. Named for the sheet, not "play
+              along", which is the transport's own Play button one card up. */}
+          <CollapsibleSection
+            id="song-sheet-controls"
+            size="bar"
+            label="Sheet controls"
+            summary={controlsSummary}
+            open={controlsOpen}
+            onOpenChange={toggleControls}
+            className="shrink-0"
+            buttonClassName="border-b border-port-border bg-port-card/60 px-3"
+            bodyClassName="border-b border-port-border bg-port-card/60 px-3 py-2 flex flex-wrap items-center gap-x-4 gap-y-2"
+          >
             {/* Autoscroll — a drum chart scrolls HORIZONTALLY under its own
                 playhead (DrumSheetView), so a second vertical-scroll play button
                 would be a rival transport with a rival meaning of "play". */}
@@ -1012,7 +997,21 @@ export default function SongBookViewer() {
                 </a>
               )}
             </div>
-          </div>
+          </CollapsibleSection>
+
+          {/* Chords used — pinned in the header band rather than scrolled away
+              with the sheet: the shapes you are reaching for matter at bar 60,
+              not only at bar 1. Follows the transposed text and the instrument
+              view, and a `plain` sheet (the opt-out of all notation UI) and a
+              drum chart have no chords to show. */}
+          {chordUiEnabled && (
+            <ChordsUsedCard
+              text={renderedText}
+              instrument={instrumentView}
+              open={chordsOpen}
+              onToggle={toggleChords}
+            />
+          )}
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-3 sm:px-4 sm:py-4">
             {/* Cross-links to the Round / music Track this song relates to
@@ -1043,7 +1042,6 @@ export default function SongBookViewer() {
                 fontSizeRem={fontSize}
                 className="max-w-4xl"
                 instrumentView={instrumentView}
-                showChordStrip
                 soundingChord={chord.sounding}
               />
             ) : (

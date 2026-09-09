@@ -11,9 +11,10 @@ accessibility). Feature-specific components live under their own feature directo
 | `AutoSizeTextarea` | Controlled `<textarea>` that grows to fit its content — no internal scroll, no hand-resize. |
 | `Banner` | Toned alert block (icon + content + actions) for warnings, errors, and info callouts. |
 | `BeatPulse` | Metronome dot row — one dot per beat of the bar, the current one lit. |
-| `CollapsibleSection` | Disclosure section header — chevron, leading icon, collapsed summary, `aria-expanded`. |
+| `CollapsibleSection` | Disclosure section header — chevron, leading icon, collapsed summary, `aria-expanded`/`aria-controls`; `keepMounted` hides the body instead of unmounting it. |
 | `CollapsibleText` | Collapsed content preview with a show-more/less toggle — line-clamped `text`, or `children` capped by `maxHeight` when `line-clamp` can't (rendered markdown). |
 | `ConfirmButtonPair` | Compact inline confirm/cancel pair for a destructive action in a dense control row. |
+| `ConnectionStatusDot` | Live-transport status dot — coloured by connection state, with a caption and the state word. |
 | `CopyableId` | Click-to-copy record-id badge — short prefix shown, full id copied. |
 | `diffRuns` | Renders `{ text, changed }` runs from `diffWords` as highlighted nodes (shared by the diff views). |
 | `FilePickerButton` | Opens the OS file picker, styled as a button or as a whole drop target. |

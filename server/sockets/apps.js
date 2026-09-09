@@ -20,21 +20,40 @@ import {
 // the re-entrancy guard and the resumable progress buffer.
 const activeAppOperations = new Map();
 
+// One operation occupies several keys, so collapse them back to one row.
 // repoPath stays server-side: the client only needs to name and render the run.
 const activeOperationsPayload = () => ({
-  operations: [...activeAppOperations.values()].map(({ repoPath: _repoPath, ...op }) => op)
+  operations: [...new Set(activeAppOperations.values())].map(({ repoPath: _repoPath, ...op }) => op)
 });
 
 // Two app records may point at the same checkout, so the app id alone doesn't
-// identify the resource being mutated.
-const findConflictingOperation = (app) => activeAppOperations.get(app.id)
-  || (app.repoPath ? [...activeAppOperations.values()].find(op => op.repoPath === app.repoPath) : undefined);
+// identify the resource being mutated — an operation is registered under every
+// key that names the resource it is mutating.
+const operationKeys = (app) => (app.repoPath && app.repoPath !== app.id ? [app.id, app.repoPath] : [app.id]);
 
-const beginAppOperation = (io, app, type) => {
+const findConflictingOperation = (app) => operationKeys(app)
+  .map(key => activeAppOperations.get(key))
+  .find(Boolean);
+
+// Refuse rather than overwrite: a caller that reaches the registry without
+// going through claimAppOperation must not be able to silently clobber a live
+// run out of the map and orphan its step buffer.
+const setOperationKey = (key, operation) => {
+  if (activeAppOperations.has(key)) throw new Error(`App operation already in flight for ${key}`);
+  activeAppOperations.set(key, operation);
+};
+
+// Claim the resource for this run. The conflict check and the registry write
+// are one synchronous step — an await between them is what let two overlapping
+// dispatches both pass the check, both run, and then delete each other's
+// record (#6638). Callers must claim BEFORE any further await.
+const claimAppOperation = (io, app, type) => {
+  const inFlight = findConflictingOperation(app);
+  if (inFlight) return { ok: false, inFlight };
   const operation = { appId: app.id, appName: app.name, type, steps: [], startedAt: Date.now(), repoPath: app.repoPath };
-  activeAppOperations.set(app.id, operation);
+  for (const key of operationKeys(app)) setOperationKey(key, operation);
   io.emit('app:operations:active', activeOperationsPayload());
-  return operation;
+  return { ok: true, operation };
 };
 
 // A PortOS self-update deliberately leaves its operation registered: the
@@ -42,8 +61,14 @@ const beginAppOperation = (io, app, type) => {
 // path has no process boundary, so it needs a way back to an empty set.
 export const __resetAppOperations = () => activeAppOperations.clear();
 
+// Clear every key this operation holds, and only the keys pointing at THIS
+// operation — a run that already finished must not evict a live sibling.
 const endAppOperation = (io, appId) => {
-  if (!activeAppOperations.delete(appId)) return;
+  const operation = activeAppOperations.get(appId);
+  if (!operation) return;
+  for (const [key, op] of activeAppOperations) {
+    if (op === operation) activeAppOperations.delete(key);
+  }
   io.emit('app:operations:active', activeOperationsPayload());
 };
 
@@ -109,15 +134,20 @@ export const registerAppHandlers = (socket, io) => {
         return;
       }
 
-      const inFlight = findConflictingOperation(app);
-      if (inFlight) {
+      // Claimed here, immediately after the app record resolves and BEFORE the
+      // preflight await below — the claim has to cover every await that
+      // precedes the actual update, or two dispatches land inside the gap.
+      const claim = claimAppOperation(io, app, 'update');
+      if (!claim.ok) {
         socket.emit('app:update:error', {
           appId: app.id,
           duplicate: true,
-          message: `An ${inFlight.type} is already running for ${inFlight.appName}`
+          message: `An ${claim.inFlight.type} is already running for ${claim.inFlight.appName}`
         });
         return;
       }
+      const operation = claim.operation;
+      operatingAppId = app.id;
 
       // PortOS is itself a managed app, and updating it restarts the whole
       // install — apply the same refusals POST /api/update/execute enforces
@@ -134,14 +164,14 @@ export const registerAppHandlers = (socket, io) => {
           acknowledgePersistentMindImageBackup: data.acknowledgePersistentMindImageBackup === true,
         }).then(() => null, (err) => err);
         if (refusal) {
+          endAppOperation(io, app.id);
+          operatingAppId = null;
           socket.emit('app:update:error', { appId: app.id, code: refusal.code, message: refusal.message });
           return;
         }
       }
 
       console.log(`⬇️ Socket update started for ${app.name}`);
-      const operation = beginAppOperation(io, app, 'update');
-      operatingAppId = app.id;
       const emit = (step, status, message) => {
         const frame = { appId: app.id, step, status, message, timestamp: Date.now() };
         recordOperationStep(operation, frame);
@@ -208,19 +238,19 @@ export const registerAppHandlers = (socket, io) => {
         return;
       }
 
-      const inFlight = findConflictingOperation(app);
-      if (inFlight) {
+      const claim = claimAppOperation(io, app, 'standardize');
+      if (!claim.ok) {
         socket.emit('app:standardize:error', {
           appId: app.id,
           duplicate: true,
-          message: `An ${inFlight.type} is already running for ${inFlight.appName}`
+          message: `An ${claim.inFlight.type} is already running for ${claim.inFlight.appName}`
         });
         return;
       }
+      const operation = claim.operation;
+      operatingAppId = app.id;
 
       console.log(`🔧 Socket standardize started for ${app.name}`);
-      const operation = beginAppOperation(io, app, 'standardize');
-      operatingAppId = app.id;
       const emit = (step, status, message) => {
         const frame = { appId: app.id, step, status, message, timestamp: Date.now() };
         recordOperationStep(operation, frame);

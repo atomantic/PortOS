@@ -10,13 +10,25 @@
 // Adding a feature:
 //   1. add a descriptor here;
 //   2. tag its pages in navManifest.js (`feature: '<id>'`, or a SECTION_FEATURE
-//      entry when a whole sidebar section belongs to it) and the matching rows
-//      in client/src/components/Layout.jsx;
+//      entry when a whole sidebar section belongs to it) — a sidebar row also
+//      needs its own NAV_PRESENTATION entry in client/src/components/Layout.jsx
+//      (path → icon): feature, section and label are inherited from
+//      NAV_COMMANDS, so the path is the one thing declared twice — the icon
+//      lives only in NAV_PRESENTATION;
 //   3. add a `detect` hook in services/instanceFeatures.js when a fresh install
 //      should infer the default from whether the integration is configured.
 // The validation schemas and the install-wide Features tab pick it up with no
 // further edit; managed-app tabs opt into the separate APP_FEATURE_IDS list
 // below when they need an app-level inherit/override control.
+//
+// A feature may carry `group: '<groupId>'` to bucket it under one of
+// INSTANCE_FEATURE_GROUPS below. A grouped feature keeps its own tri-state
+// override (inherit/on/off, same stored-`enabled` shape every feature already
+// uses) but ALSO inherits its group's `enabled` flag when its own override is
+// untouched: group off hides every member that has not overridden on, group on
+// hands each member back to its own normal resolution (detector, then
+// `defaultEnabled`). See resolveOne in services/instanceFeatures.js. An
+// ungrouped feature is completely unaffected — this is additive.
 export const INSTANCE_FEATURES = Object.freeze([
   Object.freeze({
     id: 'post',
@@ -76,10 +88,67 @@ export const INSTANCE_FEATURES = Object.freeze([
     label: 'FaceTime Audio',
     description: 'Machine-local FaceTime Audio call controls and setup checks.',
     defaultEnabled: false,
+    group: 'comms',
+  }),
+  Object.freeze({
+    id: 'imessage',
+    label: 'iMessage',
+    description: 'Machine-local iMessage and SMS reading, spam blocklist, and Tribe sync.',
+    defaultEnabled: true,
+    group: 'comms',
+  }),
+  Object.freeze({
+    id: 'signal',
+    label: 'Signal',
+    description: 'Machine-local Signal Desktop message reading and Tribe sync.',
+    defaultEnabled: true,
+    group: 'comms',
+  }),
+  Object.freeze({
+    id: 'x',
+    label: 'X',
+    description: 'X (Twitter) reach and health tracking, draft posts, and account safety controls.',
+    defaultEnabled: true,
+    group: 'comms',
+  }),
+  Object.freeze({
+    id: 'stacker-news',
+    label: 'Stacker News',
+    description: 'Stacker News community monitoring, triage queue, and draft composition.',
+    defaultEnabled: true,
+    group: 'comms',
+  }),
+  Object.freeze({
+    id: 'beeper',
+    label: 'Beeper',
+    description: 'Local Beeper Desktop bridge — WhatsApp, Discord, Telegram, and other bridged networks, mirrored machine-local.',
+    // No detector, by design (fork issue #11 decision): a token-presence gate
+    // can't bootstrap the very screen that sets the token. A plain manual
+    // toggle, off by default, like every other feature with no detector.
+    defaultEnabled: false,
+    group: 'comms',
   }),
 ]);
 
 export const INSTANCE_FEATURE_IDS = Object.freeze(INSTANCE_FEATURES.map((feature) => feature.id));
+
+// Buckets features under one group toggle with per-feature overrides (#40).
+// Membership: comms (FaceTime Audio, iMessage, Signal, X, Stacker News, Beeper
+// — #30 joined Beeper to the group #40 stood up, and X/Stacker News joined
+// after). Widening membership is a one-line change to a feature's `group`
+// above; adding a new group is a one-line addition here. A group's own
+// `enabled` flag defaults to true (see storedGroupEnabled in
+// services/instanceFeatures.js) so registering this never hides a feature an
+// existing install already saw with no settings write required.
+export const INSTANCE_FEATURE_GROUPS = Object.freeze([
+  Object.freeze({
+    id: 'comms',
+    label: 'Comms',
+    description: 'Chat and calling integrations, bucketed under one group toggle.',
+  }),
+]);
+
+export const INSTANCE_FEATURE_GROUP_IDS = Object.freeze(INSTANCE_FEATURE_GROUPS.map((group) => group.id));
 
 // These are the feature tabs shown on a managed app. POST is install-wide only;
 // it has no app-level tab or override. Keep this list next to the registry so

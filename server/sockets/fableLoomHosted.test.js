@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   registerFableLoomHostedNamespace,
   getHostedNamespace,
+  MAX_MIC_FRAME_BYTES,
+  MAX_UTTERANCE_BYTES,
 } from './fableLoomHosted.js';
 import {
   _getInternalSession,
@@ -306,6 +308,66 @@ describe('fableLoomHosted Socket.IO namespace', () => {
       await audience.listeners['hosted:mic:stop']();
 
       expect(stt.transcribe).toHaveBeenCalledWith(Buffer.from('aabb'), expect.anything());
+    });
+
+    it('stops buffering mic frames once the session expires mid-listen', async () => {
+      await audience.listeners['hosted:mic:start']();
+
+      // TTL expiry marks the record `ended` but never touches `turnPhase`, so a
+      // handler gated on the connect-time snapshot would still read `listening`
+      // and keep appending for the whole life of the socket.
+      const record = _getInternalSession(session.id);
+      record.expiresAt = new Date(Date.now() - 1000).toISOString();
+
+      audience.listeners['hosted:mic:frame'](Buffer.from('aa'));
+      audience.listeners['hosted:mic:frame'](Buffer.from('bb'));
+
+      // Revive the record so mic:stop reaches the buffer it would have filled.
+      record.expiresAt = new Date(Date.now() + 60_000).toISOString();
+      record.status = 'active';
+      await audience.listeners['hosted:mic:stop']();
+
+      expect(stt.transcribe).not.toHaveBeenCalled();
+    });
+
+    it('drops a single mic frame larger than the per-frame cap', async () => {
+      await audience.listeners['hosted:mic:start']();
+      audience.listeners['hosted:mic:frame'](Buffer.alloc(MAX_MIC_FRAME_BYTES + 1, 0x7a));
+      audience.listeners['hosted:mic:frame'](Buffer.from('aa'));
+      await audience.listeners['hosted:mic:stop']();
+
+      expect(stt.transcribe).toHaveBeenCalledWith(Buffer.from('aa'), expect.anything());
+    });
+
+    it('refuses the turn once buffered mic frames exceed the utterance cap', async () => {
+      await audience.listeners['hosted:mic:start']();
+
+      const frame = Buffer.alloc(MAX_MIC_FRAME_BYTES, 0x61);
+      const framesToCap = MAX_UTTERANCE_BYTES / MAX_MIC_FRAME_BYTES;
+      for (let i = 0; i < framesToCap; i += 1) {
+        audience.listeners['hosted:mic:frame'](frame);
+      }
+      expect(audience.emitted.filter((e) => e.event === 'hosted:error')).toHaveLength(0);
+
+      // These two both overflow; the refusal is reported exactly once per turn.
+      audience.listeners['hosted:mic:frame'](frame);
+      audience.listeners['hosted:mic:frame'](frame);
+
+      const errors = audience.emitted.filter((e) => e.event === 'hosted:error');
+      expect(errors).toHaveLength(1);
+      expect(errors[0].data).toMatchObject({ code: 'UTTERANCE_TOO_LARGE' });
+
+      await audience.listeners['hosted:mic:stop']();
+      expect(stt.transcribe).not.toHaveBeenCalled();
+    });
+
+    it('refuses a hosted:mic:stop complete buffer larger than the utterance cap', async () => {
+      await audience.listeners['hosted:mic:start']();
+      await audience.listeners['hosted:mic:stop'](Buffer.alloc(MAX_UTTERANCE_BYTES + 1, 0x61));
+
+      expect(stt.transcribe).not.toHaveBeenCalled();
+      expect(audience.emitted.find((e) => e.event === 'hosted:error')?.data)
+        .toMatchObject({ code: 'UTTERANCE_TOO_LARGE' });
     });
 
     it('ignores hosted:mic:stop when the session is not listening', async () => {

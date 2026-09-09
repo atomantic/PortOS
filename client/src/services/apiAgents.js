@@ -185,7 +185,7 @@ export const forceHealthCheck = (options = {}) => request('/cos/health/check', {
 export const getCosAgents = (options) => request('/cos/agents', options);
 export const getCosAgentDates = () => request('/cos/agents/history');
 export const getCosAgentsByDate = (date) => request(`/cos/agents/history/${date}`);
-export const getCosAgent = (id) => request(`/cos/agents/${id}`);
+export const getCosAgent = (id, options) => request(`/cos/agents/${id}`, options);
 export const pauseCosAgent = (id, reason, options = {}) => request(`/cos/agents/${id}/pause`, {
   method: 'POST',
   body: JSON.stringify({ reason }),
@@ -304,6 +304,17 @@ export const updateCosTaskInterval = (taskType, settings, options = {}) => reque
   body: JSON.stringify(settings),
   ...options
 });
+
+// Manual maintenance runs — the Schedule tab's "Run maintenance now" (server:
+// services/maintenanceRun.js).
+export const getMaintenanceRuns = (options) => request('/cos/schedule/maintenance-runs', options);
+export const startMaintenanceRun = ({ appId, providerId, model, effort = null }, options = {}) => request('/cos/schedule/maintenance-runs', {
+  method: 'POST',
+  body: JSON.stringify({ appId, providerId, model, effort }),
+  ...options
+});
+export const stopMaintenanceRun = (id, options = {}) => request(`/cos/schedule/maintenance-runs/${id}/stop`, { method: 'POST', ...options });
+export const resumeMaintenanceRun = (id, options = {}) => request(`/cos/schedule/maintenance-runs/${id}/resume`, { method: 'POST', ...options });
 
 export const triggerCosOnDemandTask = (taskType, appId = null, options = {}) => request('/cos/schedule/trigger', {
   method: 'POST',

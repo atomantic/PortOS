@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { searchHuggingFaceModels, enrichCatalogWithVariants, applyMeasuredFit, fetchRepoPublishedDates } from './huggingFaceCatalog.js'
+import { fetchRepoPublishedDates as fetchMetadataDates } from './huggingFaceMetadata.js'
 import { __resetOllamaRegistryCache } from './ollamaRegistryCatalog.js'
 
 // The disk cache resolves its file from the REAL PATHS.data, and fetchRepoModel
@@ -1296,7 +1297,7 @@ describe('huggingFaceCatalog', () => {
       expect(catalog.every((e) => e.format === 'gguf')).toBe(true)
     })
 
-    it('coalesces concurrent probes of the same repo into one request', async () => {
+    it('shares concurrent repo probes between catalog variants and metadata consumers', async () => {
       const repo = 'dedupe-pub/Shared-GGUF'
       let blobCalls = 0
       fetch.mockImplementation(async (url) => {
@@ -1304,7 +1305,7 @@ describe('huggingFaceCatalog', () => {
         if (u.includes('blobs=true')) {
           blobCalls += 1
           await new Promise((resolve) => setTimeout(resolve, 5))
-          return response({ id: repo, siblings: [{ rfilename: 'S-Q4_K_M.gguf', size: 4_000_000_000 }] })
+          return response({ id: repo, createdAt: '2026-01-02T00:00:00.000Z', siblings: [{ rfilename: 'S-Q4_K_M.gguf', size: 4_000_000_000 }] })
         }
         return response([])
       })
@@ -1312,9 +1313,15 @@ describe('huggingFaceCatalog', () => {
       const catalogs = Array.from({ length: 3 }, () => ([
         { id: repo, key: 'shared', name: 'Shared', category: 'chat', size: '2.0 GB' }
       ]))
-      await Promise.all(catalogs.map((c) => enrichCatalogWithVariants(c, {
-        backend: 'lmstudio', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [], timeoutMs: 0
-      })))
+      const [dates] = await Promise.all([
+        fetchMetadataDates([repo], { timeoutMs: 0 }),
+        ...catalogs.map((c) => enrichCatalogWithVariants(c, {
+          backend: 'lmstudio', systemMemoryBytes: 128 * 1024 ** 3, installedIds: [], timeoutMs: 0
+        }))
+      ])
+
+      expect(dates).toEqual({ [repo]: '2026-01-02T00:00:00.000Z' })
+      expect(await fetchRepoPublishedDates([repo])).toEqual(dates)
 
       expect(blobCalls).toBe(1)
       expect(catalogs.every((c) => c[0].format === 'gguf')).toBe(true)

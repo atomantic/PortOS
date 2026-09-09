@@ -705,29 +705,19 @@ async function drainLoop() {
     await videoHolds.resolveCohorts(candidates);
     videoHolds.updateQueued(queue);
     // Single queue scan, promoting work independently into each open lane.
-    let gpuOpen = !running;
-    let cloudSlots = codexParallelLimit - cloudRunning.length;
-    let remoteSlots = REMOTE_MEDIA_PARALLEL_LIMIT - remoteRunning.length;
-    if ((gpuOpen || cloudSlots > 0 || remoteSlots > 0) && queue.length > 0) {
-      for (const job of candidates) {
-        if (job.status !== 'queued' || job.hold) continue;
-        const lane = jobLane(job);
-        if (lane === 'remote') {
-          if (remoteSlots > 0) {
-            startLaneJob(job, { lane });
-            remoteSlots -= 1;
-          }
-        } else if (lane === 'cloud') {
-          if (cloudSlots > 0) {
-            startLaneJob(job, { lane });
-            cloudSlots -= 1;
-          }
-        } else if (gpuOpen) {
-          startLaneJob(job, { lane });
-          gpuOpen = false;
-        }
-        if (!gpuOpen && cloudSlots <= 0 && remoteSlots <= 0) break;
-      }
+    const limits = laneLimits();
+    const slots = {
+      gpu: limits.gpu - Number(Boolean(running)),
+      cloud: limits.cloud - cloudRunning.length,
+      remote: limits.remote - remoteRunning.length,
+    };
+    for (const job of candidates) {
+      if (job.status !== 'queued' || job.hold) continue;
+      const lane = jobLane(job);
+      if (slots[lane] <= 0) continue;
+      startLaneJob(job, { lane });
+      slots[lane] -= 1;
+      if (Object.values(slots).every((remaining) => remaining <= 0)) break;
     }
     await sleep(150);
   }

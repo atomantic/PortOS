@@ -26,7 +26,6 @@ export default function ChordPreview({
   format = 'tab',
   fontSizeRem,
   instrumentView,
-  showChordStrip = false,
   sheetClassName = '',
   settingsMirror,
 }) {
@@ -106,7 +105,6 @@ export default function ChordPreview({
           format={format}
           fontSizeRem={fontSizeRem}
           instrumentView={instrumentView}
-          showChordStrip={showChordStrip}
           soundingChord={player.sounding}
         />
       </div>

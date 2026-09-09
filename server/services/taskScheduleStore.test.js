@@ -82,6 +82,16 @@ describe('taskScheduleStore', () => {
     state.writes = [];
   });
 
+  it('round trips custom labels without resetting execution failures or task settings', async () => {
+    state.persisted.executions['task:security'] = { count: 4, consecutiveFailures: 3, failureParkedAt: '2026-09-01T00:00:00.000Z', perApp: {} };
+    await updateTaskInterval('security', { labels: ['backend'] });
+    const reloaded = await loadSchedule();
+    expect(reloaded.tasks.security).toMatchObject({ labels: ['backend'], enabled: false });
+    expect(reloaded.executions['task:security']).toMatchObject({ count: 4, consecutiveFailures: 3, failureParkedAt: '2026-09-01T00:00:00.000Z' });
+    await updateTaskInterval('security', { labels: [] });
+    expect((await loadSchedule()).tasks.security.labels).toEqual([]);
+  });
+
   it('preserves concurrent task settings and execution backoff updates', async () => {
     const settingsUpdate = updateSchedule(async (schedule) => {
       schedule.tasks.security.enabled = true;

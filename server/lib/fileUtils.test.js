@@ -1988,4 +1988,33 @@ describe('serveLocalFile (shared attachment serving pipeline)', () => {
     })).rejects.toMatchObject({ status: 404, code: 'NOT_ON_THIS_MACHINE' });
     expect(res.sendFile).not.toHaveBeenCalled();
   });
+
+  // The declared `contentType` override (Beeper attachment mirror, #37/SEC-1):
+  // a remote sender's declared type is normalized (case folded, parameters
+  // dropped) and the disposition decision is taken on BOTH the declared value
+  // and whatever the type is bounded down to — so downgrading a risky
+  // `text/html` to `application/octet-stream` never costs it the attachment
+  // header it earned.
+  it.each([
+    ['text/HTML'],
+    ['TEXT/html'],
+    [' text/html ;charset=utf-8'],
+    ['Image/SVG+xml'],
+    ['application/xhtml+xml'],
+    ['text/xml'],
+  ])('forces Content-Disposition: attachment for a contentType override of %j', async (contentType) => {
+    writeFileSync(join(dir, 'override.bin'), 'x');
+    const res = mockRes();
+    await serveLocalFile(res, dir, 'override.bin', { contentType });
+    expect(res.headers['Content-Disposition']).toBe('attachment; filename="override.bin"');
+  });
+
+  it('bounds a contentType override outside the mirrored set to application/octet-stream instead of echoing it', async () => {
+    writeFileSync(join(dir, 'mystery.bin'), 'x');
+    const res = mockRes();
+    await serveLocalFile(res, dir, 'mystery.bin', { contentType: 'application/x-not-a-mirrored-type' });
+    expect(res.type).toHaveBeenCalledWith('application/octet-stream');
+    // Not risky, and the bounded type isn't either — no disposition override.
+    expect(res.headers['Content-Disposition']).toBeUndefined();
+  });
 });

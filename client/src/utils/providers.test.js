@@ -4,6 +4,7 @@
 // the 69 `utils/providers` importers notices. The declaring modules re-export
 // their shared tables from `server/lib`, so what is pinned here is the
 // client-side behaviour built on top of them.
+import * as serverProviderTypes from '../../../server/lib/providerTypes.js';
 import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
@@ -94,17 +95,15 @@ import {
   effortSurvivingModel,
   seedModelEffort,
 } from './providers.js';
-import { PROVIDER_TYPES as SERVER_PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
 import SHIPPED_PROVIDERS from '../../../data.reference/providers.json';
 // The server's own payload decorator, so the shipped-catalog walk below tests
 // the REAL derivation instead of a hand transcription of it (#3620). Pure and
 // dependency-free — it imports nothing outside the vendored aiToolkit.
 import { withRefreshCapabilityList } from '../../../server/lib/aiToolkit/internal/modelFetchers.js';
-import {
-  effortLevelsForProvider as serverEffortLevelsForProvider,
-  isAntigravityProvider as serverIsAntigravityProvider,
-  resolveCliEffort as serverResolveCliEffort,
-} from '../../../server/lib/providerModels.js';
+import * as providerTypes from './providerTypes.js';
+import * as serverProviderModels from '../../../server/lib/providerModels.js';
+import * as serverOllamaBacked from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
+import * as serverToolkitConstants from '../../../server/lib/aiToolkit/constants.js';
 
 // The client resolves its own ladder and clamps through the server's
 // clampEffortToLadder; the server's resolveCliEffort decides what the CLI
@@ -140,16 +139,16 @@ describe('resolveCliEffort', () => {
     ['null yields no flag', null, CLAUDE, null],
   ])('%s', (_label, effort, provider, expected) => {
     expect(resolveCliEffort(effort, provider)).toBe(expected);
-    expect(serverResolveCliEffort(effort, provider)).toBe(expected);
+    expect(serverProviderModels.resolveCliEffort(effort, provider)).toBe(expected);
   });
 
   it('passes Ultra through for Sol and Terra but clamps it for Luna', () => {
     for (const model of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra']) {
       expect(resolveCliEffort('ultra', CODEX, model)).toBe('ultra');
-      expect(serverResolveCliEffort('ultra', CODEX, model)).toBe('ultra');
+      expect(serverProviderModels.resolveCliEffort('ultra', CODEX, model)).toBe('ultra');
     }
     expect(resolveCliEffort('ultra', CODEX, 'gpt-5.6-luna')).toBe('max');
-    expect(serverResolveCliEffort('ultra', CODEX, 'gpt-5.6-luna')).toBe('max');
+    expect(serverProviderModels.resolveCliEffort('ultra', CODEX, 'gpt-5.6-luna')).toBe('max');
   });
 });
 
@@ -184,7 +183,7 @@ describe('effortLevelsForProvider', () => {
 
   it.each(CASES)('%s', (_label, provider, expected) => {
     expect(effortLevelsForProvider(provider)).toEqual(expected);
-    expect(serverEffortLevelsForProvider(provider)).toEqual(expected);
+    expect(serverProviderModels.effortLevelsForProvider(provider)).toEqual(expected);
   });
 
   // Codex's ladder is model-gated in BOTH directions: the gpt-6 family adds
@@ -199,7 +198,7 @@ describe('effortLevelsForProvider', () => {
   ])('codex ladder for %s', (model, expected) => {
     const codex = { id: 'codex', command: 'codex' };
     expect(effortLevelsForProvider(codex, model)).toEqual(expected);
-    expect(serverEffortLevelsForProvider(codex, model)).toEqual(expected);
+    expect(serverProviderModels.effortLevelsForProvider(codex, model)).toEqual(expected);
   });
 });
 
@@ -210,38 +209,39 @@ describe('effortLevelsForProvider', () => {
 // (server/lib/aiToolkit/internal/generationOptions.js) for HTTP runs.
 describe('generationControlsFor', () => {
   it.each([
-    ['OpenCode llama TUI', { id: 'opencode-llama-tui', command: 'opencode', llamaBacked: true }, { temperature: true, topP: true, thinking: true }],
-    ['OpenCode MTPLX', { id: 'opencode-mtplx', command: 'opencode', mtplxBacked: true }, { temperature: true, topP: true, thinking: true }],
+    ['OpenCode llama TUI', { id: 'opencode-llama-tui', type: 'tui', command: 'opencode', llamaBacked: true }, { temperature: true, topP: true, thinking: true }],
+    ['OpenCode MTPLX', { id: 'opencode-mtplx', type: 'tui', command: 'opencode', mtplxBacked: true }, { temperature: true, topP: true, thinking: true }],
     // vLLM routes the thinking toggle through the chat template like the other
     // two. Both sides were written before `vllmBacked` existed, so the editor
     // hid the whole block while the server discarded every control anyway
     // (#4765).
-    ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', command: 'opencode', vllmBacked: true }, { temperature: true, topP: true, thinking: true }],
+    ['OpenCode vLLM TUI', { id: 'opencode-vllm-tui', type: 'tui', command: 'opencode', vllmBacked: true }, { temperature: true, topP: true, thinking: true }],
     // SGLang takes the same chat-template thinking toggle, and shipped with the
     // controls wired from day one so it never repeated vLLM's hole.
-    ['OpenCode SGLang TUI', { id: 'opencode-sglang-tui', command: 'opencode', sglangBacked: true }, { temperature: true, topP: true, thinking: true }],
+    ['OpenCode SGLang TUI', { id: 'opencode-sglang-tui', type: 'tui', command: 'opencode', sglangBacked: true }, { temperature: true, topP: true, thinking: true }],
     // A Claude harness on Ollama is forwarded only MAX_THINKING_TOKENS
     // (server/lib/cliChildEnv.js) — it owns its own sampling.
-    ['Claude Ollama TUI', { id: 'claude-ollama-tui', command: 'claude', ollamaBacked: true }, { temperature: false, topP: false, thinking: true }],
+    ['Claude Ollama TUI', { id: 'claude-ollama-tui', type: 'tui', command: 'claude', ollamaBacked: true }, { temperature: false, topP: false, thinking: true }],
+    ['blank Claude command', { id: 'claude-ollama', type: 'tui', command: '', ollamaBacked: true }, { temperature: false, topP: false, thinking: true }],
     // ...but a Claude harness on ANY OTHER local backend gets no control at all.
     // MAX_THINKING_TOKENS is the harness's only thinking lever, and it means
     // "off" solely on Ollama; SGLang takes `chat_template_kwargs.enable_thinking`,
     // which the Anthropic wire cannot carry, so the toggle would pin a value
     // nothing reads. Sampling was never forwardable on a Claude harness either,
     // which would have left the block rendering one inert select.
-    ['Claude SGLang TUI', { id: 'claude-sglang-tui', command: 'claude', sglangBacked: true }, null],
+    ['Claude SGLang TUI', { id: 'claude-sglang-tui', type: 'tui', command: 'claude', sglangBacked: true }, null],
     // LM Studio forwards temperature/top_p like any OpenAI-compatible endpoint,
     // but reasoning is a property of the LOADED model instance there — no
     // per-request field carries it, so the toggle would pin a value nothing
     // reads (THINKING_STYLE.lmstudio is null on the server).
-    ['OpenCode LM Studio', { id: 'opencode-lmstudio', command: 'opencode', lmstudioBacked: true }, { temperature: true, topP: true, thinking: false }],
+    ['OpenCode LM Studio', { id: 'opencode-lmstudio', type: 'tui', command: 'opencode', lmstudioBacked: true }, { temperature: true, topP: true, thinking: false }],
     ['native Ollama API', { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' }, { temperature: true, topP: true, thinking: true }],
     // OrcaRouter proxies cloud models that own their own reasoning switch.
-    ['OpenCode OrcaRouter', { id: 'opencode-orcarouter', command: 'opencode', orcarouterBacked: true }, { temperature: true, topP: true, thinking: false }],
+    ['OpenCode OrcaRouter', { id: 'opencode-orcarouter', type: 'tui', command: 'opencode', orcarouterBacked: true }, { temperature: true, topP: true, thinking: false }],
     // Same posture for every gateway: upstream models own their reasoning switch.
-    ['OpenCode OpenRouter', { id: 'opencode-openrouter', command: 'opencode', gatewayBacked: 'openrouter' }, { temperature: true, topP: true, thinking: false }],
+    ['OpenCode OpenRouter', { id: 'opencode-openrouter', type: 'tui', command: 'opencode', gatewayBacked: 'openrouter' }, { temperature: true, topP: true, thinking: false }],
     ['cloud API provider', { id: 'anthropic', type: 'api', endpoint: 'https://api.anthropic.com/v1' }, null],
-    ['vendor CLI', { id: 'claude-code', command: 'claude' }, null],
+    ['vendor CLI', { id: 'claude-code', type: 'cli', command: 'claude' }, null],
   ])('%s', (_label, provider, expected) => {
     expect(generationControlsFor(provider)).toEqual(expected);
   });
@@ -327,11 +327,11 @@ describe('Antigravity base-model split', () => {
       ['claude-sonnet-4-6', null],
     ]) {
       expect(effortLevelsForProvider(agy, model)).toEqual(expected);
-      expect(serverEffortLevelsForProvider(agy, model)).toEqual(expected);
+      expect(serverProviderModels.effortLevelsForProvider(agy, model)).toEqual(expected);
     }
     // Clamping follows the narrowed ladder, so agy never sees an invalid pair.
     expect(resolveCliEffort('medium', agy, 'gemini-3.1-pro')).toBe('low');
-    expect(serverResolveCliEffort('medium', agy, 'gemini-3.1-pro')).toBe('low');
+    expect(serverProviderModels.resolveCliEffort('medium', agy, 'gemini-3.1-pro')).toBe('low');
   });
 
   it('rewrites only Antigravity model lists', () => {
@@ -565,16 +565,43 @@ describe('configuredDefaultIn', () => {
   });
 });
 
-describe('isAntigravityProvider (server mirror)', () => {
-  it.each([
-    [{ id: 'antigravity-cli' }, true],
-    [{ id: 'antigravity-tui' }, true],
-    [{ id: 'custom', command: 'agy.exe' }, true],
-    [{ id: 'claude-code', command: 'claude' }, false],
-    [null, false],
-  ])('%o → %s', (provider, expected) => {
-    expect(isAntigravityProvider(provider)).toBe(expected);
-    expect(serverIsAntigravityProvider(provider)).toBe(expected);
+// The vendor predicates and backend markers the browser classifies a record
+// with are the server's own functions — identity, not behavioral parity, is the
+// contract. A copy that answers the same today is exactly what let every vendor
+// addition (kimi, cursor, the grok effort flag) land the same predicate twice.
+// Every name the client module shares with a server leaf must be that leaf's
+// export, so a local declaration that shadows a server name fails here too.
+describe('providerTypes re-exports the server predicates', () => {
+  const shared = [serverProviderModels, serverProviderTypes, serverOllamaBacked, serverToolkitConstants]
+    .flatMap((leaf) => Object.keys(leaf).filter((name) => name in providerTypes).map((name) => [name, leaf]));
+
+  it('shares exactly the re-exported names with the server leaves', () => {
+    expect(shared.map(([name]) => name).sort()).toEqual([
+      'PROVIDER_TYPES',
+      'commandBasename',
+      'isAntigravityProvider',
+      'isApiProvider',
+      'isClaudeHarnessProvider',
+      'isCliProvider',
+      'isCodexProvider',
+      'isCodexSubscriptionProvider',
+      'isCursorProvider',
+      'isGrokProvider',
+      'isKimiProvider',
+      'isOllamaBackedProvider',
+      'isOpencodeLocalProvider',
+      'isProcessProvider',
+      'isTuiProvider',
+      'localRuntimeNamespace',
+    ]);
+  });
+
+  it('keeps the legacy Claude command alias on the type-gated server export', () => {
+    expect(providerTypes.isClaudeCommandProvider).toBe(serverProviderTypes.isClaudeHarnessProvider);
+  });
+
+  it.each(shared)('%s is the server export itself', (name, leaf) => {
+    expect(providerTypes[name]).toBe(leaf[name]);
   });
 });
 
@@ -583,16 +610,8 @@ describe('PROVIDER_TYPES', () => {
     expect(PROVIDER_TYPES).toEqual({ CLI: 'cli', TUI: 'tui', API: 'api' });
   });
 
-  // The client mirror exists because aiToolkit is server-only (the directory is
-  // kept self-contained for upstream sync hygiene). A drift here would let one
-  // side read a provider type the other doesn't recognize.
-  it('matches the server-side enum (mirror must stay in lockstep)', () => {
-    expect({ ...PROVIDER_TYPES }).toEqual({ ...SERVER_PROVIDER_TYPES });
-  });
-
   it('is frozen so callers cannot mutate the shared enum', () => {
     expect(Object.isFrozen(PROVIDER_TYPES)).toBe(true);
-    expect(Object.isFrozen(SERVER_PROVIDER_TYPES)).toBe(true);
   });
 });
 
@@ -1183,7 +1202,7 @@ describe('knownProviderContextWindow', () => {
   });
 });
 
-describe('isKimiProvider (mirror of server providerModels)', () => {
+describe('isKimiProvider (re-exported from server providerModels)', () => {
   it('matches the shipped ids and a path/exe command, rejects others', () => {
     expect(isKimiProvider({ id: 'kimi-cli' })).toBe(true);
     expect(isKimiProvider({ id: 'kimi-tui' })).toBe(true);
@@ -1489,9 +1508,9 @@ describe('AI Assignments option helpers', () => {
   it('assignmentProviderOptions filters by providerTypes and flags disabled', () => {
     expect(assignmentProviderOptions({ providerTypes: ['api'] }, providers))
       .toEqual([
-        { id: 'vlm-x', name: 'VLM X (disabled)' },
-        { id: 'ollama', name: 'Ollama' },
-        { id: 'openai', name: 'OpenAI' },
+        { id: 'vlm-x', name: 'VLM X (disabled)', enabled: false },
+        { id: 'ollama', name: 'Ollama', enabled: true },
+        { id: 'openai', name: 'OpenAI', enabled: true },
       ]);
     // No providerTypes → all providers.
     expect(assignmentProviderOptions({}, providers).map((p) => p.id))
@@ -1667,7 +1686,8 @@ describe('credentialSource', () => {
     // and authenticates against nothing, so the account is not one of its
     // prerequisites — without this the card claims "No ChatGPT account is signed
     // in" and, worse, parks in UNKNOWN awaiting a read that never matters.
-    // MIRROR of server/lib/codexAccount.js#isCodexSubscriptionProvider.
+    // The server's own isCodexSubscriptionProvider (server/lib/providerModels.js),
+    // re-exported — one rule for the card and the prerequisite router.
     const local = SHIPPED_PROVIDERS.providers['codex-ollama'];
     expect(local.ollamaBacked).toBe(true);
     expect(isCodexSubscriptionProvider(local)).toBe(false);

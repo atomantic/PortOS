@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   describeReviewerCli,
+  isProviderReviewer,
   isCliReviewer,
   reviewerCliBinary,
   DEFAULT_REVIEWER,
@@ -202,6 +203,7 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
   it('DROPS rather than clamps a level the reviewer rejects — a displayed effort must be the one it runs', () => {
     // `agy` really does reject `--effort max`; clamping it to `high` would review
     // at a different effort than the picker shows.
+    expect(normalizeReviewerEfforts({ 'provider:codex-tui': 'ultra', 'provider:custom': 'invalid' })).toEqual({ 'provider:codex-tui': 'ultra' });
     expect(normalizeReviewerEfforts({ antigravity: 'max' })).toEqual({});
     // grok rejects `max` the way agy rejects it — dropped, not clamped.
     expect(normalizeReviewerEfforts({ grok: 'max' })).toEqual({});
@@ -420,6 +422,9 @@ describe('client mirror of the reviewer vocabulary', () => {
   it('matches the server reviewer roster', async () => {
     const client = await import('../../client/src/lib/reviewerPins.js');
     expect([...client.REVIEWER_VALUES].sort()).toEqual([...REVIEWER_VALUES].sort());
+    for (const token of ['provider:example-gpu', 'provider:custom-1', 'provider:', 'provider:foo,claude', 'provider:foo~opt', 'provider:foo[model]', 'provider:UPPER', 'claude']) {
+      expect(client.isProviderReviewer(token)).toBe(isProviderReviewer(token));
+    }
   });
 
   // Aliases resolve slugs already stored on tasks (`gemini`, `cursor-agent`). One

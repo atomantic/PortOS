@@ -18,6 +18,15 @@ import {
   verifyHostedToken,
 } from '../services/fableLoom/hostedSession.js';
 
+// Guest mic payload caps. This socket is authenticated by a single-use QR token
+// from a guest device, not by the install's one trusted user, so the root trust
+// model does not cover it and the numbers mirror the trusted call path in
+// `voice.js` (`MAX_CALL_FRAME_BYTES` / `MAX_AUDIO_BYTES`): one 64 KB frame is
+// two seconds of headroom over the ~20 ms bursts the audience page ships, and
+// 8 MB is ~4 minutes of 16 kHz mono audio for a single turn.
+const MAX_MIC_FRAME_BYTES = 64 * 1024;
+const MAX_UTTERANCE_BYTES = 8 * 1024 * 1024;
+
 let hostedNsInstance = null;
 
 export function getHostedNamespace() {
@@ -100,8 +109,25 @@ export function registerFableLoomHostedNamespace(io) {
       role,
     });
 
-    // Inbound frame buffer for streaming mic chunks
+    // Inbound frame buffer for streaming mic chunks. `micBytes` is a running
+    // counter rather than a re-sum of the array, and `micOverflow` latches the
+    // refusal so an over-cap turn is reported once and never processed as if it
+    // were a complete utterance.
     let micChunks = [];
+    let micBytes = 0;
+    let micOverflow = false;
+
+    const resetMicBuffer = () => {
+      micChunks = [];
+      micBytes = 0;
+      micOverflow = false;
+    };
+
+    // The record captured at connect goes stale: TTL expiry marks a session
+    // `ended` without touching `turnPhase`, so a closure gated on that snapshot
+    // reads `listening` forever. `_getInternalSession` re-evaluates the TTL and
+    // returns null for a dead session.
+    const liveSession = () => _getInternalSession(sessionId);
 
     // --- Host actions ---
     socket.on('hosted:playback:update', (data) => {
@@ -140,7 +166,7 @@ export function registerFableLoomHostedNamespace(io) {
     // --- Audience actions ---
     socket.on('hosted:mic:start', async () => {
       if (socket.hostedRole !== 'audience') return;
-      micChunks = [];
+      resetMicBuffer();
       try {
         await startHostedListening(sessionId, { io });
       } catch (err) {
@@ -150,22 +176,56 @@ export function registerFableLoomHostedNamespace(io) {
 
     socket.on('hosted:mic:frame', (chunk) => {
       if (socket.hostedRole !== 'audience') return;
-      if (!session || session.turnPhase !== 'listening') return;
-      if (chunk) {
-        micChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      const live = liveSession();
+      if (!live || live.turnPhase !== 'listening') return;
+      // Already refused this turn — keep dropping until the next mic:start.
+      if (micOverflow || !chunk) return;
+
+      const frame = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (frame.length > MAX_MIC_FRAME_BYTES) return;
+
+      if (micBytes + frame.length > MAX_UTTERANCE_BYTES) {
+        micOverflow = true;
+        micChunks = [];
+        micBytes = 0;
+        socket.emit('hosted:error', {
+          code: 'UTTERANCE_TOO_LARGE',
+          message: `audio too large (over ${MAX_UTTERANCE_BYTES} bytes)`,
+        });
+        return;
       }
+
+      micChunks.push(frame);
+      micBytes += frame.length;
     });
 
     socket.on('hosted:mic:stop', async (completeBuffer) => {
       if (socket.hostedRole !== 'audience') return;
-      if (!session || session.turnPhase !== 'listening') return;
+      const live = liveSession();
+      if (!live || live.turnPhase !== 'listening') return;
+
+      const overflowed = micOverflow;
       let finalAudio = null;
-      if (completeBuffer && (Buffer.isBuffer(completeBuffer) || ArrayBuffer.isView(completeBuffer))) {
-        finalAudio = Buffer.isBuffer(completeBuffer) ? completeBuffer : Buffer.from(completeBuffer);
-      } else if (micChunks.length > 0) {
+      if (!overflowed && completeBuffer
+        && (Buffer.isBuffer(completeBuffer) || ArrayBuffer.isView(completeBuffer))) {
+        const complete = Buffer.isBuffer(completeBuffer) ? completeBuffer : Buffer.from(completeBuffer);
+        if (complete.length > MAX_UTTERANCE_BYTES) {
+          resetMicBuffer();
+          socket.emit('hosted:error', {
+            code: 'UTTERANCE_TOO_LARGE',
+            message: `audio too large (${complete.length} > ${MAX_UTTERANCE_BYTES} bytes)`,
+          });
+          return;
+        }
+        finalAudio = complete;
+      } else if (!overflowed && micChunks.length > 0) {
         finalAudio = Buffer.concat(micChunks);
       }
-      micChunks = [];
+      resetMicBuffer();
+
+      // A truncated buffer would hand the LLM half a sentence with no signal,
+      // so an overflowed turn is refused outright; the error already went out.
+      if (overflowed) return;
 
       try {
         await processHostedUtterance(sessionId, { audioBuffer: finalAudio, io });
@@ -176,7 +236,8 @@ export function registerFableLoomHostedNamespace(io) {
 
     socket.on('hosted:turn:text', async (data) => {
       if (socket.hostedRole !== 'audience') return;
-      if (!session || session.turnPhase !== 'listening') return;
+      const live = liveSession();
+      if (!live || live.turnPhase !== 'listening') return;
       try {
         await processHostedUtterance(sessionId, { textMessage: data?.text, io });
       } catch (err) {
@@ -186,8 +247,9 @@ export function registerFableLoomHostedNamespace(io) {
 
     socket.on('hosted:speech:done', (_data) => {
       // Speech finished playback on output target
-      if (session && session.turnPhase === 'speaking') {
-        session.turnPhase = 'listening';
+      const live = liveSession();
+      if (live && live.turnPhase === 'speaking') {
+        live.turnPhase = 'listening';
         ns.to(room).emit('hosted:turn:phase', { phase: 'listening' });
       }
     });
@@ -214,3 +276,5 @@ export function registerFableLoomHostedNamespace(io) {
 
   return ns;
 }
+
+export { MAX_MIC_FRAME_BYTES, MAX_UTTERANCE_BYTES };

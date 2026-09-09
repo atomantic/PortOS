@@ -93,7 +93,6 @@ vi.mock('./layeredIntelligenceOutcomes.js', () => ({
 
 import {
   firstLine,
-  PRIORITY_VALUES,
   getUserTasks,
   getCosTasks,
   getAllTasks,
@@ -116,6 +115,7 @@ import {
   DEFAULT_FAILURE_TASK_MAX_AGE_MS,
   __resetTaskCache
 } from './cosTaskStore.js';
+import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
@@ -1323,6 +1323,98 @@ describe('cosTaskStore.updateTask', () => {
       metadata: { blockedCategory: 'worktree-busy', cooldownUntil: '2026-01-01T00:02:00.000Z' }
     }, 'internal');
     expect(cooled.metadata.existingBranch).toBe('cos/task-3/agent-3');
+  });
+
+  // ─── Transition edges the extraction must preserve (#6620) ────────────────
+  //
+  // `writeTaskUpdate` reads ONE status-transition descriptor and every lifecycle
+  // rule below keys off a field of it. These pin the edges at the `updateTask`
+  // boundary so the descriptor cannot silently answer a question differently
+  // from the hand-written predicate it replaced.
+
+  // The blocked clear is not just the reason text: the FAILURE COUNTERS go with
+  // it. A revived task that kept `failureCount` at the budget it blocked with
+  // re-blocks on its first attempt, which is precisely the retry this revive is.
+  it('clears the failure counters along with the blocked reason on a revive (#6620)', async () => {
+    await addTask({ description: 'counters', id: 'task-counters' }, 'user');
+    await updateTask('task-counters', {
+      status: 'blocked',
+      metadata: {
+        blocker: 'agent-9', blockedReason: 'kept failing', blockedCategory: 'max-retries',
+        blockedAt: '2026-01-01T00:00:00.000Z', failureCount: 3,
+        lastErrorCategory: 'timeout', lastFailureAt: '2026-01-01T00:00:00.000Z'
+      }
+    }, 'user');
+    const revived = await updateTask('task-counters', { status: 'pending' }, 'user');
+    for (const key of ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt']) {
+      expect(revived.metadata[key]).toBeUndefined();
+    }
+  });
+
+  // A requeue releases the in-flight-only markers in the SAME write that makes
+  // the task spawnable again: a retained lease blocks this instance's own retry
+  // (and its peer's) for a full lease window, and a retained hold makes the
+  // spawn guard decline the very retry the requeue exists to start.
+  it('releases both the retry hold and the claim on an in_progress → pending requeue (#6620)', async () => {
+    await addTask({ description: 'requeue release', id: 'task-requeue-rel' }, 'user');
+    await updateTask('task-requeue-rel', {
+      status: 'in_progress',
+      metadata: {
+        retryPendingCleanup: 'agent-r', retryPendingSince: '2026-01-01T00:00:00.000Z',
+        claimedBy: 'instance-a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T00:30:00.000Z'
+      }
+    }, 'user');
+    const requeued = await updateTask('task-requeue-rel', { status: 'pending' }, 'user');
+    expect(requeued.status).toBe('pending');
+    for (const key of ['retryPendingCleanup', 'retryPendingSince', 'claimedBy', 'claimedAt', 'leaseExpiresAt']) {
+      expect(requeued.metadata[key]).toBeUndefined();
+    }
+  });
+
+  // The lease-renewal heartbeat carries NO status, and "no status" is not a
+  // transition: it must release neither marker. An absent status collapsing into
+  // "not in_progress" would make every ~15min heartbeat retire the running
+  // task's own hold and lease.
+  it('keeps both the retry hold and the claim on a no-status heartbeat (#6620)', async () => {
+    await addTask({ description: 'heartbeat holds', id: 'task-beat-holds' }, 'user');
+    await updateTask('task-beat-holds', {
+      status: 'in_progress',
+      metadata: {
+        retryPendingCleanup: 'agent-h', retryPendingSince: '2026-01-01T00:00:00.000Z',
+        claimedBy: 'instance-a', claimedAt: '2026-01-01T00:00:00.000Z', leaseExpiresAt: '2026-01-01T00:30:00.000Z'
+      }
+    }, 'user');
+    const renewed = await updateTask('task-beat-holds', {
+      metadata: { leaseExpiresAt: '2026-01-01T01:00:00.000Z' }
+    }, 'user');
+    expect(renewed.metadata.retryPendingCleanup).toBe('agent-h');
+    expect(renewed.metadata.retryPendingSince).toBe('2026-01-01T00:00:00.000Z');
+    expect(renewed.metadata.claimedBy).toBe('instance-a');
+    expect(renewed.metadata.leaseExpiresAt).toBe('2026-01-01T01:00:00.000Z');
+  });
+
+  // ORDER between two of the rules, not just each rule. Leaving `blocked` clears
+  // `blockedCategory` BEFORE the terminal check reads it, so a paused task that
+  // goes straight to `completed` is no longer pause-categorized by the time the
+  // resume pointer is evaluated and the pointer drops. Reordering the two would
+  // silently strand a spent branch pointer on a completed task.
+  it('drops the resume pointer on paused → completed, because the revive clear runs first (#6620)', async () => {
+    await addTask({ description: 'paused then done', id: 'task-paused-done' }, 'user');
+    await updateTask('task-paused-done', {
+      status: 'blocked',
+      metadata: {
+        blockedCategory: 'orphan-cooldown',
+        existingBranch: 'cos/b', resumedFromAgentId: 'agent-x', resumeWorktreePath: '/w/agent-x'
+      }
+    }, 'user');
+    // Still blocked-and-paused: the pointer survives.
+    const parked = await getTaskById('task-paused-done');
+    expect(parked.metadata.existingBranch).toBe('cos/b');
+    const done = await updateTask('task-paused-done', { status: 'completed' }, 'user');
+    expect(done.metadata.blockedCategory).toBeUndefined();
+    expect(done.metadata.existingBranch).toBeUndefined();
+    expect(done.metadata.resumedFromAgentId).toBeUndefined();
+    expect(done.metadata.resumeWorktreePath).toBeUndefined();
   });
 
   it('releases the federation claim/lease when a task leaves in_progress (#1563)', async () => {

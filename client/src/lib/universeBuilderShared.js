@@ -16,8 +16,8 @@ export const CATEGORY_LABELS = {
   vehicles: 'Vehicles',
 };
 
-// Tab order in the Universe Builder. Bible / Composites / Render are always
-// visible; the three canon trunks (Cast / Places / Objects) render even when
+// Tab order in the Universe Builder. Bible / Composites / Render / Graph are
+// always visible; the three canon trunks (Cast / Places / Objects) render even when
 // empty so the user has a discoverable target for canon+variation work; Other
 // only renders when at least one un-kinded bucket exists.
 export const TAB_BIBLE = 'bible';
@@ -27,6 +27,7 @@ export const TAB_OBJECTS = 'objects';
 export const TAB_OTHER = 'other';
 export const TAB_COMPOSITES = 'composites';
 export const TAB_RENDER = 'render';
+export const TAB_GRAPH = 'graph';
 
 // Pseudo-bucket key for the canon-only view inside a trunk. Overloads
 // `?bucket=` (alongside real bucket keys) AND a `promptMode` value on the

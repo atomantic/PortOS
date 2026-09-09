@@ -60,6 +60,7 @@ vi.mock('../localMemory.js', async (importOriginal) => ({
 
 vi.mock('./db.js', () => ({
   listModels: vi.fn(),
+  listGeneratingModelSummaries: vi.fn(),
   getModel: vi.fn(),
   createModel: vi.fn(),
   mutateModel: vi.fn(),

@@ -3,8 +3,9 @@
  *
  * Task CRUD + queue persistence extracted from cos.js. Owns the read/write
  * round-trip to the user (TASKS.md) and internal (COS-TASKS.md) task files:
- * parsing, grouping, dedup, ID generation, metadata normalization, and the
- * `tasks:changed` event emissions that drive the scheduler.
+ * parsing, grouping, dedup, and the `tasks:changed` event emissions that drive
+ * the scheduler. The request → record mapping (ID generation, metadata
+ * normalization) is `cosTaskIntake.js`, kept in parity with the request schema.
  *
  * Self-contained — it emits `tasks:changed` rather than calling the scheduler
  * directly. cos.js's `init()` listens on that event to fire `tryImmediateSpawn`
@@ -12,26 +13,26 @@
  * logic stays in cos.js while persistence lives here.
  */
 
+import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix } from '../lib/taskParser.js';
-import { KEYED_REVIEWER_PINS, MAX_TOTAL_SPAWNS, REVIEW_STOP_MODES, SWARM_COUNT_MAX, SWARM_COUNT_MIN, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../lib/validation.js';
-import { isPlainObject } from '../lib/objects.js';
-import { PR_COMPLETIONS, PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
+import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, PRIORITY_VALUES } from '../lib/taskParser.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../lib/taskPauseHold.js';
 import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
+import { resolveTaskStatusTransition, isTerminalTaskStatus } from '../lib/taskStatusTransition.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
 import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { splitTaskPromptFields } from '../lib/cosTaskPrompt.js';
-import { quotaBurnProvenance, quotaBurnTaskMetadata } from '../lib/quotaBurnOrigin.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
-import { CLAIM_METADATA_KEYS, TARGET_INSTANCE_KEY, getTargetInstance } from './cosTaskClaim.js';
+import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
+import { buildQueuedTask } from './cosTaskIntake.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 
@@ -39,13 +40,6 @@ import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 // are flattened to a single line by generateTasksMarkdown, so the comparison
 // must normalize on the first line to match multi-line inputs.
 export const firstLine = (s) => (s || '').split('\n').map(l => l.trim()).find(l => l) || '';
-
-export const PRIORITY_VALUES = {
-  'CRITICAL': 4,
-  'HIGH': 3,
-  'MEDIUM': 2,
-  'LOW': 1
-};
 
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 
@@ -56,12 +50,6 @@ const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 // its own literal set is how they drifted. Re-exported at the address callers
 // already use.
 export { PAUSED_BLOCKED_CATEGORIES };
-
-// A task is terminal once it is completed or blocked — the same set cosTaskMerge's
-// release-on-transition uses. Consumed by the LI cross-peer verdict consume (#2779) to
-// spot a non-terminal→terminal ADOPTION (a failed hand-off blocks, a clean one completes;
-// both are legitimate execution outcomes worth recording).
-const isTerminalTaskStatus = (status) => status === 'completed' || status === 'blocked';
 
 // Fields an `updateTask` patch may carry directly (vs nested under `metadata`);
 // they're normalized into `metadata` on write. Listed once so the content-edit
@@ -322,268 +310,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   }
 
   // When raw=true, use the pre-built task object directly (for on-demand/generated tasks)
-  let newTask;
-  if (raw) {
-    newTask = taskData;
-  } else {
-    // Generate a unique ID if not provided
-    const id = taskData.id || `${taskType === 'user' ? 'task' : 'sys'}-${Date.now().toString(36)}`;
-    // Planning is an explicit workflow mode, not just a collection of UI
-    // toggles. Keep the server-side contract authoritative for direct API
-    // callers and for older clients that only send the plan-task command.
-    const planOnly = taskData.planOnly === true || taskData.slashdoCommand === 'plan-task';
-
-    // Build metadata object. Internal producers such as resume replacement and
-    // GSD may provide a prebuilt metadata seed; copy it first so task-specific
-    // contracts survive a normal (non-raw) queue write. The explicit top-level
-    // fields below remain authoritative and overwrite any matching seed keys.
-    const metadata = isPlainObject(taskData.metadata) ? { ...taskData.metadata } : {};
-    if (taskData.context) metadata.context = taskData.context;
-    // The full agent-facing payload, when the producer names it explicitly
-    // (#4153). Producers that still pass a multi-line `context` are classified
-    // by `splitTaskPromptFields` below, so both call shapes converge.
-    if (typeof taskData.prompt === 'string') metadata.prompt = taskData.prompt;
-    if (taskData.model) metadata.model = taskData.model;
-    if (taskData.provider) metadata.provider = taskData.provider;
-    if (taskData.effort) metadata.effort = taskData.effort;
-    // Orchestrated execution (#5992). Both keys are persisted only when they
-    // survive normalization, so a mode with no usable profile — or a profile of
-    // empty role objects — leaves the task in today's `direct` posture rather
-    // than stamping an inert override onto it. The default mode is never written:
-    // absent already means `direct`, and writing it would touch every task.
-    const orchestrationProfile = normalizeOrchestrationProfile(taskData.orchestrationProfile);
-    if (orchestrationProfile) metadata.orchestrationProfile = orchestrationProfile;
-    if (normalizeOrchestrationMode(taskData.orchestrationMode) === 'orchestrated') {
-      metadata.orchestrationMode = 'orchestrated';
-    }
-    if (taskData.temperature !== undefined) metadata.temperature = taskData.temperature;
-    if (taskData.thinking !== undefined) metadata.thinking = taskData.thinking;
-    if (taskData.app) metadata.app = taskData.app;
-    if (taskData.autonomousJob === true) metadata.autonomousJob = true;
-    if (typeof taskData.jobId === 'string' && taskData.jobId) metadata.jobId = taskData.jobId;
-    if (taskData.noChangeSuccess === true) metadata.noChangeSuccess = true;
-    else if (taskData.noChangeSuccess === false) metadata.noChangeSuccess = false;
-    // Pin this task to ONE federated instance (#4520): only that instance's CoS
-    // evaluator claims and runs it, every other peer passes over it. Absent —
-    // the default — leaves the opportunistic first-claim-wins behavior intact.
-    // Normalized through the same reader the spawn guards use, so a blank or
-    // whitespace-only value stores as unpinned rather than as a target no
-    // instance can ever match.
-    const targetInstance = getTargetInstance(taskData);
-    if (targetInstance) metadata[TARGET_INSTANCE_KEY] = targetInstance;
-    // Tags a task dispatched by the voice code-agent tool so the proactive
-    // speech layer can announce its completion (see voice/proactiveTriggers.js).
-    if (taskData.voiceDispatch === true) metadata.voiceDispatch = true;
-    if (taskData.isRecovery === true) metadata.isRecovery = true;
-    // Series Autopilot gap tasks (seriesAutopilot/session.js `fileGap`) carry the
-    // series they were filed for so a later run can retire the ones it has moved
-    // past. Without this the only handle is the description prefix, which is
-    // stable by construction but a fragile thing to key a status flip on.
-    if (taskData.autopilotGapSeriesId) metadata.autopilotGapSeriesId = taskData.autopilotGapSeriesId;
-    if (taskData.autopilotGapKind) metadata.autopilotGapKind = taskData.autopilotGapKind;
-    // Investigation-task guards (#2615): the durable fingerprint dedupes repeat
-    // failures of the same cause; the marker blocks investigations-of-investigations;
-    // affectedTasks names every task blocked on the cause (later dedup hits union in).
-    if (taskData.isInvestigation === true) metadata.isInvestigation = true;
-    if (taskData.investigationFingerprint) metadata.investigationFingerprint = taskData.investigationFingerprint;
-    // Why an approval-required task is waiting on the user, as a namespaced token
-    // (e.g. `investigation-loop:repeat-fingerprint`). Producer-agnostic on purpose
-    // — any producer that holds a task can write it and the UI explains the hold
-    // without a per-producer key. Absent on auto-approved tasks.
-    if (taskData.approvalReason) metadata.approvalReason = taskData.approvalReason;
-    if (Array.isArray(taskData.affectedTasks) && taskData.affectedTasks.length > 0) metadata.affectedTasks = taskData.affectedTasks;
-    if (taskData.createJiraTicket) metadata.createJiraTicket = true;
-    // Boolean flags: persist both true and false so users can explicitly override defaults.
-    // The string round-trip ('false' from TASKS.md) is handled by isTruthyMeta/isFalsyMeta.
-    // undefined means "use app defaults".
-    if (taskData.useWorktree === true) metadata.useWorktree = true;
-    else if (taskData.useWorktree === false) metadata.useWorktree = false;
-    if (taskData.openPR === true) metadata.openPR = true;
-    else if (taskData.openPR === false) metadata.openPR = false;
-    if (taskData.whenDone === 'commit-push' || taskData.whenDone === 'leave-uncommitted') metadata.whenDone = taskData.whenDone;
-    // Default a worktree-isolated USER task to opening a PR rather than
-    // auto-merging straight to the default branch — an unreviewed agent commit
-    // landing on main is the more dangerous default (see the local-model eval
-    // that auto-merged). Fires only when openPR wasn't explicitly set AND a
-    // worktree was explicitly requested; an explicit `openPR: false` above
-    // always wins, and internal/system tasks (autopilot, self-improvement) keep
-    // their existing auto-merge behavior so automation isn't silently gated on a
-    // human merging a PR.
-    else if (taskData.openPR === undefined && taskData.useWorktree === true && taskType === 'user') metadata.openPR = true;
-    // Claim prompts own their forge lifecycle in a separately-created
-    // claim/<item> worktree. Keep this marker independent from openPR: false is
-    // still required to stop CoS from provisioning a second worktree.
-    if (taskData.claimFlow === true) metadata.claimFlow = true;
-    if (PR_COMPLETION_VALUES.includes(taskData.prCompletion)) {
-      metadata.prCompletion = taskData.prCompletion;
-    } else if (metadata.openPR === true && taskType === 'user') {
-      // New user tasks should persist their explicit default; legacy records
-      // remain untouched and resolve from reviewLoop at read time.
-      metadata.prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE;
-    }
-    if (taskData.simplify === true) metadata.simplify = true;
-    else if (taskData.simplify === false) metadata.simplify = false;
-    // Throwaway-worktree posture. Only the raw path could set this before, so a
-    // non-raw caller that wanted "reason/report, never land code" had no way to
-    // ask for it and silently got the auto-merge default instead. `false` is not
-    // persisted — absent already means "normal posture", and writing it would
-    // stamp the key onto every task that never opted in.
-    if (taskData.discardWorktree === true) metadata.discardWorktree = true;
-    // Whether a clean tree at the end is success (issue-filing, reasoning) or a
-    // failure (code work). Both booleans are meaningful, so persist either.
-    if (taskData.worktreeChangesExpected === true) metadata.worktreeChangesExpected = true;
-    else if (taskData.worktreeChangesExpected === false) metadata.worktreeChangesExpected = false;
-    // Deliverable is an API call or CLI action performed DURING the run, not a
-    // commit and not the sentinel. Previously only the raw path could set it
-    // (creativeDirector/agentBridge.js builds its task object by hand).
-    if (taskData.noCodeOutput === true) metadata.noCodeOutput = true;
-    if (taskData.reviewLoop === true) metadata.reviewLoop = true;
-    else if (taskData.reviewLoop === false) metadata.reviewLoop = false;
-    // Ordered multi-reviewer list (normalizes legacy single `reviewer` too).
-    if (Array.isArray(taskData.reviewers) || (typeof taskData.reviewer === 'string' && taskData.reviewer)) {
-      metadata.reviewers = normalizeReviewers(taskData);
-    }
-    // Arbitrary GitHub reviewer usernames (gate-only PR reviewers). Persist the
-    // normalized list when present, or an explicit empty array so a per-task
-    // "no username reviewers" choice overrides the Code Review Defaults instead
-    // of silently inheriting them.
-    if (Array.isArray(taskData.usernames)) {
-      metadata.usernames = normalizeReviewUsernames(taskData.usernames);
-    }
-    // Non-blocking (`~opt`) reviewer set. Same explicit-empty semantics as
-    // `usernames`: an empty array is a real "none optional for this task" choice
-    // that must override the Code Review Defaults. Previously validated by
-    // createCosTaskSchema but never persisted here, so the task form's `~opt`
-    // badges silently fell back to the defaults on every task.
-    if (Array.isArray(taskData.optionalReviewers)) {
-      metadata.optionalReviewers = normalizeOptionalReviewers(taskData.optionalReviewers) || [];
-    }
-    // The token-keyed per-reviewer pins (caps / model / effort), keyed by the
-    // emitted `--review-with` token. An explicitly empty MAP is a real "use each
-    // reviewer's own default for this task" choice that overrides the Code Review
-    // Defaults; unvalidatable entries are dropped rather than coerced. Iterates
-    // the shared table so this persist path can't drift from
-    // `sanitizeTaskMetadata`'s — see KEYED_REVIEWER_PINS.
-    for (const [key, normalizeMap] of KEYED_REVIEWER_PINS) {
-      if (!isPlainObject(taskData[key])) continue;
-      metadata[key] = normalizeMap(taskData[key]) || {};
-    }
-    if (REVIEW_STOP_MODES.includes(taskData.reviewStopMode)) metadata.reviewStopMode = taskData.reviewStopMode;
-    if (taskData.reviewerApplies === true) metadata.reviewerApplies = true;
-    else if (taskData.reviewerApplies === false) metadata.reviewerApplies = false;
-    // Bundled slashdo workflow this task runs (#3089), as the BARE command name
-    // — the prompt builder renders the invocation shape once the provider is
-    // known (see server/lib/slashdoInvocation.js).
-    if (taskData.slashdoCommand) metadata.slashdoCommand = taskData.slashdoCommand;
-    if (taskData.slashdoArgs) metadata.slashdoArgs = taskData.slashdoArgs;
-    // Manual `/do:next` claim swarms are non-raw tasks. Their prompt already
-    // names the fan-out, and agentLifecycle needs this count after the markdown
-    // round-trip to lift a cloud Codex session to root + configured workers.
-    const swarmCount = Number(taskData.swarmCount);
-    if (Number.isSafeInteger(swarmCount) && swarmCount >= SWARM_COUNT_MIN && swarmCount <= SWARM_COUNT_MAX) {
-      metadata.swarmCount = swarmCount;
-    }
-    if (taskData.malwareScan && typeof taskData.malwareScan === 'object' && !Array.isArray(taskData.malwareScan)) {
-      metadata.malwareScan = taskData.malwareScan;
-    }
-    // Brain link a `repo-study` run was queued from, so the completed task can be
-    // traced back to the captured repo it studied.
-    if (isPlainObject(taskData.repoStudy)) metadata.repoStudy = taskData.repoStudy;
-    // Which tracker the prompt told the agent to file into (PLAN.md / GitHub /
-    // GitLab / JIRA), mirroring the raw reference-watch dispatch in
-    // referenceRepos.js#triggerReferenceAnalysis. Beyond traceability this is
-    // what marks a ONE-OFF tracker-filing run as such, so it reaches the
-    // no-commit gate without having to masquerade as a scheduled task type —
-    // see taskTypeHooks.js#isTrackerFilingDispatch.
-    if (taskData.workTracker) metadata.workTracker = taskData.workTracker;
-    // A manually pinned /do:next issue needs a durable target so realtime
-    // consumers can associate lifecycle events with the row that launched it.
-    // The route has already normalized this value, and unpinned runs omit it.
-    if (typeof taskData.claimTarget === 'string' && taskData.claimTarget) metadata.claimTarget = taskData.claimTarget;
-    // Same durability need as claimTarget, for the Issues tab's Replan button:
-    // the row that launched a replan associates the run's lifecycle events with
-    // itself by this value. Separate key so a replan can never light up the
-    // Claim button (or vice versa) on the same issue.
-    if (typeof taskData.replanTarget === 'string' && taskData.replanTarget) metadata.replanTarget = taskData.replanTarget;
-    if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
-    if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
-    if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;
-    if (taskData.attachments?.length > 0) metadata.attachments = taskData.attachments;
-    // Structured auto-fix diagnostics (#2328): the fallback classifier builds a
-    // { triggerEvent, target, errorType, category, tier, fixStrategy, failureReason }
-    // record for every error-driven task, but until now addTask only ever embedded
-    // it into the free-text context string and the log line — the structured object
-    // was silently dropped. Persist it as first-class metadata so downstream
-    // telemetry can aggregate auto-fix outcomes by tier / category / failure reason.
-    // It round-trips through the markdown store via the JSON sentinel (see
-    // taskParser.js escapeNewlines). A non-object / array (defensive) is ignored.
-    if (taskData.diagnostics && typeof taskData.diagnostics === 'object' && !Array.isArray(taskData.diagnostics)) {
-      metadata.diagnostics = taskData.diagnostics;
-    }
-    // Layered-Intelligence hand-off provenance (#2765): the proposal's identity +
-    // domain, carried from buildHandoffTask so recordTaskCompletion can attribute this
-    // agent run's success/failure back to the proposal's DOMAIN (per-proposal execution
-    // record). A non-object / array (defensive) is ignored. Round-trips through the
-    // markdown store via the same JSON sentinel as `diagnostics` above.
-    if (taskData.liProposal && typeof taskData.liProposal === 'object' && !Array.isArray(taskData.liProposal)) {
-      metadata.liProposal = taskData.liProposal;
-    }
-    // Quota-burn provenance — which family's window this task spends, which
-    // window will refuse first, which burn step asked, and which on-demand
-    // request (if any) it was generated for. The built-in lane stamps these onto
-    // the generated task's metadata via `lib/quotaBurnOrigin.js` and reaches disk
-    // through the RAW path above; a custom-job burn reaches disk through this
-    // non-raw path instead. Both spread the SAME block so the two lanes cannot
-    // carry different provenance for the same feature — mapping the keys one at
-    // a time here is how `quotaBurnStepId` came to reach disk without ever
-    // reaching the agent (#6406). `quotaBurnOrigin.js` owns the why of each field.
-    Object.assign(metadata, quotaBurnTaskMetadata(quotaBurnProvenance(taskData)));
-    if (planOnly) {
-      // Plan-and-file is a single bounded CoS action. The bundled plan-task
-      // command is already issue-only, so pass its supported `--yes` flag to
-      // make this toggle's issue-filing action unattended.
-      metadata.planOnly = true;
-      metadata.slashdoCommand = 'plan-task';
-      metadata.slashdoArgs = '--yes';
-      metadata.readOnly = true;
-      metadata.noCodeOutput = true;
-      metadata.useWorktree = false;
-      metadata.openPR = false;
-      metadata.simplify = false;
-      metadata.reviewLoop = false;
-      metadata.worktreeChangesExpected = false;
-      delete metadata.createJiraTicket;
-      delete metadata.prCompletion;
-      delete metadata.reviewers;
-      delete metadata.usernames;
-      delete metadata.optionalReviewers;
-      delete metadata.reviewerMaxRounds;
-      delete metadata.reviewerModels;
-      delete metadata.reviewerEfforts;
-      delete metadata.reviewStopMode;
-      delete metadata.reviewerApplies;
-    }
-    // Content-edit timestamp for cross-peer newest-edit-wins LWW (#1714). Stamped
-    // at creation so a freshly-added task always carries a stamp; the merge treats
-    // an absent stamp as oldest, so this also keeps a stamped task from losing a
-    // same-status tie to a legacy peer's un-stamped copy. `now` is injectable so
-    // the markdown output stays deterministic under test. Raw tasks (pre-built by
-    // the caller) keep whatever stamp they arrive with.
-    metadata.updatedAt = new Date(now).toISOString();
-
-    // Create the new task
-    newTask = {
-      id: hasKnownPrefix(id) ? id : `${taskType === 'user' ? 'task' : 'sys'}-${id}`,
-      status: 'pending',
-      priority: (taskData.priority || 'MEDIUM').toUpperCase(),
-      priorityValue: PRIORITY_VALUES[taskData.priority?.toUpperCase()] || 2,
-      description: taskData.description,
-      metadata,
-      approvalRequired: taskType === 'internal' && taskData.approvalRequired,
-      autoApproved: taskType === 'internal' && !taskData.approvalRequired,
-      section: 'pending'
-    };
-  }
+  let newTask = raw ? taskData : buildQueuedTask(taskData, taskType, { now });
 
   // Route a multi-line context payload to `metadata.prompt` (#4153). Applied to
   // BOTH branches — the raw path is how the generator, the reference-watch
@@ -701,6 +428,76 @@ async function preparePauseRelease(taskId, updates) {
   return { agentId, metadata: { ...pointer, ...(updates.metadata || {}) } };
 }
 
+/**
+ * Metadata a status transition RETIRES, as `[transition field, keys]` rows applied
+ * in order by `writeTaskUpdate`. One row per subsystem the transition releases —
+ * adding a lifecycle clear is a row here, not another hand-written predicate in the
+ * middle of the write.
+ *
+ * ORDER IS BEHAVIOR: the `leavesBlocked` row clears `blockedCategory`, and the
+ * resume-pointer drop below the loop reads that same key to decide whether the
+ * block was a PAUSE. A paused task flipped straight to `completed` is therefore no
+ * longer pause-categorized by the time the pointer is evaluated, and its spent
+ * pointer drops — pinned by cosTaskStore.test.js.
+ *
+ * The retry hold and the federation claim are two rows even though both key on
+ * `leavesInProgress`: they release different subsystems (#3373's cleanup handshake
+ * and #1563's cross-peer lease) and are separately documented at their sites. What
+ * they must never do again is drift, so they read the ONE descriptor field rather
+ * than each re-testing `updates.status !== 'in_progress'`.
+ */
+const TRANSITION_METADATA_CLEARS = Object.freeze([
+  // Leaving `blocked` by any door — a dedupe revive, an autopilot re-dispatch, an
+  // orphan-cooldown expiry, or a human unblocking it from the task list. Clearing
+  // only in `resumeAgent` left every one of those paths running a task that still
+  // advertised a live pause: the UI kept showing it parked, and `resumeAgent` on the
+  // still-paused agent record then read its own pause as spent and spawned a SECOND
+  // agent on a fresh task. The failure counters go too, or the revived task
+  // re-blocks on the budget it blocked with.
+  ['leavesBlocked', ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]],
+  // A retry hold (#3373) only means anything while the task is `in_progress` waiting
+  // on a cleanup to resolve its resume pointer. Any other status the task reaches —
+  // terminal, or a requeue some other path performed — retires it, so drop the marker
+  // rather than leave a stale one for a late cleanup (or the orphan sweep) to act on.
+  ['leavesInProgress', [RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY]],
+  // Release the federation claim/lease (#1563). A claim only protects in-flight work;
+  // once the task completes, fails back to pending, or is blocked, it must become
+  // freely claimable by either peer — a stale lease blocks a legitimate retry (by this
+  // instance or its peer) for a full lease window.
+  ['leavesInProgress', CLAIM_METADATA_KEYS]
+]);
+
+/**
+ * Merge an `updateTask` patch's metadata onto the task's existing metadata, in the
+ * shape the store persists. Purely about the PATCH's shape — it answers nothing
+ * about the status transition, which `resolveTaskStatusTransition` owns.
+ *
+ * Legacy direct fields use ?? not ||, so an intentional clear to "" is preserved
+ * as "" rather than dropped: || maps every falsy value (incl. "") to undefined,
+ * which `writeTaskUpdate`'s cleanup pass then deletes, conflating "cleared" with
+ * "absent" (absent-vs-cleared, AGENTS.md). Only null becomes undefined (→ deleted);
+ * absent fields never enter the loop.
+ *
+ * The orchestration pins are re-normalized after that verbatim copy (#5992) so an
+ * update lands the same persisted shape `addTask` writes: a profile of empty role
+ * objects, or the default `direct` mode, is stored as absent rather than as an
+ * inert override. A null from the route still arrives here as `undefined` and is
+ * deleted by the cleanup pass — an explicit clear.
+ */
+function mergeUpdateMetadata(existingMetadata, updates) {
+  const merged = { ...existingMetadata, ...(updates.metadata || {}) };
+  for (const f of LEGACY_DIRECT_FIELDS) {
+    if (updates[f] !== undefined) merged[f] = updates[f] ?? undefined;
+  }
+  if (merged.orchestrationProfile !== undefined) {
+    merged.orchestrationProfile = normalizeOrchestrationProfile(merged.orchestrationProfile) ?? undefined;
+  }
+  if (merged.orchestrationMode !== undefined) {
+    merged.orchestrationMode = normalizeOrchestrationMode(merged.orchestrationMode) === 'orchestrated' ? 'orchestrated' : undefined;
+  }
+  return merged;
+}
+
 async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue = false }) {
   return withStateLock(async () => {
   const state = await loadState();
@@ -721,45 +518,22 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
     return { error: 'Task not found' };
   }
 
-  // Build updated metadata - merge existing with any new metadata
-  const updatedMetadata = {
-    ...tasks[taskIndex].metadata,
-    ...(updates.metadata || {})
-  };
-  // Handle legacy fields that may be passed directly in updates. Use ?? not ||
-  // so an intentional clear to "" is preserved as "" rather than dropped: || maps
-  // every falsy value (incl. "") to undefined, which the cleanup pass below then
-  // deletes, conflating "cleared" with "absent" (absent-vs-cleared, AGENTS.md).
-  // Only null becomes undefined (→ deleted); absent fields never enter this loop.
-  for (const f of LEGACY_DIRECT_FIELDS) {
-    if (updates[f] !== undefined) updatedMetadata[f] = updates[f] ?? undefined;
-  }
-  // Re-normalize the orchestration pins the loop above just copied in verbatim
-  // (#5992), so an update lands the same persisted shape `addTask` writes: a
-  // profile of empty role objects, or the default `direct` mode, is stored as
-  // absent rather than as an inert override. A null from the route still reaches
-  // here as `undefined` and is deleted by the cleanup pass — an explicit clear.
-  if (updatedMetadata.orchestrationProfile !== undefined) {
-    updatedMetadata.orchestrationProfile = normalizeOrchestrationProfile(updatedMetadata.orchestrationProfile) ?? undefined;
-  }
-  if (updatedMetadata.orchestrationMode !== undefined) {
-    updatedMetadata.orchestrationMode = normalizeOrchestrationMode(updatedMetadata.orchestrationMode) === 'orchestrated' ? 'orchestrated' : undefined;
-  }
+  const updatedMetadata = mergeUpdateMetadata(tasks[taskIndex].metadata, updates);
 
-  // Clear blocked/failure metadata when transitioning out of blocked status.
-  //
-  // The PAUSE keys go with them (`PAUSE_METADATA_KEYS`, lib/taskPauseHold.js).
-  // `resumeAgent` is not the only way a paused task runs again — a dedupe revive, an
-  // autopilot re-dispatch, an orphan-cooldown expiry, or a human unblocking it from
-  // the task list all flip it back to `pending` through here. Clearing only in
-  // `resumeAgent` left every one of those paths running a task that still advertised
-  // a live pause: the UI kept showing it parked, and `resumeAgent` on the still-paused
-  // agent record then read its own pause as spent and spawned a SECOND agent on a
-  // fresh task. The clear belongs at the transition, not at one caller.
-  if (updates.status && updates.status !== 'blocked' && tasks[taskIndex].status === 'blocked') {
-    for (const key of ['blocker', 'blockedReason', 'blockedCategory', 'blockedAt', 'failureCount', 'lastErrorCategory', 'lastFailureAt', ...PAUSE_METADATA_KEYS]) {
-      delete updatedMetadata[key];
-    }
+  // Ask "what status transition is this?" ONCE. Every lifecycle rule below reads a
+  // field off this descriptor instead of re-deriving an answer from
+  // `(previousStatus, updates.status)` at its own site — which is how the retry-hold
+  // clear and the claim release ended up as the same predicate written twice, and
+  // how the requeue stamp and the emitted action came to key on the same edge from
+  // 52 lines apart while having to agree (#6620).
+  const previousStatus = tasks[taskIndex].status;
+  const transition = resolveTaskStatusTransition(previousStatus, updates.status);
+
+  // Retire the metadata this transition releases. Ordered — see the table's note on
+  // the `blockedCategory` clear feeding the resume-pointer check below.
+  for (const [field, keys] of TRANSITION_METADATA_CLEARS) {
+    if (!transition[field]) continue;
+    for (const key of keys) delete updatedMetadata[key];
   }
 
   // Drop the resume pointer once the task reaches a terminal state. `existingBranch`
@@ -781,37 +555,13 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
   // revives the task. Stripping the pointer in either case means the revived task
   // starts clean and abandons the worktree its dead agent left behind — which is
   // exactly the recovery this mechanism exists for.
-  if (isTerminalTaskStatus(updates.status) && !PAUSED_BLOCKED_CATEGORIES.has(updatedMetadata.blockedCategory)) {
+  if (transition.isTerminal && !PAUSED_BLOCKED_CATEGORIES.has(updatedMetadata.blockedCategory)) {
     // The shared predicate identifies only retry-owned `existingBranch` pointers.
     // Review-loop follow-ups own `reviewLoopPRBranch`, so their canonical target
     // remains intact even when a legacy duplicate is removed here.
     if (shouldStripTaskTargetBranch(updatedMetadata)) delete updatedMetadata.existingBranch;
     delete updatedMetadata.resumedFromAgentId;
     delete updatedMetadata.resumeWorktreePath;
-  }
-
-  // A retry hold (#3373) only means anything while the task is `in_progress`
-  // waiting on a cleanup to resolve its resume pointer. Any other status the task
-  // reaches — terminal, or a requeue that some other path performed — retires it,
-  // so drop the marker rather than leave a stale one for a late cleanup (or the
-  // orphan sweep) to act on. The release's own write passes these as undefined,
-  // which lands in the same place.
-  if (updates.status && updates.status !== 'in_progress') {
-    delete updatedMetadata[RETRY_HOLD_KEY];
-    delete updatedMetadata[RETRY_HOLD_SINCE_KEY];
-  }
-
-  // Release the federation claim/lease when a task leaves `in_progress` (issue
-  // #1563). A claim only protects in-flight work; once the task completes, fails
-  // back to pending, or is blocked, it must become freely claimable by either
-  // peer — leaving a stale lease behind would block a legitimate retry (by this
-  // instance or its peer) for a full lease window. The spawn's own
-  // in_progress update carries `status: 'in_progress'` and is exempt, and a
-  // lease-renewal heartbeat passes no `status` at all, so neither is stripped.
-  if (updates.status && updates.status !== 'in_progress') {
-    for (const key of CLAIM_METADATA_KEYS) {
-      delete updatedMetadata[key];
-    }
   }
 
   // Stamp the moment a RUNNING task is requeued (#3376). `in_progress → pending`
@@ -824,13 +574,13 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
   // other side's `lastSpawnedAt`, says the requeue came AFTER that spawn. Only the
   // real transition sets it, so a later edit carries it forward untouched, and the
   // next spawn clears it below.
-  if (updates.status === 'pending' && tasks[taskIndex].status === 'in_progress') {
+  if (transition.isRequeue) {
     updatedMetadata[REQUEUED_AT_KEY] = new Date(now).toISOString();
   }
   // A fresh spawn retires the marker — from here on THIS run's `lastSpawnedAt` is
   // what a future requeue must beat, and a leftover stamp from the previous cycle
   // would let a peer's pre-spawn `pending` copy win on a stale requeue.
-  if (updates.status === 'in_progress') delete updatedMetadata[REQUEUED_AT_KEY];
+  if (transition.entersInProgress) delete updatedMetadata[REQUEUED_AT_KEY];
 
   // Bump the content-edit stamp (#1714) on a genuine content change so the peer's
   // claim-aware merge can resolve a same-status edit by newest-edit-wins. Compared
@@ -858,7 +608,6 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
     metadata: updatedMetadata
   };
 
-  const previousStatus = tasks[taskIndex].status;
   tasks[taskIndex] = updatedTask;
 
   // Write back to file
@@ -866,26 +615,23 @@ async function writeTaskUpdate(taskId, updates, taskType, { now, suppressDequeue
   const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
   await writeTaskFile(filePath, markdown);
 
-  // A blocked → pending flip is a revive: the task is newly spawnable, exactly
-  // like an approval. Emit a distinct action so cos.init's listener re-runs the
-  // dequeue (#2614) — the generic 'updated' action doesn't wake the scheduler,
-  // which left revived tasks stranded until an unrelated event or timer fired.
-  //
-  // An in_progress → pending flip is a requeue and needs the same wake (#3373):
-  // a failed run's retry is released from its hold by exactly this transition,
-  // and by then the `agent:completed` dequeue has long since run — without a
-  // signal the retry would idle until the next timer. Same for the orphan sweep's
-  // requeue, which previously depended on its caller remembering to evaluate.
-  const action = updatedTask.status === 'pending' && previousStatus === 'blocked'
-    ? 'unblocked'
-    : (updatedTask.status === 'pending' && previousStatus === 'in_progress' ? 'requeued' : 'updated');
+  // `transition.action` distinguishes the two flips that must WAKE the scheduler
+  // from an ordinary edit. A blocked → pending flip is a revive: the task is newly
+  // spawnable, exactly like an approval, and cos.init's listener re-runs the dequeue
+  // on it (#2614) — the generic 'updated' action doesn't, which left revived tasks
+  // stranded until an unrelated event or timer fired. An in_progress → pending flip
+  // is a requeue and needs the same wake (#3373): a failed run's retry is released
+  // from its hold by exactly this transition, and by then the `agent:completed`
+  // dequeue has long since run — without a signal the retry would idle until the
+  // next timer. Same for the orphan sweep's requeue, which previously depended on
+  // its caller remembering to evaluate.
   // `previousStatus` rides along so consumers can key on the TRANSITION rather
   // than re-deriving one from the level. `updateTask` on an already-terminal task
   // re-emits `updated` with the same status — an edit to a completed task's
   // description is enough — so a consumer that reacts to "reached completed"
   // (the investigation auto-retry; the voice completion line) needs the edge, not
   // `status === 'completed'`, which is true on every later write too.
-  const change = { type: taskType, action, task: updatedTask, previousStatus };
+  const change = { type: taskType, action: transition.action, task: updatedTask, previousStatus };
   if (suppressDequeue) change.suppressDequeue = true;
   cosEvents.emit('tasks:changed', change);
   return updatedTask;
@@ -1392,7 +1138,7 @@ export async function resolveTaskChallengeWithRecheck(taskId, { recheck, resolve
   // single-model daemon re-checks without one. It reports `code: 'NO_MODEL'` when it
   // could not resolve one either, which stays a config problem (4xx) rather than the
   // 502 bucket reserved for a reviewer that's actually unreachable.
-  const model = recheck?.model || recheckDefaults?.[`${backend}Model`] || null;
+  const model = recheck?.model || reviewerModelsFromDefaults(recheckDefaults)[backend] || null;
   console.log(`⚖️ Re-checking challenge on ${taskId} via ${backend} (${model || 'model from the backend'}${effort ? `, ${effort} effort` : ''})`);
   const review = await runLocalCodeReview({ backend, model, effort, diff: recheck?.diff });
   if (!review?.ok) {

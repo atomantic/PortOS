@@ -3,7 +3,7 @@ import { Server } from 'socket.io';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
-import { mountAssetRoutes } from './services/assetMounts.js';
+import { mountAssetRoutes, mountClientDist } from './services/assetMounts.js';
 import { existsSync } from 'fs';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
@@ -57,6 +57,7 @@ import timelineRoutes from './routes/timeline.js';
 import imessageRoutes from './routes/imessage.js';
 import contactsRoutes from './routes/contacts.js';
 import signalRoutes from './routes/signal.js';
+import beeperRoutes from './routes/beeper.js';
 import spotifyRoutes from './routes/spotify.js';
 import youtubeRoutes from './routes/youtube.js';
 import notificationsRoutes from './routes/notifications.js';
@@ -342,6 +343,7 @@ app.use('/api/timeline', timelineRoutes);
 app.use('/api/imessage', imessageRoutes);
 app.use('/api/contacts', contactsRoutes);
 app.use('/api/signal', signalRoutes);
+app.use('/api/beeper', beeperRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/youtube', youtubeRoutes);
 app.use('/api/notifications', notificationsRoutes);
@@ -451,10 +453,10 @@ mountAssetRoutes(app);
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');
 if (existsSync(CLIENT_DIST)) {
-  // `index: false` keeps express.static from short-circuiting `/` (and any
-  // bare directory) with the raw index.html — that path needs to flow through
-  // the splat handler below so the meta-tag injection runs.
-  app.use(express.static(CLIENT_DIST, { index: false }));
+  // Hashed `/assets/**` as immutable, the rest of dist/ revalidated per load,
+  // and no index short-circuit on `/` — that path has to reach the splat
+  // handler below so the meta-tag injection runs. See services/assetMounts.js.
+  mountClientDist(app, CLIENT_DIST);
   // SPA fallback: serve index.html for page navigations only
   // Skip asset requests (.js, .css, etc.) so stale chunk requests get a proper 404
   // instead of index.html with text/html MIME type. We serve the stamped HTML

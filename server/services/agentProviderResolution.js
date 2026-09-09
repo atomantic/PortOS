@@ -1,3 +1,4 @@
+import { isProcessProvider } from '../lib/providerTypes.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 import { supportsPublicReviewProvider } from '../lib/providerVendors.js';
 /**
@@ -43,7 +44,7 @@ export async function resolveAgentProviderAndModel(task) {
     if (!project) return { ok: false, permanent: true, error: 'Video production is paused or changed. Review and Resume from the project.' };
     const choice = project.videoExecution.choices[marker.kind === 'evaluate' ? 'evaluation' : marker.kind];
     const provider = choice?.providerId ? await getProviderById(choice.providerId) : null;
-    if (!provider || provider.enabled === false || provider.type === 'api' || !await isProviderAvailable(provider.id)) {
+    if (!provider || provider.enabled === false || !isProcessProvider(provider) || !await isProviderAvailable(provider.id)) {
       return { ok: false, permanent: true, error: 'The reviewed Video agent provider is unavailable. Change Models or Settings and Resume.' };
     }
     return { ok: true, provider, selectedModel: choice.model, modelSelection: { model: choice.model, tier: 'user-specified', reason: 'Reviewed Video production choice' } };
@@ -105,6 +106,10 @@ async function resolvePublicReviewAgentProvider(task, posture) {
     return { ok: false, permanent: true, error: resolved.error, providerId: task.metadata?.provider || undefined };
   }
   const { provider } = resolved;
+  const strictFallback = task.metadata?.pipeline?.securityScan?.usedLargeInputFallback === true;
+  if (strictFallback && !resolved.pinHonored) {
+    return { ok: false, permanent: true, error: 'Configured large-input review fallback provider is unavailable' };
+  }
   if (task.metadata?.provider && !resolved.pinHonored) {
     emitLog('warn', `Public-review stage provider ${task.metadata.provider} is not eligible for the ${posture} posture — using ${provider.id}`, {
       taskId: task.id,
@@ -128,6 +133,9 @@ async function resolvePublicReviewAgentProvider(task, posture) {
   // pass-throughs (see its doc comment).
   const honorPin = pinnedForThisProvider && modelPinIsOffered(provider, pinnedModel);
   const pinRejected = pinnedForThisProvider && !honorPin;
+  if (strictFallback && !honorPin) {
+    return { ok: false, permanent: true, error: 'Configured large-input review fallback model is unavailable' };
+  }
   // Strip a pin that will NOT be honored, BEFORE model selection.
   // `selectModelForTask` returns `metadata.model` verbatim as its
   // highest-priority answer, so leaving it on the task defeats both guards

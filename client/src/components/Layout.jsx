@@ -215,6 +215,7 @@ export const NAV_PRESENTATION = {
   '/cos/jobs': { icon: Bot },
   '/cos/tasks': { icon: FileText },
   '/cos/workflow': { icon: ChartGantt },
+  '/messages/beeper': { icon: MessageCircle },
   '/messages/config': { icon: Settings },
   '/messages/contacts': { icon: Users },
   '/messages/drafts': { icon: FilePen },
@@ -1205,6 +1206,7 @@ export default function Layout() {
       {/* Sidebar */}
       <aside
         className={`
+          port-app-sidebar
           fixed inset-y-0 left-0 z-50 h-dvh-screen print:hidden
           flex flex-col bg-port-card border-r border-port-border
           transition-all duration-300 ease-in-out
@@ -1407,7 +1409,7 @@ export default function Layout() {
       {/* Main area — print drops the sidebar offset so printed pages aren't shifted right */}
       <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
         {/* Mobile header */}
-        <header className="lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
+        <header className="port-app-topbar lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
           <button
             onClick={() => setMobileOpen(true)}
             className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] -ml-1 rounded-lg text-gray-400 hover:text-white"

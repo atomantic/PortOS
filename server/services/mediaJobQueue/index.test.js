@@ -1813,6 +1813,78 @@ describe('local video failure holds', () => {
     expect(JSON.parse(readFileSync(join(tempDataDir, 'media-jobs.json'), 'utf8')).videoHolds).toEqual([]);
   });
 
+  it('refills mixed lanes in FIFO order while skipping holds and oversubscribed cloud capacity', async () => {
+    const heldBatch = Array.from({ length: 4 }, () => submit());
+    for (const id of heldBatch.slice(0, 3)) { await tick(); await finish(id); }
+    mediaJobQueue.setCodexParallelLimit(1);
+    stubs.generateImageCodex.mockResolvedValue({});
+    const cloudJob = () => mediaJobQueue.enqueueJob({
+      kind: 'image', params: { mode: 'codex', prompt: 'example cloud image' },
+    }).jobId;
+    const remoteJob = () => submit('example-mlx', { remoteMedia: remoteVideoMediaParams() });
+    const gpu = [submit('example-other')];
+    const cloud = [cloudJob()];
+    // Concurrent dynamic imports can bypass the module mock in this test runner;
+    // without this adapter stub, 19 of 20 dispatches reach the real peer lookup.
+    const { REMOTE_MEDIA_MODULES } = await import('./remoteMediaJob.js');
+    const remoteAdapter = vi.spyOn(REMOTE_MEDIA_MODULES, 'video').mockResolvedValue({
+      generateVideo: stubs.generateVideoRemote,
+    });
+    const remoteLimit = mediaJobQueue.getQueueCapacity().lanes.remote.limit;
+    const remote = Array.from({ length: remoteLimit }, remoteJob);
+    await tick();
+    cloud.push(cloudJob());
+    expect(mediaJobQueue.runJobNow(cloud[1]).ok).toBe(true);
+    await tick();
+
+    // Interleave waiting jobs behind all three busy lanes and the held cohort.
+    for (let i = 0; i < 2; i += 1) {
+      cloud.push(cloudJob());
+      gpu.push(submit('example-other'));
+      remote.push(remoteJob());
+    }
+    await tick();
+    const occupancy = () => {
+      const { lanes } = mediaJobQueue.getQueueCapacity();
+      return ['gpu', 'cloud', 'remote'].map((lane) => lanes[lane].running);
+    };
+    expect(occupancy()).toEqual([1, 2, remoteLimit]);
+    expect(mediaJobQueue.getJob(cloud[2]).status).toBe('queued');
+
+    // Returning cloud from negative to zero slots must still refuse admission;
+    // GPU and remote refill independently on the same worker pass.
+    imageGenEvents.emit('completed', { generationId: cloud[0] });
+    await finish(gpu[0], null);
+    await finish(remote[0], null);
+    await tick();
+    expect(occupancy()).toEqual([1, 1, remoteLimit]);
+    expect(mediaJobQueue.getJob(cloud[2]).status).toBe('queued');
+    expect(mediaJobQueue.getJob(gpu[1]).status).toBe('running');
+    expect(mediaJobQueue.getJob(remote[remoteLimit]).status).toBe('running');
+    expect(mediaJobQueue.getJob(gpu[2]).status).toBe('queued');
+    expect(mediaJobQueue.getJob(remote[remoteLimit + 1]).status).toBe('queued');
+
+    imageGenEvents.emit('completed', { generationId: cloud[1] });
+    await finish(gpu[1], null);
+    await finish(remote[remoteLimit], null);
+    await tick();
+    expect(occupancy()).toEqual([1, 1, remoteLimit]);
+    expect(mediaJobQueue.getJob(cloud[2]).status).toBe('running');
+    expect(mediaJobQueue.getJob(cloud[3]).status).toBe('queued');
+
+    // A live limit change opens the next cloud slot without restarting the worker.
+    mediaJobQueue.setCodexParallelLimit(2);
+    await tick();
+    expect(occupancy()).toEqual([1, 2, remoteLimit]);
+    expect(stubs.generateImageCodex.mock.calls.map(([p]) => p.jobId)).toEqual(cloud);
+    expect(stubs.generateVideoRemote.mock.calls.map(([p]) => p.jobId)).toEqual(remote);
+    expect(stubs.generateVideo.mock.calls.slice(3).map(([p]) => p.jobId)).toEqual(gpu);
+    expect(mediaJobQueue.getJob(heldBatch[3])).toMatchObject({
+      status: 'queued', hold: { heldJobCount: 1 },
+    });
+    remoteAdapter.mockRestore();
+  });
+
   it('lets other local models, image, audio, training, cloud and remote work pass a hold', async () => {
     const ids = Array.from({ length: 4 }, () => submit());
     for (const id of ids.slice(0, 3)) { await tick(); await finish(id); }

@@ -13,6 +13,12 @@ export const getTribePeople = (options = {}) => {
 export const getTribeDuplicateIdentifiers = (options = {}) =>
   request('/tribe/duplicate-identifiers', { silent: options.silent });
 
+// Single-person read (#99) — the roster row from `getTribePeople` never carries
+// `identities` (that join only runs on this single-person read), so the person
+// form fetches this on select to render the "Linked on Beeper" block.
+export const getTribePerson = (id, options = {}) =>
+  request(`/tribe/people/${id}`, { silent: options.silent });
+
 export const getTribeCareSummary = (options = {}) => {
   const params = new URLSearchParams();
   if (options.limit) params.set('limit', String(options.limit));
@@ -71,5 +77,40 @@ export const generateTribeOutreachDraft = (seed, options = {}) =>
   request('/tribe/outreach/draft', {
     method: 'POST',
     body: JSON.stringify(seed),
+    ...options,
+  });
+
+// Beeper participant → Tribe person (#34), called from the inline action on a
+// thread participant (#35). `linkBeeperParticipant` never creates a person;
+// `createTribePersonFromBeeper` does both in one step. The server derives the
+// identity's network from the participant's own conversation — it is
+// deliberately not a client-supplied field.
+export const linkBeeperParticipant = ({ conversationId, sourceUserId, personId }, options = {}) =>
+  request('/tribe/beeper/link', {
+    method: 'POST',
+    body: JSON.stringify({ conversationId, sourceUserId, personId }),
+    ...options,
+  });
+
+export const createTribePersonFromBeeper = ({ conversationId, sourceUserId, name, ring, relationship }, options = {}) =>
+  request('/tribe/beeper/link-new', {
+    method: 'POST',
+    body: JSON.stringify({ conversationId, sourceUserId, name, ring, relationship }),
+    ...options,
+  });
+
+// Remove one Beeper identity claim from a person (#99) — the person form's
+// "Linked on Beeper" block. `identityId` is a `tribe_identities.id` from that
+// person's `identities[]`, not a participant key.
+export const unlinkBeeperIdentity = (identityId, options = {}) =>
+  request(`/tribe/beeper/identities/${identityId}`, { method: 'DELETE', ...options });
+
+// Release a participant's link to whichever Tribe person currently owns it
+// (#97 part B) — the counterpart `linkBeeperParticipant` never had. Idempotent:
+// unlinking an already-unlinked participant is a 200 no-op, never an error.
+export const unlinkBeeperParticipant = ({ conversationId, sourceUserId }, options = {}) =>
+  request('/tribe/beeper/link', {
+    method: 'DELETE',
+    body: JSON.stringify({ conversationId, sourceUserId }),
     ...options,
   });

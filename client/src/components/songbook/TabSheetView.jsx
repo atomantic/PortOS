@@ -1,7 +1,5 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
 import { parseTabSheet, TAB_ARTICULATIONS } from '../../lib/tabNotation.js';
-import { splitJoinedChords } from '../../lib/chordShapes.js';
 import usePopoverPosition from '../../hooks/usePopoverPosition.js';
 import ChordDiagram from './ChordDiagram.jsx';
 import { activeCtrlClass, ctrlBtnClass } from './constants.js';
@@ -32,9 +30,6 @@ import { activeCtrlClass, ctrlBtnClass } from './constants.js';
  * because `text` arrives already transposed the diagrams follow the transposed
  * names for free. Tab staffs are guitar-specific, so non-guitar views collapse
  * each staff block to a one-line note with an inline "show" expand.
- * `showChordStrip` adds a collapsible "chords used" strip (unique chords in
- * order of first appearance, each with a mini diagram) above the sheet — the
- * viewer enables it; editor/import previews keep it off.
  *
  * Play-along support (issue #4104): `soundingChord` — `{ lineIndex, chordIndex }`
  * or null — lights the chord token the synth preview is currently sounding, the
@@ -151,14 +146,13 @@ function TabSheetView({
   fontSizeRem = 0.875,
   className = '',
   instrumentView = 'guitar',
-  showChordStrip = false,
   soundingChord = null,
 }) {
   const plain = format === 'plain';
   const { lines } = useMemo(
     // 'plain' is the explicit opt-out of notation parsing: render every line
     // verbatim (no section headings, no chord highlighting — and no chord
-    // popovers/strip either) so the stored format selector has an observable
+    // popovers either) so the stored format selector has an observable
     // effect.
     () => (plain ? { lines: [] } : parseTabSheet(text)),
     [text, plain],
@@ -181,28 +175,6 @@ function TabSheetView({
   const [legendOpen, setLegendOpen] = useState(false);
   const legendId = useId();
   const staffIdPrefix = useId();
-
-  // Unique chord names in order of first appearance (chords-used strip).
-  // Dash-joined quick changes split into their segments FIRST, so "Am-Am7"
-  // plus a standalone "Am" contributes Am and Am7 exactly once each (and an
-  // N.C. segment can't ride a joined token past the filter).
-  const usedChords = useMemo(() => {
-    if (!showChordStrip) return [];
-    const seen = new Set();
-    const out = [];
-    for (const line of lines) {
-      for (const { name } of line.chords || []) {
-        for (const part of splitJoinedChords(name)) {
-          if (part && !/^N\.?C\.?$/.test(part) && !seen.has(part)) {
-            seen.add(part);
-            out.push(part);
-          }
-        }
-      }
-    }
-    return out;
-  }, [lines, showChordStrip]);
-  const [stripOpen, setStripOpen] = useState(true);
 
   // Chord popover: { name, key }; placement is owned by usePopoverPosition,
   // which re-measures on open and reflows (rAF-coalesced, capture-phase) on
@@ -273,31 +245,6 @@ function TabSheetView({
 
   return (
     <div className={`font-mono text-gray-200 ${className}`} style={{ fontSize: `${fontSizeRem}rem`, lineHeight: 1.5 }}>
-      {showChordStrip && usedChords.length > 0 && (
-        <div className="mb-3 border border-port-border rounded-lg bg-port-card/50 font-sans">
-          <button
-            type="button"
-            onClick={() => setStripOpen((open) => !open)}
-            aria-expanded={stripOpen}
-            className="w-full flex items-center gap-1.5 px-3 py-2 min-h-[44px] text-xs text-gray-400 hover:text-white"
-          >
-            {stripOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-            <span className="font-semibold">Chords used</span>
-            <span className="text-gray-500">({usedChords.length})</span>
-          </button>
-          {stripOpen && (
-            <div className="flex flex-wrap items-end gap-x-4 gap-y-2 px-3 pb-3">
-              {usedChords.map((name) => (
-                <div key={name} className="flex flex-col items-center gap-0.5">
-                  <span className="text-[11px] font-mono font-semibold text-port-accent">{name}</span>
-                  <ChordDiagram name={name} instrument={instrumentView} size="sm" />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {hasTabstaff && (
         <div className="mb-1.5 flex justify-end font-sans">
           <button
@@ -426,9 +373,9 @@ function TabSheetView({
   );
 }
 
-// Props are all primitives (`format`/`instrumentView`/`showChordStrip`
-// included) apart from `soundingChord`, which the host memoizes and which only
-// changes when the sounding chord does (once a bar, not once a frame) — so memo
+// Props are all primitives (`format`/`instrumentView` included) apart from
+// `soundingChord`, which the host memoizes and which only changes when the
+// sounding chord does (once a bar, not once a frame) — so memo
 // makes re-renders of a host page (stage flips, autoscroll ticks) skip the full
 // sheet re-render.
 export default memo(TabSheetView);

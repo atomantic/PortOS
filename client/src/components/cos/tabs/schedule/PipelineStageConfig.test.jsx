@@ -119,6 +119,17 @@ describe('PipelineStageConfig — pr-reviewer', () => {
     expect(screen.queryByText(/applies only the screened patch/)).not.toBeInTheDocument();
   });
 
+  it('configures and clears the larger-model fallback through the standard picker', async () => {
+    const fallbackStages = STAGES.map((stage, index) => index === 0 ? { ...stage, largeInputFallback: { providerId: 'claude-ollama' } } : stage);
+    const onUpdate = renderStages(fallbackStages);
+    fireEvent.change(screen.getAllByLabelText('Model')[0], { target: { value: 'safe-model' } });
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith('pr-reviewer', expect.objectContaining({
+      taskMetadata: { pipeline: { stages: [expect.objectContaining({ largeInputFallback: { providerId: 'claude-ollama', model: 'safe-model' } }), ...STAGES.slice(1)] } },
+    })));
+    fireEvent.click(screen.getByRole('switch', { name: 'Enable larger-model fallback for oversized linked issues' }));
+    await waitFor(() => expect(onUpdate).toHaveBeenLastCalledWith('pr-reviewer', { taskMetadata: { pipeline: { stages: STAGES } } }));
+  });
+
   it('removes the optional actions stage without changing the mandatory gate', async () => {
     const onUpdate = renderStages();
     fireEvent.click(screen.getByRole('switch', { name: 'Enable final code review and actions' }));
