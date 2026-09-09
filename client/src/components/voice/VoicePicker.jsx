@@ -162,7 +162,7 @@ export default function VoicePicker({
             what they had bound before — losing it silently to a dropdown
             reset would mask the underlying drift. */}
         {value && !voices.some((v) => v.id === catalogValue) ? (
-          <option value={value}>{value} (unavailable)</option>
+          <option value={catalogValue}>{value} (unavailable)</option>
         ) : null}
         {engineKeys.map((engine) => (
           <optgroup key={engine} label={engine.charAt(0).toUpperCase() + engine.slice(1)}>

@@ -106,6 +106,17 @@ describe('VoicePicker', () => {
       .not.toBeInTheDocument();
   });
 
+  it('preserves an unavailable legacy Qwen3 voiceId after normalizing the select value', async () => {
+    listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
+    render(<VoicePicker value="qwen3:retired-voice" onChange={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toHaveValue('qwen3-tts:retired-voice');
+    });
+    expect(screen.getByRole('option', { name: 'qwen3:retired-voice (unavailable)' }))
+      .toBeInTheDocument();
+  });
+
   it('audition button posts to preview and pipes the wav through playWav', async () => {
     listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
     const buf = new ArrayBuffer(8);
