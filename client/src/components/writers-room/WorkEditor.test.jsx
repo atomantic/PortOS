@@ -107,6 +107,9 @@ describe('WorkEditor header layout (#3568)', () => {
     const secondary = screen.getByTestId('work-header-secondary');
 
     expect([...header.children]).toEqual([title, secondary, save, snapshot, menu]);
+    // Let a long title yield to the fixed-width Save control on narrow phones.
+    expect(title).toHaveClass('min-w-0', 'w-0');
+    expect(save).toHaveClass('w-24', 'shrink-0');
     // Only the sub-bar is re-ordered; anything else carrying an `order-*` class
     // would either break the row split or desync tab order from the layout.
     for (const el of [title, save, snapshot, menu]) {

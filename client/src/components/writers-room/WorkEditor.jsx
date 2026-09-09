@@ -745,7 +745,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           onChange={(e) => setTitle(e.target.value)}
           onBlur={commitTitle}
           onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-          className="bg-transparent text-base font-semibold text-white border-none focus:outline-none focus:bg-port-bg/50 px-1 rounded flex-1 min-w-[140px] sm:min-w-[180px] min-h-[44px] sm:min-h-0"
+          className="bg-transparent text-base font-semibold text-white border-none focus:outline-none focus:bg-port-bg/50 px-1 rounded flex-1 min-w-0 w-0 sm:w-auto sm:min-w-[180px] min-h-[44px] sm:min-h-0"
           aria-label="Work title"
         />
         {/* Secondary controls. `w-full order-last` gives them their own compact
