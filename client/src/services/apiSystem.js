@@ -172,6 +172,7 @@ export const getUsage = (params = {}) => {
   ).toString();
   return request(`/usage${qs ? `?${qs}` : ''}`);
 };
+export const getHourlyUsage = (options = {}) => request('/usage/hourly', options);
 export const getUsageBackfillStatus = (options = {}) => request('/usage/backfill', options);
 // Monthly plan prices per provider family, used to compare subscription spend
 // against the report's estimated API cost. `costs` is a partial patch: an

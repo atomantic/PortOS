@@ -68,6 +68,47 @@ describe('usage routes', () => {
     vi.clearAllMocks();
   });
 
+  it('GET /api/usage/hourly projects only counters and bypasses all reporting work', async () => {
+    const hourlyActivity = Array.from({ length: 24 }, (_, hour) => hour);
+    // Synthetic extra records must never escape in the hourly payload. Reporting
+    // services are stubbed: this measures route calls, not report cost or latency.
+    usage.getUsage.mockReturnValue({
+      hourlyActivity,
+      dailyActivity: Object.fromEntries(Array.from({ length: 400 }, (_, day) => [day, { tokens: 1000 }])),
+      monthlyActivity: { '2025-01': { tokens: 2000 } },
+      byProvider: { example: { tokens: 3000 } }
+    });
+    usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
+    getFleetUsage.mockResolvedValueOnce({ instances: [{ id: 'peer-a' }, { id: 'peer-b' }], totals: {} });
+    const collaborators = [usage.getUsageSummary, getAllProviders, getSubscriptionSavings,
+      getApiBilledInstanceIds, getFleetUsage];
+    const app = buildApp();
+    // Before: each dashboard refresh enters all five reporting/config/peer collaborators.
+    for (let refresh = 0; refresh < 3; refresh++) {
+      expect((await request(app).get('/api/usage')).status).toBe(200);
+    }
+    expect(collaborators.map((fn) => fn.mock.calls.length)).toEqual([3, 3, 3, 3, 3]);
+    vi.clearAllMocks();
+    // After: the same reads only serialize the 24 counters, regardless of history/peers.
+    for (let refresh = 0; refresh < 3; refresh++) {
+      const res = await request(app).get('/api/usage/hourly');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ hourlyActivity });
+    }
+    expect(usage.getUsage).toHaveBeenCalledTimes(3);
+    expect(collaborators.map((fn) => fn.mock.calls.length)).toEqual([0, 0, 0, 0, 0]);
+    expect(usage.getFirstActivityDay).not.toHaveBeenCalled();
+    expect(getProviderQuotas).not.toHaveBeenCalled();
+  });
+
+  it.each([{}, { hourlyActivity: Array(24).fill(0) }])(
+    'GET /api/usage/hourly returns 24 zero counters for empty usage %j', async (emptyUsage) => {
+    usage.getUsage.mockReturnValue(emptyUsage);
+    const res = await request(buildApp()).get('/api/usage/hourly');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ hourlyActivity: Array(24).fill(0) });
+  });
+
   it('GET /api/usage returns the usage summary with the default 7d range', async () => {
     usage.getUsageSummary.mockReturnValue({ totalSessions: 4, providers: ['anthropic'] });
     const res = await request(buildApp()).get('/api/usage');
