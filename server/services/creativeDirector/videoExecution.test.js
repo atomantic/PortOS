@@ -85,6 +85,16 @@ it('refuses stale choices, unavailable pinned credentials and unenforceable doll
   expect(startCreativeDirectorProject).not.toHaveBeenCalled();
 });
 
+it('resumes a shot whose preflight failed before creating a submission receipt', async () => {
+  state.project.status = 'paused';
+  state.project.treatment.scenes[0].status = 'rendering';
+  state.project.treatment.scenes[0].renderedJobId = null;
+  await startVideoExecution('example-video', await startInput());
+  expect(state.project.treatment.scenes[0].status).toBe('pending');
+  expect(startCreativeDirectorProject).toHaveBeenCalledTimes(1);
+  expect(await enqueue()).toMatchObject({ jobId: 'example-job-1' });
+});
+
 it('reserves before enqueue, binds one queue ID, enforces retry bounds and pauses dispatch', async () => {
   await startVideoExecution('example-video', await startInput({ maxClips: 2, maxRetries: 0 }));
   const queued = await enqueue();

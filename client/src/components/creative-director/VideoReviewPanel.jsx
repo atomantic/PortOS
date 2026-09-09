@@ -44,7 +44,7 @@ export default function VideoReviewPanel({ project, onChange }) {
 
   return <section aria-label="Production reviews" className="border-b border-port-border p-4 space-y-3">
     <h2 className="font-medium">Production reviews</h2>
-    <p className="text-sm text-port-text-muted">Approve the displayed revision to continue. Thumbs up or down saves feedback only.</p>
+    <p className="text-sm text-port-text-muted">Approve the displayed revision to continue. If production is paused, resume it from Overview. Script revision requests pause production; Resume writes a revised script for review. Thumbs up or down saves feedback only.</p>
     {error && <div role="alert" className="text-sm text-port-error">{error} <button onClick={() => { setError(''); setReload(value => value + 1); }} className="underline">Refresh reviews</button></div>}
     {!review && !error && <p role="status">Loading reviews…</p>}
     {review && !review.canReview && <p role="status" className="text-sm text-port-warning">Review on the owning install. For a draft without an owner, create a new local draft from its saved settings.</p>}

@@ -267,6 +267,26 @@ describe('runSceneRender — Reactor and fal pins', () => {
 
 
 describe('Video production review boundary', () => {
+  it('renders native audio despite the legacy muted default and pauses on shared runtime setup failure', async () => {
+    const shot = scene({ workRevision: 0, status: 'pending' });
+    const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner', disableAudio: true,
+      renderBackend: { video: { mode: 'reactor' } },
+      videoExecution: { id: 'example-execution', authorized: true, limits: { maxClips: 3, maxRetries: 1, maxAgentCalls: 10, maxReplans: 1, spendCapUsd: null }, choices: { video: { mode: 'reactor' }, audio: { mode: 'native' }, evaluation: { type: 'agent' } } },
+      videoDraft: { sources: [], audio: { mode: 'native' } },
+      treatment: { artifact: { revision: 1 }, script: 'Example script', scenes: [shot] } });
+    video.videoExecution.inputRevision = videoConfigurationRevision(video);
+    const checkpoint = videoReviewStages(video)[0];
+    video.videoReview = { decisions: { [checkpoint.stage]: { action: 'approve', revision: checkpoint.revision } } };
+    getProject.mockResolvedValue(video);
+    getSettings.mockResolvedValue({ videoGen: { reactor: { apiKey: 'example-test-key' } } });
+    expect(await runSceneRender(video, shot)).toBe('job-1');
+    expect(enqueuedParams()).toMatchObject({ mode: 'reactor', seconds: 8 });
+    expect(enqueuedParams().disableAudio).not.toBe(true);
+    mediaJobEvents.on.mock.calls.find(([event]) => event === 'failed')[1]({ id: 'job-1', error: 'Automatic Reactor runtime preparation failed' });
+    await vi.waitFor(async () => expect((await getProject()).status).toBe('paused'));
+    expect(enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
   it('does not enqueue before approval and ignores a superseded render completion', async () => {
     const shot = scene({ workRevision: 0, status: 'pending' });
     const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner',

@@ -179,6 +179,18 @@ describe('creativeDirector routes', () => {
       })).status).toBe(400);
     });
 
+    it('saves paused production settings without starting work and rejects edits while running', async () => {
+      cdService.getProject.mockResolvedValueOnce({ ...draft, id: 'cd-video', status: 'paused' });
+      expect((await request(app).patch('/api/creative-director/cd-video').send({ videoDraft: draft.videoDraft })).status).toBe(200);
+      expect(cdService.updateProject).toHaveBeenCalledTimes(1);
+      expect(hook.startCreativeDirectorProject).not.toHaveBeenCalled();
+      cdService.getProject.mockResolvedValueOnce({ ...draft, id: 'cd-video', status: 'rendering' });
+      const blocked = await request(app).patch('/api/creative-director/cd-video').send({ videoDraft: draft.videoDraft });
+      expect(blocked.status).toBe(409);
+      expect(blocked.body.error).toMatch(/Pause Video production/);
+      expect(cdService.updateProject).toHaveBeenCalledTimes(1);
+    });
+
     it('refuses legacy execution entry points before they mutate or enqueue a Video draft', async () => {
       cdService.getProject.mockResolvedValue({ ...draft, id: 'cd-video', status: 'draft' });
       for (const [action, body] of [

@@ -29,6 +29,17 @@ beforeEach(() => {
 const inputFor = async (stage, action, extra = {}) => ({ stage, action, revision: (await getVideoReview('example-video')).checkpoints.find(row => row.stage === stage).revision, ...extra });
 
 describe('Video review workflow', () => {
+  it('invalidates reference edits and continuing clips while preserving independent accepted shots', async () => {
+    await reviewVideo('example-video', await inputFor('script-shot-plan', 'approve'));
+    mocks.project = applySceneUpdate(mocks.project, 'one', { sourceImageFile: 'example-frame.png', expectedWorkRevision: 0 }).project;
+    expect(mocks.project.status).toBe('paused');
+    expect(mocks.project.treatment.scenes.map(s => s.status)).toEqual(['pending', 'pending', 'accepted']);
+    expect(mocks.project.treatment.scenes.map(s => s.workRevision)).toEqual([1, 1, 0]);
+    expect(mocks.project.treatment.history[0].scenes[0].renderedJobId).toBe('example-render-one');
+    expect(await videoReviewAllowsDispatch('example-video', ['script-shot-plan', 'references'])).toBe(false);
+    expect(() => applySceneUpdate(mocks.project, 'two', { expectedWorkRevision: 0, status: 'accepted' })).toThrow('superseded revision');
+  });
+
   it('blocks actual consumption until current approval, resumes once, and keeps feedback separate', async () => {
     expect(await videoReviewAllowsDispatch('example-video', ['script-shot-plan', 'references'])).toBe(false);
     expect(mocks.project.videoReview.waitingFor.stage).toBe('script-shot-plan');
@@ -64,6 +75,8 @@ describe('Video review workflow', () => {
   it('rejects callbacks after a whole-stage revision and resets active work', async () => {
     mocks.project.treatment.scenes[0].status = 'rendering';
     await reviewVideo('example-video', await inputFor('script-shot-plan', 'request-revision', { note: 'Revise the script' }));
+    expect(mocks.project.treatment.artifact.stale).toBe(true);
+    expect((await getVideoReview('example-video')).checkpoints[0].ready).toBe(false);
     expect(mocks.project.treatment.scenes[0]).toMatchObject({ status: 'pending', renderedJobId: null, workRevision: 1 });
     expect(() => applySceneUpdate(mocks.project, 'one', { expectedWorkRevision: 0, status: 'accepted' })).toThrow('superseded revision');
     expect(mocks.project.treatment.scenes[2].renderedJobId).toBe('example-render-three');

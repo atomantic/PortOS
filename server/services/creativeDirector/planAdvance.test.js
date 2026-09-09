@@ -286,6 +286,40 @@ const planProject = (steps, over = {}) => ({
 });
 
 describe('advanceAfterPlanStepSettled — executor', () => {
+  it.each(['script revision', 'shot edit'])('replans before dispatch after a Video %s retires the executable plan', async (edit) => {
+    const { applyTreatment, applySceneUpdate } = await import('./projectsLogic.js');
+    const { applyVideoReviewAction, videoReviewStages } = await import('../../lib/creativeDirectorVideoReview.js');
+    const review = await import('./videoReview.js');
+    const gate = vi.spyOn(review, 'videoReviewAllowsDispatch').mockResolvedValue(true);
+    try {
+      const oldSteps = [step('old-render', { toolName: 'media_enqueueVideoJob', status: 'done', result: { jobId: 'old-clip' } })];
+      const treatment = { logline: 'A visitor arrives.', synopsis: 'A visitor opens a garden gate.', script: 'The visitor opens the gate.',
+        scenes: [{ sceneId: 'shot-one', order: 0, intent: 'Arrival', prompt: 'A visitor opens a gate.', durationSeconds: 6 }] };
+      let project = applyTreatment(planProject([], { workspace: 'video', targetDurationSeconds: 6, aspectRatio: '16:9',
+        videoOwnerInstanceId: 'example-owner', videoDraft: { sources: [] }, plan: null }), treatment);
+      project.plan = { steps: oldSteps, replanRounds: 0 };
+      if (edit === 'script revision') {
+        const checkpoint = videoReviewStages(project)[0];
+        project = applyVideoReviewAction(project, { stage: checkpoint.stage, revision: checkpoint.revision, action: 'request-revision', note: 'Change the arrival.' }, 'example-owner').project;
+        project = applyTreatment(project, { ...treatment, productionRevision: project.videoWorkRevision, script: 'The visitor waits outside.',
+          scenes: [{ ...treatment.scenes[0], prompt: 'A visitor waits at a gate.' }] });
+      } else {
+        project = applySceneUpdate(project, 'shot-one', { prompt: 'A visitor waits at a gate.', expectedWorkRevision: 0 }).project;
+      }
+      const read = makeStore({ ...project, status: 'rendering' });
+      await advanceAfterPlanStepSettled(project.id);
+      expect(mockEnqueuePlanTask).toHaveBeenCalledTimes(1);
+      expect(mockEnqueuePlanTask).toHaveBeenCalledWith(expect.objectContaining({
+        treatment: expect.objectContaining({ scenes: [expect.objectContaining({ prompt: 'A visitor waits at a gate.' })] }),
+        plan: { history: [expect.objectContaining({ steps: oldSteps })] },
+      }));
+      expect(mockDispatch).not.toHaveBeenCalled();
+      expect(read().status).toBe('planning');
+    } finally {
+      gate.mockRestore();
+    }
+  });
+
   it('never plans or dispatches an inert Video production through background advancement', async () => {
     makeStore({ ...planProject([step('a', { toolName: 'pipeline_createSeries' })]), workspace: 'video' });
     await advanceAfterPlanStepSettled('cd-1');

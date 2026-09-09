@@ -270,6 +270,7 @@ export async function runSceneRender(project, scene) {
     console.error(`❌ CD scene ${scene.sceneId}: could not queue the render: ${error.message}`);
     if (project.workspace === 'video') {
       const { pauseVideoExecution } = await import('./videoExecution.js');
+      await updateScene(project.id, scene.sceneId, { expectedWorkRevision: scene.workRevision || 0, status: 'pending' });
       await pauseVideoExecution(project.id, error.message);
       return null;
     }
@@ -495,7 +496,7 @@ async function handleRenderFailed(projectId, sceneId, errorMsg, { retry = true, 
   const scene = fresh.treatment?.scenes?.find((s) => s.sceneId === sceneId);
   if (!scene || (workRevision !== undefined && workRevision !== (scene.workRevision || 0))) return;
   const nextRetry = (scene.retryCount || 0) + 1;
-  if (fresh.workspace === 'video' && /quota|credit|balance|429|timeout|timed out|interrupted/i.test(errorMsg)) {
+  if (fresh.workspace === 'video' && /quota|credit|balance|429|timeout|timed out|interrupted|runtime (?:preparation|verification) failed|custom Reactor Python runtime/i.test(errorMsg)) {
     const { pauseVideoExecution } = await import('./videoExecution.js');
     await pauseVideoExecution(projectId, `Render blocked: ${errorMsg}. Review the provider and saved job before Resume.`);
     return;

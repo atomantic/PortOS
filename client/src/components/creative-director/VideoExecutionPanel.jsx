@@ -66,6 +66,8 @@ export default function VideoExecutionPanel({ project, onChange, basePath }) {
       <p className="text-xs text-port-text-muted">{preview.costNotice}</p>
       {preview.blockers.map(blocker => <p key={blocker} role="alert" className="text-port-warning">{blocker}</p>)}
       {preview.execution?.blocker && <p role="status" className="text-port-warning">{preview.execution.blocker}</p>}
+      {project.videoReview?.waitingFor && <p role="status" className="text-port-warning">Waiting for your approval. <Link className="underline" to={`${basePath}/${project.id}/review`}>Review the current {project.videoReview.waitingFor.stage.replaceAll('-', ' ')} revision</Link> to continue.</p>}
+      {project.treatment?.artifact?.stale && <p role="status" className="text-port-warning">{active ? 'The script is being revised using the saved settings and revision notes.' : 'The saved script needs revision. Resume production to rewrite it using the saved settings and revision notes.'} Rendering waits for the revised script to be approved.</p>}
       <div className="flex flex-wrap gap-3 text-sm"><Link className="underline" to="/video/generate?settings=1">Media settings</Link><Link className="underline" to={`${basePath}/${project.id}/overview?models=1`}>Change models</Link><Link className="underline" to="/system-resources/queues">Inspect render queue</Link><Link className="underline" to={`${basePath}/${project.id}/review`}>Review artifacts</Link></div>
       {limits && <div className="grid gap-3 sm:grid-cols-2">
         {LIMITS.map(([key, label, min, max]) => <div key={key}>

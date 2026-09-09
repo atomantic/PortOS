@@ -356,7 +356,7 @@ export default function CreativeDirectorDetail({ basePath = '/creative-director'
         )}
         {project.workspace !== 'video' && activeTab === 'treatment' && <TreatmentTab project={project} />}
         {project.workspace === 'video' && activeTab === 'artifacts' && <VideoArtifactsTab project={project} basePath={basePath} />}
-        {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} basePath={basePath} />}
+        {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} basePath={basePath} onChange={fetchProject} />}
         {activeTab === 'runs' && <RunsTab project={project} />}
       </div>
 

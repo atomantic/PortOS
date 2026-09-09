@@ -15,6 +15,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { fileURLToPath } from 'node:url';
 import { addTask, reviveBlockedTask, cosEvents } from '../cos.js';
 import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../creativeDirectorPrompts.js';
 import { getToolSpecs } from '../creative/toolRegistry.js';
@@ -92,7 +93,7 @@ async function buildTaskRecord(project, kind, scene, context) {
   if (project.workspace === 'video') {
     const { reserveVideoAttempt, assertVideoAttemptDispatch } = await import('./videoExecution.js');
     const audio = project.videoExecution?.choices?.audio || project.videoDraft?.audio || { mode: 'native' };
-    context = `${context}\n\nSaved Video audio contract: ${JSON.stringify(audio)}. Soundtracks are assembled separately; do not enqueue audio or assume the video renderer supplies dialogue or lip sync. Plan visual storytelling to fit this audio choice. Shot joins: ${project.videoDraft?.transition || 'cut'}; joins do not overlap or shorten the saved shot timing.`;
+    context = `${context}\n\nSaved Video audio contract: ${JSON.stringify(audio)}. Native means the audio generated inside each video clip; there is NO separate dialogue, narration, voice casting, or lip-sync pass. Imported/generated means one assembled soundtrack replacing clip audio, not per-character speech synthesis. Silent means no final audio. Never promise an unconfigured later soundtrack or dialogue pass. Put every intended audible event in its shot prompt when using native audio, and keep any spoken line short enough for that shot. Plan visual storytelling to fit this audio choice. Repeat stable character appearance, wardrobe, and voice descriptions whenever they recur; names alone are not conditioning. Reference images must be existing supplied files, never invented filenames. Shot joins: ${project.videoDraft?.transition || 'cut'}; joins do not overlap or shorten the saved shot timing. Derive act timestamps from the actual summed shot durations. Latest revision requests: ${JSON.stringify(project.videoReview?.revisionRequests || [])}.`;
     attempt = await reserveVideoAttempt(project.id, { kind, expectedProductionRevision: project.videoWorkRevision || 0, key: `${kind}:${scene?.sceneId || 'project'}`, ...(scene ? { sceneId: scene.sceneId, workRevision: scene.workRevision || 0 } : {}) });
     if (!attempt) return null;
     await assertVideoAttemptDispatch(project.id, attempt.id).catch(async error => {
@@ -100,6 +101,10 @@ async function buildTaskRecord(project, kind, scene, context) {
       await settleVideoAttempt(project.id, attempt.id, { status: 'failed' });
       throw error;
     });
+    if (kind === 'treatment' || kind === 'plan') {
+      const submitScript = fileURLToPath(new URL('../../../scripts/submit-video-artifact.js', import.meta.url));
+      context += `\n\nLOCAL VIDEO OUTPUT HANDOFF (replaces the HTTP submission instructions above): Write the specified ${kind} JSON body to a file in your scratch workspace, then run node with these literal arguments: ${JSON.stringify([submitScript, project.id, attempt.id, kind, '<your-json-file>'])}. Use proper shell quoting for each argument. The helper validates the current authorized attempt, production revision, source revision, and artifact schema before persisting. A saved:true result completes the task. No HTTP calls or credentials are needed. Do not search for passwords, tokens, cookies, or sessions. Do not modify application code or project data directly. On a validation error fix the JSON and retry; on a retired attempt stop. All story context is supplied in this prompt.`;
+    }
   }
   return {
     id: taskId,

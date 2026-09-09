@@ -9,6 +9,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { resolveGalleryImage } from '../lib/fileUtils.js';
 import {
   validateRequest,
   creativeDirectorProjectCreateSchema,
@@ -171,8 +172,8 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   if (draftFields.some((key) => key in data)) {
     const project = await getProject(req.params.id);
     if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-    if (project.workspace !== 'video' || project.status !== 'draft') {
-      throw new ServerError('Production settings can only be edited on a Video draft', { status: 409, code: 'INVALID_STATE' });
+    if (project.workspace !== 'video' || !['draft', 'paused', 'failed'].includes(project.status)) {
+      throw new ServerError('Pause Video production before editing production settings', { status: 409, code: 'INVALID_STATE' });
     }
   }
   const updated = await updateProject(req.params.id, data);
@@ -383,6 +384,9 @@ router.post('/:id/plan/step/:stepId', asyncHandler(async (req, res) => {
 router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorSceneUpdateSchema, req.body);
   const project = await getProject(req.params.id);
+  if (data.sourceImageFile && !resolveGalleryImage(data.sourceImageFile)) {
+    throw new ServerError('The selected reference image is no longer available. Choose another gallery image.', { status: 400, code: 'IMAGE_NOT_FOUND' });
+  }
   if (project?.workspace === 'video' && data.expectedWorkRevision === undefined) {
     throw new ServerError('Include the displayed shot work revision with this update.', { status: 409, code: 'VIDEO_WORK_STALE' });
   }

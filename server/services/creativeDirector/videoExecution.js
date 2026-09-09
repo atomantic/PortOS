@@ -24,6 +24,9 @@ export function effectiveVideoProject(project) {
   const choices = project.videoExecution?.choices;
   if (project.workspace !== 'video' || !choices) return project;
   return { ...project, renderBackend: { ...project.renderBackend, video: choices.video },
+    // Video audio is selected for assembly. Legacy projects default to muted
+    // clips, but that flag must not override the reviewed Video audio contract.
+    disableAudio: false,
     modelId: choices.video.modelId || project.modelId,
     modelOverrides: { ...project.modelOverrides, treatment: choices.treatment, plan: choices.plan,
       ...(choices.evaluation.type === 'api' ? { evaluation: choices.evaluation } : {}) } };
@@ -158,6 +161,7 @@ export async function reconcileVideoExecution(projectId, { restarting = false, r
     const runs = (project.runs || []).map(run => retiredTaskIds.has(run.taskId) && run.status === 'running' ? { ...run, status: 'failed', failureReason: 'Provider task ended before resume' } : run);
     const scenes = project.treatment?.scenes?.map(scene => {
       const receipt = [...attempts].reverse().find(attempt => attempt.sceneId === scene.sceneId && attempt.workRevision === (scene.workRevision || 0) && attempt.kind === 'clip');
+      if (!receipt && scene.status === 'rendering' && !scene.renderedJobId) return { ...scene, status: 'pending' };
       if (receipt?.status === 'completed' && receipt.jobId && !['accepted', 'evaluating'].includes(scene.status)) return { ...scene, renderedJobId: receipt.jobId, status: 'evaluating' };
       if (receipt?.status === 'failed' && ['rendering', 'failed'].includes(scene.status)) return { ...scene, status: 'pending' };
       return scene;
