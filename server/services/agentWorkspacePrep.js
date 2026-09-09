@@ -379,8 +379,9 @@ export async function prepareAgentWorkspace({ agentId, task }) {
   const wantsWorktree = explicitWorktree || !!existingBranch;
 
   if (!isReadOnly) {
-    // Pull latest from git before starting work
-    const pullResult = await git.ensureLatest(workspacePath).catch(err => {
+    // Isolated tasks fetch their base in createWorktree; never rebase the
+    // shared checkout as a side effect of preparing a separate workspace.
+    const pullResult = wantsWorktree ? { skipped: 'isolated-task' } : await git.ensureLatest(workspacePath).catch(err => {
       emitLog('warn', `⚠️ Pre-task git pull failed for ${workspacePath}: ${err.message}`, { taskId: task.id, workspace: workspacePath });
       return { success: false, error: err.message };
     });

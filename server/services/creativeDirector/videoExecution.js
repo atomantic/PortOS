@@ -24,9 +24,6 @@ export function effectiveVideoProject(project) {
   const choices = project.videoExecution?.choices;
   if (project.workspace !== 'video' || !choices) return project;
   return { ...project, renderBackend: { ...project.renderBackend, video: choices.video },
-    // Video audio is selected for assembly. Legacy projects default to muted
-    // clips, but that flag must not override the reviewed Video audio contract.
-    disableAudio: false,
     modelId: choices.video.modelId || project.modelId,
     modelOverrides: { ...project.modelOverrides, treatment: choices.treatment, plan: choices.plan,
       ...(choices.evaluation.type === 'api' ? { evaluation: choices.evaluation } : {}) } };

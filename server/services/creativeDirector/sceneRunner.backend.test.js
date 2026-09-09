@@ -268,6 +268,7 @@ describe('runSceneRender — Reactor and fal pins', () => {
 
 describe('Video production review boundary', () => {
   it('renders native audio despite the legacy muted default and pauses on shared runtime setup failure', async () => {
+    reviewState.allowsDispatch = true;
     const shot = scene({ workRevision: 0, status: 'pending' });
     const video = project({ workspace: 'video', status: 'rendering', videoOwnerInstanceId: 'example-owner', disableAudio: true,
       renderBackend: { video: { mode: 'reactor' } },
