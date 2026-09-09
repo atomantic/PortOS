@@ -1001,6 +1001,22 @@ export const COMPLETION_REASON_ANALYSES = {
     message: 'Worktree agent mutated the primary checkout',
     suggestedFix: 'The agent was given its own git worktree and committed to the primary checkout anyway, so the primary is carrying commits nothing reviewed. The same work is almost certainly on the agent\'s branch too. Inspect the primary with `git log --oneline origin/<branch>..<branch>` and, once the content is confirmed preserved, restore it with `git reset --hard origin/<branch>` — PortOS will not run that for you, because it discards commits.'
   },
+  // The runner opened no PTY because its own PTY layer is unusable, or because
+  // the workspace it was pointed at disappeared. Unlike `spawn-rejected` below
+  // this is deliberately ACTIONABLE: both faults reproduce exactly on every
+  // retry, so blocking once with the repair command beats letting each task type
+  // burn MAX_TASK_RETRIES and file a meta-investigation that fails identically.
+  // Named after the observed outage: an `npm ci` inside a CoS worktree emptied
+  // the primary checkout's `server/node_modules` through a symlink, deleting the
+  // `spawn-helper` binary node-pty execs on every fork while the already-loaded
+  // binding kept the runner process itself looking healthy.
+  'runner-pty-unavailable': {
+    category: 'spawn-error',
+    actionable: true,
+    escalation: 'Repair the runner host, then approve the retry: for a broken PTY layer run `npm install --prefix server` and `pm2 restart portos-cos`; for a missing workspace confirm the worktree was not reaped mid-spawn.',
+    message: 'The runner could not open a PTY',
+    suggestedFix: 'No agent process was created and no retry can change that — the runner\'s own diagnosis (carried in the completion error) names which half failed: node-pty unable to fork at all (usually an emptied or partially installed `server/node_modules`, since node-pty execs its `spawn-helper` from disk on every spawn), or a working directory that no longer exists.'
+  },
   'spawn-rejected': {
     category: 'spawn-error',
     actionable: false,
