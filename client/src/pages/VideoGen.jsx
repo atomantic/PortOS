@@ -312,15 +312,6 @@ export default function VideoGen() {
   const localResolutionOptions = resolutionOptionsForModel(currentModel);
   const localResolutionBounds = videoEdgeBoundsForModel(currentModel);
 
-  // Can THIS render put the display to sleep at all? The model says whether
-  // its runtime needs the mitigation (mlx only); the other clauses rule out
-  // backends the mitigation never applies to. UI-only: buildGeneratePayload()
-  // decides independently (from currentModel alone) whether to attach the
-  // choice, since its grok/fal/reactor/remote branches already return first.
-  const canSleepDisplay = !!currentModel?.sleepsDisplayDuringRender
-    && !remoteTarget.isRemote && !isGrok && !isFal && !isReactor;
-  const rendersSleepDisplay = canSleepDisplay && displaySleepEnabled;
-
   // Does an external provider API own this render? Its weights, sampler and
   // encoder are all on the far side of an HTTP call, so the local STAGE: ladder
   // (download weights → load model → encode → sample → mux) describes work this
@@ -330,6 +321,16 @@ export default function VideoGen() {
   // deliberately excluded: it really does load the weights and run the sampler,
   // it just does so out of view.
   const rendersOffMachine = isGrok || isFal || isReactor;
+  const rendersOnThisMachine = !rendersOffMachine && !remoteTarget.isRemote;
+
+  // Can THIS render put the display to sleep at all? The model says whether
+  // its runtime needs the mitigation (mlx only); the other clauses rule out
+  // backends the mitigation never applies to. UI-only: buildGeneratePayload()
+  // decides independently (from currentModel alone) whether to attach the
+  // choice, since its grok/fal/reactor/remote branches already return first.
+  const canSleepDisplay = !!currentModel?.sleepsDisplayDuringRender
+    && rendersOnThisMachine;
+  const rendersSleepDisplay = canSleepDisplay && displaySleepEnabled;
 
   // Every gallery-image slot on this page (both frame panels, each multi-keyframe
   // row, each IC-LoRA reference row) opens the SAME GalleryImagePicker modal the
@@ -787,14 +788,14 @@ export default function VideoGen() {
     startEncoderWhenIdle(option && !option.builtIn ? textEncoderDownloadId(id) : null);
   }, [setTextEncoderId, textEncoderOptions, startEncoderWhenIdle]);
   const icWeightStatus = icSpec ? modelDownload.getStatus(icSpec.mode) : null;
-  const modelWeightsBlocked = !isGrok && !isFal && !isReactor
+  const modelWeightsBlocked = !rendersOffMachine
     && (statusLoading || !modelId || !currentModel || modelDownload.loading
       || modelStatus === null || modelStatus?.cached === false);
-  const textEncoderWeightsBlocked = !isGrok && !isFal && !isReactor && usesSharedTextEncoder
+  const textEncoderWeightsBlocked = !rendersOffMachine && usesSharedTextEncoder
     && (modelDownload.loading || textEncoderStatus === null || textEncoderStatus?.cached === false);
-  const icWeightsBlocked = !isGrok && !isFal && !isReactor && icModeActive
+  const icWeightsBlocked = !rendersOffMachine && icModeActive
     && (modelDownload.loading || icWeightStatus === null || icWeightStatus?.cached === false);
-  const textEncoderOptionBlocked = !isGrok && !isFal && !isReactor && !!textEncoderOptionDownloadId
+  const textEncoderOptionBlocked = !rendersOffMachine && !!textEncoderOptionDownloadId
     && (modelDownload.loading || textEncoderOptionStatus === null || textEncoderOptionStatus?.cached === false);
   const weightsGateBlocked = modelWeightsBlocked || textEncoderWeightsBlocked
     || textEncoderOptionBlocked || icWeightsBlocked;
@@ -1065,12 +1066,12 @@ export default function VideoGen() {
   // A federated render answers to the PEER’s readiness, not to this machine’s
   // runtime gates — none of the local probes below describe the hardware it
   // will actually run on.
-  const effectiveBatchSize = !isGrok && !isFal && !isReactor && !remoteTarget.isRemote
+  const effectiveBatchSize = rendersOnThisMachine
     && currentModel?.supportsWarmBatch && !chainingActive ? batchSize : 1;
 
   const canEnqueue = prompt.trim() && !remixHandoffPending && !promptOverLimit && (remoteTarget.isRemote
     ? remoteBlocked === null
-    : (isGrok || isFal || isReactor || (!notConnected && !extendModeBlocked
+    : (rendersOffMachine || (!notConnected && !extendModeBlocked
       && !a2vModeBlocked && !icLoraModeBlocked && !byovGateBlocked
       && !weightsGateBlocked && !keyframesBlocked)));
 
@@ -1193,7 +1194,7 @@ export default function VideoGen() {
           WAI-ARIA Tabs, since the mode-specific inputs aren't structured as
           tabpanels and we don't implement roving-tabindex/arrow-key focus. */}
       <div className="bg-port-card border border-port-border rounded-xl p-1 flex flex-wrap gap-1" role="group" aria-label="Video generation mode">
-        {((isGrok || isFal || isReactor) ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
+        {(rendersOffMachine ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
           const active = mode === id;
           return (
             <button
@@ -1258,7 +1259,7 @@ export default function VideoGen() {
               </div>
             </div>
           )}
-          {!isGrok && !isFal && !isReactor && byovRuntimeMissing && (
+          {!rendersOffMachine && byovRuntimeMissing && (
             <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div>
                 <strong className="font-semibold">{byovStatus.label}</strong> {byovStatus.upgradeAvailable ? 'has an update available.' : "isn't installed yet."}
@@ -1535,7 +1536,7 @@ export default function VideoGen() {
             />
           )}
 
-          {!isGrok && !isFal && !isReactor && (
+          {!rendersOffMachine && (
             <RemoteMediaTargetPicker
               target={remoteTarget}
               kind="video"
@@ -1756,11 +1757,11 @@ export default function VideoGen() {
           <ModelDisclosure
             backend={backend}
             backendDisclosures={status?.backendDisclosures}
-            model={(isGrok || isFal || isReactor) ? null : currentModel}
+            model={rendersOffMachine ? null : currentModel}
             systemMemoryGb={modelContext?.systemMemoryGb}
           />
 
-          {!isGrok && !isFal && !isReactor && (
+          {!rendersOffMachine && (
             <AdvancedParamsPanel
               mode={mode}
               currentModel={currentModel}
