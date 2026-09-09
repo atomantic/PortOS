@@ -5,7 +5,7 @@ import { startMaintenanceRun } from './apiAgents';
 // in the form test cannot catch a selected mode being dropped before POST.
 afterEach(() => vi.unstubAllGlobals());
 it.each([
-  { mode: 'fix', claimBetweenAudits: true },
+  { mode: 'fix', claimBetweenAudits: true, claimHandler: { providerId: 'claude', model: 'sonnet', effort: 'low' } },
   { mode: 'file-issues', claimBetweenAudits: false },
 ])('sends maintenance choices to the server: %j', async choices => {
   const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 201, json: async () => ({ run: { id: 'example' } }) });

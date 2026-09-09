@@ -37,6 +37,11 @@ const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
 const maintenanceRunStartSchema = z.object({
   mode: z.enum(['file-issues', 'fix']).optional(),
   claimBetweenAudits: z.boolean().optional(),
+  claimHandler: z.object({
+    providerId: z.string().trim().min(1),
+    model: z.string().trim().min(1),
+    effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+  }).nullable().optional(),
   appId: z.string().trim().min(1),
   providerId: z.string().trim().min(1),
   model: z.string().trim().min(1),

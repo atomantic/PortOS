@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { MAINTENANCE_TASK_ORDER } from '../../../../lib/quotaBurnTasks';
@@ -207,4 +207,25 @@ it('previews and starts issue filing without requiring claim jobs', async () => 
   await user.click(screen.getByRole('checkbox'));
   await user.click(screen.getByRole('button', { name: 'Run now' }));
   expect(api.startMaintenanceRun).toHaveBeenCalledWith(expect.objectContaining({ mode: 'file-issues', claimBetweenAudits: false }), { silent: true });
+});
+
+it('selects an independent claim handler and omits it in file-only mode', async () => {
+  const user = userEvent.setup();
+  show();
+  await select(user);
+  const claim = within(screen.getByRole('group', { name: 'Claim-issue handler' }));
+  await user.selectOptions(claim.getByRole('combobox', { name: 'Claim provider' }), 'claude');
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  await user.selectOptions(claim.getByRole('combobox', { name: 'Model' }), 'sonnet');
+  await user.selectOptions(claim.getByRole('combobox', { name: /effort/i }), 'low');
+  await user.click(screen.getByRole('checkbox'));
+  await user.click(screen.getByRole('button', { name: 'Run now' }));
+  expect(api.startMaintenanceRun).toHaveBeenLastCalledWith(expect.objectContaining({ effort: 'high', claimHandler: { providerId: 'claude', model: 'sonnet', effort: 'low' } }), { silent: true });
+  await user.selectOptions(screen.getByLabelText('Issue handling'), 'false');
+  expect(screen.queryByRole('group', { name: 'Claim-issue handler' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('checkbox'));
+  await user.click(screen.getByRole('button', { name: 'Run now' }));
+  expect(api.startMaintenanceRun.mock.calls.at(-1)[0]).not.toHaveProperty('claimHandler');
+  await user.selectOptions(screen.getByLabelText('Audit mode'), 'fix');
+  expect(screen.getByRole('group', { name: 'Claim-issue handler' })).toBeInTheDocument();
 });

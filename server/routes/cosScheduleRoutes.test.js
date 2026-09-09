@@ -77,9 +77,10 @@ describe('CoS Schedule Routes', () => {
   describe('manual maintenance runs', () => {
     it('accepts fix mode and rejects unknown modes', async () => {
       maintenance.startMaintenanceRun.mockResolvedValue({ run: { id: 'maint-1' } });
-      const body = { appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'fix', claimBetweenAudits: false };
+      const body = { appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'fix', claimBetweenAudits: false, claimHandler: { providerId: 'claude', model: 'sonnet', effort: 'low' } };
       expect((await request(app).post('/api/cos/schedule/maintenance-runs').send(body)).status).toBe(201);
       expect(maintenance.startMaintenanceRun).toHaveBeenCalledWith(body);
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ ...body, claimHandler: { providerId: 'claude' } })).status).toBe(400);
       expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ ...body, mode: 'unknown' })).status).toBe(400);
       expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ ...body, claimBetweenAudits: 'false' })).status).toBe(400);
     });
