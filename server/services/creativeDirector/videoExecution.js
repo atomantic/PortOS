@@ -13,6 +13,9 @@ const now = () => new Date().toISOString();
 export function videoConfigurationRevision(project) {
   return canonicalSnapshotChecksum(Object.fromEntries(['userStory', 'styleSpec', 'cast', 'targetDurationSeconds',
     'aspectRatio', 'quality', 'modelId', 'renderBackend', 'modelOverrides', 'videoDraft', 'startingImageFile',
+    // Keep the legacy field in this persisted hash for compatibility with
+    // executions authorized by older releases; Video rendering itself reads
+    // videoDraft.audio / the frozen execution choice instead.
     'disableAudio', 'autoAcceptScenes', 'directive'].map(key => [key, project[key] ?? null])));
 }
 
@@ -90,11 +93,23 @@ export async function getVideoExecutionPreview(projectId) {
   const choices = canStart ? await resolveChoices(project).catch(error => { blockers.push(error.message); return null; }) : null;
   const { assertVideoSourcesAvailable } = await import('./videoSources.js');
   if (canStart) await assertVideoSourcesAvailable(project).catch(error => blockers.push(error.message));
+  let execution = project.videoExecution || null;
+  if (execution?.blocker) {
+    const { isAudioDisabledBackendBlocker, videoAudioIsDisabled } = await import('./videoAudio.js');
+    // A failed render can leave its blocker persisted after the operator edits
+    // the draft back to native audio. Do not keep showing an error that the
+    // current Video contract cannot produce; a new Start/Resume clears it.
+    if (project.workspace === 'video'
+      && isAudioDisabledBackendBlocker(execution.blocker)
+      && !videoAudioIsDisabled(project, { includeExecution: false })) {
+      execution = { ...execution, blocker: null };
+    }
+  }
   return { canStart: canStart && blockers.length === 0, blockers, choices,
     inputRevision: videoConfigurationRevision(project),
     configurationRevision: canonicalSnapshotChecksum({ input: videoConfigurationRevision(project), choices }),
     limits: creativeDirectorVideoLimitsSchema.parse(project.videoExecution?.limits || {}),
-    execution: project.videoExecution || null,
+    execution,
     costNotice: 'Provider prices and balances are unknown. Clip and agent-call limits are enforced; a dollar cap blocks calls whose price cannot be bounded.' };
 }
 

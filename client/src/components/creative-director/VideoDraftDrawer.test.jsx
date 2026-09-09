@@ -38,3 +38,8 @@ it('restores and saves a Reactor pin even when the local model list is unavailab
   await user.click(screen.getByRole('button', { name: 'Save draft' }));
   await waitFor(() => expect(updateCreativeDirectorProject).toHaveBeenCalledWith('reactor-draft', expect.objectContaining({ renderBackend: project.renderBackend }), { silent: true }));
 });
+
+it('defaults a new Video draft to native clip audio', async () => {
+  render(<MemoryRouter initialEntries={['/?videoDraftTab=production']}><VideoDraftDrawer open onClose={vi.fn()} onSaved={vi.fn()} /></MemoryRouter>);
+  expect(await screen.findByLabelText('Audio contract')).toHaveValue('native');
+});

@@ -64,6 +64,15 @@ it('previews cloud choices without local hardware or paid calls and makes Start 
   expect(state.project.videoExecution).toMatchObject({ authorized: true, limits: { maxClips: 2, maxRetries: 0 }, inputRevision: videoConfigurationRevision(state.project) });
 });
 
+it('does not expose a stale legacy audio blocker for a native Video draft', async () => {
+  const blocker = 'The reactor video backend cannot honor audio-disabled output.';
+  state.project.videoExecution = { blocker };
+  expect((await getVideoExecutionPreview('example-video')).execution.blocker).toBeNull();
+
+  state.project.videoDraft.audio = { mode: 'silent' };
+  expect((await getVideoExecutionPreview('example-video')).execution.blocker).toBe(blocker);
+});
+
 it('refuses stale choices, unavailable pinned credentials and unenforceable dollar caps', async () => {
   const input = await startInput();
   state.project.userStory = 'A changed brief.';
