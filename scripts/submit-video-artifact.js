@@ -2,7 +2,7 @@
 // Local production-agent handoff. Uses the same validation and persistence as
 // the HTTP routes without exporting an interactive session to a CLI process.
 import { readFile } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { creativeDirectorTreatmentSchema, creativeDirectorPlanSchema } from '../server/lib/creativeDirectorValidation.js';
 
 export async function submitVideoArtifact({ projectId, attemptId, kind, input }) {
@@ -20,7 +20,7 @@ export async function submitVideoArtifact({ projectId, attemptId, kind, input })
   return { saved: true, kind };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectlyInvoked(import.meta.url)) {
   const [projectId, attemptId, kind, filename] = process.argv.slice(2);
   Promise.resolve().then(async () => {
     if (!filename) throw new Error('Usage: submit-video-artifact.js PROJECT ATTEMPT treatment|plan JSON_FILE');
