@@ -136,11 +136,15 @@ describe('manual maintenance run', () => {
     // A Stop clicked while a dispatch is in flight sticks: the walk cannot write
     // the snapshot status back over it.
     state.tasks = [];
+    // Wait for the walk to actually reach its dispatch before issuing the Stop —
+    // the walk awaits several reads first, and how long those take is not ours.
     let finishDispatch;
-    invokeQuotaBurnStep.mockImplementationOnce(() => new Promise((resolve) => { finishDispatch = resolve; }));
+    const dispatchStarted = new Promise((started) => {
+      invokeQuotaBurnStep.mockImplementationOnce(() => new Promise((resolve) => { finishDispatch = resolve; started(); }));
+    });
     const walk = evaluateMaintenanceRun(run.id);
+    await dispatchStarted;
     const stop = stopMaintenanceRun(run.id);
-    await new Promise((resolve) => setTimeout(resolve, 0));
     finishDispatch({ dispatched: true, summary: 'ran', awaiting: { requestId: 'demand-late' } });
     await Promise.all([walk, stop]);
     expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', active: { requestId: 'demand-late' } });
