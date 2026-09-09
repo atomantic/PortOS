@@ -36,12 +36,16 @@ export const MAINTENANCE_SEQUENCE_TYPES = Object.freeze(MAINTENANCE_TASK_ORDER.f
 /**
  * The run params an audit step pins. The first six audits explicitly FILE
  * issues (which the drain then claims); documentation explicitly does the work.
- * Fix mode runs audits directly and drains once at the end.
+ * Fix mode runs audits directly and drains once at the end. Code-producing
+ * steps explicitly request PR delivery so issue-only schedule defaults cannot
+ * turn their completion into a local-only merge. Review policy still inherits.
  * A drain pins nothing — it inherits the app's saved claim filters.
  */
 export const maintenanceStepParams = (taskType, mode = 'file-issues') => (taskType === MAINTENANCE_DRAIN_TASK
   ? {}
-  : { fileIssues: mode !== 'fix' && taskType !== 'documentation' });
+  : mode !== 'fix' && taskType !== 'documentation'
+    ? { fileIssues: true }
+    : { fileIssues: false, useWorktree: true, openPR: true });
 
 /**
  * Build the ladder as run-once steps targeting `appId`, every one pinned to the

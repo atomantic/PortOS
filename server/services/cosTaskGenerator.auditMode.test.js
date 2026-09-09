@@ -105,6 +105,8 @@ import {
 } from '../lib/auditCatalog.js';
 import { isProgrammaticScheduledTaskType, PROGRAMMATIC_SCHEDULED_TASK_TYPES } from '../lib/taskTargetScope.js';
 
+import { buildMaintenanceSteps } from '../lib/maintenanceSequence.js';
+
 const AUDIT_TYPES = [...AUDIT_TASK_TYPES];
 const WORKSPACE = '/tmp/example-repo';
 
@@ -313,6 +315,25 @@ describe('mode is honored identically from schedule, manual run, and quota burn'
     expect(task.metadata.fileIssues).toBe(false);
     expect(task.metadata.noCodeOutput).toBeUndefined();
     expect(task.description).toContain('Mode: implement the highest-value fix');
+  });
+
+  it('maintenance fixes override issue-only PR defaults through the final Codex prompt', async () => {
+    const { getTaskInterval } = await import('./taskSchedule.js');
+    getTaskInterval.mockResolvedValue({ type: 'weekly', taskMetadata: {
+      fileIssues: true, useWorktree: false, openPR: false,
+    } });
+    const [step] = buildMaintenanceSteps({ appId: 'app-1', idPrefix: 'maintenance', mode: 'fix' });
+    const task = await generate(step.taskRef.taskType, {
+      skipPreconditions: true, runOverrides: step.overrides.params,
+    });
+    expect(task.metadata).toMatchObject({ fileIssues: false, useWorktree: true, openPR: true });
+    const prompt = buildLightContextPrompt(task, WORKSPACE, {
+      branch: 'cos/example', worktreePath: WORKSPACE,
+    }, isTruthyMeta, { isTui: true, providerId: 'codex-tui', providerCommand: 'codex' });
+    expect(prompt).toContain('gh pr create');
+    expect(prompt).toContain('## Merge Gate');
+    expect(prompt).toContain('--merge --delete-branch');
+    expect(prompt).not.toContain('PortOS will merge it back after completion');
   });
 
   it('run overrides pass the same allowlist a stored override does', async () => {
