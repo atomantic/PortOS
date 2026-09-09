@@ -181,6 +181,25 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 `PGPASSWORD`/`PGUSER`/`PGDATABASE`/`PGPORT` are resolved from `process.env` first, then `.env`, then the backward-compatible defaults (`portos`/`portos`/`portos`/`5432`). The default `portos` password is an **intentional** local-development fallback (see the Distribution model note in [`AGENTS.md`](../AGENTS.md)); production deployments override it via `PGPASSWORD`.
 
+### Moving between Docker and native
+
+`scripts/db.sh migrate` exports the mode selected in the repository-root `.env`
+and imports into the other mode. The dump uses `--clean`: it **replaces the
+destination's database objects and records**, rather than merging records.
+Back up both databases and stop PortOS processes before an intentional move.
+
+`scripts/db.sh setup-native` selects **native** mode after provisioning; it does
+not copy Docker data. Running `scripts/db.sh migrate` immediately afterward
+therefore copies **native → Docker**, potentially overwriting your existing
+Docker records with a fresh database. For **Docker → native**, first select the
+Docker source with `scripts/db.sh use-docker`, ensure that source is running,
+then run `scripts/db.sh migrate`. Check `scripts/db.sh status` before migrating.
+The migration switches to the destination mode after a successful import.
+
+The migration command assumes the standard native `:5432` and Docker `:5561`
+destination ports. For custom ports, use an explicitly targeted dump/restore
+instead. See [Backup & Restore](./BACKUP.md) for backup and restore semantics.
+
 ### Boot schema upgrades & lock windows
 
 `ensureSchema()` in `server/lib/db.js` applies **idempotent** schema upgrades on every boot (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`). Every index it creates — including the HNSW vector index and the GIN full-text index on `catalog_scraps` — is a plain, **non-`CONCURRENT`** build.
