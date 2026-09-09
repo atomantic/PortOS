@@ -7,9 +7,9 @@ import { spawn } from '../lib/childProcess.js';
 import { execGitSafe } from '../lib/execGit.js';
 import { parseGitRemote, detectForgeCli, pickGhAccountForOwner } from '../lib/gitForge.js';
 
-function spawnCli(cmd, args, options = {}) {
+function spawnCli(cmd, args) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { shell: false, ...options });
+    const child = spawn(cmd, args, { shell: false });
     let stdout = '', stderr = '';
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
