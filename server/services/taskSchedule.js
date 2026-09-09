@@ -6,7 +6,7 @@
  *
  * Cadence model (two variants + one orthogonal flag):
  * - type 'on-demand': never auto-queued; only a manual trigger runs it.
- * - type 'cron': clock-scheduled from `cronExpression` (5-field), with catch-up.
+ * - type 'cron': clock-scheduled from `cronExpression` (5-field), without replaying missed slots.
  * - `perpetual: true` (independent of type): drain actionable work back-to-back
  *   (re-queue on completion) until a programmatic work-detector reports nothing
  *   actionable, then PARK on a recheck cadence. An on-demand+perpetual task
@@ -25,7 +25,7 @@ import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeInterval
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
-import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
+import { parseCronToNextRun } from './eventScheduler.js';
 import { isAuditTaskType, defaultFileIssuesFor, auditDoWorkRequiresWorktree, getAuditScheduleMetadata, AUDIT_RUN_GUIDANCE, AUDIT_SUGGESTED_AFTER } from '../lib/auditCatalog.js';
 import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js';
 import {
@@ -940,44 +940,12 @@ export async function shouldRunTask(taskType, appId = null, { featureEnabled = c
         break;
       }
 
-      // Catch-up: if a cron slot has already elapsed since the last successful run
-      // (or, for never-run tasks, within the last cron period), fire it now instead
-      // of waiting another full period. This recovers from daemon downtime, restarts,
-      // and the hourly-check window missing the 60-second cron match.
-      const prevRun = parseCronToPrevRun(cronExpr, new Date(now), timezone);
-      if (prevRun) {
-        const prevRunMs = prevRun.getTime();
-        let lookbackBound;
-        if (lastRun) {
-          lookbackBound = lastRun;
-        } else {
-          // Never-run: only catch up to a slot that elapsed AFTER the task was
-          // configured. Without this bound a never-run task always fires its most
-          // recent past slot, so a weekly "Sunday 09:00" task enabled on a Friday
-          // immediately reads as "due now (catch-up)" for last Sunday — a slot that
-          // predates the task and was never actually missed. `createdAt` is stamped
-          // when the task is first seen (loadSchedule backfills it for existing
-          // installs), so catch-up only recovers slots the task was around for. An
-          // un-backfilled task (createdAt absent) yields bound 0 → the legacy
-          // always-catch-up behavior.
-          lookbackBound = safeDate(interval.createdAt);
-        }
-        if (prevRunMs > lookbackBound && prevRunMs <= now) {
-          // Compute nextRun for telemetry/reporting
-          const nextRunAfterCatch = parseCronToNextRun(cronExpr, new Date(now), timezone);
-          result = {
-            shouldRun: true,
-            reason: 'cron-catch-up',
-            cronExpression: cronExpr,
-            missedSlot: prevRun.toISOString(),
-            nextRunAt: nextRunAfterCatch ? nextRunAfterCatch.toISOString() : null
-          };
-          break;
-        }
-      }
-
-      // For never-run tasks, use 1 minute ago so the first scheduled occurrence can match
-      const fromDate = lastRun ? new Date(lastRun) : new Date(now - 60_000);
+      // Only the current scheduled minute is eligible. Replaying from lastRun
+      // makes a schedule edit retroactively create missed work and lets hourly
+      // improvement checks launch tasks before their next configured occurrence.
+      // Keep lastRun as a lower bound to prevent a second run in the same minute.
+      const minuteStart = Math.floor(now / 60_000) * 60_000;
+      const fromDate = new Date(Math.max(lastRun || 0, minuteStart - 1));
       const nextRun = parseCronToNextRun(cronExpr, fromDate, timezone);
       if (!nextRun) {
         result = { shouldRun: false, reason: 'invalid-cron', cronExpression: cronExpr };
