@@ -230,3 +230,18 @@ describe('Project library discovery', () => {
     expect(screen.getByLabelText('Status')).toHaveValue('all');
   });
 });
+
+ it('reveals a smoke-test project when started from a filtered library', async () => {
+  vi.clearAllMocks();
+  cdApi.listCreativeDirectorProjects.mockResolvedValue([{ id: 'finished', name: 'Finished example', status: 'complete' }]);
+  cdApi.createSmokeTestCreativeDirectorProject.mockResolvedValue({ id: 'smoke-new', name: 'New test clip', status: 'planning', createdAt: '2026-09-09' });
+  const user = userEvent.setup();
+  render(<MemoryRouter initialEntries={['/creative-director?status=complete&q=Finished']}><CreativeDirector /></MemoryRouter>);
+  await screen.findByRole('button', { name: 'New project' });
+  await openMenu(user);
+  await user.click(screen.getByRole('menuitem', { name: ITEM_LABEL }));
+  await user.click(screen.getByRole('button', { name: CONFIRM_LABEL }));
+  await screen.findByRole('link', { name: 'Open New test clip' });
+  expect(screen.getByLabelText('Status')).toHaveValue('all');
+  expect(screen.getByLabelText('Search projects')).toHaveValue('');
+});

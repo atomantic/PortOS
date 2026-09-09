@@ -140,6 +140,12 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
   // a later, unrelated project created from this list page (#1808 review).
   const clearRemix = () => { setRemixIds([]); setRemixIngredients([]); };
 
+  const clearProjectFilters = () => setSearchParams(prev => {
+    const next = new URLSearchParams(prev);
+    ['q', 'status', 'sort'].forEach(key => next.delete(key));
+    return next;
+  }, { replace: true });
+
   const handleCreate = async (e) => {
     e.preventDefault();
     if (!form.name.trim() || !form.modelId) {
@@ -163,11 +169,7 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
     try {
       const created = await createCreativeDirectorProject(payload, { silent: true });
       setProjects((prev) => [created, ...prev]);
-      setSearchParams(prev => {
-        const next = new URLSearchParams(prev);
-        ['q', 'status', 'sort'].forEach(key => next.delete(key));
-        return next;
-      }, { replace: true });
+      clearProjectFilters();
       setShowForm(false);
       setForm((f) => ({ ...f, name: '', styleSpec: '', userStory: '', startingImageFile: '' }));
       toast.success(`Created "${created.name}"`);
@@ -280,6 +282,7 @@ export default function CreativeDirector({ basePath = '/creative-director', brow
     if (!created) return;
     toast.success('Test clip render started');
     setProjects((prev) => [created, ...prev]);
+    clearProjectFilters();
   };
 
   if (loading) {
