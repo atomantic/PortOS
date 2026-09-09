@@ -295,6 +295,17 @@ Server Event → Socket.IO → socket.js → React Component State Update
   - Serves HTTPS with the shared Tailscale cert (`data/certs/`) when one is present, plain HTTP otherwise — matching the scheme the sidebar's `//<host>:5560` link inherits from the main app
 - Fix history viewer, process status dashboard
 
+### Local-model Hub metadata
+
+`server/services/huggingFaceMetadata.js` owns the shared authenticated Hub reads,
+request budgets, in-memory cache and publish-date enrichment used by the local
+model catalog and MTPLX. Add reusable raw repo metadata reads here; disk cache
+persistence remains in `huggingFaceRepoCache.js`. Model ranking, GGUF/MLX variant
+selection, fit and installability belong in `huggingFaceCatalog.js`. Consumers
+needing only metadata import its owner directly; the catalog retains its old
+`fetchRepoPublishedDates` export for compatibility. `importScoping.test.js` guards
+this boundary and the catalog workflow test checks shared request coalescing.
+
 ### Shell Service (`server/services/shell.js`)
 - PTY-based web terminal via node-pty
 - Session management with WebSocket I/O
