@@ -10,14 +10,20 @@
  * dispatch; the pipeline doesn't care which one rendered the bytes.
  *
  * Voice ID namespace: `engine:voiceName` — `kokoro:af_heart`,
- * `piper:en_GB-northern_english_male`. A bare voice name without the
- * `engine:` prefix is interpreted as the active engine's voice.
+ * `piper:en_GB-northern_english_male`, `qwen3-tts:warm-narrator`. A bare
+ * voice name without the `engine:` prefix is interpreted as the active
+ * engine's voice; legacy `qwen3:` ids normalize to `qwen3-tts:` on read.
  */
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, atomicWrite } from '../../lib/fileUtils.js';
-import { synthesize, listVoices, VALID_ENGINES } from '../voice/tts.js';
+import {
+  synthesize,
+  listVoices,
+  normalizeVoiceEngine,
+  VALID_ENGINES,
+} from '../voice/tts.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 const VOICE_ID_RE = /^([a-z][a-z0-9-]*):(.+)$/i;
@@ -32,7 +38,7 @@ export function parseVoiceId(voiceId) {
   const trimmed = voiceId.trim();
   const m = trimmed.match(VOICE_ID_RE);
   if (!m) return { engine: null, voice: trimmed };
-  const engine = m[1].toLowerCase();
+  const engine = normalizeVoiceEngine(m[1].toLowerCase());
   if (!VALID_ENGINES.has(engine)) return { engine: null, voice: trimmed };
   return { engine, voice: m[2] };
 }
@@ -49,16 +55,21 @@ export async function listAllVoices() {
   const results = await Promise.all(engines.map(async (engine) => {
     try {
       const { voices } = await listVoices(engine);
-      return voices.map((v) => ({
-        id: `${engine}:${v.name}`,
-        engine,
-        voice: v.name,
-        label: v.label || v.name,
-        // Carry through any metadata the engine surfaces (gender, language,
-        // accent, etc.) without locking the shape — the UI renders what's
-        // present.
-        ...v,
-      }));
+      return voices.map((v) => {
+        const voice = v.voice || v.name;
+        return {
+          // Carry through any metadata the engine surfaces (gender, language,
+          // accent, etc.) without locking the shape — the UI renders what's
+          // present.
+          ...v,
+          // Namespace fields are authoritative. Engine adapters may expose a
+          // legacy id, but it must not override the catalog contract.
+          id: `${engine}:${voice}`,
+          engine,
+          voice,
+          label: v.label ?? v.name,
+        };
+      });
     } catch (err) {
       console.warn(`⚠️ listAllVoices: ${engine} unavailable — ${err?.message || err}`);
       return [];

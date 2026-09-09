@@ -18,10 +18,11 @@ vi.mock('../../lib/fileUtils.js', async () => {
 const synthesizeMock = vi.fn();
 const listVoicesMock = vi.fn();
 vi.mock('../voice/tts.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
+  tryReadFile: vi.fn().mockResolvedValue(null),
   synthesize: (...a) => synthesizeMock(...a),
   listVoices: (...a) => listVoicesMock(...a),
-  VALID_ENGINES: new Set(['kokoro', 'piper']),
+  normalizeVoiceEngine: (engine) => engine === 'qwen3' ? 'qwen3-tts' : engine,
+  VALID_ENGINES: new Set(['kokoro', 'piper', 'qwen3-tts']),
 }));
 
 const { parseVoiceId, listAllVoices, synthesizeToFile, extractDialogueLines, resolveVoiceForLine, wavDurationMs } = await import('./audio.js');
@@ -67,6 +68,15 @@ describe('parseVoiceId', () => {
     });
   });
 
+  it('normalizes legacy and canonical Qwen3 prefixes to the registered engine', () => {
+    expect(parseVoiceId('qwen3:warm-narrator')).toEqual({
+      engine: 'qwen3-tts', voice: 'warm-narrator',
+    });
+    expect(parseVoiceId('qwen3-tts:warm-narrator')).toEqual({
+      engine: 'qwen3-tts', voice: 'warm-narrator',
+    });
+  });
+
   it('ignores unknown engine prefixes and treats the whole id as a bare voice name', () => {
     expect(parseVoiceId('elevenlabs:Rachel')).toEqual({ engine: null, voice: 'elevenlabs:Rachel' });
   });
@@ -97,6 +107,26 @@ describe('listAllVoices', () => {
     }));
     expect(voices).toContainEqual(expect.objectContaining({
       id: 'piper:en_GB-northern_english_male', engine: 'piper',
+    }));
+  });
+
+  it('keeps canonical namespace fields when an engine returns a legacy id', async () => {
+    listVoicesMock.mockImplementation(async (engine) => ({
+      engine,
+      voices: engine === 'qwen3-tts' ? [{
+        id: 'qwen3:warm-narrator',
+        name: 'Warm Narrator (1.7B Design)',
+        label: 'Warm Narrator (1.7B Design)',
+        voice: 'warm-narrator',
+        engine: 'qwen3',
+      }] : [],
+    }));
+
+    expect(await listAllVoices()).toContainEqual(expect.objectContaining({
+      id: 'qwen3-tts:warm-narrator',
+      engine: 'qwen3-tts',
+      voice: 'warm-narrator',
+      label: 'Warm Narrator (1.7B Design)',
     }));
   });
 

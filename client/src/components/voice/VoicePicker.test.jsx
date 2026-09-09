@@ -21,6 +21,7 @@ const SAMPLE_VOICES = [
   { id: 'kokoro:af_bella', engine: 'kokoro', voice: 'af_bella', name: 'af_bella', gender: 'female', language: 'en-US', grade: 'A' },
   { id: 'kokoro:am_michael', engine: 'kokoro', voice: 'am_michael', name: 'am_michael', gender: 'male', language: 'en-US', grade: 'B' },
   { id: 'piper:lessac-medium', engine: 'piper', voice: 'lessac-medium', name: 'lessac-medium', gender: 'female', accent: 'American', downloaded: true },
+  { id: 'qwen3-tts:warm-narrator', engine: 'qwen3-tts', voice: 'warm-narrator', name: 'Warm Narrator (1.7B Design)', label: 'Warm Narrator (1.7B Design)' },
 ];
 
 beforeEach(() => {
@@ -92,6 +93,17 @@ describe('VoicePicker', () => {
       expect(document.querySelector('option[value="kokoro:af_bella"]')).toBeInTheDocument();
     });
     expect(screen.getByRole('option', { name: /retired-voice \(unavailable\)/i })).toBeInTheDocument();
+  });
+
+  it('matches a legacy Qwen3 voiceId to its canonical catalog option', async () => {
+    listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
+    render(<VoicePicker value="qwen3:warm-narrator" onChange={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toHaveValue('qwen3-tts:warm-narrator');
+    });
+    expect(screen.queryByRole('option', { name: /qwen3:warm-narrator \(unavailable\)/i }))
+      .not.toBeInTheDocument();
   });
 
   it('audition button posts to preview and pipes the wav through playWav', async () => {
