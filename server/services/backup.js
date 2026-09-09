@@ -779,7 +779,7 @@ export async function restorePostgres(destPath, snapshotId, { dryRun = true } = 
       '-v', 'ON_ERROR_STOP=1',
       '--single-transaction',
       '-h', pgHost, '-p', pgPort, '-U', pgUser, '-d', pgDb, '-f', sqlPath
-    ], { shell: false, env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
+    ], { shell: false, stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, PGPASSWORD: process.env.PGPASSWORD || 'portos' } });
 
     let stderr = '';
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });

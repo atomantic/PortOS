@@ -62,6 +62,7 @@ import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
 import { hostname } from 'os';
 import { PassThrough } from 'node:stream';
+import { spawn as spawnChild } from 'node:child_process';
 import { spawn } from '../lib/childProcess.js';
 // Partial mock: only override spawn. Preserve execFile et al. because
 // backup.js transitively imports fileUtils.js, which promisifies execFile.
@@ -731,21 +732,32 @@ describe('restorePostgres', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('real restore spawns psql with ON_ERROR_STOP and shell:false, returns ok on exit 0', async () => {
+  it('completes a verbose file restore without stdin/stdout pipes', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
     vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE a (...);\n');
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
-    const proc = fakeProc();
-    spawn.mockReturnValue(proc);
-    const p = restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
-    await flush();
-    proc.emit('close', 0);
-    const result = await p;
-    expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1 });
-    const [bin, args, opts] = spawn.mock.calls[0];
-    expect(bin).toBe('psql');
-    expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '-f']));
-    expect(opts.shell).toBe(false);
+    let child;
+    spawn.mockImplementationOnce((_bin, _args, options) => {
+      // Exercise the restore's actual stdio with output exceeding pipe capacity.
+      // The timeout kills a regressed child, so neither it nor the restore hangs.
+      child = spawnChild(process.execPath, ['-e',
+        "process.stdout.write('COPY 1\\n'.repeat(300000))"
+      ], { ...options, timeout: 3000, killSignal: 'SIGKILL' });
+      return child;
+    });
+    try {
+      const result = await restorePostgres('/dest', '2026-06-05T00-00-00', { dryRun: false });
+      expect(result).toEqual({ status: 'ok', dryRun: false, sizeBytes: 4096, tableCount: 1 });
+      const [bin, args, opts] = spawn.mock.calls[0];
+      expect(bin).toBe('psql');
+      expect(args).toEqual(expect.arrayContaining(['-v', 'ON_ERROR_STOP=1', '--single-transaction', '-f']));
+      expect(opts.shell).toBe(false);
+      expect(opts.stdio).toEqual(['ignore', 'ignore', 'pipe']);
+      expect(child.stdin).toBeNull();
+      expect(child.stdout).toBeNull();
+    } finally {
+      if (child && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
   });
 
   it('real restore returns failed/restore_error on non-zero psql exit', async () => {
