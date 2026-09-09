@@ -58,6 +58,7 @@ import { windowLabelOf } from '../lib/quotaWindows.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
 import { cosEvents } from './cosEvents.js';
 import { nextQuotaBurnSequenceJob, completeQuotaBurnSequenceStep } from './quotaBurnSequence.js';
+import { burnPlanOwnsAgent } from '../lib/quotaBurnOrigin.js';
 
 const TICK_MS = 60_000;
 
@@ -689,10 +690,15 @@ function onBurnAgentCompleted(agent) {
   // subscriber, whose ordering against this one is not guaranteed) is one wasted
   // agent too late, every single time. A ledger failure must not stop the
   // continuation, so it degrades to a logged warning.
+  // The plan is walked only for an agent the plan OWNS (`burnPlanOwnsAgent`):
+  // a manual maintenance run's agent spends this family's window — so the
+  // denial ledger still hears about it — but its completion advances that run,
+  // never this plan.
+  const walkPlan = () => completeQuotaBurnSequenceStep(agent)
+    .then(() => runQuotaBurnCycle({ trigger: 'continuation', familyId, ignoreTaskId: agent?.result?.success ? agent?.taskId : null }));
   return recordBurnAgentCompletion(agent)
     .catch((err) => console.error(`⚠️ Quota-burn denial ledger for ${familyId}: ${err.message}`))
-    .then(() => completeQuotaBurnSequenceStep(agent))
-    .then(() => runQuotaBurnCycle({ trigger: 'continuation', familyId, ignoreTaskId: agent?.result?.success ? agent?.taskId : null }))
+    .then(() => (burnPlanOwnsAgent(agent) ? walkPlan() : { skipped: 'maintenance-run' }))
     .catch((err) => console.error(`❌ Quota-burn continuation for ${familyId} failed: ${err.message}`));
 }
 

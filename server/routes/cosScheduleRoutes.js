@@ -13,6 +13,7 @@ import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
 import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
 import { findCronExpressionError } from '../lib/cronValidation.js';
+import { listMaintenanceRuns, resumeMaintenanceRun, startMaintenanceRun, stopMaintenanceRun } from '../services/maintenanceRun.js';
 
 const templateTaskSchema = z.object({
   name: z.string().min(1),
@@ -29,6 +30,16 @@ const scheduleLabelsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
 // Shape only — normalizeSuggestedAfter does the trimming, self-drop and dedupe
 // so the storage rules live with the field's own helper, not in the route.
 const suggestedAfterSchema = z.array(z.string()).max(SUGGESTED_AFTER_MAX);
+
+// A manual maintenance run names the app, the subscription provider and the
+// model up front (AGENTS.md AI-policy: the click IS the consent). Blank effort
+// inherits each scheduled task's saved effort.
+const maintenanceRunStartSchema = z.object({
+  appId: z.string().trim().min(1),
+  providerId: z.string().trim().min(1),
+  model: z.string().trim().min(1),
+  effort: z.enum(EFFORT_LEVELS).nullable().optional(),
+}).strict();
 
 const router = Router();
 
@@ -244,6 +255,29 @@ router.post('/schedule/trigger', asyncHandler(async (req, res) => {
     throw new ServerError(request.error, { status: 409, code: 'TRIGGER_REJECTED' });
   }
   res.json({ success: true, request });
+}));
+
+// Manual maintenance runs — the Schedule tab's "Run maintenance now"; see
+// services/maintenanceRun.js for why this is not a quota burn.
+router.get('/schedule/maintenance-runs', asyncHandler(async (_req, res) => {
+  res.json({ runs: await listMaintenanceRuns() });
+}));
+
+router.post('/schedule/maintenance-runs', asyncHandler(async (req, res) => {
+  const body = validateRequest(maintenanceRunStartSchema, req.body || {});
+  res.status(201).json(await startMaintenanceRun(body));
+}));
+
+router.post('/schedule/maintenance-runs/:id/stop', asyncHandler(async (req, res) => {
+  const run = await stopMaintenanceRun(req.params.id);
+  if (!run) throw new ServerError('Maintenance run not found', { status: 404, code: 'NOT_FOUND' });
+  res.json({ run });
+}));
+
+router.post('/schedule/maintenance-runs/:id/resume', asyncHandler(async (req, res) => {
+  const resumed = await resumeMaintenanceRun(req.params.id);
+  if (!resumed) throw new ServerError('Maintenance run not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(resumed);
 }));
 
 // GET /api/cos/schedule/on-demand - Get pending on-demand requests

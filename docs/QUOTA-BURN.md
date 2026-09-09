@@ -601,21 +601,45 @@ reaches disk instead of being persisted as a step the runner can only refuse.
 
 ## Maintenance sequence
 
-An empty family plan offers **Populate maintenance sequence** and **Populate and
-start sequence** after choosing an app. The latter saves first, enables Quota
-Burn and the family, then evaluates the plan under its quota gates. No tasks
-run merely by opening the page or populating the plan.
+The maintenance ladder — structural drift → simplify → module hygiene →
+complexity → performance → cognitive load → documentation, with a perpetual
+`claim-issue` drain between every pair of audits (13 steps) — is declared once
+in `server/lib/maintenanceSequence.js` and can be run two ways:
 
-The default order is structural drift → simplify → module hygiene → complexity
-→ performance + cognitive load → documentation. Performance and cognitive load
-share a stage in the guidance; the preset serializes performance first. A
-perpetual `claim-issue` drain separates every pair of audits (13 steps total).
-The first six audits explicitly file issues; documentation explicitly does the
-work. All steps reference the existing scheduled tasks and inherit their pins
-and configuration. Each task must be enabled for the selected app, and
-`claim-issue` must have perpetual mode enabled in Scheduled Tasks.
+- **Now, from the CoS Schedule tab** ("Run maintenance now"). This is a
+  standalone run (`server/services/maintenanceRun.js`, `data/cos/maintenance-runs.json`),
+  NOT a burn: it needs no Quota Burn master switch, faces no reset-window /
+  reserve / dispatch-cap gates, writes nothing into any family plan, and has
+  nothing to re-arm — every "Run now" is a fresh run with its own completion
+  ledger. Pick the app, a subscription CLI/TUI provider, a model and an optional
+  effort; every step is pinned to them. Each audit is dispatched when the
+  previous step finishes and each drain repeats until the app's issue backlog
+  is empty, so the run walks to the end on its own. A step that cannot go out
+  (a task disabled since, a blocked task, a transient claim probe) HOLDS the run
+  with its reason and is retried on each completion and on a slow sweep; Stop
+  ends dispatching (a task already queued or running is not recalled) and Resume
+  picks the ladder up from its ledger. One running run per app.
+- **Later, under quota gates, from this page.** An empty family plan offers
+  **Populate maintenance sequence** and **Populate and start sequence** after
+  choosing an app. The latter saves first, enables Quota Burn and the family,
+  then evaluates the plan under its quota gates. No tasks run merely by opening
+  the page or populating the plan.
 
-This opts the family into `sequence: true`. Unlike the existing rotation, an
+Both share the invocation path (`quotaBurnInvoke.js`), so the schedule's own
+gate ladder applies either way: each task must be enabled globally and for the
+selected app, `claim-issue` must have perpetual mode enabled in Scheduled
+Tasks, the master Improve switch must be on, and the CoS daemon must be running
+to accept the requests. The first six audits explicitly file issues; documentation
+explicitly does the work. All steps reference the existing scheduled tasks and
+inherit their pins and configuration.
+
+A manual run's tasks carry the family provenance (so they are cooldown-exempt
+and an observed refusal is credited to the window they spent) plus a
+`maintenanceRunId`, which is what tells the burn loop to leave them alone: a
+manual run's completion never dispatches a plan step, and a plan's sequence
+never waits on a manual run's task.
+
+A saved plan opts the family into `sequence: true`. Unlike the existing rotation, an
 unavailable, disabled, queued, running, or blocked predecessor holds the sequence.
 Audits finish after successful completion; a `drain: true` claim step repeats
 under the same quota gates until the configured eligibility detector reports no

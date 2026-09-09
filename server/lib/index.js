@@ -228,6 +228,7 @@ export * from './mtplxModels.js';
 export * from './mtplxRuntime.js';
 export * from './slotstreamCatalog.js';
 export * from './slotstreamModels.js';
+export * from './maintenanceSequence.js';
 export * from './managedDaemon.js';
 export * from './recordedProjectDir.js';
 export * from './vllmQwenProject.js';

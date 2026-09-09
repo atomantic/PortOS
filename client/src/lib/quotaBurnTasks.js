@@ -12,6 +12,8 @@
  * inheritance display and the PUT payload without a server.
  */
 
+import { MAINTENANCE_DRAIN_TASK, MAINTENANCE_SEQUENCE_TYPES, MAINTENANCE_TASK_ORDER, maintenanceStepParams } from '../../../server/lib/maintenanceSequence.js';
+
 /** Mirrors `QUOTA_BURN_TASK_REF_KIND` in `server/lib/quotaBurnTaskRef.js`. */
 export const QUOTA_BURN_TASK_REF_KIND = Object.freeze({ BUILTIN: 'builtin', CUSTOM: 'custom' });
 
@@ -252,23 +254,24 @@ export const taskSourceHref = (entry) => (entry?.kind === QUOTA_BURN_TASK_REF_KI
 /** Where a user goes to CREATE the on-demand scheduled task a new step would reference. */
 export const CREATE_TASK_HREF = '/cos/jobs';
 
-/** Default maintenance ladder, using the canonical scheduled-task identifiers. */
-export const MAINTENANCE_TASK_ORDER = Object.freeze([
-  'better-structural-drift', 'simplify', 'module-hygiene', 'better-complexity',
-  'performance', 'better-cognitive-load', 'documentation',
-]);
-export const MAINTENANCE_ORDER_GUIDANCE = 'better-structural-drift → simplify → module-hygiene → better-complexity → performance + better-cognitive-load → documentation';
+/**
+ * The maintenance ladder is declared ONCE, server-side (`server/lib/maintenanceSequence.js`),
+ * because two runners walk it — the Schedule tab's manual run builds its steps
+ * there, and this page saves the same steps into a family plan. Re-exported so
+ * the guidance banner and the prerequisite check read the same list.
+ */
+export { MAINTENANCE_TASK_ORDER, MAINTENANCE_ORDER_GUIDANCE } from '../../../server/lib/maintenanceSequence.js';
 
 /** Saved settings required by the maintenance ladder, including actionable patches. */
 export function maintenancePrerequisites(groups, appId) {
   if (!appId) return [];
   const entries = flattenTaskCatalog(groups);
-  return [...MAINTENANCE_TASK_ORDER, 'claim-issue'].flatMap(taskType => {
+  return [...MAINTENANCE_TASK_ORDER, MAINTENANCE_DRAIN_TASK].flatMap(taskType => {
     const entry = entries.find(candidate => candidate.taskType === taskType);
     if (!entry) return [{ taskType, reason: 'unavailable in Scheduled Tasks', unavailable: true }];
     const settings = {
       ...(!entry.enabled ? { enabled: true } : {}),
-      ...(taskType === 'claim-issue' && entry.config.perpetual !== true ? { perpetual: true } : {}),
+      ...(taskType === MAINTENANCE_DRAIN_TASK && entry.config.perpetual !== true ? { perpetual: true } : {}),
     };
     const enableApp = !entry.appIds.includes(appId);
     const reasons = [
@@ -283,15 +286,12 @@ export function maintenancePrerequisites(groups, appId) {
 /** Populate references only; preserve the source tasks and their configured filters. */
 export function maintenanceSequence(groups, appId, idPrefix) {
   const entries = flattenTaskCatalog(groups);
-  const types = MAINTENANCE_TASK_ORDER.flatMap((type, index) =>
-    index ? ['claim-issue', type] : [type]);
-  const picked = types.map(type => entries.find(entry => entry.taskType === type));
+  const picked = MAINTENANCE_SEQUENCE_TYPES.map(type => entries.find(entry => entry.taskType === type));
   if (!appId || maintenancePrerequisites(groups, appId).length) return null;
   return picked.map((entry, index) => ({
     ...stepFromTaskEntry(entry, { id: `${idPrefix}-${index}`, appId }),
     runOnce: true,
-    drain: entry.taskType === 'claim-issue',
-    overrides: { providerId: null, model: null, effort: null,
-      params: entry.taskType === 'claim-issue' ? {} : { fileIssues: entry.taskType !== 'documentation' } },
+    drain: entry.taskType === MAINTENANCE_DRAIN_TASK,
+    overrides: { providerId: null, model: null, effort: null, params: maintenanceStepParams(entry.taskType) },
   }));
 }

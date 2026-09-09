@@ -268,6 +268,10 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 | GET | `/cos/schedule/task/:taskType` | Get interval and schedule settings for a task type |
 | PUT | `/cos/schedule/task/:taskType` | Update schedule settings for a task type (`type`: `on-demand` \| `cron`; `cronExpression`: 5-field or null; `perpetual`: boolean drain flag, orthogonal to `type`) |
 | POST | `/cos/schedule/trigger` | Trigger an on-demand task run |
+| GET | `/cos/schedule/maintenance-runs` | List manual maintenance runs (the Schedule tab's "Run maintenance now"; running first, then recent history) |
+| POST | `/cos/schedule/maintenance-runs` | Start a manual maintenance run for one app (`appId`, `providerId`, `model`, optional `effort`); returns the run and its first dispatch or hold reason. Independent of Quota Burn |
+| POST | `/cos/schedule/maintenance-runs/:id/stop` | Stop a run from dispatching further steps (a task already queued or running is not recalled) |
+| POST | `/cos/schedule/maintenance-runs/:id/resume` | Resume a stopped run from its completion ledger |
 | GET | `/cos/schedule/on-demand` | List pending on-demand task requests |
 | DELETE | `/cos/schedule/on-demand/:requestId` | Clear a pending on-demand request |
 | POST | `/cos/schedule/reset` | Reset execution history for a task type |

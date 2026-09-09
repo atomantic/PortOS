@@ -83,6 +83,7 @@ import { initVoiceTimers } from './voice/timers.js';
 import { startBackupScheduler } from './backupScheduler.js';
 import { startPrivacyRecheckScheduler } from './privacyRecheckScheduler.js';
 import { startQuotaBurnScheduler } from './quotaBurnRunner.js';
+import { startMaintenanceRunScheduler } from './maintenanceRun.js';
 import { startSeriesAutopilotScheduler } from './seriesAutopilotScheduler.js';
 import { startCommissionScheduler } from './creativeCommissions/scheduler.js';
 import { startImessageScheduler } from './imessageScheduler.js';
@@ -425,6 +426,9 @@ const startBackgroundServices = ({ spawnerReady, io }) => {
   // family, provider, model, and work are all named first (sanctioned
   // scheduled-automation exception).
   startQuotaBurnScheduler();
+  // Manual maintenance runs (Schedule tab → "Run maintenance now"): arms a
+  // listener and a slow sweep; dispatches only for a run the user started.
+  startMaintenanceRunScheduler();
   // Initialize Series Autopilot scheduler — OFF by default; registers a cron per
   // series only when the user configured + enabled one via Settings → Series
   // Autopilot. Each scheduled run still passes through the cos autonomy gate +
