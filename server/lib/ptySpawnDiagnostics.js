@@ -17,7 +17,8 @@
  * (3) is the one that cost a day: `npm ci` run inside a CoS worktree whose
  * `server/node_modules` was symlinked at the primary checkout empties the
  * SYMLINK TARGET and then installs into a fresh real directory in the worktree —
- * see the "Agent worktrees" rule in the root `AGENTS.md`. The primary checkout is
+ * see the "Never run `npm ci` … from inside a CoS worktree" rule in the root
+ * `AGENTS.md`, which exists to prevent this. The primary checkout is
  * left with an empty `server/node_modules`, `spawn-helper` is gone, and every
  * subsequent agent spawn fails identically forever. Classified as a generic
  * `spawn-rejected` it looks transient, so the fleet retried it: every task type
@@ -39,7 +40,15 @@ import { existsSync } from 'fs';
  */
 export const PTY_UNAVAILABLE_PREFIX = 'CoS Runner PTY unavailable:';
 
-/** Message prefix for a spawn whose working directory vanished before launch. */
+/**
+ * Message prefix for a spawn whose working directory vanished before launch.
+ *
+ * Deliberately NOT matched by `agentTuiSpawning.js`: unlike a broken PTY layer this
+ * is transient — each retry provisions a fresh worktree at a fresh path — so it
+ * falls through to the retrying `spawn-rejected`. Naming it separately is what
+ * keeps the two from being collapsed back together; a genuinely misconfigured cwd
+ * still surfaces by failing every attempt and blocking on MAX_TASK_RETRIES.
+ */
 export const PTY_WORKSPACE_MISSING_PREFIX = 'CoS Runner workspace missing:';
 
 /**
@@ -58,8 +67,10 @@ const PROBE_ARGS = process.platform === 'win32' ? ['/c', 'exit'] : ['portos-pty-
  * @returns {boolean} true when the PTY layer is usable
  */
 export function probePtyRuntime(pty, probeCwd) {
-  // Outside the Express request lifecycle and deliberately best-effort: a probe
-  // that itself explodes must not mask the original failure we are explaining.
+  // Catching here is the point of the function, not an escape from the no-try/catch
+  // rule: "did this throw?" IS the answer being computed. It also runs while the
+  // caller is already handling a failure, so a probe that explodes on its own must
+  // not replace the original error with its own.
   try {
     const probe = pty.spawn(PROBE_COMMAND, PROBE_ARGS, {
       name: 'xterm-256color',
@@ -93,26 +104,29 @@ export function probePtyRuntime(pty, probeCwd) {
  * @param {string} options.probeCwd - a directory known to exist, for the probe
  * @param {(probeCwd: string) => boolean} options.runtimeProbe - returns whether the
  *   PTY layer still works; injected so callers own the node-pty import
- * @returns {{ retryable: boolean, message: string }} `retryable: false` marks a
- *   fault that will fail identically on every attempt, so the caller should block
- *   rather than burn retries.
+ * @returns {{ diagnosed: boolean, message: string }} `diagnosed: false` means the
+ *   failure matched neither known fault, so the caller should let the original error
+ *   bubble rather than dress an unknown cause in a confident explanation. Whether a
+ *   named fault is worth RETRYING is the caller's policy, not this function's — the
+ *   two differ: a reaped worktree clears on the next attempt (which provisions a
+ *   fresh one), while a broken PTY layer reproduces forever.
  */
 export function diagnosePtySpawnFailure(err, { cwd, probeCwd, runtimeProbe }) {
   const raw = err?.message || String(err);
 
   if (cwd && !existsSync(cwd)) {
     return {
-      retryable: false,
+      diagnosed: true,
       message: `${PTY_WORKSPACE_MISSING_PREFIX} the working directory for this spawn no longer exists. It was probably removed (a reaped worktree) between the request and the launch. Original error: ${raw}`,
     };
   }
 
   if (!runtimeProbe(probeCwd)) {
     return {
-      retryable: false,
+      diagnosed: true,
       message: `${PTY_UNAVAILABLE_PREFIX} node-pty cannot fork any process, so this is not specific to the requested command. The usual cause is an emptied or partially installed \`server/node_modules\` — node-pty execs its \`spawn-helper\` binary from disk on every spawn. Repair it with \`npm install --prefix server\` and restart the runner (\`pm2 restart portos-cos\`). Original error: ${raw}`,
     };
   }
 
-  return { retryable: true, message: raw };
+  return { diagnosed: false, message: raw };
 }

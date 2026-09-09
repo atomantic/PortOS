@@ -260,12 +260,14 @@ app.post('/spawn-tui', async (req, res) => {
       env: childEnv,
     });
   } catch (err) {
-    const { retryable, message } = diagnosePtySpawnFailure(err, {
+    const { diagnosed, message } = diagnosePtySpawnFailure(err, {
       cwd,
       probeCwd: ROOT_DIR,
       runtimeProbe: (probeCwd) => probePtyRuntime(pty, probeCwd),
     });
-    if (retryable) throw err;
+    // Neither known fault: let the original bubble to the error middleware exactly
+    // as it did before, rather than dressing an unknown cause in a confident 422.
+    if (!diagnosed) throw err;
     console.error(`❌ PTY spawn failed for ${agentId}: ${message}`);
     return res.status(422).json({ error: message });
   }

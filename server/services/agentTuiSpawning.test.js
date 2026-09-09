@@ -2631,6 +2631,47 @@ describe('spawnTuiAgent runtime', () => {
       );
     });
 
+    // The runner's two PTY diagnoses split on RETRY POLICY, and the split is the
+    // whole point of naming them separately. A PTY layer that cannot fork is
+    // broken for every task until a human reinstalls, so it must block once
+    // instead of retry-storming the fleet; a reaped worktree is cleared by the
+    // very next attempt, which provisions a fresh one, so it must NOT block.
+    // Collapsing them (an earlier revision matched both prefixes) parks work a
+    // retry would have fixed.
+    it('blocks on an unusable PTY layer as runner-pty-unavailable', async () => {
+      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
+        new Error('CoS Runner PTY unavailable: node-pty cannot fork any process, so this is not specific to the requested command. Repair it with `npm install --prefix server`.'),
+      );
+
+      await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
+
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: 'agent-1',
+          success: false,
+          completionReason: 'runner-pty-unavailable',
+          error: expect.stringContaining('npm install --prefix server'),
+        })
+      );
+    });
+
+    it('leaves a reaped workspace retryable as spawn-rejected', async () => {
+      vi.mocked(spawnTuiSessionViaRunner).mockRejectedValueOnce(
+        new Error('CoS Runner workspace missing: the workspace for this spawn does not exist. Its worktree was probably removed before the agent launched.'),
+      );
+
+      await expect(runSpawn({ useDurableRunner: true })).resolves.toBeNull();
+
+      expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: 'agent-1',
+          success: false,
+          completionReason: 'spawn-rejected',
+          error: expect.stringContaining('worktree was probably removed'),
+        })
+      );
+    });
+
     // The ledger has to carry the outcome it actually knows (#4615). A runner
     // that ANSWERED with a refusal and a transport failure that answered
     // nothing are different facts, and a diagnostic that reads the second as
