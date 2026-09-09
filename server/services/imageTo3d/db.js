@@ -46,6 +46,13 @@ export async function listModels({ includeDeleted = false } = {}) {
   return result.rows.map(rowToModel);
 }
 
+export async function listGeneratingModelSummaries() {
+  const result = await query(
+    "SELECT id, name FROM image_to_3d_models WHERE deleted = FALSE AND status = 'generating' ORDER BY updated_at DESC",
+  );
+  return result.rows;
+}
+
 export async function getModel(id, { includeDeleted = false } = {}) {
   const result = await query('SELECT data FROM image_to_3d_models WHERE id = $1', [id]);
   const model = rowToModel(result.rows[0]);
