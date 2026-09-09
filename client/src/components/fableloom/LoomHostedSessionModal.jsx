@@ -114,11 +114,7 @@ export default function LoomHostedSessionModal({
     }
   };
 
-  const handleCopyLink = async () => {
-    if (!currentJoinUrl) return;
-    const ok = await copyToClipboard(currentJoinUrl);
-    if (ok) toast.success('Join link copied to clipboard!');
-  };
+  const handleCopyLink = () => copyToClipboard(currentJoinUrl, 'Join link copied to clipboard!');
 
   return (
     <Modal
