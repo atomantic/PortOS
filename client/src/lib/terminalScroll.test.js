@@ -36,7 +36,7 @@ const touchEvent = (type, touches) => {
   return ev;
 };
 
-afterEach(() => { document.body.innerHTML = ''; });
+afterEach(() => { vi.useRealTimers(); document.body.innerHTML = ''; });
 
 describe('measureTerminalGeometry', () => {
   it('derives the row height from the rendered screen, not the outer container', () => {
@@ -370,6 +370,51 @@ describe('attachTerminalTouchScroll', () => {
     term.element.dispatchEvent(touchEvent('touchmove', [315]));
     expect(term.scrollLines).not.toHaveBeenCalled();
     detach();
+  });
+
+  it('coasts a shell flick and stops at the scrollback boundary', () => {
+    vi.useFakeTimers();
+    const term = makeTerminal({ alt: false });
+    term.buffer.active.viewportY = 20;
+    term.scrollLines.mockImplementation(lines => {
+      term.buffer.active.viewportY = Math.max(0, term.buffer.active.viewportY + lines);
+    });
+    const detach = attachTerminalTouchScroll(term);
+    term.element.dispatchEvent(touchEvent('touchstart', [300]));
+    vi.advanceTimersByTime(20);
+    term.element.dispatchEvent(touchEvent('touchmove', [340]));
+    expect(term.buffer.active.viewportY).toBe(18);
+    term.element.dispatchEvent(touchEvent('touchend', []));
+    vi.advanceTimersByTime(48);
+    expect(term.buffer.active.viewportY).toBeLessThan(18);
+    vi.advanceTimersByTime(2000);
+    const settled = term.scrollLines.mock.calls.length;
+    vi.advanceTimersByTime(2000);
+    expect(term.scrollLines).toHaveBeenCalledTimes(settled);
+    detach();
+    vi.useRealTimers();
+  });
+
+  it.each(['touchstart', 'touchcancel', 'wheel', 'detach', 'buffer', 'session reset'])('cancels a shell flick on %s', action => {
+    vi.useFakeTimers();
+    const term = makeTerminal({ alt: false });
+    term.buffer.active.viewportY = 100;
+    term.scrollLines.mockImplementation(lines => { term.buffer.active.viewportY += lines; });
+    const detach = attachTerminalTouchScroll(term);
+    term.element.dispatchEvent(touchEvent('touchstart', [300]));
+    vi.advanceTimersByTime(20);
+    term.element.dispatchEvent(touchEvent('touchmove', [340]));
+    term.element.dispatchEvent(touchEvent('touchend', []));
+    if (action === 'session reset') resetTerminalWheelScroll(term);
+    else if (action === 'detach') detach();
+    else if (action === 'buffer') term.buffer.active = { type: 'alternate' };
+    else if (action === 'wheel') term.element.dispatchEvent(new WheelEvent('wheel'));
+    else term.element.dispatchEvent(touchEvent(action, action === 'touchstart' ? [340] : []));
+    vi.advanceTimersByTime(1000);
+    expect(term.scrollLines).toHaveBeenCalledTimes(1);
+    expect(term.input).not.toHaveBeenCalled();
+    detach();
+    vi.useRealTimers();
   });
 
   it('detaches every listener', () => {
