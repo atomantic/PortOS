@@ -7,8 +7,12 @@ import { getCurrentVersion, recordUpdateResult } from './updateChecker.js';
 const UPDATE_SH = join(PATHS.root, 'update.sh');
 const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
 
+// Workspaces update.sh / update.ps1 know how to clean-reinstall — the env
+// passthrough is allowlisted to these so nothing arbitrary reaches the scripts.
+const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
+
 /**
- * Execute the PortOS update script (git pull to latest).
+ * Launch the PortOS update script (git pull to latest).
  *
  * The script is launched via spawnDetached so it leaves this process's tree and
  * SURVIVES pm2's TreeKill. A plain `spawn(..., { detached: true })` does NOT
@@ -36,15 +40,11 @@ const UPDATE_PS1 = join(PATHS.root, 'update.ps1');
  * @param {function} emit - Callback (step, status, message) for progress
  * @param {object} [options]
  * @param {string[]} [options.forceCleanWorkspaces] - workspaces to reinstall from scratch
- * @param {function} [options.onLaunched] - called once the script is spawned, before
- *   the returned promise starts tracking its lifetime
- * @returns {Promise<{success: boolean, version?: string, failedStep?: string, errorMessage?: string}>}
+ * @returns {Promise<{started: false, result: object} | {started: true, completion: Promise<object>}>}
+ *   Refusal returns its recorded result; spawn failures reject. A successful
+ *   launch returns separately from completion, which may outlive this server.
  */
-// Workspaces update.sh / update.ps1 know how to clean-reinstall — the env
-// passthrough is allowlisted to these so nothing arbitrary reaches the scripts.
-const CLEANABLE_WORKSPACES = new Set(['.', 'client', 'server', 'autofixer']);
-
-export async function executeUpdate(tag, emit, { forceCleanWorkspaces, onLaunched } = {}) {
+export async function launchUpdate(tag, emit, { forceCleanWorkspaces } = {}) {
   const targetVersion = tag.replace(/^v/, '');
   const isWindows = process.platform === 'win32';
   const cmd = isWindows ? 'powershell' : 'bash';
@@ -93,7 +93,7 @@ export async function executeUpdate(tag, emit, { forceCleanWorkspaces, onLaunche
       log: errorMessage
     }).catch(e => console.error(`❌ Failed to record update result: ${e.message}`));
     emit('starting', 'error', errorMessage);
-    return { success: false, failedStep: 'starting', errorMessage };
+    return { started: false, result: { success: false, failedStep: 'starting', errorMessage } };
   }
 
   const child = await spawnDetached(cmd, args, {
@@ -106,14 +106,7 @@ export async function executeUpdate(tag, emit, { forceCleanWorkspaces, onLaunche
     pollMs: 1000
   });
 
-  // The script is running from here on. Everything ABOVE can still refuse (a
-  // prior update script is still alive) or throw (spawn error); nothing below
-  // can — the returned promise then tracks the script's whole lifetime. A
-  // caller that must tell "the launch failed" from "the update failed" waits on
-  // this signal rather than on the promise. See `portosSelfUpdate`'s launch gate.
-  onLaunched?.();
-
-  return new Promise((resolve) => {
+  const completion = new Promise((resolve) => {
     let lastStep = 'starting';
     // Whether the script ever reported a step. A run that exits 0 without one
     // never executed the script — the scripts emit `git-pull:running` before
@@ -237,4 +230,17 @@ export async function executeUpdate(tag, emit, { forceCleanWorkspaces, onLaunche
     // Nothing to unref: spawnDetached's handle is a plain EventEmitter tailing
     // the control dir, and its launcher already unref'd the process it spawned.
   });
+  return { started: true, completion };
+}
+
+/**
+ * Compatibility adapter for callers awaiting the complete update result.
+ * onLaunched fires once after a successful spawn, before awaiting completion;
+ * it never fires for a refusal or a rejected spawn.
+ */
+export async function executeUpdate(tag, emit, { onLaunched, ...options } = {}) {
+  const launch = await launchUpdate(tag, emit, options);
+  if (!launch.started) return launch.result;
+  onLaunched?.();
+  return launch.completion;
 }

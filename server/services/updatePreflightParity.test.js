@@ -16,7 +16,7 @@ vi.mock('../services/updateChecker.js', () => ({
   setUpdateInProgress: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('../services/updateExecutor.js', () => ({
-  executeUpdate: vi.fn().mockResolvedValue({ success: true, version: '1.26.0' }),
+  launchUpdate: vi.fn().mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) }),
 }));
 const { mockSpawningTasks } = vi.hoisted(() => ({ mockSpawningTasks: new Set() }));
 vi.mock('../services/agentState.js', () => ({
@@ -49,7 +49,7 @@ vi.mock('../services/pm2Standardizer.js', () => ({}));
 vi.mock('../services/streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 
 import * as updateChecker from '../services/updateChecker.js';
-import { executeUpdate } from '../services/updateExecutor.js';
+import { launchUpdate } from '../services/updateExecutor.js';
 import { getActiveAgentIds } from '../services/agentState.js';
 import { readPersistentMindStateForSafetyCheck } from '../services/cosState.js';
 import { updateApp as appUpdaterUpdateApp } from '../services/appUpdater.js';
@@ -100,7 +100,7 @@ describe('PortOS update preflight parity — route vs. socket', () => {
     mockSpawningTasks.clear();
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
     updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
-    executeUpdate.mockResolvedValue({ success: true, version: '1.26.0' });
+    launchUpdate.mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) });
     getActiveAgentIds.mockReturnValue([]);
     mockCosState.persistentMind = { queuedMessages: [], activeTurn: null };
     readPersistentMindStateForSafetyCheck.mockImplementation(async () => ({
