@@ -417,6 +417,13 @@ export const catalogExtractRequestSchema = z.object({
   providerOverride: z.string().trim().min(1).max(64).optional(),
 }).strict();
 
+// Babble is deliberately bounded to one provider call; never silently truncate it.
+export const catalogPruneRequestSchema = z.object({
+  providerId: z.string().trim().min(1).max(120),
+  model: z.string().trim().min(1).max(200),
+  effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
+}).strict();
+
 // /embeddings/backfill — re-embed up to `limit` rows. By default only fills
 // rows where embedding IS NULL; pass `includeStale: true` to also re-embed
 // rows whose stored `embedding_model` differs from the current settings

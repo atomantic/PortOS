@@ -1,0 +1,27 @@
+import { it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import CatalogIngest from './CatalogIngest';
+import { createCatalogScrap, pruneCatalogScrap, commitCatalogScrapDraft } from '../services/apiCatalog';
+vi.mock('../services/socket', () => ({ default: { on: vi.fn(), off: vi.fn() } }));
+vi.mock('../hooks/useProviderModels', () => ({ default: () => ({ providers: [], selectedProviderId: 'example-provider', selectedModel: 'example-model', availableModels: [], loading: false }) }));
+vi.mock('../components/ProviderModelSelector', () => ({ default: ({ onEffortChange }) => <button type="button" onClick={() => onEffortChange('high')}>High effort</button> }));
+vi.mock('../services/apiCatalog', () => ({ createCatalogScrap: vi.fn(), pruneCatalogScrap: vi.fn(), commitCatalogScrapDraft: vi.fn() }));
+it('prunes only on request, keeps the brainstorm, and saves edited selected suggestions', async () => {
+  createCatalogScrap.mockResolvedValue({ scrap: { id: 'example-scrap' } });
+  pruneCatalogScrap.mockResolvedValue({ scrap: { id: 'example-scrap' }, draft: { ideas: [{ name: 'Moon story', summary: 'A missing moon.' }], scenes: [{ name: 'Argument', summary: 'Two travelers argue.' }] } });
+  commitCatalogScrapDraft.mockResolvedValue({ ingredients: [] });
+  render(<MemoryRouter initialEntries={['/catalog/ingest?mode=babble']}><CatalogIngest /></MemoryRouter>);
+  expect(pruneCatalogScrap).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText(/Babble freely/), { target: { value: 'A missing moon and arguing travelers.' } });
+  fireEvent.click(screen.getByText('High effort'));
+  fireEvent.click(screen.getByRole('button', { name: 'Prune into suggestions' }));
+  await screen.findByDisplayValue('Moon story');
+  expect(createCatalogScrap).toHaveBeenCalledWith(expect.objectContaining({ rawText: 'A missing moon and arguing travelers.' }), expect.anything());
+  expect(pruneCatalogScrap).toHaveBeenCalledWith('example-scrap', { providerId: 'example-provider', model: 'example-model', effort: 'high' }, expect.anything());
+  expect(commitCatalogScrapDraft).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByDisplayValue('Moon story'), { target: { value: 'The lost moon' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Include Argument' }));
+  fireEvent.click(screen.getByRole('button', { name: /Commit/ }));
+  await waitFor(() => expect(commitCatalogScrapDraft).toHaveBeenCalledWith('example-scrap', [expect.objectContaining({ name: 'The lost moon', type: 'idea' })], expect.anything()));
+});

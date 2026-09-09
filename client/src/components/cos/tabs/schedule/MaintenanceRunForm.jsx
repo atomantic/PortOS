@@ -1,5 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
+import socket from '../../../../services/socket';
+import MaintenanceRunStatus from './MaintenanceRunStatus';
 import ProviderModelSelector from '../../../ProviderModelSelector';
 import * as api from '../../../../services/api';
 import { useAutoRefetch } from '../../../../hooks/useAutoRefetch';
@@ -10,15 +12,6 @@ import { familyForProvider } from '../../../../../../server/lib/providerFamilies
 
 const RUNS_POLL_MS = 15_000;
 const FINISHED_RUNS_SHOWN = 3;
-
-/** Step progress as the user reads it: audits and drains done, out of the ladder. */
-const progressOf = run => ({ done: Object.keys(run.completed || {}).length, total: run.steps?.length || 0 });
-
-const currentStepOf = run => {
-  if (run.active?.taskType) return run.active.taskType;
-  const next = (run.steps || []).find(step => !run.completed?.[step.id]);
-  return next?.taskRef?.taskType || null;
-};
 
 export default function MaintenanceRunForm({ schedule, apps = [], providers = [], providersLoaded, improvementDisabled, daemonRunning, onRefresh }) {
   const [appId, setAppId] = useState('');
@@ -32,6 +25,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
   // `null` = not read yet, `[]` = read and empty — the first read must happen
   // even when there is nothing to show.
   const [runs, setRuns] = useState(null);
+  const revision = useRef(0);
   const availableProviders = providers.filter(provider => provider.enabled && isProcessProvider(provider) && familyForProvider(provider));
   const provider = availableProviders.find(entry => entry.id === providerId);
   const groups = buildQuotaBurnTaskCatalog({ schedule, apps });
@@ -40,15 +34,35 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
   const blocked = improvementDisabled || daemonRunning === false;
 
   const fetchRuns = useCallback(async () => {
+    const requestedRevision = revision.current;
     const response = await api.getMaintenanceRuns({ silent: true }).catch(() => null);
     // A failed read stays `null` so the poll keeps trying; only a real answer
     // settles the list.
-    if (response) setRuns(response.runs || []);
+    if (response && requestedRevision === revision.current) setRuns(response.runs || []);
   }, []);
   const anyRunning = (runs || []).some(run => run.status === 'running');
   // One read on mount, then polling only while a run is in flight — an idle
   // form costs nothing, and a start/resume already holds the fresh record.
   const { refetch: refreshRuns } = useAutoRefetch(fetchRuns, RUNS_POLL_MS, { pollOnly: true, enabled: runs === null || anyRunning, immediate: runs === null });
+
+  useEffect(() => {
+    const subscribe = () => { socket.emit('cos:subscribe'); fetchRuns(); };
+    const update = updated => {
+      revision.current += 1;
+      setRuns(current => {
+        const previous = (current || []).find(entry => entry.id === updated.id);
+        if (previous?.updatedAt > updated.updatedAt) return current;
+        return [updated, ...(current || []).filter(entry => entry.id !== updated.id)];
+      });
+    };
+    socket.on('cos:maintenance:updated', update);
+    socket.on('connect', subscribe);
+    socket.emit('cos:subscribe');
+    return () => {
+      socket.off('cos:maintenance:updated', update);
+      socket.off('connect', subscribe);
+    };
+  }, [fetchRuns]);
 
   const prepare = async () => {
     if (busy || !onRefresh || !prerequisites.length || prerequisites.some(item => item.unavailable)) return;
@@ -95,6 +109,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
       return null;
     });
     if (response?.run) {
+      revision.current += 1;
       setRuns(current => [response.run, ...(current || []).filter(entry => entry.id !== response.run.id)]);
       setMessage(describe(response.result));
       setConsent(false);
@@ -104,6 +119,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
 
   const applyRun = (updated, result) => {
     if (!updated) return;
+    revision.current += 1;
     setRuns(current => (current || []).map(entry => (entry.id === updated.id ? updated : entry)));
     if (result) setMessage(describe(result));
   };
@@ -180,13 +196,10 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
       {message && <p role="status">{message}</p>}
       {visibleRuns.length > 0 && <ul aria-label="Maintenance runs" className="space-y-2">
         {visibleRuns.map(entry => {
-          const { done, total } = progressOf(entry);
-          const step = currentStepOf(entry);
           return <li key={entry.id} className="border border-port-border rounded p-2 flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-medium">{getAppName(entry.appId, apps, entry.appId)}</span>
             <span className="text-xs">{entry.providerId}{entry.model ? ` · ${entry.model}` : ''}</span>
-            <span className="text-xs">{entry.status} · {done}/{total} steps{entry.status === 'running' && step ? ` · ${step}` : ''}</span>
-            {entry.reason && <span className="text-xs basis-full">{entry.reason}</span>}
+            <MaintenanceRunStatus run={entry} />
             {entry.status === 'running'
               ? <button type="button" onClick={() => stop(entry.id)} className="px-2 py-1 text-xs bg-port-border rounded">Stop</button>
               : entry.status === 'stopped' && <button type="button" onClick={() => resume(entry.id)} className="px-2 py-1 text-xs bg-port-border rounded">Resume</button>}

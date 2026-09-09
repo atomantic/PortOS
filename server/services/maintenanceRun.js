@@ -91,6 +91,7 @@ async function writeRuns(runs) {
 
 const insertRun = (run) => writeQueue(async () => {
   await writeRuns([run, ...(await listMaintenanceRuns())]);
+  cosEvents.emit('maintenance:updated', run);
   return run;
 });
 
@@ -113,6 +114,7 @@ const patchRun = (id, patch) => writeQueue(async () => {
     updatedAt: new Date().toISOString(),
   };
   await writeRuns(runs.map((entry) => (entry.id === id ? updated : entry)));
+  cosEvents.emit('maintenance:updated', updated);
   return updated;
 });
 
@@ -231,7 +233,14 @@ async function evaluate(id, { ignoreTaskId }) {
   const { user, cos } = await getAllTasks();
   const ownTask = [...(user?.tasks || []), ...(cos?.tasks || [])].find((task) => task.id !== ignoreTaskId
     && quotaBurnProvenance(task.metadata).maintenanceRunId === id && ACTIVE_TASK_STATUSES.has(task.status));
-  if (ownTask) return hold(`waiting for ${ownTask.status.replace('_', ' ')} task ${ownTask.id}`);
+  if (ownTask) {
+    const { loadState } = await import('./cosState.js');
+    const state = await loadState();
+    const agent = Object.values(state.agents || {}).find(entry => entry.taskId === ownTask.id && entry.status === 'running');
+    return hold(`waiting for ${ownTask.status.replace('_', ' ')} task ${ownTask.id}`, {
+      active: { ...run.active, taskId: ownTask.id, agentId: agent?.id || run.active?.agentId || null, status: ownTask.status },
+    });
+  }
   const queued = (await getOnDemandRequests()).find((request) => request?.burn?.maintenanceRunId === id);
   if (queued) return hold(`waiting for the CoS daemon to accept request ${queued.id} (${queued.taskType})`);
 
@@ -255,7 +264,7 @@ async function evaluate(id, { ignoreTaskId }) {
     await patchRun(id, {
       completed,
       reason: null,
-      active: { stepId: step.id, taskType, requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
+      active: { stepId: step.id, taskType, status: 'queued', requestId: result.awaiting?.requestId ?? null, at: new Date().toISOString() },
     });
     console.log(`🧹 Maintenance run ${id}: dispatched ${taskType} (${step.id})`);
     return { dispatched: true, stepId: step.id, taskType, summary: result.summary };
@@ -289,6 +298,19 @@ function onMaintenanceAgentCompleted(agent) {
     .catch((err) => console.error(`❌ Maintenance run ${id} continuation failed: ${err.message}`));
 }
 
+function onMaintenanceAgentSpawned(agent) {
+  const id = agent?.metadata?.taskQuotaBurnMaintenanceRunId;
+  if (!id) return;
+  return perRun(id, async () => {
+    const run = await getMaintenanceRun(id);
+    if (!run) return;
+    await patchRun(id, {
+      active: { ...run.active, stepId: agent.metadata.taskQuotaBurnStepId, agentId: agent.id, taskId: agent.taskId, status: 'running' },
+      reason: run.status === MAINTENANCE_RUN_STATUS.RUNNING ? null : run.reason,
+    });
+  }).catch(err => console.error(`❌ Maintenance agent status update failed: ${err.message}`));
+}
+
 async function retryRunningRuns() {
   const running = (await listMaintenanceRuns()).filter((run) => run.status === MAINTENANCE_RUN_STATUS.RUNNING);
   for (const run of running) {
@@ -302,6 +324,7 @@ export function startMaintenanceRunScheduler() {
   // Both run outside the request lifecycle: the listener never rethrows and the
   // timer's callback owns its rejections, so neither can take the process down.
   cosEvents.on('agent:completed', onMaintenanceAgentCompleted);
+  cosEvents.on('agent:spawned', onMaintenanceAgentSpawned);
   retryTimer = setInterval(() => {
     retryRunningRuns().catch((err) => console.error(`❌ Maintenance run retry sweep failed: ${err.message}`));
   }, RETRY_MS);
@@ -310,11 +333,13 @@ export function startMaintenanceRunScheduler() {
 }
 
 /** Test seams. */
+export const __onMaintenanceAgentSpawned = onMaintenanceAgentSpawned;
 export const __onMaintenanceAgentCompleted = onMaintenanceAgentCompleted;
 export const __retryMaintenanceRuns = retryRunningRuns;
 export function __resetMaintenanceRunScheduler() {
   if (retryTimer) clearInterval(retryTimer);
   retryTimer = null;
   cosEvents.off('agent:completed', onMaintenanceAgentCompleted);
+  cosEvents.off('agent:spawned', onMaintenanceAgentSpawned);
   perRun.clear();
 }
