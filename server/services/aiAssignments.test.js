@@ -235,6 +235,23 @@ describe('updateAiAssignment routing', () => {
     expect(mocks.updateSettings).not.toHaveBeenCalled();
   });
 
+  it('inventories and updates the fallback without changing primary stage pins', async () => {
+    const stage = { name: 'Security Scan', providerId: 'primary', model: 'small', largeInputFallback: { providerId: 'large-provider', model: 'large-model', effort: 'high' } };
+    const task = { taskMetadata: { pipeline: { stages: [stage] } } };
+    mocks.getScheduleStatus.mockResolvedValue({ tasks: { 'pr-reviewer': task } });
+    mocks.getTaskInterval.mockResolvedValue(task);
+    const id = 'cos.taskStageFallback.pr-reviewer.0';
+    expect((await getAiAssignments()).assignments.find(a => a.id === id)).toMatchObject({
+      ...stage.largeInputFallback, needsTools: false, effortEditable: true,
+    });
+    await updateAiAssignment(id, { providerId: 'replacement', model: 'larger-model', effort: null });
+    expect(mocks.updateTaskInterval).toHaveBeenCalledWith('pr-reviewer', { taskMetadata: { pipeline: { stages: [
+      { ...stage, largeInputFallback: { providerId: 'replacement', model: 'larger-model' } },
+    ] } } });
+    mocks.getTaskInterval.mockResolvedValue({ taskMetadata: { pipeline: { stages: [{ name: 'Security Scan' }] } } });
+    await expect(updateAiAssignment(id, { providerId: 'replacement', model: 'larger-model' })).rejects.toMatchObject({ status: 404 });
+  });
+
   it('cos.task.<existing> updates the schedule interval', async () => {
     await updateAiAssignment('cos.task.morning-brief', { providerId: 'claude', model: 'opus', effort: 'high' });
     expect(mocks.updateTaskInterval).toHaveBeenCalledWith('morning-brief', { providerId: 'claude', model: 'opus', effort: 'high' });

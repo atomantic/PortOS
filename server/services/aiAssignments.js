@@ -376,6 +376,24 @@ const addRecordEntries = async (entries) => {
           link: '/cos/config',
         }));
       }
+      const fallback = stage?.largeInputFallback;
+      if (fallback?.providerId || fallback?.model || fallback?.effort) {
+        entries.push(makeEntry({
+          id: `cos.taskStageFallback.${taskType}.${index}`,
+          area: 'Chief of Staff',
+          assignmentType: 'Scheduled tasks',
+          label: `${taskType} stage: ${stage.name || index + 1} (large-input fallback)`,
+          source: `cos task ${taskType}.taskMetadata.pipeline.stages[${index}].largeInputFallback`,
+          providerId: fallback.providerId,
+          model: fallback.model,
+          effort: fallback.effort,
+          effortEditable: true,
+          providerTypes: cliProviderTypes,
+          scope: 'record',
+          notes: 'Requires a tool-free public-review provider and a model with enough context for the complete input. Configure eligible choices in the scheduled task options.',
+          link: '/cos/config',
+        }));
+      }
     }
   }
 
@@ -597,13 +615,22 @@ export async function updateAiAssignment(id, payload = {}) {
     return getAiAssignments();
   }
 
-  if (id.startsWith('cos.taskStage.')) {
+  if (id.startsWith('cos.taskStage.') || id.startsWith('cos.taskStageFallback.')) {
     const [, , taskType, indexRaw] = id.split('.');
     const index = Number(indexRaw);
     const task = await taskScheduleService.getTaskInterval(taskType);
     const stages = [...(task.taskMetadata?.pipeline?.stages || [])];
     if (!stages[index]) throw new ServerError(`Stage not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
-    stages[index] = { ...stages[index], providerId: nextProviderId, model: nextModel, ...effortPatch };
+    if (id.startsWith('cos.taskStageFallback.')) {
+      if (!isPlainObject(stages[index].largeInputFallback)) throw new ServerError(`Fallback not found: ${id}`, { status: 404, code: 'NOT_FOUND' });
+      const fallback = { ...stages[index].largeInputFallback, providerId: nextProviderId, model: nextModel, ...effortPatch };
+      for (const key of ['providerId', 'model', 'effort']) {
+        if (fallback[key] == null) delete fallback[key];
+      }
+      stages[index] = { ...stages[index], largeInputFallback: fallback };
+    } else {
+      stages[index] = { ...stages[index], providerId: nextProviderId, model: nextModel, ...effortPatch };
+    }
     await taskScheduleService.updateTaskInterval(taskType, {
       taskMetadata: { ...(task.taskMetadata || {}), pipeline: { ...(task.taskMetadata?.pipeline || {}), stages } },
     });

@@ -229,6 +229,9 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                     size="sm"
                   />
                   <p className="text-xs text-gray-400 mt-2">Larger-model fallback for oversized linked issues. Choose a provider and a model with enough context for the complete PR and issues. Issues over 8,000 characters (up to 65,536 each) use this selection for the eligibility gate and final review. Security screening still runs on all content; flagged or incomplete input stays blocked.</p>
+                  {stage.largeInputFallback && eligibleProviders?.length === 0 && (
+                    <p className="text-xs text-port-warning mt-2">No enabled tool-free provider is available for the fallback. Oversized linked issues will block the run until one is configured.</p>
+                  )}
                   {stage.largeInputFallback && (!selection.providerId || !selection.model) && (
                     <p className="text-xs text-port-warning mt-2">Select both a provider and a model to enable fallback runs.</p>
                   )}
@@ -254,7 +257,7 @@ export default function PipelineStageConfig({ taskType, config, providers, provi
                   disabled={updating}
                 />
               )}
-              {posture && eligibleProviders?.length === 0 && (
+              {posture && !isSecurityStage && eligibleProviders?.length === 0 && (
                 <p className="text-xs text-port-warning mt-2">
                   No enabled AI provider on this install can enforce the{' '}
                   {isActionsStage ? 'sandboxed-actions' : 'tool-free'} posture, so this stage will not run.

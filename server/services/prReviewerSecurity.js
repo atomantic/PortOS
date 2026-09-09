@@ -304,7 +304,7 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
   const requiresLargeInputFallback = resolvedTarget.prs.some(pr =>
     pr.linkedIssues?.some(issue => issue.body.length > LINKED_ISSUE_STANDARD_BODY_MAX_CHARS));
   if (requiresLargeInputFallback && (!largeInputFallback?.providerId || !largeInputFallback?.model)) {
-    return failure('security-scan-linked-issue-too-large', { scanKey });
+    return failure(largeInputFallback ? 'security-scan-large-input-fallback-unconfigured' : 'security-scan-linked-issue-too-large', { scanKey });
   }
 
   const reviewedPrs = [];
@@ -380,7 +380,8 @@ export async function runPrReviewerSecurityScan({ app, target = null, largeInput
     reviewedPrs,
     reports: reviewedPrs,
     reviewInputs,
-    usedLargeInputFallback: requiresLargeInputFallback,
+    usedLargeInputFallback: reviewInputs.some(input =>
+      input.linkedIssues.some(issue => issue.body.length > LINKED_ISSUE_STANDARD_BODY_MAX_CHARS)),
   };
 }
 
