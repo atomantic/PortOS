@@ -261,6 +261,21 @@ export async function isInstanceFeatureEnabled(featureId) {
   return resolveOne(feature, settings, { [featureId]: await runDetector(featureId) }).enabled;
 }
 
+async function recordFeatureToggle(id, enabled, { group = false } = {}) {
+  const type = group ? 'instance-feature-group.toggle' : 'instance-feature.toggle';
+  const happenedAt = new Date().toISOString();
+  await recordUserAction({
+    type,
+    actor: 'user',
+    target: id,
+    summary: `Toggled instance feature${group ? ' group' : ''} ${id} ${enabled === null ? 'inherit' : enabled ? 'on' : 'off'}`,
+    payload: { id, enabled },
+    source: { service: 'instanceFeatures', fn: group ? 'updateInstanceFeatureGroup' : 'updateInstanceFeature' },
+    happenedAt,
+    dedupeKey: `${type}:${id}:${enabled}:${happenedAt}`,
+  }).catch((error) => console.error(`❌ Failed to record ${type}: ${error.message}`));
+}
+
 export async function updateInstanceFeature(featureId, enabled) {
   if (!FEATURE_BY_ID.has(featureId)) {
     throw new ServerError(`Unknown instance feature: ${featureId}`, { status: 404, code: 'NOT_FOUND' });
@@ -297,21 +312,7 @@ export async function updateInstanceFeature(featureId, enabled) {
     };
   }, { actor: 'user', skipUserAction: true });
 
-  try {
-    const happenedAt = new Date().toISOString();
-    await recordUserAction({
-      type: 'instance-feature.toggle',
-      actor: 'user',
-      target: featureId,
-      summary: `Toggled instance feature ${featureId} ${enabled ? 'on' : 'off'}`,
-      payload: { id: featureId, enabled },
-      source: { service: 'instanceFeatures', fn: 'updateInstanceFeature' },
-      happenedAt,
-      dedupeKey: `instance-feature.toggle:${featureId}:${enabled}:${happenedAt}`,
-    });
-  } catch (error) {
-    console.error(`❌ Failed to record instance-feature.toggle: ${error.message}`);
-  }
+  await recordFeatureToggle(featureId, enabled);
 
   const detected = await detectFeatureConfiguration();
   return {
@@ -335,7 +336,8 @@ export async function updateInstanceFeatureGroup(groupId, enabled) {
         [groupId]: { ...currentGroup, enabled },
       },
     };
-  });
+  }, { actor: 'user', skipUserAction: true });
+  await recordFeatureToggle(groupId, enabled, { group: true });
 
   const detected = await detectFeatureConfiguration();
   return {

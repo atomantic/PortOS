@@ -444,6 +444,11 @@ describe('instance features', () => {
 
     expect(mock.settings).toEqual({ instanceFeatureGroups: { comms: { enabled: false } } });
     expect(byId(result.groups, 'comms')).toMatchObject({ enabled: false });
+    expect(mock.updateSettingsWith).toHaveBeenCalledWith(expect.any(Function), { actor: 'user', skipUserAction: true });
+    expect(recordUserAction).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'instance-feature-group.toggle', actor: 'user', target: 'comms',
+      payload: { id: 'comms', enabled: false },
+    }));
     expect(byId(result.features, 'imessage')).toMatchObject({ enabled: false, source: 'group-off' });
     expect(await isInstanceFeatureEnabled('imessage')).toBe(false);
   });
