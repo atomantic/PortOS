@@ -267,7 +267,8 @@ vi.mock('../services/pipeline/episodeVideo.js', () => ({
 
 // Audio service mocks — avoid touching the real TTS pipeline + filesystem
 // while still exercising the route's voice-resolution + persist flow.
-vi.mock('../services/pipeline/audio.js', () => ({
+vi.mock('../services/pipeline/audio.js', async () => ({
+  ...await vi.importActual('../services/pipeline/audio.js'),
   listAllVoices: vi.fn(async () => [{ id: 'kokoro:af_heart', engine: 'kokoro', voice: 'af_heart', label: 'Heart' }]),
   synthesizeToFile: vi.fn(async ({ voiceId }) => ({
     filename: `vo-mock-${++uuidCounter}.wav`,
@@ -275,11 +276,6 @@ vi.mock('../services/pipeline/audio.js', () => ({
     engine: 'kokoro',
     voiceId: voiceId || null,
   })),
-  parseVoiceId: vi.fn((v) => {
-    if (!v) return { engine: null, voice: null };
-    const m = v.match(/^([a-z]+):(.+)$/);
-    return m ? { engine: m[1], voice: m[2] } : { engine: null, voice: v };
-  }),
   extractDialogueLines: vi.fn((issue) => {
     const scenes = issue?.stages?.storyboards?.scenes || [];
     const out = [];
@@ -314,7 +310,8 @@ vi.mock('../services/pipeline/audio.js', () => ({
 vi.mock('../services/voice/tts.js', () => ({
   synthesize: vi.fn(async () => ({ wav: Buffer.from('w'), latencyMs: 1, engine: 'kokoro' })),
   listVoices: vi.fn(async () => ({ engine: 'kokoro', voices: [] })),
-  VALID_ENGINES: new Set(['kokoro', 'piper']),
+  normalizeVoiceEngine: (engine) => engine === 'qwen3' ? 'qwen3-tts' : engine,
+  VALID_ENGINES: new Set(['kokoro', 'piper', 'qwen3-tts']),
 }));
 vi.mock('../services/voice/profiles.js', () => ({
   clearVoiceProfileRender: vi.fn(),
@@ -2690,6 +2687,25 @@ describe('pipeline routes', () => {
       });
       return iss.body;
     }
+
+    it('POST /tts/preview forwards a canonical Qwen3 preset to synthesis', async () => {
+      const voiceTts = await import('../services/voice/tts.js');
+      vi.mocked(voiceTts.synthesize).mockResolvedValueOnce({
+        wav: Buffer.from('qwen3-wav'), latencyMs: 12, engine: 'qwen3-tts',
+      });
+      const app = makeApp();
+
+      const r = await request(app)
+        .post('/api/pipeline/tts/preview')
+        .send({ voiceId: 'qwen3-tts:warm-narrator' });
+
+      expect(r.status).toBe(200);
+      expect(r.headers['x-tts-engine']).toBe('qwen3-tts');
+      expect(voiceTts.synthesize).toHaveBeenCalledWith(expect.any(String), {
+        engine: 'qwen3-tts',
+        voice: 'warm-narrator',
+      });
+    });
 
     it('POST /audio/extract-lines populates lines[] from storyboards dialogue', async () => {
       const app = makeApp();

@@ -6,6 +6,7 @@ vi.mock('./config.js', () => ({
 }));
 vi.mock('./tts-kokoro.js', () => ({ synthesizeKokoro: vi.fn(), listKokoroVoices: vi.fn() }));
 vi.mock('./tts-piper.js', () => ({ synthesizePiper: vi.fn(), listPiperVoices: vi.fn() }));
+vi.mock('./tts-qwen3.js', () => ({ synthesizeQwen3: vi.fn(), listQwen3Voices: vi.fn() }));
 vi.mock('./piper-voices.js', () => ({ findPiperVoice: vi.fn() }));
 vi.mock('./kokoro-voices.js', () => ({ isKokoroVoice: vi.fn(() => true) }));
 vi.mock('./profiles.js', () => ({ getProfileForSynthesis: vi.fn() }));
@@ -13,8 +14,9 @@ vi.mock('./bootstrap.js', () => ({ which: vi.fn() }));
 
 import { getVoiceConfig } from './config.js';
 import { synthesizeKokoro } from './tts-kokoro.js';
+import { synthesizeQwen3 } from './tts-qwen3.js';
 import { getProfileForSynthesis } from './profiles.js';
-import { synthesize } from './tts.js';
+import { normalizeVoiceEngine, synthesize } from './tts.js';
 
 const CONFIG = {
   tts: {
@@ -25,11 +27,38 @@ const CONFIG = {
   },
 };
 
+describe('voice engine normalization', () => {
+  it('keeps canonical engines and upgrades the legacy Qwen3 alias', () => {
+    expect(normalizeVoiceEngine('kokoro')).toBe('kokoro');
+    expect(normalizeVoiceEngine('piper')).toBe('piper');
+    expect(normalizeVoiceEngine('qwen3-tts')).toBe('qwen3-tts');
+    expect(normalizeVoiceEngine('qwen3')).toBe('qwen3-tts');
+  });
+});
+
 describe('profile-aware TTS', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getVoiceConfig.mockResolvedValue(CONFIG);
     synthesizeKokoro.mockResolvedValue({ wav: Buffer.from('wav'), latencyMs: 12 });
+  });
+
+  it('dispatches the legacy Qwen3 engine alias and preset key to the Qwen3 adapter', async () => {
+    getProfileForSynthesis.mockResolvedValue(null);
+    synthesizeQwen3.mockResolvedValue({
+      wav: Buffer.from('qwen3-wav'), latencyMs: 8, modelRevision: 'qwen3-model',
+    });
+
+    const result = await synthesize('A stable character line.', {
+      engine: 'qwen3', voice: 'warm-narrator',
+    });
+
+    expect(synthesizeQwen3).toHaveBeenCalledWith(
+      'A stable character line.',
+      expect.objectContaining({ voice: 'warm-narrator', rate: 1.7 }),
+      undefined,
+    );
+    expect(result.engine).toBe('qwen3-tts');
   });
 
   it('uses the approved profile voice and promoted delivery rate instead of later project defaults', async () => {
