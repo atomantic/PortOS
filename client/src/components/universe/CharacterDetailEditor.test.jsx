@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, waitFor } from '@testing-library/react';
 import CharacterDetailEditor from './CharacterDetailEditor';
+import { MemoryRouter, useLocation } from 'react-router';
+
+const render = (ui, options) => rtlRender(ui, { wrapper: MemoryRouter, ...options });
 
 // Mock VoicePicker — it pulls in the voice API/socket layer the relationship
 // tests don't care about.
@@ -29,10 +32,9 @@ const ARIA = { id: 'chr-aria', name: 'Aria' };
 const BRAM = { id: 'chr-bram', name: 'Bram' };
 const CASS = { id: 'chr-cass', name: 'Cass' };
 
-// CollapsibleSection starts closed — open the Relationships one by clicking its
-// header button.
+// Story groups relationships, secrets, framework, and psychology on one sheet page.
 const openRelationships = () => {
-  fireEvent.click(screen.getByRole('button', { name: /Relationships/i }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
 };
 
 describe('CharacterDetailEditor — Relationships (#1287)', () => {
@@ -127,19 +129,19 @@ describe('CharacterDetailEditor — Relationships (#1287)', () => {
       ],
     };
     render(<CharacterDetailEditor entry={entry} characters={[ARIA, BRAM, CASS]} onPatch={() => {}} />);
-    // Summary renders inside the collapsed header.
+    openRelationships();
     expect(screen.getByText(/2 links · 1 opposing/i)).toBeInTheDocument();
   });
 });
 
 describe('CharacterDetailEditor — character framework (#2175)', () => {
-  const openArc = () => fireEvent.click(screen.getByRole('button', { name: /Arc type & sliders/i }));
+  const openArc = () => expect(screen.getByRole('heading', { name: /Arc type & sliders/i })).toBeInTheDocument();
 
   it('renders the arc-type select seeded from the entry and patches on change', () => {
     const onPatch = vi.fn();
     render(<CharacterDetailEditor entry={{ ...ARIA, arcType: 'positive' }} characters={[ARIA]} onPatch={onPatch} />);
     openArc();
-    const select = screen.getByLabelText(/Arc type/i);
+    const select = screen.getByRole('combobox', { name: /^Arc type$/i });
     expect(select).toHaveValue('positive');
     fireEvent.change(select, { target: { value: 'negative' } });
     expect(onPatch).toHaveBeenCalledWith({ arcType: 'negative' });
@@ -167,7 +169,7 @@ describe('CharacterDetailEditor — character framework (#2175)', () => {
     const onPatch = vi.fn();
     const entry = { ...ARIA, secrets: ['forged the charter'] };
     render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={onPatch} />);
-    fireEvent.click(screen.getByRole('button', { name: /Secrets/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
     // Existing secret is rendered in its row input.
     const input = screen.getByDisplayValue('forged the charter');
     fireEvent.change(input, { target: { value: 'forged the charter and the seal' } });
@@ -178,7 +180,7 @@ describe('CharacterDetailEditor — character framework (#2175)', () => {
 
   it('exposes the Ghost→Wound→Lie→Want→Need prose fields', () => {
     render(<CharacterDetailEditor entry={{ ...ARIA, lie: 'I only matter if I win' }} characters={[ARIA]} onPatch={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: /Character framework/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
     expect(screen.getByDisplayValue('I only matter if I win')).toBeInTheDocument();
   });
 });
@@ -196,7 +198,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     render(<CharacterDetailEditor
       entry={{ ...ARIA, voiceId: 'kokoro:af_heart' }} universeId="uni-1" characters={[ARIA]} onPatch={() => {}}
     />);
-    fireEvent.click(screen.getByRole('button', { name: /Local voice profile/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
     expect(await screen.findByText(/Promote the selected Kokoro or Piper preset/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Promote selected preset/i }));
     await waitFor(() => expect(promoteVoicePreset).toHaveBeenCalledWith({
@@ -217,7 +219,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     render(<CharacterDetailEditor
       entry={{ ...ARIA, voiceId: 'kokoro:af_heart' }} universeId="uni-1" characters={[ARIA]} onPatch={() => {}}
     />);
-    fireEvent.click(screen.getByRole('button', { name: /Local voice profile/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
     expect(await screen.findByLabelText(/Voice benchmark identity/i)).toHaveAttribute(
       'src', '/data/voice-profiles/voice-profile-1/benchmarks/v1/01-identity.wav',
     );
@@ -236,7 +238,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     render(<CharacterDetailEditor
       entry={ARIA} universeId="uni-1" characters={[ARIA]} onPatch={() => {}}
     />);
-    fireEvent.click(screen.getByRole('button', { name: /Local voice profile/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
 
     // Switch to Design tab
     fireEvent.click(screen.getByRole('button', { name: /Design/i }));
@@ -262,7 +264,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     render(<CharacterDetailEditor
       entry={ARIA} universeId="uni-1" characters={[ARIA]} onPatch={() => {}}
     />);
-    fireEvent.click(screen.getByRole('button', { name: /Local voice profile/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
     expect(await screen.findByText(/Machine-local voice design/i)).toBeInTheDocument();
 
     // Switch to Clone tab
@@ -296,7 +298,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
     render(<CharacterDetailEditor
       entry={ARIA} universeId="uni-1" characters={[ARIA]} onPatch={() => {}}
     />);
-    fireEvent.click(screen.getByRole('button', { name: /Local voice profile/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
     fireEvent.click(await screen.findByRole('button', { name: /Qualify interactive route/i }));
 
     await waitFor(() => expect(benchmarkProfileInteractive).toHaveBeenCalledWith(
@@ -307,7 +309,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
   it('marks a voice-canon revision as approved', () => {
     const onPatch = vi.fn();
     render(<CharacterDetailEditor entry={ARIA} characters={[ARIA]} onPatch={onPatch} />);
-    fireEvent.click(screen.getByRole('button', { name: /Voice canon/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Candidate revision/i }));
     expect(onPatch).toHaveBeenCalledWith({
       voiceCanon: { version: 1, approved: true },
@@ -317,7 +319,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
   it('adds an identity reference as a candidate and surfaces missing required roles', () => {
     const onPatch = vi.fn();
     render(<CharacterDetailEditor entry={{ ...ARIA, imageRefs: ['neutral.png'] }} characters={[ARIA]} onPatch={onPatch} />);
-    fireEvent.click(screen.getByRole('button', { name: /Identity pack/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
     expect(screen.getByText(/Missing: neutral, profile, full-body/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Add reference/i }));
     expect(onPatch).toHaveBeenCalledWith({
@@ -331,7 +333,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
       ...ARIA,
       voiceCanon: { version: 2, description: 'measured', approved: true },
     }} characters={[ARIA]} onPatch={onPatch} />);
-    fireEvent.click(screen.getByRole('button', { name: /Voice canon/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
     const description = screen.getByRole('textbox', { name: /voice canon description/i });
     fireEvent.change(description, { target: { value: 'more urgent' } });
     fireEvent.blur(description);
@@ -347,7 +349,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
       imageRefs: ['neutral.png', 'replacement.png'],
       identityPack: { assets: [{ imageRef: 'neutral.png', role: 'neutral', approved: true }] },
     }} characters={[ARIA]} onPatch={onPatch} />);
-    fireEvent.click(screen.getByRole('button', { name: /Identity pack/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
     fireEvent.change(screen.getByRole('combobox', { name: /identity asset 1 image/i }), {
       target: { value: 'replacement.png' },
     });
@@ -359,7 +361,7 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
   it('adds only a complete pronunciation row', () => {
     const onPatch = vi.fn();
     render(<CharacterDetailEditor entry={ARIA} characters={[ARIA]} onPatch={onPatch} />);
-    fireEvent.click(screen.getByRole('button', { name: /Voice canon/i }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Voice' }));
 
     const addButton = screen.getByRole('button', { name: /Add pronunciation/i });
     fireEvent.change(screen.getByRole('textbox', { name: /new pronunciation term/i }), {
@@ -383,12 +385,12 @@ describe('CharacterDetailEditor — production package (#5378)', () => {
 });
 
 describe('CharacterDetailEditor — Psychology (#6414)', () => {
-  const openPsychology = () => fireEvent.click(screen.getByRole('button', { name: /Psychology \(theory of control/i }));
+  const openPsychology = () => fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
 
   it('reads as unassessed on a legacy character and offers no clear action', () => {
     render(<CharacterDetailEditor entry={ARIA} characters={[ARIA]} onPatch={() => {}} />);
-    expect(screen.getByRole('button', { name: /Psychology \(theory of control/i })).toHaveTextContent(/unassessed/i);
     openPsychology();
+    expect(screen.getByText('unassessed')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Clear psychology profile/i })).toBeDisabled();
   });
 
@@ -430,7 +432,7 @@ describe('CharacterDetailEditor — Psychology (#6414)', () => {
     const entry = { ...ARIA, lie: 'I only matter if I win.' };
     render(<CharacterDetailEditor entry={entry} characters={[ARIA]} onPatch={() => {}} />);
     openPsychology();
-    expect(screen.getByText(/I only matter if I win\./)).toBeInTheDocument();
+    expect(screen.getByText(/I only matter if I win\./, { selector: 'span' })).toBeInTheDocument();
     expect(screen.getByText(/suggested starting point only/i)).toBeInTheDocument();
     expect(screen.getByText(/not the same sentence/i)).toBeInTheDocument();
     // The theory of control is NOT pre-filled from the Lie.
@@ -468,5 +470,40 @@ describe('CharacterDetailEditor — Psychology (#6414)', () => {
     openPsychology();
     fireEvent.click(screen.getByRole('button', { name: /Clear psychology profile/i }));
     expect(onPatch).toHaveBeenCalledWith({ psychology: null });
+  });
+});
+
+
+describe('CharacterDetailEditor — sheet navigation', () => {
+  it('keeps identity visible, retains pending rows across pages, and writes the page to the URL', () => {
+    function LocationProbe() {
+      return <output aria-label="Location">{useLocation().search}</output>;
+    }
+    const onPatch = vi.fn();
+    render(<><CharacterDetailEditor entry={ARIA} onPatch={onPatch} /><LocationProbe /></>);
+    expect(screen.getByRole('textbox', { name: 'Pronouns' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Personality & motivations' })).toBeVisible();
+    expect(listVoiceEngines).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add prop' }));
+    const purpose = screen.getByRole('textbox', { name: 'row 1 purpose' });
+    fireEvent.change(purpose, { target: { value: 'navigation' } });
+    fireEvent.blur(purpose);
+    fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
+    expect(screen.getByLabelText('Location')).toHaveTextContent('castSheet-chr-aria=story');
+    expect(screen.getByRole('textbox', { name: 'Pronouns' })).toBeVisible();
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance' }));
+    expect(screen.getByRole('textbox', { name: 'row 1 purpose' })).toHaveValue('navigation');
+    expect(onPatch).not.toHaveBeenCalled();
+  });
+
+  it('opens a linked page with locked fields and disables generation', () => {
+    render(<CharacterDetailEditor entry={ARIA} disabled onPatch={vi.fn()} onExpand={vi.fn()} />, {
+      wrapper: ({ children }) => <MemoryRouter initialEntries={['/?castSheet-chr-aria=appearance']}>{children}</MemoryRouter>,
+    });
+    expect(screen.getByRole('tab', { name: 'Appearance' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('textbox', { name: 'Silhouette notes' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add prop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'AI: expand character' })).toBeDisabled();
   });
 });

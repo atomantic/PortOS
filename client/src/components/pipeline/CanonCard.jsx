@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, ImagePlus, ImageUp, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, X, Star, Square, BookOpen, ScanText } from 'lucide-react';
+import { Loader2, ImagePlus, ImageUp, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, X, Star, Square, ScanText } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import useRowDraft from '../../hooks/useRowDraft';
 import useFieldDraft from '../../hooks/useFieldDraft';
@@ -205,23 +205,6 @@ function RevealTimingField({ entry, editable, onPatch }) {
           className="w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-gray-200 whitespace-pre-wrap"
         />
       </div>
-    </CollapsibleSection>
-  );
-}
-
-// Collapsible wrapper for the universe-only character details panel
-// (CharacterDetailEditor + CharacterReferenceSheetPanel). Single toggle so the
-// card stays terse by default — the user opens it only when filling in
-// novelist / graphic-novelist fields or generating a reference sheet.
-function CharacterDetailsToggle({ children }) {
-  return (
-    <CollapsibleSection
-      className="mt-2"
-      icon={BookOpen}
-      label="Character details"
-      summary="+ reference sheet"
-    >
-      {children}
     </CollapsibleSection>
   );
 }
@@ -466,6 +449,31 @@ export default function CanonCard({
     </div>
   );
 
+  // Three-state thumbnail slot (pending / empty / completed). Empty state
+  // shows a placeholder box with a Render button that fires the same handler
+  // as the actions-column Image button — surfaces a one-click affordance for
+  // canon entries that haven't been visualized yet. Pending shows the live
+  // diffusion spinner from MediaJobThumb (also mirrored in the footer's
+  // ref-grid for live-progress detail).
+  // Lock no longer gates rendering — see the `blockedByLock` comment above.
+  // Render still requires a description (the prompt source) + an actual
+  // handler from the parent. Pending state is checked inside EntryThumbSlot.
+
+  const showCharacterSheet = kind.key === 'characters' && !!characterExtensions && !!onPatchEntry;
+  const canRender = !!onRender && !!description.trim();
+  const thumbnail = (
+    <EntryThumbSlot
+      size={showCharacterSheet ? 'sheet' : 'sm'}
+      inFlightJobId={inFlightJobId || null}
+      imageRefs={refs}
+      primaryImageRef={entry.primaryImageRef || null}
+      alt={`${entry.name} reference`}
+      onPreview={onPreview ? (visibleFilename) => onPreview(visibleFilename || thumbnailRef) : null}
+      onRender={onRender}
+      canRender={canRender}
+    />
+  );
+
   const body = (
     <>
       {tags.length > 0 ? (
@@ -514,7 +522,7 @@ export default function CanonCard({
         editable={!!onPatchEntry && !locked}
         onPatch={(patch) => onPatchEntry?.(entry.id, patch)}
       />
-      {kind.key === 'characters' ? (
+      {kind.key === 'characters' && !showCharacterSheet ? (
         <WardrobeSection
           wardrobes={Array.isArray(entry.wardrobes) ? entry.wardrobes : []}
           editable={!!onPatchEntry && !locked}
@@ -524,16 +532,22 @@ export default function CanonCard({
       {/* Universe-only: extended character detail editor + AI expand action.
           Hidden when the caller didn't pass `characterExtensions` (pipeline
           series view). Locked characters render read-only inputs. */}
-      {kind.key === 'characters' && characterExtensions && onPatchEntry ? (
-        <CharacterDetailsToggle>
-          <CharacterDetailEditor
-            entry={entry}
-            universeId={characterExtensions.universeId}
-            characters={characterExtensions.castList || []}
-            onPatch={(patch) => onPatchEntry(entry.id, patch)}
-            onExpand={characterExtensions.onExpandCharacter ? () => characterExtensions.onExpandCharacter(entry.id) : null}
-            expanding={!!characterExtensions.expanding}
-            disabled={locked}
+      {showCharacterSheet ? (
+        <CharacterDetailEditor
+          key={entry.id}
+          portrait={thumbnail}
+          entry={entry}
+          universeId={characterExtensions.universeId}
+          characters={characterExtensions.castList || []}
+          onPatch={(patch) => onPatchEntry(entry.id, patch)}
+          onExpand={characterExtensions.onExpandCharacter ? () => characterExtensions.onExpandCharacter(entry.id) : null}
+          expanding={!!characterExtensions.expanding}
+          disabled={locked}
+        >
+          <WardrobeSection
+            wardrobes={Array.isArray(entry.wardrobes) ? entry.wardrobes : []}
+            editable={!locked}
+            onChange={(next) => onPatchEntry(entry.id, { wardrobes: next })}
           />
           <CharacterReferenceSheetPanel
             universeId={characterExtensions.universeId}
@@ -552,7 +566,7 @@ export default function CanonCard({
               universeId={characterExtensions.universeId}
             />
           </div>
-        </CharacterDetailsToggle>
+        </CharacterDetailEditor>
       ) : null}
       {/* Universe-only: object↔character attachment editor (#1288). Hidden when
           the caller didn't pass `objectExtensions` (pipeline series view).
@@ -750,32 +764,11 @@ export default function CanonCard({
     </>
   );
 
-  // Three-state thumbnail slot (pending / empty / completed). Empty state
-  // shows a placeholder box with a Render button that fires the same handler
-  // as the actions-column Image button — surfaces a one-click affordance for
-  // canon entries that haven't been visualized yet. Pending shows the live
-  // diffusion spinner from MediaJobThumb (also mirrored in the footer's
-  // ref-grid for live-progress detail).
-  // Lock no longer gates rendering — see the `blockedByLock` comment above.
-  // Render still requires a description (the prompt source) + an actual
-  // handler from the parent. Pending state is checked inside EntryThumbSlot.
-  const canRender = !!onRender && !!description.trim();
-  const thumbnail = (
-    <EntryThumbSlot
-      inFlightJobId={inFlightJobId || null}
-      imageRefs={refs}
-      primaryImageRef={entry.primaryImageRef || null}
-      alt={`${entry.name} reference`}
-      onPreview={onPreview ? (visibleFilename) => onPreview(visibleFilename || thumbnailRef) : null}
-      onRender={onRender}
-      canRender={canRender}
-    />
-  );
 
   return (
     <EntryCard
       locked={locked}
-      thumbnail={thumbnail}
+      thumbnail={showCharacterSheet ? null : thumbnail}
       title={title}
       body={body}
       actions={actions}
