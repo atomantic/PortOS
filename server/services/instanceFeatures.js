@@ -203,7 +203,7 @@ const attachSetupStatus = async (features, settings) => {
     upstream,
   };
   return features.map((feature) => (
-    feature.id === 'eidoverse' ? { ...feature, setup: { ...eidoverse, sourceOwners } } : feature
+    feature.id === 'eidoverse' ? { ...feature, setup: { ...eidoverse, worldsBranch: settings?.instanceFeatures?.eidoverse?.worldsBranch ?? '', sourceOwners } } : feature
   ));
 };
 
@@ -222,7 +222,7 @@ export async function getInstanceFeatures() {
   return { features, groups };
 }
 
-export async function updateEidoverseWorldsRepo(worldsRepoUrl) {
+export async function updateEidoverseWorldsRepo(worldsRepoUrl, worldsBranch) {
   const normalizedRepoUrl = normalizeEidoverseWorldsRepo(worldsRepoUrl);
   await updateSettingsWith((current) => {
     const instanceFeatures = isPlainObject(current.instanceFeatures) ? current.instanceFeatures : {};
@@ -231,7 +231,7 @@ export async function updateEidoverseWorldsRepo(worldsRepoUrl) {
       ...current,
       instanceFeatures: {
         ...instanceFeatures,
-        eidoverse: { ...eidoverse, worldsRepoUrl: normalizedRepoUrl },
+        eidoverse: { ...eidoverse, worldsRepoUrl: normalizedRepoUrl, ...(worldsBranch !== undefined ? { worldsBranch } : {}) },
       },
     };
   });

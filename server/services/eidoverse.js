@@ -193,13 +193,13 @@ async function installDependencies(directory, bun) {
 
 let installInFlight = null;
 
-async function performInstall(worldsRepoUrl) {
+async function performInstall(worldsRepoUrl, worldsBranch) {
   const bun = await ensureBunRuntime();
 
   const configuredPaths = getEidoversePaths(worldsRepoUrl);
   const paths = await resolveEidoverseInstallPaths(worldsRepoUrl);
   await Promise.all([
-    paths.worlds === configuredPaths.worlds ? cloneRepo(worldsRepoUrl) : Promise.resolve(),
+    paths.worlds === configuredPaths.worlds ? cloneRepo(worldsRepoUrl, { branch: worldsBranch }) : Promise.resolve(),
     cloneRepo(EIDOVERSE_VIDEO_REPO),
   ]);
   await updateOriginAtPath(paths.worlds, worldsRepoUrl);
@@ -223,10 +223,10 @@ async function performInstall(worldsRepoUrl) {
  * a managed-app record. A process-local promise collapses double-clicks into
  * one clone/install operation.
  */
-export async function installEidoverse({ worldsRepoUrl = DEFAULT_EIDOVERSE_WORLDS_REPO } = {}) {
+export async function installEidoverse({ worldsRepoUrl = DEFAULT_EIDOVERSE_WORLDS_REPO, worldsBranch = '' } = {}) {
   const normalizedRepoUrl = normalizeEidoverseWorldsRepo(worldsRepoUrl);
   if (installInFlight) return installInFlight;
-  installInFlight = performInstall(normalizedRepoUrl).finally(() => {
+  installInFlight = performInstall(normalizedRepoUrl, worldsBranch.trim()).finally(() => {
     installInFlight = null;
   });
   return installInFlight;

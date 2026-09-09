@@ -81,9 +81,9 @@ export const updateInstanceFeatureGroup = (groupId, enabled, options = {}) => re
   body: JSON.stringify({ enabled }),
   ...options,
 });
-export const installEidoverseFeature = (worldsRepoUrl, options = {}) => request('/settings/features/eidoverse/install', {
+export const installEidoverseFeature = (worldsRepoUrl, options = {}, worldsBranch = '') => request('/settings/features/eidoverse/install', {
   method: 'POST',
-  body: JSON.stringify({ worldsRepoUrl }),
+  body: JSON.stringify({ worldsRepoUrl, worldsBranch }),
   ...options,
 });
 export const updateEidoverseWorldsSource = (worldsRepoUrl, options = {}) => request('/settings/features/eidoverse/source', {

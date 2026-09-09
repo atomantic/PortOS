@@ -115,10 +115,16 @@ describe('Eidoverse managed-app installer', () => {
     });
   });
 
+  it('passes the selected branch only to the Worlds clone', async () => {
+    await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO, worldsBranch: ' feature/worlds ' });
+    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO, { branch: 'feature/worlds' });
+    expect(mock.cloneRepo).toHaveBeenCalledWith(EIDOVERSE_VIDEO_REPO);
+  });
+
   it('clones separate licensed repos, installs Bun dependencies, and registers Worlds', async () => {
     const status = await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO });
 
-    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO);
+    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO, { branch: '' });
     expect(mock.cloneRepo).toHaveBeenCalledWith(EIDOVERSE_VIDEO_REPO);
     expect(mock.execGit).toHaveBeenCalledWith(
       ['remote', 'set-url', 'origin', SELECTED_WORLDS_REPO],
@@ -158,7 +164,7 @@ describe('Eidoverse managed-app installer', () => {
 
     const status = await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO });
 
-    expect(mock.cloneRepo).not.toHaveBeenCalledWith(SELECTED_WORLDS_REPO);
+    expect(mock.cloneRepo).not.toHaveBeenCalledWith(SELECTED_WORLDS_REPO, { branch: '' });
     expect(mock.spawn).toHaveBeenCalledWith('bun', ['install', '--frozen-lockfile'], expect.objectContaining({ cwd: existingPaths.worlds }));
     expect(mock.atomicWrite).toHaveBeenCalledWith(
       existingPaths.envFile,
@@ -170,7 +176,7 @@ describe('Eidoverse managed-app installer', () => {
   it('configures a fresh checkout with the selected SSH origin', async () => {
     const status = await installEidoverse({ worldsRepoUrl: SELECTED_WORLDS_REPO_SSH });
 
-    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO_SSH);
+    expect(mock.cloneRepo).toHaveBeenCalledWith(SELECTED_WORLDS_REPO_SSH, { branch: '' });
     expect(mock.execGit).toHaveBeenCalledWith(
       ['remote', 'set-url', 'origin', SELECTED_WORLDS_REPO_SSH],
       selectedPaths.worlds,

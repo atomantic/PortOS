@@ -235,9 +235,12 @@ router.put('/credentials/:id', asyncHandler(async (req, res) => {
 // Explicit consent boundary: no Eidoverse checkout or dependency install occurs
 // until the user presses Install in Settings > Features.
 router.post('/features/eidoverse/install', asyncHandler(async (req, res) => {
-  const { worldsRepoUrl } = validateRequest(eidoverseRepoSchema, req.body || {});
-  const normalizedRepoUrl = await updateEidoverseWorldsRepo(worldsRepoUrl);
-  await installEidoverse({ worldsRepoUrl: normalizedRepoUrl });
+  const { worldsRepoUrl, worldsBranch } = validateRequest(eidoverseRepoSchema.extend({
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: reject control characters in Git branch input
+    worldsBranch: z.string().trim().max(255).regex(/^[^\u0000-\u001f\u007f]*$/).optional(),
+  }), req.body || {});
+  const normalizedRepoUrl = await updateEidoverseWorldsRepo(worldsRepoUrl, worldsBranch);
+  await installEidoverse({ worldsRepoUrl: normalizedRepoUrl, ...(worldsBranch !== undefined ? { worldsBranch } : {}) });
   res.status(201).json(await updateInstanceFeature('eidoverse', true));
 }));
 

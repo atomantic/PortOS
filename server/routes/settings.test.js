@@ -297,6 +297,18 @@ describe('Settings routes — instance feature participation', () => {
     expect(res.body.features).toContainEqual(expect.objectContaining({ id: 'eidoverse', enabled: true }));
   });
 
+  it.each(['feature/worlds', ''])('persists and forwards clone branch %j', async (worldsBranch) => {
+    const worldsRepoUrl = 'https://github.com/example-owner/eidoverse-worlds';
+    const res = await request(buildApp())
+      .post('/api/settings/features/eidoverse/install')
+      .send({ worldsRepoUrl, worldsBranch });
+
+    expect(res.status).toBe(201);
+    expect(installEidoverse).toHaveBeenCalledWith({ worldsRepoUrl, worldsBranch });
+    expect(store.instanceFeatures.eidoverse.worldsBranch).toBe(worldsBranch);
+    expect(res.body.features.find(feature => feature.id === 'eidoverse').setup.worldsBranch).toBe(worldsBranch);
+  });
+
   it('updates the installed Eidoverse source without changing feature participation', async () => {
     const worldsRepoUrl = 'git@github.com:example-owner/eidoverse-worlds.git';
     store = { instanceFeatures: { eidoverse: { enabled: true } } };

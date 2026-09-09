@@ -159,6 +159,7 @@ describe('InstanceFeaturesTab', () => {
     await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
       'https://github.com/anima-research/eidoverse-worlds',
       { silent: true },
+      '',
     ));
     expect(await screen.findByRole('link', { name: 'Manage app' })).toHaveAttribute('href', '/apps/app-eidoverse');
     expect(screen.getByText(/start it from the managed app/i)).toBeInTheDocument();
@@ -170,11 +171,13 @@ describe('InstanceFeaturesTab', () => {
 
     const repoInput = await screen.findByRole('textbox', { name: 'Worlds GitHub repository' });
     fireEvent.change(repoInput, { target: { value: 'https://github.com/example-owner/eidoverse-worlds' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Worlds clone branch' }), { target: { value: 'feature/worlds' } });
     fireEvent.click(screen.getByRole('button', { name: 'Install & enable' }));
 
     await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
       'https://github.com/example-owner/eidoverse-worlds',
       { silent: true },
+      'feature/worlds',
     ));
   });
 
@@ -196,6 +199,7 @@ describe('InstanceFeaturesTab', () => {
     await waitFor(() => expect(mock.installEidoverseFeature).toHaveBeenCalledWith(
       'git@github.com:example-owner/eidoverse-worlds.git',
       { silent: true },
+      '',
     ));
   });
 
