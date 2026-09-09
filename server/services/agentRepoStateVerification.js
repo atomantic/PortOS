@@ -102,8 +102,7 @@ async function branchHasPendingOwner(branchName, app) {
 }
 
 /**
- * Is `branch` already on `target`? Tri-state, unlike `isBranchMergedInto`, which
- * answers `false` both for "not merged" and for "could not tell".
+ * Probe merge evidence, returning null when the preliminary ref checks fail.
  *
  * @returns {Promise<boolean|null>} null when either ref could not be resolved
  */
@@ -113,7 +112,7 @@ async function probeBranchMerged(repoPath, branch, target) {
     .catch(() => false);
   const [hasBranch, hasTarget] = await Promise.all([resolvable(branch), resolvable(target)]);
   if (!hasBranch || !hasTarget) return null;
-  return git.isBranchMergedInto(repoPath, branch, target).catch(() => null);
+  return git.hasBranchMergeEvidence(repoPath, branch, target).catch(() => null);
 }
 
 /**
@@ -189,13 +188,8 @@ async function probeRepoState({ sourceWorkspace, branchName, worktreePath, branc
   ]);
 
   // Only meaningful while the branch still exists locally.
-  //
-  // `isBranchMergedInto` fails CLOSED — it returns `false`, not a throw, when it
-  // cannot resolve either ref (git.js). That polarity is right for its original
-  // caller, which preserves a branch on doubt; here it inverts into a FINDING, so
-  // an unreadable repo would file a recovery task claiming unmerged work. Resolve
-  // both refs first: if either cannot be read, the answer is `null` (unknown), and
-  // only a `false` backed by two resolvable refs is reported.
+  // Diagnostics require readable refs before reporting absent merge evidence;
+  // otherwise an unreadable repo would produce a false recovery finding.
   const branchMerged = localBranchPresent === true && defaultBranch
     ? await probeBranchMerged(sourceWorkspace, branchName, defaultBranch)
     : null;

@@ -29,7 +29,7 @@ vi.mock('./branchReconcile.js', () => ({
 }));
 vi.mock('./git.js', () => ({
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
-  isBranchMergedInto: vi.fn().mockResolvedValue(true),
+  hasBranchMergeEvidence: vi.fn().mockResolvedValue(true),
   resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: null }),
 }));
 vi.mock('./github.js', () => ({
@@ -52,7 +52,7 @@ import { verifyAgentRepoState, REPO_STATE_REMEDIATIONS } from './agentRepoStateV
 import { addTask, getAllTasks } from './cos.js';
 import { listWorktrees } from './worktreeManager.js';
 import { listRemoteHeads } from './branchReconcile.js';
-import { isBranchMergedInto, resolveForgeForRepo } from './git.js';
+import { hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
 import { findPullRequestForBranch } from './github.js';
 import { findMergeRequestForBranch } from './gitlab.js';
 import { getAppById } from './apps.js';
@@ -101,7 +101,7 @@ beforeEach(() => {
   listWorktrees.mockResolvedValue([]);
   listRemoteHeads.mockResolvedValue(new Map());
   existsSync.mockReturnValue(false);
-  isBranchMergedInto.mockResolvedValue(true);
+  hasBranchMergeEvidence.mockResolvedValue(true);
   queuedTasks([]);
   getAppById.mockResolvedValue({ id: 'demo-app', name: 'Demo App' });
   readPendingMergePrs.mockReturnValue([]);
@@ -173,7 +173,7 @@ describe('verifyAgentRepoState — divergent runs', () => {
 
   it('reports an unmerged PR the agent left open', async () => {
     localBranch(true);
-    isBranchMergedInto.mockResolvedValue(false);
+    hasBranchMergeEvidence.mockResolvedValue(false);
     listRemoteHeads.mockResolvedValue(new Map([[BRANCH, 'abc123']]));
     findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://example.com/pr/9', detail: 'OPEN' });
 
@@ -366,7 +366,7 @@ describe('verifyAgentRepoState — never fires', () => {
   });
 
   it('does not claim unmerged work when the merge check could not be answered', async () => {
-    // `isBranchMergedInto` fails CLOSED (`false`, not a throw) when it cannot read
+    // `hasBranchMergeEvidence` fails CLOSED (`false`, not a throw) when it cannot read
     // a ref — right for its original caller, inverted into a false finding here.
     // An unresolvable ref must read as unknown, not as "carries unmerged commits".
     execGit.mockImplementation((args) => {
@@ -374,11 +374,11 @@ describe('verifyAgentRepoState — never fires', () => {
       // rev-parse --verify fails => the ref could not be resolved
       return Promise.resolve({ exitCode: 128, stdout: '', stderr: 'bad revision' });
     });
-    isBranchMergedInto.mockResolvedValue(false);
+    hasBranchMergeEvidence.mockResolvedValue(false);
 
     const result = await run({ prExpected: false });
 
-    expect(isBranchMergedInto).not.toHaveBeenCalled();
+    expect(hasBranchMergeEvidence).not.toHaveBeenCalled();
     expect(result.observed.branchMerged).toBeNull();
     expect(result.issues.map(i => i.code)).not.toContain(REPO_STATE_ISSUES.BRANCH_UNMERGED);
     expect(result.observed.unreadable).toContain('branch-merged');

@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('./git.js', () => ({
   getBranches: vi.fn(),
   getDefaultBranch: vi.fn(async () => 'main'),
-  isBranchMergedInto: vi.fn(),
+  hasBranchMergeEvidence: vi.fn(),
   deleteBranch: vi.fn(async () => ({ branch: 'x', results: { local: 'deleted' } }))
 }));
 vi.mock('../lib/execGit.js', () => ({
@@ -258,7 +258,7 @@ describe('classifyBranches', () => {
 
 describe('cleanupMerged', () => {
   it('removes worktree + deletes branch when merged and clean', async () => {
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean worktree
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/wt/2190' }]);
     expect(res.cleaned).toEqual(['next/issue-2190']);
@@ -267,7 +267,7 @@ describe('cleanupMerged', () => {
   });
 
   it('skips when re-check says not merged (fail closed)', async () => {
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2190', worktreePath: '/wt/2190' }]);
     expect(res.cleaned).toEqual([]);
     expect(res.skipped).toEqual([{ branch: 'next/issue-2190', reason: 'not-merged-on-recheck' }]);
@@ -275,7 +275,7 @@ describe('cleanupMerged', () => {
   });
 
   it('skips when the worktree has real uncommitted changes', async () => {
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: ' M server/index.js', exitCode: 0 }); // dirty
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-2196', worktreePath: '/wt/2196' }]);
     expect(res.cleaned).toEqual([]);
@@ -285,14 +285,14 @@ describe('cleanupMerged', () => {
   });
 
   it('deletes a merged branch with no worktree', async () => {
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     const res = await cleanupMerged('/repo', 'main', [{ branch: 'orphan', worktreePath: null }]);
     expect(res.cleaned).toEqual(['orphan']);
     expect(wt.forceRemoveWorktreeDir).not.toHaveBeenCalled();
   });
 
   it('never tears down a locked / human-claim / active-agent worktree', async () => {
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     const activeAgentIds = new Set(['agent-abc12345']);
     const res = await cleanupMerged('/repo', 'main', [
       { branch: 'locked-b', worktreePath: '/wt/locked', worktreeLocked: true },
@@ -310,7 +310,7 @@ describe('cleanupMerged', () => {
   });
 
   it('reaps an ABANDONED claim worktree (merged + clean + stale age)', async () => {
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
     const res = await cleanupMerged('/repo', 'main', [
       // 10 days old — comfortably past the 7-day STALE_CLAIM_IDLE_MS default
@@ -322,7 +322,7 @@ describe('cleanupMerged', () => {
   });
 
   it('still protects a RECENT claim worktree even when merged + clean, and says when the hold lifts', async () => {
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
     const before = Date.now();
     const res = await cleanupMerged('/repo', 'main', [
@@ -345,7 +345,7 @@ describe('cleanupMerged', () => {
     const shipped = (over) => ({
       worktreePath: '/repo/data/cos/worktrees/claim-x', worktreeAgeMs: 2 * HOUR, upstreamGone: true, ...over
     });
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
 
     execGit.mockResolvedValue({ stdout: '', exitCode: 0 }); // clean
     const reaped = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-0', ...shipped() }]);
@@ -378,7 +378,7 @@ describe('cleanupMerged', () => {
   });
 
   it('omits retryAt for holds that do NOT lift on a clock', async () => {
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     const res = await cleanupMerged('/repo', 'main', [
       { branch: 'locked-b', worktreePath: '/wt/locked', worktreeLocked: true, worktreeAgeMs: 60 * 1000 },
       { branch: 'active-b', worktreePath: '/repo/data/cos/worktrees/agent-abc12345', worktreeAgeMs: 60 * 1000 }
@@ -447,7 +447,7 @@ describe('gatherBranchState', () => {
     execGh.mockResolvedValue(JSON.stringify([
       { number: 2206, headRefName: 'next/issue-2199', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }
     ]));
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
 
     const inputs = await gatherBranchState('/repo', { defaultBranch: 'main' });
     const names = inputs.map((i) => i.branch);
@@ -470,7 +470,7 @@ describe('gatherBranchState', () => {
       { name: 'next/issue-77', isDefault: false, current: false, tracking: 'origin/next/issue-77', merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([]);
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGh.mockResolvedValueOnce(JSON.stringify([
       { number: 77, headRefName: 'next/issue-77', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }
     ]));
@@ -490,7 +490,7 @@ describe('gatherBranchState', () => {
       { name: 'next/issue-88', isDefault: false, current: false, tracking: 'origin/next/issue-88', merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([]);
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGh.mockClear();
 
     const inputs = await gatherBranchState('/repo', { defaultBranch: 'main' });
@@ -512,7 +512,7 @@ describe('gatherBranchState', () => {
       { name: 'local/only', isDefault: false, current: false, tracking: null, merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([]);
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGit.mockImplementation(async (args) => (args[0] === 'ls-remote'
       ? { stdout: '', stderr: "fatal: 'origin' does not appear to be a git repository", exitCode: 128 }
       : { stdout: '', exitCode: 0 }));
@@ -734,7 +734,7 @@ describe('unreachable forge (#3358)', () => {
     ]);
     wt.listWorktrees.mockResolvedValue([]);
     execGh.mockRejectedValue(new Error('connect: bad file descriptor'));
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
 
     const inputs = await gatherBranchState('/repo', { defaultBranch: 'main' });
     expect(inputs[0].prStateUnavailable).toBe(true);
@@ -747,7 +747,7 @@ describe('unreachable forge (#3358)', () => {
     ]);
     wt.listWorktrees.mockResolvedValue([]);
     execGh.mockResolvedValue('[]');
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
 
     const inputs = await gatherBranchState('/repo', { defaultBranch: 'main' });
     expect(inputs[0].prStateUnavailable).toBe(false);
@@ -760,7 +760,7 @@ describe('unreachable forge (#3358)', () => {
     ]);
     wt.listWorktrees.mockResolvedValue([]);
     execGh.mockRejectedValue(new Error('connect: bad file descriptor'));
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
 
     const res = await reconcile('/repo');
     // The probe passed, so the cycle ran — but the in-flight set is empty for a
@@ -780,7 +780,7 @@ describe('unreachable forge (#3358)', () => {
       { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([]);
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGh.mockResolvedValue('[]');
 
     await reconcile('/repo');
@@ -794,7 +794,7 @@ describe('unreachable forge (#3358)', () => {
       { name: 'claim/issue-1', isDefault: false, current: false, tracking: 'origin/claim/issue-1', merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([]);
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGit.mockImplementation(async (args) => args[0] === 'ls-remote'
       ? { stdout: 'sha\trefs/heads/claim/issue-1\n', exitCode: 0 }
       : { stdout: '', exitCode: 0 });
@@ -817,7 +817,7 @@ describe('unreachable forge (#3358)', () => {
     ]);
     wt.listWorktrees.mockResolvedValue([]);
     execGh.mockResolvedValue('[]');
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     expect((await reconcile('/repo')).prStateUnavailable).toBe(false);
   });
 
@@ -836,7 +836,7 @@ describe('unreachable forge (#3358)', () => {
       { name: 'feature/x', isDefault: false, current: false, tracking: 'origin/feature/x', merged: true }
     ]);
     wt.listWorktrees.mockResolvedValue([]);
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
 
     const res = await reconcile('/repo');
     expect(ensureForgeReachableMock).not.toHaveBeenCalled();
@@ -884,7 +884,7 @@ describe('reconcile', () => {
     ]);
     wt.listWorktrees.mockResolvedValue([]);
     execGh.mockResolvedValue('[]');
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
 
     const res = await reconcile('/repo');
     expect(res.inFlight.map((i) => i.branch)).toEqual(['claim/issue-42', 'feature/new-thing', 'scratch-thing']);
@@ -910,7 +910,7 @@ describe('reconcile', () => {
       : { stdout: '', exitCode: 0 });
     // Idle for hours — past SHIPPED_CLAIM_IDLE_MS, so no live session is implied.
     worktreeMtimeMs = Date.now() - 4 * 60 * 60 * 1000;
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
 
     const res = await reconcile('/repo');
     expect(res.cleaned).toEqual(['claim/issue-4348']);
@@ -938,7 +938,7 @@ describe('reconcile', () => {
     // Idle long enough that the SHORT window would have released it — so the only
     // thing holding it back is the unreadable remote, which is what this pins.
     worktreeMtimeMs = Date.now() - 4 * 60 * 60 * 1000;
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
 
     const res = await reconcile('/repo');
     expect(res.cleaned).toEqual([]);
@@ -959,7 +959,7 @@ describe('reconcile', () => {
     // Branch-aware: only 2190 is merged (gather short-circuits it via merged:true;
     // this also satisfies the cleanup re-check). 2199 must stay un-merged so it
     // classifies IN_REVIEW rather than being swept into cleanup.
-    git.isBranchMergedInto.mockImplementation(async (_dir, branch) => branch === 'next/issue-2190');
+    git.hasBranchMergeEvidence.mockImplementation(async (_dir, branch) => branch === 'next/issue-2190');
 
     const res = await reconcile('/repo');
     expect(res.cleaned).toEqual(['next/issue-2190']);
@@ -979,7 +979,7 @@ describe('reconcile', () => {
     wt.listWorktrees.mockResolvedValue([
       { path: '/repo/data/cos/worktrees/agent-live1234', branch: 'refs/heads/cos/task-y/agent-live1234' }
     ]);
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGh.mockResolvedValue(JSON.stringify([
       { number: 4001, headRefName: 'cos/task-y/agent-live1234', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }
     ]));
@@ -1004,7 +1004,7 @@ describe('reconcile', () => {
       { name: 'cos/task-z/agent-live5678', isDefault: false, current: false, tracking: 'origin/cos/task-z/agent-live5678', merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([]); // worktree already cleaned up
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGh.mockResolvedValue(JSON.stringify([
       { number: 4002, headRefName: 'cos/task-z/agent-live5678', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }
     ]));
@@ -1022,7 +1022,7 @@ describe('reconcile', () => {
     wt.listWorktrees.mockResolvedValue([
       { path: '/repo/data/cos/worktrees/claim-issue-42', branch: 'refs/heads/claim/issue-42' }
     ]);
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGh.mockResolvedValue(JSON.stringify([
       { number: 4200, headRefName: 'claim/issue-42', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }
     ]));
@@ -1047,7 +1047,7 @@ describe('reconcile', () => {
     wt.listWorktrees.mockResolvedValue([
       { path: '/repo/data/cos/worktrees/agent-deadbeef', branch: 'refs/heads/cos/task-x/agent-deadbeef' }
     ]);
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     // Uncommitted work in the worktree.
     execGit.mockResolvedValue({ stdout: ' M server/services/thing.js\n?? server/services/newThing.js\n', exitCode: 0 });
 
@@ -1065,7 +1065,7 @@ describe('reconcile', () => {
     wt.listWorktrees.mockResolvedValue([
       { path: '/repo/data/cos/worktrees/agent-deadbeef', branch: 'refs/heads/cos/task-x/agent-deadbeef' }
     ]);
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockResolvedValue({ stdout: ' M server/services/thing.js\n', exitCode: 0 });
 
     const res = await reconcile('/repo', { activeAgentIds: new Set(['agent-deadbeef']) });
@@ -1091,7 +1091,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
       { name: BRANCH, isDefault: false, current: false, tracking: 'origin/main', merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([{ path: WORKTREE, branch: `refs/heads/${BRANCH}` }]);
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGit.mockImplementation(async (args) => {
       const [cmd] = args;
       if (cmd === 'rev-parse') return { stdout: `${tip}\n`, exitCode: 0 };
@@ -1177,7 +1177,7 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
       { name: CLAIM, isDefault: false, current: false, tracking: null, merged: false }
     ]);
     wt.listWorktrees.mockResolvedValue([{ path: CLAIM_TREE, branch: `refs/heads/${CLAIM}` }]);
-    git.isBranchMergedInto.mockResolvedValue(false);
+    git.hasBranchMergeEvidence.mockResolvedValue(false);
     execGit.mockImplementation(async (args) => {
       const [cmd] = args;
       if (cmd === 'rev-parse') return { stdout: 'aaaaaaa\n', exitCode: 0 };
@@ -1332,7 +1332,7 @@ describe('reconcile — a worktree holding only PortOS runtime scratch', () => {
       { name: BRANCH, isDefault: false, current: false, tracking: null, merged: true }
     ]);
     wt.listWorktrees.mockResolvedValue([{ path: WORKTREE, branch: `refs/heads/${BRANCH}` }]);
-    git.isBranchMergedInto.mockResolvedValue(true);
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
     execGit.mockImplementation(async (args) => {
       if (args[0] === 'rev-list') return { stdout: '114\t0\n', exitCode: 0 };
       if (args[0] === 'status') return { stdout: porcelain, exitCode: 0 };
@@ -1840,7 +1840,7 @@ describe('orphaned remote branches', () => {
       // shared forge and cannot be undone from here.
       mockRemote(lsRemote([['stale/merged', 'sha-merged']]));
       git.getBranches.mockResolvedValue([]);
-      git.isBranchMergedInto.mockResolvedValue(true);
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
 
       const res = await reapOrphanedRemotes('/repo', 'main');
       expect(res.reaped).toEqual([]);
@@ -1851,7 +1851,7 @@ describe('orphaned remote branches', () => {
     it('deletes a merged orphan on the remote when reaping is enabled', async () => {
       mockRemote(lsRemote([['stale/merged', 'sha-merged']]));
       git.getBranches.mockResolvedValue([]);
-      git.isBranchMergedInto.mockResolvedValue(true);
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
       git.deleteBranch.mockResolvedValue({ branch: 'stale/merged', results: { remote: 'deleted' } });
 
       const res = await reapOrphanedRemotes('/repo', 'main', { reap: true });
@@ -1884,16 +1884,16 @@ describe('orphaned remote branches', () => {
       // since moved past; the live SHA is the only safe thing to judge.
       mockRemote(lsRemote([['stale/merged', 'sha-from-ls-remote']]));
       git.getBranches.mockResolvedValue([]);
-      git.isBranchMergedInto.mockResolvedValue(true);
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
 
       await reapOrphanedRemotes('/repo', 'main', { reap: true });
-      expect(git.isBranchMergedInto).toHaveBeenCalledWith('/repo', 'sha-from-ls-remote', 'main');
+      expect(git.hasBranchMergeEvidence).toHaveBeenCalledWith('/repo', 'sha-from-ls-remote', 'main');
     });
 
     it('never deletes an unmerged remote-only branch — it may be a peer\'s live work', async () => {
       mockRemote(lsRemote([['peer/in-progress', 'sha-unmerged']]));
       git.getBranches.mockResolvedValue([]);
-      git.isBranchMergedInto.mockResolvedValue(false);
+      git.hasBranchMergeEvidence.mockResolvedValue(false);
 
       const res = await reapOrphanedRemotes('/repo', 'main', { reap: true });
       expect(res.reaped).toEqual([]);
@@ -1906,7 +1906,7 @@ describe('orphaned remote branches', () => {
       // "leave it alone", never as "not merged, so safe to assume".
       mockRemote(lsRemote([['never/fetched', 'sha-missing']]));
       git.getBranches.mockResolvedValue([]);
-      git.isBranchMergedInto.mockRejectedValue(new Error('bad object'));
+      git.hasBranchMergeEvidence.mockRejectedValue(new Error('bad object'));
 
       const res = await reapOrphanedRemotes('/repo', 'main', { reap: true });
       expect(res.reaped).toEqual([]);
@@ -1937,7 +1937,7 @@ describe('orphaned remote branches', () => {
     it('surfaces a failed remote delete rather than claiming it was reaped', async () => {
       mockRemote(lsRemote([['stale/merged', 'sha-merged']]));
       git.getBranches.mockResolvedValue([]);
-      git.isBranchMergedInto.mockResolvedValue(true);
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
       git.deleteBranch.mockResolvedValue({ results: { remote: 'failed: protected branch' } });
 
       const res = await reapOrphanedRemotes('/repo', 'main', { reap: true });
@@ -1957,7 +1957,7 @@ describe('orphaned remote branches', () => {
       ]);
       wt.listWorktrees.mockResolvedValue([]);
       execGh.mockResolvedValue('[]');
-      git.isBranchMergedInto.mockResolvedValue(true);
+      git.hasBranchMergeEvidence.mockResolvedValue(true);
       mockRemote(lsRemote([['left/behind', 'sha-merged'], ['main', 'sha-main']]));
 
       const res = await reconcile('/repo');

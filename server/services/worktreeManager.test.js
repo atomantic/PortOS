@@ -23,10 +23,10 @@ vi.mock('fs/promises', () => ({
 }));
 vi.mock('./instances.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
 const getDefaultBranchMock = vi.fn().mockResolvedValue('main');
-const isBranchMergedIntoMock = vi.fn().mockResolvedValue(false);
+const hasBranchMergeEvidenceMock = vi.fn().mockResolvedValue(false);
 vi.mock('./git.js', () => ({
   getDefaultBranch: (...args) => getDefaultBranchMock(...args),
-  isBranchMergedInto: (...args) => isBranchMergedIntoMock(...args),
+  hasBranchMergeEvidence: (...args) => hasBranchMergeEvidenceMock(...args),
 }));
 
 const {
@@ -877,7 +877,7 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
   // Routes each git invocation this path makes to a scripted answer, keyed on the
   // subcommand, so a test only has to state what it cares about instead of
   // ordering every call. The preserve/delete decision itself comes from the
-  // mocked `isBranchMergedInto` (see the ./git.js mock at the top of this file).
+  // mocked `hasBranchMergeEvidence` (see the ./git.js mock at the top of this file).
   function scriptGit({ porcelain = '' } = {}) {
     execGitMock.mockReset();
     execGitMock.mockImplementation((args) => {
@@ -900,8 +900,8 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
     getDefaultBranchMock.mockResolvedValue('main');
     // mockReset (not just mockResolvedValue): the opt-in test asserts the merged
     // check was NOT consulted, so recorded calls must not leak in from a prior test.
-    isBranchMergedIntoMock.mockReset();
-    isBranchMergedIntoMock.mockResolvedValue(false);
+    hasBranchMergeEvidenceMock.mockReset();
+    hasBranchMergeEvidenceMock.mockResolvedValue(false);
     scriptGit();
   });
 
@@ -915,10 +915,10 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
   });
 
   // Patch-equivalence matters here: PortOS merges with `--rebase`, so a landed
-  // branch has new SHAs. `isBranchMergedInto` is what sees through that — a bare
+  // branch has new SHAs. `hasBranchMergeEvidence` is what sees through that — a bare
   // `rev-list --count` would report it ahead and preserve a merged branch forever.
   it('DELETES the branch once it is merged (including rebase/squash-merged)', async () => {
-    isBranchMergedIntoMock.mockResolvedValue(true);
+    hasBranchMergeEvidenceMock.mockResolvedValue(true);
 
     await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', {
       merge: false, preserveBranchWithCommits: true,
@@ -928,7 +928,7 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
   });
 
   it('fails CLOSED — keeps the branch when the merged check cannot be determined', async () => {
-    isBranchMergedIntoMock.mockRejectedValue(new Error('unknown revision'));
+    hasBranchMergeEvidenceMock.mockRejectedValue(new Error('unknown revision'));
 
     const result = await removeWorktree('agent-x', '/repo', 'cos/task-1/agent-x', {
       merge: false, preserveBranchWithCommits: true,
@@ -943,7 +943,7 @@ describe('removeWorktree branch preservation for resume (#3167)', () => {
 
     expect(calledWith(['branch', '-D', 'cos/task-1/agent-x'])).toBe(true);
     // The resume gate never consulted the merged check for THIS branch.
-    expect(isBranchMergedIntoMock).not.toHaveBeenCalledWith('/repo', 'cos/task-1/agent-x', 'main');
+    expect(hasBranchMergeEvidenceMock).not.toHaveBeenCalledWith('/repo', 'cos/task-1/agent-x', 'main');
   });
 
   // The bare "uncommitted changes detected" message left the user unable to tell

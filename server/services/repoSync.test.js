@@ -28,7 +28,7 @@ const gitMocks = {
   getBranches: vi.fn(async () => []),
   getDefaultBranch: vi.fn(async () => 'main'),
   getStatusPorcelain: vi.fn(async () => ''),
-  isBranchMergedInto: vi.fn(async () => false),
+  hasBranchMergeEvidence: vi.fn(async () => false),
   isRepo: vi.fn(async () => true)
 };
 vi.mock('./git.js', () => gitMocks);
@@ -524,7 +524,7 @@ describe('syncRepo — the argv it issues is the non-destructive form', () => {
   });
 
   it('updates a non-checked-out default branch with a refspec fetch git itself refuses to non-FF', async () => {
-    gitMocks.isBranchMergedInto.mockResolvedValue(false);
+    gitMocks.hasBranchMergeEvidence.mockResolvedValue(false);
     arrange({
       current: 'feature/x',
       branches: [{ name: 'feature/x', current: true, tracking: 'origin/feature/x', ahead: 0, behind: 0, isDefault: false, merged: false }],
@@ -539,7 +539,7 @@ describe('syncRepo — the argv it issues is the non-destructive form', () => {
     // will be on main by then. If the checkout is refused, a `merge --ff-only
     // origin/main` issued anyway would land main's commits ON the feature
     // branch — a real change to the wrong branch. The executor re-reads HEAD.
-    gitMocks.isBranchMergedInto.mockResolvedValue(true);
+    gitMocks.hasBranchMergeEvidence.mockResolvedValue(true);
     arrange({
       current: 'feature/x',
       divergence: '2\t0',

@@ -286,9 +286,10 @@ describe('extractAgentSummary', () => {
 describe('git.js exports the helpers the agent resume path calls', () => {
   it('exposes every function agentWorktreeCleanup.resolveResumePointer uses', async () => {
     const git = await vi.importActual('./git.js');
+    expect(git.isBranchMergedInto).toBe(git.hasBranchMergeEvidence);
     for (const name of [
       'getBranch', 'getStatusPorcelain', 'getBranchComparison',
-      'isBranchMergedInto', 'getWorktreeBranches', 'getDefaultBranch'
+      'hasBranchMergeEvidence', 'getWorktreeBranches', 'getDefaultBranch'
     ]) {
       expect(typeof git[name], `git.${name} must be exported`).toBe('function');
     }

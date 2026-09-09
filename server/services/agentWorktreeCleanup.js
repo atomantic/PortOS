@@ -504,7 +504,7 @@ async function runCleanupAgentWorktree(agentId, success, { prCreation = PR_CREAT
  *     so `refs/remotes/origin/<branch>` answers "did this agent push?" with one
  *     local rev-parse and no network. Absent ⇒ nothing to do. (A push from some
  *     other clone is invisible here; the repo-state audit still reports it.)
- *   - Merged-ness is `git.isBranchMergedInto` — the definition the branch-
+ *   - Merge evidence uses `git.hasBranchMergeEvidence` — the predicate the branch-
  *     reconcile reaper and `removeWorktree` already use — so a copy the agent
  *     amended or rebased after pushing (patch-equivalent, not an ancestor) still
  *     counts as landed, and an unresolvable object fails closed.
@@ -521,9 +521,9 @@ async function deleteMergedRemoteCopy(agentId, sourceWorkspace, branchName) {
     .catch(() => null);
   const pushedSha = tracked?.exitCode === 0 ? tracked.stdout.trim() : '';
   if (!pushedSha) return;
-  const landed = await git.isBranchMergedInto(sourceWorkspace, pushedSha, 'HEAD').catch(() => false);
-  if (!landed) {
-    emitLog('warn', `🌳 origin/${branchName} (${pushedSha.slice(0, 7)}) is not merged into the checkout that received the branch — left in place for the repo-state audit`, { agentId, branchName });
+  const hasMergeEvidence = await git.hasBranchMergeEvidence(sourceWorkspace, pushedSha, 'HEAD').catch(() => false);
+  if (!hasMergeEvidence) {
+    emitLog('warn', `🌳 origin/${branchName} (${pushedSha.slice(0, 7)}) has no established merge evidence in the checkout that received the branch — left in place for the repo-state audit`, { agentId, branchName });
     return;
   }
   const pushed = await execGit(['push', `--force-with-lease=${remoteRef}:${pushedSha}`, 'origin', `:${remoteRef}`], sourceWorkspace, { ignoreExitCode: true })
@@ -572,16 +572,16 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
   const survivingTree = !!(worktreePath && existsSync(worktreePath));
   const target = await git.getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
   // Same predicate `removeWorktree` used to decide whether to KEEP this branch, so
-  // the two can't disagree and orphan it. `isBranchMergedInto` (not a rev-list
+  // the two can't disagree and orphan it. `hasBranchMergeEvidence` (not a rev-list
   // count) because a rebase/squash-merged branch has new SHAs and would otherwise
   // read as resumable — pointing a retry at already-landed work. Note the polarity
-  // flips here: preservation fails closed (keep), but resuming fails OPEN (start
-  // clean), because a wrong resume makes an agent build on a merged branch while a
-  // wrong clean start merely repeats work the branch still holds for a human.
-  const merged = await git.isBranchMergedInto(sourceWorkspace, branchName, target).catch(() => true);
+  // flips only for a rejected call: resume starts clean on rejection, while the
+  // predicate's internal probe failures still return false. The existence checks
+  // below keep that negative evidence result from reviving an absent branch.
+  const hasMergeEvidence = await git.hasBranchMergeEvidence(sourceWorkspace, branchName, target).catch(() => true);
   // Nothing survived and nothing is unmerged — the common "run finished, branch
   // landed, tree already reaped" shape. Bail before spending any more git calls.
-  if (merged && !survivingTree) return null;
+  if (hasMergeEvidence && !survivingTree) return null;
 
   // How many commits the branch holds that the default branch doesn't. Only ever
   // consulted on one of the two mutually exclusive paths below, so it costs a
@@ -592,8 +592,8 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
   // 1. Adopt the surviving tree — but only if it is actually on the branch we're
   //    resuming; a half-cleaned or repurposed directory must not be handed over.
   if (survivingTree && await git.getBranch(worktreePath).catch(() => null) === branchName) {
-    if (!merged) {
-      emitLog('info', `🌳 Worktree ${worktreePath} survived on unmerged ${branchName} — a retry can adopt it`, { branchName, worktreePath });
+    if (!hasMergeEvidence) {
+      emitLog('info', `🌳 Worktree ${worktreePath} survived on ${branchName} without established merge evidence — a retry can adopt it`, { branchName, worktreePath });
       return { branchName, worktreePath };
     }
     // A merged branch reads that way for two very different reasons. Commits that
@@ -612,7 +612,7 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
     return { branchName, worktreePath };
   }
 
-  if (merged) return null;
+  if (hasMergeEvidence) return null;
 
   // 2. Attach a fresh worktree to the branch. Git allows a branch to be checked out
   //    in only ONE worktree, so if a worktree is STILL on this branch, `git worktree
@@ -625,8 +625,8 @@ export async function resolveResumePointer(sourceWorkspace, branchName, worktree
     emitLog('info', `🌳 Branch ${branchName} is still checked out in a preserved worktree — a retry can't attach to it, so it will start clean`, { branchName });
     return null;
   }
-  // Confirm the branch actually exists and holds commits — `isBranchMergedInto`
-  // reports an ABSENT branch as unmerged, which would hand back a branch name no
+  // Confirm the branch actually exists and holds commits — `hasBranchMergeEvidence`
+  // returns false for an absent branch, which would hand back a branch name no
   // worktree can attach to.
   return await commitsAhead() > 0 ? { branchName, worktreePath: null } : null;
 }

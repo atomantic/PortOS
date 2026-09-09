@@ -1179,8 +1179,8 @@ export async function mergeBranch(dir, branchName) {
 }
 
 /**
- * Determine whether a branch's work is fully present in `target` (e.g. main),
- * covering BOTH a normal/fast-forward/no-ff merge AND a squash (or rebase) merge.
+ * True means the merge probes found evidence; false means they did not establish
+ * it, including missing inputs, self-comparison, unresolved refs, and probe failures.
  *
  * - Normal / ff / no-ff merge: the branch tip becomes reachable from target, so
  *   `git merge-base --is-ancestor` settles it immediately.
@@ -1203,7 +1203,7 @@ export async function mergeBranch(dir, branchName) {
  * @param {string} target - Branch it should be merged into (e.g. 'main')
  * @returns {Promise<boolean>}
  */
-export async function isBranchMergedInto(dir, branch, target) {
+export async function hasBranchMergeEvidence(dir, branch, target) {
   if (!branch || !target || branch === target) return false;
 
   const resolve = (ref) => execGit(['rev-parse', '--verify', `${ref}^{commit}`], dir, { ignoreExitCode: true })
@@ -1243,9 +1243,9 @@ export async function isBranchMergedInto(dir, branch, target) {
     .catch(() => null);
   if (!branchTree) return false;
 
-  // Synthesize a single commit with the branch's full tree atop the merge base.
+  // Write a synthetic commit object with the branch's full tree atop the merge base.
   // commit-tree uses the repo's configured identity; if that's unset it fails and
-  // we fall through to "not merged" (safe — the worktree is just preserved).
+  // no merge evidence is established (the worktree is preserved).
   const synthesized = await execGit(['commit-tree', branchTree, '-p', mergeBase, '-m', 'merged-check-probe'], dir, { ignoreExitCode: true })
     .then(r => (r.exitCode === 0 ? r.stdout.trim() : null))
     .catch(() => null);
@@ -1258,6 +1258,9 @@ export async function isBranchMergedInto(dir, branch, target) {
   if (combinedCherry === '') return true; // empty patch (tree already matches) ⇒ merged
   return combinedCherry.split('\n').every(line => line.startsWith('-'));
 }
+
+// Backward-compatible name for callers using the original evidence predicate.
+export const isBranchMergedInto = hasBranchMergeEvidence;
 
 /**
  * Checkout a remote branch that doesn't exist locally.
