@@ -150,7 +150,7 @@ PortOS treats **PostgreSQL as a mandatory install/runtime dependency** for every
 - **System (native) PostgreSQL on `:5432`** — `PGMODE=native`, or
 - **Docker PostgreSQL on `:5561`** — `PGMODE=docker` (the default).
 
-Provision either path with **`npm run setup:db`** (also run automatically by `npm run setup` and `npm start`). It auto-detects an already-healthy local PostgreSQL and uses native mode; otherwise it starts/initializes the Docker container, or — when Docker is unavailable — offers to bootstrap native PostgreSQL. See [Setup path](#setup-path-npm-run-setupdb) below.
+Provision either path with **`npm run setup:db`** (also run automatically by `npm run setup` and `npm start`). It follows `PGMODE` (shell environment → `.env` → `docker`), so an available Docker installation takes precedence over a healthy native database unless you explicitly select `native`. Native auto-detection is a fallback only when Docker or Compose is unavailable, or the Docker daemon is stopped. See [Setup path](#setup-path-npm-run-setupdb) below.
 
 ### `MEMORY_BACKEND=file` is a development/test-only escape hatch — NOT a deployment mode
 
@@ -171,10 +171,13 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 `npm run setup:db` → `scripts/setup-db.js` is the single command that makes PostgreSQL ready, and is wired into `npm run setup` and `npm start` so a normal install never has to think about it. Its happy path:
 
-1. **Already healthy?** If the configured role can authenticate to the configured database **and** the `memories` table from `server/scripts/init-db.sql` exists, it reports ready and exits (fast path — no re-provisioning on every `npm start`).
-2. **`PGMODE=docker` (default):** starts the `pgvector/pgvector:pg17` container (`docker-compose.yml`), waits for it to accept connections **and** finish applying the init schema, then reports ready on `:5561`. If Docker is missing or not running, it prints platform-specific install/start hints and — if a healthy native PostgreSQL is already present — switches to native automatically.
-3. **`PGMODE=native`:** runs `scripts/db.sh setup-native` (idempotent: brew install, role, db, extensions, schema) and verifies at the domain level (role can auth + schema present) before reporting ready on `:5432`.
-4. **Failure is non-zero exit.** A started-but-unresponsive container, a failed native bootstrap, or a non-interactive context with no usable DB exits non-zero with an actionable message — so the `&&`-chained `npm start` halts here instead of crash-looping under PM2 against an unready database.
+1. **Select the mode first.** Set `PGMODE=native` in the repository-root `.env` before running setup to reuse a native PortOS database, even when Docker is running. An exported `PGMODE` overrides `.env` for this script; unset a conflicting shell value before retrying.
+2. **`PGMODE=docker` (default):** starts or reuses the `pgvector/pgvector:pg17` container (`docker-compose.yml`), waits for TCP connections **and** the base `memories` table, then reports ready. It does not probe native PostgreSQL first. The host port defaults to `:5561` (`PGPORT_DOCKER` overrides it).
+3. **Docker unavailable:** if Docker or Compose is missing, or the daemon is stopped, a healthy native PortOS database triggers an automatic switch: setup writes `PGMODE=native` to `.env` and exits successfully. Otherwise an interactive terminal offers native bootstrap or instructions to install/start Docker; a non-interactive run exits non-zero.
+4. **`PGMODE=native`:** first checks whether the configured role can authenticate to the configured database and its base `memories` table exists. A healthy database exits immediately without re-provisioning. Otherwise it runs `scripts/db.sh setup-native` (Homebrew install, role, database, extensions, schema) and verifies readiness again. The port defaults to `:5432` (`PGPORT` overrides it).
+5. **Failure is non-zero exit.** A started-but-unresponsive container or a failed native bootstrap exits non-zero with an actionable message — so the `&&`-chained `npm start` halts here instead of crash-looping under PM2 against an unready database.
+
+**Mode selection does not migrate data.** Native and Docker PostgreSQL are separate databases; setup checks schema readiness, not whether one contains your existing records. Keep an existing install pointed at the database holding its data. Back up before an intentional move between modes (see [Backup & Restore](./BACKUP.md)).
 
 `PGPASSWORD`/`PGUSER`/`PGDATABASE`/`PGPORT` are resolved from `process.env` first, then `.env`, then the backward-compatible defaults (`portos`/`portos`/`portos`/`5432`). The default `portos` password is an **intentional** local-development fallback (see the Distribution model note in [`AGENTS.md`](../AGENTS.md)); production deployments override it via `PGPASSWORD`.
 
