@@ -1,11 +1,24 @@
-import { useState } from 'react';
-import { uuidv4 } from '../../../../lib/uuid';
+import { useCallback, useState } from 'react';
 import { Link } from 'react-router';
 import ProviderModelSelector from '../../../ProviderModelSelector';
 import * as api from '../../../../services/api';
-import { buildQuotaBurnTaskCatalog, maintenancePrerequisites, maintenanceSequence, taskSourceHref } from '../../../../lib/quotaBurnTasks';
+import { useAutoRefetch } from '../../../../hooks/useAutoRefetch';
+import { buildQuotaBurnTaskCatalog, maintenancePrerequisites, taskSourceHref } from '../../../../lib/quotaBurnTasks';
+import { getAppName } from '../../../../utils/formatters';
 import { effortAwareModelOptions, isProcessProvider } from '../../../../utils/providers';
 import { familyForProvider } from '../../../../../../server/lib/providerFamilies';
+
+const RUNS_POLL_MS = 15_000;
+const FINISHED_RUNS_SHOWN = 3;
+
+/** Step progress as the user reads it: audits and drains done, out of the ladder. */
+const progressOf = run => ({ done: Object.keys(run.completed || {}).length, total: run.steps?.length || 0 });
+
+const currentStepOf = run => {
+  if (run.active?.taskType) return run.active.taskType;
+  const next = (run.steps || []).find(step => !run.completed?.[step.id]);
+  return next?.taskRef?.taskType || null;
+};
 
 export default function MaintenanceRunForm({ schedule, apps = [], providers = [], providersLoaded, improvementDisabled, daemonRunning, onRefresh }) {
   const [appId, setAppId] = useState('');
@@ -16,13 +29,24 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
   const [busy, setBusy] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [message, setMessage] = useState('');
+  // `null` = not read yet, `[]` = read and empty — the first read must happen
+  // even when there is nothing to show.
+  const [runs, setRuns] = useState(null);
   const availableProviders = providers.filter(provider => provider.enabled && isProcessProvider(provider) && familyForProvider(provider));
   const provider = availableProviders.find(entry => entry.id === providerId);
-  const familyId = familyForProvider(provider);
   const groups = buildQuotaBurnTaskCatalog({ schedule, apps });
-  const jobs = maintenanceSequence(groups, appId, 'preview');
   const prerequisites = maintenancePrerequisites(groups, appId);
+  const ready = Boolean(appId) && prerequisites.length === 0;
   const blocked = improvementDisabled || daemonRunning === false;
+
+  const fetchRuns = useCallback(async () => {
+    const response = await api.getMaintenanceRuns({ silent: true }).catch(() => null);
+    setRuns(response?.runs || (current => current || []));
+  }, []);
+  const anyRunning = (runs || []).some(run => run.status === 'running');
+  // One read on mount, then polling only while a run is in flight — an idle
+  // form costs nothing, and a start/resume already holds the fresh record.
+  const { refetch: refreshRuns } = useAutoRefetch(fetchRuns, RUNS_POLL_MS, { pollOnly: true, enabled: runs === null || anyRunning, immediate: runs === null });
 
   const prepare = async () => {
     if (busy || !onRefresh || !prerequisites.length || prerequisites.some(item => item.unavailable)) return;
@@ -56,48 +80,50 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
     setBusy(false);
   };
 
+  const describe = result => (result?.dispatched
+    ? `Maintenance started with ${result.taskType}. Later steps follow as each one finishes; progress is shown below and in Tasks.`
+    : `Maintenance run saved; holding: ${result?.reason || 'nothing dispatched'}. It retries on its own.`);
+
   const run = async () => {
-    if (busy || blocked || !jobs || !provider || !model || !consent) return;
+    if (busy || blocked || !ready || !provider || !model || !consent) return;
     setBusy(true);
-    setMessage('Checking existing plan…');
-    const current = await api.getQuotaBurn(false, { silent: true }).catch(error => {
-      setMessage(`Could not check existing plan: ${error.message}`);
+    setMessage('Starting maintenance…');
+    const response = await api.startMaintenanceRun({ appId, providerId, model, effort: effort || null }, { silent: true }).catch(error => {
+      setMessage(`Could not start maintenance: ${error.message}`);
       return null;
     });
-    if (!current?.config || current.config.families?.[familyId]?.jobs?.length) {
-      if (current?.config) setMessage('This family already has a plan. Manage or clear it in Quota Burn before starting another sequence.');
-      setBusy(false);
-      return;
-    }
-    setMessage('Saving maintenance sequence…');
-    // Each invocation gets fresh completion keys. Pins apply to the audits AND
-    // their claim drains; the scheduled tasks' saved settings remain intact.
-    const steps = maintenanceSequence(groups, appId, `maintenance-${uuidv4()}`).map(job => ({
-      ...job,
-      overrides: { ...job.overrides, providerId, model, effort: effort || null },
-    }));
-    const saved = await api.saveQuotaBurn({
-      enabled: true,
-      families: { [familyId]: { enabled: true, sequence: true, jobs: steps } },
-    }, { silent: true }).catch(error => {
-      setMessage(`Could not save maintenance sequence: ${error.message}`);
-      return null;
-    });
-    if (saved) {
-      const response = await api.runQuotaBurn({ familyId, force: true }, { silent: true }).catch(error => {
-        setMessage(`Sequence saved, but could not start: ${error.message}. Manage it in Quota Burn.`);
-        return null;
-      });
-      if (response) {
-        const result = response.result;
-        setMessage(result?.dispatched
-          ? 'Maintenance started. Follow progress in Tasks and Quota Burn.'
-          : `Sequence saved; waiting: ${result?.reason || 'no task dispatched'}. See Quota Burn for details.`);
-      }
+    if (response?.run) {
+      setRuns(current => [response.run, ...(current || []).filter(entry => entry.id !== response.run.id)]);
+      setMessage(describe(response.result));
       setConsent(false);
     }
     setBusy(false);
   };
+
+  const applyRun = (updated, result) => {
+    if (!updated) return;
+    setRuns(current => (current || []).map(entry => (entry.id === updated.id ? updated : entry)));
+    if (result) setMessage(describe(result));
+  };
+  const stop = async id => {
+    const response = await api.stopMaintenanceRun(id, { silent: true }).catch(error => {
+      setMessage(`Could not stop the run: ${error.message}`);
+      return null;
+    });
+    applyRun(response?.run);
+  };
+  const resume = async id => {
+    const response = await api.resumeMaintenanceRun(id, { silent: true }).catch(error => {
+      setMessage(`Could not resume the run: ${error.message}`);
+      return null;
+    });
+    applyRun(response?.run, response?.result);
+  };
+
+  const visibleRuns = [
+    ...(runs || []).filter(entry => entry.status === 'running'),
+    ...(runs || []).filter(entry => entry.status !== 'running').slice(0, FINISHED_RUNS_SHOWN),
+  ];
 
   return (
     <div className="mt-3 space-y-3 text-sm">
@@ -123,7 +149,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
         loading={!providersLoaded}
         disabled={busy}
       />
-      {appId && !jobs && <div className="space-y-2">
+      {appId && !ready && <div className="space-y-2">
         <p role="status">Run now needs these saved task settings:</p>
         <ul className="list-disc pl-5 space-y-1">
           {prerequisites.map(item => <li key={item.taskType}>
@@ -138,18 +164,34 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
         </>}
       </div>}
       {blocked && <p role="status">Enable Improvement and start the CoS daemon before running maintenance.</p>}
-      <p className="text-xs">Runs the first step now, bypassing its reset window, reserve, and dispatch cap; later steps continue in order through Quota Burn, subject to its quota gates. Supports subscription CLI/TUI providers. Blank effort inherits each scheduled task’s saved effort.</p>
+      <p className="text-xs">Runs every step now, in order: each audit starts when the previous step finishes, and each claim-issue drain repeats until the app’s issue backlog is empty. Independent of Quota Burn — no master switch, no quota gates, nothing to re-arm. Supports subscription CLI/TUI providers. Blank effort inherits each scheduled task’s saved effort.</p>
       <label className="flex items-start gap-2" htmlFor="maintenance-run-consent">
         <input id="maintenance-run-consent" type="checkbox" checked={consent} disabled={busy} onChange={event => setConsent(event.target.checked)} />
-        <span>Enable Quota Burn and add this maintenance sequence to an empty provider family plan. Other enabled family plans may also resume.</span>
+        <span>Run the whole maintenance sequence for this app on the selected provider now, spending its quota as needed.</span>
       </label>
       <div className="flex items-center gap-3 flex-wrap">
-        <button type="button" onClick={run} disabled={busy || blocked || !jobs || !provider || !model || !consent || !providersLoaded} className="px-3 py-1.5 bg-port-accent text-white rounded disabled:opacity-50">
+        <button type="button" onClick={run} disabled={busy || blocked || !ready || !provider || !model || !consent || !providersLoaded} className="px-3 py-1.5 bg-port-accent text-white rounded disabled:opacity-50">
           {busy && !preparing ? 'Starting…' : 'Run now'}
         </button>
-        <Link className="underline" to={familyId ? `/devtools/quota-burn/${familyId}` : '/devtools/quota-burn'}>Manage sequence in Quota Burn</Link>
+        <Link className="underline" to="/devtools/quota-burn">Schedule this sequence in Quota Burn instead</Link>
       </div>
       {message && <p role="status">{message}</p>}
+      {visibleRuns.length > 0 && <ul aria-label="Maintenance runs" className="space-y-2">
+        {visibleRuns.map(entry => {
+          const { done, total } = progressOf(entry);
+          const step = currentStepOf(entry);
+          return <li key={entry.id} className="border border-port-border rounded p-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-medium">{getAppName(entry.appId, apps, entry.appId)}</span>
+            <span className="text-xs">{entry.providerId}{entry.model ? ` · ${entry.model}` : ''}</span>
+            <span className="text-xs">{entry.status} · {done}/{total} steps{entry.status === 'running' && step ? ` · ${step}` : ''}</span>
+            {entry.reason && <span className="text-xs basis-full">{entry.reason}</span>}
+            {entry.status === 'running'
+              ? <button type="button" onClick={() => stop(entry.id)} className="px-2 py-1 text-xs bg-port-border rounded">Stop</button>
+              : entry.status === 'stopped' && <button type="button" onClick={() => resume(entry.id)} className="px-2 py-1 text-xs bg-port-border rounded">Resume</button>}
+          </li>;
+        })}
+      </ul>}
+      {visibleRuns.length > 0 && <button type="button" onClick={refreshRuns} className="text-xs underline">Refresh runs</button>}
     </div>
   );
 }

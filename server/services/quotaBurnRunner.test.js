@@ -645,6 +645,20 @@ describe('completion continuation', () => {
     expect(state.invoked).toEqual([]);
   });
 
+  it('credits the agent of a manual maintenance run to the denial ledger but never walks the plan on it', async () => {
+    // The Schedule tab's "Run maintenance now" spends this family's window
+    // (so a refusal is still the family's), but its ladder is its own — the
+    // plan must not dispatch, and no plan step may be marked spent, because a
+    // manual run finished a task.
+    state.invokePending = { first: { count: 1 } };
+    const agent = { taskId: 'manual-1', result: { success: true }, metadata: { taskQuotaBurnFamily: 'grok', taskQuotaBurnStepId: 'first', taskQuotaBurnMaintenanceRunId: 'maint-1' } };
+    await expect(__onBurnAgentCompleted(agent)).resolves.toEqual({ skipped: 'maintenance-run' });
+    expect(state.settled).toEqual(['grok']);
+    expect(state.invoked).toEqual([]);
+    expect(state.completed).toEqual([]);
+    expect(state.runs).toEqual([]);
+  });
+
   it('stops when the master switch is off', async () => {
     // A continuation is unattended spending — switching the feature off must end
     // the chain, not leave it running until the window cap happens to close it.

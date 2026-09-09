@@ -84,6 +84,12 @@ export const QUOTA_BURN_PROVENANCE_FIELDS = Object.freeze([
   // synthesized — on the synchronous custom-job lane, which queues the task itself
   // and has no request to name; a fake id would make a join over it silently wrong.
   { field: 'requestId', taskKey: 'quotaBurnRequestId', agentKey: 'taskQuotaBurnRequestId', read: asId },
+  // The MANUAL maintenance run that asked (`services/maintenanceRun.js`), absent
+  // on an automatic burn. It is what lets the quota-burn runner leave a manual
+  // run's agents alone — the run walks its own ladder, outside the family's
+  // plan, its completion ledger and its window gates — while the family
+  // attribution above still credits a refusal to the window it actually spent.
+  { field: 'maintenanceRunId', taskKey: 'quotaBurnMaintenanceRunId', agentKey: 'taskQuotaBurnMaintenanceRunId', read: asId },
 ].map(Object.freeze));
 
 /**
@@ -131,6 +137,20 @@ export function quotaBurnAgentMetadata(taskMetadata) {
 
 /** Whether a task carries attributable burn provenance at all. */
 export const hasQuotaBurnProvenance = (taskMetadata) => Boolean(quotaBurnProvenance(taskMetadata).family);
+
+/**
+ * Whether the family's burn PLAN owns this task: burn-provenanced, and not a
+ * manual maintenance run's. The one rule the plan's sequence walk and its
+ * completion continuation both apply — a manual run spends the family's
+ * window (so the denial ledger still hears about it) but walks its own ladder,
+ * so the plan neither advances on it nor waits for it. `burnPlanOwnsAgent` is
+ * the same rule over the agent projection (`quotaBurnAgentMetadata`).
+ */
+export function burnPlanOwnsTask(taskMetadata) {
+  const block = quotaBurnProvenance(taskMetadata);
+  return Boolean(block.family) && !block.maintenanceRunId;
+}
+export const burnPlanOwnsAgent = (agent) => Boolean(agent?.metadata?.taskQuotaBurnFamily) && !agent.metadata.taskQuotaBurnMaintenanceRunId;
 
 const trimmed = (value, max = MAX_FIELD) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 const nullable = (value, max = MAX_FIELD) => trimmed(value, max) || null;
@@ -186,6 +206,7 @@ export function normalizeQuotaBurnProvenance(raw) {
     family,
     stepId,
     limitingResetAt: Number.isFinite(limitingResetAt) ? limitingResetAt : null,
+    ...(nullable(raw.maintenanceRunId) ? { maintenanceRunId: nullable(raw.maintenanceRunId) } : {}),
     overrides: {
       providerId: nullable(overrides.providerId),
       model: nullable(overrides.model),

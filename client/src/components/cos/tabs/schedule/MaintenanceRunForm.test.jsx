@@ -4,9 +4,13 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { MAINTENANCE_TASK_ORDER } from '../../../../lib/quotaBurnTasks';
+import { MAINTENANCE_SEQUENCE_TYPES } from '../../../../../../server/lib/maintenanceSequence';
 import MaintenanceRunForm from './MaintenanceRunForm';
 
-const api = vi.hoisted(() => ({ getQuotaBurn: vi.fn(), saveQuotaBurn: vi.fn(), runQuotaBurn: vi.fn(), updateCosTaskInterval: vi.fn(), updateAppTaskTypeOverride: vi.fn() }));
+const api = vi.hoisted(() => ({
+  getMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn(),
+  updateCosTaskInterval: vi.fn(), updateAppTaskTypeOverride: vi.fn(),
+}));
 vi.mock('../../../../services/api', () => api);
 const tasks = Object.fromEntries([...MAINTENANCE_TASK_ORDER, 'claim-issue'].map(taskType => [taskType, {
   enabled: true, perpetual: taskType === 'claim-issue', appOverrides: { example: { enabled: true } },
@@ -16,6 +20,11 @@ const props = {
   providers: [{ id: 'claude', name: 'Claude', type: 'cli', command: 'claude', enabled: true, models: ['sonnet'] }],
   providersLoaded: true, daemonRunning: true,
 };
+const steps = MAINTENANCE_SEQUENCE_TYPES.map((taskType, index) => ({ id: `maint-1-${index}`, taskRef: { taskType } }));
+const runRecord = (overrides = {}) => ({
+  id: 'maint-1', appId: 'example', providerId: 'claude', model: 'sonnet', status: 'running', steps,
+  completed: { 'maint-1-0': 'done' }, active: { stepId: 'maint-1-1', taskType: 'claim-issue' }, reason: null, ...overrides,
+});
 const show = (overrides = {}) => render(<MemoryRouter><MaintenanceRunForm {...props} {...overrides} /></MemoryRouter>);
 const select = async user => {
   await user.selectOptions(screen.getByLabelText('App'), 'example');
@@ -28,70 +37,53 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.updateCosTaskInterval.mockResolvedValue({ success: true });
   api.updateAppTaskTypeOverride.mockResolvedValue({ success: true });
-  api.getQuotaBurn.mockResolvedValue({ config: { families: {} } });
-  api.saveQuotaBurn.mockResolvedValue({ config: {} });
-  api.runQuotaBurn.mockResolvedValue({ result: { dispatched: true } });
+  api.getMaintenanceRuns.mockResolvedValue({ runs: [] });
+  api.startMaintenanceRun.mockResolvedValue({ run: runRecord({ completed: {}, active: { stepId: 'maint-1-0', taskType: 'better-structural-drift' } }), result: { dispatched: true, taskType: 'better-structural-drift' } });
 });
 describe('maintenance launch', () => {
-  it('saves ordered steps with app and pins before dispatch and gates duplicate launches', async () => {
+  it('starts a standalone run with the app and pins, and shows its progress', async () => {
     const user = userEvent.setup();
-    let finishSave;
-    api.saveQuotaBurn.mockReturnValue(new Promise(resolve => { finishSave = resolve; }));
+    let finishStart;
+    api.startMaintenanceRun.mockReturnValue(new Promise(resolve => { finishStart = resolve; }));
     show();
-    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
     await select(user);
     await user.click(screen.getByRole('button', { name: 'Run now' }));
-    expect(api.runQuotaBurn).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
-    const patch = api.saveQuotaBurn.mock.calls[0][0];
-    expect(patch.enabled).toBe(true);
-    const family = patch.families.claude;
-    expect(family.sequence).toBe(true);
-    expect(family.jobs.map(job => job.taskRef.taskType)).toEqual(MAINTENANCE_TASK_ORDER.flatMap((type, index) => index ? ['claim-issue', type] : [type]));
-    for (const job of family.jobs) {
-      expect(job.taskRef.appId).toBe('example');
-      expect(job.overrides).toMatchObject({ providerId: 'claude', model: 'sonnet', effort: 'high' });
-      expect(job.runOnce).toBe(true);
-    }
-    finishSave({ config: patch });
-    await waitFor(() => expect(api.runQuotaBurn).toHaveBeenCalledWith({ familyId: 'claude', force: true }, { silent: true }));
-    expect(await screen.findByText(/Maintenance started/)).toBeInTheDocument();
+    expect(api.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'example', providerId: 'claude', model: 'sonnet', effort: 'high' }, { silent: true });
+    // The poll re-fires once a run is in flight and reads the persisted record back.
+    api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord()] });
+    finishStart({ run: runRecord(), result: { dispatched: true, taskType: 'better-structural-drift' } });
+    expect(await screen.findByText(/Maintenance started with better-structural-drift/)).toBeInTheDocument();
+    const row = screen.getByRole('list', { name: 'Maintenance runs' });
+    expect(row).toHaveTextContent('Example App');
+    expect(row).toHaveTextContent('running · 1/13 steps · claim-issue');
     expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: /Quota Burn/ })).toHaveAttribute('href', '/devtools/quota-burn');
   });
-  it('does not dispatch after a failed save and reports a saved but blocked run honestly', async () => {
+  it('reports a saved-but-holding run and a failed start honestly', async () => {
     const user = userEvent.setup();
-    api.saveQuotaBurn.mockRejectedValueOnce(new Error('save unavailable'));
+    api.startMaintenanceRun.mockResolvedValueOnce({ run: runRecord({ completed: {}, active: null, reason: 'provider unavailable' }), result: { dispatched: false, reason: 'provider unavailable' } });
     show();
     await select(user);
     await user.click(screen.getByRole('button', { name: 'Run now' }));
-    expect(await screen.findByText(/Could not save maintenance sequence: save unavailable/)).toBeInTheDocument();
-    expect(api.runQuotaBurn).not.toHaveBeenCalled();
-    api.runQuotaBurn.mockResolvedValueOnce({ result: { dispatched: false, reason: 'provider unavailable' } });
+    expect(await screen.findByText(/holding: provider unavailable/)).toBeInTheDocument();
+    api.startMaintenanceRun.mockRejectedValueOnce(new Error('a maintenance run is already in progress'));
+    await user.click(screen.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: 'Run now' }));
-    expect(await screen.findByText(/Sequence saved; waiting: provider unavailable/)).toBeInTheDocument();
+    expect(await screen.findByText(/Could not start maintenance: a maintenance run is already in progress/)).toBeInTheDocument();
   });
-  it('preserves existing family plans and refuses to save when the plan cannot be read', async () => {
+  it('stops and resumes an existing run from the list', async () => {
     const user = userEvent.setup();
+    api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord()] });
+    api.stopMaintenanceRun.mockResolvedValue({ run: runRecord({ status: 'stopped', reason: 'stopped by the user' }) });
+    api.resumeMaintenanceRun.mockResolvedValue({ run: runRecord(), result: { dispatched: true, taskType: 'claim-issue' } });
     show();
-    await select(user);
-    api.getQuotaBurn.mockResolvedValueOnce({ config: { families: { claude: { jobs: [{ id: 'existing' }] } } } });
-    await user.click(screen.getByRole('button', { name: 'Run now' }));
-    expect(await screen.findByText(/This family already has a plan/)).toBeInTheDocument();
-    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
-    api.getQuotaBurn.mockRejectedValueOnce(new Error('offline'));
-    await user.click(screen.getByRole('button', { name: 'Run now' }));
-    expect(await screen.findByText(/Could not check existing plan: offline/)).toBeInTheDocument();
-    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
-    expect(api.runQuotaBurn).not.toHaveBeenCalled();
-  });
-  it('links to the saved plan after dispatch transport failure', async () => {
-    const user = userEvent.setup();
-    show();
-    await select(user);
-    api.runQuotaBurn.mockRejectedValueOnce(new Error('runner offline'));
-    await user.click(screen.getByRole('button', { name: 'Run now' }));
-    expect(await screen.findByText(/Sequence saved, but could not start: runner offline/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Manage sequence/ })).toHaveAttribute('href', '/devtools/quota-burn/claude');
+    await user.click(await screen.findByRole('button', { name: 'Stop' }));
+    expect(await screen.findByText(/stopped · 1\/13 steps/)).toBeInTheDocument();
+    expect(api.stopMaintenanceRun).toHaveBeenCalledWith('maint-1', { silent: true });
+    await user.click(screen.getByRole('button', { name: 'Resume' }));
+    expect(await screen.findByText(/running · 1\/13 steps/)).toBeInTheDocument();
+    expect(screen.getByText(/Maintenance started with claim-issue/)).toBeInTheDocument();
   });
   it('blocks missing task eligibility and a stopped daemon', async () => {
     const user = userEvent.setup();
@@ -101,7 +93,7 @@ describe('maintenance launch', () => {
     expect(screen.getByText(/Run now needs these saved task settings/)).toBeInTheDocument();
     expect(screen.getByText(/start the CoS daemon/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Enable required tasks' })).not.toBeInTheDocument();
-    expect(api.saveQuotaBurn).not.toHaveBeenCalled();
+    expect(api.startMaintenanceRun).not.toHaveBeenCalled();
   });
 });
 
@@ -135,14 +127,14 @@ it('enables only missing prerequisites and waits for refreshed saved settings be
   expect(api.updateAppTaskTypeOverride).toHaveBeenCalledExactlyOnceWith('example', 'simplify', { enabled: true }, { silent: true });
   expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
   expect(screen.getByRole('combobox', { name: 'App' })).toBeDisabled();
-  expect(api.runQuotaBurn).not.toHaveBeenCalled();
+  expect(api.startMaintenanceRun).not.toHaveBeenCalled();
   finishRefresh();
   await waitFor(() => expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled());
   await user.click(screen.getByRole('button', { name: 'Run now' }));
   expect(await screen.findByText(/Maintenance started/)).toBeInTheDocument();
 });
 
-it('refreshes partial setup after failure without saving a plan or starting work', async () => {
+it('refreshes partial setup after failure without starting work', async () => {
   const user = userEvent.setup();
   const onRefresh = vi.fn().mockRejectedValue(new Error('refresh unavailable'));
   api.updateAppTaskTypeOverride.mockRejectedValueOnce(new Error('save unavailable'));
@@ -153,6 +145,5 @@ it('refreshes partial setup after failure without saving a plan or starting work
   expect(onRefresh).toHaveBeenCalledOnce();
   expect(screen.getByText(/Refreshing the schedule also failed/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
-  expect(api.saveQuotaBurn).not.toHaveBeenCalled();
-  expect(api.runQuotaBurn).not.toHaveBeenCalled();
+  expect(api.startMaintenanceRun).not.toHaveBeenCalled();
 });

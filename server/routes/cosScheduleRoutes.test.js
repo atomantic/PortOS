@@ -5,6 +5,8 @@ import scheduleRoutes from './cosScheduleRoutes.js';
 
 const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
 vi.mock('../services/userActions.js', () => ({ recordUserAction }));
+const maintenance = vi.hoisted(() => ({ listMaintenanceRuns: vi.fn(), startMaintenanceRun: vi.fn(), stopMaintenanceRun: vi.fn(), resumeMaintenanceRun: vi.fn() }));
+vi.mock('../services/maintenanceRun.js', () => maintenance);
 
 vi.mock('../services/taskSchedule.js', () => ({
   getScheduleStatus: vi.fn(),
@@ -69,6 +71,28 @@ describe('CoS Schedule Routes', () => {
       const response = await request(app).get('/api/cos/schedule');
 
       expect(response.status).toBe(200);
+    });
+  });
+
+  describe('manual maintenance runs', () => {
+    it('starts a run from a validated body and reports the first dispatch', async () => {
+      maintenance.startMaintenanceRun.mockResolvedValue({ run: { id: 'maint-1', status: 'running' }, result: { dispatched: true, taskType: 'better-structural-drift' } });
+      const response = await request(app).post('/api/cos/schedule/maintenance-runs').send({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: null });
+      expect(response.status).toBe(201);
+      expect(response.body.result.taskType).toBe('better-structural-drift');
+      expect(maintenance.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: null });
+      // The model is not optional: a run must name what it spends.
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ appId: 'app-1', providerId: 'codex' })).status).toBe(400);
+      expect(maintenance.startMaintenanceRun).toHaveBeenCalledTimes(1);
+    });
+
+    it('lists, stops and resumes runs, and 404s an unknown id', async () => {
+      maintenance.listMaintenanceRuns.mockResolvedValue([{ id: 'maint-1' }]);
+      expect((await request(app).get('/api/cos/schedule/maintenance-runs')).body).toEqual({ runs: [{ id: 'maint-1' }] });
+      maintenance.stopMaintenanceRun.mockResolvedValue({ id: 'maint-1', status: 'stopped' });
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs/maint-1/stop')).body.run.status).toBe('stopped');
+      maintenance.resumeMaintenanceRun.mockResolvedValue(null);
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs/maint-1/resume')).status).toBe(404);
     });
   });
 

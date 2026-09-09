@@ -136,7 +136,7 @@ describe('the quota-burn provenance block', () => {
     // ledger being able to read it. Driving both sides off the one table means a
     // new row cannot be half-applied, and this asserts the table IS both sides.
     const persisted = quotaBurnTaskMetadata({
-      family: 'grok', limitingResetAt: 1700000000000, stepId: 'step-1', requestId: 'demand-7',
+      family: 'grok', limitingResetAt: 1700000000000, stepId: 'step-1', requestId: 'demand-7', maintenanceRunId: 'maint-1',
     });
     const projected = quotaBurnAgentMetadata(persisted);
     for (const { taskKey, agentKey } of QUOTA_BURN_PROVENANCE_FIELDS) {
@@ -155,6 +155,7 @@ describe('the quota-burn provenance block', () => {
       taskQuotaBurnLimitingResetAt: 1700000000000,
       taskQuotaBurnStepId: null,
       taskQuotaBurnRequestId: null,
+      taskQuotaBurnMaintenanceRunId: null,
     });
     expect(quotaBurnAgentMetadata(undefined).taskQuotaBurnFamily).toBeNull();
   });
