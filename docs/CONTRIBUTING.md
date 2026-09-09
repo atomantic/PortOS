@@ -86,14 +86,22 @@ details.
 
 ### Line Endings on Windows
 
-`.gitattributes` pins `eol=lf` for text files across all platforms. If you have an existing repository clone on Windows from before this setting landed, run:
+`.gitattributes` pins `eol=lf` for text files across all platforms. To normalize
+tracked files in an older Windows clone, first commit or stash unrelated work
+(including staged changes). Then run from the repository root:
 
 ```bash
-git rm --cached -r .
-git reset --hard
+git add --renormalize .
+git diff --cached --stat
+git diff --cached
 ```
 
-to re-index files with LF line endings.
+This reapplies the current attributes to tracked files in the index without
+overwriting working files. It also stages any other tracked edits or deletions,
+which is why unrelated work must be saved first. Commit only if the reviewed
+diff contains the intended normalization changes; an empty diff needs no commit.
+Do not use `git reset --hard` for this repair: it discards uncommitted tracked
+changes.
 
 ### Commit Messages
 
