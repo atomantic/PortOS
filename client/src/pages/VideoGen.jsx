@@ -73,7 +73,7 @@ import ModelSelect from '../components/ModelSelect';
 import { FormField } from '../components/ui/FormField';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../components/media/ModelDownloadBadge';
-import { useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID, textEncoderDownloadId } from '../hooks/useModelDownloadStatus';
+import { useDownloadableAssets, useModelDownloadStatus, TEXT_ENCODER_DOWNLOAD_ID, textEncoderDownloadId } from '../hooks/useModelDownloadStatus';
 import TextEncoderPicker from '../components/videoGen/TextEncoderPicker';
 import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
@@ -788,77 +788,37 @@ export default function VideoGen() {
     startEncoderWhenIdle(option && !option.builtIn ? textEncoderDownloadId(id) : null);
   }, [setTextEncoderId, textEncoderOptions, startEncoderWhenIdle]);
   const icWeightStatus = icSpec ? modelDownload.getStatus(icSpec.mode) : null;
-  const modelWeightsBlocked = !rendersOffMachine
-    && (statusLoading || !modelId || !currentModel || modelDownload.loading
-      || modelStatus === null || modelStatus?.cached === false);
-  const textEncoderWeightsBlocked = !rendersOffMachine && usesSharedTextEncoder
-    && (modelDownload.loading || textEncoderStatus === null || textEncoderStatus?.cached === false);
-  const icWeightsBlocked = !rendersOffMachine && icModeActive
-    && (modelDownload.loading || icWeightStatus === null || icWeightStatus?.cached === false);
-  const textEncoderOptionBlocked = !rendersOffMachine && !!textEncoderOptionDownloadId
-    && (modelDownload.loading || textEncoderOptionStatus === null || textEncoderOptionStatus?.cached === false);
-  const weightsGateBlocked = modelWeightsBlocked || textEncoderWeightsBlocked
-    || textEncoderOptionBlocked || icWeightsBlocked;
-  const activeWeightErrorIds = [
-    modelId,
-    usesSharedTextEncoder ? TEXT_ENCODER_DOWNLOAD_ID : null,
-    textEncoderOptionDownloadId,
-    icModeActive ? icSpec?.mode : null,
-  ].filter(Boolean);
+  const assets = useDownloadableAssets([
+    {
+      key: 'model', id: modelId, label: 'selected model weights',
+      applies: true, extraBlocked: statusLoading || !modelId || !currentModel,
+      status: modelStatus, keyPrefix: modelId,
+      name: currentModel?.name || modelId, repairLabel: 'Repair model',
+    },
+    {
+      key: 'shared-encoder', id: TEXT_ENCODER_DOWNLOAD_ID, label: 'shared text encoder',
+      applies: usesSharedTextEncoder, status: textEncoderStatus, keyPrefix: 'text-encoder',
+      name: `The shared text encoder (${textEncoderStatus?.repo})`, repairLabel: 'Repair encoder',
+    },
+    {
+      key: 'encoder-option', id: textEncoderOptionDownloadId,
+      label: `${selectedTextEncoder?.label || 'selected'} text encoder`,
+      applies: !!textEncoderOptionDownloadId, status: textEncoderOptionStatus, keyPrefix: textEncoderOptionDownloadId,
+      name: `The ${selectedTextEncoder?.label} text encoder`, repairLabel: 'Repair text encoder',
+    },
+    {
+      key: 'ic-lora', id: icSpec?.mode, label: `${icSpec?.label || 'IC-LoRA'} weight`,
+      applies: icModeActive, status: icWeightStatus, keyPrefix: icSpec?.mode,
+      name: `The ${icSpec?.label || 'IC-LoRA'} weight`, repairLabel: `Repair ${icSpec?.label || 'IC-LoRA'}`,
+    },
+  ], { loading: modelDownload.loading, downloading: modelDownload.downloading, enabled: !rendersOffMachine });
+  const sharedEncoderAsset = assets.find(asset => asset.key === 'shared-encoder');
+  const blockedAsset = assets.find(asset => asset.blocked);
+  const weightsGateBlocked = !!blockedAsset;
+  const activeWeightErrorIds = assets.filter(asset => asset.applies).map(asset => asset.id).filter(Boolean);
   const activeWeightError = activeWeightErrorIds.includes(modelDownload.lastError?.modelId)
     ? modelDownload.lastError
     : null;
-
-  // Weight-integrity (issue #1324). A corrupt/truncated model decodes to
-  // garbled "mosaic" video that a clean re-download fixes; surface a Repair
-  // banner keyed on the cheap structural check the status poll already ran so
-  // the user can delete + re-fetch the bad files instead of debugging a render.
-  const modelIntegrity = modelStatus && !modelStatus.downloading ? modelStatus.integrity : null;
-  const integrityBad = modelIntegrity?.status === 'bad';
-  const integrityBadCount = integrityBad ? (modelIntegrity.badFiles || []).length : 0;
-  const integrityKey = integrityBad ? `${modelId}:${(modelIntegrity.badFiles || []).map((f) => f.name).join(',')}` : null;
-  const [dismissedIntegrityKey, setDismissedIntegrityKey] = useState(null);
-  const showIntegrityBanner = integrityBad && dismissedIntegrityKey !== integrityKey && !modelDownload.downloading;
-
-  // Text-encoder integrity. The shared Gemma encoder is a separate HF repo, so a
-  // corrupt encoder needs its own Repair banner — the model-keyed repair above
-  // can't reach it (it isn't a listVideoModels() entry). Local-path encoders
-  // report `integrity: null`, so this only fires for a damaged HF-cached encoder.
-  const encoderIntegrity = textEncoderStatus && !textEncoderStatus.downloading ? textEncoderStatus.integrity : null;
-  const encoderIntegrityBad = encoderIntegrity?.status === 'bad';
-  const encoderIntegrityBadCount = encoderIntegrityBad ? (encoderIntegrity.badFiles || []).length : 0;
-  const encoderIntegrityKey = encoderIntegrityBad ? `text-encoder:${(encoderIntegrity.badFiles || []).map((f) => f.name).join(',')}` : null;
-  const [dismissedEncoderIntegrityKey, setDismissedEncoderIntegrityKey] = useState(null);
-  const showEncoderIntegrityBanner = encoderIntegrityBad && dismissedEncoderIntegrityKey !== encoderIntegrityKey && !modelDownload.downloading;
-
-  // A substituted conditioner is a separate pinned file, so it gets the same
-  // treatment: the model-keyed and shared-encoder repairs above can't reach it,
-  // and a corrupt one degrades the render rather than failing it.
-  const textEncoderOptionIntegrity = textEncoderOptionStatus && !textEncoderOptionStatus.downloading
-    ? textEncoderOptionStatus.integrity
-    : null;
-  const textEncoderOptionIntegrityBad = textEncoderOptionIntegrity?.status === 'bad';
-  const textEncoderOptionIntegrityBadCount = textEncoderOptionIntegrityBad ? (textEncoderOptionIntegrity.badFiles || []).length : 0;
-  const textEncoderOptionIntegrityKey = textEncoderOptionIntegrityBad
-    ? `${textEncoderOptionDownloadId}:${(textEncoderOptionIntegrity.badFiles || []).map((f) => f.name).join(',')}`
-    : null;
-  const [dismissedTextEncoderOptionIntegrityKey, setDismissedTextEncoderOptionIntegrityKey] = useState(null);
-  const showTextEncoderOptionIntegrityBanner = textEncoderOptionIntegrityBad
-    && dismissedTextEncoderOptionIntegrityKey !== textEncoderOptionIntegrityKey
-    && !modelDownload.downloading;
-
-  // IC-LoRA weights are independent downloads too. Keep their corruption
-  // recovery on the originating Video Gen surface instead of requiring a CLI
-  // cache purge or leaving the user with a disabled Generate button.
-  const icIntegrity = icWeightStatus && !icWeightStatus.downloading ? icWeightStatus.integrity : null;
-  const icIntegrityBad = icIntegrity?.status === 'bad';
-  const icIntegrityBadCount = icIntegrityBad ? (icIntegrity.badFiles || []).length : 0;
-  const icIntegrityKey = icIntegrityBad
-    ? `${icSpec?.mode}:${(icIntegrity.badFiles || []).map((file) => file.name).join(',')}`
-    : null;
-  const [dismissedIcIntegrityKey, setDismissedIcIntegrityKey] = useState(null);
-  const showIcIntegrityBanner = icIntegrityBad
-    && dismissedIcIntegrityKey !== icIntegrityKey && !modelDownload.downloading;
 
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
 
@@ -1276,68 +1236,20 @@ export default function VideoGen() {
               </button>
             </div>
           )}
-          {showIntegrityBanner && (
+          {assets.filter(asset => asset.showBanner).map(asset => (
             <ModelRepairBanner
+              key={asset.key}
               message={<>
-                <strong className="font-semibold">{currentModel?.name || modelId}</strong> has {integrityBadCount || 'corrupt'} damaged weight file{integrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
-                Repair deletes the bad file{integrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
+                <strong className="font-semibold">{asset.name}</strong> has {asset.integrityBadCount || 'corrupt'} damaged weight file{asset.integrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
+                Repair deletes the bad file{asset.integrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
               </>}
-              repairLabel="Repair model"
-              onRepair={() => {
-                setDismissedIntegrityKey(integrityKey);
-                modelDownload.repair(modelId);
-              }}
-              onDismiss={() => setDismissedIntegrityKey(integrityKey)}
+              repairLabel={asset.repairLabel}
+              onRepair={() => { asset.dismiss(); modelDownload.repair(asset.id); }}
+              onDismiss={asset.dismiss}
               disabled={modelDownload.repairing || modelDownload.downloading}
               repairing={modelDownload.repairing}
             />
-          )}
-          {showEncoderIntegrityBanner && (
-            <ModelRepairBanner
-              message={<>
-                The shared <strong className="font-semibold">text encoder</strong> ({textEncoderStatus?.repo}) has {encoderIntegrityBadCount || 'corrupt'} damaged weight file{encoderIntegrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
-                Repair deletes the bad file{encoderIntegrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
-              </>}
-              repairLabel="Repair encoder"
-              onRepair={() => { setDismissedEncoderIntegrityKey(encoderIntegrityKey); modelDownload.repair(TEXT_ENCODER_DOWNLOAD_ID); }}
-              onDismiss={() => setDismissedEncoderIntegrityKey(encoderIntegrityKey)}
-              disabled={modelDownload.repairing || modelDownload.downloading}
-              repairing={modelDownload.repairing}
-            />
-          )}
-          {/* A substituted conditioner is its own multi-GB file, so a corrupt
-              one needs its own Repair path — neither the model-keyed banner nor
-              the shared-encoder one above can reach it. Same failure mode as a
-              corrupt model: the render completes and comes out garbled. */}
-          {showTextEncoderOptionIntegrityBanner && (
-            <ModelRepairBanner
-              message={<>
-                The <strong className="font-semibold">{selectedTextEncoder?.label}</strong> text encoder has {textEncoderOptionIntegrityBadCount || 'corrupt'} damaged file{textEncoderOptionIntegrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
-                Repair deletes the bad file{textEncoderOptionIntegrityBadCount === 1 ? '' : 's'} and re-downloads a clean copy.
-              </>}
-              repairLabel="Repair text encoder"
-              onRepair={() => {
-                setDismissedTextEncoderOptionIntegrityKey(textEncoderOptionIntegrityKey);
-                modelDownload.repair(textEncoderOptionDownloadId);
-              }}
-              onDismiss={() => setDismissedTextEncoderOptionIntegrityKey(textEncoderOptionIntegrityKey)}
-              disabled={modelDownload.repairing || modelDownload.downloading}
-              repairing={modelDownload.repairing}
-            />
-          )}
-          {showIcIntegrityBanner && (
-            <ModelRepairBanner
-              message={<>
-                The <strong className="font-semibold">{icSpec?.label || 'IC-LoRA'}</strong> weight has {icIntegrityBadCount || 'corrupt'} damaged file{icIntegrityBadCount === 1 ? '' : 's'}.
-                Repair deletes the bad file{icIntegrityBadCount === 1 ? '' : 's'} and re-downloads a clean copy.
-              </>}
-              repairLabel={`Repair ${icSpec?.label || 'IC-LoRA'}`}
-              onRepair={() => { setDismissedIcIntegrityKey(icIntegrityKey); modelDownload.repair(icSpec.mode); }}
-              onDismiss={() => setDismissedIcIntegrityKey(icIntegrityKey)}
-              disabled={modelDownload.repairing || modelDownload.downloading}
-              repairing={modelDownload.repairing}
-            />
-          )}
+          ))}
           <UniverseStylePicker
             value={selectedUniverse?.id || ''}
             onChange={setSelectedUniverse}
@@ -1682,7 +1594,7 @@ export default function VideoGen() {
                   onCancel={modelDownload.cancel}
                   disabled={generating}
                 />
-                {usesSharedTextEncoder && textEncoderStatus && (textEncoderStatus.cached === false || textEncoderStatus.downloading) && (
+                {usesSharedTextEncoder && textEncoderStatus && (sharedEncoderAsset.missingWeights || textEncoderStatus.downloading) && (
                   <div className="mt-1">
                     <p className="text-[10px] text-gray-500">Text encoder ({textEncoderStatus.repo}) is also required:</p>
                     <ModelDownloadBadge
@@ -1807,10 +1719,7 @@ export default function VideoGen() {
                   remoteBlocked ? remoteBlocked
                     : byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`
                     : byovGateBlocked ? `Checking ${byovRuntime} runtime status…`
-                    : modelWeightsBlocked ? 'Download the selected model weights before generating'
-                    : textEncoderWeightsBlocked ? 'Download the shared text encoder before generating'
-                    : textEncoderOptionBlocked ? `Download the ${selectedTextEncoder?.label || 'selected'} text encoder before generating`
-                    : icWeightsBlocked ? `Download the ${icSpec?.label || 'IC-LoRA'} weight before generating`
+                    : blockedAsset ? `Download the ${blockedAsset.label} before generating`
                     : extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
                     : a2vModeBlocked ? (a2vDurationError || (!isAudioToVideoRuntime(currentModel?.runtime)
                       ? 'a2v mode requires an audio-to-video model — pick one from the Model dropdown'
@@ -1829,8 +1738,7 @@ export default function VideoGen() {
               disabled={!canEnqueue}
               className="flex items-center gap-2 px-4 py-2 border border-port-border text-gray-200 hover:text-white hover:bg-port-border/40 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium rounded-lg min-h-[40px]"
               title={canEnqueue ? 'Submit this configuration to its server queue; local, Grok, and remote lanes run independently'
-                : icWeightsBlocked ? `Download the ${icSpec?.label || 'IC-LoRA'} weight before queueing`
-                  : weightsGateBlocked ? 'Finish required model downloads before queueing'
+                : blockedAsset ? `Download the ${blockedAsset.label} before queueing`
                     : 'Complete the required inputs before queueing'}
             >
               <ListPlus className="w-4 h-4" /> {effectiveBatchSize > 1 ? `Add ${effectiveBatchSize} videos to queue` : 'Add to queue'}

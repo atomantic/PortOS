@@ -197,7 +197,8 @@ vi.mock('../services/api', () => ({
   getVisionModels: vi.fn(async () => ({ models: [] })),
 }));
 
-vi.mock('../hooks/useModelDownloadStatus', () => ({
+vi.mock('../hooks/useModelDownloadStatus', async (importOriginal) => ({
+  ...await importOriginal(),
   TEXT_ENCODER_DOWNLOAD_ID: '__text_encoder__',
   textEncoderDownloadId: (id) => `__text_encoder_option__:${id}`,
   useModelDownloadStatus: () => ({
