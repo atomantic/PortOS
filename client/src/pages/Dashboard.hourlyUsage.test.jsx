@@ -21,7 +21,8 @@ import { request } from '../services/apiCore.js';
 import socket from '../services/socket';
 import Dashboard from './Dashboard.jsx';
 
-// Exercise the real API wrapper, registry gate and hourly widget through Dashboard.
+// Hourly Activity is the only registry/widget consumer of dashboardState.usage.
+// Exercise its real API wrapper, registry gate and widget through Dashboard.
 describe('Dashboard hourly usage hydration', () => {
   it('uses only the hourly endpoint on mount and app changes, preserving data and the zero gate', async () => {
     let hourlyActivity = Array(24).fill(0);

@@ -70,11 +70,13 @@ describe('usage routes', () => {
 
   it('GET /api/usage/hourly projects only counters and bypasses all reporting work', async () => {
     const hourlyActivity = Array.from({ length: 24 }, (_, hour) => hour);
+    // Synthetic extra records must never escape in the hourly payload. Reporting
+    // services are stubbed: this measures route calls, not report cost or latency.
     usage.getUsage.mockReturnValue({
       hourlyActivity,
-      daily: Object.fromEntries(Array.from({ length: 400 }, (_, day) => [day, { tokens: 1000 }])),
-      monthly: { '2025-01': { tokens: 2000 } },
-      providers: { example: { tokens: 3000 } }
+      dailyActivity: Object.fromEntries(Array.from({ length: 400 }, (_, day) => [day, { tokens: 1000 }])),
+      monthlyActivity: { '2025-01': { tokens: 2000 } },
+      byProvider: { example: { tokens: 3000 } }
     });
     usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
     getFleetUsage.mockResolvedValueOnce({ instances: [{ id: 'peer-a' }, { id: 'peer-b' }], totals: {} });
@@ -99,8 +101,9 @@ describe('usage routes', () => {
     expect(getProviderQuotas).not.toHaveBeenCalled();
   });
 
-  it('GET /api/usage/hourly preserves the empty-usage zero counters', async () => {
-    usage.getUsage.mockReturnValue({ hourlyActivity: Array(24).fill(0) });
+  it.each([{}, { hourlyActivity: Array(24).fill(0) }])(
+    'GET /api/usage/hourly returns 24 zero counters for empty usage %j', async (emptyUsage) => {
+    usage.getUsage.mockReturnValue(emptyUsage);
     const res = await request(buildApp()).get('/api/usage/hourly');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ hourlyActivity: Array(24).fill(0) });
