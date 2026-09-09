@@ -138,7 +138,7 @@ async function assertNoRunningRun(appId) {
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
  */
-export async function startMaintenanceRun({ appId, providerId, model = null, effort = null }) {
+export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues' }) {
   const [{ getAppById }, { getProviderById }, { resolveBurnProvider }] = await Promise.all([
     import('./apps.js'), import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
   ]);
@@ -155,7 +155,7 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const run = await insertRun({
     id, appId, familyId, ...pins,
     status: MAINTENANCE_RUN_STATUS.RUNNING,
-    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins }),
+    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode }),
     completed: {},
     active: null,
     reason: null,

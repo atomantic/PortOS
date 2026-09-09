@@ -51,7 +51,7 @@ describe('maintenance launch', () => {
     await select(user);
     await user.click(screen.getByRole('button', { name: 'Run now' }));
     expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
-    expect(api.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'example', providerId: 'claude', model: 'sonnet', effort: 'high' }, { silent: true });
+    expect(api.startMaintenanceRun).toHaveBeenCalledWith({ appId: 'example', providerId: 'claude', model: 'sonnet', effort: 'high', mode: 'file-issues' }, { silent: true });
     finishStart({ run: runRecord(), result: { dispatched: true, taskType: 'better-structural-drift' } });
     expect(await screen.findByText(/Maintenance started with better-structural-drift/)).toBeInTheDocument();
     const row = screen.getByRole('list', { name: 'Maintenance runs' });
@@ -173,4 +173,16 @@ it('keeps a newer live update when an older initial fetch resolves late, and ref
   api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord({ status: 'completed', active: null })] });
   await act(async () => socket.on.mock.calls.find(([name]) => name === 'connect')[1]());
   expect(screen.getByText(/completed · 1\/13 steps/)).toBeInTheDocument();
+});
+
+it('launches fix mode only after renewed consent', async () => {
+  const user = userEvent.setup();
+  show();
+  await select(user);
+  await user.selectOptions(screen.getByLabelText('Audit mode'), 'fix');
+  expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
+  expect(screen.getByText(/one final claim-issue drain/)).toBeInTheDocument();
+  await user.click(screen.getByRole('checkbox'));
+  await user.click(screen.getByRole('button', { name: 'Run now' }));
+  expect(api.startMaintenanceRun).toHaveBeenCalledWith(expect.objectContaining({ mode: 'fix' }), { silent: true });
 });

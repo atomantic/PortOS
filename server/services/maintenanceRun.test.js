@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rm } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
-import { MAINTENANCE_SEQUENCE_TYPES } from '../lib/maintenanceSequence.js';
+import { MAINTENANCE_SEQUENCE_TYPES, MAINTENANCE_TASK_ORDER } from '../lib/maintenanceSequence.js';
 
 const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-maintenance-run-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
@@ -183,4 +183,19 @@ it('publishes queued, running, and completed progress with the active agent link
   expect(updates.at(-1).completed).toHaveProperty(run.steps[0].id);
   expect(updates.at(-1).active).not.toHaveProperty('agentId');
   cosEvents.off('maintenance:updated', listener);
+});
+
+it('runs fixes consecutively and drains remaining issues only after documentation', async () => {
+  const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', mode: 'fix' });
+  expect(run.steps.map(step => step.taskRef.taskType)).toEqual([...MAINTENANCE_TASK_ORDER, 'claim-issue']);
+  for (let index = 0; index < MAINTENANCE_TASK_ORDER.length; index++) {
+    expect(state.invoked.at(-1).step.overrides.params).toEqual({ fileIssues: false });
+    await __onMaintenanceAgentCompleted(agentFor(run, index));
+  }
+  expect(dispatchedTypes()).toEqual([...MAINTENANCE_TASK_ORDER, 'claim-issue']);
+  await __onMaintenanceAgentCompleted(agentFor(run, MAINTENANCE_TASK_ORDER.length));
+  expect(dispatchedTypes().slice(-2)).toEqual(['claim-issue', 'claim-issue']);
+  state.probe = { drained: true };
+  await __onMaintenanceAgentCompleted(agentFor(run, MAINTENANCE_TASK_ORDER.length));
+  expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'completed' });
 });

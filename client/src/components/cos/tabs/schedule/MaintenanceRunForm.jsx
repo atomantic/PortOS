@@ -18,6 +18,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
   const [providerId, setProviderId] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
+  const [mode, setMode] = useState('file-issues');
   const [consent, setConsent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -104,7 +105,7 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
     if (busy || blocked || !ready || !provider || !model || !consent) return;
     setBusy(true);
     setMessage('Starting maintenance…');
-    const response = await api.startMaintenanceRun({ appId, providerId, model, effort: effort || null }, { silent: true }).catch(error => {
+    const response = await api.startMaintenanceRun({ appId, providerId, model, effort: effort || null, mode }, { silent: true }).catch(error => {
       setMessage(`Could not start maintenance: ${error.message}`);
       return null;
     });
@@ -152,6 +153,16 @@ export default function MaintenanceRunForm({ schedule, apps = [], providers = []
           {apps.filter(app => app.archived !== true).map(app => <option key={app.id} value={app.id}>{app.name}</option>)}
         </select>
       </label>
+      <label htmlFor="maintenance-run-mode" className="block">
+        Audit mode
+        <select id="maintenance-run-mode" value={mode} disabled={busy} onChange={event => { setMode(event.target.value); setConsent(false); }} className="mt-1 w-full bg-port-bg border border-port-border rounded p-2 text-white">
+          <option value="file-issues">File issues</option>
+          <option value="fix">Audit and fix</option>
+        </select>
+      </label>
+      <p className="text-xs">{mode === 'fix'
+        ? 'Audits fix findings directly, then documentation runs, followed by one final claim-issue drain for remaining issues.'
+        : 'Audits file issues, with a claim-issue drain between audits to resolve findings before the next step.'}</p>
       <ProviderModelSelector
         providers={availableProviders}
         selectedProviderId={providerId}
