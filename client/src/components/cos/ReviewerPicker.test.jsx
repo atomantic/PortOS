@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -5,6 +6,26 @@ import ReviewerPicker from './ReviewerPicker';
 import { typeSettled } from '../../test/settledInput';
 
 describe('ReviewerPicker', () => {
+  it('adds, edits, and clears effort for a configured provider reviewer', () => {
+    const onChange = vi.fn();
+    const providers = [{ id: 'codex-tui', name: 'Codex TUI', command: 'codex', enabled: true, defaultModel: 'gpt-6-astra', models: ['gpt-6-astra'] }];
+    function Form() {
+      const [config, setConfig] = useState({ reviewers: [] });
+      return <ReviewerPicker {...config} modelOptions={{ providers }} onChange={value => { onChange(value); setConfig(value); }} />;
+    }
+    render(<Form />);
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'codex-tui' } });
+    fireEvent.change(screen.getByLabelText('Thinking effort'), { target: { value: 'ultra' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider reviewer' }));
+    const effort = screen.getByLabelText('Reasoning effort for Codex TUI');
+    expect(effort).toHaveValue('ultra');
+    expect([...effort.options].map(option => option.value)).not.toContain('minimal');
+    fireEvent.change(effort, { target: { value: 'high' } });
+    expect(onChange.mock.lastCall[0].reviewerEfforts).toEqual({ 'provider:codex-tui': 'high' });
+    fireEvent.change(effort, { target: { value: '' } });
+    expect(onChange.mock.lastCall[0].reviewerEfforts).toEqual({});
+  });
+
   it('renders the selected reviewers in order with numbered badges', () => {
     render(<ReviewerPicker reviewers={['codex', 'antigravity', 'copilot']} onChange={() => {}} />);
     expect(screen.getByText('1.')).toBeInTheDocument();

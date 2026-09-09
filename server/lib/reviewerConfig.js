@@ -636,7 +636,10 @@ export function normalizeReviewerEffort(raw, reviewer, model = null) {
   if (typeof raw !== 'string') return undefined;
   const effort = raw.trim().toLowerCase();
   if (!effort) return undefined;
-  return reviewerEffortLevels(reviewer, model)?.includes(effort) ? effort : undefined;
+  // Provider identities are dynamic; their model-specific ladder is resolved from
+  // the provider catalog at selection/execution, while storage accepts known tiers.
+  const levels = isProviderReviewer(reviewer) ? EFFORT_LEVELS : reviewerEffortLevels(reviewer, model);
+  return levels?.includes(effort) ? effort : undefined;
 }
 
 /**

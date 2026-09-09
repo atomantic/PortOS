@@ -16,7 +16,7 @@ import {
   sanitizeReviewerModelInput
 } from './constants';
 import ProviderModelSelector from '../ProviderModelSelector';
-import { selectableModelsForProvider } from '../../utils/providers';
+import { selectableModelsForProvider, effortLevelsForProvider, effectiveModelFor } from '../../utils/providers';
 import { isProviderReviewer, normalizeReviewerSlug } from '../../lib/reviewerPins';
 
 const normalizeReviewerValue = (value) => normalizeReviewerSlug(value);
@@ -149,6 +149,7 @@ export default function ReviewerPicker({
   const id = useId();
   const [addProviderId, setAddProviderId] = useState('');
   const [addProviderModel, setAddProviderModel] = useState('');
+  const [addProviderEffort, setAddProviderEffort] = useState('');
   const providerRecords = modelOptions?.providers || [];
   const addProvider = providerRecords.find(provider => provider.id === addProviderId);
   const labelFor = (token) => isProviderReviewer(token)
@@ -426,9 +427,8 @@ export default function ReviewerPicker({
     </select>
   );
 
-  // The Effort cell. Only EFFORT_SELECTABLE_REVIEWERS get one, and each offers
-  // only its own CLI's ladder — copilot has no CLI, grok's takes no effort flag,
-  // and a `@username` reviewer is a person.
+  // The Effort cell uses the configured provider catalog for provider identities
+  // and the built-in reviewer ladder for legacy CLI tokens.
   //
   // The ladder is narrowed by the row's PINNED MODEL where the CLI validates the
   // pair: `agy` rejects `gemini-3.1-pro --effort medium`, so offering `medium`
@@ -439,9 +439,10 @@ export default function ReviewerPicker({
   const renderEffortCell = (token) => {
     const subject = labelFor(token);
     const stored = efforts.get(token) ?? '';
-    const ladder = reviewerEffortLevels(token);
-    if (!ladder?.length) return renderNoPinCell(`${subject} has no reasoning-effort control`);
-    const levels = modelOptions?.modelEffortLevels?.(token, models.get(token)) ?? ladder;
+    const provider = providerRecords.find(record => `provider:${record.id}` === token);
+    const levels = isProviderReviewer(token)
+      ? effortLevelsForProvider(provider, effectiveModelFor(provider, models.get(token))) || []
+      : modelOptions?.modelEffortLevels?.(token, models.get(token)) ?? reviewerEffortLevels(token, models.get(token)) ?? [];
     // A pinned model whose catalog lists NO tiers still renders the select when
     // something is stored, so a pin made before the model changed (or on another
     // machine) stays visible and clearable rather than vanishing behind the dash.
@@ -685,8 +686,10 @@ export default function ReviewerPicker({
             selectedProviderId={addProviderId}
             selectedModel={addProviderModel}
             availableModels={addProvider ? selectableModelsForProvider(addProvider, addProvider.models || []) : []}
-            onProviderChange={value => { setAddProviderId(value); setAddProviderModel(''); }}
+            onProviderChange={value => { setAddProviderId(value); setAddProviderModel(''); setAddProviderEffort(''); }}
             onModelChange={setAddProviderModel}
+            effort={addProviderEffort}
+            onEffortChange={setAddProviderEffort}
             emptyProviderOption="Choose a reviewer provider"
             emptyModelOption="Provider default"
             alwaysShowModel
@@ -696,8 +699,8 @@ export default function ReviewerPicker({
             className="text-sm text-port-accent disabled:opacity-50 self-start"
             onClick={() => {
               const token = `provider:${addProviderId}`;
-              emit({ reviewers: [...selected, token], reviewerModels: { ...modelsMap, ...(addProviderModel ? { [token]: addProviderModel } : {}) } });
-              setAddProviderId(''); setAddProviderModel('');
+              emit({ reviewers: [...selected, token], reviewerModels: { ...modelsMap, ...(addProviderModel ? { [token]: addProviderModel } : {}) }, reviewerEfforts: { ...effortsMap, ...(addProviderEffort ? { [token]: addProviderEffort } : {}) } });
+              setAddProviderId(''); setAddProviderModel(''); setAddProviderEffort('');
             }}>Add provider reviewer</button>
           <p className="text-xs text-gray-500">Choose from your enabled AI providers. Providers need an API text transport or an enforced tool-free harness to run reviews.</p>
         </div>

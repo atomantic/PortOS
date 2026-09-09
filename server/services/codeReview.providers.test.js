@@ -74,10 +74,12 @@ describe('configured provider reviewers', () => {
     const cli = { ...provider, type: 'tui', command: 'claude' };
     getProviderById.mockResolvedValue(cli);
     runCliProviderPrompt.mockResolvedValue({ text: '{"type":"result","result":"NO FINDINGS"}', partial: false, streamFormat: 'stream-json' });
-    const result = await runLocalCodeReview({ backend, model: 'pinned-coder', diff: 'example diff' });
-    expect(result).toMatchObject({ ok: true, findings: 'NO FINDINGS' });
+    const task = sanitizeTaskMetadata({ reviewers: [backend], reviewerEfforts: { [backend]: 'high' } });
+    expect(task.reviewerEfforts).toEqual({ [backend]: 'high' });
+    const result = await runLocalCodeReview({ backend, model: 'pinned-coder', effort: task.reviewerEfforts[backend], diff: 'example diff' });
+    expect(result).toMatchObject({ ok: true, findings: 'NO FINDINGS', effort: 'high' });
     const args = runCliProviderPrompt.mock.calls[0][0];
-    expect(args).toMatchObject({ provider: cli, model: 'pinned-coder', safetyProfile: 'public-review-gate' });
+    expect(args).toMatchObject({ provider: { ...cli, effort: 'high' }, model: 'pinned-coder', safetyProfile: 'public-review-gate' });
     await expect(access(args.cwd)).rejects.toThrow();
     expect(callProviderAISimple).not.toHaveBeenCalled();
 
@@ -85,6 +87,13 @@ describe('configured provider reviewers', () => {
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
     runCliProviderPrompt.mockResolvedValue({ text: 'NO FINDINGS', partial: true });
     expect(await runLocalCodeReview({ backend, diff: 'example diff' })).toMatchObject({ ok: false });
+  });
+
+  it('refuses an unsupported effort before invoking the provider', async () => {
+    getProviderById.mockResolvedValue({ ...provider, type: 'tui', command: 'codex', defaultModel: 'gpt-6-astra' });
+    expect(await runLocalCodeReview({ backend, effort: 'minimal', diff: 'example diff' })).toMatchObject({ ok: false, error: expect.stringContaining('reasoning effort') });
+    expect(callProviderAISimple).not.toHaveBeenCalled();
+    expect(runCliProviderPrompt).not.toHaveBeenCalled();
   });
 
   it('refuses an unsupported harness instead of spawning it with ordinary agent permissions', async () => {
