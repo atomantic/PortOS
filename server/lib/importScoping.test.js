@@ -37,8 +37,9 @@ const abs = (relative) => join(SERVER_DIR, ...relative.split('/'));
 const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs(target));
 
 // Each row: the entry that was narrowed, the module it must no longer
-// statically reach, and why the entry only ever needed a slice of it.
 const NARROWED = [
+  ['services/persistentMindAttachments.js', 'services/persistentMindSupervisor.js',
+    'owns screenshot attachment lifecycle without supervisor turn execution'],
   ['services/mtplxModelManager.js', 'services/huggingFaceCatalog.js',
     'reads repository ages through shared metadata without catalog selection'],
   ['services/huggingFaceMetadata.js', 'services/pipeline/musicGen.js',
@@ -87,6 +88,8 @@ describe('narrowed imports stay narrow (#6009)', () => {
   // Positive controls. Without these the negatives above would also pass if
   // `staticImportClosure` stopped resolving these files at all.
   it('still sees the modules the narrowed entries were pointed AT', () => {
+    expect(reaches('services/persistentMindSupervisor.js', 'services/persistentMindAttachments.js')).toBe(true);
+    expect(reaches('services/persistentMindAttachments.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('services/mtplxModelManager.js', 'services/huggingFaceMetadata.js')).toBe(true);
     expect(reaches('services/huggingFaceCatalog.js', 'services/huggingFaceMetadata.js')).toBe(true);
     expect(reaches('services/huggingFaceMetadata.js', 'services/huggingFaceRepoCache.js')).toBe(true);
