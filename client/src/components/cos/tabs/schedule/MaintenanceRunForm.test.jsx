@@ -72,18 +72,22 @@ describe('maintenance launch', () => {
     await user.click(screen.getByRole('button', { name: 'Run now' }));
     expect(await screen.findByText(/Could not start maintenance: a maintenance run is already in progress/)).toBeInTheDocument();
   });
-  it('stops and resumes an existing run from the list', async () => {
+  it('shows only active runs and removes a run when stopped', async () => {
     const user = userEvent.setup();
-    api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord()] });
+    api.getMaintenanceRuns.mockResolvedValue({ runs: [
+      runRecord({ id: 'old-completed', status: 'completed', providerId: 'historical-completed' }),
+      runRecord(),
+      runRecord({ id: 'old-stopped', status: 'stopped', providerId: 'historical-stopped' }),
+    ] });
     api.stopMaintenanceRun.mockResolvedValue({ run: runRecord({ status: 'stopped', reason: 'stopped by the user' }) });
-    api.resumeMaintenanceRun.mockResolvedValue({ run: runRecord(), result: { dispatched: true, taskType: 'claim-issue' } });
     show();
-    await user.click(await screen.findByRole('button', { name: 'Stop' }));
-    expect(await screen.findByText(/stopped · 1\/13 steps/)).toBeInTheDocument();
+    await screen.findByRole('button', { name: 'Stop' });
+    expect(screen.queryByText(/historical-/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
     expect(api.stopMaintenanceRun).toHaveBeenCalledWith('maint-1', { silent: true });
-    await user.click(screen.getByRole('button', { name: 'Resume' }));
-    expect(await screen.findByText(/running · 1\/13 steps/)).toBeInTheDocument();
-    expect(screen.getByText(/Maintenance started with claim-issue/)).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Maintenance runs' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh runs' })).not.toBeInTheDocument();
   });
   it('blocks missing task eligibility and a stopped daemon', async () => {
     const user = userEvent.setup();
@@ -158,6 +162,8 @@ it('streams agent activity and completed steps, and removes listeners on unmount
   expect(screen.getByRole('link', { name: 'Open agent in new tab' })).toHaveAttribute('target', '_blank');
   act(() => update(runRecord()));
   expect(screen.getByRole('progressbar')).toHaveAttribute('value', '1');
+  act(() => update(runRecord({ status: 'completed', active: null })));
+  expect(screen.queryByRole('list', { name: 'Maintenance runs' })).not.toBeInTheDocument();
   view.unmount();
   expect(socket.off).toHaveBeenCalledWith('cos:maintenance:updated', update);
 });
@@ -172,7 +178,7 @@ it('keeps a newer live update when an older initial fetch resolves late, and ref
   expect(screen.getByRole('progressbar')).toHaveAttribute('value', '1');
   api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord({ status: 'completed', active: null })] });
   await act(async () => socket.on.mock.calls.find(([name]) => name === 'connect')[1]());
-  expect(screen.getByText(/completed · 1\/13 steps/)).toBeInTheDocument();
+  expect(screen.queryByRole('list', { name: 'Maintenance runs' })).not.toBeInTheDocument();
 });
 
 it('launches fix mode only after renewed consent', async () => {
