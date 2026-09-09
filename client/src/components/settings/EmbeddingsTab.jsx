@@ -39,8 +39,8 @@ export default function EmbeddingsTab() {
     setModelsLoading(true);
     const status = await getLocalLlmStatus({ silent: true }).catch(() => null);
     setModels({
-      ollama: (status?.ollama?.installedModels || []).map((m) => m.id || m.name),
-      lmstudio: (status?.lmstudio?.installedModels || []).map((m) => m.id || m.name),
+      ollama: (status?.ollama?.models || []).map((m) => m.id || m.name),
+      lmstudio: (status?.lmstudio?.models || []).map((m) => m.id || m.name),
     });
     setModelsLoading(false);
   };
