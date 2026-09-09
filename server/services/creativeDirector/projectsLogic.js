@@ -219,7 +219,11 @@ export function buildProjectRecord(input, { id, now, collectionId }) {
     // ingredients are also linked durably in catalog_ingredient_refs. Empty for
     // a bare project. Each member: { ingredientId, name, type, role, summary? }.
     cast: Array.isArray(cast) ? cast : [],
-    disableAudio,
+    // Video drafts use videoDraft.audio; keep the legacy top-level flag off on
+    // new Video records so old consumers cannot mistake a native draft for a
+    // request to strip clip audio. Legacy CD records retain their historical
+    // default and UI contract.
+    disableAudio: input.workspace === 'video' ? false : disableAudio,
     autoAcceptScenes,
     // Server-managed intent flag (#1867) — set on the project by the
     // auto-cast route when a user opts into both `compose` and

@@ -41,6 +41,7 @@ import { enqueueUnattendedMediaJob, hasConfiguredMediaRoute } from '../federated
 import { getSettings } from '../settings.js';
 import { updateScene, updateProject, getProject } from './local.js';
 import { dispatchSceneEvaluation } from './sceneEvaluator.js';
+import { videoAudioIsDisabled } from './videoAudio.js';
 
 // Max render+eval attempts per scene (shared with the evaluator so render-retry
 // and eval-retry caps can't silently diverge — both bump the same scene.retryCount).
@@ -222,7 +223,14 @@ export async function runSceneRender(project, scene) {
   const sceneParams = {
     ...shared,
     creativeDirector: { projectId: project.id, sceneId: scene.sceneId },
-    disableAudio: project.disableAudio === true,
+    // Video projects have their own frozen audio contract. The top-level flag
+    // predates the Video workspace and defaults to true on legacy records, so
+    // reading it here made a native Video choice look like audio-disabled
+    // output to cloud backends such as Reactor. Preserve that flag for legacy
+    // Creative Director projects, where it remains the public contract.
+    disableAudio: project.workspace === 'video'
+      ? videoAudioIsDisabled(project)
+      : project.disableAudio === true,
     ...(useLocal ? {
       pythonPath,
       modelId: project.modelId,

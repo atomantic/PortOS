@@ -161,6 +161,14 @@ describe('buildProjectRecord', () => {
     );
     expect(pinned.renderBackend).toEqual({ image: { mode: 'grok' }, video: { mode: 'local', modelId: 'example-model' } });
   });
+
+  it('keeps the legacy audio-off field disabled on new Video drafts', () => {
+    const p = buildProjectRecord({
+      workspace: 'video', name: 'Video draft', aspectRatio: '16:9', quality: 'standard', modelId: '', targetDurationSeconds: 30,
+    }, { id: 'video-1', now: 'now', collectionId: 'c-1' });
+    expect(p.videoDraft.audio.mode).toBe('native');
+    expect(p.disableAudio).toBe(false);
+  });
 });
 
 describe('normalizeRenderBackend (#3135)', () => {

@@ -5,9 +5,28 @@ import { sleep } from '../../lib/fileUtils.js';
 
 const blocked = message => new ServerError(message, { status: 409, code: 'VIDEO_AUDIO_BLOCKED' });
 
+/**
+ * Resolve the Video workspace's audio contract. The execution choice is the
+ * frozen value once production has started; drafts use the saved production
+ * choice before Start. Legacy Creative Director projects do not have a Video
+ * draft and keep using their top-level `disableAudio` flag elsewhere.
+ */
+export function resolveVideoAudioMode(project, { includeExecution = true } = {}) {
+  const executionMode = includeExecution ? project?.videoExecution?.choices?.audio?.mode : null;
+  return executionMode || project?.videoDraft?.audio?.mode || 'native';
+}
+
+export function videoAudioIsDisabled(project, options) {
+  return resolveVideoAudioMode(project, options) === 'silent';
+}
+
+export function isAudioDisabledBackendBlocker(blocker) {
+  return typeof blocker === 'string' && blocker.includes('audio-disabled output');
+}
+
 export async function resolveVideoAudioChoice(project) {
   const audio = project.videoDraft?.audio || {};
-  const mode = audio.mode || 'native';
+  const mode = resolveVideoAudioMode(project, { includeExecution: false });
   if (mode === 'silent' || mode === 'native') return { mode };
   if (mode === 'imported') {
     const { getTrack } = await import('../tracks/index.js');

@@ -156,7 +156,7 @@ export const creativeDirectorVideoDraftSchema = z.object({
     prompt: z.string().trim().max(1000).optional(),
     providerId: z.string().max(120).optional(),
     model: z.string().max(200).optional(),
-  }).strict().default({}),
+  }).strict().default({ mode: 'native' }),
   reviewPolicy: z.enum(['review', 'autonomous']).default('review'),
   checkpoints: z.array(z.enum(VIDEO_REVIEW_CHECKPOINTS))
     .max(VIDEO_REVIEW_CHECKPOINTS.length).default([...VIDEO_REVIEW_CHECKPOINTS]),
@@ -181,9 +181,10 @@ export const creativeDirectorProjectCreateSchema = z.object({
   // Server-derived from catalogIngredientIds; also accepted directly for off-UI
   // callers and sync. Schema-parity with buildProjectRecord's `cast` field.
   cast: z.array(creativeDirectorCastMemberSchema).max(50).optional(),
-  // Audio defaults OFF for CD projects — current model audio output is
+  // Legacy CD projects default audio OFF — current model audio output is
   // inconsistent across renders and the user can re-enable per-project.
-  // (videoGen one-offs still default to enabled.)
+  // Video workspace projects use videoDraft.audio instead; buildProjectRecord
+  // normalizes this legacy field off for those records.
   disableAudio: z.boolean().optional().default(true),
   autoAcceptScenes: z.boolean().optional().default(false),
   // Optional back-pointer to the pipeline issue that spawned this project,

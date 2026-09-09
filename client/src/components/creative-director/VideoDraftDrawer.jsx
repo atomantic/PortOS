@@ -35,7 +35,7 @@ export default function VideoDraftDrawer({ open, onClose, project, onSaved, cata
       videoMode: project?.renderBackend?.video?.mode || 'local', backendModelId: project?.renderBackend?.video?.modelId || '',
       aspectRatio: project?.aspectRatio || '16:9', quality: project?.quality || 'standard', modelId: (project?.renderBackend?.video?.mode === 'local' ? project.renderBackend.video.modelId : '') || project?.modelId || '',
       min: draft?.durationRange?.min || 30, max: draft?.durationRange?.max || 60,
-      reviewPolicy: draft?.reviewPolicy || 'review', transition: draft?.transition || 'cut', audioMode: draft?.audio?.mode || (project ? 'native' : 'silent'), trackId: draft?.audio?.trackId || '', audioPrompt: draft?.audio?.prompt || '', audioProvider: draft?.audio?.providerId || '', audioModel: draft?.audio?.model || '',
+      reviewPolicy: draft?.reviewPolicy || 'review', transition: draft?.transition || 'cut', audioMode: draft?.audio?.mode || 'native', trackId: draft?.audio?.trackId || '', audioPrompt: draft?.audio?.prompt || '', audioProvider: draft?.audio?.providerId || '', audioModel: draft?.audio?.model || '',
       sources: draft?.sources || catalogIngredientIds.map(id => ({ kind: 'catalog', id })) });
     listTracks({ silent: true }).then(data => setTracks(Array.isArray(data) ? data : data?.tracks || [])).catch(() => {});
     listMusicEngines({ silent: true }).then(data => setEngines(data?.engines || [])).catch(() => {});
