@@ -60,17 +60,20 @@ describe('useInstanceFeatures', () => {
     expect(mock.getInstanceFeatures).toHaveBeenCalledTimes(1);
   });
 
-  it('refetches when told the underlying state changed but not what it is', async () => {
+  it('shares a legacy invalidation without hiding navigation during the refresh', async () => {
+    mock.getInstanceFeatures.mockResolvedValueOnce({ features: JIRA_ON });
     render(<><Probe label="a" /><Probe label="b" /></>);
     await act(async () => {});
-    mock.getInstanceFeatures.mockResolvedValue({ features: JIRA_ON });
+    const fresh = deferred();
+    mock.getInstanceFeatures.mockReturnValueOnce(fresh.promise);
 
-    await act(async () => {
-      window.dispatchEvent(new CustomEvent(INSTANCE_FEATURES_CHANGED, { detail: { featureId: 'jira', enabled: true } }));
+    act(() => {
+      window.dispatchEvent(new CustomEvent(INSTANCE_FEATURES_CHANGED, { detail: { featureId: 'jira', enabled: false } }));
     });
-
-    expect(screen.getByTestId('a')).toHaveTextContent('on');
     expect(mock.getInstanceFeatures).toHaveBeenCalledTimes(2);
+    for (const label of ['a', 'b']) expect(screen.getByTestId(label)).toHaveTextContent('on');
+    await act(async () => { fresh.resolve({ features: JIRA_OFF }); });
+    for (const label of ['a', 'b']) expect(screen.getByTestId(label)).toHaveTextContent('off');
   });
 
   // The race the generation counter exists for: a save lands while the initial
@@ -130,8 +133,12 @@ describe('useInstanceFeatures', () => {
       expect(screen.getByTestId(label)).toHaveAttribute('data-features', 'null');
       expect(screen.getByTestId(label)).toHaveAttribute('data-error', 'true');
     }
-    await act(async () => { fireEvent.click(screen.getByText('Reload a')); });
+    const retry = deferred();
+    mock.getInstanceFeatures.mockReturnValueOnce(retry.promise);
+    act(() => { fireEvent.click(screen.getByText('Reload a')); });
     expect(mock.getInstanceFeatures).toHaveBeenCalledTimes(3);
+    for (const label of ['a', 'b']) expect(screen.getByTestId(label)).toHaveTextContent('on');
+    await act(async () => { retry.resolve({ features: JIRA_OFF }); });
     for (const label of ['a', 'b']) {
       expect(screen.getByTestId(label)).toHaveTextContent('off');
       expect(screen.getByTestId(label)).toHaveAttribute('data-error', 'false');

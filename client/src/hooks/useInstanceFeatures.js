@@ -43,7 +43,6 @@ const onFeaturesChanged = (event) => {
   if (Array.isArray(features)) {
     commitSnapshot({ features, error: null });
   } else {
-    commitSnapshot(INITIAL_STATE);
     loadInstanceFeatures();
   }
 };
@@ -66,7 +65,6 @@ const reload = () => {
   generation += 1;
   const requested = generation;
   inFlight = null;
-  commitSnapshot(INITIAL_STATE);
   return loadInstanceFeatures().then(() => {
     // Preserve the public success announcement for non-hook event listeners.
     if (requested === generation && snapshot.features) publishInstanceFeatures(snapshot.features);
