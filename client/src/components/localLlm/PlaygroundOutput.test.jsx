@@ -1,6 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { render, fireEvent, waitFor } from '@testing-library/react';
 import PlaygroundOutput, { parseSegments } from './PlaygroundOutput';
+
+const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
+vi.mock('../ui/Toast', () => ({ default: toast }));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.clearAllMocks();
+});
 
 describe('parseSegments', () => {
   it('splits prose and fenced code into ordered segments with the language captured', () => {
@@ -55,5 +63,30 @@ describe('PlaygroundOutput rendering', () => {
   it('offers Preview for a bare fence whose body sniffs as HTML', () => {
     const { getByText } = render(<PlaygroundOutput text={'```\n<!doctype html><html></html>\n```'} />);
     expect(getByText('Preview')).toBeTruthy();
+  });
+});
+
+describe('code copying', () => {
+  it('reports success only after the code reaches the clipboard', async () => {
+    let finishWrite;
+    const writeText = vi.fn(() => new Promise(resolve => { finishWrite = resolve; }));
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    const { getByTitle, queryByText } = render(<PlaygroundOutput text={'```js\nconst answer = 42;\n```'} />);
+    fireEvent.click(getByTitle('Copy code'));
+    expect(writeText).toHaveBeenCalledWith('const answer = 42;');
+    expect(queryByText('Copied')).toBeNull();
+    expect(toast.success).not.toHaveBeenCalled();
+    finishWrite();
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Copied code'));
+    expect(toast.success).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a denied copy without a false Copied indicator', async () => {
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) } });
+    const { getByTitle, queryByText } = render(<PlaygroundOutput text={'```js\nconst answer = 42;\n```'} />);
+    fireEvent.click(getByTitle('Copy code'));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Copy failed'));
+    expect(queryByText('Copied')).toBeNull();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

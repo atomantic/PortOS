@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Check, Code2, Copy, Eye } from 'lucide-react';
+import { Code2, Copy, Eye } from 'lucide-react';
 import MarkdownOutput from '../cos/MarkdownOutput';
 import { copyToClipboard } from '../../lib/clipboard';
 
@@ -53,20 +53,6 @@ export function parseSegments(text) {
   return segments;
 }
 
-function CopyButton({ value, label = 'Copied' }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      onClick={() => { copyToClipboard(value, label); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
-      className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-white"
-      title="Copy code"
-    >
-      {copied ? <Check size={12} className="text-port-success" /> : <Copy size={12} />}
-      {copied ? 'Copied' : 'Copy'}
-    </button>
-  );
-}
-
 function CodeBlock({ lang, code, closed }) {
   const htmlPreviewable = useMemo(() => isHtmlLike(lang, code), [lang, code]);
   // 'code' | 'preview' — only meaningful when htmlPreviewable. Default to code so
@@ -97,7 +83,14 @@ function CodeBlock({ lang, code, closed }) {
               </button>
             </div>
           )}
-          <CopyButton value={code} label="Copied code" />
+          <button
+            type="button"
+            onClick={() => copyToClipboard(code, 'Copied code')}
+            className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-white"
+            title="Copy code"
+          >
+            <Copy size={12} /> Copy
+          </button>
         </div>
       </div>
       {showPreview ? (
