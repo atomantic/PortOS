@@ -1126,7 +1126,7 @@ export const buildMiniMaxH3Ref2vaArgs = ({
   return { bin: process.execPath, args };
 };
 
-export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, streamingMode, ffmpegPath, ffprobePath }) => {
+export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, fastvideoModelPath, wanRequiredWeights, ltxModelPath, ref2vaModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, stage2Steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, audioStartSec, mode, imageStrength, i2vReferenceMode, textEncoderRepo, textEncoder, outputPath, previewDir, loras, icReferencePaths, icLoraWeightPath, icStrength, icAttentionStrength, icSkipStage2, speedProfile, draftDecoder, streamingMode, ffmpegPath, ffprobePath }) => {
   // Generative upscale (#6511) declines FIRST. It is not a text/image render:
   // it carries no video model, no prompt and no reference mode, so every guard
   // below would either dereference a model it was never given or reject it for
@@ -1186,7 +1186,7 @@ export const buildArgs = ({ upscale, pythonPath, modelId, model, wanModelPath, w
       : videoLoraUnsupportedError(model, modelId);
   }
   if (model.runtime === 'fastvideo') {
-    return buildFastVideoArgs({ model, fastvideoModelPath: wanModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
+    return buildFastVideoArgs({ model, fastvideoModelPath, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
   }
   if (model.runtime === 'wan22') {
     return buildWan22Args({ model, wanModelPath, wanRequiredWeights, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, mode, outputPath });
