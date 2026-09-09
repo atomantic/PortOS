@@ -21,7 +21,7 @@
 // translated to PageUp/PageDown escape sequences through `terminal.input()`. That
 // keeps the event from becoming unsupported application mouse input while still
 // letting the TUI own its conversation scroll region. The page buttons and touch
-// gestures use the same key path.
+// gestures use that key path only when the app has not enabled mouse tracking.
 //
 // Scrolling back PAST a TUI, into what the shell printed before it started, stays
 // impossible while it holds the alternate screen. That is terminal semantics, not a
@@ -185,12 +185,18 @@ export const planTouchScrollSteps = (accumPx, rowHeightPx) => {
 /**
  * Make a one-finger drag scroll the terminal. Returns a detach function.
  *
- * Normal shell sessions scroll row-by-row. Alternate-screen TUIs use a half-viewport
- * drag threshold because their PageUp/PageDown bindings move a page, not one row.
+ * Shell scrollback and mouse-aware apps scroll row-by-row. Apps without mouse
+ * tracking retain page-key scrolling because they expose no generic line-scroll API.
  */
 export const attachTerminalTouchScroll = (terminal) => {
   const el = terminal?.element;
   if (!el?.addEventListener) return () => {};
+
+  // Reserve one-finger panning before the browser can claim the gesture. Keep
+  // pinch zoom and taps available; waiting for a whole row in touchmove is too late
+  // on mobile browsers, which can already have started scrolling an ancestor.
+  const previousTouchAction = el.style.touchAction;
+  el.style.touchAction = 'pinch-zoom';
 
   let lastY = null;
   let accumPx = 0;
@@ -212,19 +218,37 @@ export const attachTerminalTouchScroll = (terminal) => {
     const y = ev.touches[0].clientY;
     accumPx += lastY - y;
     lastY = y;
+    // Cancel even sub-row movement: it still belongs to this terminal gesture.
+    if (ev.cancelable) ev.preventDefault();
+    const mouseMode = terminal.modes?.mouseTrackingMode;
+    // X10 reports presses only, not wheel events.
+    const mouseScroll = mouseMode && mouseMode !== 'none' && mouseMode !== 'x10';
     // OpenCode's PageUp/PageDown bindings move the message viewport by a page,
     // not by one terminal row. Wait for roughly half a viewport before sending a
     // page key; normal shell scrollback remains row-granular.
-    const stepHeight = isAltBuffer(terminal)
+    const stepHeight = isAltBuffer(terminal) && !mouseScroll
       ? Math.max(geometry.rowHeightPx, (terminal.rows || 1) * geometry.rowHeightPx / 2)
       : geometry.rowHeightPx;
     const { steps, remainderPx } = planTouchScrollSteps(accumPx, stepHeight);
     if (!steps) return;
     accumPx = remainderPx;
-    // Swallow the gesture only once it has resolved into a scroll — before that it
-    // may still be a tap, and a TUI with mouse tracking on wants the click.
-    if (ev.cancelable) ev.preventDefault();
-    scrollTerminalLines(terminal, steps);
+    if (mouseScroll) {
+      // Let xterm encode the negotiated mouse protocol and coordinates. One wheel
+      // event produces one report, regardless of delta magnitude, so emit bounded
+      // row steps instead of turning a drag into one large jump or a page key.
+      for (let i = 0; i < Math.min(Math.abs(steps), MAX_SCROLL_STEPS); i++) {
+        el.dispatchEvent(new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: true,
+          deltaMode: WHEEL_DELTA_MODE_LINE,
+          deltaY: Math.sign(steps),
+          clientX: ev.touches[0].clientX,
+          clientY: y,
+        }));
+      }
+    } else {
+      scrollTerminalLines(terminal, steps);
+    }
   };
 
   el.addEventListener('touchstart', onStart, { passive: true });
@@ -233,6 +257,8 @@ export const attachTerminalTouchScroll = (terminal) => {
   el.addEventListener('touchcancel', end, { passive: true });
 
   return () => {
+    end();
+    el.style.touchAction = previousTouchAction;
     el.removeEventListener('touchstart', onStart);
     el.removeEventListener('touchmove', onMove);
     el.removeEventListener('touchend', end);

@@ -32,7 +32,7 @@ const makeTerminal = ({ alt = true, rows = 24, height = 480, mouseTrackingMode =
 
 const touchEvent = (type, touches) => {
   const ev = new Event(type, { bubbles: true, cancelable: true });
-  ev.touches = touches.map((clientY) => ({ clientY }));
+  ev.touches = touches.map((clientY) => ({ clientX: 150, clientY }));
   return ev;
 };
 
@@ -278,15 +278,55 @@ describe('attachTerminalTouchScroll', () => {
     detach();
   });
 
-  it('leaves a sub-row drag alone so a tap still reaches the TUI', () => {
+  it('claims sub-row movement before the browser starts panning an ancestor', () => {
     const term = makeTerminal({ rows: 24, height: 480 });
     const detach = attachTerminalTouchScroll(term);
     term.element.dispatchEvent(touchEvent('touchstart', [300]));
     const move = touchEvent('touchmove', [305]);
     term.element.dispatchEvent(move);
     expect(term.input).not.toHaveBeenCalled();
-    expect(move.defaultPrevented).toBe(false);
+    expect(move.defaultPrevented).toBe(true);
     detach();
+  });
+
+  it('routes small bidirectional drags through mouse wheel input, not page keys', () => {
+    const term = makeTerminal({ mouseTrackingMode: 'vt200' });
+    // happy-dom's WheelEvent omits MouseEvent coordinates; assert constructor
+    // options as well as delivery until its inheritance matches browsers.
+    const wheelConstructor = vi.spyOn(globalThis, 'WheelEvent');
+    const wheelEvents = [];
+    term.element.addEventListener('wheel', event => wheelEvents.push(event));
+    const detachWheel = attachTerminalWheelScroll(term);
+    const detach = attachTerminalTouchScroll(term);
+    term.element.dispatchEvent(touchEvent('touchstart', [300]));
+    term.element.dispatchEvent(touchEvent('touchmove', [325]));
+    term.element.dispatchEvent(touchEvent('touchmove', [300]));
+    expect(wheelEvents.map(event => [event.deltaY, event.deltaMode]))
+      .toEqual([[-1, 1], [1, 1]]);
+    expect(wheelConstructor).toHaveBeenNthCalledWith(1, 'wheel', expect.objectContaining({ clientX: 150, clientY: 325 }));
+    expect(wheelConstructor).toHaveBeenNthCalledWith(2, 'wheel', expect.objectContaining({ clientX: 150, clientY: 300 }));
+    expect(term.input).not.toHaveBeenCalled();
+    expect(term.scrollLines).not.toHaveBeenCalled();
+    detach();
+    detachWheel();
+    wheelConstructor.mockRestore();
+  });
+
+  it('reserves panning while preserving pinch zoom, taps, and the previous style on detach', () => {
+    const term = makeTerminal();
+    term.element.style.touchAction = 'auto';
+    const detach = attachTerminalTouchScroll(term);
+    expect(term.element.style.touchAction).toBe('pinch-zoom');
+    const start = touchEvent('touchstart', [300]);
+    term.element.dispatchEvent(start);
+    expect(start.defaultPrevented).toBe(false);
+    const pinch = touchEvent('touchmove', [280, 400]);
+    term.element.dispatchEvent(pinch);
+    expect(pinch.defaultPrevented).toBe(false);
+    term.element.dispatchEvent(touchEvent('touchmove', [600]));
+    expect(term.input).not.toHaveBeenCalled();
+    detach();
+    expect(term.element.style.touchAction).toBe('auto');
   });
 
   it('still scrolls an alternate buffer before layout is available', () => {
