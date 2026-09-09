@@ -371,8 +371,11 @@ export function applyProjectPatch(project, patch) {
   // Normalize the whole override object on write so stored records never carry
   // empty/model-only stage stubs; the client sends the full object each save.
   if ('modelOverrides' in patch) next.modelOverrides = normalizeModelOverrides(patch.modelOverrides);
+  // Changing the reviewer does not change the approved story or rendered clips.
+  const creativeValue = (record, key) => key === 'modelOverrides'
+    ? { ...record[key], evaluation: undefined } : record[key];
   if (project.workspace === 'video' && project.treatment?.artifact
-      && ['videoDraft', 'targetDurationSeconds', 'aspectRatio', 'userStory', 'styleSpec', 'cast', 'startingImageFile', 'modelId', 'renderBackend', 'quality', 'modelOverrides', 'disableAudio'].some((key) => key in patch && !isDeepStrictEqual(next[key], project[key]))) {
+      && ['videoDraft', 'targetDurationSeconds', 'aspectRatio', 'userStory', 'styleSpec', 'cast', 'startingImageFile', 'modelId', 'renderBackend', 'quality', 'modelOverrides', 'disableAudio'].some((key) => key in patch && !isDeepStrictEqual(creativeValue(next, key), creativeValue(project, key)))) {
     next.treatment = { ...project.treatment, artifact: { ...project.treatment.artifact, stale: true },
       scenes: project.treatment.scenes.map(scene => ({ ...scene, workRevision: (scene.workRevision || 0) + 1 })) };
     next.videoWorkRevision = (project.videoWorkRevision || 0) + 1;

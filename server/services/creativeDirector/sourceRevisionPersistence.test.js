@@ -38,6 +38,12 @@ describe('Video source revision persistence through the PostgreSQL adapter', () 
     expect(saved.treatment.artifact.stale).not.toBe(true);
     expect(saved.videoWorkRevision).toBe(3);
     expect(saved.finalVideoId).toBe('approved-cut');
+    const reviewerChanged = await updateProject(state.project.id, {
+      modelOverrides: { evaluation: { providerId: 'local-vision', model: 'small-vision' } },
+    });
+    expect(reviewerChanged.treatment.artifact.stale).not.toBe(true);
+    expect(reviewerChanged.videoWorkRevision).toBe(3);
+    expect(reviewerChanged.finalVideoId).toBe('approved-cut');
     const revised = await updateProject(state.project.id, {
       renderBackend: { image: { mode: 'local' }, video: { mode: 'reactor', modelId: 'quality-h3' } },
     });
