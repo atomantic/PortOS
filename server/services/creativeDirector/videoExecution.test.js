@@ -95,6 +95,23 @@ it('resumes a shot whose preflight failed before creating a submission receipt',
   expect(await enqueue()).toMatchObject({ jobId: 'example-job-1' });
 });
 
+it('resumes failed shots without erasing retries, receipts or accepted work', async () => {
+  await startVideoExecution('example-video', await startInput({ maxRetries: 0 }));
+  const queued = await enqueue();
+  state.jobs[0].status = 'failed';
+  state.project.status = 'paused';
+  Object.assign(state.project.treatment.scenes[0], { status: 'failed', retryCount: 1, renderedJobId: queued.jobId });
+  state.project.treatment.scenes.push({ sceneId: 'accepted', status: 'accepted', renderedJobId: 'saved-clip' },
+    { sceneId: 'legacy-failed', status: 'failed', retryCount: 1 });
+  await startVideoExecution('example-video', await startInput({ maxRetries: 0 }));
+  expect(state.project.treatment.scenes[0]).toMatchObject({ status: 'pending', retryCount: 1, renderedJobId: null });
+  expect(state.project.treatment.scenes[1]).toMatchObject({ status: 'accepted', renderedJobId: 'saved-clip' });
+  expect(state.project.treatment.scenes[2]).toMatchObject({ status: 'pending', retryCount: 1 });
+  expect(await enqueue()).toBeNull();
+  expect(state.project.videoExecution.blocker).toMatch(/retry limit/);
+  expect(state.project.videoExecution.attempts).toHaveLength(1);
+});
+
 it('reserves before enqueue, binds one queue ID, enforces retry bounds and pauses dispatch', async () => {
   await startVideoExecution('example-video', await startInput({ maxClips: 2, maxRetries: 0 }));
   const queued = await enqueue();

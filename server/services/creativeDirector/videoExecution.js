@@ -160,7 +160,7 @@ export async function reconcileVideoExecution(projectId, { restarting = false, r
       const receipt = [...attempts].reverse().find(attempt => attempt.sceneId === scene.sceneId && attempt.workRevision === (scene.workRevision || 0) && attempt.kind === 'clip');
       if (!receipt && scene.status === 'rendering' && !scene.renderedJobId) return { ...scene, status: 'pending' };
       if (receipt?.status === 'completed' && receipt.jobId && !['accepted', 'evaluating'].includes(scene.status)) return { ...scene, renderedJobId: receipt.jobId, status: 'evaluating' };
-      if (receipt?.status === 'failed' && ['rendering', 'failed'].includes(scene.status)) return { ...scene, status: 'pending' };
+      if (receipt?.status === 'failed' && ['rendering', 'failed'].includes(scene.status)) return { ...scene, status: 'pending', renderedJobId: null, evaluation: null };
       return scene;
     });
     const steps = project.plan?.steps?.map(step => {
@@ -192,6 +192,10 @@ export async function startVideoExecution(projectId, input) {
     if (videoConfigurationRevision(current) !== preview.inputRevision) throw new ServerError('Production changed during Start. Refresh and try again.', { status: 409, code: 'VIDEO_START_STALE' });
     const execution = current.videoExecution || {};
     return { project: { ...current, status: current.treatment ? 'rendering' : 'planning', failureReason: null,
+      // Resume retries terminal failures while preserving attempt receipts and
+      // counters, so changing limits never erases previously consumed budget.
+      ...(current.treatment ? { treatment: { ...current.treatment, scenes: (current.treatment.scenes || []).map(scene =>
+        scene.status === 'failed' ? { ...scene, status: 'pending', renderedJobId: null, evaluation: null } : scene) } } : {}),
       videoExecution: { ...execution, id: execution.id || randomUUID(), authorized: true, authorizedAt: now(),
         inputRevision: videoConfigurationRevision(current), configurationRevision: input.configurationRevision,
         choices: preview.choices, limits, attempts: execution.attempts || [], blocker: null }, updatedAt: now(),
