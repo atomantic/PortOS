@@ -1,4 +1,4 @@
-import { AlertTriangle, Activity, CheckCircle, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 
 export const DEFAULT_HEALTH_THRESHOLDS = {
   memoryWarn: 85,
