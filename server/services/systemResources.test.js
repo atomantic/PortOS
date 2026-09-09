@@ -76,6 +76,7 @@ vi.mock('./mediaJobQueue/index.js', () => ({
     byKind: {
       image: { queued: 1, running: 0 },
       video: { queued: 0, running: 1 },
+      'video-upscale': { queued: 2, running: 0 },
     },
   })),
 }));
@@ -144,6 +145,10 @@ describe('system resource reporting', () => {
       usagePercent: 75,
     });
     expect(report.summary).toMatchObject({ loadedModels: 1, queuedJobs: 3, runningJobs: 1 });
+    expect(report.queues.media).toMatchObject({
+      byKind: expect.objectContaining({ 'video-upscale': { queued: 2, running: 0 } }),
+      totals: { queued: 1, running: 1 },
+    });
     expect(report.queues.agents).toMatchObject({ pendingSystem: 1, awaitingApproval: 1 });
     expect(report.models.downloaded.map((model) => model.backend)).toEqual(
       expect.arrayContaining(['huggingface', 'lora', 'ollama', 'lmstudio']),

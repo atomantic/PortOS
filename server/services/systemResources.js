@@ -314,18 +314,6 @@ function loadedModelInventory({ ollamaLoaded, lmStudioLoaded }) {
   ];
 }
 
-function mediaQueueSummary(capacity) {
-  const byKind = Object.fromEntries(['image', 'video', 'training', 'audio'].map((kind) => [
-    kind,
-    capacity?.byKind?.[kind] || { queued: 0, running: 0 },
-  ]));
-  return {
-    queued: capacity?.totals?.queued || 0,
-    running: capacity?.totals?.running || 0,
-    byKind,
-  };
-}
-
 function agentQueueSummary(tasks, status) {
   if (!tasks) return null;
   return {
@@ -432,7 +420,7 @@ export async function buildSystemResourceReport() {
     downloadedModels,
     npmCacheBytes,
   });
-  const mediaQueue = mediaQueueSummary(getQueueCapacity());
+  const mediaQueue = getQueueCapacity();
   const agentQueue = agentQueueSummary(cosTasks, cosStatus);
   const modelBytes = sumKnownBytes([hf?.totalBytes, loraStorage?.totalBytes, ollamaBytes, lmStudioBytes]);
   const storageAreas = [
@@ -529,8 +517,8 @@ export async function buildSystemResourceReport() {
       modelBytes,
       managedReclaimableBytes,
       loadedModels: loadedModels.length,
-      queuedJobs: agentQueue ? mediaQueue.queued + queuedAgents : null,
-      runningJobs: agentQueue ? mediaQueue.running + agentQueue.inProgress : null,
+      queuedJobs: agentQueue ? mediaQueue.totals.queued + queuedAgents : null,
+      runningJobs: agentQueue ? mediaQueue.totals.running + agentQueue.inProgress : null,
     },
     storageAreas,
     dataCategories: categories,
