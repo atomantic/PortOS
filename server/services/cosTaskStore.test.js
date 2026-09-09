@@ -96,6 +96,7 @@ import {
   getUserTasks,
   getCosTasks,
   getAllTasks,
+  getPendingTaskIds,
   getTasks,
   getTaskById,
   addTask,
@@ -188,6 +189,29 @@ describe('cosTaskStore.getUserTasks / getCosTasks', () => {
 // that every invalidation signal fires, and that a cached read can never leak a
 // caller's in-place mutations into the next reader.
 describe('cosTaskStore parsed-task cache (#3497)', () => {
+  it('projects pending IDs without cloning task payloads and refreshes after writes and external edits', async () => {
+    expect(await getPendingTaskIds()).toEqual([]);
+    const user = await addTask({ description: 'Example user task' }, 'user');
+    const internal = await addTask({ description: 'Example internal task' }, 'internal');
+    const clone = vi.spyOn(globalThis, 'structuredClone');
+    const ids = await getPendingTaskIds();
+    expect(ids).toEqual([user.id, internal.id]);
+    ids.push('caller-only');
+    const parses = mock.parseCalls;
+    expect(await getPendingTaskIds()).toEqual([user.id, internal.id]);
+    expect(mock.parseCalls).toBe(parses);
+    expect(clone).not.toHaveBeenCalled();
+    clone.mockRestore();
+
+    await updateTask(user.id, { status: 'completed' }, 'user');
+    expect(await getPendingTaskIds()).toEqual([internal.id]);
+    mock.files.set(COS_FILE, mock.files.get(COS_FILE).replace('- [ ]', '- [x]'));
+    mock.mtimes.set(COS_FILE, mock.mtimes.get(COS_FILE) + 5000);
+    expect(await getPendingTaskIds()).toEqual([]);
+    mock.files.delete(USER_FILE);
+    expect(await getPendingTaskIds()).toEqual([]);
+  });
+
   it('serves a cached parse while the file is unchanged', async () => {
     await addTask({ description: 'cached thing' }, 'user');
     mock.parseCalls = 0;
