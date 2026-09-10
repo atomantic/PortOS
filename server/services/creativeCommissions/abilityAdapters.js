@@ -35,6 +35,7 @@ import {
   ABILITY_GENERATION_SPEC, GENERATION_KEY_DEFS, CREATIVE_COMMISSION_ABILITIES,
   COMMISSION_RENDER_BACKEND_AUTO,
 } from '../../lib/creativeCommissionValidation.js';
+import { resolvedDefault } from '../../lib/creativeCommissionSpec.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 import { buildVideoPromptGuidance } from './videoPromptGuidance.js';
 
@@ -46,18 +47,32 @@ function pickModel(raw) {
   return isStr(raw?.model) && raw.model.trim() ? raw.model.trim() : null;
 }
 
+// A commission's effective duration mode, made explicit: an ABSENT durationMode
+// on a real record reads as `legacyAbsent` ('manual' — the pre-#4494 behavior
+// every record without the key was already rendering), never the fresh-commission
+// `default` ('auto'). Mirrors the client form's own record projection
+// (commissionForm.js `generationToForm`) — see creativeCommissionSpec.js's
+// GENERATION_KEY_DEFS.durationMode for the compatibility split.
+function isAutoDuration(generation) {
+  return (generation?.durationMode ?? GENERATION_KEY_DEFS.durationMode.legacyAbsent) === 'auto';
+}
+
 // Coerce one generation value against its GENERATION_KEY_DEFS descriptor, falling
-// back to the default when absent/invalid (absent-vs-empty: a wrong-type or
-// out-of-range value falls back rather than corrupting the record).
+// back to the RESOLVED default when absent/invalid (absent-vs-empty: a wrong-type
+// or out-of-range value falls back rather than corrupting the record).
+// `resolvedDefault` prefers a descriptor's `legacyAbsent` over its `default` —
+// the only key that matters for today (`durationMode`) needs an absent value to
+// keep meaning `manual`, the pre-#4494 behavior, even though `default` now seeds
+// a brand-new commission with `auto` (see creativeCommissionSpec.js).
 function coerceGenerationValue(key, raw) {
   const def = GENERATION_KEY_DEFS[key];
   const v = raw?.[key];
-  if (def.type === 'enum') return def.values.includes(v) ? v : def.default;
+  if (def.type === 'enum') return def.values.includes(v) ? v : resolvedDefault(def);
   // A model id (#3135): trim to a non-empty string, else null. A blank/absent id
   // means "the install's default model", which is a real, meaningful value — not
   // a validation failure — so it normalizes rather than erroring.
-  if (def.type === 'id') return isStr(v) && v.trim() ? v.trim().slice(0, def.max) : def.default;
-  return Number.isInteger(v) && v >= def.min && v <= def.max ? v : def.default;
+  if (def.type === 'id') return isStr(v) && v.trim() ? v.trim().slice(0, def.max) : resolvedDefault(def);
+  return Number.isInteger(v) && v >= def.min && v <= def.max ? v : resolvedDefault(def);
 }
 
 // Fill an ability's generation defaults and keep ONLY that ability's keys (+ the
@@ -174,7 +189,7 @@ function buildVideoGeometryParams(commission, { defaultVideoModelId } = {}) {
     // Auto mode lets the planner choose a per-step duration; retain a valid
     // project fallback for plans that omit one. Music-video commissions still
     // use their legacy audio length as the manual fallback.
-    targetDurationSeconds: gen?.durationMode === 'auto'
+    targetDurationSeconds: isAutoDuration(gen)
       ? 10
       : (gen?.targetDurationSeconds || gen?.lengthSeconds || 10),
     // Only passed when the commission actually pinned a backend (#3135), so an
@@ -196,7 +211,7 @@ const videoAdapter = {
   sanitizeGeneration: (raw) => sanitizeGenerationFor('video', raw),
   buildProjectParams: buildVideoGeometryParams,
   buildDirective(commission, { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId } = {}) {
-    const duration = commission?.generation?.durationMode === 'auto'
+    const duration = isAutoDuration(commission?.generation)
       ? ' Choose an appropriate duration between 5 and 600 seconds for the brief.' : '';
     const { lines, digest, constraints } = briefContext(commission, `Create a short-form video piece.${duration}`);
     lines.unshift(videoPromptGuidanceFor(commission, { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId }));
@@ -247,7 +262,7 @@ const musicVideoAdapter = {
   sanitizeGeneration: (raw) => sanitizeGenerationFor('music-video', raw),
   buildProjectParams: buildVideoGeometryParams,
   buildDirective(commission, { defaultVideoModelId, effectiveVideoMode, effectiveVideoModelId } = {}) {
-    const duration = commission?.generation?.durationMode === 'auto'
+    const duration = isAutoDuration(commission?.generation)
       ? ' Choose an appropriate video duration between 5 and 600 seconds for the brief.' : '';
     const lead = `Create a short-form music video:${duration} Generate an original music bed AND a matching video scored to it.`;
     const { lines, digest, constraints } = briefContext(commission, lead);
