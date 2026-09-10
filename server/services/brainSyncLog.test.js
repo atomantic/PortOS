@@ -34,15 +34,16 @@ vi.mock('fs', async () => {
   return { ...actual, createReadStream: vi.fn(actual.createReadStream) };
 });
 
-// appendFile is spied (not stubbed) so the one-write-per-batch contract stays
-// assertable while the bytes still land on disk for the offset assertions.
+// appendFile and readFile are spied (not stubbed) so the one-write-per-batch
+// and skip-the-read-when-nothing-changed (#6854) contracts stay assertable
+// while the bytes still land on / come from disk for the offset assertions.
 vi.mock('fs/promises', async () => {
   const actual = await vi.importActual('fs/promises');
-  return { ...actual, appendFile: vi.fn(actual.appendFile) };
+  return { ...actual, appendFile: vi.fn(actual.appendFile), readFile: vi.fn(actual.readFile) };
 });
 
 import { createReadStream } from 'fs';
-import { appendFile } from 'fs/promises';
+import { appendFile, readFile } from 'fs/promises';
 import { atomicWrite } from '../lib/fileUtils.js';
 import {
   initSyncLog,
@@ -586,6 +587,65 @@ describe('brainSyncLog', () => {
       expect(lines.map(line => line.seq)).toEqual([2, 50, 51, 52]);
       expect(lines[0].id).toBe('x');
       expect(lines[0].op).toBe('delete');
+    });
+
+    describe('skips the read when nothing changed (#6854)', () => {
+      it('does not read the file on a repeat call with the same floor and no appends in between', async () => {
+        for (let i = 0; i < 3; i++) {
+          await appendChange('create', 'people', `p${i}`, { name: `Person ${i}`, updatedAt: `2026-01-0${i + 1}T00:00:00.000Z` }, 'inst-1');
+        }
+
+        expect(await compactLog(0)).toBe(0);
+
+        vi.clearAllMocks();
+        const dropped = await compactLog(0);
+
+        expect(dropped).toBe(0);
+        expect(readFile).not.toHaveBeenCalled();
+      });
+
+      it('reads again after an append landed since the last completed pass', async () => {
+        await appendChange('create', 'people', 'p0', { name: 'Person 0', updatedAt: '2026-01-01T00:00:00.000Z' }, 'inst-1');
+        await compactLog(0);
+
+        await appendChange('create', 'people', 'p1', { name: 'Person 1', updatedAt: '2026-01-02T00:00:00.000Z' }, 'inst-1');
+        vi.clearAllMocks();
+        await compactLog(0);
+
+        expect(readFile).toHaveBeenCalledTimes(1);
+      });
+
+      it('reads again when minSeq resolves to a different floor', async () => {
+        await appendChange('create', 'people', 'p0', { name: 'Person 0', updatedAt: '2026-01-01T00:00:00.000Z' }, 'inst-1');
+        await appendChange('create', 'people', 'p1', { name: 'Person 1', updatedAt: '2026-01-02T00:00:00.000Z' }, 'inst-1');
+        await compactLog(0);
+
+        vi.clearAllMocks();
+        await compactLog(1);
+
+        expect(readFile).toHaveBeenCalledTimes(1);
+      });
+
+      it('reads again when force:true is passed even with no appends and the same floor', async () => {
+        await appendChange('create', 'people', 'p0', { name: 'Person 0', updatedAt: '2026-01-01T00:00:00.000Z' }, 'inst-1');
+        await compactLog(0);
+
+        vi.clearAllMocks();
+        await compactLog(0, { force: true });
+
+        expect(readFile).toHaveBeenCalledTimes(1);
+      });
+
+      it('reads on the first call after initSyncLog reloads the index', async () => {
+        await appendChange('create', 'people', 'p0', { name: 'Person 0', updatedAt: '2026-01-01T00:00:00.000Z' }, 'inst-1');
+        await compactLog(0);
+
+        await initSyncLog();
+        vi.clearAllMocks();
+        await compactLog(0);
+
+        expect(readFile).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });
