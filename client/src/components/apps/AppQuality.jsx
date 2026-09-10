@@ -24,7 +24,7 @@ export default function AppQuality({ app, detail = false }) {
     </Link>
   );
   return (
-    <section aria-label="App quality" className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+    <AppQualityRunner key={app.id} app={app}>{runner => <section aria-label="App quality" className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <h3 className="font-semibold text-white">{label}</h3>
       <p className="text-xs text-gray-400">
         Assessments describe the code before fixes. The overall score is the equal-weight mean of broad, medium/high-confidence assessments from the last 30 days.
@@ -48,7 +48,7 @@ export default function AppQuality({ app, detail = false }) {
       <div className="flex flex-wrap gap-4 text-sm text-port-accent"><Link to="/cos/schedule" className="hover:underline">Scheduled audit runners</Link><Link to="/cos/agents" className="hover:underline">View agents</Link></div>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
       <div className="min-w-0 space-y-4">
-        {!selectedCategory && <AppQualityRunner key={app.id} app={app} />}
+        {!selectedCategory && runner}
         <AppQualityHistory appId={app.id} categories={quality?.categories} />
       </div>
       {!!quality?.categories?.length && (
@@ -72,7 +72,7 @@ export default function AppQuality({ app, detail = false }) {
                 </td>
               </tr>
               {selectedCategory?.id === category.id && <tr><td colSpan={3} className="pb-3">
-                <AppQualityRunner key={app.id} app={app} />
+                {runner}
               </td></tr>}
               </Fragment>
             ))}</tbody>
@@ -81,6 +81,6 @@ export default function AppQuality({ app, detail = false }) {
         </section>
       )}
       </div>
-    </section>
+    </section>}</AppQualityRunner>
   );
 }

@@ -11,7 +11,7 @@ import { getMaintenanceRuns, startMaintenanceRun, stopMaintenanceRun } from '../
 const eligibleProvider = provider => provider.enabled && isProcessProvider(provider) && familyForProvider(provider);
 const needsCheck = category => category.score == null || category.stale || category.coverage !== 'broad' || category.confidence === 'low';
 
-export default function AppQualityRunner({ app }) {
+export default function AppQualityRunner({ app, children }) {
   const categories = app.quality?.categories || [];
   const [params, setParams] = useSearchParams();
   const requested = params.get('qualityCheck');
@@ -55,7 +55,7 @@ export default function AppQualityRunner({ app }) {
     if (response) setRun(response.run);
     setBusy(false);
   };
-  return <section id="quality-runner" aria-label="Run quality checks" className="border-t border-port-border pt-3 space-y-3">
+  const controls = <section id="quality-runner" aria-label="Run quality checks" className="border-t border-port-border pt-3 space-y-3">
     <h4 className="font-medium">Run quality checks</h4>
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
       <label htmlFor="quality-checks">Checks
@@ -86,4 +86,5 @@ export default function AppQualityRunner({ app }) {
       {run.status === 'running' && <button type="button" className="text-xs text-port-accent" disabled={busy} onClick={stop}>Stop remaining checks</button>}
     </div>}
   </section>;
+  return children ? children(controls) : controls;
 }

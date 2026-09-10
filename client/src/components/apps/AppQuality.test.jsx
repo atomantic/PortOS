@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { it, expect, vi } from 'vitest';
 import AppQuality from './AppQuality';
-vi.mock('./AppQualityRunner', () => ({ default: () => <div>Runner</div> }));
+vi.mock('./AppQualityRunner', () => ({ default: ({ children }) => children(<div>Runner</div>) }));
 vi.mock('../../services/apiApps', () => ({ getAppQualityHistory: vi.fn().mockResolvedValue({ points: [], totalCategories: 25 }) }));
 
 it('shows zero as a real score and explains excluded categories in the breakdown', async () => {
