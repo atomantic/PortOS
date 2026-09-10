@@ -264,7 +264,7 @@ export default function IssuesTab({ appId, appName }) {
   const {
     providers, selectedProviderId, selectedModel, availableModels,
     setSelectedProviderId, setSelectedModel
-  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, silent: true, withEffort: true });
+  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
   const [overrideContext, setOverrideContext] = useState('');
   // The reviewers a Claim launched from this tab will actually run — NOT the

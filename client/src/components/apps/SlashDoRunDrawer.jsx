@@ -41,7 +41,7 @@ function SlashDoRunDrawerBody({ open, command, label, appId, appName, onClose, o
     setSelectedProviderId, setSelectedModel
     // This picker renders the effort control and sends the value, so Antigravity
     // lists base models with the effort picked separately.
-  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, silent: true, withEffort: true });
+  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
 
   const [effort, setEffort] = useState('');
   const [simplify, setSimplify] = useState(true);

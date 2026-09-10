@@ -138,13 +138,13 @@ export default function PullRequestsTab({ appId, appName }) {
   const requestRef = useRef(0);
 
   // Page-level provider/model/effort pin for every Resolve & merge / PR review
-  // click on this tab — left untouched (blank), a run resolves the install's
-  // active provider, same as the bare button always did. Mirrors the Issues
+  // click on this tab — initially the active provider and configured model.
+  // Auto remains available for server-side routing. Mirrors the Issues
   // tab's "Run with" picker: a session convenience, never persisted.
   const {
     providers, selectedProviderId, selectedModel, availableModels,
     setSelectedProviderId, setSelectedModel
-  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, silent: true, withEffort: true });
+  } = useProviderModels({ filter: enabledProcessProviderFilter, allowDefault: true, preselectDefaults: true, silent: true, withEffort: true });
   const [effort, setEffort] = useState('');
 
   // One writer for the whole `{ kind: { number: action } }` bag so the ref the
@@ -299,8 +299,7 @@ export default function PullRequestsTab({ appId, appName }) {
     else toast.success(message);
   };
 
-  // The "Run with" picker above the list — left untouched, every field is
-  // `undefined` and the server resolves its own default exactly as before.
+  // Submit the visible session selection; clearing Auto restores server routing.
   const providerSettings = {
     provider: selectedProviderId || undefined,
     model: selectedModel || undefined,

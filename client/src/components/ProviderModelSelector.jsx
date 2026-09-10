@@ -156,16 +156,14 @@ export default function ProviderModelSelector({
   const visibleProviders = selectableProviders(providerList, { selectedId: selectedProviderId, allowed: providerAllowed });
   const compatibleModels = filterHardwareCompatibleProviderModels(availableModels, selectedProvider)
     .filter((model) => !modelAllowed || modelAllowed(model, selectedProvider));
-  const selectedModelIsUnavailable = Boolean(
-    selectedModel
-    && !isProviderModelHardwareCompatible(selectedProvider, selectedModel)
+  // Keep a configured default visible even when it is a CLI-default sentinel
+  // omitted from the browsable catalog, alongside unavailable saved pins.
+  const preserveSelectedModel = selectedModel && (
+    selectedModel === selectedProvider?.defaultModel
+    || !isProviderModelHardwareCompatible(selectedProvider, selectedModel)
+    || (modelAllowed && !modelAllowed(selectedModel, selectedProvider))
   );
-  const selectedModelIsDisallowed = Boolean(
-    selectedModel
-    && modelAllowed
-    && !modelAllowed(selectedModel, selectedProvider)
-  );
-  const modelOptions = (selectedModelIsUnavailable || selectedModelIsDisallowed)
+  const modelOptions = preserveSelectedModel
     && !compatibleModels.some((model) => modelOption(model)?.value === selectedModel)
     ? [selectedModel, ...compatibleModels]
     : compatibleModels;
@@ -221,7 +219,7 @@ export default function ProviderModelSelector({
               same broken control. */}
           {loading
             ? <option value="">Loading providers…</option>
-            : emptyProviderOption != null && <option value="">{emptyProviderOption}</option>}
+            : emptyProviderOption != null && <option value="">{effectiveProviderId && selectedProvider ? `${emptyProviderOption} — ${selectedProvider.name}` : emptyProviderOption}</option>}
           {visibleProviders.map((p) => {
             const hardwareUnavailable = !isProviderHardwareCompatible(p);
             const policyDisallowed = Boolean(providerAllowed && !providerAllowed(p));
@@ -248,7 +246,7 @@ export default function ProviderModelSelector({
             aria-label={compact ? 'Model' : undefined}
             className={SELECT_CLASS}
           >
-            {emptyModelOption != null && <option value="">{emptyModelOption}</option>}
+            {emptyModelOption != null && <option value="">{selectedProvider?.defaultModel ? `${emptyModelOption} — ${selectedProvider.defaultModel}` : emptyModelOption}</option>}
             {modelOptions.map(m => {
               const opt = modelOption(m);
               if (!opt) return null;

@@ -311,6 +311,24 @@ describe('IssuesTab', () => {
     expect(screen.queryByText('Reviewed by')).not.toBeInTheDocument();
   });
 
+  it('shows and submits the configured default without touching the override controls', async () => {
+    api.getProviders.mockResolvedValue({
+      activeProvider: 'codex',
+      providers: [{ id: 'codex', name: 'Codex', type: 'cli', command: 'codex', enabled: true,
+        models: ['gpt-5'], defaultModel: 'gpt-5', effort: 'high' }],
+    });
+    await renderTab();
+    await screen.findByText('Crash on save');
+    await waitFor(() => expect(screen.getByLabelText('Provider')).toHaveValue('codex'));
+    expect(screen.getByLabelText('Model')).toHaveValue('gpt-5');
+    expect(screen.getByRole('option', { name: 'Default effort — high' }).selected).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
+      'next', 'app-1', expect.objectContaining({ provider: 'codex', model: 'gpt-5', effort: undefined }),
+      { silent: true }
+    ));
+  });
+
   it('sends the page-level provider/model/effort pin along with a claim', async () => {
     api.getProviders.mockResolvedValue({
       providers: [{
