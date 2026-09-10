@@ -16,10 +16,11 @@ import PostDrillConfig from './PostDrillConfig';
 import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultiplicationProgress, getPostPowersProgress, getPostCognitiveProgress, getMemoryItems } from '../../../services/api';
 import { LLM_DRILL_TYPES, DRILL_LABELS, COGNITIVE_DRILL_TYPES, COGNITIVE_LADDER_TYPES } from './constants';
 
-// The generatable LLM drill types + labels, imported from the canonical
-// client constant (mirrors server LLM_DRILL_TYPES in meatspacePostLlm.js) —
-// NOT a hardcoded parallel copy, so this test can't stay green against a
-// stale list if a drill type is ever added/removed/relabeled.
+// The generatable LLM drill types + labels, imported from the client constant
+// (itself a re-export of the server's LLM_DRILL_TYPES in
+// server/lib/postDrillTypes.js) — NOT a hardcoded parallel copy, so this test
+// can't stay green against a stale list if a drill type is ever
+// added/removed/relabeled.
 const ALL_LLM_TYPES = LLM_DRILL_TYPES;
 // The 5 legacy drills that ship enabled by default (server DEFAULT_CONFIG);
 // everything else in ALL_LLM_TYPES is newly-exposed and defaults to opt-in.

@@ -1,4 +1,6 @@
-export const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', 'wit-comeback', 'pun-wordplay', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist', 'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'];
+// Every LLM-generated drill type. Re-exported from the server's zod-free leaf
+// so the client and the server validation schemas share one definition.
+export { LLM_DRILL_TYPES } from '../../../../../server/lib/postDrillTypes.js';
 // All three memory drill types are now fully scored in a POST session (issue
 // #2099/#2116): usePostSession.finishDrill uses this to tag the result's
 // module as `memory` (not `mental-math`) and preserve memoryItemId so the

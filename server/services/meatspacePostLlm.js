@@ -23,22 +23,10 @@ import {
   validatePostLlmSemanticVerdicts,
 } from '../lib/postLlmContracts.js';
 
-export const LLM_DRILL_TYPES = [
-  'word-association',
-  'story-recall',
-  'verbal-fluency',
-  'wit-comeback',
-  'pun-wordplay',
-  'compound-chain',
-  'bridge-word',
-  'double-meaning',
-  'idiom-twist',
-  'what-if',
-  'alternative-uses',
-  'story-prompt',
-  'invention-pitch',
-  'reframe',
-];
+// The list lives in the zod-free leaf so lib/postValidation.js and the client
+// can share it without importing this module; re-exported here so existing
+// deep imports keep working.
+export { LLM_DRILL_TYPES } from '../lib/postDrillTypes.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AI CALLER (mirrors brain.js pattern)
