@@ -32,6 +32,7 @@ import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, 
 import { PATHS } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { hasQuotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
+import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -47,6 +48,7 @@ import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
+import { isMissionTierEligible, isIdleTierEligible } from './cosDequeue.js';
 import { resolveAgentProviderPin } from './appTaskProviderPin.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
 import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
@@ -725,7 +727,7 @@ export async function unblockExpiredCooldowns(userTaskData, cosTaskData) {
  *
  * @returns {Promise<{ cosAutonomyMode: string, autonomousActionsRemaining: number }>}
  */
-async function resolveAutonomyBudget(state, runningAgentEntries) {
+export async function resolveAutonomyBudget(state, runningAgentEntries) {
   let cosAutonomyMode = getDomainMode(state.config, 'cos');
 
   // Daily CoS budget (#711). Two dimensions, handled differently so a single
@@ -761,6 +763,111 @@ async function resolveAutonomyBudget(state, runningAgentEntries) {
   return { cosAutonomyMode, autonomousActionsRemaining };
 }
 
+const analysisTypeForTask = (task) => task.metadata?.analysisType || task.metadata?.selfImprovementType;
+
+function isDisabledAnalysisType(task, taskSchedule) {
+  const analysisType = analysisTypeForTask(task);
+  return Boolean(analysisType) && !taskSchedule.tasks[analysisType]?.enabled;
+}
+
+/**
+ * Run the one Priority-2 admission pass shared by the periodic evaluator and
+ * event-driven dequeue engine. The pass owns candidate expansion and every
+ * dry-run/execute gate; adapters only decide how an admitted task is emitted
+ * and how their per-cycle capacity bookkeeping is updated.
+ */
+export async function admitAutoApprovedSystemTasks(ctx, adapter) {
+  const {
+    state,
+    cosTaskData,
+    taskSchedule,
+    cosAutonomyMode,
+    autonomousSlotCeiling,
+    alreadySpawned,
+    perProjectLimit,
+    spawnProjectCounts,
+    instanceId,
+  } = ctx;
+  const { canSpawn, trackSpawn, emitSpawn, onDefer = async () => {} } = adapter;
+
+  if (!cosTaskData.exists) return [];
+
+  const autoApproved = [
+    ...(cosTaskData.autoApproved || []),
+    ...(state.config.autoApproveInvestigations
+      ? (cosTaskData.grouped?.pending || []).filter((task) => isAutoApprovableInvestigation(task, state.config))
+      : [])
+  ];
+  const disabledAnalysisType = (task) => isDisabledAnalysisType(task, taskSchedule);
+
+  if (cosAutonomyMode !== 'execute') {
+    if (cosAutonomyMode !== 'dry-run') return [];
+    const wouldSpawn = await selectDryRunAutoApproved(autoApproved, {
+      availableSlots: autonomousSlotCeiling,
+      alreadySpawned,
+      perProjectLimit,
+      spawnProjectCounts,
+      isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
+      cooldownExempt: isCooldownExemptTask,
+      extraSkip: disabledAnalysisType,
+      notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null
+    });
+    for (const task of wouldSpawn) {
+      emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
+    }
+    return wouldSpawn;
+  }
+
+  const admitted = [];
+  let spawned = alreadySpawned;
+  for (const task of autoApproved) {
+    if (spawned >= autonomousSlotCeiling) break;
+    const skipReason = getSkipReason(task.metadata, instanceId);
+    if (skipReason) {
+      emitLog('debug', `Skipping system task ${task.id} — ${skipReason}`, { taskId: task.id });
+      continue;
+    }
+    if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
+    if (disabledAnalysisType(task)) {
+      emitLog('info', `System task skipped — task type '${analysisTypeForTask(task)}' is disabled`, { taskId: task.id });
+      continue;
+    }
+    const appId = task.metadata?.app;
+    if (appId && !isCooldownExemptTask(task) && (await isAppOnCooldown(appId, state.config.appReviewCooldownMs))) {
+      await onDefer({ type: 'cooldown', task, appId });
+      continue;
+    }
+    const sysTask = { ...task, taskType: 'internal' };
+    if (!canSpawn(sysTask, autonomousSlotCeiling)) {
+      await onDefer({ type: 'capacity', task, project: appId || '_self' });
+      continue;
+    }
+    emitSpawn(sysTask);
+    trackSpawn(sysTask);
+    admitted.push(sysTask);
+    spawned++;
+  }
+  return admitted;
+}
+
+async function recordAutoApprovedDeferral({ type, task, appId, project }, state, perProjectLimit) {
+  if (type === 'cooldown') {
+    emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);
+    await recordDecision(
+      DECISION_TYPES.COOLDOWN_ACTIVE,
+      `System task ${task.id} skipped — app ${appId} on cooldown (${Math.round(state.config.appReviewCooldownMs / 60000)}min window)`,
+      { taskId: task.id, appId, cooldownMs: state.config.appReviewCooldownMs }
+    );
+    return;
+  }
+  emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${project}`);
+  await recordDecision(
+    DECISION_TYPES.CAPACITY_FULL,
+    `System task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${project}`,
+    { taskId: task.id, project, limit: perProjectLimit }
+  );
+}
+
 /**
  * Priority 0: On-demand task requests (highest priority — user explicitly
  * requested these). Reads the live schedule's `onDemandRequests`, clears each
@@ -771,7 +878,7 @@ async function resolveAutonomyBudget(state, runningAgentEntries) {
 async function spawnPriority0OnDemand(ctx) {
   const { state, availableSlots, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
-  await drainOnDemandRequests({ state }, {
+  const { schedule } = await drainOnDemandRequests({ state }, {
     capacityExhausted: () => tasksToSpawn.length >= availableSlots,
     canSpawn: (task) => canSpawnTask(task),
     emitSpawn: (task) => {
@@ -779,6 +886,7 @@ async function spawnPriority0OnDemand(ctx) {
       trackSpawn(task);
     },
   });
+  ctx.taskSchedule = schedule;
 }
 
 /**
@@ -825,73 +933,22 @@ async function spawnPriority1UserTasks(ctx) {
  */
 async function spawnPriority2AutoApproved(ctx) {
   const { state, cosTaskData, cosAutonomyMode, autonomousSlotCeiling, perProjectLimit, spawnProjectCounts, tasksToSpawn, canSpawnTask, trackSpawn, instanceId } = ctx;
-
-  if (tasksToSpawn.length < autonomousSlotCeiling && cosTaskData.exists && cosAutonomyMode !== 'execute') {
-    if (cosAutonomyMode === 'dry-run') {
-      // Log only the tasks execute mode would ACTUALLY spawn — applying the same
-      // instance-pin / peer-lease / max-spawns / cooldown / per-project gates
-      // against virtual capacity — rather than every auto-approved task
-      // regardless of eligibility.
-      const wouldSpawn = await selectDryRunAutoApproved(cosTaskData.autoApproved || [], {
-        availableSlots: autonomousSlotCeiling,
-        alreadySpawned: tasksToSpawn.length,
-        perProjectLimit,
-        spawnProjectCounts,
-        isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
-        cooldownExempt: isCooldownExemptTask,
-        notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null
-      });
-      for (const task of wouldSpawn) {
-        emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
-      }
-    }
-  } else if (tasksToSpawn.length < autonomousSlotCeiling && cosTaskData.exists) {
-    const autoApproved = cosTaskData.autoApproved || [];
-    for (const task of autoApproved) {
-      if (tasksToSpawn.length >= autonomousSlotCeiling) break;
-
-      // Pinned to another instance (#4520), or a federated peer holds a live
-      // lease on it (#1650) — skip it during candidate selection so it doesn't
-      // consume an autonomous slot the spawn guard would just reject.
-      const skipReason = getSkipReason(task.metadata, instanceId);
-      if (skipReason) {
-        emitLog('debug', `Skipping system task ${task.id} — ${skipReason}`, { taskId: task.id });
-        continue;
-      }
-
-      if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
-
-      // Check if task's app is on cooldown (pipeline continuations AND perpetual
-      // drains bypass cooldown — see isCooldownExemptTask).
-      const appId = task.metadata?.app;
-      if (appId && !isCooldownExemptTask(task)) {
-        const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
-        if (onCooldown) {
-          emitLog('debug', `Skipping system task ${task.id} - app ${appId} on cooldown`);
-          await recordDecision(
-            DECISION_TYPES.COOLDOWN_ACTIVE,
-            `System task ${task.id} skipped — app ${appId} on cooldown (${Math.round(state.config.appReviewCooldownMs / 60000)}min window)`,
-            { taskId: task.id, appId, cooldownMs: state.config.appReviewCooldownMs }
-          );
-          continue;
-        }
-      }
-
-      const sysTask = { ...task, taskType: 'internal' };
-      if (!canSpawnTask(sysTask, autonomousSlotCeiling)) {
-        const sysProject = appId || '_self';
-        emitLog('debug', `⏳ Queued system task ${task.id} - per-project limit reached for ${sysProject}`);
-        await recordDecision(
-          DECISION_TYPES.CAPACITY_FULL,
-          `System task ${task.id} deferred — per-project limit (${perProjectLimit}) reached for ${sysProject}`,
-          { taskId: task.id, project: sysProject, limit: perProjectLimit }
-        );
-        continue;
-      }
-      tasksToSpawn.push(sysTask);
-      trackSpawn(sysTask);
-    }
-  }
+  return admitAutoApprovedSystemTasks({
+    state,
+    cosTaskData,
+    taskSchedule: ctx.taskSchedule,
+    cosAutonomyMode,
+    autonomousSlotCeiling,
+    alreadySpawned: tasksToSpawn.length,
+    perProjectLimit,
+    spawnProjectCounts,
+    instanceId,
+  }, {
+    canSpawn: canSpawnTask,
+    trackSpawn,
+    emitSpawn: (task) => tasksToSpawn.push(task),
+    onDefer: (decision) => recordAutoApprovedDeferral(decision, state, perProjectLimit),
+  });
 }
 
 /**
@@ -915,7 +972,13 @@ async function maybeQueueImprovementTasks(ctx) {
 async function spawnPriority3Missions(ctx) {
   const { state, hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
-  if (tasksToSpawn.length < autonomousSlotCeiling && !hasPendingUserTasks && state.config.proactiveMode && cosAutonomyMode === 'execute') {
+  if (isMissionTierEligible({
+    spawned: tasksToSpawn.length,
+    ceiling: autonomousSlotCeiling,
+    hasPendingUserTasks,
+    proactiveMode: state.config.proactiveMode,
+    autonomyMode: cosAutonomyMode
+  })) {
     const missionTasks = await generateMissionTasks({ maxTasks: autonomousSlotCeiling - tasksToSpawn.length }).catch(err => {
       emitLog('debug', `Mission task generation failed: ${err.message}`);
       return [];
@@ -987,7 +1050,12 @@ async function spawnPriority36FeatureAgents(ctx) {
 async function spawnPriority4IdleReview(ctx) {
   const { state, hasPendingUserTasks, cosAutonomyMode, autonomousSlotCeiling, tasksToSpawn, canSpawnTask, trackSpawn } = ctx;
 
-  if (tasksToSpawn.length === 0 && state.config.idleReviewEnabled && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
+  if (isIdleTierEligible({
+    spawned: tasksToSpawn.length,
+    hasPendingUserTasks,
+    idleReviewEnabled: state.config.idleReviewEnabled,
+    autonomyMode: cosAutonomyMode
+  })) {
     const freshCosTasks = await getCosTasks();
     const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
     if (pendingSystemTasks === 0) {
@@ -1143,6 +1211,7 @@ export async function evaluateTasks(options) {
     hasPendingUserTasks,
     canSpawnTask,
     trackSpawn,
+    taskSchedule: null,
     autonomousSlotCeiling: availableSlots
   };
 
