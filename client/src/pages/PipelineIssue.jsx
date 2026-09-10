@@ -499,6 +499,7 @@ export default function PipelineIssue() {
               value={issue.stages?.[stageId]?.genConfig || null}
               onChange={handleGenConfigChange}
               stageLabel={VISUAL_STAGE_LABELS[stageId]}
+              series={series}
             />
           </div>
         </Modal>

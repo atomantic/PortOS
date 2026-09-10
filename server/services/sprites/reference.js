@@ -35,7 +35,8 @@ import {
   IMAGE_GEN_MODE, resolveQueueImageMode, LOCAL_IMAGEGEN_DEFAULT_MODEL,
 } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
-import { pickUsableMode, renderTargetDefaults, resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
+import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
+import { imageModeCandidates, pickUsableMode } from '../../lib/renderModeLadder.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { getSettings } from '../settings.js';
 import { getRecord, updateRecord, listRecords, createCharacter } from './records.js';
@@ -389,18 +390,15 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   const settings = await getSettings();
   // Render-target ladder (#3231): the page's explicit body.mode wins, then
   // the sprite record's persisted pin (Phase 3), then the sprite-reference
-  // pin in settings.renderDefaults, then the install default. The pins go
+  // pin in settings.renderDefaults, then the install default — the shared
+  // `imageModeCandidates` order (lib/renderModeLadder.js, #6815). The pins go
   // through pickUsableMode so each disabled rung falls to the NEXT rung
   // (matching resolveRenderTargetConfig's per-rung gating) instead of a
   // disabled record pin swallowing the target pin; resolveQueueImageMode
   // keeps the historical gate for an explicit body.mode.
   const spritePin = recordRenderPin(record);
   const mode = resolveQueueImageMode(
-    body.mode || pickUsableMode(settings, [
-      spritePin.mode,
-      renderTargetDefaults(settings, RENDER_TARGET.SPRITE_REFERENCE).imageMode,
-      settings?.imageGen?.mode,
-    ]),
+    body.mode || pickUsableMode(settings, imageModeCandidates(settings, RENDER_TARGET.SPRITE_REFERENCE, record)),
     settings,
   );
 

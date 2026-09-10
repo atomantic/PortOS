@@ -17,18 +17,20 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
-import { normalizeRenderPinValue } from '../../lib/renderTargets.js';
 import {
   cloudPromptRequired,
   IMAGE_GEN_PROVIDER_CAPABILITIES,
   maxInputImages,
 } from '../../lib/imageGenCapabilities.js';
 import {
+  isModeUsable,
+  pickUsableMode,
+  renderTargetDefaults,
+} from '../../lib/renderModeLadder.js';
+import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
-  CLOUD_IMAGE_GEN_MODES,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
   IMAGE_GEN_MODE,
-  QUEUEABLE_IMAGE_MODES,
 } from './modes.js';
 
 // The pure capability half of the specs below, plus the two predicates that
@@ -37,6 +39,14 @@ import {
 // every existing caller (inputImages, prepareParams, the providers,
 // fableLoom/production) imports them from this module.
 export { cloudPromptRequired, maxInputImages };
+
+// The pure resolution ladder lives in the dependency-free `lib/renderModeLadder.js`
+// leaf (#6815) so the client can import it directly instead of hand-copying it —
+// see that module for their docs and the fall-through semantics (a pin is a
+// preference, not a guarantee). Re-exported here because every existing caller
+// (visualStageHelpers, sprites/reference, creativeCommissions/scheduler,
+// creative/tools/media, videoGen/backendPin) imports them from this module.
+export { isModeUsable, pickUsableMode, renderTargetDefaults };
 
 /**
  * Per-provider knowledge, keyed by mode:
@@ -137,56 +147,6 @@ export function resolveCloudProviderConfig(settings, mode, overrides = {}) {
     ),
     disabledReason: `${mode}-disabled`,
     connectionReason: `${spec.label} is disabled in settings`,
-  };
-}
-
-/**
- * Can the queue-backed surfaces render in `mode` right now? Cloud CLIs need
- * their opt-in toggle; local is always usable (its own pythonPath/model
- * validation happens per call site); external isn't queueable at all.
- *
- * The predicate behind the candidate walk in `resolveMode`
- * (pipeline/visualStageHelpers.js), so the mode ladder no longer grows a
- * pairwise `if` per backend.
- *
- * There is no edit/i2i variant: every queueable backend accepts an input image
- * (see EDIT_INCAPABLE_IMAGE_MODES, whose sole member — external — is not
- * queueable), so an i2i render walks this exact ladder. #3243 threaded an
- * `{ edit }` flag through here to route redraws away from Agy; that turned out
- * to be a misreading of Agy's tool schema, and the flag is gone rather than
- * left as a branch that can never be taken.
- */
-export function isModeUsable(settings, mode) {
-  if (!QUEUEABLE_IMAGE_MODES.includes(mode)) return false;
-  const cloud = resolveCloudProviderConfig(settings, mode);
-  return cloud ? cloud.enabled : true;
-}
-
-/**
- * First usable mode from an ordered candidate list, falling back to the
- * cloud providers (in `CLOUD_IMAGE_GEN_MODES` order) and finally local.
- *
- * A record pinned to a DISABLED backend falls through to the next usable one
- * rather than failing — a pin is a preference (the enforceRenderBackendPin
- * contract). LOCAL is always usable, so the tail always resolves.
- */
-export function pickUsableMode(settings, candidates = []) {
-  const ordered = [...candidates, ...CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE.LOCAL];
-  return ordered.find((m) => m && isModeUsable(settings, m)) || IMAGE_GEN_MODE.LOCAL;
-}
-
-/**
- * The user's saved per-surface pins for one render target (#3231 Phase 2) —
- * `settings.renderDefaults[target]`, normalized: the `'auto'` sentinel and
- * blank strings collapse to null ("no pin — fall through").
- */
-export function renderTargetDefaults(settings, target) {
-  const d = settings?.renderDefaults?.[target] || {};
-  return {
-    imageMode: normalizeRenderPinValue(d.imageMode),
-    imageModel: normalizeRenderPinValue(d.imageModel),
-    videoMode: normalizeRenderPinValue(d.videoMode),
-    videoModel: normalizeRenderPinValue(d.videoModel),
   };
 }
 
