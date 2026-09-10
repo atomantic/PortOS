@@ -12,9 +12,7 @@
 
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, resolveImageRef } from '../../lib/fileUtils.js';
-import {
-  BIBLE_KEYS, pruneStaleReferenceSheets, mergePreservedSheetPointers, isStr, trimTo,
-} from '../../lib/storyBible.js';
+import { BIBLE_KEYS, pruneStaleReferenceSheets, mergePreservedSheetPointers } from '../../lib/storyBible.js';
 import { store } from './storeFacade.js';
 import {
   sanitizeTemplate, sanitizeRun, sanitizeImageRefFilename, resolveInfluences,
@@ -36,6 +34,7 @@ import {
 // series.js does NOT import universeBuilder (one-directional), so this static
 // import is cycle-safe — unlike canonUsage.js, which back-imports this module.
 import { listSeries } from '../pipeline/series.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 // Once-per-process flag for the canon-backfill log — readState() runs in both
 // the queue and from un-queued readers, and the in-memory migration is cheap

@@ -25,13 +25,13 @@ import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
+import { isNonBlankStr } from '../lib/textUtils.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
 const FETCH_TIMEOUT_MS = 15000;
 
 const withLock = createMutex();
-const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;
 let syncTimer = null;
 let peerOnlineHandler = null;
 const syncingPeers = new Set();
@@ -144,7 +144,7 @@ export async function getSyncStatus({ includeChecksums = false, forPeer = null }
   // (universe/pipeline/mediaCollections) — making them read "behind" forever,
   // even when both sides are empty. An absent `forPeer` (self-view, older peer)
   // keeps the unscoped global checksum (forPeerId: undefined).
-  const forPeerId = isNonEmptyStr(forPeer) ? forPeer : undefined;
+  const forPeerId = isNonBlankStr(forPeer) ? forPeer : undefined;
   const [brainSeq, memorySeq, catalogSeqs, cursors, ...checksumResults] = await Promise.all([
     Promise.resolve(brainSyncLog.getCurrentSeq()),
     isPostgres ? memorySync.getMaxSequence() : Promise.resolve(null),
@@ -165,7 +165,7 @@ export async function getSyncStatus({ includeChecksums = false, forPeer = null }
   // far we've consumed from it. That cursor IS the peer's push-frontier toward
   // us, so the requesting peer can render an outbound "N to push" count without
   // us tracking its local max. Null when we've never synced that peer.
-  if (isNonEmptyStr(forPeer)) {
+  if (isNonBlankStr(forPeer)) {
     result.cursorForYou = cursors[forPeer] ?? null;
   }
   return result;
@@ -223,7 +223,7 @@ async function syncBrainFromPeer(peer, cursor) {
     cursor.brainChecksumTypes === typesSignature ? (cursor.brainChecksum ?? null) : null;
   let brainChecksum = cachedChecksum;
   const remote = await fetchPeer(peer, '/api/brain/reconcile/checksum');
-  const remoteChecksum = isNonEmptyStr(remote?.checksum) ? remote.checksum : null;
+  const remoteChecksum = isNonBlankStr(remote?.checksum) ? remote.checksum : null;
   if (remoteChecksum && remoteChecksum !== cachedChecksum) {
     const localChecksum = await brainReconcile.getBrainChecksum().catch(() => null);
     if (remoteChecksum === localChecksum) {
@@ -238,7 +238,7 @@ async function syncBrainFromPeer(peer, cursor) {
         // at step 2 next cycle. (Our post-merge local checksum may differ from
         // the peer's if WE hold records THEY lack — that asymmetry is fine; the
         // peer reconciles those from us on its own cycle.)
-        brainChecksum = isNonEmptyStr(snapshot.checksum) ? snapshot.checksum : remoteChecksum;
+        brainChecksum = isNonBlankStr(snapshot.checksum) ? snapshot.checksum : remoteChecksum;
       }
     }
   }
@@ -476,7 +476,7 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
   // applied idempotently. The query string is only appended for the three
   // peer-record-subscribable categories; for goals/character/etc. it's inert
   // server-side, but we still pass it uniformly to keep the URL builder simple.
-  const forPeerQs = isNonEmptyStr(ourInstanceId) ? `?forPeer=${encodeURIComponent(ourInstanceId)}` : '';
+  const forPeerQs = isNonBlankStr(ourInstanceId) ? `?forPeer=${encodeURIComponent(ourInstanceId)}` : '';
   // Lightweight checksum check first
   const checksumRes = await fetchPeer(peer, `/api/sync/${category}/checksum${forPeerQs}`);
   if (!checksumRes?.checksum) return { totalApplied: 0, checksum: null };
@@ -676,12 +676,12 @@ export async function categoriesCoveredByPeerSync(peerId, peer = null, ourInstan
   // instanceId yields the records it pushes to us. Best-effort — a null
   // response (older peer / offline) leaves inbound empty → full snapshot.
   const inbound = emptyCoverage();
-  if (peer && isNonEmptyStr(ourInstanceId)) {
+  if (peer && isNonBlankStr(ourInstanceId)) {
     const res = await fetchPeer(peer, `/api/peer-sync/subscriptions?peerId=${encodeURIComponent(ourInstanceId)}`);
     const subs = Array.isArray(res?.subscriptions) ? res.subscriptions : [];
     for (const sub of subs) {
       const cat = RECORD_KIND_TO_CATEGORY[sub?.recordKind];
-      if (cat && isNonEmptyStr(sub?.recordId)) inbound[cat].add(sub.recordId);
+      if (cat && isNonBlankStr(sub?.recordId)) inbound[cat].add(sub.recordId);
     }
   }
   return { outbound, inbound };
@@ -728,7 +728,7 @@ export async function syncWithPeer(peer) {
     // per-record). Resolved once per sync, best-effort; null/UNKNOWN → no
     // scoping (full snapshots, legacy behavior).
     const ourInstanceId = await getInstanceId().catch(() => null);
-    const scopedInstanceId = isNonEmptyStr(ourInstanceId) && ourInstanceId !== UNKNOWN_INSTANCE_ID
+    const scopedInstanceId = isNonBlankStr(ourInstanceId) && ourInstanceId !== UNKNOWN_INSTANCE_ID
       ? ourInstanceId
       : null;
 
@@ -818,7 +818,7 @@ export async function syncWithPeer(peer) {
         // short-circuits the snapshot fetch next cycle (#1077). Only overwrite
         // when we actually resolved one — a failed/legacy probe (null) leaves
         // the prior value so we don't lose the skip-optimization on a blip.
-        if (isNonEmptyStr(brainResult.brainChecksum)) {
+        if (isNonBlankStr(brainResult.brainChecksum)) {
           cursors[peerId].brainChecksum = brainResult.brainChecksum;
           // Stamp the entity-type signature the cache is valid for — an
           // enrollment change (new brain type) invalidates the cached checksum

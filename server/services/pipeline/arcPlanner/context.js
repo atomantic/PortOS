@@ -10,7 +10,6 @@
 import { MANUSCRIPT_TYPES } from '../series.js';
 import { listIssues, STAGE_INPUT_MAX } from '../issues.js';
 import { ARC_LIMITS, ARC_ROLES as ARC_ROLE_LIST, ARC_SHAPE_IDS, READER_MAP_BEAT_KINDS, buildSeason, renderArcShapeGuidance, renderTickingClock, sanitizeSeasonList } from '../../../lib/storyArc.js';
-import { trimToClause } from '../../../lib/storyBible.js';
 import { composeStyleNotes } from '../../../lib/styleGuide.js';
 import {
   CHARACTER_ARC_LIMITS,
@@ -22,6 +21,7 @@ import { computeIssueTargets, DEFAULT_LENGTH_PROFILE, LENGTH_PROFILE_NAMES } fro
 import { getUniverse } from '../../universeBuilder.js';
 import { getSeriesPlanningCanon, scopeCanonForSeries } from '../seriesCanon.js';
 import { CHARACTER_NARRATIVE_ARC_MAX, renderCanonForPrompt, renderCategoriesForPrompt, renderCharacterNarrativeContext, renderCompositesForPrompt, renderEntitiesSummary } from '../../../lib/universePromptRenderers.js';
+import { trimToClause } from '../../../lib/textUtils.js';
 
 export const ERR_VALIDATION = 'PIPELINE_ARC_VALIDATION';
 

@@ -12,16 +12,14 @@
 
 import { randomUUID } from 'crypto';
 import { basename } from 'path';
-import {
-  sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
-  normalizeBibleName, isStr, trimTo,
-} from '../../lib/storyBible.js';
+import { sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE, normalizeBibleName } from '../../lib/storyBible.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import {
   LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX, INFLUENCE_ENTRY_MAX, INFLUENCES_PER_LIST_MAX, STYLE_REFERENCES_MAX, LOCKABLE_FIELDS,
 } from '../../lib/universeBibleLimits.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 // RECORD-shape schema version, stamped INSIDE each universe record. Distinct
 // from the type-level (storage layout) schemaVersion carried by

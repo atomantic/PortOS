@@ -8,6 +8,7 @@
 
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { trimTo } from './textUtils.js';
 
 export const PERSISTENT_MIND_PROFILE_SCHEMA_VERSION = 1;
 
@@ -50,8 +51,6 @@ export function createDefaultPersistentMindProfile() {
   };
 }
 
-const text = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-
 const wakeIntervalMinutes = (value) => (
   Number.isInteger(value)
     && value >= PERSISTENT_MIND_PROFILE_LIMITS.WAKE_INTERVAL_MINUTES_MIN
@@ -64,12 +63,12 @@ const wakeIntervalMinutes = (value) => (
 export function normalizePersistentMindProfile(raw) {
   const defaults = createDefaultPersistentMindProfile();
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  const effort = text(source.effort, 20);
+  const effort = trimTo(source.effort, 20);
   return {
     ...defaults,
     enabled: source.enabled === true,
-    providerId: text(source.providerId, PERSISTENT_MIND_PROFILE_LIMITS.PROVIDER_ID_MAX),
-    model: text(source.model, PERSISTENT_MIND_PROFILE_LIMITS.MODEL_MAX),
+    providerId: trimTo(source.providerId, PERSISTENT_MIND_PROFILE_LIMITS.PROVIDER_ID_MAX),
+    model: trimTo(source.model, PERSISTENT_MIND_PROFILE_LIMITS.MODEL_MAX),
     effort: EFFORT_LEVELS.includes(effort) ? effort : '',
     thinkingInterface: source.thinkingInterface === PERSISTENT_MIND_THINKING_INTERFACE
       ? source.thinkingInterface

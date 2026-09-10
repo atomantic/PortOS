@@ -42,6 +42,7 @@ import { pickAnalyzableContent } from './editorialAnalysis.js';
 import { getIssue, listIssues } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 const STAGE = 'pipeline-judge-issue';
 
@@ -130,18 +131,16 @@ export function computeQualityScore(judgeOverall, slopPenalty) {
 
 // ---------- sanitize LLM output ----------
 
-const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-
 const strList = (v, max, cap) => (Array.isArray(v)
-  ? v.map((s) => str(s, max)).filter(Boolean).slice(0, cap)
+  ? v.map((s) => trimTo(s, max)).filter(Boolean).slice(0, cap)
   : []);
 
 function sanitizeDimension(raw) {
   const d = raw && typeof raw === 'object' ? raw : {};
   return {
     score: clampScore(d.score),
-    weakestMoment: str(d.weakestMoment, MOMENT_MAX),
-    fix: str(d.fix, FIX_MAX),
+    weakestMoment: trimTo(d.weakestMoment, MOMENT_MAX),
+    fix: trimTo(d.fix, FIX_MAX),
   };
 }
 
@@ -166,7 +165,7 @@ export function sanitizeJudge(parsed) {
     weakestSentences: strList(p.weakestSentences, SENTENCE_MAX, MAX_SENTENCES),
     sceneVsSummaryRatio: Number.isFinite(ratio) ? Math.max(0, Math.min(1, Math.round(ratio * 100) / 100)) : null,
     topRevisions: strList(p.topRevisions, REVISION_MAX, MAX_REVISIONS),
-    oneLineVerdict: str(p.oneLineVerdict, VERDICT_MAX),
+    oneLineVerdict: trimTo(p.oneLineVerdict, VERDICT_MAX),
   };
 }
 

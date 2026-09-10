@@ -18,8 +18,7 @@
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { WORK_ID_RE, DRAFT_ID_RE, FOLDER_ID_RE, EXERCISE_ID_RE } from './_shared.js';
-
-const isStr = (v) => typeof v === 'string';
+import { isStr } from '../../lib/textUtils.js';
 
 // The peer-sync record kind + the asset kind its draft bodies ride. Exported so
 // peerSync.js / sync.js reference one source of truth instead of bare strings.

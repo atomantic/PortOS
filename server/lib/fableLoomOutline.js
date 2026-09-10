@@ -10,11 +10,10 @@
 
 import { LOOM_LIMITS } from './fableLoomLimits.js';
 import { FABLELOOM_PROTAGONIST_PRESENCE } from './fableLoomPlayback.js';
-import { trimTo } from './textUtils.js';
+import { trimTo, isNonBlankStr } from './textUtils.js';
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const isObject = (value) => value && typeof value === 'object';
-const isText = (value) => typeof value === 'string' && value.trim().length > 0;
 
 export const OUTLINE_ISSUE_CODES = Object.freeze({
   NO_SCENES: 'NO_SCENES',
@@ -80,7 +79,7 @@ export const fableLoomEpisodeChallenges = (loom, episodeId) => asArray(loom?.ser
   .filter((item) => item?.episodeId === episodeId && fableLoomPlotPointKind(item) === 'challenge');
 
 const uniqueKey = (candidate, index, seen) => {
-  const base = isText(candidate)
+  const base = isNonBlankStr(candidate)
     ? candidate.trim().slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX)
     : `s${index + 1}`;
   let key = base || `s${index + 1}`;
@@ -104,7 +103,7 @@ const sanitizeValidation = (raw) => {
       code: trimTo(issue.code, 80),
       severity: issue.severity === 'warning' ? 'warning' : 'error',
       message: trimTo(issue.message, LOOM_LIMITS.OUTLINE_ISSUE_MESSAGE_MAX),
-      ...(isText(issue.sceneKey) ? { sceneKey: issue.sceneKey.slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX) } : {}),
+      ...(isNonBlankStr(issue.sceneKey) ? { sceneKey: issue.sceneKey.slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX) } : {}),
       ...(Number.isInteger(issue.transitionIndex) && issue.transitionIndex >= 0
         ? { transitionIndex: issue.transitionIndex }
         : {}),
@@ -113,7 +112,7 @@ const sanitizeValidation = (raw) => {
   return {
     status,
     issues,
-    ...(isText(raw.validatedAt) ? { validatedAt: raw.validatedAt.slice(0, 80) } : {}),
+    ...(isNonBlankStr(raw.validatedAt) ? { validatedAt: raw.validatedAt.slice(0, 80) } : {}),
   };
 };
 
@@ -129,12 +128,12 @@ export function sanitizeStoryOutline(raw, { participationMode = 'protagonist' } 
   const keyByRawKey = new Map();
   const scenes = rawScenes.map((scene, index) => {
     const key = uniqueKey(scene?.key, index, seen);
-    if (isText(scene?.key) && !keyByRawKey.has(scene.key.trim())) keyByRawKey.set(scene.key.trim(), key);
+    if (isNonBlankStr(scene?.key) && !keyByRawKey.has(scene.key.trim())) keyByRawKey.set(scene.key.trim(), key);
     const transitions = asArray(scene?.transitions)
       .slice(0, LOOM_LIMITS.OUTLINE_TRANSITIONS_MAX)
       .filter(isObject)
       .map((transition) => ({
-        targetKey: isText(transition.targetKey)
+        targetKey: isNonBlankStr(transition.targetKey)
           ? transition.targetKey.trim().slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX)
           : '',
         intent: trimTo(transition.intent, LOOM_LIMITS.INTENT_MAX),
@@ -143,7 +142,7 @@ export function sanitizeStoryOutline(raw, { participationMode = 'protagonist' } 
       key,
       title: trimTo(scene?.title, LOOM_LIMITS.NODE_TITLE_MAX),
       summary: trimTo(scene?.summary, LOOM_LIMITS.OUTLINE_SUMMARY_MAX),
-      plotPointId: isText(scene?.plotPointId)
+      plotPointId: isNonBlankStr(scene?.plotPointId)
         ? scene.plotPointId.trim().slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX)
         : null,
       challengePhase: challengePhaseSet.has(scene?.challengePhase) ? scene.challengePhase : null,
@@ -161,7 +160,7 @@ export function sanitizeStoryOutline(raw, { participationMode = 'protagonist' } 
       transitions,
     };
   });
-  const rawStart = isText(raw.startKey) ? raw.startKey.trim() : '';
+  const rawStart = isNonBlankStr(raw.startKey) ? raw.startKey.trim() : '';
   const startKey = keyByRawKey.get(rawStart) || rawStart.slice(0, LOOM_LIMITS.OUTLINE_KEY_MAX) || scenes[0]?.key || null;
   return {
     version: 1,
@@ -188,7 +187,7 @@ export function analyzeStoryOutline(outline, {
     push(OUTLINE_ISSUE_CODES.NO_SCENES, 'error', 'The story outline has no scene beats yet.');
   }
   const startKey = outline?.startKey;
-  if (!isText(startKey)) {
+  if (!isNonBlankStr(startKey)) {
     if (scenes.length) push(OUTLINE_ISSUE_CODES.MISSING_START, 'error', 'The story outline has no opening beat.');
   } else if (scenes.length && !byKey.has(startKey)) {
     push(OUTLINE_ISSUE_CODES.START_NOT_FOUND, 'error', 'The opening beat points at a key that does not exist.');
@@ -257,7 +256,7 @@ export function analyzeStoryOutline(outline, {
     if (episodeId && assignedPlot?.episodeId && assignedPlot.episodeId !== episodeId) {
       push(OUTLINE_ISSUE_CODES.WRONG_EPISODE_PLOT_POINT, 'error', `"${label}" uses a plot point assigned to another episode. Keep that payoff in its assigned episode.`, { sceneKey: scene.key });
     }
-    if (!isText(scene.summary)) {
+    if (!isNonBlankStr(scene.summary)) {
       push(OUTLINE_ISSUE_CODES.EMPTY_SUMMARY, 'error', `"${label}" has no scene log-line.`, { sceneKey: scene.key });
     }
     if (!reachable.has(scene.key)) {
@@ -298,7 +297,7 @@ export function analyzeStoryOutline(outline, {
 
     const seenIntents = new Set();
     transitions.forEach((transition, transitionIndex) => {
-      const intent = isText(transition.intent) ? transition.intent.trim().toLowerCase() : '';
+      const intent = isNonBlankStr(transition.intent) ? transition.intent.trim().toLowerCase() : '';
       if (!intent) {
         push(
           OUTLINE_ISSUE_CODES.EMPTY_INTENT,
@@ -573,7 +572,7 @@ export function analyzeSeriesStoryOutlines(loom, { replacingEpisodeId = null } =
           `The handoff from Episode ${fromEpisode.number} to Episode ${toEpisode.number} needs an overnight voicemail.`,
           { episodeId: fromEpisode.id },
         );
-      } else if (!isText(voicemail.transcript)) {
+      } else if (!isNonBlankStr(voicemail.transcript)) {
         push(
           OUTLINE_ISSUE_CODES.EMPTY_OVERNIGHT_VOICEMAIL,
           'error',
@@ -583,7 +582,7 @@ export function analyzeSeriesStoryOutlines(loom, { replacingEpisodeId = null } =
       }
     });
   }
-  if (delivery.nextSeasonTeaser === true && !isText(loom?.seriesPlan?.nextSeasonTeaser?.transcript)) {
+  if (delivery.nextSeasonTeaser === true && !isNonBlankStr(loom?.seriesPlan?.nextSeasonTeaser?.transcript)) {
     push(
       OUTLINE_ISSUE_CODES.MISSING_NEXT_SEASON_TEASER,
       'error',

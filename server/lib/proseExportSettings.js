@@ -14,6 +14,7 @@
 // Trade-paperback trim sizes, in PDF points (1pt = 1/72"). The keys are stable
 // wire values; the labels are UI-only (kept on the client). us-trade (6"×9") is
 // the default fiction trade size.
+import { trimTo } from './textUtils.js';
 export const TRIM_SIZES = Object.freeze({
   'us-trade':    { width: 432,   height: 648 },    // 6" × 9"
   'digest':      { width: 396,   height: 612 },    // 5.5" × 8.5"
@@ -33,8 +34,6 @@ const SUBTITLE_MAX = 300;
 const AUTHOR_MAX = 120;
 const COPYRIGHT_MAX = 500;
 const DEDICATION_MAX = 2000;
-
-const trimTo = (val, max) => (typeof val === 'string' ? val.trim().slice(0, max) : '');
 
 /**
  * Sanitize the optional `series.exportSettings` field. Returns `null` when the

@@ -11,7 +11,6 @@
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { LOOM_LIMITS } from '../../lib/fableLoomLimits.js';
-import { trimTo } from '../../lib/storyBible.js';
 import { getLoom, mutateLoom } from './records.js';
 import {
   evaluateAndRemediateFableLoom,
@@ -21,6 +20,7 @@ import {
   runFableLoomEditorialSelfImprove,
   shouldDiagnoseFableLoomEditorial,
 } from './editorialSelfImprove.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 export const FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS = Object.freeze({
   DEFAULT_ROUNDS: 3,

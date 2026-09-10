@@ -22,7 +22,7 @@
 
 import * as os from 'os';
 import { getSettings, settingsEvents } from '../settings.js';
-import { isStr } from '../../lib/storyBible.js';
+import { isStr } from '../../lib/textUtils.js';
 
 const CACHE_TTL_MS = 30_000;
 let cachedName = null;

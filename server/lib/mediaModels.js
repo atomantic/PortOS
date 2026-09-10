@@ -89,6 +89,7 @@ import {
   isHardwareCompatible,
   withHardwareCompatibility,
 } from './systemCapabilities.js';
+import { isNonBlankStr } from './textUtils.js';
 // fileUtils.ensureDir is async/Promise-returning; this module needs a
 // synchronous version because `loadMediaModels()` is called at import-time
 // from videoGen/imageGen modules, which can't await before exporting.
@@ -1977,7 +1978,7 @@ const MFLUX_LEGACY_REPOS = {
 
 export const repoForModel = (model) => {
   if (!model || typeof model !== 'object') return null;
-  if (isNonEmptyString(model.repo)) return model.repo;
+  if (isNonBlankStr(model.repo)) return model.repo;
   if (MFLUX_LEGACY_REPOS[model.id]) return MFLUX_LEGACY_REPOS[model.id];
   return null;
 };
@@ -1993,7 +1994,7 @@ export const requiredReposForModel = (model) => {
   const main = repoForModel(model);
   if (!main) return null;
   const aux = [];
-  if (isNonEmptyString(model?.textEncoderRepo)) aux.push(model.textEncoderRepo);
+  if (isNonBlankStr(model?.textEncoderRepo)) aux.push(model.textEncoderRepo);
   return [main, ...aux];
 };
 
@@ -2025,7 +2026,6 @@ export const isHfRepoId = (value) => {
 // install) when it exists; otherwise returns the HF repo id which mlx_video
 // will resolve via the HF cache (downloading on first run).
 const FALLBACK_TEXT_ENCODER_REPO = 'mlx-community/gemma-3-12b-it-4bit';
-const isNonEmptyString = (v) => typeof v === 'string' && v.length > 0;
 
 export const getTextEncoderRepo = () => {
   const reg = loadMediaModels();
@@ -2034,7 +2034,7 @@ export const getTextEncoderRepo = () => {
   if (!entry) {
     console.log(`⚠️ Unknown selectedTextEncoder "${id}"; falling back to first entry`);
     const firstRepo = reg.textEncoders?.[0]?.repo;
-    return isNonEmptyString(firstRepo) ? firstRepo : FALLBACK_TEXT_ENCODER_REPO;
+    return isNonBlankStr(firstRepo) ? firstRepo : FALLBACK_TEXT_ENCODER_REPO;
   }
   if (entry.localPath) {
     const expanded = expandHome(entry.localPath);
@@ -2043,7 +2043,7 @@ export const getTextEncoderRepo = () => {
   // Spawn args must be non-empty strings — a malformed registry entry
   // (missing/empty `repo`) would otherwise reach mlx_video as undefined and
   // surface as a confusing TypeError or downstream CLI error.
-  if (!isNonEmptyString(entry.repo)) {
+  if (!isNonBlankStr(entry.repo)) {
     console.log(`⚠️ Text encoder "${id}" has no repo; falling back to "${FALLBACK_TEXT_ENCODER_REPO}"`);
     return FALLBACK_TEXT_ENCODER_REPO;
   }

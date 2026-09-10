@@ -26,6 +26,7 @@
 
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 export const AUTHOR_ID_RE = /^auth-[A-Za-z0-9-]{1,64}$/;
 
@@ -35,9 +36,6 @@ export const BIO_MAX = 4000;
 export const PHYSICAL_DESCRIPTION_MAX = 2000;
 export const HEADSHOT_STYLE_MAX = 2000;
 export const HEADSHOT_IMAGE_URL_MAX = 1000;
-
-const isStr = (v) => typeof v === 'string';
-const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');
 
 /**
  * Normalize a raw author record into the canonical stored shape. Returns null

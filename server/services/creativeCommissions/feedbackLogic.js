@@ -28,8 +28,7 @@
 
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
-
-const isStr = (v) => typeof v === 'string';
+import { isStr } from '../../lib/textUtils.js';
 
 // The peer-sync record kind. Exported so the feedback store / peerSync.js
 // reference one source of truth instead of bare strings.

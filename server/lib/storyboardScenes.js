@@ -35,9 +35,8 @@
  * mis-target this module exists to prevent.
  */
 
+import { isNonBlankStr } from './textUtils.js';
 const ID_MAX = 80;
-
-const isNonEmptyStr = (v) => typeof v === 'string' && v.trim().length > 0;
 
 export const sceneIdForIndex = (index) => `scene-${String(index + 1).padStart(2, '0')}`;
 export const shotIdForIndex = (index) => `shot-${String(index + 1).padStart(2, '0')}`;
@@ -66,13 +65,13 @@ const stampIds = (list, idFor) => {
   // a duplicate is about to be replaced, so it must not reserve its own id.
   const taken = new Set();
   for (const rec of list) {
-    if (rec && typeof rec === 'object' && isNonEmptyStr(rec.id)) taken.add(rec.id);
+    if (rec && typeof rec === 'object' && isNonBlankStr(rec.id)) taken.add(rec.id);
   }
   const seen = new Set();
   let changed = false;
   const out = list.map((rec, i) => {
     if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return rec;
-    if (isNonEmptyStr(rec.id) && !seen.has(rec.id)) {
+    if (isNonBlankStr(rec.id) && !seen.has(rec.id)) {
       seen.add(rec.id);
       return rec;
     }
@@ -129,7 +128,7 @@ export function resolveStoryboardTarget(list, { id = null, index = null } = {}) 
   // "index 0" (AGENTS.md sentinel discipline), so coerce only real numerics.
   const idx = index === null || index === undefined || index === '' ? NaN : Number(index);
   const hasIndex = Number.isInteger(idx) && idx >= 0;
-  if (isNonEmptyStr(id)) {
+  if (isNonBlankStr(id)) {
     if (hasIndex && arr[idx] && arr[idx].id === id) {
       return { index: idx, record: arr[idx], matchedBy: 'id', stale: false };
     }

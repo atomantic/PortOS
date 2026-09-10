@@ -40,6 +40,7 @@
 
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeChiptuneScore } from '../../lib/chiptuneScore.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 export const TRACK_ID_RE = /^track-[A-Za-z0-9-]{1,64}$/;
 
@@ -65,9 +66,6 @@ export const DURATION_MIN_SEC = 1;
 export const DURATION_MAX_SEC = 3600;
 
 const RENDER_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
-
-const isStr = (v) => typeof v === 'string';
-const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');
 
 function sanitizeDuration(v) {
   if (typeof v !== 'number' || !Number.isFinite(v)) return null;

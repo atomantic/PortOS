@@ -15,7 +15,7 @@ import { isPlainObject } from '../lib/objects.js';
  *     (Express returns arrays for repeated keys; the guard prevents those from
  *     leaking into the filter).
  *   - DELETE /:id is forwarded straight to the service layer, which validates
- *     it via the same `isNonEmptyStr` check used by every other id-keyed
+ *     it via the same `isNonBlankStr` check used by every other id-keyed
  *     call (returns ERR_NOT_FOUND for missing, ERR_VALIDATION for malformed).
  *
  * Service errors carry an `ERR_*` code that maps to the HTTP status here;

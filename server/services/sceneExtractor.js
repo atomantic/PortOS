@@ -19,8 +19,9 @@
  */
 
 import { runStagedLLM } from './stageRunner.js';
-import { BIBLE_KIND, pickPromptFields, isStr, trimTo } from '../lib/storyBible.js';
+import { BIBLE_KIND, pickPromptFields } from '../lib/storyBible.js';
 import { normalizeShotType, normalizeScreenDirection } from '../lib/shotGrammar.js';
+import { isStr, trimTo } from '../lib/textUtils.js';
 
 export const SOURCE_KIND = Object.freeze({ PROSE: 'prose', TELEPLAY: 'teleplay' });
 

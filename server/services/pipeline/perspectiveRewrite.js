@@ -31,6 +31,7 @@ import { getIssue } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { pickAnalyzableContent } from './editorialAnalysis.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 const REWRITE_STAGE = 'pipeline-pov-rewrite';
 const ANALYSIS_STAGE = 'pipeline-pov-analysis';
@@ -58,7 +59,6 @@ const REWRITE_OUTPUT_RESERVE_TOKENS = 6_000;
 const ANALYSIS_OUTPUT_RESERVE_TOKENS = 3_000;
 
 const nowIso = () => new Date().toISOString();
-const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const clampNum = (v, min, max, fallback = 0) => {
   const n = Number(v);
   if (!Number.isFinite(n)) return fallback;
@@ -91,17 +91,17 @@ const queueWrite = createKeyedFileWriteQueue();
 // POV in everything we know about them.
 function shapeCastEntry(char) {
   if (!char || typeof char !== 'object') return null;
-  const name = str(char.name, 120);
+  const name = trimTo(char.name, 120);
   if (!name) return null;
   const descriptorParts = [
     flattenCanonDescriptorFragments(richCanonDescriptorFragments('character', char)),
-    char.personality ? `Personality: ${str(char.personality, 600)}` : '',
-    char.background ? `Background: ${str(char.background, 600)}` : '',
+    char.personality ? `Personality: ${trimTo(char.personality, 600)}` : '',
+    char.background ? `Background: ${trimTo(char.background, 600)}` : '',
   ].filter(Boolean);
   return {
-    id: str(char.id, 120) || name,
+    id: trimTo(char.id, 120) || name,
     name,
-    role: str(char.role, 80),
+    role: trimTo(char.role, 80),
     descriptor: descriptorParts.join('. '),
   };
 }
@@ -133,7 +133,7 @@ async function resolveCast(series, issueNumber, keepFullPov = null) {
 
 function sanitizeStringList(raw) {
   if (!Array.isArray(raw)) return [];
-  return raw.map((v) => str(v, ITEM_MAX)).filter(Boolean).slice(0, MAX_LIST_ITEMS);
+  return raw.map((v) => trimTo(v, ITEM_MAX)).filter(Boolean).slice(0, MAX_LIST_ITEMS);
 }
 
 function sanitizeFoldBack(raw) {
@@ -141,9 +141,9 @@ function sanitizeFoldBack(raw) {
   return raw
     .map((f) => {
       if (!f || typeof f !== 'object') return null;
-      const suggestion = str(f.suggestion, ITEM_MAX);
+      const suggestion = trimTo(f.suggestion, ITEM_MAX);
       if (!suggestion) return null;
-      return { suggestion, rationale: str(f.rationale, RATIONALE_MAX) };
+      return { suggestion, rationale: trimTo(f.rationale, RATIONALE_MAX) };
     })
     .filter(Boolean)
     .slice(0, MAX_LIST_ITEMS);
@@ -158,11 +158,11 @@ export function sanitizeAnalysis(parsed) {
     arcStrength: {
       score: clampNum(arc.score, 0, 100),
       strongerThanOriginal: arc.strongerThanOriginal === true,
-      rationale: str(arc.rationale, RATIONALE_MAX),
+      rationale: trimTo(arc.rationale, RATIONALE_MAX),
     },
     foldBackSuggestions: sanitizeFoldBack(p.foldBackSuggestions),
-    povJustification: str(p.povJustification, RATIONALE_MAX),
-    oneLine: str(p.oneLine, ONE_LINE_MAX),
+    povJustification: trimTo(p.povJustification, RATIONALE_MAX),
+    oneLine: trimTo(p.oneLine, ONE_LINE_MAX),
   };
 }
 
@@ -286,7 +286,7 @@ export async function generatePerspectiveRewrite(issueId, { povCharacterId, sour
     modelOverride: model,
     source: 'pipeline-pov-rewrite',
   });
-  const rewriteText = str(rewriteResult.content, REWRITE_MAX_CHARS);
+  const rewriteText = trimTo(rewriteResult.content, REWRITE_MAX_CHARS);
   if (!rewriteText) return { status: 'empty-rewrite', issueId, seriesId: issue.seriesId };
 
   // 2. Analyze original vs rewrite (structured JSON). Budget against the

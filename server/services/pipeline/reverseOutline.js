@@ -31,6 +31,7 @@ import { seriesStore, getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { collectManuscriptSections, sectionsCorpus } from './arcPlanner.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 const STAGE = 'pipeline-reverse-outline';
 
@@ -84,7 +85,6 @@ const PLOTLINE_COLORS = Object.freeze([
 const UNASSIGNED_PLOTLINE = Object.freeze({ id: '_unassigned', label: 'Unassigned', kind: 'other', color: '#6b7280' });
 
 const nowIso = () => new Date().toISOString();
-const clampStr = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const colorForIndex = (i) => PLOTLINE_COLORS[i % PLOTLINE_COLORS.length];
 
 // Content hash — pins the analyzed manuscript so a later edit flips the outline
@@ -111,8 +111,8 @@ function sanitizePlotlines(rawList) {
   for (const raw of Array.isArray(rawList) ? rawList : []) {
     if (out.length >= MAX_PLOTLINES) break;
     if (!raw || typeof raw !== 'object') continue;
-    const id = clampStr(raw.id, PLOTLINE_ID_MAX);
-    const label = clampStr(raw.label, LABEL_MAX);
+    const id = trimTo(raw.id, PLOTLINE_ID_MAX);
+    const label = trimTo(raw.label, LABEL_MAX);
     if (!id || !label || seen.has(id)) continue;
     seen.add(id);
     out.push({
@@ -139,13 +139,13 @@ function sanitizeComponents(raw) {
 // synthetic '_unassigned' plotline so the grid never references a missing row).
 function sanitizeScene(raw, idx, { byNumber, plotlineIds }) {
   if (!raw || typeof raw !== 'object') return null;
-  const summary = clampStr(raw.summary, SUMMARY_MAX);
-  const heading = clampStr(raw.heading, LABEL_MAX);
+  const summary = trimTo(raw.summary, SUMMARY_MAX);
+  const heading = trimTo(raw.heading, LABEL_MAX);
   if (!summary && !heading) return null;
   const issueNumber = Number.isInteger(raw.issueNumber) ? raw.issueNumber : null;
   const section = issueNumber != null ? byNumber.get(issueNumber) : null;
-  const primary = clampStr(raw.plotlineId, PLOTLINE_ID_MAX);
-  const secondary = clampStr(raw.secondaryPlotlineId, PLOTLINE_ID_MAX);
+  const primary = trimTo(raw.plotlineId, PLOTLINE_ID_MAX);
+  const secondary = trimTo(raw.secondaryPlotlineId, PLOTLINE_ID_MAX);
   return {
     id: `scene-${String(idx + 1).padStart(3, '0')}`,
     sequence: idx,
@@ -154,14 +154,14 @@ function sanitizeScene(raw, idx, { byNumber, plotlineIds }) {
     issueTitle: section ? section.title : '',
     heading: heading || summary.slice(0, LABEL_MAX),
     summary,
-    anchorQuote: clampStr(raw.anchorQuote, ANCHOR_MAX),
-    povCharacter: clampStr(raw.povCharacter, NAME_MAX) || null,
+    anchorQuote: trimTo(raw.anchorQuote, ANCHOR_MAX),
+    povCharacter: trimTo(raw.povCharacter, NAME_MAX) || null,
     plotlineId: plotlineIds.has(primary) ? primary : UNASSIGNED_PLOTLINE.id,
     secondaryPlotlineId: secondary && plotlineIds.has(secondary) && secondary !== primary ? secondary : null,
     components: sanitizeComponents(raw.components),
-    setting: clampStr(raw.setting, SETTING_MAX),
+    setting: trimTo(raw.setting, SETTING_MAX),
     charactersPresent: Array.isArray(raw.charactersPresent)
-      ? raw.charactersPresent.map((n) => clampStr(n, NAME_MAX)).filter(Boolean).slice(0, MAX_CHARS_PRESENT)
+      ? raw.charactersPresent.map((n) => trimTo(n, NAME_MAX)).filter(Boolean).slice(0, MAX_CHARS_PRESENT)
       : [],
   };
 }
@@ -382,27 +382,27 @@ export async function getStoredOutline(seriesId) {
 // peer may not hold the drafted manuscript, and the issues sync separately.
 function sanitizeSyncedScene(raw, idx, plotlineIds) {
   if (!raw || typeof raw !== 'object') return null;
-  const summary = clampStr(raw.summary, SUMMARY_MAX);
-  const heading = clampStr(raw.heading, LABEL_MAX);
+  const summary = trimTo(raw.summary, SUMMARY_MAX);
+  const heading = trimTo(raw.heading, LABEL_MAX);
   if (!summary && !heading) return null;
-  const primary = clampStr(raw.plotlineId, PLOTLINE_ID_MAX);
-  const secondary = clampStr(raw.secondaryPlotlineId, PLOTLINE_ID_MAX);
+  const primary = trimTo(raw.plotlineId, PLOTLINE_ID_MAX);
+  const secondary = trimTo(raw.secondaryPlotlineId, PLOTLINE_ID_MAX);
   return {
     id: `scene-${String(idx + 1).padStart(3, '0')}`,
     sequence: idx,
     issueNumber: Number.isInteger(raw.issueNumber) ? raw.issueNumber : null,
-    issueId: clampStr(raw.issueId, ISSUE_ID_MAX) || null,
-    issueTitle: clampStr(raw.issueTitle, LABEL_MAX),
+    issueId: trimTo(raw.issueId, ISSUE_ID_MAX) || null,
+    issueTitle: trimTo(raw.issueTitle, LABEL_MAX),
     heading: heading || summary.slice(0, LABEL_MAX),
     summary,
-    anchorQuote: clampStr(raw.anchorQuote, ANCHOR_MAX),
-    povCharacter: clampStr(raw.povCharacter, NAME_MAX) || null,
+    anchorQuote: trimTo(raw.anchorQuote, ANCHOR_MAX),
+    povCharacter: trimTo(raw.povCharacter, NAME_MAX) || null,
     plotlineId: plotlineIds.has(primary) ? primary : UNASSIGNED_PLOTLINE.id,
     secondaryPlotlineId: secondary && plotlineIds.has(secondary) && secondary !== primary ? secondary : null,
     components: sanitizeComponents(raw.components),
-    setting: clampStr(raw.setting, SETTING_MAX),
+    setting: trimTo(raw.setting, SETTING_MAX),
     charactersPresent: Array.isArray(raw.charactersPresent)
-      ? raw.charactersPresent.map((n) => clampStr(n, NAME_MAX)).filter(Boolean).slice(0, MAX_CHARS_PRESENT)
+      ? raw.charactersPresent.map((n) => trimTo(n, NAME_MAX)).filter(Boolean).slice(0, MAX_CHARS_PRESENT)
       : [],
   };
 }
@@ -433,11 +433,11 @@ function sanitizeSyncedOutline(raw) {
   return {
     schemaVersion: SCHEMA_VERSION,
     status: 'complete',
-    sourceContentHash: clampStr(raw.sourceContentHash, HASH_MAX) || null,
+    sourceContentHash: trimTo(raw.sourceContentHash, HASH_MAX) || null,
     truncated: raw.truncated === true,
-    providerId: clampStr(raw.providerId, PROVIDER_MAX) || null,
-    model: clampStr(raw.model, PROVIDER_MAX) || null,
-    runId: clampStr(raw.runId, PROVIDER_MAX) || null,
+    providerId: trimTo(raw.providerId, PROVIDER_MAX) || null,
+    model: trimTo(raw.model, PROVIDER_MAX) || null,
+    runId: trimTo(raw.runId, PROVIDER_MAX) || null,
     generatedAt,
     plotlines,
     scenes,

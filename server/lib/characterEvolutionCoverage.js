@@ -46,9 +46,9 @@
 import { EVOLUTION_STAGES, EVOLUTION_STAGE_LABELS, isDeclaredEvolution } from './characterEvolution.js';
 import { computeTopologicalNodeOrder } from './fableLoomProduction.js';
 import { enumerateEpisodePlaythroughs } from './fableLoomPlaytest.js';
+import { isNonBlankStr } from './textUtils.js';
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
-const hasText = (value) => typeof value === 'string' && value.trim().length > 0;
 
 /**
  * Per-lens and whole-report coverage. Mirrors `CHARACTER_REVIEW_STATUSES` in
@@ -107,7 +107,7 @@ export const EVOLUTION_COVERAGE_FINDINGS_MAX = 40;
 
 const STAGE_INDEX = new Map(EVOLUTION_STAGES.map((stageId, index) => [stageId, index]));
 const stageLabel = (stageId) => EVOLUTION_STAGE_LABELS[stageId] || stageId;
-const nodeLabel = (node, nodeId) => (hasText(node?.title) ? node.title : nodeId);
+const nodeLabel = (node, nodeId) => (isNonBlankStr(node?.title) ? node.title : nodeId);
 
 /**
  * The scenes each episode can anchor evidence to, and the nodes that are
@@ -119,10 +119,10 @@ const nodeLabel = (node, nodeId) => (hasText(node?.title) ? node.title : nodeId)
  * resolves, and only a pointer at something genuinely deleted reads stale.
  */
 const buildSceneIndex = (loom) => new Map(asArray(loom?.episodes).map((episode) => {
-  const nodeIds = new Set(asArray(episode?.nodes).map((node) => node?.id).filter(hasText));
+  const nodeIds = new Set(asArray(episode?.nodes).map((node) => node?.id).filter(isNonBlankStr));
   const sceneKeys = new Set(nodeIds);
   for (const scene of asArray(episode?.storyOutline?.scenes)) {
-    if (hasText(scene?.key)) sceneKeys.add(scene.key);
+    if (isNonBlankStr(scene?.key)) sceneKeys.add(scene.key);
   }
   return [episode.id, { episode, nodeIds, sceneKeys }];
 }));
@@ -137,8 +137,8 @@ const buildSceneIndex = (loom) => new Map(asArray(loom?.episodes).map((episode) 
  * is the direction the "never silently verified" rule allows.
  */
 const resolveStageAnchor = (evidence, sceneIndex) => {
-  const episodeId = hasText(evidence?.episodeId) ? evidence.episodeId : '';
-  const sceneKey = hasText(evidence?.sceneKey) ? evidence.sceneKey : '';
+  const episodeId = isNonBlankStr(evidence?.episodeId) ? evidence.episodeId : '';
+  const sceneKey = isNonBlankStr(evidence?.sceneKey) ? evidence.sceneKey : '';
   if (!episodeId && !sceneKey) return { resolution: 'unanchored', episodeId: null, nodeId: null };
   if (episodeId && !sceneIndex.has(episodeId)) {
     return {

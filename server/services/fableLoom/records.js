@@ -14,7 +14,6 @@
 import { sanitizeShot } from '../../lib/fableLoomShots.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeLlmRoutePin } from '../../lib/llmRoutePin.js';
 import { sanitizeCharacterEvolutionList } from '../../lib/characterEvolution.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
@@ -71,6 +70,7 @@ import {
   mergeFableLoomRenderSettings,
   sanitizeFableLoomRenderSettings,
 } from '../../lib/fableLoomProduction.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 export { LOOM_LIMITS };
 

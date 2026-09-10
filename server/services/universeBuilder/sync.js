@@ -8,7 +8,7 @@
  * re-exports this module so existing import paths keep working.
  */
 
-import { isStr, preserveLegacyCharacterFields } from '../../lib/storyBible.js';
+import { preserveLegacyCharacterFields } from '../../lib/storyBible.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
   deleteSyncBaseHash, withBaseHashFlushBatch,
@@ -19,6 +19,7 @@ import { store } from './storeFacade.js';
 import { emitRecordDeleted } from '../sharing/recordEvents.js';
 import { unlinkCollectionsForUniverse } from '../mediaCollections.js';
 import { clearPendingSheetSlotsForUniverse } from '../universeCharacterSheetSlot.js';
+import { isStr } from '../../lib/textUtils.js';
 
 /**
  * Cascade orphan cleanup for a universe whose soft-delete arrived via peer

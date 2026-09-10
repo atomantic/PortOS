@@ -27,13 +27,12 @@ import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
+import { isStr } from '../../lib/textUtils.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 // Re-exported for the PG backend's typed mirror columns (mirrors the CD store).
 export { mirrorTimestamp } from '../../lib/pgTimestamp.js';
-
-const isStr = (v) => typeof v === 'string';
 
 const STATUS_COLUMN_MAX = 32;
 

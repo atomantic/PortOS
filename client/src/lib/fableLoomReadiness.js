@@ -7,8 +7,8 @@
  * The server remains authoritative for expansion and batch preflight.
  */
 
+import { isNonBlankStr } from './textUtils';
 const asArray = (value) => (Array.isArray(value) ? value : []);
-const hasText = (value) => typeof value === 'string' && value.trim().length > 0;
 
 const reachableNodes = (episode) => {
   const nodes = asArray(episode?.nodes);
@@ -38,12 +38,12 @@ const playableChallenge = (item) => item?.kind === 'challenge'
 
 const nodeHasMotionDelivery = (node) => {
   const assets = node?.playbackAssets || {};
-  const hasEntry = hasText(node?.videoHistoryId) || hasText(assets.entryVideoHistoryId);
+  const hasEntry = isNonBlankStr(node?.videoHistoryId) || isNonBlankStr(assets.entryVideoHistoryId);
   if (!hasEntry) return false;
   if (node?.playbackMode !== 'decision' || node?.isEnding) return true;
   const exits = assets.exitByTransition || {};
   return asArray(assets.holdLoopVideoHistoryIds).length > 0
-    && asArray(node.transitions).every((transition) => hasText(exits[transition.id]));
+    && asArray(node.transitions).every((transition) => isNonBlankStr(exits[transition.id]));
 };
 
 const deliveryHandoffsReady = (loom) => {
@@ -55,11 +55,11 @@ const deliveryHandoffsReady = (loom) => {
       [`${item?.fromEpisodeId}::${item?.toEpisodeId}`, item]
     )));
     const missing = episodes.slice(0, -1).some((episode, index) => (
-      !hasText(messages.get(`${episode.id}::${episodes[index + 1]?.id}`)?.transcript)
+      !isNonBlankStr(messages.get(`${episode.id}::${episodes[index + 1]?.id}`)?.transcript)
     ));
     if (missing) return false;
   }
-  return options.nextSeasonTeaser !== true || hasText(plan.nextSeasonTeaser?.transcript);
+  return options.nextSeasonTeaser !== true || isNonBlankStr(plan.nextSeasonTeaser?.transcript);
 };
 
 export function fableLoomEpisodeOrderReadiness(loom, episode) {
@@ -69,7 +69,7 @@ export function fableLoomEpisodeOrderReadiness(loom, episode) {
     return { ready: false, reason: 'The selected episode is not present in the ordered loom.' };
   }
   for (const [index, priorEpisode] of episodes.slice(0, currentIndex).entries()) {
-    const missing = reachableNodes(priorEpisode).filter((node) => !hasText(node.image));
+    const missing = reachableNodes(priorEpisode).filter((node) => !isNonBlankStr(node.image));
     if (missing.length) {
       const priorNumber = priorEpisode.number || index + 1;
       const currentNumber = episode.number || currentIndex + 1;
@@ -110,7 +110,7 @@ export function fableLoomStoryReadiness(loom) {
       const from = episodes[index];
       const to = episodes[index + 1];
       const voicemail = voicemails.get(`${from.id}::${to.id}`);
-      if (!hasText(voicemail?.transcript)) {
+      if (!isNonBlankStr(voicemail?.transcript)) {
         return {
           ready: false,
           reason: `Author the overnight voicemail from Episode ${from.number || index + 1} to Episode ${to.number || index + 2} before generating media.`,
@@ -120,7 +120,7 @@ export function fableLoomStoryReadiness(loom) {
   }
 
   if (deliveryOptions.nextSeasonTeaser === true
-    && !hasText(loom?.seriesPlan?.nextSeasonTeaser?.transcript)) {
+    && !isNonBlankStr(loom?.seriesPlan?.nextSeasonTeaser?.transcript)) {
     return { ready: false, reason: 'Author the finale next-season teaser before generating media.' };
   }
 
@@ -161,9 +161,9 @@ export function fableLoomProductionWorkflow(loom, episode, {
   const structureReady = teleplaysReady && episodes.length > 0
     && structurePassedCount === episodes.length;
   const planReady = challenges.length > 0 && plotPoints.every((item) => (
-    hasText(item?.title) && hasText(item?.description) && hasText(item?.episodeId)
+    isNonBlankStr(item?.title) && isNonBlankStr(item?.description) && isNonBlankStr(item?.episodeId)
   ));
-  const imagesReady = reachable.length > 0 && reachable.every((node) => hasText(node?.image));
+  const imagesReady = reachable.length > 0 && reachable.every((node) => isNonBlankStr(node?.image));
   const motionReady = reachable.length > 0 && reachable.every(nodeHasMotionDelivery)
     && structural?.productionReadiness?.ready !== false;
   const handoffsReady = deliveryHandoffsReady(loom);
@@ -173,19 +173,19 @@ export function fableLoomProductionWorkflow(loom, episode, {
   const continuityReviewedCount = continuityResults.filter(Boolean).length;
   const continuityPassedCount = continuityResults.filter((result) => result?.passed === true).length;
   const continuityReady = episodes.length > 0 && continuityPassedCount === episodes.length;
-  const editorialIsCurrent = hasText(loom?.productionStatus?.editorialApprovedAt)
+  const editorialIsCurrent = isNonBlankStr(loom?.productionStatus?.editorialApprovedAt)
     || editorialRun?.status === 'completed';
-  const deliveryApproved = hasText(loom?.productionStatus?.deliveryApprovedAt);
+  const deliveryApproved = isNonBlankStr(loom?.productionStatus?.deliveryApprovedAt);
 
   const stages = [
     {
       id: 'foundation', label: 'Story foundation', action: 'settings',
-      complete: hasText(loom?.name) && (hasText(loom?.premise) || hasText(loom?.logline)),
+      complete: isNonBlankStr(loom?.name) && (isNonBlankStr(loom?.premise) || isNonBlankStr(loom?.logline)),
       detail: 'Lock the format, premise, protagonist, and audience participation mode.',
     },
     {
       id: 'series-arc', label: 'Series arc', action: 'series-arc',
-      complete: hasText(loom?.seriesPlan?.storyArc),
+      complete: isNonBlankStr(loom?.seriesPlan?.storyArc),
       detail: 'Define the beginning-to-end dramatic movement before expanding episodes.',
     },
     {
@@ -236,7 +236,7 @@ export function fableLoomProductionWorkflow(loom, episode, {
     {
       id: 'storyboards', label: 'Storyboard images', action: 'render',
       complete: imagesReady,
-      detail: `${reachable.filter((node) => hasText(node?.image)).length}/${reachable.length} reachable scenes have storyboard images.`,
+      detail: `${reachable.filter((node) => isNonBlankStr(node?.image)).length}/${reachable.length} reachable scenes have storyboard images.`,
     },
     {
       id: 'motion', label: 'Motion & live voice assets', action: 'render',

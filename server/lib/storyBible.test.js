@@ -22,7 +22,6 @@ const {
   sanitizeObject,
   sanitizeBibleList,
   mergeExtractedBible,
-  isBlank,
   normalizeBibleName,
   normalizeSlugline,
   findBibleEntryByName,
@@ -1375,14 +1374,6 @@ describe('storyBible — mergeExtractedBible (objects)', () => {
 });
 
 describe('storyBible — helpers', () => {
-  it('isBlank covers null, empty array, whitespace string', () => {
-    expect(isBlank(null)).toBe(true);
-    expect(isBlank('   ')).toBe(true);
-    expect(isBlank([])).toBe(true);
-    expect(isBlank('x')).toBe(false);
-    expect(isBlank(['x'])).toBe(false);
-  });
-
   it('normalizeBibleName lowercases + trims', () => {
     expect(normalizeBibleName('  Aria Reyes  ')).toBe('aria reyes');
     expect(normalizeBibleName(null)).toBe('');

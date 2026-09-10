@@ -32,7 +32,6 @@ import {
   isFableLoomPlaybackMode,
   FABLELOOM_PROTAGONIST_PRESENCE,
 } from '../../lib/fableLoomPlayback.js';
-import { trimTo } from '../../lib/storyBible.js';
 import { renderStoryCanonDigest } from '../../lib/universePromptRenderers.js';
 import { normalizeFableLoomCameraMovement } from '../../lib/fableLoomCameraMovements.js';
 import { startAIOp } from '../aiStatusEvents.js';
@@ -45,6 +44,7 @@ import {
   mutateLoom,
   sanitizeLoom,
 } from './records.js';
+import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 
 const REVIEW_SEVERITIES = new Set(['high', 'medium', 'low']);
 const REVIEW_CATEGORIES = new Set([
@@ -75,7 +75,6 @@ const INSTRUCTION_PLACEHOLDER_VALUES = new Set([
 ]);
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
-const hasText = (value) => typeof value === 'string' && value.trim().length > 0;
 const hasOwn = (value, key) => Object.hasOwn(value, key);
 const clampScore = (value) => (Number.isFinite(value)
   ? Math.max(0, Math.min(10, Math.round(value * 10) / 10))
@@ -346,13 +345,13 @@ const resolveEditorialPromptBudgetChars = async (stage, route, source) => {
  */
 const loomCastCharacterIds = (loom) => {
   const ids = new Set();
-  if (hasText(loom?.protagonistCharacterId)) ids.add(loom.protagonistCharacterId);
+  if (isNonBlankStr(loom?.protagonistCharacterId)) ids.add(loom.protagonistCharacterId);
   for (const episode of asArray(loom?.episodes)) {
     for (const node of asArray(episode.nodes)) {
       for (const appearance of asArray(node.visualCanon?.characterAppearances)) {
-        if (hasText(appearance?.characterId)) ids.add(appearance.characterId);
+        if (isNonBlankStr(appearance?.characterId)) ids.add(appearance.characterId);
       }
-      if (hasText(node.interactionWindow?.protagonistCharacterId)) {
+      if (isNonBlankStr(node.interactionWindow?.protagonistCharacterId)) {
         ids.add(node.interactionWindow.protagonistCharacterId);
       }
     }
@@ -586,7 +585,7 @@ const sanitizeEvaluation = (content, loom) => {
     new Set(episode.nodes.map((node) => node.id)),
   ]));
   const findings = asArray(content?.findings)
-    .filter((finding) => finding && typeof finding === 'object' && hasText(finding.problem))
+    .filter((finding) => finding && typeof finding === 'object' && isNonBlankStr(finding.problem))
     .slice(0, 40)
     .map((finding) => {
       const episodeId = episodeIds.has(finding.episodeId) ? finding.episodeId : null;
@@ -768,7 +767,7 @@ const applyScenePatch = (episode, scene, rawScene) => {
   }
   const returnedTransitionIds = new Set();
   for (const rawTransition of asArray(rawScene.transitions)) {
-    if (!isPlainObject(rawTransition) || !hasText(rawTransition.id)) {
+    if (!isPlainObject(rawTransition) || !isNonBlankStr(rawTransition.id)) {
       throw aiShapeError(`The model returned a transition without an existing id for scene ${scene.id}`);
     }
     const transition = transitionsById.get(rawTransition?.id);
@@ -803,7 +802,7 @@ const applyContinuitySourcePatch = (scene, sourceId, predecessorsByNodeId) => {
   const validPredecessors = new Set(
     asArray(predecessorsByNodeId.get(scene.id)).map((item) => item.nodeId),
   );
-  if (sourceId !== null && (!hasText(sourceId) || !validPredecessors.has(sourceId))) {
+  if (sourceId !== null && (!isNonBlankStr(sourceId) || !validPredecessors.has(sourceId))) {
     throw aiShapeError(`The model selected an invalid continuity predecessor for scene ${scene.id}`);
   }
   scene.visualCanon = {
@@ -915,7 +914,7 @@ export function applyFableLoomEditorialPatch(
   const episodesById = new Map(candidate.episodes.map((episode) => [episode.id, episode]));
   const returnedEpisodeIds = new Set();
   for (const rawEpisode of asArray(content.episodes)) {
-    if (!isPlainObject(rawEpisode) || !hasText(rawEpisode.id)) {
+    if (!isPlainObject(rawEpisode) || !isNonBlankStr(rawEpisode.id)) {
       throw aiShapeError('The model returned an episode patch without an existing id');
     }
     const episode = episodesById.get(rawEpisode?.id);
@@ -946,7 +945,7 @@ export function applyFableLoomEditorialPatch(
     }
     const returnedSceneIds = new Set();
     for (const rawScene of asArray(rawEpisode.scenes)) {
-      if (!isPlainObject(rawScene) || !hasText(rawScene.id)) {
+      if (!isPlainObject(rawScene) || !isNonBlankStr(rawScene.id)) {
         throw aiShapeError(`The model returned a scene patch without an existing id for episode ${episode.id}`);
       }
       const scene = scenesById.get(rawScene?.id);
@@ -1150,7 +1149,7 @@ const sanitizePlaythroughReview = (content, loom, deterministic) => {
     new Set(episode.paths.map((path) => path.id)),
   ]));
   const findings = asArray(content?.findings)
-    .filter((finding) => finding && typeof finding === 'object' && hasText(finding.problem))
+    .filter((finding) => finding && typeof finding === 'object' && isNonBlankStr(finding.problem))
     .slice(0, 60)
     .map((finding) => {
       const episode = episodeById.get(finding.episodeId);
@@ -1172,7 +1171,7 @@ const sanitizePlaythroughReview = (content, loom, deterministic) => {
       };
     });
   const qualityScore = clampScore(content?.qualityScore);
-  if (qualityScore === null || !hasText(content?.summary)) {
+  if (qualityScore === null || !isNonBlankStr(content?.summary)) {
     throw aiShapeError('The model returned no usable playthrough quality verdict');
   }
   return {

@@ -17,6 +17,7 @@
 
 // The four personas, in render order. `id` is the stable machine key (also the
 // stage-prompt suffix `pipeline-panel-<id>.md`); `label` is the human name.
+import { trimTo } from '../textUtils.js';
 export const PANEL_PERSONAS = Object.freeze([
   { id: 'editor', label: 'The Editor', blurb: 'Senior editor — prose texture, subtext, over-explaining.' },
   { id: 'genre-reader', label: 'The Genre Reader', blurb: 'Reads 50 novels a year — pacing and page-turn pull.' },
@@ -64,8 +65,6 @@ const VERDICT_MAX = 600;
 const MAX_ISSUES_PER_ANSWER = 12;
 const PROBLEM_MAX = 1900;
 
-const cleanStr = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-
 // Accept an array of issue numbers the persona cited; keep valid positive
 // integers, dedupe, cap. Optionally intersect with the known series issue
 // numbers so a hallucinated citation never reaches the findings store.
@@ -99,9 +98,9 @@ export function sanitizePersonaResponse(personaId, raw, { validIssueNumbers = nu
   for (const qid of PANEL_QUESTION_IDS) {
     const a = src[qid];
     if (a && typeof a === 'object' && !Array.isArray(a)) {
-      answers[qid] = { text: cleanStr(a.text ?? a.answer, ANSWER_TEXT_MAX), issues: cleanIssueNumbers(a.issues ?? a.issueNumbers, validSet) };
+      answers[qid] = { text: trimTo(a.text ?? a.answer, ANSWER_TEXT_MAX), issues: cleanIssueNumbers(a.issues ?? a.issueNumbers, validSet) };
     } else if (typeof a === 'string') {
-      answers[qid] = { text: cleanStr(a, ANSWER_TEXT_MAX), issues: [] };
+      answers[qid] = { text: trimTo(a, ANSWER_TEXT_MAX), issues: [] };
     } else {
       answers[qid] = { text: '', issues: [] };
     }
@@ -109,7 +108,7 @@ export function sanitizePersonaResponse(personaId, raw, { validIssueNumbers = nu
   return {
     persona: personaId,
     answers,
-    verdict: cleanStr(raw?.verdict ?? raw?.summary, VERDICT_MAX),
+    verdict: trimTo(raw?.verdict ?? raw?.summary, VERDICT_MAX),
   };
 }
 

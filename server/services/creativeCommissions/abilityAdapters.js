@@ -38,8 +38,7 @@ import {
 import { resolvedDefault } from '../../lib/creativeCommissionSpec.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 import { buildVideoPromptGuidance } from './videoPromptGuidance.js';
-
-const isStr = (v) => typeof v === 'string';
+import { isStr } from '../../lib/textUtils.js';
 
 // The optional per-type engine/model override, universal across abilities. A free
 // string, so it's handled separately from the typed/bounded spec keys.

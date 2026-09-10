@@ -35,6 +35,7 @@
 
 import { isPlainObject, POLLUTING_KEYS } from './objects.js';
 import { requiresInstallWideTarget, requiresManagedAppTarget } from './taskTargetScope.js';
+import { trimTo } from './textUtils.js';
 
 /** The two things a burn step may point at. */
 export const QUOTA_BURN_TASK_REF_KIND = Object.freeze({
@@ -78,8 +79,7 @@ export const QUOTA_BURN_UNAVAILABLE = Object.freeze({
 
 const MAX_REF_FIELD = 64;
 
-const trimmed = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-const nullable = (value, max) => trimmed(value, max) || null;
+const nullable = (value, max) => trimTo(value, max) || null;
 
 /**
  * Normalize a stored/submitted task reference. Returns `null` when the payload
@@ -94,12 +94,12 @@ const nullable = (value, max) => trimmed(value, max) || null;
 export function normalizeQuotaBurnTaskRef(raw) {
   if (!isPlainObject(raw)) return null;
   if (raw.kind === QUOTA_BURN_TASK_REF_KIND.BUILTIN) {
-    const taskType = trimmed(raw.taskType, MAX_REF_FIELD);
+    const taskType = trimTo(raw.taskType, MAX_REF_FIELD);
     if (!taskType) return null;
     return { kind: QUOTA_BURN_TASK_REF_KIND.BUILTIN, taskType, appId: nullable(raw.appId, MAX_REF_FIELD) };
   }
   if (raw.kind === QUOTA_BURN_TASK_REF_KIND.CUSTOM) {
-    const jobId = trimmed(raw.jobId, MAX_REF_FIELD);
+    const jobId = trimTo(raw.jobId, MAX_REF_FIELD);
     if (!jobId) return null;
     return { kind: QUOTA_BURN_TASK_REF_KIND.CUSTOM, jobId };
   }

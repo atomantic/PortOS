@@ -47,6 +47,7 @@ import { renderCharacterNarrativeContext } from '../../lib/universePromptRendere
 import { runStagedLLM, resolveJudgeForStage } from '../stageRunner.js';
 import { getStage } from '../promptService.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { trimTo } from '../../lib/textUtils.js';
 
 const CANON_LIST_MAX = 24; // cap per canon kind in the brief — keeps the prompt tight
 // Cap on the authored-psychology block. The roster above stays a scannable
@@ -79,8 +80,6 @@ export const ANTI_GENERIC_BANLIST = Object.freeze([
   'an ancient prophecy that foretells the events of the story',
   'a mentor who dies to motivate the hero',
 ]);
-
-const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 const rangeIndices = (n) => Array.from({ length: n }, (_, i) => i);
 
@@ -190,20 +189,20 @@ function buildContext(universe, existingSeries) {
 // picker UI and fed to the judge, not persisted on the series record.
 function normalizeCandidate(raw) {
   if (raw == null || typeof raw !== 'object') return null;
-  const name = str(raw.name, NAME_MAX);
+  const name = trimTo(raw.name, NAME_MAX);
   if (!name) return null;
   const shapeRaw = typeof raw.shape === 'string' ? raw.shape.trim() : '';
   return {
     name,
-    logline: str(raw.logline, LOGLINE_MAX),
-    premise: str(raw.premise, PREMISE_MAX),
+    logline: trimTo(raw.logline, LOGLINE_MAX),
+    premise: trimTo(raw.premise, PREMISE_MAX),
     shape: ARC_SHAPE_IDS.includes(shapeRaw) ? shapeRaw : null,
-    hook: str(raw.hook, FACET_MAX),
-    world: str(raw.world, FACET_MAX),
-    conflictEngine: str(raw.conflictEngine, FACET_MAX),
-    cost: str(raw.cost, FACET_MAX),
-    tension: str(raw.tension, FACET_MAX),
-    theme: str(raw.theme, FACET_MAX),
+    hook: trimTo(raw.hook, FACET_MAX),
+    world: trimTo(raw.world, FACET_MAX),
+    conflictEngine: trimTo(raw.conflictEngine, FACET_MAX),
+    cost: trimTo(raw.cost, FACET_MAX),
+    tension: trimTo(raw.tension, FACET_MAX),
+    theme: trimTo(raw.theme, FACET_MAX),
   };
 }
 
@@ -309,7 +308,7 @@ export function parseConceptPick(content, n) {
   // Ensure the winner leads the ranking, and every candidate appears once.
   const ordered = [index, ...ranking.filter((i) => i !== index)];
   for (const i of rangeIndices(n)) if (!ordered.includes(i)) ordered.push(i);
-  const rationale = str(content.rationale, 600);
+  const rationale = trimTo(content.rationale, 600);
   return { index, ranking: ordered, rationale };
 }
 

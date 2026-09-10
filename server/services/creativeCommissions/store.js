@@ -80,6 +80,7 @@ import {
   backfillInlineFeedback,
   tombstoneFeedbackForCommission,
 } from './feedbackStore.js';
+import { isStr } from '../../lib/textUtils.js';
 
 // Emits `commission:changed` on any create/update/delete (not on run-record
 // appends, which don't affect scheduling). The scheduler subscribes to re-sync.
@@ -133,8 +134,6 @@ export const MAX_PERSISTED_FEEDBACK = 100;
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
 export const makeErr = (message, code) => Object.assign(new Error(message), { code });
-
-const isStr = (v) => typeof v === 'string';
 
 /**
  * Normalize a single feedback reaction (#2657, Phase 2). A reaction MUST carry a

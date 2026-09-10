@@ -44,6 +44,7 @@ import { peerFetch } from '../lib/peerHttpClient.js';
 import * as brainStorage from './brainStorage.js';
 import * as brainReconcile from './brainReconcile.js';
 import { getPeers } from './instances.js';
+import { isNonBlankStr } from '../lib/textUtils.js';
 
 const { BRAIN_ENTITY_TYPES } = brainStorage;
 
@@ -60,8 +61,6 @@ const STORED_RECORDS_PER_TYPE = 25;
 // Generous relative to the sync cycle's 15s budget: the snapshot fallback below
 // pulls a peer's ENTIRE brain, which is legitimately slow on a large install.
 const PEER_FETCH_TIMEOUT_MS = 30000;
-
-const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;
 
 /**
  * Build this instance's brain manifest: `{ types: { [type]: [row] } }` where a
@@ -107,7 +106,7 @@ function normalizeRemoteManifest(body) {
     const rows = types[type];
     if (!Array.isArray(rows)) continue;
     out[type] = rows
-      .filter((r) => r && typeof r === 'object' && !Array.isArray(r) && isNonEmptyStr(r.id))
+      .filter((r) => r && typeof r === 'object' && !Array.isArray(r) && isNonBlankStr(r.id))
       .map((r) => ({ id: r.id, updatedAt: r.updatedAt ?? null, deleted: r.deleted === true }));
   }
   return out;
@@ -243,7 +242,7 @@ async function compareChecksums(peer) {
     brainReconcile.getBrainChecksum().catch(() => null),
     fetchPeerJson(peer, '/api/brain/reconcile/checksum'),
   ]);
-  const peerChecksum = isNonEmptyStr(remote.body?.checksum) ? remote.body.checksum : null;
+  const peerChecksum = isNonBlankStr(remote.body?.checksum) ? remote.body.checksum : null;
   return {
     local: local ?? null,
     peer: peerChecksum,
@@ -339,11 +338,11 @@ export async function runBrainParityCheck({ peerId } = {}) {
   // where silent divergence accumulates — filtering it out would hide the case
   // the audit exists to find. An un-probed peer (no instanceId) is skipped
   // because there is no stable key to file its report under.
-  const targets = isNonEmptyStr(peerId)
+  const targets = isNonBlankStr(peerId)
     ? peers.filter((p) => p.id === peerId)
-    : peers.filter((p) => p.syncEnabled !== false && isNonEmptyStr(p.instanceId));
+    : peers.filter((p) => p.syncEnabled !== false && isNonBlankStr(p.instanceId));
 
-  if (isNonEmptyStr(peerId) && targets.length === 0) {
+  if (isNonBlankStr(peerId) && targets.length === 0) {
     return { reports: [{ peerId, available: false, reason: 'peer-not-found', checkedAt: new Date().toISOString() }] };
   }
 

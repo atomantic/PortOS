@@ -9,7 +9,6 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
@@ -60,7 +59,6 @@ import {
   buildMusicVideoAssetManifest,
 } from './peerSyncAssets.js';
 import {
-  isNonEmptyStr,
   peerAllowsOutbound,
   peerHasCategory,
   findPeerById,
@@ -72,6 +70,7 @@ import {
   ERR_SCHEMA_VERSION_AHEAD,
   PEER_SUBSCRIBABLE_KINDS,
 } from './peerSyncShared.js';
+import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 
 
 // --- Push pipeline (sender side) ----------------------------------------
@@ -169,9 +168,9 @@ async function isSubscriptionRecordTombstone(sub) {
 export async function pushRecordToPeer(sub, options = {}) {
   if (
     !isPlainObject(sub)
-    || !isNonEmptyStr(sub.peerId)
-    || !isNonEmptyStr(sub.recordKind)
-    || !isNonEmptyStr(sub.recordId)
+    || !isNonBlankStr(sub.peerId)
+    || !isNonBlankStr(sub.recordKind)
+    || !isNonBlankStr(sub.recordId)
   ) {
     return { pushed: false, reason: 'invalid-subscription' };
   }
@@ -203,7 +202,7 @@ export async function pushRecordToPeer(sub, options = {}) {
   if (!peerHasCategory(peer, sub.recordKind)) return { pushed: false, reason: 'category-disabled' };
 
   const ourInstanceId = await getInstanceId().catch(() => null);
-  if (!isNonEmptyStr(ourInstanceId) || ourInstanceId === UNKNOWN_INSTANCE_ID) {
+  if (!isNonBlankStr(ourInstanceId) || ourInstanceId === UNKNOWN_INSTANCE_ID) {
     return { pushed: false, reason: 'unknown-local-instance' };
   }
 
@@ -554,7 +553,7 @@ async function persistPushSuccess(subId, hash, { confirmedAtMs = Date.now(), tra
     // with a newer top-level key stripped for an older peer; cleared on every
     // other successful push so a peer that has since upgraded (or a record
     // whose content moved) can never be held back by a stale entry.
-    sub.lastPushedLegacyHash = isNonEmptyStr(legacyStrippedHash) ? legacyStrippedHash : null;
+    sub.lastPushedLegacyHash = isNonBlankStr(legacyStrippedHash) ? legacyStrippedHash : null;
     sub.updatedAt = now;
     // Advance the per-record confirmed-delivery water-mark monotonically — an
     // out-of-order retry must not retract it (mirrors ackDeletesUpTo's

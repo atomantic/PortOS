@@ -13,7 +13,7 @@ import { resolveSeriesLlmOverride } from '../../../lib/seriesLlmOverride.js';
 import { getSeriesPlanningCanon } from '../seriesCanon.js';
 import { ARC_ROLES, ERR_VALIDATION, SEASON_LENGTH_PRESETS, SHAPE_GUIDANCE_NONE, appendCharacterFirstArcGuidance, appendTickingClock, lengthProfileForArcRole, makeErr, renderPriorSeason, resolveWorldContext } from './context.js';
 import { ARC_LIMITS } from '../../../lib/storyArc.js';
-import { trimToClause } from '../../../lib/storyBible.js';
+import { trimToClause } from '../../../lib/textUtils.js';
 
 /**
  * Build the context for one season's episode breakdown. `priorSeasonsContext`

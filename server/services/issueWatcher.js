@@ -31,6 +31,7 @@ import { mergePR, resolveForgeForRepo } from './git.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
+import { trimTo } from '../lib/textUtils.js';
 
 const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
 
@@ -58,7 +59,6 @@ const FAILED_CHECKS = new Set(['ACTION_REQUIRED', 'CANCELLED', 'ERROR', 'FAILURE
 
 let stateWriteTail = Promise.resolve();
 
-const text = (value, max = 8_000) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const fullText = (value) => typeof value === 'string' ? value : '';
 const sameLogin = (a, b) => Boolean(a && b) && String(a).toLowerCase() === String(b).toLowerCase();
 // GitHub reports issue state as `open`/`closed`; normalize once so every caller
@@ -142,7 +142,7 @@ async function resolveContext(app) {
 
 /** True only for an affirmative, explicit request to take ownership. */
 export function isIssueClaimRequest(body) {
-  const value = text(body, 4_000).replace(/```[\s\S]*?```/g, '').split('\n').filter((line) => !line.trimStart().startsWith('>')).join('\n');
+  const value = trimTo(body, 4_000).replace(/```[\s\S]*?```/g, '').split('\n').filter((line) => !line.trimStart().startsWith('>')).join('\n');
   if (!value || /\b(?:cannot|can't|can not|won't|will not|not able to)\b/i.test(value)) return false;
   return [
     /\b(?:i\s+can|i'll|i\s+will)\s+(?:take|handle|work\s+on)\s+(?:this|it|the\s+issue)\b/i,
@@ -188,7 +188,7 @@ export function classifyChecks(statusCheckRollup) {
 
 function normalizeFinding(finding, anchors) {
   if (!finding || typeof finding !== 'object') return null;
-  const path = text(finding.path, 500);
+  const path = trimTo(finding.path, 500);
   const side = String(finding.side || '').toUpperCase();
   const line = Number(finding.line);
   // A finding without an explicit boolean is blocking. The watcher must not
@@ -211,7 +211,7 @@ function normalizeReviewDecision(value) {
   if (!verdict || !ciPolicy || typeof value.rebaseRequired !== 'boolean') return null;
   return {
     number: value.number,
-    headSha: text(value.headSha, 80),
+    headSha: trimTo(value.headSha, 80),
     verdict,
     ciPolicy,
     rebaseRequired: value.rebaseRequired,
@@ -1173,7 +1173,7 @@ async function runScheduledIssueIntake({ app, interval } = {}) {
 
 async function postIssueReply(ctx, decision) {
   return runGh([
-    'issue', 'comment', String(decision.issueNumber), '--repo', ctx.repoSpec, '--body', text(decision.body, 5_000),
+    'issue', 'comment', String(decision.issueNumber), '--repo', ctx.repoSpec, '--body', trimTo(decision.body, 5_000),
   ], ctx).then(() => true).catch((err) => {
     console.error(`❌ issue-watcher: issue reply failed for #${decision.issueNumber}: ${err.message}`);
     return false;
@@ -1204,7 +1204,7 @@ async function readCurrentIssueComment(ctx, item) {
 }
 
 async function submitReview(ctx, number, { body, event, comments = [] }) {
-  const input = JSON.stringify({ body: text(body, MAX_REVIEW_BODY_CHARS), event, comments });
+  const input = JSON.stringify({ body: trimTo(body, MAX_REVIEW_BODY_CHARS), event, comments });
   return runGh([...apiArgs(ctx, `repos/${ctx.repoFullName}/pulls/${number}/reviews`, { method: 'POST' }), '--input', '-'], ctx, input)
     .then(() => true)
     .catch((err) => {
@@ -1214,7 +1214,7 @@ async function submitReview(ctx, number, { body, event, comments = [] }) {
 }
 
 async function postReviewFallback(ctx, number, body) {
-  return runGh(['pr', 'comment', String(number), '--repo', ctx.repoSpec, '--body', text(body, MAX_REVIEW_BODY_CHARS)], ctx)
+  return runGh(['pr', 'comment', String(number), '--repo', ctx.repoSpec, '--body', trimTo(body, MAX_REVIEW_BODY_CHARS)], ctx)
     .then(() => true)
     .catch((err) => {
       console.error(`❌ issue-watcher: review comment failed for PR #${number}: ${err.message}`);
@@ -1291,7 +1291,7 @@ export async function processTaskOutput({ appId, success, payload, task, require
     const current = await readCurrentIssueComment(ctx, item);
     if (!current || !item.contentFingerprint || abuseFingerprint('issue-comment', current, issueAbuseInput(current)) !== item.contentFingerprint) continue;
     if (decision.action === 'reply') {
-      const posted = text(decision.body, 5_000) && await postIssueReply(ctx, { ...current, body: decision.body });
+      const posted = trimTo(decision.body, 5_000) && await postIssueReply(ctx, { ...current, body: decision.body });
       if (!posted) continue;
       replies += 1;
     }

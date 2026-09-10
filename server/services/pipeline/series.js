@@ -13,7 +13,6 @@
 
 import { randomUUID } from 'crypto';
 import { getSeriesStore } from './seriesStore/store.js';
-import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeCharacterArcList } from '../../lib/seriesCharacterArc.js';
 import { sanitizeStyleGuide } from '../../lib/styleGuide.js';
@@ -35,6 +34,7 @@ import {
   autoSubscribeRecordToAllPeers, unsubscribeAllForRecord,
 } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
+import { isStr, trimTo } from '../../lib/textUtils.js';
 
 // Storage backend dispatcher (#1015). Series records moved from per-record
 // `data/pipeline-series/{id}/index.json` (collectionStore) to one-row-per-series

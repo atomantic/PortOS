@@ -25,6 +25,7 @@
  */
 
 import { parseTsMs } from './lwwTimestamp.js';
+import { isNonBlankStr } from './textUtils.js';
 
 // Structural bounds on ONE peer-supplied quota payload. Same reasoning as the
 // usage digest's caps in services/peerUsage.js: the wire shape is fixed and
@@ -36,8 +37,7 @@ const MAX_NOTES_PER_ACTIVITY = 8;
 // How many instance names a note spells out before collapsing the tail.
 const NOTE_NAME_LIMIT = 3;
 
-const isNonEmptyStr = (v) => typeof v === 'string' && v.length > 0;
-const str = (v, max) => (isNonEmptyStr(v) ? v.slice(0, max) : null);
+const str = (v, max) => (isNonBlankStr(v) ? v.slice(0, max) : null);
 const int = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null);
 const pct = (v) => {
   const n = int(v);

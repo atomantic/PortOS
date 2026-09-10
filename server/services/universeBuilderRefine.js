@@ -41,7 +41,7 @@ import {
   sanitizeInfluences,
   sanitizeLocked,
 } from "./universeBuilder.js";
-import { trimTo } from "../lib/storyBible.js";
+import { trimTo } from "../lib/textUtils.js";
 
 const MAX_FEEDBACK = 3000;
 const MAX_RATIONALE = 1200;

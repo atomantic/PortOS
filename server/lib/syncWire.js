@@ -3,21 +3,17 @@ import {
   IDENTITY_ASSET_ROLES,
   VOICE_CANON_SOURCE_POLICIES,
 } from './storyBible.js';
+import { isNonBlankStr, trimTo } from './textUtils.js';
 
-const isNonEmptyStr = (v) => typeof v === 'string' && v.trim().length > 0;
 const IDENTITY_ASSET_ROLE_SET = new Set(IDENTITY_ASSET_ROLES);
 const VOICE_CANON_SOURCE_POLICY_SET = new Set(VOICE_CANON_SOURCE_POLICIES);
-
-const boundedWireString = (value, max) => (
-  typeof value === 'string' ? value.trim().slice(0, max) : ''
-);
 
 const portableStringArray = (value, itemMax, listMax) => {
   if (!Array.isArray(value)) return [];
   const seen = new Set();
   const result = [];
   for (const item of value) {
-    const text = boundedWireString(item, itemMax);
+    const text = trimTo(item, itemMax);
     if (!text || seen.has(text)) continue;
     seen.add(text);
     result.push(text);
@@ -40,7 +36,7 @@ const portableStringArray = (value, itemMax, listMax) => {
  */
 export function sanitizeSoftDeleteFields(raw) {
   const deleted = raw?.deleted === true;
-  const deletedAt = deleted && isNonEmptyStr(raw?.deletedAt) ? raw.deletedAt : null;
+  const deletedAt = deleted && isNonBlankStr(raw?.deletedAt) ? raw.deletedAt : null;
   return { deleted, deletedAt };
 }
 
@@ -77,8 +73,8 @@ function stripUniverseCharacterLocalProductionFields(record) {
         version: Number.isInteger(voiceCanon.version) && voiceCanon.version > 0
           ? Math.min(voiceCanon.version, BIBLE_LIMITS.VOICE_CANON_VERSION_MAX)
           : 1,
-        description: boundedWireString(voiceCanon.description, BIBLE_LIMITS.VOICE_CANON_DESCRIPTION_MAX),
-        defaultDelivery: boundedWireString(voiceCanon.defaultDelivery, BIBLE_LIMITS.VOICE_CANON_DELIVERY_MAX),
+        description: trimTo(voiceCanon.description, BIBLE_LIMITS.VOICE_CANON_DESCRIPTION_MAX),
+        defaultDelivery: trimTo(voiceCanon.defaultDelivery, BIBLE_LIMITS.VOICE_CANON_DELIVERY_MAX),
         emotionalRange: portableStringArray(
           voiceCanon.emotionalRange,
           BIBLE_LIMITS.VOICE_CANON_RANGE_ITEM_MAX,
@@ -92,8 +88,8 @@ function stripUniverseCharacterLocalProductionFields(record) {
         pronunciations: (Array.isArray(voiceCanon.pronunciations) ? voiceCanon.pronunciations : [])
           .flatMap((item) => {
             if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
-            const term = boundedWireString(item.term, BIBLE_LIMITS.VOICE_CANON_PRONUNCIATION_TERM_MAX);
-            const pronunciation = boundedWireString(
+            const term = trimTo(item.term, BIBLE_LIMITS.VOICE_CANON_PRONUNCIATION_TERM_MAX);
+            const pronunciation = trimTo(
               item.pronunciation,
               BIBLE_LIMITS.VOICE_CANON_PRONUNCIATION_VALUE_MAX,
             );
@@ -182,7 +178,7 @@ export function sanitizeRecordForWire(kind, record) {
   // the snapshot checksum reflects content the receiver can never apply —
   // permanent mismatch + churn until both sides clean up the corrupt entries.
   if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
-  if (!isNonEmptyStr(record.id)) return null;
+  if (!isNonBlankStr(record.id)) return null;
   // Ephemeral records are local-only — scratch universes/series/issues the
   // user (or a test fixture) explicitly marks "don't sync to peers." Filter
   // here so BOTH transports (60s snapshot + per-record push) skip them
@@ -243,7 +239,7 @@ export function sanitizeRecordForWire(kind, record) {
           ...(record.updatedAt ? { updatedAt: record.updatedAt } : {}),
         };
         if (kind === 'universe' || kind === 'series') {
-          minimized.name = isNonEmptyStr(record.name) ? record.name : '_';
+          minimized.name = isNonBlankStr(record.name) ? record.name : '_';
         } else if (kind === 'issue') {
           // seriesId is REQUIRED by sanitizeIssue on the receiver. Without
           // a placeholder, an ephemeral issue tombstone whose on-disk
@@ -251,8 +247,8 @@ export function sanitizeRecordForWire(kind, record) {
           // partial-delete race) would be silently dropped on receive and
           // the tombstone would never land — peer keeps the live issue
           // copy forever.
-          minimized.seriesId = isNonEmptyStr(record.seriesId) ? record.seriesId : '_';
-          minimized.title = isNonEmptyStr(record.title) ? record.title : '_';
+          minimized.seriesId = isNonBlankStr(record.seriesId) ? record.seriesId : '_';
+          minimized.title = isNonBlankStr(record.title) ? record.title : '_';
         }
         return { ...minimized, ...sanitizeSoftDeleteFields(record) };
       }

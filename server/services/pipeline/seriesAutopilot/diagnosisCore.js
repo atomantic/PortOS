@@ -21,8 +21,8 @@
 
 import { PORTOS_APP_ID } from '../../../lib/appIdentity.js';
 import { PR_COMPLETIONS } from '../../../lib/prDisposition.js';
-import { trimToClause } from '../../../lib/storyBible.js';
 import { slugify } from '../../../lib/planIds.js';
+import { trimToClause } from '../../../lib/textUtils.js';
 
 // The verdict vocabulary. `pipeline` is the only one that files anything;
 // `content` means the manuscript, not the code, needs work, and `none` means

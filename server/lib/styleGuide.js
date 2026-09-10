@@ -20,8 +20,7 @@
  * all-empty guide collapses to `null` ("no style guide yet").
  */
 
-import { isStr, trimTo } from './storyBible.js';
-
+import { isStr, trimTo } from './textUtils.js';
 export const STYLE_GUIDE_LIMITS = Object.freeze({
   TONE_MAX: 60,
   TONES_MAX: 20,

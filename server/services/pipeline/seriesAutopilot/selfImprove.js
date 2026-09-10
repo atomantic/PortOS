@@ -51,7 +51,6 @@
 import * as cosTaskStore from '../../cosTaskStore.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../../domainUsage.js';
 import { runStagedLLM } from '../../stageRunner.js';
-import { trimToClause } from '../../../lib/storyBible.js';
 import { getSettings } from '../../settings.js';
 import { buildEditorialCheckPlan } from '../editorial/checkRunner.js';
 import { getSeries } from '../series.js';
@@ -61,6 +60,7 @@ import {
   SELF_IMPROVE_AREAS, buildDiagnosisStageVars, buildDiagnosisTask, diagnosisEnabled,
   hasAutomationSignals, isActionableDiagnosis, shapeDiagnosis, terminalWarrantsDiagnosis,
 } from './diagnosisCore.js';
+import { trimToClause } from '../../../lib/textUtils.js';
 
 // Re-export the shared diagnosis vocabulary under this module's established
 // import surface (tests and the barrel reach it here).

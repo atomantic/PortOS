@@ -18,8 +18,6 @@
 // basename. Path-traversal scrubbing happens downstream in
 // `sanitizeAssetFilename`; here we only decide IS-this-a-local-image + basename.
 
-const isStr = (v) => typeof v === 'string';
-
 /**
  * Strip any querystring/hash a stored reference might carry, then reduce it to
  * the basename — the bare unit the peer-sync asset pipeline hashes + transfers.
@@ -31,6 +29,7 @@ const isStr = (v) => typeof v === 'string';
  * @param {unknown} pathOrName - a path segment or bare filename (no mount prefix)
  * @returns {string|null} the basename, or null when it collapses to empty
  */
+import { isStr } from './textUtils.js';
 export function assetBasename(pathOrName) {
   if (!isStr(pathOrName)) return null;
   const base = pathOrName.split(/[?#]/)[0].split('/').pop();

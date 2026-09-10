@@ -14,7 +14,6 @@ import { readdir, stat } from 'fs/promises';
 import { createHash } from 'crypto';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
-import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
@@ -30,7 +29,8 @@ import {
   pullMissingAssetsFromPeer,
   ASSET_PULL_TIMEOUT_MS,
 } from './peerSyncAssets.js';
-import { findPeerById, isNonEmptyStr, FORCE_REVALIDATE_EVERY } from './peerSyncShared.js';
+import { findPeerById, FORCE_REVALIDATE_EVERY } from './peerSyncShared.js';
+import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 
 
 // --- Standalone media-library federation (#1566) ------------------------

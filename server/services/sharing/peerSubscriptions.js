@@ -18,7 +18,6 @@ import {
   ERR_NOT_FOUND,
   ERR_VALIDATION,
   makeErr,
-  isNonEmptyStr,
   subscriptionId,
   readState,
   writeState,
@@ -26,6 +25,7 @@ import {
   KIND_TO_CATEGORY,
 } from './peerSyncShared.js';
 import { pushRecordToPeer } from './peerSyncPush.js';
+import { isNonBlankStr } from '../../lib/textUtils.js';
 
 // subId → Timeout for the debounced push scheduler. Lives beside the
 // subscription rows because `unsubscribePeer` must cancel a pending timer as
@@ -109,11 +109,11 @@ export async function getOutboundCoverageForPeer(peerId) {
   // NOT add an `authors` key here (it would have no consumer in dataSync's
   // snapshot exclude path and would imply a snapshot category that doesn't exist).
   const coverage = { universe: new Set(), pipeline: new Set(), mediaCollections: new Set() };
-  if (!isNonEmptyStr(peerId)) return coverage;
+  if (!isNonBlankStr(peerId)) return coverage;
   const subs = await listPeerSubscriptions({ peerId });
   for (const sub of subs) {
     const category = KIND_TO_CATEGORY[sub.recordKind];
-    if (!category || !isNonEmptyStr(sub.recordId)) continue;
+    if (!category || !isNonBlankStr(sub.recordId)) continue;
     coverage[category]?.add(sub.recordId);
   }
   return coverage;
@@ -144,7 +144,7 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
   if (!PEER_SUBSCRIBABLE_KINDS.includes(recordKind)) {
     throw makeErr(`subscribable kinds are ${PEER_SUBSCRIBABLE_KINDS.join(', ')} (got "${recordKind}")`, ERR_VALIDATION);
   }
-  if (!isNonEmptyStr(peerId) || !isNonEmptyStr(recordId)) {
+  if (!isNonBlankStr(peerId) || !isNonBlankStr(recordId)) {
     throw makeErr('peerId and recordId are required', ERR_VALIDATION);
   }
 
@@ -232,7 +232,7 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
 }
 
 export async function unsubscribePeer(id) {
-  if (!isNonEmptyStr(id)) throw makeErr('subscription id required', ERR_VALIDATION);
+  if (!isNonBlankStr(id)) throw makeErr('subscription id required', ERR_VALIDATION);
   const { sub, stillSubscribed } = await withStateLock(async () => {
     const state = await readState();
     const idx = state.subscriptions.findIndex((s) => s.id === id);

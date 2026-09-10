@@ -7,6 +7,7 @@ import {
   isOpencodeCommand,
   parseOpencodeConfigContent,
 } from './providerModels.js';
+import { isNonBlankStr } from './textUtils.js';
 
 /**
  * The CONNECTION half of the provider-connection graph proposed in
@@ -88,8 +89,6 @@ const DYNAMIC_REFERENCE_RE = /\$[({]?[A-Za-z_]/;
 /** Flags that point a harness at an external config file we cannot read here. */
 const EXTERNAL_CONFIG_FLAGS = new Set(['--config', '--config-file', '--configuration']);
 
-const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
-
 /**
  * The base URL an OpenCode record declares for `namespace` inside its inline
  * config, plus every OTHER namespace it declares. A config naming a namespace
@@ -98,13 +97,13 @@ const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !=
  */
 function opencodeDeclaredEndpoints(provider, namespace) {
   const raw = provider?.envVars?.OPENCODE_CONFIG_CONTENT;
-  if (!isNonEmptyString(raw)) return { baseUrl: null, foreign: [], unparsable: false, declared: false };
+  if (!isNonBlankStr(raw)) return { baseUrl: null, foreign: [], unparsable: false, declared: false };
   const parsed = parseOpencodeConfigContent(raw);
   if (!parsed) return { baseUrl: null, foreign: [], unparsable: true, declared: true };
   const declaredProviders = parsed.provider && typeof parsed.provider === 'object' ? parsed.provider : {};
   const baseUrl = declaredProviders?.[namespace]?.options?.baseURL;
   return {
-    baseUrl: isNonEmptyString(baseUrl) ? baseUrl : null,
+    baseUrl: isNonBlankStr(baseUrl) ? baseUrl : null,
     foreign: Object.keys(declaredProviders).filter((key) => key !== namespace),
     unparsable: false,
     declared: true,
@@ -171,13 +170,13 @@ export function providerConnectionProfile(provider) {
     // is null/empty — so the split below stays lossless either way.
     if (Object.hasOwn(record, 'endpoint')) ownedFields.endpoint = record.endpoint;
     for (const [name, envProtocol] of Object.entries(TRANSPORT_ENV_VARS)) {
-      if (!isNonEmptyString(envVars[name])) continue;
+      if (!isNonBlankStr(envVars[name])) continue;
       ownedEnvVars[name] = envVars[name];
       protocol = envProtocol;
       baseUrl = envVars[name];
       break;
     }
-    if (!baseUrl && isNonEmptyString(record.endpoint)) baseUrl = record.endpoint;
+    if (!baseUrl && isNonBlankStr(record.endpoint)) baseUrl = record.endpoint;
   }
 
   if (baseUrl) transports[protocol] = { baseUrl };
@@ -192,12 +191,12 @@ export function providerConnectionProfile(provider) {
   const credentials = {};
   if (Object.hasOwn(record, 'apiKey')) {
     ownedFields.apiKey = record.apiKey;
-    if (isNonEmptyString(record.apiKey)) credentials.apiKey = record.apiKey;
+    if (isNonBlankStr(record.apiKey)) credentials.apiKey = record.apiKey;
   }
   for (const name of CONNECTION_CREDENTIAL_ENV_VARS) {
     if (!Object.hasOwn(envVars, name)) continue;
     ownedEnvVars[name] = envVars[name];
-    if (isNonEmptyString(envVars[name])) credentials[name] = envVars[name];
+    if (isNonBlankStr(envVars[name])) credentials[name] = envVars[name];
   }
   if (Object.values(credentials).includes(REDACTED_CREDENTIAL)) {
     addReason('redacted-credential', 'profile built from a sanitized record');
@@ -211,7 +210,7 @@ export function providerConnectionProfile(provider) {
   if (dynamic.length > 0) addReason('dynamic-config', dynamic.map(([name]) => name).join(','));
 
   const externalConfig = [
-    ...Object.keys(envVars).filter((name) => /_CONFIG(_FILE)?$/.test(name) && isNonEmptyString(envVars[name])),
+    ...Object.keys(envVars).filter((name) => /_CONFIG(_FILE)?$/.test(name) && isNonBlankStr(envVars[name])),
     ...(Array.isArray(record.args) ? record.args.filter((arg) => EXTERNAL_CONFIG_FLAGS.has(arg)) : []),
   ];
   if (externalConfig.length > 0) addReason('external-harness-config', externalConfig.join(','));
