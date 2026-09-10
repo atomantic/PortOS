@@ -83,7 +83,7 @@ describe('float32ToWav16k', () => {
   it('encodes a resampled PCM buffer into a WAV with a correct header and peak', async () => {
     const rendered = new Float32Array([0, 0.5, -1, 0.25]);
     class FakeOfflineAudioContext {
-      createBuffer(channels, length) {
+      createBuffer(_channels, length) {
         return { getChannelData: () => new Float32Array(length) };
       }
       createBufferSource() {
