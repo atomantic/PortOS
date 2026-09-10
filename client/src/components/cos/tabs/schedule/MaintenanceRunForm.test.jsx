@@ -56,9 +56,21 @@ describe('maintenance launch', () => {
     expect(await screen.findByText(/Maintenance started with better-structural-drift/)).toBeInTheDocument();
     const row = screen.getByRole('list', { name: 'Maintenance runs' });
     expect(row).toHaveTextContent('Example App');
-    expect(row).toHaveTextContent('running · 1/13 steps · claim-issue');
+    expect(row).toHaveTextContent('running · 2/13 steps · claim-issue');
     expect(screen.getByRole('button', { name: 'Run now' })).toBeDisabled();
     expect(screen.getByRole('link', { name: /Quota Burn/ })).toHaveAttribute('href', '/devtools/quota-burn');
+  });
+  it('names the live 1-based step while a recommended-workflow audit is running', async () => {
+    const auditSteps = MAINTENANCE_TASK_ORDER.map((taskType, index) => ({ id: `maint-1-${index}`, taskRef: { taskType } }));
+    api.getMaintenanceRuns.mockResolvedValue({ runs: [runRecord({
+      steps: auditSteps,
+      completed: { 'maint-1-0': 'done', 'maint-1-1': 'done' },
+      active: { stepId: 'maint-1-2', taskType: 'module-hygiene' },
+    })] });
+    show();
+    const row = await screen.findByRole('list', { name: 'Maintenance runs' });
+    expect(row).toHaveTextContent('running · 3/7 steps · module-hygiene');
+    expect(screen.getByRole('progressbar')).toHaveAttribute('value', '2');
   });
   it('reports a saved-but-holding run and a failed start honestly', async () => {
     const user = userEvent.setup();
