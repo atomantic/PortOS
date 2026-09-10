@@ -121,6 +121,7 @@ import {
   recordExecution,
   getExecutionHistory,
   shouldRunTask,
+  shouldContinuePerpetualDrain,
   getDueTasks,
   getNextTaskType,
   getUpcomingTasks,
@@ -2418,6 +2419,55 @@ describe('taskSchedule', () => {
       })
     })
 
+    describe('shouldContinuePerpetualDrain', () => {
+      it('does not force a non-perpetual task past its normal cadence', async () => {
+        cronNotDueYet()
+        mockSchedule({
+          tasks: {
+            ...PAUSED_SHIPPED_DRAINS,
+            security: { type: 'cron', cronExpression: '0 7 * * *', enabled: true }
+          }
+        })
+
+        expect(await shouldContinuePerpetualDrain('security'))
+          .toMatchObject({ shouldRun: false, reason: 'cron-cooldown' })
+      })
+
+      it('keeps continuation behind feature and runAfter gates', async () => {
+        cronNotDueYet()
+        const featureEnabled = vi.fn().mockResolvedValue(false)
+        mockSchedule({
+          tasks: {
+            // Feature ownership comes from the task registry, not stored overrides.
+            'jira-sprint-manager': {
+              type: 'cron', cronExpression: '0 7 * * *', perpetual: true,
+              enabled: true
+            }
+          }
+        })
+
+        expect(await shouldContinuePerpetualDrain('jira-sprint-manager', null, { featureEnabled }))
+          .toEqual({ shouldRun: false, reason: 'feature-disabled', feature: 'jira' })
+
+        featureEnabled.mockResolvedValue(true)
+        mockSchedule({
+          tasks: {
+            'claim-issue': {
+              type: 'cron', cronExpression: '0 7 * * *', perpetual: true,
+              enabled: true, runAfter: ['security']
+            },
+            security: { type: 'cron', cronExpression: '0 6 * * *', enabled: true }
+          },
+          executions: {
+            'task:claim-issue': { lastRun: new Date().toISOString(), count: 1, perApp: {} },
+            'task:security': { lastRun: null, count: 0, perApp: {} }
+          }
+        })
+        expect(await shouldContinuePerpetualDrain('claim-issue', null, { featureEnabled }))
+          .toEqual({ shouldRun: false, reason: 'waiting-on-dependencies', pendingDeps: ['security'] })
+      })
+    })
+
     describe('getNextTaskType', () => {
       it('picks a draining perpetual task when no cron task is due', async () => {
         cronNotDueYet()
@@ -2473,6 +2523,9 @@ describe('taskSchedule', () => {
           },
           executions: { 'task:claim-issue': { lastRun: new Date().toISOString(), count: 1, perApp: {} } }
         })
+        expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: false, reason: 'cron-cooldown' })
+        expect(await shouldContinuePerpetualDrain('claim-issue'))
+          .toEqual({ shouldRun: true, reason: 'perpetual-drain' })
         expect(await getNextTaskType()).toBeNull()
         expect(await getNextTaskType(null, { continuingTaskType: 'security' })).toBeNull()
         expect(await getNextTaskType(null, { continuingTaskType: 'claim-issue', perpetualOnly: true }))
