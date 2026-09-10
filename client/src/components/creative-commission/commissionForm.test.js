@@ -227,6 +227,19 @@ describe('commissionForm helpers', () => {
       expect(generationToForm('video', {}).aspectRatio).toBe('16:9');
     });
 
+    it('treats a SAVED record with a missing generation object as legacy, not fresh', () => {
+      // A record with an `id` has already been persisted — it is never the
+      // blank/new-commission case, even if its `generation` object happens to
+      // be absent or null (which a real API response never actually sends,
+      // but toForm() must not silently mis-seed one that did).
+      expect(toForm({ id: 'c-1', targetAbility: 'video' }).generation.durationMode).toBe('manual');
+      expect(toForm({ id: 'c-1', targetAbility: 'video', generation: null }).generation.durationMode).toBe('manual');
+      // The blank/new case is unaffected: no id AND no generation still seeds
+      // the fresh default, including when other fields (a pre-filled brief)
+      // are already present.
+      expect(toForm({ brief: { intent: 'x' } }).generation.durationMode).toBe('auto');
+    });
+
     it('toPayload round-trips a non-video commission', () => {
       const form = toForm({ name: 'Daily Stills', targetAbility: 'image', brief: { intent: 'x' }, generation: { imageCount: 2 } });
       const payload = toPayload(form);

@@ -270,15 +270,22 @@ export function toForm(c) {
       timezone: c.schedule?.timezone || null,
     },
     // Per-ability generation (#2769): only the selected type's fields, filled
-    // from the record or the type's defaults. A BLANK/new commission (no
-    // `generation` object at all — e.g. `blankForm()`'s `toForm({})`) seeds
-    // every key's fresh-commission default; a REAL record (however old)
-    // projects through generationToForm, which resolves an absent key to its
-    // spec `legacyAbsent` reading when the key has one — durationMode's is
-    // 'manual', so an existing record with no key still projects as a fixed
-    // length, matching abilityAdapters.js, while a brand-new commission seeds
-    // 'auto' (the #4494 product choice).
-    generation: c.generation == null
+    // from the record or the type's defaults. NOT YET PERSISTED (no `id` —
+    // `blankForm()`'s `toForm({})`, or a create-drawer harness that pre-seeds
+    // just a brief before the user has touched generation at all) with no
+    // `generation` opinion either seeds every key's fresh-commission default;
+    // anything else — any record that HAS an id, or that already carries a
+    // `generation` object of its own — projects through generationToForm,
+    // which resolves an absent key to its spec `legacyAbsent` reading when
+    // the key has one. durationMode's is 'manual', so an existing record
+    // with no key still projects as a fixed length (matching
+    // abilityAdapters.js) while a genuinely brand-new commission seeds 'auto'
+    // (the #4494 product choice). Gating on `c.generation == null` alone
+    // would treat a saved record whose generation object is missing/null the
+    // same as a fresh one; requiring `!c.id` too keeps that record on the
+    // legacy-aware path (ids are always minted server-side, never present on
+    // an unsaved commission).
+    generation: c.generation == null && !c.id
       ? { ...GENERATION_DEFAULTS_BY_ABILITY[abilityOr(c.targetAbility)] }
       : generationToForm(c.targetAbility, c.generation),
     // Which AI provider/model processes the commission's CD stages. Empty
