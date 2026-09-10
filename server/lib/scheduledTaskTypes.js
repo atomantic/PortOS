@@ -52,11 +52,12 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   'react-lifecycle',
   // Quota-burn `observability-audit` counterpart. Silent catches, log noise, and
   // errors logged without the context needed to reproduce them. Files under the
-  // `code-quality` label. Defaults to file-issues.
+  // `code-quality` category and the `observability` metric label. Defaults to file-issues.
   'observability',
   // Quota-burn `copy-audit` counterpart. User-facing wording only — jargon,
-  // ambiguous action verbs, dead-end error text. Files under the `ux` label;
-  // narrower than the `ux` audit, which walks the running UI. File-issues.
+  // ambiguous action verbs, dead-end error text. Files under the `ux` category
+  // and the `copy` metric label; narrower than the `ux` audit, which walks the
+  // running UI. File-issues.
   'copy',
   // The six lanes below complete the scheduled counterparts of the slashdo
   // `do:better` audit lenses (DO_BETTER_LENS_COVERAGE in lib/auditCatalog.js),
@@ -73,13 +74,14 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   'better-cognitive-load',
   // Carved out of `code-quality` v3: derived artifacts kept as a second
   // source of truth, hand-synchronized registries, incidental-layout
-  // coupling. Files under `code-quality`; do-work is worktree-isolated.
+  // coupling. Files under `code-quality` plus the `structural-drift` metric
+  // label; do-work is worktree-isolated.
   'better-structural-drift',
   // Latent defects found by reading source: missing awaits, unhandled
   // rejections, unguarded null access, resource leaks, races, unbounded
   // reads. Distinct from `console-errors` (observed at runtime),
   // `error-handling` (failure paths + resilience) and `react-lifecycle`
-  // (component effects). Files under `bug`.
+  // (component effects). Files under `bug` plus the `runtime-safety` metric label.
   'better-runtime-safety',
   // Third-party dependency NECESSITY (the `do:depfree` lens) — replace
   // micro-packages and native-API wrappers with in-repo code. Distinct from
@@ -87,7 +89,8 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   'better-dependency-freedom',
   // Tests that prove nothing: assert on mocks, can never fail, re-implement
   // the code under test, or duplicate a stronger boundary test. Distinct from
-  // `test-coverage`, which owns the GAPS. Files under `tests`.
+  // `test-coverage`, which owns the GAPS. Files under `tests` plus the
+  // `test-quality` metric label.
   'better-test-quality',
   // Audits `git stash list` for {appName} and drops entries already superseded
   // by (or a subset of) current `main`/HEAD, or that are stale/abandoned scratch

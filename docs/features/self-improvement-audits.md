@@ -9,6 +9,12 @@ Configure them in **CoS → Schedule**. Every lane is on-demand and enabled by
 default, so a fresh install spends nothing until you press Run or pick a cadence
 (the AI Provider Usage Policy in `AGENTS.md`).
 
+Filed forge issues keep a `[<metric>-…]` slug in the title **and** apply that
+same metric as a label (`cognitive-load`, `structural-drift`, `runtime-safety`,
+…) alongside the category (`code-quality`, `bug`, `tests`, …) so the backlog
+can be filtered without parsing titles. When the slug stem is already the
+category (`ux`, `security`) the extra label is omitted.
+
 Registry: `server/lib/auditCatalog.js` (what each lane is and how it files),
 `server/services/taskScheduleRegistry.js` (cadence and posture),
 `server/services/taskPromptDefaults/prompts.js` (the mission bodies).
@@ -23,29 +29,29 @@ the operator's live checkout.
 |---|---|---|---|---|
 | `security` | Exposure real under the app's own threat model | `security` | implement | |
 | `code-quality` | Conventional maintainability defects | `code-quality` | implement | |
-| `test-coverage` | Untested behavior worth covering | `tests` | implement | |
-| `performance` | Provably wasted work on a hot path | `performance` | implement | |
-| `accessibility` | Keyboard, screen-reader, contrast, zoom barriers | `accessibility` | implement | |
-| `documentation` | Docs that are wrong, then docs that are missing | `documentation` | implement | |
-| `ui-bugs` | Things that are broken in the running interface | `bug` | implement | |
+| `test-coverage` | Untested behavior worth covering | `tests`, `test-gap` | implement | |
+| `performance` | Provably wasted work on a hot path | `performance`, `perf` | implement | |
+| `accessibility` | Keyboard, screen-reader, contrast, zoom barriers | `accessibility`, `a11y` | implement | |
+| `documentation` | Docs that are wrong, then docs that are missing | `documentation`, `docs` | implement | |
+| `ui-bugs` | Things that are broken in the running interface | `bug`, `ui-bug` | implement | |
 | `mobile-responsive` | Small-screen and touch usability | `mobile` | implement | |
 | `error-handling` | Failure paths, timeouts, retries, degraded fallback | `resilience` | implement | |
-| `typing` | Type contracts at boundaries | `code-quality` | implement | |
-| `console-errors` | What the app actually emits while running | `bug` | implement | |
+| `typing` | Type contracts at boundaries | `code-quality`, `typing` | implement | |
+| `console-errors` | What the app actually emits while running | `bug`, `console` | implement | |
 | `ux` | Whether a user can get the job done | `ux` | file | |
 | `data-safety` | Migrations, schema parity, cross-version safety | `data-safety` | file | |
-| `simplify` | Dead code, duplication, YAGNI | `code-quality` | file | |
-| `module-hygiene` | Responsibility boundaries, reuse, discoverability | `code-quality` | file | yes |
+| `simplify` | Dead code, duplication, YAGNI | `code-quality`, `simplify` | file | |
+| `module-hygiene` | Responsibility boundaries, reuse, discoverability | `code-quality`, `module-hygiene` | file | yes |
 | `api-contract` | Route validation, client/server drift, envelopes | `api-contract` | file | |
 | `react-lifecycle` | Effect teardown, stale closures, render races | `react-lifecycle` | file | |
-| `observability` | Silent catches, log noise, missing error context | `code-quality` | file | |
-| `copy` | User-facing wording | `ux` | file | |
-| `better-complexity` | Counted branching per function | `code-quality` | file | yes |
-| `better-cognitive-load` | Reader cost no metric captures | `code-quality` | file | yes |
-| `better-structural-drift` | The same fact kept in two places | `code-quality` | file | yes |
-| `better-runtime-safety` | Latent defects not yet triggered | `bug` | file | |
-| `better-dependency-freedom` | Whether a dependency should exist at all | `dependencies` | file | yes |
-| `better-test-quality` | Existing tests that prove nothing | `tests` | file | |
+| `observability` | Silent catches, log noise, missing error context | `code-quality`, `observability` | file | |
+| `copy` | User-facing wording | `ux`, `copy` | file | |
+| `better-complexity` | Counted branching per function | `code-quality`, `complexity` | file | yes |
+| `better-cognitive-load` | Reader cost no metric captures | `code-quality`, `cognitive-load` | file | yes |
+| `better-structural-drift` | The same fact kept in two places | `code-quality`, `structural-drift` | file | yes |
+| `better-runtime-safety` | Latent defects not yet triggered | `bug`, `runtime-safety` | file | |
+| `better-dependency-freedom` | Whether a dependency should exist at all | `dependencies`, `depfree` | file | yes |
+| `better-test-quality` | Existing tests that prove nothing | `tests`, `test-quality` | file | |
 
 ## Why the boundaries are explicit
 
