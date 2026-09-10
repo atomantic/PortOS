@@ -144,14 +144,24 @@ vi.mock('../musicVideo/projects.js', async () => ({
 vi.mock('../authors/index.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listAuthors: vi.fn().mockResolvedValue([]),
+  // #6843: getAuthor/mergeAuthorsFromSync stubbed (not spread from the real
+  // module) so the all-kinds parity suite can drive/assert push+receive for
+  // this kind the same way universe/series/etc. already are, without hitting
+  // the real file-backed store.
+  getAuthor: vi.fn(),
+  mergeAuthorsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
 vi.mock('../creativeDirector/local.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listProjects: vi.fn().mockResolvedValue([]),
+  getProject: vi.fn(),
+  mergeProjectsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
 vi.mock('../moodBoard/index.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listBoards: vi.fn().mockResolvedValue([]),
+  getBoard: vi.fn(),
+  mergeBoardsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
 vi.mock('../fableLoom/index.js', () => ({
   getLoom: vi.fn(),
@@ -163,6 +173,12 @@ vi.mock('../writersRoom/sync.js', async (importOriginal) => ({
   listWorksForSync: vi.fn().mockResolvedValue([]),
   listFoldersForSync: vi.fn().mockResolvedValue([]),
   listExercisesForSync: vi.fn().mockResolvedValue([]),
+  getWorkForSync: vi.fn(),
+  mergeWorksFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
+  getFolderForSync: vi.fn(),
+  mergeFoldersFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
+  getExerciseForSync: vi.fn(),
+  mergeExercisesFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
 // #2686: commissionFeedback is a per-record store peerSync's getFullSyncCoverageForPeer
 // iterates via PEER_SUBSCRIBABLE_KINDS. Mock the lister so the zero-records
@@ -170,10 +186,14 @@ vi.mock('../writersRoom/sync.js', async (importOriginal) => ({
 vi.mock('../creativeCommissions/feedbackStore.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listCommissionFeedbackForSync: vi.fn().mockResolvedValue([]),
+  getCommissionFeedbackForSync: vi.fn(),
+  mergeCommissionFeedbackFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
 vi.mock('../creativeCommissions/store.js', async (importOriginal) => ({
   ...(await importOriginal()),
   listCommissionsForSync: vi.fn().mockResolvedValue([]),
+  getCommissionForSync: vi.fn(),
+  mergeCommissionsFromSync: vi.fn().mockResolvedValue({ applied: true, count: 1 }),
 }));
 
 vi.mock('../../lib/peerHttpClient.js', async () => ({
@@ -229,6 +249,7 @@ import {
   __drainForTests,
 } from './peerSync.js';
 
+import { buildPushPayload } from './peerSyncPush.js';
 import { getPeers } from '../instances.js';
 import { getInstanceId } from '../instanceIdentity.js';
 import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeBuilder.js';
@@ -253,13 +274,23 @@ import {
 } from '../musicVideo/projects.js';
 // #1964 — list backends the full-sync coverage path reads; imported so the
 // beforeEach can reset each to an empty fixture (see the partial mocks above).
-import { listAuthors } from '../authors/index.js';
-import { listProjects as listCreativeDirectorProjects } from '../creativeDirector/local.js';
-import { listBoards } from '../moodBoard/index.js';
+// get*/merge*FromSync for these 8 kinds (#6843) drive the all-kinds parity
+// suite below the same way the fully-mocked kinds above already do.
+import { listAuthors, getAuthor, mergeAuthorsFromSync } from '../authors/index.js';
+import {
+  listProjects as listCreativeDirectorProjects,
+  getProject as getCreativeDirectorProject,
+  mergeProjectsFromSync as mergeCreativeDirectorProjectsFromSync,
+} from '../creativeDirector/local.js';
+import { listBoards, getBoard, mergeBoardsFromSync } from '../moodBoard/index.js';
 import { getLoom, listLooms, mergeLoomsFromSync } from '../fableLoom/index.js';
-import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
-import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
-import { listCommissionsForSync } from '../creativeCommissions/store.js';
+import {
+  listWorksForSync, getWorkForSync, mergeWorksFromSync,
+  listFoldersForSync, getFolderForSync, mergeFoldersFromSync,
+  listExercisesForSync, getExerciseForSync, mergeExercisesFromSync,
+} from '../writersRoom/sync.js';
+import { listCommissionFeedbackForSync, getCommissionFeedbackForSync, mergeCommissionFeedbackFromSync } from '../creativeCommissions/feedbackStore.js';
+import { listCommissionsForSync, getCommissionForSync, mergeCommissionsFromSync } from '../creativeCommissions/store.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
@@ -2944,17 +2975,20 @@ describe('peerSync', () => {
         sourceInstanceId: 'peer-a',
       });
 
+      // The record-kind table (#6843) passes senderSchemaVersions to every
+      // merger uniformly (harmless for these three, which ignore it) — assert
+      // via objectContaining rather than pinning its full shape.
       expect(mergeArtistsFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'artist-1' })],
-        { source: { via: 'peer-push', peerId: 'peer-a' } },
+        expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
       );
       expect(mergeAlbumsFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'album-1' })],
-        { source: { via: 'peer-push', peerId: 'peer-a' } },
+        expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
       );
       expect(mergeTracksFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'track-1' })],
-        { source: { via: 'peer-push', peerId: 'peer-a' } },
+        expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
       );
     });
 
@@ -2999,9 +3033,13 @@ describe('peerSync', () => {
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
+      // The project's own merge goes through the record-kind table (#6843),
+      // which passes senderSchemaVersions uniformly (harmless — ignored).
+      // The linkedTrack merge is a hand-written hook that still calls with
+      // exactly `{ source }`, unchanged.
       expect(mergeMusicVideoProjectsFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'mv-1' })],
-        { source: { via: 'peer-push', peerId: 'peer-a' } },
+        expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
       );
       expect(mergeTracksFromSync).toHaveBeenCalledWith(
         [linkedTrack],
@@ -3231,9 +3269,11 @@ describe('peerSync', () => {
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
+      // Goes through the record-kind table (#6843), which passes
+      // senderSchemaVersions uniformly (harmless for series — ignored).
       expect(mergeSeriesFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 's1' })],
-        { source: { via: 'peer-push', peerId: 'peer-a' } },
+        expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
       );
       expect(mergeIssuesFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'i1' })],
@@ -3348,7 +3388,17 @@ describe('peerSync', () => {
       expect(result.ackedDeletesUpTo).toBe(0);
     });
 
-    it('does NOT fold a bundled linkedTrack tombstone into ackedDeletesUpTo for a local-ephemeral project (merge skipped, opted out)', async () => {
+    it('folds a bundled linkedTrack tombstone into ackedDeletesUpTo even when the local record LOOKS ephemeral-shaped (#6843: musicVideoProject has no ephemeral concept)', async () => {
+      // Historical: applyIncomingPush used to probe getMusicVideoProject for a
+      // local `ephemeral` flag (added by #1858) and skip the bundled track
+      // merge when set. The store never actually sets that flag on this kind
+      // (musicVideo/projectsLogic.js: "no ephemeral flag") — the check always
+      // evaluated false in production, and classifyLocalRecord already
+      // documented the kind as having no ephemeral concept. #6843 collapsed
+      // the dead check via the record-kind table's `hasEphemeral: false` and
+      // this asserts the fix: an `ephemeral: true`-shaped local record (which
+      // could previously only be reached by a mock like this one, never by
+      // real data) does NOT suppress the linkedTrack merge or its ack.
       vi.mocked(getMusicVideoProject).mockResolvedValueOnce({ id: 'mv-16', ephemeral: true });
       const result = await applyIncomingPush({
         kind: 'musicVideoProject',
@@ -3357,8 +3407,11 @@ describe('peerSync', () => {
         assetManifest: [],
         sourceInstanceId: 'peer-a',
       });
-      expect(mergeTracksFromSync).not.toHaveBeenCalled();
-      expect(result.ackedDeletesUpTo).toBe(0);
+      expect(mergeTracksFromSync).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: 'track-16' })],
+        { source: { via: 'peer-push', peerId: 'peer-a' } },
+      );
+      expect(result.ackedDeletesUpTo).toBe(Date.parse('2026-04-04T00:00:00Z'));
     });
 
     it('auto-creates a reverse subscription back to the sender', async () => {
@@ -3876,9 +3929,12 @@ describe('peerSync', () => {
             schemaVersions: { ...PORTOS_SCHEMA_VERSIONS, tracks: PORTOS_SCHEMA_VERSIONS.tracks + 1 },
           },
         });
+        // Goes through the record-kind table (#6843), which passes
+        // senderSchemaVersions uniformly (harmless for musicVideoProject —
+        // ignored).
         expect(mergeMusicVideoProjectsFromSync).toHaveBeenCalledWith(
           [expect.objectContaining({ id: 'mv-1' })],
-          { source: { via: 'peer-push', peerId: 'peer-a' } },
+          expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
         );
       });
 
@@ -4608,9 +4664,11 @@ describe('peerSync', () => {
         sourceInstanceId: 'peer-abc',
       });
 
+      // Goes through the record-kind table (#6843), which passes
+      // senderSchemaVersions uniformly (harmless for mediaCollection — ignored).
       expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'col-x', name: 'Synced' })],
-        { source: { via: 'peer-push', peerId: 'peer-abc' } },
+        expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-abc' } }),
       );
 
       // Confirm the record landed on disk via the real listCollections.
@@ -4629,7 +4687,7 @@ describe('peerSync', () => {
       });
       expect(mergeMediaCollectionsFromSync).toHaveBeenCalledWith(
         [expect.objectContaining({ id: 'col-y' })],
-        { source: { via: 'peer-push', peerId: 'peer-abc' } },
+        expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-abc' } }),
       );
     });
 
@@ -4948,6 +5006,99 @@ describe('media-library federation (#1566)', () => {
         .map((c) => String(c[0])).filter((u) => u.endsWith('/library-manifest'));
       expect(manifestUrls).toHaveLength(1);
       expect(manifestUrls[0]).toContain('10.0.0.4');
+    });
+  });
+
+  // #6843 — the per-kind record-kind table (recordKinds.js) collapsed six
+  // hand-mirrored kind === '...' ladders (isSubscriptionRecordTombstone,
+  // buildPushPayload, classifyLocalRecord, applyIncomingPush's ephemeral
+  // lookup + merge dispatch, refusedFromCutoffs) to one lookup each. Before
+  // that table, only 4 of the 16 subscribable kinds were exercised through
+  // buildPushPayload/applyIncomingPush by this file (universe, series,
+  // musicVideoProject, mediaCollection) — the other 12 kinds' ladder arms
+  // were untested, which is exactly the gap that let classifyLocalRecord ship
+  // with no fableLoom arm (always 'missing', so an inbound fableLoom push
+  // could never auto-create a reverse subscription) and applyIncomingPush
+  // carry a dead musicVideoProject ephemeral probe. This suite drives EVERY
+  // PEER_SUBSCRIBABLE_KINDS entry through both boundaries so a future kind
+  // that's added to the table but wired wrong fails here instead of shipping
+  // silently — the exact failure mode the issue documents.
+  describe('all-kinds parity (#6843)', () => {
+    // One row per PEER_SUBSCRIBABLE_KINDS entry: the (already-imported,
+    // already-mocked) getter + merger this kind's descriptor wraps, and a
+    // minimal record shape sanitizeRecordForWire accepts for it (id +
+    // deleted/deletedAt is sufficient for every kind — see syncWire.js: the
+    // only universal requirements are a plain object with a non-blank id and
+    // not `ephemeral === true` while live).
+    const ALL_KINDS_FIXTURES = {
+      universe: { get: getUniverse, merge: mergeUniversesFromSync },
+      series: { get: getSeries, merge: mergeSeriesFromSync },
+      mediaCollection: { get: getCollection, merge: mergeMediaCollectionsFromSync },
+      author: { get: getAuthor, merge: mergeAuthorsFromSync },
+      artist: { get: getArtist, merge: mergeArtistsFromSync },
+      album: { get: getAlbum, merge: mergeAlbumsFromSync },
+      track: { get: getTrack, merge: mergeTracksFromSync },
+      creativeDirectorProject: { get: getCreativeDirectorProject, merge: mergeCreativeDirectorProjectsFromSync },
+      moodBoard: { get: getBoard, merge: mergeBoardsFromSync },
+      fableLoom: { get: getLoom, merge: mergeLoomsFromSync },
+      writersRoomWork: { get: getWorkForSync, merge: mergeWorksFromSync },
+      writersRoomFolder: { get: getFolderForSync, merge: mergeFoldersFromSync },
+      writersRoomExercise: { get: getExerciseForSync, merge: mergeExercisesFromSync },
+      musicVideoProject: { get: getMusicVideoProject, merge: mergeMusicVideoProjectsFromSync },
+      commissionFeedback: { get: getCommissionFeedbackForSync, merge: mergeCommissionFeedbackFromSync },
+      creativeCommission: { get: getCommissionForSync, merge: mergeCommissionsFromSync },
+    };
+
+    it('every PEER_SUBSCRIBABLE_KINDS entry has a test fixture (guards the parity suite itself against a silently-skipped kind)', () => {
+      expect(Object.keys(ALL_KINDS_FIXTURES).sort()).toEqual([...PEER_SUBSCRIBABLE_KINDS].sort());
+    });
+
+    it.each(PEER_SUBSCRIBABLE_KINDS)('buildPushPayload(%s): a live record pushes a populated envelope, a tombstone pushes assetManifest:[]', async (kind) => {
+      const { get } = ALL_KINDS_FIXTURES[kind];
+      const liveRecord = { id: `ak-live-${kind}`, name: 'AK', title: 'AK', deleted: false, deletedAt: null };
+      vi.mocked(get).mockResolvedValueOnce(liveRecord);
+      const liveResult = await buildPushPayload({ recordKind: kind, recordId: liveRecord.id }, 'src-instance');
+      expect(liveResult.kind).toBe(kind);
+      expect(liveResult.record.id).toBe(liveRecord.id);
+      expect(Array.isArray(liveResult.assetManifest)).toBe(true);
+
+      const tombstone = { id: `ak-tomb-${kind}`, deleted: true, deletedAt: '2026-05-01T00:00:00Z' };
+      vi.mocked(get).mockResolvedValueOnce(tombstone);
+      const tombResult = await buildPushPayload({ recordKind: kind, recordId: tombstone.id }, 'src-instance');
+      expect(tombResult.record.deleted).toBe(true);
+      expect(tombResult.assetManifest).toEqual([]);
+    });
+
+    it.each(PEER_SUBSCRIBABLE_KINDS)('applyIncomingPush(%s): merges the incoming record through this kind\'s own merger with a { source } envelope', async (kind) => {
+      const { get, merge } = ALL_KINDS_FIXTURES[kind];
+      vi.mocked(merge).mockClear();
+      const record = { id: `ak-merge-${kind}`, name: 'AK', deleted: false, deletedAt: null };
+      // Satisfies universe/series' local-ephemeral lookup (the only two kinds
+      // that read `desc.load` before merging) — a non-ephemeral local match.
+      vi.mocked(get).mockResolvedValue(record);
+      await applyIncomingPush({ kind, record, assetManifest: [], sourceInstanceId: 'peer-a' });
+      expect(merge).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: record.id })],
+        expect.objectContaining({ source: { via: 'peer-push', peerId: 'peer-a' } }),
+      );
+    });
+
+    it.each(PEER_SUBSCRIBABLE_KINDS)('applyIncomingPush(%s): reverse-subscribes when the local record is present, refuses when it is missing (classifyLocalRecord)', async (kind) => {
+      const { get } = ALL_KINDS_FIXTURES[kind];
+
+      const presentRecord = { id: `ak-present-${kind}`, name: 'AK', deleted: false, deletedAt: null };
+      vi.mocked(get).mockResolvedValue(presentRecord);
+      const presentResult = await applyIncomingPush({
+        kind, record: presentRecord, assetManifest: [], sourceInstanceId: 'peer-a',
+      });
+      expect(presentResult.reverseSubscriptionCreated).toBe(true);
+
+      const missingRecord = { id: `ak-missing-${kind}`, name: 'AK', deleted: false, deletedAt: null };
+      vi.mocked(get).mockResolvedValue(undefined);
+      const missingResult = await applyIncomingPush({
+        kind, record: missingRecord, assetManifest: [], sourceInstanceId: 'peer-a',
+      });
+      expect(missingResult.reverseSubscriptionCreated).toBe(false);
     });
   });
 });
