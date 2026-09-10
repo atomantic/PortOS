@@ -180,6 +180,8 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
     // Positive control: the file-issues contract IS what rendered, so the
     // negatives above are not passing on an empty or truncated prompt.
     expect(prompt).toContain('Mode: file issues, change nothing');
+    expect(prompt).toContain('Repository-wide discovery, worst offender first');
+    expect(prompt).toContain(`"category":"${taskType}"`);
     expect(prompt).toContain('## Completion (No Code Output)');
     expect(prompt).not.toContain('{modeInstructions}');
     expect(prompt).not.toContain('{trackerInstructions}');
@@ -209,6 +211,8 @@ describe('issues-only audit dispatch never acquires code-shipping instructions (
 
     const prompt = renderPrompt(task);
     expect(prompt).toContain('Mode: implement the highest-value fix');
+    expect(prompt).toContain('Repository-wide discovery, worst offender first');
+    expect(prompt).toContain(`"category":"${taskType}"`);
     expect(prompt).toMatch(/^## Completion Workflow$/m);
     expect(prompt).toMatch(/^\s*\d+\.\s+`\/do:push/m);
   });

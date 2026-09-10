@@ -379,3 +379,16 @@ Timeline render ID, so restart can reconcile output without new provider work.
 Project sync v10 gates cut validation and explicit audio semantics. Older Video
 audio settings default to native clip audio when read; new drafts explicitly
 select a contract. No new store, seed or data-rewriting migration is required.
+
+### Managed app quality assessments
+
+`app_quality_measurements` is `db-primary`: immutable assessments per managed
+app/category/run, with the latest per category queried together for the dashboard and management pages. The app
+registry is still file-backed, so app ids are opaque scoped keys; reads select
+only currently registered apps. PostgreSQL stores the bounded JSON report and
+agent provenance; no asset bytes or new JSON store. Additive `CREATE TABLE IF
+NOT EXISTS` in boot schema and init-db.sql provisions both existing and new
+installs without transforming existing records. No seed or backfill fabricates
+scores. The mandatory Postgres backup includes the table. These assessments
+remain machine-local: they describe this install's checkout and agent evidence,
+and are not included in peer sync or capability/status payloads.

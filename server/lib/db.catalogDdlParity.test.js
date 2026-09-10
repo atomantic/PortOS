@@ -37,6 +37,7 @@ const DB_JS = [
 ].join('\n');
 
 const CATALOG_TABLES = [
+  'app_quality_measurements',
   'catalog_scraps',
   'catalog_ingredients',
   'catalog_ingredient_sources',

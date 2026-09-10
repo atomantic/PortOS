@@ -1,0 +1,23 @@
+import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import { it, expect, vi } from 'vitest';
+import AppQuality from './AppQuality';
+vi.mock('../../services/apiApps', () => ({ getAppQualityHistory: vi.fn().mockResolvedValue({ points: [], totalCategories: 25 }) }));
+
+it('shows zero as a real score and explains excluded categories in the breakdown', async () => {
+  const app = { id: 'portos-default', quality: { score: 0, ratedCategories: 1, totalCategories: 25, categories: [
+    { id: 'security', label: 'Security', score: 0, coverage: 'broad', confidence: 'high', summary: 'Critical failure', scannedFiles: 5, totalFiles: 5, worstSeverity: 10 },
+    { id: 'ux', label: 'UX', score: 80, coverage: 'partial', stale: true, summary: 'Only one journey inspected' },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  expect(screen.getByRole('heading', { name: 'Quality: 0/100' })).toBeInTheDocument();
+  expect(screen.getByText('Stale · partial')).toBeInTheDocument();
+  expect(screen.getByText(/1\/25 categories contribute/)).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /Configure/ })).toHaveAttribute('href', '/apps/portos-default/tasks');
+});
+
+it('links an unassessed tile to its app overview without inventing a score', () => {
+  render(<MemoryRouter><AppQuality app={{ id: 'other' }} /></MemoryRouter>);
+  expect(screen.getByRole('link', { name: 'Quality: not assessed' })).toHaveAttribute('href', '/apps/other/overview');
+});

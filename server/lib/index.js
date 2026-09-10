@@ -611,3 +611,5 @@ export * from './providerTypes.js';
 export * from './notificationTypes.js';
 export * from './videoTimelineFades.js';
 export * from './voiceEngines.js';
+
+export * from './auditQuality.js';

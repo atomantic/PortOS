@@ -1,3 +1,4 @@
+import { auditQualityInstructions } from '../lib/auditQuality.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../lib/privateSecurityPolicy.js';
 /**
  * CoS Task Generator Module
@@ -2722,7 +2723,9 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
 
-  const modeInstructions = isAuditTaskType(taskType) ? modeContractFor(fileIssues) : '';
+  const modeInstructions = isAuditTaskType(taskType)
+    ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType)}`
+    : '';
   const baseDescription = await buildImprovementTaskDescription({
     promptTemplate: applyAuditModeWrapper(promptTemplate, modeInstructions),
     app, promptTaskType, metadata,

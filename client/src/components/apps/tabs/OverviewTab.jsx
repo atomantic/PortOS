@@ -1,3 +1,4 @@
+import AppQuality from '../AppQuality';
 import { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { FolderOpen, Gamepad2, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Download, Tag, AlertTriangle, Rocket, Camera, Image, Sparkles, Trash2 } from 'lucide-react';
@@ -124,6 +125,7 @@ export default function OverviewTab({ app, onRefresh }) {
           Kanban board, which needed the full page width, now live on the app's
           own JIRA tab.) */}
       <div className="space-y-6 max-w-5xl">
+      <AppQuality app={app} detail />
       {/* Details Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
         <div>

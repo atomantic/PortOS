@@ -1,3 +1,5 @@
+vi.mock('./appQuality.js', () => ({ recordAuditQuality: vi.fn(async () => true) }));
+import { recordAuditQuality } from './appQuality.js';
 // The goal-fidelity gate (#5994) reaches a local model at completion. Pinned OFF
 // here so these tests exercise the path they are about without depending on the
 // developer's own reviewer settings — and so a machine that HAS a local reviewer
@@ -58,6 +60,7 @@ describe('recovery output-hook dispatch (#3182)', () => {
     persistedAgent = {
       id: 'agent-example',
       status: 'running',
+      startedAt: '2026-09-10T00:00:00Z',
       metadata: {},
     };
     getAgent.mockImplementation(async () => persistedAgent);
@@ -70,6 +73,15 @@ describe('recovery output-hook dispatch (#3182)', () => {
     });
     hook = vi.fn().mockResolvedValue({ recorded: true });
     getTaskOutputHook.mockResolvedValue(hook);
+  });
+
+  it('captures audit telemetry on the shared completion path without waiving fix-mode delivery criteria', async () => {
+    const task = { ...TASK, metadata: { ...TASK.metadata, analysisType: 'better-complexity' } };
+    await expect(dispatchTaskOutputHookOnce({ agentId: 'agent-audit', task, success: true, workspacePath: '/worktree' }))
+      .resolves.toEqual({ ran: false });
+    expect(recordAuditQuality).toHaveBeenCalledWith({ task, taskType: 'better-complexity', agentId: 'agent-audit', success: true, workspacePath: '/worktree', assessedAt: persistedAgent.startedAt });
+    expect(hook).not.toHaveBeenCalled();
+    expect(updateAgent).not.toHaveBeenCalled();
   });
 
   it.each([
