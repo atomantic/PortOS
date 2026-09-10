@@ -19,6 +19,7 @@ import { join, basename } from 'path';
 import { readFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { PATHS, ensureDir, atomicWrite, readJSONFile, sha256File, copyFileGuarded } from '../../lib/fileUtils.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, bucketBlobIndexPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
@@ -96,24 +97,22 @@ async function loadAssetHashCache(bucketPath) {
   return isPlainObject(raw) ? raw : {};
 }
 
-// Per-bucket cache-write tail — serializes the re-load → merge → atomicWrite
+// Per-bucket cache-write queue — serializes the re-load → merge → atomicWrite
 // step so two concurrent exporters (e.g. `exportByKind` fanning out parallel
-// `exportSeries`) accumulate entries instead of clobbering. Mirrors the
-// `issueWriteTail` pattern in `pipeline/issues.js`.
-const cacheWriteTails = new Map();
+// `exportSeries`) accumulate entries instead of clobbering. The shared queue
+// also recovers after a rejected write so one transient bucket failure does not
+// poison every later export for the process lifetime.
+const cacheWriteQueue = createKeyCachedQueue();
 
 async function withAssetHashCache(bucketPath, fn) {
   const cache = await loadAssetHashCache(bucketPath);
   const initialKeys = Object.keys(cache).length;
   const result = await fn(cache);
   if (Object.keys(cache).length !== initialKeys) {
-    const prevTail = cacheWriteTails.get(bucketPath) || Promise.resolve();
-    const tail = prevTail.then(async () => {
+    await cacheWriteQueue(bucketPath, async () => {
       const onDisk = await loadAssetHashCache(bucketPath);
       await atomicWrite(bucketBlobIndexPath(bucketPath), { ...onDisk, ...cache });
     });
-    cacheWriteTails.set(bucketPath, tail);
-    await tail;
   }
   return result;
 }
