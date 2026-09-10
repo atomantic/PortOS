@@ -23,7 +23,7 @@ import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { detectImageFormat } from '../../lib/mimeTypes.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
@@ -236,7 +236,7 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
       const status = await pollFalStatus({ statusUrl, apiKey });
       if (status.status === 'COMPLETED') break;
       if (status.status === 'ERROR') {
-        return finalizeError(job, jobId, `fal.ai render failed: ${status.error || 'unknown error'}`);
+        return finalizeJobFailure(job, jobId, null, `fal.ai render failed: ${status.error || 'unknown error'}`);
       }
       // fal's own queue maps to SUBMIT rather than to the queued step: the
       // ladder's `queued` is PortOS's local queue, and stepping back to it
@@ -247,19 +247,19 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
     }
     if (entry.aborted) return finalizeCanceled(job, jobId);
     if (Date.now() >= deadline) {
-      return finalizeError(job, jobId, `fal.ai did not finish within ${Math.round(FAL_RENDER_TIMEOUT_MS / 1000)}s`);
+      return finalizeJobFailure(job, jobId, null, `fal.ai did not finish within ${Math.round(FAL_RENDER_TIMEOUT_MS / 1000)}s`);
     }
 
     const result = await fetchFalResult({ responseUrl, apiKey });
     const videoUrl = result?.video?.url || result?.video_url || result?.output?.video?.url;
     if (!videoUrl) {
-      return finalizeError(job, jobId, 'fal.ai completed but returned no video URL');
+      return finalizeJobFailure(job, jobId, null, 'fal.ai completed but returned no video URL');
     }
 
     emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.FETCH, 'Downloading video…');
     const videoRes = await fetchWithTimeout(videoUrl, {}, FAL_DOWNLOAD_TIMEOUT_MS);
     if (!videoRes.ok) {
-      return finalizeError(job, jobId, `fal.ai video download failed: HTTP ${videoRes.status}`);
+      return finalizeJobFailure(job, jobId, null, `fal.ai video download failed: HTTP ${videoRes.status}`);
     }
     const buffer = Buffer.from(await videoRes.arrayBuffer());
     await writeFile(outputPath, buffer);
@@ -269,22 +269,22 @@ async function runFalVideo(job, jobId, { apiKey, modelId, prompt, negativePrompt
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed: null, mutateHistory: mutateVideoHistory });
     closeJobAfterDelay(jobs, jobId);
   } catch (err) {
-    finalizeError(job, jobId, `fal.ai video generation failed: ${err?.message || err}`);
+    // NOTE: not forced, unlike videoGen/grok.js's post-exit catch — see #6831.
+    // finalizeGeneratedVideo stamps job.status = 'complete' before its own
+    // async tail (same as here), so a throw from that tail after the request
+    // slot is already cleared above lands here as a silent no-op today.
+    finalizeJobFailure(job, jobId, null, `fal.ai video generation failed: ${err?.message || err}`);
   }
 }
 
-const finalizeCanceled = (job, jobId) => finalizeError(job, jobId, 'Canceled', { force: true });
-
-const finalizeError = (job, jobId, reason, { force = false } = {}) => {
-  if (!force && (job.status === 'error' || job.status === 'complete')) return;
-  activeRequests.delete(jobId);
-  activeJobs.delete(jobId);
-  job.status = 'error';
-  console.log(`❌ fal video generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
-  broadcastSse(job, { type: 'error', error: reason });
-  videoGenEvents.emit('failed', { generationId: jobId, error: reason });
-  closeJobAfterDelay(jobs, jobId);
-};
+const finalizeJobFailure = createJobFailureFinalizer({
+  jobs,
+  activeJobs,
+  activeSlots: activeRequests,
+  label: 'fal video generation',
+  events: videoGenEvents,
+});
+const finalizeCanceled = finalizeJobFailure.canceled;
 
 // Test-only handles.
 export const _internals = {

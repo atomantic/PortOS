@@ -39,7 +39,7 @@ import { atomicWrite, copyFileGuarded, ensureDir, PATHS } from '../../lib/fileUt
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { buildCodexStartupArgs, buildEffortArgs, resolveCliEffort } from '../../lib/providerModels.js';
@@ -366,7 +366,7 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
 
   proc.on('error', (err) => {
     clearTimeout(timeoutTimer);
-    finalizeError(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
+    finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
 
   proc.stdout.on('data', (chunk) => {
@@ -404,17 +404,17 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       if (code !== 0) {
         const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
         const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
-        return finalizeError(job, jobId, proc, `Codex generation failed: ${reason}\n${tail}`);
+        return finalizeJobFailure(job, jobId, proc, `Codex generation failed: ${reason}\n${tail}`);
       }
       if (!sessionId) {
-        return finalizeError(job, jobId, proc, 'Codex returned no session id — output format may have changed');
+        return finalizeJobFailure(job, jobId, proc, 'Codex returned no session id — output format may have changed');
       }
       // Codex writes the PNG asynchronously while it's wrapping up the turn.
       // Empirically the file is on disk by the time `codex exec` exits, but
       // poll for a few seconds in case there's a flush lag on slow disks.
       const harvested = await harvestGeneratedImage(sessionId, harvestTimeoutMs);
       if (!harvested) {
-        return finalizeError(job, jobId, proc, noImageReason(stdoutTail));
+        return finalizeJobFailure(job, jobId, proc, noImageReason(stdoutTail));
       }
       if (harvested.path) {
         await copyFileGuarded(harvested.path, outputPath);
@@ -425,7 +425,7 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       // contentless canvas never becomes a gallery record.
       const emptyFrame = await rejectDegenerateFrame(outputPath);
       if (emptyFrame) {
-        return finalizeError(job, jobId, proc, emptyFrame);
+        return finalizeJobFailure(job, jobId, proc, emptyFrame);
       }
       // Sidecar metadata so the gallery can recover prompt/seed/etc. The
       // codex sessionId is the closest analogue to a seed for gpt-image-2
@@ -450,28 +450,21 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cle
       imageGenEvents.emit('completed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, path: `/data/images/${filename}`, filename });
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
-      finalizeError(job, jobId, proc, `Codex post-exit handler failed: ${err?.message || err}`);
+      // force: true — 'complete' is already stamped above; see
+      // createJobFailureFinalizer's doc comment in sseUtils.js.
+      finalizeJobFailure(job, jobId, proc, `Codex post-exit handler failed: ${err?.message || err}`, { force: true });
     }
   });
 }
 
-// `proc` is the child this finalize belongs to — pass it through so we
-// only clear module-scoped state when it still belongs to *this* job.
-// A late finalize from a cancelled or stale run must not wipe a newer
-// job that has already become active.
-const finalizeError = (job, jobId, proc, reason) => {
-  // Idempotent — spawn failures fire 'error' AND a follow-up 'close', so
-  // both paths reach finalizeError. Without this guard, listeners would
-  // see duplicate 'failed' events.
-  if (job.status === 'error' || job.status === 'complete') return;
-  if (proc == null || activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
-  job.status = 'error';
-  activeJobs.delete(jobId);
-  console.log(`❌ codex image generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
-  broadcastSse(job, { type: 'error', error: reason });
-  imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, error: reason });
-  closeJobAfterDelay(jobs, jobId);
-};
+const finalizeJobFailure = createJobFailureFinalizer({
+  jobs,
+  activeJobs,
+  activeSlots: activeProcs,
+  label: 'codex image generation',
+  events: imageGenEvents,
+  failedPayload: (jobId, reason) => ({ mode: IMAGE_GEN_MODE.CODEX, generationId: jobId, error: reason }),
+});
 
 // Returns the absolute path to the newest PNG in the session dir. Codex has
 // used both `ig_*.png` and `exec-*.png`; the per-session directory is already

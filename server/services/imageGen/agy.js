@@ -29,7 +29,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { buildNoImageReason } from './noImageReason.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
@@ -340,7 +340,7 @@ async function runAgy(job, jobId, bin, args, {
   proc.on('error', (err) => {
     clearTimeout(timeoutTimer);
     removeScratch();
-    finalizeError(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
+    finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
   proc.on('close', async (code, signal) => {
     clearTimeout(timeoutTimer);
@@ -348,13 +348,13 @@ async function runAgy(job, jobId, bin, args, {
       if (code !== 0) {
         removeScratch();
         const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
-        return finalizeError(job, jobId, proc, `Agy generation failed: ${reason}\n${stderrTail.trim().split('\n').slice(-6).join('\n')}`);
+        return finalizeJobFailure(job, jobId, proc, `Agy generation failed: ${reason}\n${stderrTail.trim().split('\n').slice(-6).join('\n')}`);
       }
       const harvested = await harvestStagedImage(stagingPath, harvestTimeoutMs);
       if (!harvested.found) {
         removeScratch();
         const prefix = harvested.invalid ? 'Agy wrote a non-image file at the directed path. ' : '';
-        return finalizeError(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
+        return finalizeJobFailure(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
       }
       // A PNG landed — but the harvest gate only proves it is image bytes, not
       // that generate_image made them. Reject a file the agent drew itself.
@@ -364,7 +364,7 @@ async function runAgy(job, jobId, bin, args, {
       const fabricated = await checkFabrication(scratchDir, AGY_TOOL);
       if (fabricated) {
         removeScratch();
-        return finalizeError(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
+        return finalizeJobFailure(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
       }
       if (harvested.format === 'png') {
         await copyFileGuarded(stagingPath, outputPath);
@@ -378,7 +378,7 @@ async function runAgy(job, jobId, bin, args, {
       // contentless canvas never becomes a gallery record.
       const emptyFrame = await rejectDegenerateFrame(outputPath);
       if (emptyFrame) {
-        return finalizeError(job, jobId, proc, emptyFrame);
+        return finalizeJobFailure(job, jobId, proc, emptyFrame);
       }
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
       // `job.renderStartedAtMs` is the queue-ingestion instant generateImage
@@ -402,21 +402,21 @@ async function runAgy(job, jobId, bin, args, {
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       removeScratch();
-      finalizeError(job, jobId, proc, `Agy post-exit handler failed: ${err?.message || err}`);
+      // force: true — 'complete' is already stamped above; see
+      // createJobFailureFinalizer's doc comment in sseUtils.js.
+      finalizeJobFailure(job, jobId, proc, `Agy post-exit handler failed: ${err?.message || err}`, { force: true });
     }
   });
 }
 
-const finalizeError = (job, jobId, proc, reason) => {
-  if (job.status === 'error' || job.status === 'complete') return;
-  if (proc == null || activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
-  job.status = 'error';
-  activeJobs.delete(jobId);
-  console.log(`❌ agy image generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
-  broadcastSse(job, { type: 'error', error: reason });
-  imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.AGY, generationId: jobId, error: reason });
-  closeJobAfterDelay(jobs, jobId);
-};
+const finalizeJobFailure = createJobFailureFinalizer({
+  jobs,
+  activeJobs,
+  activeSlots: activeProcs,
+  label: 'agy image generation',
+  events: imageGenEvents,
+  failedPayload: (jobId, reason) => ({ mode: IMAGE_GEN_MODE.AGY, generationId: jobId, error: reason }),
+});
 
 async function harvestStagedImage(stagingPath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
