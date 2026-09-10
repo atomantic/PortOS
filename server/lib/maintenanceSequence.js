@@ -18,6 +18,8 @@
  * either runner without knowing which one asked.
  */
 
+import { AUDIT_DEFINITIONS } from './auditCatalog.js';
+
 /** The audits, in the order they should run. */
 export const MAINTENANCE_TASK_ORDER = Object.freeze([
   'better-structural-drift', 'simplify', 'module-hygiene', 'better-complexity',
@@ -54,8 +56,12 @@ export const maintenanceStepParams = (taskType, mode = 'file-issues') => (taskTy
  * invocation yields fresh step identities. An optional claimHandler replaces
  * the provider/model/effort bundle for drains only; omitted keeps legacy pins.
  */
-export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null }) {
-  const types = mode === 'fix' ? [...MAINTENANCE_TASK_ORDER, MAINTENANCE_DRAIN_TASK] : claimBetweenAudits ? MAINTENANCE_SEQUENCE_TYPES : MAINTENANCE_TASK_ORDER;
+export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null }) {
+  if (taskTypes !== null && (!Array.isArray(taskTypes) || !taskTypes.length || taskTypes.some(type => !Object.hasOwn(AUDIT_DEFINITIONS, type)))) {
+    throw new Error('Quality checks must name known audit categories');
+  }
+  // An explicit quality selection runs only those audits, without backlog drains.
+  const types = taskTypes ? [...new Set(taskTypes)] : mode === 'fix' ? [...MAINTENANCE_TASK_ORDER, MAINTENANCE_DRAIN_TASK] : claimBetweenAudits ? MAINTENANCE_SEQUENCE_TYPES : MAINTENANCE_TASK_ORDER;
   return types.map((taskType, index) => ({
     id: `${idPrefix}-${index}`,
     enabled: true,
@@ -64,6 +70,6 @@ export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, mode
     jobType: null,
     runOnce: true,
     drain: taskType === MAINTENANCE_DRAIN_TASK,
-    overrides: { ...(taskType === MAINTENANCE_DRAIN_TASK && claimHandler ? claimHandler : { providerId, model, effort }), params: maintenanceStepParams(taskType, mode) },
+    overrides: { ...(taskType === MAINTENANCE_DRAIN_TASK && claimHandler ? claimHandler : { providerId, model, effort }), params: taskTypes ? { fileIssues: mode !== 'fix', ...(mode === 'fix' ? { useWorktree: true, openPR: true } : {}) } : maintenanceStepParams(taskType, mode) },
   }));
 }
