@@ -1067,14 +1067,7 @@ export async function processManifest(bucketId, manifestFilename) {
   // when the owner record failed to import (corrupt JSON, schema-version
   // mismatch) or the manifest references an owner id not listed in
   // `recordIds`.
-  const collectionPendingUniverse = outcome?.collectionPendingUniverse || null;
-  const collectionPendingSeries = outcome?.collectionPendingSeries || null;
   const collectionTombstonedUniverse = outcome?.collectionTombstonedUniverse || null;
-  const legacyCanonPendingUniverses = outcome?.legacyCanonPendingUniverses || null;
-  const legacyCanonPendingFailures = outcome?.legacyCanonPendingFailures || null;
-  const recordImportFailures = outcome?.recordImportFailures || null;
-  const reviewMergeFailures = outcome?.reviewMergeFailures || null;
-  const outlineMergeFailures = outcome?.outlineMergeFailures || null;
   // Tombstoned universe: the collection owner IS on disk but locally deleted.
   // Unlike the truly-missing case this will never self-resolve via sync, so we
   // advance the cursor (no infinite pending loop) and emit a clear signal. The
@@ -1085,20 +1078,33 @@ export async function processManifest(bucketId, manifestFilename) {
     console.log(`⚠️ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} collectionUniverse=${collectionTombstonedUniverse} is deleted locally — ${outcome.collectionItemsDeferred ?? 0} item(s) skipped; restore universe to import`);
     return { processed: true, manifest, outcome };
   }
-  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || missingReviews.length > 0 || missingOutlines.length > 0 || collectionPendingUniverse || collectionPendingSeries || legacyCanonPendingUniverses || legacyCanonPendingFailures || recordImportFailures || reviewMergeFailures || outlineMergeFailures) {
-    if (assetCopy.missing.length > 0) outcome.pendingAssets = assetCopy.missing;
-    if (missingRecords.length > 0) outcome.pendingRecords = missingRecords;
-    if (missingReviews.length > 0) outcome.pendingReviews = missingReviews;
-    if (missingOutlines.length > 0) outcome.pendingOutlines = missingOutlines;
-    if (collectionPendingUniverse) outcome.pendingCollectionUniverse = collectionPendingUniverse;
-    if (collectionPendingSeries) outcome.pendingCollectionSeries = collectionPendingSeries;
-    if (legacyCanonPendingUniverses) outcome.pendingLegacyCanonUniverses = legacyCanonPendingUniverses;
-    if (legacyCanonPendingFailures) outcome.pendingLegacyCanonFailures = legacyCanonPendingFailures;
-    if (recordImportFailures) outcome.pendingRecordImportFailures = recordImportFailures;
-    if (reviewMergeFailures) outcome.pendingReviewMergeFailures = reviewMergeFailures;
-    if (outlineMergeFailures) outcome.pendingOutlineMergeFailures = outlineMergeFailures;
+  // Each row is checked once for "is this still pending?", assigned onto
+  // `outcome.<key>` once, and formatted into the `⏳ sharing:` log line once —
+  // rather than the same eleven conditions repeated across a trigger check,
+  // an assignment block, and a log-suffix template (#6845).
+  const PENDING_SIGNALS = [
+    { key: 'pendingAssets', value: assetCopy.missing, label: 'waitingForAssets', format: 'count', alwaysLog: true },
+    { key: 'pendingRecords', value: missingRecords, label: 'waitingForRecords', format: 'count', alwaysLog: true },
+    { key: 'pendingReviews', value: missingReviews, label: 'waitingForReviews', format: 'count' },
+    { key: 'pendingOutlines', value: missingOutlines, label: 'waitingForOutlines', format: 'count' },
+    { key: 'pendingCollectionUniverse', value: outcome?.collectionPendingUniverse || null, label: 'waitingForUniverse', format: 'value' },
+    { key: 'pendingCollectionSeries', value: outcome?.collectionPendingSeries || null, label: 'waitingForSeries', format: 'value' },
+    { key: 'pendingLegacyCanonUniverses', value: outcome?.legacyCanonPendingUniverses || null, label: 'waitingForLegacyCanonUniverses', format: 'list' },
+    { key: 'pendingLegacyCanonFailures', value: outcome?.legacyCanonPendingFailures || null, label: 'legacyCanonFailures', format: 'list' },
+    { key: 'pendingRecordImportFailures', value: outcome?.recordImportFailures || null, label: 'recordImportFailures', format: 'list' },
+    { key: 'pendingReviewMergeFailures', value: outcome?.reviewMergeFailures || null, label: 'reviewMergeFailures', format: 'list' },
+    { key: 'pendingOutlineMergeFailures', value: outcome?.outlineMergeFailures || null, label: 'outlineMergeFailures', format: 'list' },
+  ];
+  const isPendingSignalSet = (value) => (Array.isArray(value) ? value.length > 0 : Boolean(value));
+  const activePendingSignals = PENDING_SIGNALS.filter((signal) => isPendingSignalSet(signal.value));
+  if (activePendingSignals.length > 0) {
+    for (const { key, value } of activePendingSignals) outcome[key] = value;
+    const suffix = PENDING_SIGNALS
+      .filter((signal) => signal.alwaysLog || isPendingSignalSet(signal.value))
+      .map(({ value, label, format }) => ` ${label}=${format === 'count' ? value.length : format === 'list' ? value.join(',') : value}`)
+      .join('');
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
-    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${missingReviews.length > 0 ? ` waitingForReviews=${missingReviews.length}` : ''}${missingOutlines.length > 0 ? ` waitingForOutlines=${missingOutlines.length}` : ''}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}${legacyCanonPendingUniverses ? ` waitingForLegacyCanonUniverses=${legacyCanonPendingUniverses.join(',')}` : ''}${legacyCanonPendingFailures ? ` legacyCanonFailures=${legacyCanonPendingFailures.join(',')}` : ''}${recordImportFailures ? ` recordImportFailures=${recordImportFailures.join(',')}` : ''}${reviewMergeFailures ? ` reviewMergeFailures=${reviewMergeFailures.join(',')}` : ''}${outlineMergeFailures ? ` outlineMergeFailures=${outlineMergeFailures.join(',')}` : ''}`);
+    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode}${suffix}`);
     return { processed: true, pending: true, manifest, outcome };
   }
   await markProcessed(bucketId, manifestFilename, manifest.id);

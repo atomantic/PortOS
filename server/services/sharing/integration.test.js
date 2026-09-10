@@ -2472,4 +2472,153 @@ describe('sharing round-trip', () => {
       expect(restored.id).toBe(s.id);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // PENDING-SIGNAL LADDER (#6845) — processManifest derives its "still waiting
+  // on something" decision, the outcome.pending* keys, and the `⏳ sharing:`
+  // log suffix from one table (PENDING_SIGNALS) instead of three separately
+  // maintained lists. These tests pin the two signal formats not already
+  // covered above (a universe-linked collection defer, and a legacy-canon
+  // migration failure) plus the exact log-line shape and the all-clear path.
+  // ---------------------------------------------------------------------------
+  describe('processManifest pending-signal ladder (#6845)', () => {
+    it('defers when the collection payload targets a universe not yet imported locally (pendingCollectionUniverse)', async () => {
+      // `getUniverse(id, { includeDeleted: true })` distinguishes a
+      // tombstoned universe (deleteUniverse always soft-deletes) from one
+      // that never existed locally at all — only the latter produces
+      // `missingUniverse: true` → `pendingCollectionUniverse`. So the
+      // collection payload must target an id no local universe ever held;
+      // repoint the manifest's collection at a fabricated id after export.
+      const bucket = await buckets.createBucket({ name: 'UniverseCollectionDeferBucket', path: tempBucket, mode: 'auto-merge' });
+      const mediaCollections = await import('../mediaCollections.js');
+      const universeBuilder = await import('../universeBuilder.js');
+      const fs = await import('fs');
+      const { hasBeenProcessed, readCursor } = await import('./manifest.js');
+
+      const u = await universeBuilder.createUniverse({ name: 'Has A Collection Universe' });
+      fs.writeFileSync(join(tempData, 'images', 'late-universe-cover.png'), 'LATEUNI');
+      const collection = await mediaCollections.findOrCreateCollectionByName({
+        name: `Universe: ${u.name}`, description: 'Linked', universeId: u.id,
+      });
+      await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'late-universe-cover.png' });
+
+      const exp = await exporter.exportUniverse(u.id, bucket.id);
+      const missingUniverseId = 'uni-not-imported-anywhere';
+      const manifestPath = join(tempBucket, 'manifests', exp.filename);
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      manifest.collection.universeId = missingUniverseId;
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+      simulateRemoteSender(tempBucket, exp.filename);
+      const r = await importer.processManifest(bucket.id, exp.filename);
+      expect(r.pending).toBe(true);
+      expect(r.outcome.pendingCollectionUniverse).toBe(missingUniverseId);
+      const cursor = await readCursor(bucket.id);
+      expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(false);
+    });
+
+    it('keeps a manifest retryable when the legacy-canon migration throws (pendingLegacyCanonFailures)', async () => {
+      const migrateSeriesCanon = await import('../pipeline/migrateSeriesCanon.js');
+      const { hasBeenProcessed, readCursor } = await import('./manifest.js');
+      const bucket = await buckets.createBucket({ name: 'LegacyCanonThrowBucket', path: tempBucket, mode: 'auto-merge' });
+
+      const seriesId = 'ser-legacy-canon-throws';
+      const legacySeries = {
+        id: seriesId,
+        name: 'Legacy Canon Throws Series',
+        logline: 'orphaned link',
+        premise: 'migration helper fails transiently',
+        characters: [{ name: 'Ghost', physicalDescription: 'unseen' }],
+        createdAt: '2026-05-01T00:00:00.000Z',
+        updatedAt: '2026-05-01T00:00:00.000Z',
+      };
+      mkdirSync(join(tempBucket, 'records', 'series'), { recursive: true });
+      writeFileSync(join(tempBucket, 'records', 'series', `${seriesId}.json`), JSON.stringify(legacySeries));
+      const manifest = {
+        id: 'mfst-legacy-canon-throws',
+        schemaVersion: 1,
+        sharingSchemaVersion: 1,
+        producedByVersion: '1.0.0',
+        createdAt: new Date().toISOString(),
+        kind: 'series',
+        senderInstanceId: 'legacy-canon-throws-peer',
+        source: 'Legacy Canon Throws Peer',
+        sourceBio: null,
+        bucketId: bucket.id,
+        bucketName: bucket.name,
+        recordIds: [seriesId],
+        assetRefs: [],
+        note: null,
+      };
+      const filename = `2026-05-01T00-00-00-000Z-legacy-canon-throws-peer-${manifest.id}.json`;
+      writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(manifest));
+
+      const spy = vi.spyOn(migrateSeriesCanon, 'applyLegacySeriesCanonToUniverse')
+        .mockRejectedValueOnce(new Error('simulated migration failure'));
+      const first = await importer.processManifest(bucket.id, filename);
+      expect(first.pending).toBe(true);
+      expect(first.outcome.pendingLegacyCanonFailures).toEqual([seriesId]);
+      let cursor = await readCursor(bucket.id);
+      expect(hasBeenProcessed(cursor, filename, manifest.id)).toBe(false);
+      const stillMissing = await series.getSeries(seriesId).catch(() => null);
+      expect(stillMissing).toBeNull();
+      spy.mockRestore();
+
+      const second = await importer.processManifest(bucket.id, filename);
+      expect(second.pending).toBeFalsy();
+      cursor = await readCursor(bucket.id);
+      expect(hasBeenProcessed(cursor, filename, manifest.id)).toBe(true);
+    });
+
+    it('formats the ⏳ sharing: pending log line with always-on counts alongside a conditional count signal', async () => {
+      const bucket = await buckets.createBucket({ name: 'LogLineFormatBucket', path: tempBucket, mode: 'auto-merge' });
+      const s = await series.createSeries({ name: 'Log Line Series', logline: 'A' });
+      await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
+      await manuscriptReview.seedReviewFromFindings(s.id, [
+        { problem: 'Act II sags', severity: 'medium', anchorQuote: 'the long road', issueNumber: 1 },
+      ]);
+      const exp = await exporter.exportSeries(s.id, bucket.id);
+      const reviewFile = join(tempBucket, 'records', 'reviews', `${s.id}.json`);
+      const stashedReview = readFileSync(reviewFile, 'utf-8');
+      rmSync(reviewFile);
+      await series.deleteSeries(s.id);
+      simulateRemoteSender(tempBucket, exp.filename);
+
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const r = await importer.processManifest(bucket.id, exp.filename);
+      const pendingLine = logSpy.mock.calls.map(([line]) => line).find((line) => line.startsWith('⏳ sharing:'));
+      logSpy.mockRestore();
+
+      expect(r.pending).toBe(true);
+      expect(r.outcome.pendingReviews).toContain(s.id);
+      expect(pendingLine).toBe(
+        `⏳ sharing: bucket=${bucket.name} manifest=${exp.manifestId} kind=series mode=auto-merge ` +
+        `waitingForAssets=0 waitingForRecords=0 waitingForReviews=1`,
+      );
+
+      writeFileSync(reviewFile, stashedReview);
+      const r2 = await importer.processManifest(bucket.id, exp.filename);
+      expect(r2.pending).toBeFalsy();
+    });
+
+    it('advances the cursor and logs no ⏳ sharing: line when every signal is clear (all-clear case)', async () => {
+      const bucket = await buckets.createBucket({ name: 'AllClearBucket', path: tempBucket, mode: 'auto-merge' });
+      const { hasBeenProcessed, readCursor } = await import('./manifest.js');
+      const s = await series.createSeries({ name: 'All Clear Series', logline: 'A' });
+      const exp = await exporter.exportSeries(s.id, bucket.id);
+      await series.deleteSeries(s.id);
+      simulateRemoteSender(tempBucket, exp.filename);
+
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const r = await importer.processManifest(bucket.id, exp.filename);
+      const sawPendingLog = logSpy.mock.calls.some(([line]) => line.startsWith('⏳ sharing:'));
+      logSpy.mockRestore();
+
+      expect(r.pending).toBeFalsy();
+      expect(Object.keys(r.outcome).some((key) => key.startsWith('pending'))).toBe(false);
+      expect(sawPendingLog).toBe(false);
+      const cursor = await readCursor(bucket.id);
+      expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(true);
+    });
+  });
 });
