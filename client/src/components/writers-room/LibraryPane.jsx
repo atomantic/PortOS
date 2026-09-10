@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Folder, FolderPlus, FilePlus, FileText, ChevronDown, ChevronRight, Trash2, GripVertical, PanelLeftClose } from 'lucide-react';
 import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
 import toast from '../ui/Toast';
@@ -24,6 +24,12 @@ export default function LibraryPane({
   const [folderName, setFolderName] = useState('');
   const [workTitle, setWorkTitle] = useState('');
   const [workKind, setWorkKind] = useState('short-story');
+
+  // The page-level empty state can start work creation too. Keep the two
+  // inline creation forms mutually exclusive regardless of which CTA fired.
+  useEffect(() => {
+    if (creatingWork) setCreatingFolder(false);
+  }, [creatingWork]);
   // Inline delete confirm (no two-click-arm, no toast re-arm) — one row armed at
   // a time, keyed by `work:<id>` / `folder:<id>`.
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();

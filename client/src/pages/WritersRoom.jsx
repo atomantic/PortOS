@@ -196,7 +196,10 @@ export default function WritersRoom() {
                 title="No work selected"
                 message="Create a work or pick one from the library to start writing."
                 actionLabel="New work"
-                onAction={() => setCreatingWork('unfiled')}
+                onAction={() => {
+                  setLibraryCollapsed(false);
+                  setCreatingWork('unfiled');
+                }}
               />
             </div>
           )}

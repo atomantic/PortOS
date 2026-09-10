@@ -27,9 +27,13 @@ describe('WritersRoom empty state', () => {
     expect(within(main).getByText('Create a work or pick one from the library to start writing.')).toBeInTheDocument();
     expect(within(main).queryByText(/Write for 10/)).toBeNull();
 
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
+    expect(screen.getByRole('textbox', { name: 'Folder name' })).toBeInTheDocument();
     fireEvent.click(within(main).getByRole('button', { name: 'New work' }));
 
     expect(await screen.findByRole('textbox', { name: 'Work title' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Work title' })).toHaveFocus();
+    expect(screen.queryByRole('textbox', { name: 'Folder name' })).toBeNull();
     expect(screen.getByRole('combobox', { name: 'Work kind' })).toBeInTheDocument();
     fireEvent.change(screen.getByRole('textbox', { name: 'Work title' }), { target: { value: 'A new draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
