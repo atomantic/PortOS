@@ -194,7 +194,7 @@ const attachSetupStatus = async (features, settings) => {
     getEidoverseStatus({ worldsRepoUrl: configuredEidoverseRepo(settings) }),
     getOriginInfo(),
   ]);
-  const upstream = parseGitHubUrl(DEFAULT_EIDOVERSE_WORLDS_REPO)?.owner || null;
+  const upstream = 'anima-research';
   const sourceOwners = {
     // A stock clone points at atomantic/PortOS, which identifies the project
     // owner rather than the current user's GitHub account. Only a non-upstream
@@ -203,7 +203,7 @@ const attachSetupStatus = async (features, settings) => {
     upstream,
   };
   return features.map((feature) => (
-    feature.id === 'eidoverse' ? { ...feature, setup: { ...eidoverse, worldsBranch: settings?.instanceFeatures?.eidoverse?.worldsBranch ?? '', sourceOwners } } : feature
+    feature.id === 'eidoverse' ? { ...feature, setup: { ...eidoverse, worldsBranch: settings?.instanceFeatures?.eidoverse?.worldsBranch ?? (settings?.instanceFeatures?.eidoverse?.worldsRepoUrl || eidoverse.appRegistered ? '' : 'portos'), sourceOwners } } : feature
   ));
 };
 
@@ -238,10 +238,10 @@ export async function updateEidoverseWorldsRepo(worldsRepoUrl, worldsBranch) {
   return normalizedRepoUrl;
 }
 
-export async function updateEidoverseWorldsSource(worldsRepoUrl) {
+export async function updateEidoverseWorldsSource(worldsRepoUrl, worldsBranch) {
   const normalizedRepoUrl = normalizeEidoverseWorldsRepo(worldsRepoUrl);
-  await setEidoverseWorldsOrigin(normalizedRepoUrl);
-  return updateEidoverseWorldsRepo(normalizedRepoUrl);
+  await setEidoverseWorldsOrigin(normalizedRepoUrl, worldsBranch);
+  return updateEidoverseWorldsRepo(normalizedRepoUrl, worldsBranch);
 }
 
 // The same precedence ladder as `resolveInstanceFeatures`, but probing only this

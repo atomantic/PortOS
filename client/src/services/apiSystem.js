@@ -86,9 +86,9 @@ export const installEidoverseFeature = (worldsRepoUrl, options = {}, worldsBranc
   body: JSON.stringify({ worldsRepoUrl, worldsBranch }),
   ...options,
 });
-export const updateEidoverseWorldsSource = (worldsRepoUrl, options = {}) => request('/settings/features/eidoverse/source', {
+export const updateEidoverseWorldsSource = (worldsRepoUrl, options = {}, worldsBranch) => request('/settings/features/eidoverse/source', {
   method: 'PUT',
-  body: JSON.stringify({ worldsRepoUrl }),
+  body: JSON.stringify({ worldsRepoUrl, worldsBranch }),
   ...options,
 });
 export const startEidoverseHost = (options = {}) => request('/settings/features/eidoverse/host', {

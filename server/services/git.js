@@ -743,7 +743,8 @@ export async function updateDefaultBranch(dir) {
     .join('\n') || fallback;
 
   await execGit(['fetch', 'origin'], dir);
-  const branch = await getDefaultBranch(dir, { strict: true });
+  const runtimeBranch = await execGit(['config', '--get', 'portos.runtimeBranch'], dir, { ignoreExitCode: true });
+  const branch = runtimeBranch.stdout.trim() || await getDefaultBranch(dir, { strict: true });
   if (!branch) throw new ServerError('could not determine origin default branch', { status: 400, code: 'NO_DEFAULT_BRANCH' });
 
   const currentBranch = await getBranch(dir);
