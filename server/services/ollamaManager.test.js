@@ -1260,6 +1260,46 @@ describe('ollamaManager.restartWithEnv', () => {
     expect(lastSpawn[2].env.OLLAMA_CONTEXT_LENGTH).toBe('131072')
   })
 
+  // The test above only covers a probe that fails INSIDE the reload:
+  // `ensureContextWindow` reads the applied env before it probes, so that call's
+  // own failure can never reach it. A probe that failed EARLIER can — a status
+  // poll while the daemon is down, or a reload that could not restart it — and
+  // the record of what PortOS put in front of Ollama has to outlive that. If it
+  // were dropped when the daemon record is, the retry would silently come up
+  // untuned and the sweep would file its readings under a tuning that never ran.
+  it('preserves the tuning across a reload attempt that failed to restart the daemon', async () => {
+    const state = { up: false, probesBeforeStop: 0 }
+    stubReachable({ get reachable() { return state.up || state.probesBeforeStop-- > 0 } })
+    const spawn = await stubSpawnRestart(state)
+    const { ensureContextWindow, restartWithEnv } = await loadManager()
+
+    await restartWithEnv({ OLLAMA_FLASH_ATTENTION: '1', OLLAMA_KV_CACHE_TYPE: 'q8_0' })
+
+    // The daemon goes down and the reload cannot bring it back. The spawn fails
+    // outright so the attempt settles immediately rather than on the 12s probe
+    // timeout — and the failed probe on the way in is what drops the daemon
+    // record while the tuning is still outstanding.
+    state.up = false
+    spawn.mockImplementation(() => ({
+      pid: null,
+      stderr: { on: () => {} },
+      on: (event, handler) => {
+        if (event === 'error') queueMicrotask(() => handler(Object.assign(new Error('spawn ollama ENOENT'), { code: 'ENOENT' })))
+      },
+      unref: () => {}
+    }))
+    expect(await ensureContextWindow(131072)).toMatchObject({ applied: false, reason: 'start-failed' })
+
+    // The retry succeeds, and still carries the knobs from before the daemon
+    // was lost sight of.
+    await stubSpawnRestart(state)
+    expect(await ensureContextWindow(131072)).toMatchObject({ applied: true, contextLength: 131072 })
+    const lastSpawn = spawn.mock.calls[spawn.mock.calls.length - 1]
+    expect(lastSpawn[2].env.OLLAMA_FLASH_ATTENTION).toBe('1')
+    expect(lastSpawn[2].env.OLLAMA_KV_CACHE_TYPE).toBe('q8_0')
+    expect(lastSpawn[2].env.OLLAMA_CONTEXT_LENGTH).toBe('131072')
+  })
+
   // The domain outlives the daemon, so a stopped Ollama is no reason to leave
   // the variables in it — the next login-launched one would inherit them.
   it('unsets exported variables even when Ollama is already down', async () => {
