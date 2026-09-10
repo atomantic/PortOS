@@ -49,7 +49,7 @@ export default function Apps() {
   const ticketRequestsRef = useRef({});
 
   const fetchApps = useCallback(async () => {
-    const data = await api.getApps().catch(() => []);
+    const data = await api.getApps({ includeQuality: true }).catch(() => []);
     setApps(data);
     setLoading(false);
   }, []);

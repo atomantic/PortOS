@@ -5,7 +5,7 @@ vi.mock('../components/ui/Toast', () => ({
 }));
 
 import toast from '../components/ui/Toast';
-import { handleSelfRestart } from './apiApps';
+import { handleSelfRestart, getApps, getApp } from './apiApps';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -53,4 +53,19 @@ describe('handleSelfRestart', () => {
       'https://host-alpha.example-tailnet.ts.net:5555/instances?view=peers#https'
     );
   });
+});
+
+it('requests quality only for opted-in views and preserves caller request options', async () => {
+  const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
+  vi.stubGlobal('fetch', fetch);
+  const signal = new AbortController().signal;
+  await getApps();
+  await getApp('portos-default');
+  await getApps({ includeQuality: true, signal });
+  await getApp('portos-default', { includeQuality: true, signal });
+  expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+    '/api/apps', '/api/apps/portos-default', '/api/apps?includeQuality=true', '/api/apps/portos-default?includeQuality=true',
+  ]);
+  expect(fetch.mock.calls[2][1]).toMatchObject({ signal });
+  expect(fetch.mock.calls[2][1]).not.toHaveProperty('includeQuality');
 });

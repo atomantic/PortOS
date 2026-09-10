@@ -106,7 +106,7 @@ export default function Dashboard() {
     // Apps and the remaining widgets are independent hydration streams. Health
     // and daily-actions in particular can involve slow subsystem/database work
     // that should not hold every widget behind one Promise.all barrier.
-    const appsRead = api.getApps()
+    const appsRead = api.getApps({ includeQuality: true })
       .catch((err) => { setDataError(err.message); return null; })
       .finally(() => setAppsReadSettled(true));
     const secondaryRead = Promise.all([

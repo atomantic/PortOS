@@ -52,7 +52,7 @@ export default function AppDetailView() {
   const { features: instanceFeatures, error: instanceFeaturesError } = useInstanceFeatures();
 
   const fetchApp = useCallback(async () => {
-    const data = await api.getApp(appId).catch(() => null);
+    const data = await api.getApp(appId, { includeQuality: true }).catch(() => null);
     if (!data) {
       setNotFound(true);
       setLoading(false);

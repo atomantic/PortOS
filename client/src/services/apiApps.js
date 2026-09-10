@@ -2,8 +2,8 @@ import toast from '../components/ui/Toast';
 import { request, API_BASE } from './apiCore.js';
 
 // Apps
-export const getApps = (options) => request('/apps?includeQuality=true', options);
-export const getApp = (id, options) => request(`/apps/${id}?includeQuality=true`, options);
+export const getApps = ({ includeQuality = false, ...options } = {}) => request(includeQuality ? '/apps?includeQuality=true' : '/apps', options);
+export const getApp = (id, { includeQuality = false, ...options } = {}) => request(includeQuality ? `/apps/${id}?includeQuality=true` : `/apps/${id}`, options);
 export const getAppQualityHistory = (id, days, options) => request(`/apps/${id}/quality-history?days=${days}`, { silent: true, ...options });
 // Managed checkout topology: returns sanitized local/fork/upstream revision
 // state without exposing machine-local repo paths.
