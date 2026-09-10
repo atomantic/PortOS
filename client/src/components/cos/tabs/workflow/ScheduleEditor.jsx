@@ -4,16 +4,11 @@ import toast from '../../../ui/Toast';
 import * as api from '../../../../services/api';
 import { DEFAULT_CRON, buildCronFromRecurrence, parseCronToRecurrence } from '../../../../utils/cronHelpers';
 import CronSchedulePicker from '../../../CronSchedulePicker';
+import { PERPETUAL_DESCRIPTION } from '../schedule/scheduleConstants';
 
 const TASK_MODES = [
-  ['cron', 'Pinned time (cron)'],
-  ['perpetual', 'Perpetual drain'],
-  ['daily', 'Daily interval'],
-  ['weekly', 'Weekly interval'],
-  ['rotation', 'Runner rotation'],
-  ['custom', 'Custom interval'],
-  ['once', 'Once'],
-  ['on-demand', 'On demand']
+  ['on-demand', 'On Demand'],
+  ['cron', 'Scheduled']
 ];
 
 const JOB_INTERVALS = [
@@ -47,13 +42,13 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
       // here would silently override that cadence on any unrelated save,
       // because recheckCron takes precedence over recheckIntervalMs.
       recheckCron: schedule.recheckCron || '',
+      perpetual: !!schedule.perpetual,
       interval: node.kind === 'job' ? (schedule.type || 'daily') : 'daily',
-      intervalHours: Math.max(1, Math.round((schedule.intervalMs || 3_600_000) / 3_600_000)),
       scheduledTime: schedule.scheduledTime || '',
       weekdaysOnly: !!schedule.weekdaysOnly,
       runAfter: [...(node.runAfter || [])]
     });
-  }, [node, schedule.cronExpression, schedule.cronSchedule, schedule.intervalMs, schedule.recheckCron, schedule.scheduledTime, schedule.type, schedule.weekdaysOnly]);
+  }, [node, schedule.cronExpression, schedule.cronSchedule, schedule.perpetual, schedule.recheckCron, schedule.scheduledTime, schedule.type, schedule.weekdaysOnly]);
 
   const dependencyOptions = useMemo(() => {
     if (!node) return [];
@@ -88,13 +83,8 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
       toast.error('Cron schedules need five fields');
       return;
     }
-    if (node.kind === 'task' && form.mode === 'perpetual' && form.recheckCron && !validateCron(form.recheckCron)) {
+    if (node.kind === 'task' && form.perpetual && form.mode === 'on-demand' && form.recheckCron && !validateCron(form.recheckCron)) {
       toast.error('The perpetual recheck schedule needs five fields');
-      return;
-    }
-    const intervalHours = Number(form.intervalHours);
-    if (node.kind === 'task' && form.mode === 'custom' && (!Number.isFinite(intervalHours) || intervalHours <= 0)) {
-      toast.error('Custom intervals need a positive number of hours');
       return;
     }
 
@@ -105,10 +95,10 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
         enabled: form.enabled,
         type: form.mode,
         cronExpression: form.mode === 'cron' ? String(form.cronExpression || '').trim() || null : null,
+        perpetual: form.perpetual,
+        recheckCron: form.recheckCron.trim() || null,
         runAfter: form.runAfter
       };
-      if (form.mode === 'custom') payload.intervalMs = intervalHours * 3_600_000;
-      if (form.mode === 'perpetual') payload.recheckCron = form.recheckCron.trim() || null;
       result = await api.updateCosTaskInterval(node.id.slice(5), payload, { silent: true }).catch(error => {
         toast.error(error.message);
         return null;
@@ -169,9 +159,9 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
         </label>
 
         {node.kind === 'task' ? (
-          <label className="block text-xs text-gray-400">
+          <label htmlFor="workflow-task-cadence" className="block text-xs text-gray-400">
             Scheduling behavior
-            <select value={form.mode} onChange={event => setMode(event.target.value)} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white">
+            <select id="workflow-task-cadence" value={form.mode} onChange={event => setMode(event.target.value)} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white">
               {TASK_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
@@ -208,20 +198,29 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
           </div>
         )}
 
-        {node.kind === 'task' && form.mode === 'perpetual' && (
+        {node.kind === 'task' && (
+          <label htmlFor="workflow-task-perpetual" className="flex items-center justify-between gap-3 text-sm text-gray-300">
+            <span>
+              <span className="block">Perpetual</span>
+              <span className="mt-0.5 block text-[11px] text-gray-500">{PERPETUAL_DESCRIPTION}</span>
+            </span>
+            <input
+              id="workflow-task-perpetual"
+              type="checkbox"
+              checked={form.perpetual}
+              onChange={event => set('perpetual', event.target.checked)}
+              className="h-4 w-4 shrink-0 accent-port-accent"
+            />
+          </label>
+        )}
+
+        {node.kind === 'task' && form.perpetual && form.mode === 'on-demand' && (
           <div className="space-y-2 rounded border border-port-warning/20 bg-port-warning/5 p-3">
             <p className="text-xs text-gray-400">
               Drains work back-to-back. Once parked, this is its reset/recheck time — leave blank to keep the default interval-based recheck cadence.
             </p>
             <CronSchedulePicker value={form.recheckCron} onChange={value => set('recheckCron', value)} />
           </div>
-        )}
-
-        {node.kind === 'task' && form.mode === 'custom' && (
-          <label className="block text-xs text-gray-400">
-            Repeat every (hours)
-            <input type="number" min="1" value={form.intervalHours} onChange={event => set('intervalHours', event.target.value)} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white" />
-          </label>
         )}
 
         {node.kind === 'job' && form.mode === 'interval' && (
@@ -267,12 +266,6 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
               </label>
             )}
           </div>
-        )}
-
-        {(form.mode === 'daily' || form.mode === 'weekly') && (
-          <p className="rounded border border-port-border/50 bg-port-bg/50 p-2 text-xs leading-relaxed text-gray-500">
-            Interval schedules float with the last run. Choose “Pinned time” when its position relative to other tasks must stay fixed.
-          </p>
         )}
 
         <button type="button" onClick={handleSave} disabled={saving} className="flex w-full items-center justify-center gap-2 rounded bg-port-accent px-3 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:opacity-50">
