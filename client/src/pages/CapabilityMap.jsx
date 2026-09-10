@@ -110,6 +110,21 @@ export default function CapabilityMap() {
 
       <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 sm:p-5">
         <div>
+          <h3 className="font-semibold text-white">AI provider</h3>
+          <p className="mt-1 text-xs text-gray-500">
+            Enable one option you intend to use: an authenticated subscription CLI, a paid API key, or a local runtime with a downloaded model. PortOS never enables a paid provider or starts model work without your action.
+          </p>
+        </div>
+        {providerCapability && <CapabilityRow cap={providerCapability} />}
+        <div className="grid gap-2 text-xs text-gray-400 sm:grid-cols-3">
+          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Subscription CLI</strong><br />Claude Code, Codex, or Antigravity after local sign-in.</div>
+          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">API provider</strong><br />Add a key only for the paid service you chose.</div>
+          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Local/private</strong><br />Ollama or LM Studio with a runnable model.</div>
+        </div>
+      </section>
+
+      <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 sm:p-5">
+        <div>
           <h3 className="font-semibold text-white">Optional networking</h3>
           <p className="mt-1 text-xs text-gray-500">
             Choose Tailscale for private device access, Tailcat to bridge instances, or mark networking as not desired. This preference does not start or stop connections.
@@ -131,21 +146,6 @@ export default function CapabilityMap() {
           {' '}<Link to="/instances" className="text-port-accent underline">Configure Tailcat bridge</Link>
         </p>}
         {preference === 'none' && <p className="text-sm text-gray-400">Networking marked as not desired. You can change this preference at any time.</p>}
-      </section>
-
-      <section className="space-y-3 rounded-xl border border-port-border bg-port-card p-4 sm:p-5">
-        <div>
-          <h3 className="font-semibold text-white">AI provider</h3>
-          <p className="mt-1 text-xs text-gray-500">
-            Enable one option you intend to use: an authenticated subscription CLI, a paid API key, or a local runtime with a downloaded model. PortOS never enables a paid provider or starts model work without your action.
-          </p>
-        </div>
-        {providerCapability && <CapabilityRow cap={providerCapability} />}
-        <div className="grid gap-2 text-xs text-gray-400 sm:grid-cols-3">
-          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Subscription CLI</strong><br />Claude Code, Codex, or Antigravity after local sign-in.</div>
-          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">API provider</strong><br />Add a key only for the paid service you chose.</div>
-          <div className="rounded-lg border border-port-border bg-port-bg/40 p-3"><strong className="text-gray-200">Local/private</strong><br />Ollama or LM Studio with a runnable model.</div>
-        </div>
       </section>
 
       <section className="space-y-3">
