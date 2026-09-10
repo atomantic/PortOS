@@ -24,7 +24,7 @@ import { isPlainObject } from '../../lib/objects.js';
 import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, bucketBlobIndexPath, bucketRecordsDir, bucketRecordPath, imageSidecarName, isHexHash } from './buckets.js';
 import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
 import { listSeries, getSeries } from '../pipeline/series.js';
-import { listIssues } from '../pipeline/issues.js';
+import { listIssuesForSeries } from '../pipeline/issues.js';
 import { getReview } from '../pipeline/manuscriptReview.js';
 import { getStoredOutline } from '../pipeline/reverseOutline.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -368,7 +368,7 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
   const bucket = await getBucket(bucketId);
   await ensureBucketLayout(bucket);
   const series = await getSeries(seriesId);
-  const issues = await listIssues({ seriesId });
+  const issues = await listIssuesForSeries(seriesId, { includeDeleted: false });
   let universe = null;
   let linkedCollection = null;
   if (series.universeId) {

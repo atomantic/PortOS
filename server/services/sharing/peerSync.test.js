@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 
 // We test peerSync.js by stubbing the external dependencies:
 //   - getPeers / getInstanceId from services/instances
-//   - merge*FromSync + getUniverse + getSeries + listIssues
+//   - merge*FromSync + getUniverse + getSeries + issue lookup/list helpers
 //   - peerFetch (network)
 // All other logic (subscription store, asset manifest, diff, cursor advance)
 // runs against the real on-disk paths via the tmpdir-redirect pattern below.
@@ -39,7 +39,10 @@ vi.mock('../pipeline/series.js', async () => ({
 }));
 
 vi.mock('../pipeline/issues.js', async () => ({
+  getIssue: vi.fn(),
+  listAllIssues: vi.fn(),
   listIssues: vi.fn(),
+  listIssuesForSeries: vi.fn(),
   mergeIssuesFromSync: vi.fn(),
 }));
 
@@ -225,7 +228,7 @@ import {
 import { getInstanceId, getPeers } from '../instances.js';
 import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync, listSeries } from '../pipeline/series.js';
-import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
+import { getIssue, listAllIssues, listIssues, listIssuesForSeries, mergeIssuesFromSync } from '../pipeline/issues.js';
 import { getReview, mergeReviewFromSync } from '../pipeline/manuscriptReview.js';
 import { getStoredOutline, mergeOutlineFromSync } from '../pipeline/reverseOutline.js';
 import {
@@ -314,18 +317,20 @@ beforeEach(async () => {
   vi.mocked(mergeUniversesFromSync).mockResolvedValue({ applied: true, count: 1 });
   vi.mocked(mergeSeriesFromSync).mockResolvedValue({ applied: true, count: 1 });
   vi.mocked(mergeIssuesFromSync).mockResolvedValue({ applied: true, count: 1 });
-  // Default getUniverse / getSeries / listIssues mocks to resolved promises
+  // Default getUniverse / getSeries / issue-service mocks to resolved promises
   // so any callsite that doesn't override (e.g. the receiver-side
   // `isLocalRecordEphemeral` lookup in maybeCreateReverseSubscription)
   // doesn't blow up on `.catch` against a `vi.fn()` non-Promise return.
-  // Real getUniverse / getSeries / listIssues are `async` so they always
+  // The real service functions are `async` so they always
   // return Promises; production code can assume this, but the test mock
-  // has to match — including the per-call default for listIssues so a
-  // buildPushPayload path that bundles child issues doesn't choke on an
-  // un-overridden mock.
+  // has to match, including listIssuesForSeries so a buildPushPayload path
+  // that bundles child issues doesn't choke on an un-overridden mock.
   vi.mocked(getUniverse).mockReset().mockResolvedValue(undefined);
   vi.mocked(getSeries).mockReset().mockResolvedValue(undefined);
+  vi.mocked(getIssue).mockReset().mockResolvedValue(undefined);
+  vi.mocked(listAllIssues).mockReset().mockResolvedValue([]);
   vi.mocked(listIssues).mockReset().mockResolvedValue([]);
+  vi.mocked(listIssuesForSeries).mockReset().mockResolvedValue([]);
   // Default: no manuscript review for any series. Tests that exercise the
   // review-bundle path override getReview per-call.
   vi.mocked(getReview).mockReset().mockResolvedValue({ schemaVersion: 1, comments: [] });
@@ -1528,7 +1533,7 @@ describe('peerSync', () => {
 
     it('includes live child issue assets in a series integrity summary', async () => {
       await writeFile(join(PATHS.images, 'issue-panel.png'), Buffer.from('issue image bytes'));
-      vi.mocked(listIssues).mockResolvedValue([
+      vi.mocked(listIssuesForSeries).mockResolvedValue([
         { id: 'i1', seriesId: 's1', stages: { storyboards: { panels: [{ imageRefs: ['issue-panel.png'] }] } } },
       ]);
       const summary = await assetIntegrityForRecord('series', { id: 's1', name: 'Series' });
@@ -1906,7 +1911,7 @@ describe('peerSync', () => {
       // every panel edit propagates as an issue update under a series sub)
       // would collapse to reason: 'unchanged' and never propagate.
       vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-      vi.mocked(listIssues).mockResolvedValueOnce([
+      vi.mocked(listIssuesForSeries).mockResolvedValueOnce([
         { id: 'i1', seriesId: 's1', number: 1, title: 'First' },
       ]);
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
@@ -1918,7 +1923,7 @@ describe('peerSync', () => {
       expect(first.pushed).toBe(true);
 
       // Series record identical, but child issue title changed → MUST re-push.
-      vi.mocked(listIssues).mockResolvedValueOnce([
+      vi.mocked(listIssuesForSeries).mockResolvedValueOnce([
         { id: 'i1', seriesId: 's1', number: 1, title: 'Revised' },
       ]);
       vi.mocked(peerFetch).mockClear();
@@ -1931,9 +1936,9 @@ describe('peerSync', () => {
 
     it('bundles child issues with a series push', async () => {
       vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-      vi.mocked(listIssues).mockResolvedValue([
+      vi.mocked(listIssuesForSeries).mockResolvedValue([
         { id: 'i1', seriesId: 's1', number: 1 },
-        { id: 'i2', seriesId: 's1', number: 2 },
+        { id: 'i1001', seriesId: 's1', number: 1001 },
       ]);
       let captured = null;
       vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
@@ -1945,7 +1950,8 @@ describe('peerSync', () => {
       });
       expect(captured.kind).toBe('series');
       expect(captured.issues).toHaveLength(2);
-      expect(captured.issues.map((i) => i.id)).toEqual(['i1', 'i2']);
+      expect(captured.issues.map((i) => i.id)).toEqual(['i1', 'i1001']);
+      expect(listIssuesForSeries).toHaveBeenCalledWith('s1', { includeDeleted: true });
     });
 
     it('bundles the manuscript review with a series push so review-only edits propagate', async () => {
@@ -2245,7 +2251,7 @@ describe('peerSync', () => {
       // background-fetch those bytes — defeating the "local-only" intent
       // of ephemeral.
       vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-      vi.mocked(listIssues).mockResolvedValue([
+      vi.mocked(listIssuesForSeries).mockResolvedValue([
         // Live issue with a referenced image.
         {
           id: 'i1', seriesId: 's1', number: 1,
@@ -2348,7 +2354,7 @@ describe('peerSync', () => {
       // must NOT appear in the manifest — the receiver would otherwise
       // pull bytes for issues it's about to orphan.
       vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-      vi.mocked(listIssues).mockResolvedValue([
+      vi.mocked(listIssuesForSeries).mockResolvedValue([
         // Live issue (no manifest leak — buildAssetManifest doesn't yet
         // resolve imageJobId → filename, that's a Stage 3 thing).
         { id: 'i1', seriesId: 's1', number: 1 },
@@ -2793,6 +2799,20 @@ describe('peerSync', () => {
   });
 
   describe('collectSubscriptionsForUpdate', () => {
+    it('resolves a tail issue directly when finding its parent-series subscription', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 'series-tail', title: 'Long series' });
+      vi.mocked(getIssue).mockResolvedValue({ id: 'issue-1001', seriesId: 'series-tail' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 'series-tail' });
+      await __drainForTests();
+
+      const subs = await collectSubscriptionsForUpdate('issue', 'issue-1001');
+
+      expect(getIssue).toHaveBeenCalledWith('issue-1001', { includeDeleted: true });
+      expect(listIssues).not.toHaveBeenCalled();
+      expect(subs.some((sub) => sub.recordKind === 'series' && sub.recordId === 'series-tail')).toBe(true);
+    });
+
     // Regression: mediaCollections.js emits emitRecordUpdated('mediaCollection',…)
     // on every edit/delete, but the push pipeline only acted on it if
     // collectSubscriptionsForUpdate returns the direct subs. Omitting the
@@ -4217,7 +4237,7 @@ describe('peerSync', () => {
         // once it upgrades). This is what makes the review's "degrades
         // gracefully on older peers" contract hold.
         vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
         vi.mocked(getReview).mockResolvedValue({
           schemaVersion: 1,
           comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
@@ -4258,7 +4278,7 @@ describe('peerSync', () => {
         // reverseOutline key, so the sender strips ONLY it and retries, then
         // withholds the hash so the outline re-sends once the peer upgrades.
         vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
         vi.mocked(getStoredOutline).mockResolvedValue({
           seriesId: 's1', schemaVersion: 1, status: 'complete', generatedAt: '2026-06-02T00:00:00Z',
           plotlines: [{ id: 'a', label: 'A', kind: 'main', color: '#3b82f6' }],
@@ -4319,7 +4339,7 @@ describe('peerSync', () => {
 
       it('records lastPushedLegacyHash when a stripped retry lands on a legacy peer (#3928)', async () => {
         vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
         vi.mocked(getReview).mockResolvedValue({
           schemaVersion: 1,
           comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
@@ -4339,7 +4359,7 @@ describe('peerSync', () => {
 
       it('short-circuits the next cycle as unchanged instead of re-running the 400 + retry pair (#3928)', async () => {
         vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
         vi.mocked(getReview).mockResolvedValue({
           schemaVersion: 1,
           comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
@@ -4359,7 +4379,7 @@ describe('peerSync', () => {
 
       it('re-pushes when the bundled review actually changes after a stripped push (#3928)', async () => {
         vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
         vi.mocked(getReview).mockResolvedValue({
           schemaVersion: 1,
           comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
@@ -4386,7 +4406,7 @@ describe('peerSync', () => {
 
       it('re-attempts the full push on a peer:online re-probe even when the legacy hash matches (#3928)', async () => {
         vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
         vi.mocked(getReview).mockResolvedValue({
           schemaVersion: 1,
           comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
@@ -4416,7 +4436,7 @@ describe('peerSync', () => {
         // `reviewSyncPending` from the receiver is a transient merge failure,
         // not a version gap — the next cycle must genuinely re-push.
         vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
-        vi.mocked(listIssues).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
+        vi.mocked(listIssuesForSeries).mockResolvedValue([{ id: 'i1', seriesId: 's1', number: 1 }]);
         vi.mocked(getReview).mockResolvedValue({
           schemaVersion: 1,
           comments: [{ id: 'mrc-1', problem: 'pacing', status: 'open', updatedAt: '2026-06-02T00:00:00Z' }],
