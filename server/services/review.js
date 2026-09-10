@@ -40,21 +40,25 @@ const ARCHIVE_ELIGIBLE_STATUSES = new Set(['completed', 'dismissed']);
 // re-stats after every write and seeds the cache directly from what it just
 // wrote, so a read immediately following a write is a cache hit, not a re-parse.
 //
-// Every mutation path below (createItem/updateItemStatus/bulkUpdateStatus/
-// updateItem/deleteItem/updateStatusByReferenceId) mutates the array/items
-// returned by `loadItems()` in place and then immediately calls `saveItems`
-// with that same array — never mutates without saving. That invariant is what
-// makes it safe for `loadItems()` to hand back the cached array/objects
-// directly instead of deep-cloning on every read: a caller either treats it as
-// read-only, or mutates it and persists the result in the same call, which
-// `saveItems` then adopts as the new cache. Keep that invariant true for any
-// new mutation path.
+// `loadItems()` hands every caller a fresh shallow clone (see `cloneItems`),
+// never the cached array/objects themselves — `getItems` is a public export
+// with callers outside this module's own mutate-then-save discipline, and a
+// caller that decorated or edited a returned item in place would otherwise
+// silently pollute the cache, later persisted by the next unrelated
+// `saveItems` call. The internal mutation paths below (createItem/
+// updateItemStatus/bulkUpdateStatus/updateItem/deleteItem/
+// updateStatusByReferenceId) mutate the clone `loadItems()` gave them and
+// then immediately call `saveItems` with it — `saveItems` adopts whatever
+// array it is given as the new cache, so this costs nothing extra there.
 let itemsCache = null; // { mtimeMs, size, items }
 let lastRetentionAt = 0; // 0 so the first save after boot always evaluates retention
 
+const cloneItems = (items) => items.map(i => ({ ...i, metadata: { ...(i.metadata || {}) } }));
+
 /**
  * Load all review items from file, reusing the cached parse when the file's
- * mtime/size haven't changed since the last read.
+ * mtime/size haven't changed since the last read. Always returns a clone —
+ * see the cache comment above.
  */
 // STRICT (#4115): `getPendingCounts()` reduces this list into the Review Hub's
 // total/alert/todo/briefing/cos tiles, so a swallowed unreadable read reports a
@@ -73,21 +77,39 @@ async function loadItems() {
   }
 
   if (itemsCache && itemsCache.mtimeMs === stats.mtimeMs && itemsCache.size === stats.size) {
-    return itemsCache.items;
+    return cloneItems(itemsCache.items);
   }
 
   const items = await readJSONFile(ITEMS_FILE, [], { strict: true });
   itemsCache = { mtimeMs: stats.mtimeMs, size: stats.size, items };
-  return items;
+  return cloneItems(items);
 }
 
 /**
  * Load the archived (retired) items. Never cached — only read from the
  * history views (`getItems` for a completed/dismissed/unfiltered query,
  * and `createItem`'s duplicate-alert check when the live scan misses).
+ * Strict: a caller that must not silently treat "unreadable" as "empty"
+ * (`applyRetention`, before it trusts the file enough to write over it)
+ * awaits this directly. A read-only view that can safely degrade instead
+ * uses `loadArchiveOrEmpty`.
  */
 async function loadArchive() {
   return readJSONFile(ARCHIVE_FILE, [], { strict: true });
+}
+
+/**
+ * Read-only archive access for history views: on a corrupt/unreadable
+ * archive.json, log and continue without archived items rather than 500ing
+ * every completed/dismissed/unfiltered review read. Never used by the write
+ * path (`applyRetention`), which must not mistake "unreadable" for "empty"
+ * and overwrite real archived history with just the newest batch.
+ */
+async function loadArchiveOrEmpty(context) {
+  return loadArchive().catch((err) => {
+    console.error(`⚠️ Review archive unreadable (${context}), continuing without archived items: ${err.message}`);
+    return [];
+  });
 }
 
 /**
@@ -99,12 +121,14 @@ async function loadArchive() {
  * that duplication self-heal on the very next retention pass instead of
  * accumulating a second archive.json copy forever.
  *
- * An unreadable archive.json is isolated to THIS function rather than left to
- * throw: `saveItems` calls this on every create/status-flip/bulk/delete, so a
- * corrupt archive.json must not block every live review write. On that
- * failure this returns `items` untouched (items.json is not rewritten either)
- * and leaves `lastRetentionAt` alone so the very next write retries retention
- * instead of waiting out the full interval against a file nobody fixed yet.
+ * Both the archive READ and the archive WRITE are isolated to THIS function
+ * rather than left to throw: `saveItems` calls this on every
+ * create/status-flip/bulk/delete, so a corrupt archive.json — or a failed
+ * write to it (disk full, permission error) — must not block every live
+ * review write. Either failure returns `items` untouched (items.json is not
+ * rewritten either) and leaves `lastRetentionAt` alone, so the very next
+ * write retries retention instead of waiting out the full interval against a
+ * problem nobody has fixed yet.
  */
 async function applyRetention(items) {
   const now = Date.now();
@@ -131,10 +155,18 @@ async function applyRetention(items) {
 
   const archivedIds = new Set(archive.map(i => i.id));
   const fresh = toArchive.filter(i => !archivedIds.has(i.id));
-  if (fresh.length > 0) {
-    await atomicWrite(ARCHIVE_FILE, [...archive, ...fresh]);
-    console.log(`📦 Review items archived: ${fresh.length}`);
+  if (fresh.length === 0) {
+    lastRetentionAt = now;
+    return remaining;
   }
+
+  const archived = await atomicWrite(ARCHIVE_FILE, [...archive, ...fresh]).then(() => true).catch((err) => {
+    console.error(`⚠️ Failed to write review archive, skipping retention this cycle: ${err.message}`);
+    return false;
+  });
+  if (!archived) return items;
+
+  console.log(`📦 Review items archived: ${fresh.length}`);
   lastRetentionAt = now;
   return remaining;
 }
@@ -154,12 +186,19 @@ async function saveItems(items) {
 /**
  * Get all review items, sorted by type then creation date (newest first).
  * A completed/dismissed or unfiltered query also merges in archive.json —
- * archive never holds a pending item, so a pending-only query skips it.
+ * archive never holds a pending item, so a pending-only query skips it. A
+ * corrupt archive.json degrades to "no archived items" rather than failing
+ * the whole read (`loadArchiveOrEmpty`) — unlike the retention write path,
+ * a read can safely omit history it could not trust. Deduped by id
+ * (live copy wins) in case a crash left the same item in both files
+ * mid-retention; see `applyRetention`'s doc comment.
  */
 export async function getItems({ status, type } = {}) {
   let items = await loadItems();
   if (!status || ARCHIVE_ELIGIBLE_STATUSES.has(status)) {
-    items = items.concat(await loadArchive());
+    const archived = await loadArchiveOrEmpty('getItems');
+    const liveIds = new Set(items.map(i => i.id));
+    items = items.concat(archived.filter(i => !liveIds.has(i.id)));
   }
   if (status) items = items.filter(i => i.status === status);
   if (type) items = items.filter(i => i.type === type);
@@ -200,14 +239,16 @@ export async function createItem({ type, title, description = '', metadata = {} 
   // window in practice — but check it anyway rather than silently narrowing
   // the dedup window the day an item crosses into archive.json. Only
   // consulted when the live scan misses, so the common case (no dedup match,
-  // or a live match) never touches the archive file.
+  // or a live match) never touches the archive file. A corrupt archive.json
+  // degrades to "no archived duplicate found" (`loadArchiveOrEmpty`) rather
+  // than blocking item creation entirely.
   if (type === 'alert' && metadata?.referenceId) {
     const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
     const isDuplicate = (i) =>
       i.type === 'alert' &&
       i.metadata?.referenceId === metadata.referenceId &&
       new Date(i.createdAt).getTime() > oneDayAgo;
-    const duplicate = items.find(isDuplicate) ?? (await loadArchive()).find(isDuplicate);
+    const duplicate = items.find(isDuplicate) ?? (await loadArchiveOrEmpty('createItem duplicate check')).find(isDuplicate);
     if (duplicate) return duplicate;
   }
 
