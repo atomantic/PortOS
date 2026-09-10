@@ -5,10 +5,20 @@ vi.mock('./components/Layout', () => ({ default: () => <Outlet /> }));
 vi.mock('./pages/Dashboard', () => ({ default: () => null }));
 vi.mock('./hooks/useCatalogTypes.jsx', () => ({ CatalogTypesProvider: ({ children }) => children }));
 vi.mock('./services/api', () => ({ getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })), updateSettings: vi.fn(), getSelfInstance: vi.fn(() => Promise.resolve({})), PORTOS_APP_ID: 'portos' }));
-vi.mock('./pages/MediaGen', () => ({ default: () => <Outlet /> }));
+vi.mock('./pages/MediaGen', () => ({ default: () => (
+  <>
+    <div data-testid="media-gen-shell" />
+    <Outlet />
+  </>
+) }));
 vi.mock('./pages/VideoGen', () => ({ default: () => { const location = useLocation(); return <pre data-testid="clip-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash, state: location.state })}</pre>; } }));
 vi.mock('./pages/CreativeDirectorDetail', () => ({ default: () => { const location = useLocation(); return <pre data-testid="project-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash, state: location.state })}</pre>; } }));
 import App from './App.jsx';
+it('keeps Generate Video inside the Media Gen tab shell', async () => {
+  render(<MemoryRouter initialEntries={['/video/generate']}><App /></MemoryRouter>);
+  expect(await screen.findByTestId('media-gen-shell')).toBeInTheDocument();
+  expect(screen.getByTestId('clip-location')).toBeInTheDocument();
+});
 it.each(['/media/video', '/video-gen'])('preserves clip handoff state through %s', async path => {
   const state = { remix: { ingredientIds: ['example-ingredient'] } };
   render(<MemoryRouter initialEntries={[{ pathname: path, search: '?settings=1', hash: '#clip', state }]}><App /></MemoryRouter>);

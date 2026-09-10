@@ -486,7 +486,13 @@ export default function App() {
               :id in the path) so a deep-link like /creative-director/abc?x#y
               lands on /creative-director/abc/overview?x#y intact. */}
           <Route path="video" element={<CreativeDirector browseOnly />} />
-          <Route path="video/generate" element={<VideoGen />} />
+          {/* VideoGen still uses the Media Gen tab shell (header + tabs +
+              overflow-auto body). Leaving it as a bare full-width page
+              clips the form: `/video` is a full-width prefix, and VideoGen
+              has no internal scroller of its own. */}
+          <Route path="video/generate" element={<MediaGen />}>
+            <Route index element={<VideoGen />} />
+          </Route>
           <Route path="video/:id" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
           <Route path="video/:id/:tab/:sceneId" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
           <Route path="video/:id/:tab" element={<PrefixRedirect from={VIDEO_PROJECT_PREFIX} to="/creative-director" />} />
