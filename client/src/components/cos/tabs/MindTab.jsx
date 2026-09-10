@@ -11,6 +11,7 @@ import * as api from '../../../services/api';
 import { formatDateTime, timeUntil } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import Drawer from '../../Drawer';
+import AutoSizeTextarea from '../../ui/AutoSizeTextarea';
 import Banner from '../../ui/Banner';
 import FilePickerButton from '../../ui/FilePickerButton';
 import TabPills from '../../ui/TabPills';
@@ -554,7 +555,7 @@ export default function MindTab() {
   };
 
   const handleMessageKeyDown = (event) => {
-    if (event.key !== 'Enter' || event.altKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.key !== 'Enter' || event.altKey || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
     void submitMessage(event);
   };
 
@@ -699,8 +700,8 @@ export default function MindTab() {
   });
 
   return (
-    <section aria-labelledby="mind-heading" className="mx-auto max-w-[100rem] space-y-4 pb-4">
-      <header className="flex flex-col gap-3 rounded-2xl border border-port-border bg-port-card/70 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
+    <section aria-labelledby="mind-heading" className="mx-auto flex h-full min-h-0 w-full max-w-[100rem] flex-col gap-4 pb-4 xl:pb-0">
+      <header className="flex shrink-0 flex-col gap-3 rounded-2xl border border-port-border bg-port-card/70 p-3 sm:flex-row sm:items-center sm:justify-between sm:p-4">
         <div className="flex min-w-0 items-center gap-3">
           <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-port-accent/15 text-port-accent ring-1 ring-port-accent/30">
             <Brain size={23} aria-hidden="true" />
@@ -736,6 +737,7 @@ export default function MindTab() {
 
       {callState?.active && (
         <Banner
+          className="shrink-0"
           tone="info"
           icon={PhoneCall}
           title="On a FaceTime Audio call"
@@ -754,12 +756,12 @@ export default function MindTab() {
         </Banner>
       )}
 
-      {gap && <Banner tone="warning" title="History gap detected">The saved cursor is no longer retained. The visible trace was reloaded from the newest bounded snapshot.</Banner>}
-      {loadError && <Banner tone="error" title="Conversation unavailable">{loadError}. Existing messages are preserved; retry when the connection recovers.</Banner>}
-      {lifecycleError && <Banner tone="error" title="Action failed">{lifecycleError}</Banner>}
+      {gap && <Banner className="shrink-0" tone="warning" title="History gap detected">The saved cursor is no longer retained. The visible trace was reloaded from the newest bounded snapshot.</Banner>}
+      {loadError && <Banner className="shrink-0" tone="error" title="Conversation unavailable">{loadError}. Existing messages are preserved; retry when the connection recovers.</Banner>}
+      {lifecycleError && <Banner className="shrink-0" tone="error" title="Action failed">{lifecycleError}</Banner>}
 
-      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_19rem]">
-        <section data-testid="mind-chat" aria-label="Persistent mind chat" className="flex h-[68dvh] min-h-[30rem] max-h-[54rem] flex-col overflow-hidden rounded-[1.5rem] border border-port-border bg-port-card shadow-lg shadow-black/10 sm:min-h-[34rem]">
+      <div className="grid min-h-0 flex-1 items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_19rem]">
+        <section data-testid="mind-chat" aria-label="Persistent mind chat" className="flex min-h-[30rem] flex-col overflow-hidden rounded-[1.5rem] border border-port-border bg-port-card shadow-lg shadow-black/10 sm:min-h-[34rem] xl:h-full xl:min-h-0">
           <header className="flex shrink-0 items-center justify-between gap-3 border-b border-port-border bg-port-card/95 px-3 py-2.5 sm:px-4">
             <h3 className="flex items-center gap-2 text-sm font-medium text-port-text">Conversation {state?.status === 'thinking' && <MindTypingIndicator />}</h3>
             <label htmlFor="mind-show-activity" className="flex shrink-0 items-center gap-2 rounded-full border border-port-border px-2.5 py-1.5 text-[11px] text-port-text-muted">
@@ -834,7 +836,7 @@ export default function MindTab() {
                 {messageImagesUploading ? <RefreshCw size={17} className="animate-spin" aria-hidden="true" /> : <ImagePlus size={18} aria-hidden="true" />}
               </FilePickerButton>
               <label htmlFor="mind-input-text" className="sr-only">Message</label>
-              <textarea id="mind-input-text" value={messageText} onChange={(event) => changeMessageText(event.target.value)} onKeyDown={handleMessageKeyDown} maxLength={8000} rows={1} className="min-h-[36px] max-h-32 flex-1 resize-y bg-transparent py-2 text-sm leading-5 text-port-text outline-none placeholder:text-port-text-muted" placeholder="Message Persistent Mind" />
+              <AutoSizeTextarea id="mind-input-text" value={messageText} onChange={(event) => changeMessageText(event.target.value)} onKeyDown={handleMessageKeyDown} maxLength={8000} rows={1} className="min-h-[36px] max-h-[40vh] flex-1 overflow-y-auto bg-transparent py-2 text-sm leading-5 text-port-text outline-none placeholder:text-port-text-muted" placeholder="Message Persistent Mind" />
               <button type="submit" disabled={(!messageText.trim() && messageImages.length === 0) || submitting || messageImagesUploading} aria-label={submitting ? 'Sending message' : submitError ? 'Retry' : selectedPreset ? `Send with ${selectedPreset.label}` : 'Send message'} title={selectedPreset ? `Send this one message with ${selectedPreset.label}` : undefined} className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors disabled:cursor-not-allowed disabled:bg-port-border disabled:text-port-text-muted ${selectedPreset ? 'bg-port-warning hover:bg-port-warning/85' : 'bg-port-accent hover:bg-port-accent/85'}`}>
                 {submitting ? <RefreshCw size={17} className="animate-spin" aria-hidden="true" /> : <ArrowUp size={19} strokeWidth={2.5} aria-hidden="true" />}
               </button>
@@ -842,7 +844,7 @@ export default function MindTab() {
           </form>
         </section>
 
-        <aside aria-labelledby="mind-state-heading" className="space-y-3 xl:sticky xl:top-0">
+        <aside aria-labelledby="mind-state-heading" className="space-y-3 xl:min-h-0 xl:overflow-y-auto">
           <section className="rounded-2xl border border-port-border bg-port-card p-4">
             <div className="flex items-center justify-between gap-3">
               <div>

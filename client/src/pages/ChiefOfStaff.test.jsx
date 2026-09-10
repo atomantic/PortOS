@@ -73,6 +73,9 @@ vi.mock('../components/cos/MiniCharacterCoSAvatar', () => ({
     />
   ),
 }));
+vi.mock('../components/cos/tabs/MindTab', () => ({
+  default: () => <div data-testid="mind-tab">Mind</div>,
+}));
 
 const { default: ChiefOfStaff, SPEAKING_MS, LAZY_AVATARS, INLINE_RENDERED_AVATAR_STYLES } = await import('./ChiefOfStaff');
 const { AVATAR_STYLE_IDS } = await import('../lib/avatarStyles');
@@ -197,6 +200,17 @@ describe('ChiefOfStaff loading skeleton', () => {
     await act(async () => {
       releaseInsights({ insights: [] });
     });
+  });
+});
+
+describe('ChiefOfStaff mind tab layout', () => {
+  it('fills leftover desktop height so the chat can use the viewport', async () => {
+    const { container } = await renderSettledAt('mind');
+    const content = container.querySelector('.overflow-y-auto.overflow-x-hidden');
+    expect(content.className).toContain('flex-col');
+    const panel = document.getElementById('tabpanel-mind');
+    expect(panel.className).toContain('xl:flex-1');
+    expect(panel.className).toContain('min-h-0');
   });
 });
 
