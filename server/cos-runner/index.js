@@ -27,7 +27,7 @@ import { diagnosePtySpawnFailure, probePtyRuntime, PTY_WORKSPACE_MISSING_PREFIX 
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { isKnownCliStderrNoise } from '../lib/cliStderrNoise.js';
 import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
-import { createStreamJsonParser } from './streamJsonParser.js';
+import { createStreamJsonParser } from '../lib/streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
 import { getProcessStats, checkProcessRunning } from './processStats.js';
 import { usableAgentPid, runnerAgentLivenessFields } from '../lib/runnerAgentLiveness.js';
