@@ -184,6 +184,7 @@ export const APP_DETAIL_TABS = [
   { id: 'pull-requests', label: 'PRs / MRs' },
   { id: 'jira', label: 'JIRA', feature: 'jira' },
   { id: 'processes', label: 'Processes' },
+  { id: 'quality', label: 'Quality' },
   { id: 'references', label: 'References' },
   // Only repos that declare submodules (a .gitmodules file) get the tab — most
   // managed apps have none, and an always-empty tab is just noise.

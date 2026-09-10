@@ -10,7 +10,7 @@ export default function AppQuality({ app, detail = false }) {
   const label = quality?.unavailable ? 'Quality unavailable'
     : score == null ? unscoredLabel : `Quality: ${score}/100`;
   if (!detail) return (
-    <Link to={`/apps/${app.id}/overview`} className="text-xs text-port-accent hover:underline" title="View audit scores and coverage">
+    <Link to={`/apps/${app.id}/quality`} className="text-xs text-port-accent hover:underline" title="View audit scores and coverage">
       {label}{score != null && ` · ${quality.ratedCategories}/${quality.totalCategories} categories`}
     </Link>
   );

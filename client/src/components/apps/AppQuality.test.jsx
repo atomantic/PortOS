@@ -17,9 +17,9 @@ it('shows zero as a real score and explains excluded categories in the breakdown
   expect(screen.getByRole('link', { name: /Configure/ })).toHaveAttribute('href', '/apps/portos-default/tasks');
 });
 
-it('links an unassessed tile to its app overview without inventing a score', () => {
+it('links an unassessed tile to its app quality tab without inventing a score', () => {
   render(<MemoryRouter><AppQuality app={{ id: 'other' }} /></MemoryRouter>);
-  expect(screen.getByRole('link', { name: 'Quality: not assessed' })).toHaveAttribute('href', '/apps/other/overview');
+  expect(screen.getByRole('link', { name: 'Quality: not assessed' })).toHaveAttribute('href', '/apps/other/quality');
 });
 
 it('explains why completed maintenance can still have no saved assessment', async () => {
