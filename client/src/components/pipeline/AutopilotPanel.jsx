@@ -28,6 +28,7 @@ import AutopilotMilestones from './AutopilotMilestones';
 import CanonReadinessPanel from './CanonReadinessPanel';
 import SeriesAutopilotSchedule from './SeriesAutopilotSchedule';
 import { severityColor } from './constants.js';
+import { READINESS_GATE_LABELS, READINESS_GATE_ORDER } from '../../lib/editorialHealth.js';
 
 // Convergence-round bounds — mirror the server (seriesAutopilot.js + the
 // pipelineEditorialChecks settings schema). 0 = skip that gate entirely.
@@ -103,11 +104,6 @@ const clampFoundationThreshold = (n, fallback) => {
 // Options select sends a chosen gate as a PER-RUN override only (it does NOT
 // persist, unlike the round inputs) so a one-off looser/stricter run never edits
 // the install's saved default; '' means "use the saved default" and sends nothing.
-const READINESS_GATE_LABELS = {
-  noOpenHigh: 'No open High findings',
-  noOpenHighOrMedium: 'No open High or Medium (strict)',
-  none: 'None — skip the health gate',
-};
 // Clamp a number-input value to [min, max] integers, with a blank/invalid field
 // falling back to `fallback` (NOT min — for round gates fallback is the default,
 // not 0, so a cleared input never silently disables a gate; an explicitly typed 0
@@ -1295,8 +1291,8 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
               <option value="">
                 Use saved default{savedGate ? ` (${READINESS_GATE_LABELS[savedGate]})` : ''}
               </option>
-              {Object.entries(READINESS_GATE_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>{label}</option>
+              {READINESS_GATE_ORDER.map((value) => (
+                <option key={value} value={value}>{READINESS_GATE_LABELS[value]}</option>
               ))}
             </select>
           </div>
