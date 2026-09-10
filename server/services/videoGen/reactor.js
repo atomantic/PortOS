@@ -6,7 +6,7 @@ import { join } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
 import { finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
@@ -319,7 +319,7 @@ async function runReactorVideo(job, jobId, {
     const continuationHint = continueFromClipId
       ? ' — reactor may no longer hold that clip; clear "Continue from clip" and render fresh, or start from an image'
       : '';
-    finalizeError(job, jobId, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}${continuationHint}`, { force: true });
+    finalizeJobFailure(job, jobId, null, entry.aborted ? 'Canceled' : `Reactor video generation failed: ${err?.message || 'unknown error'}${continuationHint}`, { force: true });
   } finally {
     await rm(`${outputPath}.capture`, { recursive: true, force: true }).catch(() => {});
     if (frame.fittedPath) await rm(frame.fittedPath, { force: true }).catch(() => {});
@@ -329,18 +329,15 @@ async function runReactorVideo(job, jobId, {
   }
 }
 
-const finalizeCanceled = (job, jobId) => finalizeError(job, jobId, 'Canceled', { force: true });
+const finalizeCanceled = (job, jobId) => finalizeJobFailure(job, jobId, null, 'Canceled', { force: true });
 
-const finalizeError = (job, jobId, reason, { force = false } = {}) => {
-  if (!force && (job.status === 'error' || job.status === 'complete')) return;
-  activeRequests.delete(jobId);
-  activeJobs.delete(jobId);
-  job.status = 'error';
-  console.log(`❌ reactor video generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
-  broadcastSse(job, { type: 'error', error: reason });
-  videoGenEvents.emit('failed', { generationId: jobId, error: reason });
-  closeJobAfterDelay(jobs, jobId);
-};
+const finalizeJobFailure = createJobFailureFinalizer({
+  jobs,
+  activeJobs,
+  activeSlots: activeRequests,
+  label: 'reactor video generation',
+  events: videoGenEvents,
+});
 
 // Test-only handles.
 export const _internals = { validateRequest: validateReactorRequest };

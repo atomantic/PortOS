@@ -41,7 +41,7 @@ import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGu
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { buildNoImageReason } from './noImageReason.js';
@@ -349,7 +349,7 @@ async function runGrok(job, jobId, bin, args, {
     clearTimeout(timeoutTimer);
     cleanupPromptFile();
     removeScratch();
-    finalizeError(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
+    finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
 
   proc.stdout.on('data', (chunk) => {
@@ -374,7 +374,7 @@ async function runGrok(job, jobId, bin, args, {
         const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
         const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
         removeScratch();
-        return finalizeError(job, jobId, proc, `Grok generation failed: ${reason}\n${tail}`);
+        return finalizeJobFailure(job, jobId, proc, `Grok generation failed: ${reason}\n${tail}`);
       }
       // Grok writes the file during the turn; empirically it's on disk by
       // exit, but poll a few seconds in case of flush lag on slow disks. The
@@ -384,7 +384,7 @@ async function runGrok(job, jobId, bin, args, {
       if (!harvested.found) {
         removeScratch();
         const prefix = harvested.invalid ? 'Grok wrote a non-image file at the directed path. ' : '';
-        return finalizeError(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
+        return finalizeJobFailure(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
       }
       // Image bytes are not proof the image tool made them — reject a picture
       // the agent drew with code (see fabricationGuard.js). The narration tail
@@ -393,7 +393,7 @@ async function runGrok(job, jobId, bin, args, {
       const fabricated = await checkFabrication(scratchDir, toolName);
       if (fabricated) {
         removeScratch();
-        return finalizeError(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
+        return finalizeJobFailure(job, jobId, proc, `${fabricated} ${noImageReason(stdoutTail)}`);
       }
       if (harvested.format === 'png') {
         await copyFileGuarded(stagingPath, outputPath);
@@ -410,7 +410,7 @@ async function runGrok(job, jobId, bin, args, {
       // canvas must fail here, not become a gallery record.
       const emptyFrame = await rejectDegenerateFrame(outputPath);
       if (emptyFrame) {
-        return finalizeError(job, jobId, proc, emptyFrame);
+        return finalizeJobFailure(job, jobId, proc, emptyFrame);
       }
       // Sidecar metadata so the gallery can recover prompt/ratio/etc.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
@@ -431,25 +431,24 @@ async function runGrok(job, jobId, bin, args, {
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
       removeScratch();
-      finalizeError(job, jobId, proc, `Grok post-exit handler failed: ${err?.message || err}`);
+      // finalizeJobFailure is a no-op once job.status === 'complete' — but the
+      // success path above stamps 'complete' BEFORE its own broadcastSse/
+      // event-emit tail, so a throw from there still needs a terminal
+      // 'failed' delivered. Force past the idempotency guard (matches
+      // videoGen/grok.js's post-exit catch, fa3796650).
+      finalizeJobFailure(job, jobId, proc, `Grok post-exit handler failed: ${err?.message || err}`, { force: true });
     }
   });
 }
 
-// `proc` is the child this finalize belongs to — only clear module-scoped
-// state when it still belongs to *this* job (a late finalize from a stale run
-// must not wipe a newer active job).
-const finalizeError = (job, jobId, proc, reason) => {
-  // Idempotent — spawn failures fire 'error' AND a follow-up 'close'.
-  if (job.status === 'error' || job.status === 'complete') return;
-  if (proc == null || activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
-  job.status = 'error';
-  activeJobs.delete(jobId);
-  console.log(`❌ grok image generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
-  broadcastSse(job, { type: 'error', error: reason });
-  imageGenEvents.emit('failed', { mode: IMAGE_GEN_MODE.GROK, generationId: jobId, error: reason });
-  closeJobAfterDelay(jobs, jobId);
-};
+const finalizeJobFailure = createJobFailureFinalizer({
+  jobs,
+  activeJobs,
+  activeSlots: activeProcs,
+  label: 'grok image generation',
+  events: imageGenEvents,
+  failedPayload: (jobId, reason) => ({ mode: IMAGE_GEN_MODE.GROK, generationId: jobId, error: reason }),
+});
 
 // Poll for the directed output file until it exists non-empty AND carries a
 // real image signature (PNG/JPEG/WebP/GIF via the shared detectImageFormat

@@ -85,6 +85,50 @@ export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, ex
   }, delay);
 };
 
+// Shared "this job died" finalizer for the six media-generation backends
+// (imageGen/{agy,codex,grok}.js, videoGen/{grok,fal,reactor}.js). Each used to
+// carry a private ~10-line `finalizeError` doing the same eight things —
+// idempotency guard, clear the active-slot map, stamp `job.status = 'error'`,
+// drop from `activeJobs`, log, broadcast an SSE error frame, emit `failed`,
+// and `closeJobAfterDelay` — which had drifted (#6830): the video backends
+// picked up a `force` escape hatch (fa3796650) for a throw that lands AFTER
+// `job.status` is already stamped 'complete' (finalizeGeneratedVideo/the
+// image copy-and-clean tail failing during their own post-processing), and
+// the three image backends never did, so that same failure silently hit the
+// idempotency guard's no-op instead of ever reaching the client or the queue.
+//
+// `activeSlots` is the per-jobId "who owns this render" map — `activeProcs`
+// for the CLI-spawn backends (agy/codex/imageGen-grok/videoGen-grok, keyed by
+// the child process) or `activeRequests` for the REST-poll backends (fal,
+// reactor). The returned finalizer takes `slotOwner` per call: pass the
+// current owner (the `proc`/request entry) to clear the slot only when it
+// still belongs to THIS job — a late finalize from a cancelled/stale run must
+// not wipe a newer job's active slot — or pass `null` for a backend whose
+// slot map has no owner identity to compare, which deletes unconditionally
+// (fal/reactor's pre-factory behavior).
+//
+// `failedPayload(jobId, reason)` builds the `events.emit('failed', …)` body.
+// It defaults to the video shape (`{ generationId, error }`); the image
+// backends override it to add the `mode` field their event bus carries
+// (read by `imageGenQuota.js`'s per-provider outcome recorder).
+export const createJobFailureFinalizer = ({
+  jobs, activeJobs, activeSlots, label, events,
+  failedPayload = (jobId, reason) => ({ generationId: jobId, error: reason }),
+}) => (job, jobId, slotOwner, reason, { force = false } = {}) => {
+  // Idempotent except under `force` — spawn failures fire 'error' AND a
+  // follow-up 'close', so both paths reach this finalizer, and a caller
+  // whose success path can throw AFTER stamping 'complete' passes `force`
+  // to still deliver a terminal 'failed' for that window.
+  if (!force && (job.status === 'error' || job.status === 'complete')) return;
+  if (slotOwner == null || activeSlots.get(jobId) === slotOwner) activeSlots.delete(jobId);
+  job.status = 'error';
+  activeJobs.delete(jobId);
+  console.log(`❌ ${label} failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
+  broadcastSse(job, { type: 'error', error: reason });
+  events.emit('failed', failedPayload(jobId, reason));
+  closeJobAfterDelay(jobs, jobId);
+};
+
 // ---------------------------------------------------------------------------
 // createSseRunner — shared batch-runner lifecycle for the pipeline runners.
 // ---------------------------------------------------------------------------

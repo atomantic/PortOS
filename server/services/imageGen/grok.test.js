@@ -374,6 +374,45 @@ describe('grok provider — directed-path harvest', () => {
     expect(failedListener).toHaveBeenCalledTimes(1);
     expect(failedListener.mock.calls[0][0].error).toMatch(/Failed to spawn grok/);
   });
+
+  // Regression (#6830): the success path stamps job.status = 'complete'
+  // BEFORE its own broadcastSse('complete') + imageGenEvents 'completed'
+  // tail, so a throw from that tail — a subscriber's res.write failing
+  // inside broadcastSse, same as any throw the surrounding catch was written
+  // to contain — used to hit the idempotency guard as a silent no-op: no
+  // 'failed' event, job stuck reading 'complete' with no terminal frame ever
+  // delivered. videoGen/grok.js already forces past this window (fa3796650);
+  // the three image backends never did until the shared finalizer's `force`
+  // option was threaded through their post-exit catches.
+  it('still emits failed when the post-exit handler throws after job.status is already complete', async () => {
+    const failedListener = vi.fn();
+    imageGenEvents.on('failed', failedListener);
+
+    const job = await grok.generateImage({ prompt: 'a fox' });
+    const fakePngBytes = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('fakepngbody'),
+    ]);
+    await mkdir(join(tmpdir(), `portos-grok-${job.jobId}`), { recursive: true });
+    await writeFile(stagingPathFor(job.jobId), fakePngBytes);
+
+    // A subscriber whose res.write throws ONLY on the terminal 'complete'
+    // frame — the exact window this regression covers. The earlier 'status'
+    // replay-on-attach write must succeed so the render reaches that frame.
+    const throwingClient = {
+      writeHead: vi.fn(),
+      write: vi.fn((msg) => {
+        if (msg.includes('"type":"complete"')) throw new Error('subscriber write failed');
+      }),
+      req: { on: vi.fn() },
+    };
+    grok.attachSseClient(job.jobId, throwingClient);
+
+    await closeChild(0, 0);
+
+    await vi.waitFor(() => expect(failedListener).toHaveBeenCalledTimes(1), { timeout: 5000, interval: 50 });
+    expect(failedListener.mock.calls[0][0].error).toMatch(/post-exit handler failed/i);
+  }, 10000);
 });
 
 describe('grok provider — noImageReason', () => {

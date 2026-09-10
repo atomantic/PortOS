@@ -5,6 +5,7 @@ import {
   broadcastSse,
   attachSseClient,
   closeJobAfterDelay,
+  createJobFailureFinalizer,
   createSseRunner
 } from './sseUtils.js';
 
@@ -182,6 +183,108 @@ describe('closeJobAfterDelay', () => {
     vi.advanceTimersByTime(100);
     expect(job.clients[0].end).toHaveBeenCalled();
     expect(jobs.has('j1')).toBe(false);
+  });
+});
+
+describe('createJobFailureFinalizer', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const setup = (overrides = {}) => {
+    const jobs = new Map();
+    const activeJobs = new Map();
+    const activeSlots = new Map();
+    const events = { emit: vi.fn() };
+    const finalize = createJobFailureFinalizer({
+      jobs, activeJobs, activeSlots, events, label: 'test backend', ...overrides,
+    });
+    return { jobs, activeJobs, activeSlots, events, finalize };
+  };
+
+  it('stamps error, clears the owned slot, emits failed (default payload), and schedules cleanup', () => {
+    const { jobs, activeJobs, activeSlots, events, finalize } = setup();
+    const proc = { pid: 1 };
+    const client = makeRes();
+    const job = { clients: [client], status: 'running' };
+    jobs.set('j1', job);
+    activeJobs.set('j1', { id: 'j1' });
+    activeSlots.set('j1', proc);
+
+    finalize(job, 'j1', proc, 'boom');
+
+    expect(job.status).toBe('error');
+    expect(activeSlots.has('j1')).toBe(false);
+    expect(activeJobs.has('j1')).toBe(false);
+    expect(events.emit).toHaveBeenCalledWith('failed', { generationId: 'j1', error: 'boom' });
+    expect(client.write).toHaveBeenCalledWith(`data: ${JSON.stringify({ type: 'error', error: 'boom' })}\n\n`);
+
+    // closeJobAfterDelay was scheduled as part of the same call.
+    vi.advanceTimersByTime(SSE_CLEANUP_DELAY_MS);
+    expect(client.end).toHaveBeenCalled();
+    expect(jobs.has('j1')).toBe(false);
+  });
+
+  it('is idempotent once the job is already terminal — a duplicate spawn-error/close pair does not double-emit', () => {
+    const { activeSlots, activeJobs, events, finalize } = setup();
+    const proc = { pid: 1 };
+    const job = { clients: [], status: 'complete' };
+    activeSlots.set('j1', proc);
+    activeJobs.set('j1', {});
+
+    finalize(job, 'j1', proc, 'boom');
+
+    expect(job.status).toBe('complete');
+    expect(activeSlots.has('j1')).toBe(true);
+    expect(activeJobs.has('j1')).toBe(true);
+    expect(events.emit).not.toHaveBeenCalled();
+  });
+
+  it('force overrides the idempotency guard for a throw that lands after complete is already stamped', () => {
+    const { activeJobs, events, finalize } = setup();
+    const job = { clients: [], status: 'complete' };
+    activeJobs.set('j1', {});
+
+    finalize(job, 'j1', { pid: 1 }, 'threw after complete', { force: true });
+
+    expect(job.status).toBe('error');
+    expect(activeJobs.has('j1')).toBe(false);
+    expect(events.emit).toHaveBeenCalledWith('failed', { generationId: 'j1', error: 'threw after complete' });
+  });
+
+  it('does not evict a slot a newer job already owns (stale finalize from a cancelled/superseded run)', () => {
+    const { activeSlots, finalize } = setup();
+    const staleProc = { pid: 1 };
+    const freshProc = { pid: 2 };
+    const job = { clients: [], status: 'running' };
+    activeSlots.set('j1', freshProc);
+
+    finalize(job, 'j1', staleProc, 'stale failure');
+
+    // The stale finalize still fails ITS OWN job record...
+    expect(job.status).toBe('error');
+    // ...but must not evict the newer run's slot ownership.
+    expect(activeSlots.get('j1')).toBe(freshProc);
+  });
+
+  it('clears the slot unconditionally when slotOwner is null (fal/reactor have no owner identity to compare)', () => {
+    const { activeSlots, finalize } = setup();
+    const job = { clients: [], status: 'running' };
+    activeSlots.set('j1', { some: 'request-entry' });
+
+    finalize(job, 'j1', null, 'boom');
+
+    expect(activeSlots.has('j1')).toBe(false);
+  });
+
+  it('builds the failed payload with a custom failedPayload (the image bus mode field)', () => {
+    const { events, finalize } = setup({
+      failedPayload: (jobId, reason) => ({ mode: 'grok', generationId: jobId, error: reason }),
+    });
+    const job = { clients: [], status: 'running' };
+
+    finalize(job, 'j1', null, 'boom');
+
+    expect(events.emit).toHaveBeenCalledWith('failed', { mode: 'grok', generationId: 'j1', error: 'boom' });
   });
 });
 

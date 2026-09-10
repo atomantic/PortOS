@@ -28,7 +28,7 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS, copyFileGuarded, unlinkGuarded, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
@@ -238,7 +238,7 @@ async function runGrokVideo(job, jobId, bin, args, {
     cleanupPromptFile();
     removeScratch();
     removeUpload();
-    finalizeError(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
+    finalizeJobFailure(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
 
   proc.stdout.on('data', (chunk) => {
@@ -267,14 +267,14 @@ async function runGrokVideo(job, jobId, bin, args, {
         const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
         removeScratch();
         removeUpload();
-        return finalizeError(job, jobId, proc, `Grok video generation failed: ${reason}\n${tail}`);
+        return finalizeJobFailure(job, jobId, proc, `Grok video generation failed: ${reason}\n${tail}`);
       }
       const harvested = await harvestStagedVideo(stagingPath, harvestTimeoutMs);
       if (!harvested.found) {
         removeScratch();
         removeUpload();
         const prefix = harvested.invalid ? 'Grok wrote a non-MP4 file at the directed path. ' : '';
-        return finalizeError(job, jobId, proc, `${prefix}${noVideoReason(stdoutTail)}`);
+        return finalizeJobFailure(job, jobId, proc, `${prefix}${noVideoReason(stdoutTail)}`);
       }
       await copyFileGuarded(stagingPath, outputPath);
       await unlinkGuarded(stagingPath).catch(() => {});
@@ -295,7 +295,7 @@ async function runGrokVideo(job, jobId, bin, args, {
       // post-processing (faststart/thumbnail/history) — a throw there must
       // still surface as a terminal failure or the queue's job stays
       // 'running' until the watchdog. Force past the idempotence guard.
-      finalizeError(job, jobId, proc, `Grok video post-exit handler failed: ${err?.message || err}`, { force: true });
+      finalizeJobFailure(job, jobId, proc, `Grok video post-exit handler failed: ${err?.message || err}`, { force: true });
     }
   });
 }
@@ -309,19 +309,13 @@ function noVideoReason(stdoutTail = '') {
     .replace('the image_gen tool may be unavailable', 'the image_to_video tool may be unavailable');
 }
 
-const finalizeError = (job, jobId, proc, reason, { force = false } = {}) => {
-  // Idempotent except under `force` — used when finalizeGeneratedVideo threw
-  // AFTER stamping 'complete' but BEFORE emitting the completed event, so a
-  // terminal 'failed' must still go out.
-  if (!force && (job.status === 'error' || job.status === 'complete')) return;
-  if (proc == null || activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
-  job.status = 'error';
-  activeJobs.delete(jobId);
-  console.log(`❌ grok video generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
-  broadcastSse(job, { type: 'error', error: reason });
-  videoGenEvents.emit('failed', { generationId: jobId, error: reason });
-  closeJobAfterDelay(jobs, jobId);
-};
+const finalizeJobFailure = createJobFailureFinalizer({
+  jobs,
+  activeJobs,
+  activeSlots: activeProcs,
+  label: 'grok video generation',
+  events: videoGenEvents,
+});
 
 // Poll for the directed MP4 until it exists non-empty with an `ftyp` header,
 // or timeoutMs elapses. { found, invalid } mirrors the image harvest —
