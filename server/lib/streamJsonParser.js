@@ -1,11 +1,10 @@
 /**
- * CoS Runner — Stream-JSON parsing layer
+ * Claude stream-JSON parsing layer.
  *
- * Self-contained — no imports, pure functions only — so the isolated
- * `portos-cos` PM2 process stays standalone.
- * NOTE: an equivalent parser also lives in server/services/agentCliSpawning.js
- * for the in-process spawn path; the two are intentionally separate copies
- * because cos-runner must not pull in the main server's dependency graph.
+ * Self-contained — no imports, pure functions only — so both the isolated
+ * `portos-cos` PM2 process (cos-runner) and the in-process spawn path
+ * (agentCliSpawning.js) can share it without pulling in each other's
+ * dependency graph.
  */
 
 /**

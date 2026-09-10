@@ -121,6 +121,7 @@ export * from './styleGuide.js';
 export * from './storyBuilderIntegrity.js';
 export * from './storyBuilderSteps.js';
 export * from './streamLines.js';
+export * from './streamJsonParser.js';
 export * from './taskDataInputCatalog.js';
 // The canon field caps storyBible.js sanitizes against, as a pure leaf.
 export * from './bibleLimits.js';
