@@ -329,7 +329,18 @@ describe('deferred imports stay deferred (#6156)', () => {
 // across existing suites, primarily dependency-free validation/attachment
 // leaves. Measured against current main: 99,794 -> 101,772. No new heavy eager
 // subtree is introduced; retain the standard roughly 1,500 allowance.
-const MAX_STATIC_INSTANTIATIONS = 103272;
+//
+// #6816 is the #6590/#6617 shape again: `creativeCommissionValidation.js`'s
+// generation-key spec (GENERATION_KEY_DEFS / ABILITY_GENERATION_SPEC and the
+// quality/aspect-ratio/backend enums) moved into a new dependency-free leaf,
+// `creativeCommissionSpec.js`, so the client form can import it directly
+// instead of hand-copying it. Its only imports (`generationModes.js`,
+// `renderTargets.js`) were already reached by every closure that reaches
+// `creativeCommissionValidation.js` (itself widely reached through
+// `validation.js`'s flat re-export, per the #6617 note above), so the new leaf
+// contributes +1 to each of those ~230 closures and pulls in nothing new.
+// Measured against current main: 103,076 -> 103,308. Restore the ~1.5k allowance.
+const MAX_STATIC_INSTANTIATIONS = 104808;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);

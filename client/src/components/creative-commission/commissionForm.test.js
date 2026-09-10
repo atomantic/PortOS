@@ -5,6 +5,7 @@ import {
   ABILITY_OPTIONS, GENERATION_FIELDS_BY_ABILITY, GENERATION_DEFAULTS_BY_ABILITY,
   generationToForm, mergeGenerationForAbility, generationToPayload,
   backendFieldsForAbility, RENDER_BACKEND_AUTO,
+  IMAGE_BACKEND_OPTIONS, VIDEO_BACKEND_OPTIONS,
 } from './commissionForm.js';
 
 describe('commissionForm helpers', () => {
@@ -198,6 +199,17 @@ describe('commissionForm helpers', () => {
       expect(mergeGenerationForAbility('music', { imageCount: 4 })).toEqual({ lengthSeconds: 30 });
     });
 
+    it('mergeGenerationForAbility seeds a key the switch introduces with the FRESH default, not the legacy reading', () => {
+      // image → video: durationMode never existed on this generation, so it
+      // seeds #4494's 'auto' (what a blank video form gets). Only a REAL record
+      // with the key missing reads as legacy 'manual' — that is generationToForm's
+      // contract, and the two must not collapse into one another.
+      expect(mergeGenerationForAbility('video', { quality: 'high', aspectRatio: '9:16', imageCount: 2 }).durationMode).toBe('auto');
+      expect(generationToForm('video', { quality: 'high', aspectRatio: '9:16' }).durationMode).toBe('manual');
+      // A value already present survives the switch untouched.
+      expect(mergeGenerationForAbility('music-video', { durationMode: 'manual', targetDurationSeconds: 20 }).durationMode).toBe('manual');
+    });
+
     it('generationToPayload emits only the ability keys and coerces numbers', () => {
       // number inputs arrive as strings from the DOM.
       expect(generationToPayload('image', { quality: 'standard', aspectRatio: '1:1', imageCount: '3' }))
@@ -211,6 +223,32 @@ describe('commissionForm helpers', () => {
     it('keeps legacy video records pinned while blank forms use automatic duration', () => {
       expect(toForm({}).generation.durationMode).toBe('auto');
       expect(toForm({ targetAbility: 'video', generation: { targetDurationSeconds: 20 } }).generation.durationMode).toBe('manual');
+    });
+
+    it('generationToForm itself resolves an absent durationMode to its legacy reading', () => {
+      // Distinct from the toForm-level case above: this pins generationToForm's
+      // OWN contract (used directly by mergeGenerationForAbility on an ability
+      // switch too) — a regression that made it fall back to
+      // GENERATION_DEFAULTS_BY_ABILITY's plain 'auto' instead of the spec's
+      // legacyAbsent 'manual' would slip past a toForm-only test.
+      expect(generationToForm('video', {}).durationMode).toBe('manual');
+      expect(generationToForm('music-video', { quality: 'high' }).durationMode).toBe('manual');
+      // A key with no `legacyAbsent` (aspectRatio) is unaffected: it still falls
+      // back to the plain default either way.
+      expect(generationToForm('video', {}).aspectRatio).toBe('16:9');
+    });
+
+    it('treats a SAVED record with a missing generation object as legacy, not fresh', () => {
+      // A record with an `id` has already been persisted — it is never the
+      // blank/new-commission case, even if its `generation` object happens to
+      // be absent or null (which a real API response never actually sends,
+      // but toForm() must not silently mis-seed one that did).
+      expect(toForm({ id: 'c-1', targetAbility: 'video' }).generation.durationMode).toBe('manual');
+      expect(toForm({ id: 'c-1', targetAbility: 'video', generation: null }).generation.durationMode).toBe('manual');
+      // The blank/new case is unaffected: no id AND no generation still seeds
+      // the fresh default, including when other fields (a pre-filled brief)
+      // are already present.
+      expect(toForm({ brief: { intent: 'x' } }).generation.durationMode).toBe('auto');
     });
 
     it('toPayload round-trips a non-video commission', () => {
@@ -265,6 +303,25 @@ describe('commissionForm helpers', () => {
       });
       expect(f.generation.imageMode).toBe('local');
       expect(f.generation.imageModelId).toBe('example-model');
+    });
+
+    it('round-trips a record pinned to a backend the form used to have no option for (#6816)', () => {
+      // agy (image) and fal/reactor (video) all post-date the hand-copied
+      // IMAGE_BACKEND_OPTIONS/VIDEO_BACKEND_OPTIONS arrays this form used to
+      // carry; a record already pinned to one rendered a <select> with no
+      // matching option. Deriving the options from the server enum fixes this
+      // for every mode at once, not just these three by name.
+      const image = toForm({ targetAbility: 'image', brief: { intent: 'x' }, generation: { imageMode: 'agy' } });
+      expect(image.generation.imageMode).toBe('agy');
+      expect(IMAGE_BACKEND_OPTIONS.some(([v]) => v === 'agy')).toBe(true);
+      expect(toPayload(image).generation.imageMode).toBe('agy');
+
+      for (const videoMode of ['fal', 'reactor']) {
+        const video = toForm({ targetAbility: 'video', brief: { intent: 'x' }, generation: { videoMode } });
+        expect(video.generation.videoMode).toBe(videoMode);
+        expect(VIDEO_BACKEND_OPTIONS.some(([v]) => v === videoMode)).toBe(true);
+        expect(toPayload(video).generation.videoMode).toBe(videoMode);
+      }
     });
 
     it('sends the model id for a model-bearing backend', () => {

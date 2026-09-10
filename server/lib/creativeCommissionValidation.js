@@ -1,11 +1,27 @@
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
-import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
-import { RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
 import {
   COMMISSION_BRIEF_TAG_MAX, COMMISSION_INTENT_MAX, COMMISSION_NAME_MAX, COMMISSION_STYLE_SPEC_MAX,
 } from './creativeBriefLimits.js';
+import {
+  CREATIVE_COMMISSION_QUALITIES, CREATIVE_COMMISSION_ASPECT_RATIOS,
+  CREATIVE_COMMISSION_IMAGE_MODES, CREATIVE_COMMISSION_VIDEO_MODES,
+  COMMISSION_RENDER_BACKEND_AUTO, COMMISSION_RENDER_MODEL_MAX,
+  GENERATION_KEY_DEFS, ABILITY_GENERATION_SPEC,
+} from './creativeCommissionSpec.js';
+
+// Re-exported for every existing importer of this module (abilityAdapters.js,
+// validation.js's `export *`, the barrel's namespace, tests): the spec itself
+// now lives in creativeCommissionSpec.js (#6816) — a zod-free leaf the browser
+// form imports directly — and this module keeps building the Zod schema from
+// it exactly as before.
+export {
+  CREATIVE_COMMISSION_QUALITIES, CREATIVE_COMMISSION_ASPECT_RATIOS,
+  CREATIVE_COMMISSION_IMAGE_MODES, CREATIVE_COMMISSION_VIDEO_MODES,
+  COMMISSION_RENDER_BACKEND_AUTO, COMMISSION_RENDER_MODEL_MAX,
+  GENERATION_KEY_DEFS, ABILITY_GENERATION_SPEC,
+};
 
 // =============================================================================
 // CREATIVE COMMISSION SCHEMAS (Autonomous Creation Engine — #2657, Phase 1)
@@ -36,106 +52,6 @@ export const CREATIVE_COMMISSION_ABILITIES = Object.freeze(['video', 'image', 'm
 // CUSTOM carries a raw 5-field cron; RECURRENCE carries the richer calendar rule
 // used for anchored intervals such as every two weeks or the last Thursday.
 export const CREATIVE_COMMISSION_SCHEDULE_KINDS = Object.freeze(['DAILY', 'WEEKLY', 'CUSTOM', 'RECURRENCE']);
-
-export const CREATIVE_COMMISSION_QUALITIES = Object.freeze(['draft', 'standard', 'high']);
-export const CREATIVE_COMMISSION_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
-
-// Per-commission render-backend pin (#3135). Before this, which backend actually
-// rendered a commission's image/video was an accidental side effect of whatever
-// the Creative Director planner LLM happened to write into the job params — in
-// practice always local, because nothing ever set `params.mode`. These enums let
-// a commission SAY "always render on Grok" (or Codex, or local) and have the
-// scheduled fire honor it.
-//
-// `AUTO` is the default and the no-op: it means "resolve at fire time the way
-// this install already would" (settings.imageGen.mode / the local video default),
-// so an existing commission that never sets the field behaves exactly as before.
-// It is deliberately NOT a member of the backend enums — it is the absence of a
-// pin, mirroring the `'auto'` sentinel the pipeline visual stages already ship
-// (client/src/components/pipeline/stages/VisualGenSettings.jsx). Re-exported
-// from the render-target leaf (#3231) so the two "no pin" protocol values can
-// never diverge.
-export const COMMISSION_RENDER_BACKEND_AUTO = RENDER_TARGET_BACKEND_AUTO;
-
-// Image backends a commission may pin: the queueable image modes (local / codex
-// / grok — `external` never queues) plus the auto sentinel. Derived from
-// QUEUEABLE_IMAGE_MODES so a new backend needs no edit here.
-export const CREATIVE_COMMISSION_IMAGE_MODES = Object.freeze([
-  COMMISSION_RENDER_BACKEND_AUTO, ...QUEUEABLE_IMAGE_MODES,
-]);
-
-// Video backends a commission may pin: local (MLX runtimes) or grok, plus auto.
-export const CREATIVE_COMMISSION_VIDEO_MODES = Object.freeze([
-  COMMISSION_RENDER_BACKEND_AUTO, ...VIDEO_GEN_MODES,
-]);
-
-// A model id is a free string (the media-models registry is user-editable, so an
-// enum here would reject a legitimately-installed model). Bounded like the
-// existing `generation.model`.
-export const COMMISSION_RENDER_MODEL_MAX = 64;
-
-// Per-KEY generation descriptor — the SINGLE SOURCE OF TRUTH for a generation
-// param's type, bounds, and default. Everything else derives from this: the Zod
-// superset (`creativeCommissionGenerationSchema`), the per-ability key lists +
-// defaults (`ABILITY_GENERATION_SPEC`), and the ability adapter's data-driven
-// `sanitizeGeneration`. Keeping the bounds here (not re-typed in the schema AND
-// the adapter AND the client) is what stops the four-way drift. The client
-// (commissionForm.js) still mirrors these values by hand: this module pulls
-// `zod`, so the browser can import them only once they move to a pure leaf,
-// the way the brief caps did (`creativeBriefLimits.js`).
-// `type: 'id'` is a nullable free-string model id: absent/blank normalizes to
-// `null` (= "the install's default model"), which is why its `default` is null
-// rather than a string. Distinct from the `enum`/`int` numeric-or-member kinds so
-// the Zod builder and the adapter coercion both stay data-driven.
-export const GENERATION_KEY_DEFS = Object.freeze({
-  quality: { type: 'enum', values: CREATIVE_COMMISSION_QUALITIES, default: 'standard' },
-  aspectRatio: { type: 'enum', values: CREATIVE_COMMISSION_ASPECT_RATIOS, default: '16:9' },
-  targetDurationSeconds: { type: 'int', min: 5, max: 600, default: 10 },
-  durationMode: { type: 'enum', values: ['auto', 'manual'], default: 'manual' },
-  imageCount: { type: 'int', min: 1, max: 6, default: 1 },
-  lengthSeconds: { type: 'int', min: 5, max: 600, default: 30 },
-  episodeCount: { type: 'int', min: 1, max: 6, default: 1 },
-  // Render-backend pin (#3135) — `auto` = no pin (today's behavior).
-  imageMode: { type: 'enum', values: CREATIVE_COMMISSION_IMAGE_MODES, default: COMMISSION_RENDER_BACKEND_AUTO },
-  videoMode: { type: 'enum', values: CREATIVE_COMMISSION_VIDEO_MODES, default: COMMISSION_RENDER_BACKEND_AUTO },
-  // Optional model id, only meaningful when the matching mode is pinned to a
-  // backend that HAS a model knob (local diffusion / local video runtimes; the
-  // cloud CLIs pick their own model). null = the install default.
-  //
-  // NOT a replacement for the universal `generation.model` below it: that one maps
-  // onto the CD project's `modelId` (the LTX variant the legacy treatment/scene
-  // flow renders with, `sceneRunner.js`) and is left untouched by #3135. These two
-  // are the PLAN-driven path's per-backend pins, which the scene flow never reads.
-  imageModelId: { type: 'id', max: COMMISSION_RENDER_MODEL_MAX, default: null },
-  videoModelId: { type: 'id', max: COMMISSION_RENDER_MODEL_MAX, default: null },
-});
-
-// Which keys each output type carries (the universal `model` is added separately
-// — every type accepts an optional engine/model override). The adapter fills
-// these keys' defaults and preserves only them.
-//
-// The backend pins (#3135) are scoped to the abilities that actually enqueue that
-// kind of render: `imageMode` on `image`, `videoMode` on `video`, and BOTH on
-// `music-video` (its plan renders a video, and the planner may render stills for
-// it too). `music` and `series` carry neither — a series' per-issue renders are
-// pinned on the pipeline series/stage records, not here.
-const ABILITY_GENERATION_KEYS = Object.freeze({
-  video: ['quality', 'aspectRatio', 'targetDurationSeconds', 'durationMode', 'videoMode', 'videoModelId'],
-  image: ['quality', 'aspectRatio', 'imageCount', 'imageMode', 'imageModelId'],
-  music: ['lengthSeconds'],
-  'music-video': ['quality', 'aspectRatio', 'targetDurationSeconds', 'durationMode', 'videoMode', 'videoModelId', 'imageMode', 'imageModelId'],
-  series: ['episodeCount'],
-});
-
-// Derived per-ability { keys, defaults } view — the shape the store sanitizer and
-// tests consume. Built from GENERATION_KEY_DEFS so a default only ever lives in
-// one place.
-export const ABILITY_GENERATION_SPEC = Object.freeze(
-  Object.fromEntries(Object.entries(ABILITY_GENERATION_KEYS).map(([ability, keys]) => [ability, {
-    keys,
-    defaults: Object.fromEntries(keys.map((k) => [k, GENERATION_KEY_DEFS[k].default])),
-  }])),
-);
 
 // Keys allowed for a given ability (the spec keys + the universal `model`). Used
 // by the create-path superRefine to flag a param that doesn't belong to the type.

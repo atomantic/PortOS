@@ -35,6 +35,9 @@ export * as cosValidation from './cosValidation.js';
 export * from './cronValidation.js';
 export * from './cosToolContracts.js';
 export * as creativeCommissionValidation from './creativeCommissionValidation.js';
+// The generation-key spec creativeCommissionValidation.js builds its Zod schema
+// from, as a pure leaf the browser form imports directly (no zod, no Node builtins).
+export * from './creativeCommissionSpec.js';
 export * as creativeDirectorValidation from './creativeDirectorValidation.js';
 // The brief/goal caps both schemas above and the browser forms share, as a pure leaf.
 export * from './creativeBriefLimits.js';
