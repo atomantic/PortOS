@@ -14,7 +14,7 @@ import { getInstanceId, ensureInstanceId, UNKNOWN_INSTANCE_ID } from './instance
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { getDomainAutonomyMode } from './cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
@@ -78,58 +78,49 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
   const { text, model: effectiveModel } = await runPromptThroughProvider({
     provider: providerForCall, prompt, source: `brain-${promptStageName}`, model,
   });
-  return { content: text, model: effectiveModel || model, providerId: provider.id };
+  return { content: text, model: effectiveModel || model, providerId: provider.id, prompt };
 }
 
 /**
  * Parse JSON from AI response (handles markdown code blocks)
  */
-function parseJsonResponse(content) {
+function parseJsonResponse(content, responseSchema = null, promptToStrip = '') {
   if (!content || typeof content !== 'string') {
     throw new Error('Empty or invalid AI response');
   }
 
-  let jsonStr = content.trim();
-
-  // Remove markdown code blocks if present
-  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
+  const shapePredicate = responseSchema
+    ? (value) => responseSchema.safeParse(value).success
+    : undefined;
+  const source = promptToStrip && content.includes(promptToStrip)
+    ? content.replace(promptToStrip, '')
+    : content;
+  const { value, lastError } = extractJson(source, {
+    // Brain prompts include fenced JSON examples. Walk all candidates so an
+    // echoed example cannot win before the actual answer.
+    skipInnerFence: true,
+    shapePredicate,
+  });
+  if (value === undefined) {
+    throw new Error(`Failed to parse AI JSON response: ${lastError?.message || 'No JSON found'}`);
   }
-
-  // Find JSON object
-  const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (objectMatch) {
-    jsonStr = objectMatch[0];
-  }
-
-  try {
-    return JSON.parse(jsonStr);
-  } catch (err) {
-    throw new Error(`Failed to parse AI JSON response: ${err.message}`);
-  }
+  return value;
 }
 
 /**
  * Safe version of parseJsonResponse that returns null instead of throwing.
  * Used in background classification where errors can't bubble to middleware.
  */
-function safeParseJsonResponse(content) {
+function safeParseJsonResponse(content, responseSchema = null, promptToStrip = '') {
   if (!content || typeof content !== 'string') return null;
-
-  let jsonStr = content.trim();
-
-  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
-  }
-
-  const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (objectMatch) {
-    jsonStr = objectMatch[0];
-  }
-
-  return safeJSONParse(jsonStr, null, { logError: true, context: 'brain-classifier' });
+  const source = promptToStrip && content.includes(promptToStrip)
+    ? content.replace(promptToStrip, '')
+    : content;
+  const shapePredicate = responseSchema
+    ? (value) => responseSchema.safeParse(value).success
+    : undefined;
+  const { value } = extractJson(source, { skipInnerFence: true, shapePredicate });
+  return value === undefined ? null : value;
 }
 
 /**
@@ -301,7 +292,7 @@ async function classifyInBackground(entryId, text, meta, providerOverride, model
 
   if (aiResponse) {
     console.log(`🧠 AI responded in ${elapsed}s for ${entryId}`);
-    const parsed = safeParseJsonResponse(aiResponse);
+    const parsed = safeParseJsonResponse(aiResponse, classifierOutputSchema, aiResult.prompt);
     if (parsed) {
       const validationResult = classifierOutputSchema.safeParse(parsed);
       if (validationResult.success) {
@@ -620,7 +611,7 @@ export async function runDailyDigest(providerOverride, modelOverride) {
     modelOverride || meta.defaultModel
   );
 
-  const parsed = parseJsonResponse(aiResult.content);
+  const parsed = parseJsonResponse(aiResult.content, digestOutputSchema, aiResult.prompt);
   const validationResult = digestOutputSchema.safeParse(parsed);
 
   if (!validationResult.success) {
@@ -682,7 +673,7 @@ export async function runWeeklyReview(providerOverride, modelOverride) {
     modelOverride || meta.defaultModel
   );
 
-  const parsed = parseJsonResponse(aiResult.content);
+  const parsed = parseJsonResponse(aiResult.content, reviewOutputSchema, aiResult.prompt);
   const validationResult = reviewOutputSchema.safeParse(parsed);
 
   if (!validationResult.success) {

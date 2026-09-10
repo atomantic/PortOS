@@ -8,8 +8,8 @@ import { join } from 'path';
 import { readFile, readdir } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, safeJSONParse, tryReadFile, rmGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { stripCodeFences } from '../aiProvider.js';
 import { runStagedLLM } from '../stageRunner.js';
+import { extractJson as extractJsonShared } from '../../lib/jsonExtract.js';
 import { extractBible } from '../bibleExtractor.js';
 import { extractScenes, SOURCE_KIND } from '../sceneExtractor.js';
 import { BIBLE_KIND } from '../../lib/storyBible.js';
@@ -60,13 +60,23 @@ const analysisPath = (workId, id) => join(analysisDir(workId), `${id}.json`);
 
 // ---------- response parsing ----------
 
-function extractJson(text) {
+function extractJsonResponse(text, shapePredicate) {
+  // runStagedLLM parses returnsJson stages before handing the result to the
+  // shaper. Keep that object boundary accepted so the shared extractor only
+  // handles raw strings from direct callers; otherwise every JSON Writers
+  // Room pass would fail with "Empty AI response" after the migration.
+  if (text && typeof text === 'object') return text;
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
-  let str = stripCodeFences(text);
-  // Some providers prepend explanation text; pull the first balanced object/array.
-  const objMatch = str.match(/[{[][\s\S]*[\]}]/);
-  if (objMatch) str = objMatch[0];
-  return JSON.parse(str);
+  const { value, lastError } = extractJsonShared(text, {
+    // Writers Room prompts include fenced JSON schemas. Walk every candidate
+    // so a provider's echoed schema cannot become the analysis.
+    skipInnerFence: true,
+    shapePredicate,
+  });
+  if (value === undefined) {
+    throw new Error(`Failed to parse AI response${lastError ? `: ${lastError.message}` : ''}`);
+  }
+  return value;
 }
 
 // Strip a leading/trailing markdown code fence from a prose response — some
@@ -81,7 +91,10 @@ function stripProseFence(raw) {
 export const SHAPERS = {
   format: (raw) => ({ formattedBody: stripProseFence(raw) }),
   evaluate: (raw) => {
-    const parsed = extractJson(raw);
+    const parsed = extractJsonResponse(raw, (value) => value && typeof value === 'object'
+      && !Array.isArray(value)
+      && ['logline', 'summary', 'themes', 'strengths', 'issues', 'suggestions']
+        .some((key) => key in value));
     return {
       logline: typeof parsed.logline === 'string' ? parsed.logline : null,
       summary: typeof parsed.summary === 'string' ? parsed.summary : null,
@@ -96,7 +109,9 @@ export const SHAPERS = {
   // health signals (fat %, protected passage). Findings without a usable anchor
   // quote or a recognized cut type are dropped — the applier can't act on them.
   cuts: (raw) => {
-    const parsed = extractJson(raw);
+    const parsed = extractJsonResponse(raw, (value) => value && typeof value === 'object'
+      && !Array.isArray(value) && (Array.isArray(value.findings)
+        || typeof value.fat_percentage === 'number'));
     const rawFindings = Array.isArray(parsed.findings) ? parsed.findings : [];
     return {
       fatPercentage: typeof parsed.fat_percentage === 'number' ? parsed.fat_percentage : null,

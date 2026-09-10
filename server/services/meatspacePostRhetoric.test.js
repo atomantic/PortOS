@@ -50,5 +50,10 @@ describe('evaluateRhetoricAttempt', () => {
       'high',
       'meatspace-post-rhetoric-evaluator',
     );
+    expect(parseJsonFromAI).toHaveBeenCalledWith(
+      '{}',
+      expect.any(Function),
+      expect.stringContaining('Return ONLY valid JSON'),
+    );
   });
 });

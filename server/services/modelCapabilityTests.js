@@ -59,7 +59,7 @@ import {
   applicableTests, getCapabilityTest,
   scoreKeywords, scoreFictionScene, scoreStoryBeats, scoreSandboxRepair, rollUpVerdict,
 } from '../lib/modelCapabilityTests.js';
-import { parseRhetoricJson, scoreRhetoricReference } from '../lib/postRhetoric.js';
+import { parseRhetoricJson, scoreRhetoricReference, RHETORIC_REFERENCE_SET } from '../lib/postRhetoric.js';
 import { listRuntimeModels, runtimeEndpoint, runtimeApiKey } from './localModelAssessments.js';
 import { runLocalLlmTest, runEndpointLlmTest } from './localLlmPlayground.js';
 import { listProviders } from './providers.js';
@@ -249,7 +249,14 @@ const CHAT_TESTS = {
     maxTokens: 5000,
     message: (modelId) => `Scoring the rhetoric reference set with ${modelId}…`,
     images: async () => undefined,
-    score: (text) => scoreRhetoricReference(parseRhetoricJson(text)),
+    score: (text) => scoreRhetoricReference(parseRhetoricJson(text, (value) => {
+      const expected = new Set(RHETORIC_REFERENCE_SET.map(({ id }) => id));
+      return value && typeof value === 'object' && !Array.isArray(value)
+        && Array.isArray(value.evaluations)
+        && value.evaluations.length === expected.size
+        && value.evaluations.every((item) => item && expected.has(item.id)
+          && typeof item.score === 'number');
+    })),
   },
 };
 

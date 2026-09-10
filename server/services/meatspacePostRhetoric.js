@@ -24,14 +24,22 @@ export async function evaluateRhetoricAttempt({
   effort,
 }) {
   const startedAt = Date.now();
+  const evaluatorPrompt = buildRhetoricEvaluatorPrompt({ mode, prompt, response });
   const aiResponse = await callAI(
-    buildRhetoricEvaluatorPrompt({ mode, prompt, response }),
+    evaluatorPrompt,
     providerId,
     model,
     effort,
     'meatspace-post-rhetoric-evaluator',
   );
-  const payload = validateRhetoricEvaluationPayload(mode, parseJsonFromAI(aiResponse.text));
+  const payload = validateRhetoricEvaluationPayload(mode, parseJsonFromAI(aiResponse.text, (value) => {
+    try {
+      validateRhetoricEvaluationPayload(mode, value);
+      return true;
+    } catch {
+      return false;
+    }
+  }, evaluatorPrompt));
   const evaluation = rhetoricEvaluationSchema.parse({
     ...payload,
     provenance: {

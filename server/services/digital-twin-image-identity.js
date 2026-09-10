@@ -15,7 +15,7 @@
  */
 
 import { buildPrompt } from './promptService.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { getProviderById } from './providers.js';
 import { describeImageDataUrl } from './visionTest.js';
 import { loadMeta } from './digital-twin-meta.js';
@@ -79,7 +79,7 @@ export async function analyzeIdentityImage({ imageDataUrl, providerId, model }) 
     return { error: 'Vision model returned an empty response' };
   }
 
-  return parseIdentityImage(vision.text);
+  return parseIdentityImage(vision.text, prompt);
 }
 
 /**
@@ -139,23 +139,25 @@ function buildDocumentMarkdown({ summary, appearance, presentation, setting, exp
  * synthesized so the save action has content even when the model omits
  * `documentMarkdown`.
  */
-export function parseIdentityImage(response) {
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  const jsonStr = jsonMatch
-    ? jsonMatch[1]
-    : (response.trim().startsWith('{') ? response.trim() : null);
-
-  if (!jsonStr) {
+export function parseIdentityImage(response, promptToStrip = '') {
+  const source = promptToStrip && typeof response === 'string' && response.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  if (typeof source === 'string' && /^\s*(?:```(?:json)?\s*)?\[/.test(source)) {
+    return { error: 'Failed to parse image analysis - invalid JSON', rawResponse: response };
+  }
+  const result = extractJson(source, {
+    blockType: 'object',
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && ['appearance', 'presentation', 'setting', 'expression', 'descriptors', 'summary', 'documentMarkdown']
+        .some((key) => key in value),
+  });
+  const parsed = result.value;
+  if (parsed === undefined && !/[{[]/.test(source || '')) {
     return { error: 'Failed to parse image analysis - no JSON found', rawResponse: response };
   }
-
-  const parsed = safeJSONParse(jsonStr, null, {
-    allowArray: false,
-    logError: true,
-    context: 'image identity analysis'
-  });
-
-  if (!parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { error: 'Failed to parse image analysis - invalid JSON', rawResponse: response };
   }
 

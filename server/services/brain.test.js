@@ -141,6 +141,7 @@ import * as repoCloner from './repoCloner.js';
 import * as storage from './brainStorage.js';
 import { deleteMemoryAssets } from './chatgptImport.js';
 import { getProviderById } from './providers.js';
+import { BRAIN_DIGEST_ECHO_FIXTURE } from '../test/fixtures/brainDigestEcho.js';
 import {
   captureThought,
   resolveReview,
@@ -1294,6 +1295,24 @@ describe('brain service', () => {
 
       const result = await runDailyDigest();
       expect(result.digestText).toBe('Summary');
+    });
+
+    it('skips an echoed schema object before the real digest response', async () => {
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
+      storage.getAdminItems.mockResolvedValue([]);
+      storage.getPeople.mockResolvedValue([]);
+      storage.getInboxLog.mockResolvedValue([]);
+
+      const mockProvider = { id: 'lmstudio', enabled: true, type: 'api', endpoint: 'http://localhost:1234/v1', defaultModel: 'test' };
+      getProviderById.mockResolvedValue(mockProvider);
+      runPromptThroughProvider.mockResolvedValue({
+        text: BRAIN_DIGEST_ECHO_FIXTURE.raw,
+        runId: 'test-run', model: 'test-model'
+      });
+      storage.createDigest.mockImplementation(async (data) => ({ id: 'd1', ...data }));
+
+      const result = await runDailyDigest();
+      expect(result.digestText).toBe(BRAIN_DIGEST_ECHO_FIXTURE.actual.digestText);
     });
 
     it('should throw on empty AI response', async () => {

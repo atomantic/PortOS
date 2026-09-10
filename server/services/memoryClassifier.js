@@ -10,6 +10,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getStageTemplate } from './promptService.js';
 import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { getMemories } from './memoryBackend.js';
@@ -279,25 +280,23 @@ async function callLLM(prompt, config) {
 /**
  * Parse LLM response to extract memories
  */
-function parseLLMResponse(response) {
-  // Extract JSON from response (may be wrapped in markdown code blocks)
-  const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/) ||
-                    response.match(/(\{[\s\S]*\})/);
+function parseLLMResponse(response, promptToStrip = '') {
+  const source = promptToStrip && response?.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  const { value: parsed } = extractJson(source, {
+    // The classifier prompt includes a schema object. Walk all candidates and
+    // prefer the response shape so a prompt echo cannot look like an empty
+    // classification result.
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && Array.isArray(value.memories),
+  });
 
-  if (!jsonMatch) {
+  if (parsed === undefined || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     console.log('⚠️ Could not find JSON in LLM response');
     return { memories: [], rejected: [], parseError: true };
   }
-
-  let parsed;
-  const jsonStr = jsonMatch[1].trim();
-  // Validate JSON structure before parsing
-  if (!jsonStr || !(jsonStr.startsWith('{') && jsonStr.endsWith('}'))) {
-    console.log('⚠️ Extracted JSON appears malformed');
-    return { memories: [], rejected: [], parseError: true };
-  }
-  parsed = safeJSONParse(jsonStr, null, { logError: true, context: 'memory classification' });
-  if (!parsed) return { memories: [], rejected: [], parseError: true };
 
   // Validate structure
   if (!Array.isArray(parsed.memories)) {
@@ -377,7 +376,7 @@ export async function classifyMemories(task, agentOutput) {
     };
   }
 
-  const result = parseLLMResponse(llmResponse);
+  const result = parseLLMResponse(llmResponse, prompt);
 
   if (result.parseError) {
     console.log(`⚠️ Failed to parse LLM response, raw: ${llmResponse.substring(0, 200)}`);

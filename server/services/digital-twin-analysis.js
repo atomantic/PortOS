@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { DIGITAL_TWIN_DIR, callProviderAI, now } from './digital-twin-helpers.js';
 import { loadMeta, saveMeta, digitalTwinEvents } from './digital-twin-meta.js';
 import { getDocuments } from './digital-twin-documents.js';
@@ -152,26 +152,34 @@ export async function detectContradictions(providerId, model) {
 
   const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
-    return parseContradictionResponse(result.text);
+    return parseContradictionResponse(result.text, prompt);
   }
 
   return { issues: [], error: result.error || 'Failed to analyze contradictions' };
 }
 
-function parseContradictionResponse(response) {
-  // Try to extract JSON from the response
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  if (jsonMatch) {
-    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'contradiction analysis' });
-    if (parsed) return { issues: parsed.issues || [], summary: parsed.summary };
+function parseContradictionResponse(response, promptToStrip = '') {
+  const source = promptToStrip && typeof response === 'string' && response.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  // The legacy parser accepted a top-level array when the provider returned
+  // one directly. Check that form first so the object walker does not harvest
+  // the first item inside the array.
+  if (typeof source === 'string' && /^\s*(?:```(?:json)?\s*)?\[/.test(source)) {
+    const arrayResult = extractJson(source, { blockType: 'array', skipInnerFence: true });
+    if (Array.isArray(arrayResult.value)) return { issues: arrayResult.value, summary: undefined };
   }
-
-  // Fallback: try direct JSON parse
-  if (response.trim().startsWith('{') || response.trim().startsWith('[')) {
-    const parsed = safeJSONParse(response, null, { logError: true, context: 'contradiction analysis fallback' });
-    if (parsed) return { issues: parsed.issues || parsed || [], summary: parsed.summary };
+  const { value: parsed } = extractJson(source, {
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object'
+      && (Array.isArray(value.issues) || typeof value.summary === 'string'),
+  });
+  if (parsed && typeof parsed === 'object') {
+    return {
+      issues: parsed.issues || parsed || [],
+      summary: parsed.summary,
+    };
   }
-
   return { issues: [], rawResponse: response };
 }
 
@@ -197,26 +205,38 @@ export async function generateDynamicTests(providerId, model) {
 
   const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
-    return parseGeneratedTests(result.text);
+    return parseGeneratedTests(result.text, prompt);
   }
 
   return { tests: [], error: result.error || 'Failed to generate tests' };
 }
 
-function parseGeneratedTests(response) {
-  // Try to extract JSON from the response
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  if (jsonMatch) {
-    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'generated tests' });
-    if (parsed) return { tests: parsed.tests || parsed || [] };
+function parseGeneratedTests(response, promptToStrip = '') {
+  const source = promptToStrip && typeof response === 'string' && response.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  // Preserve direct top-level arrays; walking object blocks first would return
+  // the first test item rather than the collection.
+  if (typeof source === 'string' && /^\s*(?:```(?:json)?\s*)?\[/.test(source)) {
+    const arrayResult = extractJson(source, { blockType: 'array', skipInnerFence: true });
+    if (Array.isArray(arrayResult.value)) return { tests: arrayResult.value };
   }
-
-  // Fallback: try direct JSON parse
-  if (response.trim().startsWith('{') || response.trim().startsWith('[')) {
-    const parsed = safeJSONParse(response, null, { logError: true, context: 'generated tests fallback' });
-    if (parsed) return { tests: parsed.tests || parsed || [] };
+  const { value: parsed } = extractJson(source, {
+    skipInnerFence: true,
+    shapePredicate: (value) => Array.isArray(value)
+      || (value && typeof value === 'object' && Array.isArray(value.tests)),
+  });
+  if (parsed && typeof parsed === 'object') {
+    return { tests: parsed.tests || parsed || [] };
   }
-
+  // `extractJson` defaults to object blocks. Preserve the old direct-array
+  // response contract for providers that return a top-level list.
+  const arrayResult = extractJson(source, {
+    blockType: 'array',
+    skipInnerFence: true,
+    shapePredicate: Array.isArray,
+  });
+  if (Array.isArray(arrayResult.value)) return { tests: arrayResult.value };
   return { tests: [], rawResponse: response };
 }
 
@@ -242,27 +262,30 @@ export async function analyzeWritingSamples(samples, providerId, model) {
 
   const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
-    return parseWritingAnalysis(result.text);
+    return parseWritingAnalysis(result.text, prompt);
   }
 
   return { error: result.error || 'Failed to analyze writing samples' };
 }
 
-function parseWritingAnalysis(response) {
-  // Try to extract JSON
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  if (jsonMatch) {
-    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'writing analysis' });
-    if (parsed) {
-      return {
-        analysis: parsed.analysis || parsed,
-        suggestedContent: parsed.suggestedContent || parsed.document || ''
-      };
-    }
+function parseWritingAnalysis(response, promptToStrip = '') {
+  const source = promptToStrip && typeof response === 'string' && response.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  const { value: parsed } = extractJson(source, {
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && ('analysis' in value || 'suggestedContent' in value || 'document' in value),
+  });
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return {
+      analysis: parsed.analysis || parsed,
+      suggestedContent: parsed.suggestedContent || parsed.document || ''
+    };
   }
 
   // Extract markdown content for document if present
-  const mdMatch = response.match(/```markdown\s*([\s\S]*?)\s*```/);
+  const mdMatch = source.match(/```markdown\s*([\s\S]*?)\s*```/);
   const suggestedContent = mdMatch ? mdMatch[1] : '';
 
   return {
@@ -378,7 +401,7 @@ export async function analyzeTraits(providerId, model, forceReanalyze = false) {
     return { error: result.error };
   }
 
-  const parsedTraits = parseTraitsResponse(result.text || '');
+  const parsedTraits = parseTraitsResponse(result.text || '', prompt);
   if (parsedTraits.error) {
     return parsedTraits;
   }
@@ -402,19 +425,21 @@ export async function analyzeTraits(providerId, model, forceReanalyze = false) {
   return { traits, analysisNotes: parsedTraits.analysisNotes };
 }
 
-export function parseTraitsResponse(response) {
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  const jsonStr = jsonMatch ? jsonMatch[1] : (response.trim().startsWith('{') ? response.trim() : null);
-
-  if (!jsonStr) {
-    return { error: 'Failed to parse traits response - no JSON found', rawResponse: response };
+export function parseTraitsResponse(response, promptToStrip = '') {
+  const source = promptToStrip && typeof response === 'string' && response.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  if (typeof source === 'string' && /^\s*(?:```(?:json)?\s*)?\[/.test(source)) {
+    return { error: 'Failed to parse traits response - invalid JSON', rawResponse: response };
   }
-
-  const parsed = safeJSONParse(jsonStr, null, { allowArray: false });
+  const { value: parsed } = extractJson(source, {
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value),
+  });
   // A fenced ```json block can wrap a bare scalar (e.g. the model responds
-  // with just `42`) — `allowArray: false` only rejects a root array, so guard
-  // for a genuine object before treating it as a traits response.
-  if (!parsed || typeof parsed !== 'object') {
+  // with just `42`; guard for a genuine object before treating it as a traits
+  // response.
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { error: 'Failed to parse traits response - invalid JSON', rawResponse: response };
   }
 
@@ -459,7 +484,7 @@ export async function calculateConfidence(providerId, model) {
 
   const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
-    const parsed = parseConfidenceResponse(result.text);
+    const parsed = parseConfidenceResponse(result.text, prompt);
 
     if (!parsed.error) {
       const confidence = {
@@ -479,19 +504,17 @@ export async function calculateConfidence(providerId, model) {
   return calculateLocalConfidence(twinContent, currentTraits, meta);
 }
 
-function parseConfidenceResponse(response) {
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  if (jsonMatch) {
-    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'confidence response' });
-    if (parsed) return parsed;
-  }
-
-  if (response.trim().startsWith('{')) {
-    const parsed = safeJSONParse(response, null, { logError: true, context: 'confidence response fallback' });
-    if (parsed) return parsed;
-  }
-
-  return { error: 'Failed to parse confidence response' };
+function parseConfidenceResponse(response, promptToStrip = '') {
+  const source = promptToStrip && typeof response === 'string' && response.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  const { value: parsed } = extractJson(source, {
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value),
+  });
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed
+    : { error: 'Failed to parse confidence response' };
 }
 
 /**

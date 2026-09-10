@@ -11,6 +11,7 @@
 
 import { getActiveProvider, getProviderById } from './providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import {
   LEGACY_POST_LLM_PROVENANCE,
   POST_LLM_MAX_SEMANTIC_CANDIDATES,
@@ -74,26 +75,57 @@ export async function callAI(prompt, providerId, model, effort = null, source = 
   };
 }
 
-export function parseJsonFromAI(content) {
+export function parseJsonFromAI(content, shapePredicate, promptToStrip = '') {
   if (!content || typeof content !== 'string') throw new Error('Empty AI response');
-  let jsonStr = content.trim();
-  // Strip fenced code blocks
-  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) jsonStr = jsonMatch[1].trim();
-  // Extract first JSON object/array from surrounding text
-  const objectMatch = jsonStr.match(/(\{[\s\S]*\})/);
-  if (objectMatch) jsonStr = objectMatch[1];
-  else {
-    const arrayMatch = jsonStr.match(/(\[[\s\S]*\])/);
-    if (arrayMatch) jsonStr = arrayMatch[1];
+
+  // POST responses are objects for most drills, but a few legacy providers
+  // return a top-level array. Walk both delimiters while preserving that
+  // public object-or-array contract. The optional predicate lets validators
+  // skip a prompt-echoed schema example before accepting the real payload.
+  const source = promptToStrip && content.includes(promptToStrip)
+    ? content.replace(promptToStrip, '')
+    : content;
+  const options = { skipInnerFence: true, shapePredicate };
+  // If the response itself is an array (possibly wrapped in one outer fence),
+  // inspect that container before walking nested object items.
+  if (/^\s*(?:```(?:json)?\s*)?\[/.test(source)) {
+    const topLevelArray = extractJson(source, { ...options, blockType: 'array' });
+    if (topLevelArray.value !== undefined
+      && (!shapePredicate || shapePredicate(topLevelArray.value))) {
+      return topLevelArray.value;
+    }
   }
-  return JSON.parse(jsonStr);
+  const objectResult = extractJson(source, options);
+  if (objectResult.value !== undefined
+    && (!shapePredicate || shapePredicate(objectResult.value))) {
+    return objectResult.value;
+  }
+  const arrayResult = extractJson(source, { ...options, blockType: 'array' });
+  if (arrayResult.value !== undefined
+    && (!shapePredicate || shapePredicate(arrayResult.value))) {
+    return arrayResult.value;
+  }
+
+  // No candidate matched the optional shape. Keep the old behavior of
+  // returning the first parseable value so the contract validator can report
+  // its detailed shape error to the caller.
+  const fallback = objectResult.value !== undefined ? objectResult.value : arrayResult.value;
+  if (fallback !== undefined) return fallback;
+  const error = objectResult.lastError || arrayResult.lastError;
+  throw new Error(`Failed to parse AI response: ${error?.message || 'No JSON found'}`);
 }
 
 async function generateValidatedPayload(type, count, prompt, providerId, model) {
   const response = await callAI(prompt, providerId, model);
   return {
-    data: validatePostLlmGenerationPayload(type, parseJsonFromAI(response.text), count),
+    data: validatePostLlmGenerationPayload(type, parseJsonFromAI(response.text, (value) => {
+      try {
+        validatePostLlmGenerationPayload(type, value, count);
+        return true;
+      } catch {
+        return false;
+      }
+    }, prompt), count),
     generation: buildPostLlmGeneratorProvenance(type, response.providerId, response.model),
   };
 }
@@ -503,7 +535,14 @@ async function semanticVerdicts(candidates, prompt, providerId, model, label) {
     throw new Error(`Cannot score ${candidates.length} open-ended items in one bounded batch (max ${POST_LLM_MAX_SEMANTIC_CANDIDATES})`);
   }
   const response = await callAI(prompt, providerId, model);
-  const parsed = validatePostLlmSemanticVerdicts(parseJsonFromAI(response.text), candidates, label);
+  const parsed = validatePostLlmSemanticVerdicts(parseJsonFromAI(response.text, (value) => {
+    try {
+      validatePostLlmSemanticVerdicts(value, candidates, label);
+      return true;
+    } catch {
+      return false;
+    }
+  }, prompt), candidates, label);
   return {
     verdicts: new Map(parsed.verdicts.map((verdict) => [`${verdict.responseIndex}:${verdict.itemIndex}`, verdict.valid])),
     providerId: response.providerId,
@@ -769,8 +808,16 @@ export async function scoreLlmDrill(type, drillData, userResponses, timeLimitMs,
   if (!builder) throw new Error(`Unsupported POST LLM scorer type: ${type}`);
 
   console.log(`🧪 POST LLM scoring: ${type}`);
-  const response = await callAI(builder(drillData, userResponses), providerId, model);
-  const payload = validatePostLlmScorePayload(parseJsonFromAI(response.text), userResponses.length);
+  const scoringPrompt = builder(drillData, userResponses);
+  const response = await callAI(scoringPrompt, providerId, model);
+  const payload = validatePostLlmScorePayload(parseJsonFromAI(response.text, (value) => {
+    try {
+      validatePostLlmScorePayload(value, userResponses.length);
+      return true;
+    } catch {
+      return false;
+    }
+  }, scoringPrompt), userResponses.length);
   const evaluation = evaluationWithProvenance(
     type, drillData, payload, 'llm', response.providerId, response.model,
   );
