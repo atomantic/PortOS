@@ -2320,7 +2320,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     ).toBe(true);
   });
 
-  it('a MANUAL (on-demand) drain continues via triggerOnDemandTask under isImprovementEnabled, returning before the auto-run queue lane', () => {
+  it('a MANUAL (on-demand) drain continues via queuePerpetualRefill under isImprovementEnabled, returning before the auto-run queue lane', () => {
     // The bug fixed here: a "Run Now" perpetual drain is allowed to START in a
     // posture where canQueueImprovementTasks is false (auto-run off/dry-run or
     // idle-review off), but the scheduled queue lane refuses to continue it —
@@ -2339,14 +2339,14 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     expect(/plan\.lane === 'onDemand'/.test(fnSlice), 'refill must branch on the on-demand lane').toBe(true);
 
     const improveGateIdx = fnSlice.indexOf('if (!isImprovementEnabled(state)) return;');
-    // `emit: false` avoids a redundant second dequeue; `origin: REFILL` marks the
-    // re-issue as automated so the on-demand engines do NOT clear the drain's park /
-    // convergence signature / dispatch counter on its behalf.
-    const triggerMatch = /triggerOnDemandTask\(plan\.taskType, plan\.appId, \{\s*emit: false, origin: taskScheduleMod\.ON_DEMAND_ORIGINS\.REFILL\s*\}\)/.exec(fnSlice);
+    // queuePerpetualRefill owns the non-emitting REFILL pair so the on-demand
+    // engines do NOT clear the drain's park / convergence signature / dispatch
+    // counter on its behalf.
+    const triggerMatch = /queuePerpetualRefill\(plan\.taskType, plan\.appId\)/.exec(fnSlice);
     const triggerIdx = triggerMatch ? triggerMatch.index : -1;
     const queueIdx = fnSlice.indexOf('queueEligibleImprovementTasks(state, cosTaskData');
     expect(improveGateIdx, 'manual lane must gate on isImprovementEnabled').toBeGreaterThan(-1);
-    expect(triggerIdx, 'manual lane must re-issue via triggerOnDemandTask(plan.taskType, plan.appId, { emit: false, origin: ON_DEMAND_ORIGINS.REFILL })').toBeGreaterThan(-1);
+    expect(triggerIdx, 'manual lane must re-issue via queuePerpetualRefill(plan.taskType, plan.appId)').toBeGreaterThan(-1);
     expect(queueIdx, 'scheduled queue lane must still exist').toBeGreaterThan(-1);
     // Improve gate precedes the re-issue; the manual lane returns before the queue lane.
     expect(improveGateIdx).toBeLessThan(triggerIdx);
@@ -2381,7 +2381,7 @@ describe('cos.js source — agent:completed triggers perpetual refill', () => {
     const fnIdx = COS_SRC.indexOf('async function refillPerpetualForCompletedAgent');
     const fnSlice = COS_SRC.slice(fnIdx, fnIdx + 4600);
     const parkIdx = fnSlice.indexOf('isPerpetualParkActive(plan.taskType, plan.appId)');
-    const triggerIdx = fnSlice.indexOf('triggerOnDemandTask(plan.taskType, plan.appId');
+    const triggerIdx = fnSlice.indexOf('queuePerpetualRefill(plan.taskType, plan.appId');
     expect(parkIdx, 'refill must consult the type+app park before re-issuing').toBeGreaterThan(-1);
     expect(parkIdx).toBeLessThan(triggerIdx);
     const returnAfterPark = fnSlice.indexOf('return;', parkIdx);

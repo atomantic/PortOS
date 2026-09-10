@@ -1190,6 +1190,19 @@ export async function triggerOnDemandTask(taskType, appId = null, {
   return request;
 }
 
+/**
+ * Queue the next item in a perpetual drain without treating it as a human
+ * pressing Run. The two options are an inseparable policy pair: the refill's
+ * completion handler owns dequeue, and the automated origin must preserve the
+ * drain's park, convergence signature, and dispatch counter.
+ */
+export async function queuePerpetualRefill(taskType, appId) {
+  return triggerOnDemandTask(taskType, appId, {
+    emit: false,
+    origin: ON_DEMAND_ORIGINS.REFILL,
+  });
+}
+
 export async function getOnDemandRequests() {
   const schedule = await loadSchedule();
   const featureEnabled = createFeatureGate();
