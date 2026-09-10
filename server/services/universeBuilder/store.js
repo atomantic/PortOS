@@ -90,6 +90,25 @@ function makeFileBackend(dir) {
     name: 'file',
     readRaw: (id) => cs.loadOneRaw(id),
     listIds: () => cs.listIds(),
+    // The file layout can't project either — `deleted` lives inside each
+    // record, so a live-only or tombstone-cutoff id list means reading them
+    // all (same constraint as countUniverses below). Mirrors the JS filters
+    // the service used to run over listRaw() directly — same conservative
+    // "unparseable deletedAt is kept" rule.
+    listLiveIds: async () => {
+      const records = await listRaw();
+      return records.filter((r) => r && r.deleted !== true).map((r) => r.id);
+    },
+    listTombstoneIdsBefore: async (beforeMs) => {
+      const records = await listRaw();
+      const out = [];
+      for (const r of records) {
+        if (!r?.deleted || typeof r.id !== 'string' || !r.id) continue;
+        const t = Date.parse(r.deletedAt || '');
+        if (Number.isFinite(t) && t < beforeMs) out.push(r.id);
+      }
+      return out;
+    },
     listRaw,
     // There is no cheap count on the file layout — `deleted` lives INSIDE each
     // record, so knowing which ids are live means reading them all (listIds()
@@ -164,6 +183,8 @@ function makePgBackend(db) {
     name: 'postgres',
     readRaw: db.readRaw,
     listIds: db.listIds,
+    listLiveIds: db.listLiveIds,
+    listTombstoneIdsBefore: db.listTombstoneIdsBefore,
     listRaw: db.listRaw,
     countUniverses: db.countUniverses,
     listNames: db.listNames,
@@ -223,6 +244,8 @@ function createFacade({ dir, sanitizeRecord }) {
 
     // Reads
     listIds: async () => (await getBackend()).listIds(),
+    listLiveIds: async () => (await getBackend()).listLiveIds(),
+    listTombstoneIdsBefore: async (beforeMs) => (await getBackend()).listTombstoneIdsBefore(beforeMs),
     listRaw: async () => (await getBackend()).listRaw(),
     countUniverses: async (opts) => (await getBackend()).countUniverses(opts),
     listNames: async () => (await getBackend()).listNames(),

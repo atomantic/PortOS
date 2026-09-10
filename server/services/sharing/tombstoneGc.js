@@ -36,10 +36,18 @@
  * failed). See `TRACK_COHORT_KINDS` / `confirmedFloorForSub` below.
  */
 
-import { pruneTombstonedUniverses, listUniverses } from '../universeBuilder.js';
-import { pruneTombstonedSeries, listSeries } from '../pipeline/series.js';
+import {
+  pruneTombstonedUniverses,
+  listLiveIds as listLiveUniverseIds,
+  listIds as listUniverseIds,
+} from '../universeBuilder.js';
+import {
+  pruneTombstonedSeries,
+  listLiveIds as listLiveSeriesIds,
+  listIds as listSeriesIds,
+} from '../pipeline/series.js';
 import { pruneTombstonedIssues, listIssueIds } from '../pipeline/issues.js';
-import { pruneTombstonedCollections, listCollections } from '../mediaCollections.js';
+import { pruneTombstonedCollections, listCollections, listCollectionIds } from '../mediaCollections.js';
 import { pruneTombstonedAuthors, listAuthorIds } from '../authors/index.js';
 import { pruneTombstonedArtists, listArtistIds } from '../artists/index.js';
 import { pruneTombstonedAlbums, listAlbumIds } from '../albums/index.js';
@@ -50,7 +58,11 @@ import {
   listProjectIds as listMusicVideoProjectIds,
 } from '../musicVideo/projects.js';
 import { pruneTombstonedBoards, listBoardIds } from '../moodBoard/index.js';
-import { pruneTombstonedLooms, listLooms } from '../fableLoom/index.js';
+import {
+  pruneTombstonedLooms,
+  listLiveIds as listLiveLoomIds,
+  listIds as listLoomIds,
+} from '../fableLoom/index.js';
 import {
   pruneTombstonedWorks, listWorkIdsForSync,
   pruneTombstonedFolders, listFolderIdsForSync,
@@ -78,9 +90,16 @@ import { PEER_SUBSCRIBABLE_KINDS } from './peerSyncShared.js';
 // `listIssueIds` (not `listIssues`) because the latter caps at 1000 — a capped
 // source would report a live record beyond the cap as missing and the sweep
 // would strip its base hash, silently disabling conflict detection for it.
+//
+// universe/series/fableLoom read id-only projections (`listLiveIds` — a SQL
+// `WHERE deleted = FALSE`, or the file-backend hydrate+filter twin) instead of
+// the full-record listers: this sweep runs every tick and almost never finds
+// anything to strip, so it must not pay for every universe/series/loom body
+// (#6851). mediaCollection is file-backed with `deleted` living inside the
+// record, so there's no cheaper live projection — it still hydrates.
 const LIVE_ID_LISTERS = Object.freeze({
-  universe: async () => (await listUniverses()).map((r) => r.id),
-  series: async () => (await listSeries()).map((r) => r.id),
+  universe: () => listLiveUniverseIds(),
+  series: () => listLiveSeriesIds(),
   issue: () => listIssueIds(),
   mediaCollection: async () => (await listCollections()).map((r) => r.id),
   author: () => listAuthorIds(),
@@ -90,7 +109,7 @@ const LIVE_ID_LISTERS = Object.freeze({
   creativeDirectorProject: () => listProjectIds(),
   musicVideoProject: () => listMusicVideoProjectIds(),
   moodBoard: () => listBoardIds(),
-  fableLoom: async () => (await listLooms()).map((r) => r.id),
+  fableLoom: () => listLiveLoomIds(),
   writersRoomWork: () => listWorkIdsForSync(),
   writersRoomFolder: () => listFolderIdsForSync(),
   writersRoomExercise: () => listExerciseIdsForSync(),
@@ -105,10 +124,18 @@ const LIVE_ID_LISTERS = Object.freeze({
 // directory is actually gone (hard-deleted by the tombstone prune above).
 // Issues are absent — they're never directly subscribed (issue tombstones
 // ride their parent series's push, so PEER_SUBSCRIBABLE_KINDS has no 'issue').
+//
+// universe/series/fableLoom/mediaCollection read id-only projections here too
+// (`listIds`/`listCollectionIds` — every row, no JSONB body) instead of the
+// full-record `{ includeDeleted: true }` listers, same hydration-avoidance
+// reasoning as LIVE_ID_LISTERS above. mediaCollection's projection is a
+// directory listing (collectionStore.listIds()), not a SQL query — the file
+// layout has no `deleted` column to filter live vs. tombstoned rows on, but a
+// plain id listing needs no hydration either way.
 const ALL_ID_LISTERS = Object.freeze({
-  universe: async () => (await listUniverses({ includeDeleted: true })).map((r) => r.id),
-  series: async () => (await listSeries({ includeDeleted: true })).map((r) => r.id),
-  mediaCollection: async () => (await listCollections({ includeDeleted: true })).map((r) => r.id),
+  universe: () => listUniverseIds(),
+  series: () => listSeriesIds(),
+  mediaCollection: () => listCollectionIds(),
   author: () => listAuthorIds({ includeDeleted: true }),
   artist: () => listArtistIds({ includeDeleted: true }),
   album: () => listAlbumIds({ includeDeleted: true }),
@@ -116,7 +143,7 @@ const ALL_ID_LISTERS = Object.freeze({
   creativeDirectorProject: () => listProjectIds({ includeDeleted: true }),
   musicVideoProject: () => listMusicVideoProjectIds({ includeDeleted: true }),
   moodBoard: () => listBoardIds({ includeDeleted: true }),
-  fableLoom: async () => (await listLooms({ includeDeleted: true })).map((r) => r.id),
+  fableLoom: () => listLoomIds(),
   writersRoomWork: () => listWorkIdsForSync({ includeDeleted: true }),
   writersRoomFolder: () => listFolderIdsForSync({ includeDeleted: true }),
   writersRoomExercise: () => listExerciseIdsForSync({ includeDeleted: true }),

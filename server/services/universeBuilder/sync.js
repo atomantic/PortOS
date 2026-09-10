@@ -188,6 +188,24 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
 }
 
 /**
+ * Universe id listers for the tombstone-sweep's orphan resolvers
+ * (server/services/sharing/tombstoneGc.js). Both are id-only projections — no
+ * record hydration, no sanitize — so a sweep that only checks set membership
+ * never pays for a universe's JSONB body, let alone every one of them.
+ *
+ * `listLiveIds` excludes tombstones (LIVE_ID_LISTERS — a record stops
+ * protecting its base hash once tombstoned); `listIds` includes them
+ * (ALL_ID_LISTERS — a tombstone still owns its peer subscription until the
+ * record is hard-deleted).
+ */
+export async function listLiveIds() {
+  return store().listLiveIds();
+}
+export async function listIds() {
+  return store().listIds();
+}
+
+/**
  * Garbage-collect universe tombstones older than `beforeMs`. Pure of GC
  * policy — the caller (server/services/sharing/tombstoneGc.js) owns the
  * ack-cursor + grace-period math and just tells us the cutoff timestamp.
@@ -199,17 +217,13 @@ export async function mergeUniversesFromSync(remoteUniverses, { source = { via: 
 export async function pruneTombstonedUniverses(beforeMs) {
   if (!Number.isFinite(beforeMs)) return { pruned: 0 };
   const s = store();
-  // Bulk raw read for the out-of-queue candidate scan — we only need
-  // id/deleted/deletedAt, so skip the per-record sanitize. The authoritative
-  // re-check inside each per-id queue below still uses loadOne (sanitized).
-  const records = await s.listRaw();
-  const candidates = [];
-  for (const u of records) {
-    if (!u?.deleted || !isStr(u.id)) continue;
-    const t = Date.parse(u.deletedAt || '');
-    if (!Number.isFinite(t)) continue;
-    if (t < beforeMs) candidates.push(u.id);
-  }
+  // Id-only candidate scan for the out-of-queue pass — a SQL projection on
+  // Postgres (`WHERE deleted = TRUE AND deleted_at < $1`), hydrate+filter on
+  // the file escape hatch. The sweep almost never finds a tombstone, so this
+  // must not pay for every universe's JSONB body just to find zero candidates.
+  // The authoritative re-check inside each per-id queue below still uses
+  // loadOne (sanitized).
+  const candidates = await s.listTombstoneIdsBefore(beforeMs);
   // Per-id deletes fan out, but we re-check the tombstone status INSIDE each
   // per-id queue. A concurrent mergeUniversesFromSync could have un-deleted
   // the record (newer remote `updatedAt`, `deleted: false`) between our
