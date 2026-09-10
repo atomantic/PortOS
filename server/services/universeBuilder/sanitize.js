@@ -18,6 +18,9 @@ import {
 } from '../../lib/storyBible.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
+import {
+  LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX, INFLUENCE_ENTRY_MAX, INFLUENCES_PER_LIST_MAX, STYLE_REFERENCES_MAX, LOCKABLE_FIELDS,
+} from '../../lib/universeBibleLimits.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 
 // RECORD-shape schema version, stamped INSIDE each universe record. Distinct
@@ -62,14 +65,9 @@ export const COMPOSITE_PROMPT_MAX = 4000;
 export const VARIATION_LABEL_MAX = 120;
 // Narrative bible fields — surfaced into the Pipeline "new series" form so a
 // universe's logline/premise/style notes can seed a production series in one click.
-export const LOGLINE_MAX = 500;
-// Match the production-series premise ceiling. A universe premise that must
-// carry distinct economies, jurisdictions, travel rules, route logistics, and
-// several sites can legitimately need well beyond 8k; this remains a
-// runaway-payload guard, not an instruction to crush readable bible prose into
-// an abbreviation ledger.
-export const PREMISE_MAX = 20000;
-export const STYLE_NOTES_MAX = 4000;
+// Shared limits and lockable-fields list now live in server/lib/universeBibleLimits.js
+// (imported above).
+export { LOGLINE_MAX, PREMISE_MAX, STYLE_NOTES_MAX, INFLUENCE_ENTRY_MAX, INFLUENCES_PER_LIST_MAX, STYLE_REFERENCES_MAX, LOCKABLE_FIELDS };
 // Linked mood board pointer (`mb-<uuid>`, #4188) — generous cap for the id.
 export const MOOD_BOARD_ID_MAX = 80;
 export const VARIATIONS_PER_CATEGORY_MAX = 50;
@@ -96,24 +94,8 @@ export const ENTRY_REF_KIND = Object.freeze({
 // prompts. Surfaced in the UI as "Style prompt" (embrace) and "Negative prompt"
 // (avoid) and managed via the draggable-chip editor. Joined verbatim with the
 // per-variation prompt at render-compile time.
-export const INFLUENCE_ENTRY_MAX = 120;
-export const INFLUENCES_PER_LIST_MAX = 30;
 export const STYLE_REFERENCE_TITLE_MAX = 120;
 export const STYLE_REFERENCE_PROMPT_MAX = 4000;
-export const STYLE_REFERENCES_MAX = 20;
-
-// Top-level fields the user can lock against AI-driven changes (refine /
-// expand). When a field is locked, both the refiner and the expansion-merge
-// must preserve the user's value verbatim. Categories + composite sheets are
-// not lockable yet — start with the bible/prompt scalars the user owns.
-export const LOCKABLE_FIELDS = Object.freeze([
-  'starterPrompt',
-  'logline',
-  'premise',
-  'styleNotes',
-  'influencesEmbrace',
-  'influencesAvoid',
-]);
 
 // Human-readable labels for lockable fields. Single source of truth for the
 // LLM prompt builders (refine emits "starter idea", expand emits "STARTER IDEA"

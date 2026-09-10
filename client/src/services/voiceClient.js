@@ -9,6 +9,7 @@ import socket from './socket';
 import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
 import { sleep } from '../utils/sleep.js';
 import { resumeAudioContext, acquireAudioSession } from '../lib/audioContext.js';
+import { ECHO_WINDOW_MS, MIN_TOKENS_FOR_ECHO_CHECK, MIN_SHARED_TRIGRAMS, tokenize, trigramsOf } from '../../../server/lib/voiceEcho.js';
 
 // iOS audio-session claims held while a mic stream is open — one per capture
 // mode, because push-to-talk and hands-free listening can overlap. `getUserMedia`
@@ -190,39 +191,20 @@ const isInTtsEchoWindow = () => isTtsActive() || performance.now() < ttsCooldown
 // This client gate runs only on the Web Speech path where transcripts are
 // produced in-browser and sent as voice:text. Whisper-based continuous mode
 // sends audio to the server, so its echo gate lives in
-// server/services/voice/echo.js — KEEP THE TWO IN SYNC. Both implement the
-// same algorithm so tuning one (threshold, window, tokenizer) requires the
-// other to match.
-const TTS_ECHO_MEMORY_MS = 8000;
-const MIN_TOKENS_FOR_ECHO_CHECK = 4;
-const MIN_SHARED_TRIGRAMS = 2;
+// server/services/voice/echo.js. Pure helpers are shared via
+// server/lib/voiceEcho.js.
 const recentTtsSentences = [];
 
-const tokenizeForEcho = (s) => (s || '')
-  .toLowerCase()
-  .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-  .split(/\s+/)
-  .filter(Boolean);
-
-const buildTrigrams = (tokens) => {
-  if (tokens.length < 3) return [];
-  const out = [];
-  for (let i = 0; i + 3 <= tokens.length; i++) {
-    out.push(`${tokens[i]} ${tokens[i + 1]} ${tokens[i + 2]}`);
-  }
-  return out;
-};
-
 const rememberTtsSentence = (sentence) => {
-  const tokens = tokenizeForEcho(sentence);
+  const tokens = tokenize(sentence);
   if (!tokens.length) return;
   const now = performance.now();
-  while (recentTtsSentences.length && now - recentTtsSentences[0].t > TTS_ECHO_MEMORY_MS) {
+  while (recentTtsSentences.length && now - recentTtsSentences[0].t > ECHO_WINDOW_MS) {
     recentTtsSentences.shift();
   }
   recentTtsSentences.push({
     text: tokens.join(' '),
-    trigrams: new Set(buildTrigrams(tokens)),
+    trigrams: new Set(trigramsOf(tokens)),
     t: now,
   });
 };
@@ -233,14 +215,14 @@ const looksLikeTtsEcho = (text) => {
   // content gate entirely so we never misclassify the user's actual speech.
   if (audioRoute.likelyHeadset) return false;
 
-  const tokens = tokenizeForEcho(text);
+  const tokens = tokenize(text);
   if (tokens.length < MIN_TOKENS_FOR_ECHO_CHECK) return false;
   const heardText = tokens.join(' ');
-  const heardTrigrams = buildTrigrams(tokens);
+  const heardTrigrams = trigramsOf(tokens);
   if (!heardTrigrams.length) return false;
   const now = performance.now();
   for (const entry of recentTtsSentences) {
-    if (now - entry.t > TTS_ECHO_MEMORY_MS) continue;
+    if (now - entry.t > ECHO_WINDOW_MS) continue;
     if (entry.text.includes(heardText)) return true;
     let shared = 0;
     for (const tg of heardTrigrams) {

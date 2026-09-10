@@ -6,7 +6,7 @@
 // A mirror of this algorithm runs client-side in
 // client/src/services/voiceClient.js for the Web Speech STT path (which
 // produces transcripts in-browser and never sends audio to the server).
-// KEEP THE TWO IN SYNC — same tokenizer, same thresholds, same window.
+// Pure helpers are shared via server/lib/voiceEcho.js.
 //
 // Strategy — two stacked filters:
 //   1. Length gate: utterances shorter than MIN_TOKENS_FOR_ECHO_CHECK words
@@ -22,23 +22,20 @@
 // Time-windowed: TTS sentences older than `windowMs` are ignored so an echo
 // from 30 seconds ago can't suppress a legitimate later utterance.
 
-export const ECHO_WINDOW_MS = 8000;
-export const MIN_TOKENS_FOR_ECHO_CHECK = 4;
-export const MIN_SHARED_TRIGRAMS = 2;
+import {
+  ECHO_WINDOW_MS,
+  MIN_TOKENS_FOR_ECHO_CHECK,
+  MIN_SHARED_TRIGRAMS,
+  tokenize,
+  trigramsOf,
+} from '../../lib/voiceEcho.js';
 
-export const tokenize = (s) => (s || '')
-  .toLowerCase()
-  .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-  .split(/\s+/)
-  .filter(Boolean);
-
-export const trigramsOf = (tokens) => {
-  if (!Array.isArray(tokens) || tokens.length < 3) return [];
-  const out = [];
-  for (let i = 0; i + 3 <= tokens.length; i++) {
-    out.push(`${tokens[i]} ${tokens[i + 1]} ${tokens[i + 2]}`);
-  }
-  return out;
+export {
+  ECHO_WINDOW_MS,
+  MIN_TOKENS_FOR_ECHO_CHECK,
+  MIN_SHARED_TRIGRAMS,
+  tokenize,
+  trigramsOf,
 };
 
 // Push a freshly-spoken TTS sentence into the per-socket echo memory and
