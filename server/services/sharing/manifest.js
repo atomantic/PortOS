@@ -18,6 +18,7 @@ import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { readdir, rename } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { SHARING_SCHEMA_VERSION, getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
@@ -36,6 +37,8 @@ export function annotationManifestFilename(senderInstanceId) {
 
 /** @deprecated Use SHARING_SCHEMA_VERSION from ./version.js. Kept exported for back-compat. */
 export const MANIFEST_SCHEMA_VERSION = SHARING_SCHEMA_VERSION;
+
+const queueCursorWrite = createKeyCachedQueue();
 
 const cursorPath = (bucketId) => join(PATHS.data, 'sharing', 'cursors', `${bucketId}.json`);
 
@@ -74,24 +77,26 @@ export async function writeCursor(bucketId, cursor) {
  * cursor at 5000 entries so a runaway peer can't grow the file unbounded.
  */
 export async function markProcessed(bucketId, manifestFilename, manifestId = null) {
-  const cursor = await readCursor(bucketId);
-  cursor.processedById[manifestFilename] = manifestId || cursor.processedById[manifestFilename] || '';
-  // Drop legacy entry if it was tracked there; the map is now authoritative.
-  if (cursor.processed.includes(manifestFilename)) {
-    cursor.processed = cursor.processed.filter((f) => f !== manifestFilename);
-  }
-  const keys = Object.keys(cursor.processedById);
-  if (keys.length > 5000) {
-    // Drop the lexicographically-smallest 1000 — for timestamp-prefixed
-    // one-shot manifests this is the oldest entries. Subscription filenames
-    // (sub-…) sort after timestamp-prefixed ones, so they survive a prune
-    // even when the cursor is full of legacy one-shot history.
-    const drop = new Set(keys.sort().slice(0, keys.length - 5000));
-    for (const k of drop) delete cursor.processedById[k];
-  }
-  cursor.lastProcessedAt = new Date().toISOString();
-  await writeCursor(bucketId, cursor);
-  return cursor;
+  return queueCursorWrite(bucketId, async () => {
+    const cursor = await readCursor(bucketId);
+    cursor.processedById[manifestFilename] = manifestId || cursor.processedById[manifestFilename] || '';
+    // Drop legacy entry if it was tracked there; the map is now authoritative.
+    if (cursor.processed.includes(manifestFilename)) {
+      cursor.processed = cursor.processed.filter((f) => f !== manifestFilename);
+    }
+    const keys = Object.keys(cursor.processedById);
+    if (keys.length > 5000) {
+      // Drop the lexicographically-smallest 1000 — for timestamp-prefixed
+      // one-shot manifests this is the oldest entries. Subscription filenames
+      // (sub-…) sort after timestamp-prefixed ones, so they survive a prune
+      // even when the cursor is full of legacy one-shot history.
+      const drop = new Set(keys.sort().slice(0, keys.length - 5000));
+      for (const k of drop) delete cursor.processedById[k];
+    }
+    cursor.lastProcessedAt = new Date().toISOString();
+    await writeCursor(bucketId, cursor);
+    return cursor;
+  });
 }
 
 /**
@@ -101,14 +106,16 @@ export async function markProcessed(bucketId, manifestFilename, manifestId = nul
  * `unlink` for arbitrary files in the watched dir, not just our manifests.
  */
 export async function forgetProcessed(bucketId, manifestFilename) {
-  const cursor = await readCursor(bucketId);
-  const inMap = cursor.processedById && manifestFilename in cursor.processedById;
-  const inLegacy = cursor.processed.includes(manifestFilename);
-  if (!inMap && !inLegacy) return cursor;
-  if (inMap) delete cursor.processedById[manifestFilename];
-  if (inLegacy) cursor.processed = cursor.processed.filter((f) => f !== manifestFilename);
-  await writeCursor(bucketId, cursor);
-  return cursor;
+  return queueCursorWrite(bucketId, async () => {
+    const cursor = await readCursor(bucketId);
+    const inMap = cursor.processedById && manifestFilename in cursor.processedById;
+    const inLegacy = cursor.processed.includes(manifestFilename);
+    if (!inMap && !inLegacy) return cursor;
+    if (inMap) delete cursor.processedById[manifestFilename];
+    if (inLegacy) cursor.processed = cursor.processed.filter((f) => f !== manifestFilename);
+    await writeCursor(bucketId, cursor);
+    return cursor;
+  });
 }
 
 /**
