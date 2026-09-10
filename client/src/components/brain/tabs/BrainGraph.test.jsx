@@ -41,7 +41,7 @@ vi.mock('../../../services/api', () => ({
 import * as api from '../../../services/api';
 import { chipColors, parseColor } from '../../../lib/chipContrast';
 import { BRAIN_TYPE_HEX } from '../constants';
-import BrainGraph, { graphMotionSettings, recordBody } from './BrainGraph';
+import BrainGraph, { recordBody, brainEdgeColor, brainEdgeIntensity } from './BrainGraph';
 
 const GRAPH = {
   hasEmbeddings: true,
@@ -91,13 +91,27 @@ describe('reduced motion', () => {
     expect(window.matchMedia).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
     expect(screen.getByTestId('graph-canvas')).toHaveAttribute('data-frameloop', 'demand');
   });
+});
 
-  it('stops the canvas render loop and OrbitControls inertia when motion is reduced', () => {
-    expect(graphMotionSettings(true)).toEqual({ frameloop: 'demand', enableDamping: false });
+// The scene appearance moved to the shared graph3d/GraphScene + GraphEdges
+// (#6828) — these callbacks are what preserves BrainGraph's distinct render
+// (a per-edge-type palette, and a flat intensity for "linked" edges) now that
+// MemoryGraph's own flat blue/gray, weight-scaled palette runs through the
+// same shared component. graphMotionSettings' own contract is pinned in
+// graph3d/GraphScene.test.jsx, its new canonical home.
+describe('edge appearance (graph3d extraction)', () => {
+  it('colors each edge type from EDGE_COLORS, falling back to gray for an unknown type', () => {
+    expect(brainEdgeColor({ type: 'similar' })).toBe('#3b82f6');
+    expect(brainEdgeColor({ type: 'shared_tag' })).toBe('#f59e0b');
+    expect(brainEdgeColor({ type: 'linked' })).toBe('#ffffff');
+    expect(brainEdgeColor({ type: 'unknown' })).toBe('#6b7280');
   });
 
-  it('keeps animated rendering and controls for users without the preference', () => {
-    expect(graphMotionSettings(false)).toEqual({ frameloop: 'always', enableDamping: true });
+  it('holds linked edges at a flat intensity and defaults an unweighted similarity edge to 0.5', () => {
+    expect(brainEdgeIntensity({ type: 'linked', weight: 0.1 }, false)).toBe(0.6);
+    expect(brainEdgeIntensity({ type: 'similar', weight: undefined }, false)).toBeCloseTo(0.3 * 0.5);
+    expect(brainEdgeIntensity({ type: 'similar', weight: 0.8 }, false)).toBeCloseTo(0.3 * 0.8);
+    expect(brainEdgeIntensity({ type: 'linked' }, true)).toBe(0.06);
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 // The three.js stack can't run in jsdom (no WebGL context), and none of it is
@@ -7,12 +7,15 @@ import userEvent from '@testing-library/user-event';
 // The stub deliberately drops `children` from the render: mounting the scene
 // would create <bufferGeometry>/<mesh> as unknown DOM elements. It still
 // *captures* the element so a test can reach GraphScene's callbacks (the only
-// way to open the hover tooltip without a real raycast).
+// way to open the hover tooltip, or stand in for a screen-space pick, without
+// a real raycast). Rendered as an actual <canvas> tag (not a <div>) so the
+// wrapper's `isCanvasGesture` check — `e.target.tagName === 'CANVAS'` — passes
+// for the touch-tap test below, matching what react-three-fiber really mounts.
 let sceneElement = null;
 vi.mock('@react-three/fiber', () => ({
-  Canvas: ({ children }) => {
+  Canvas: ({ children, frameloop }) => {
     sceneElement = children;
-    return <div data-testid="graph-canvas" />;
+    return <canvas data-testid="graph-canvas" data-frameloop={frameloop} />;
   },
 }));
 vi.mock('@react-three/drei', () => ({ OrbitControls: () => null }));
@@ -23,7 +26,7 @@ vi.mock('../../../services/api', () => ({
 }));
 
 import * as api from '../../../services/api';
-import MemoryGraph from './MemoryGraph';
+import MemoryGraph, { memoryEdgeColor, memoryEdgeIntensity } from './MemoryGraph';
 
 const GRAPH = {
   nodes: [
@@ -46,6 +49,7 @@ const hoverNode = async (node, point) => {
 };
 
 const originalInnerWidth = window.innerWidth;
+const originalMatchMedia = window.matchMedia;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -56,6 +60,7 @@ beforeEach(() => {
 
 afterEach(() => {
   window.innerWidth = originalInnerWidth;
+  window.matchMedia = originalMatchMedia;
 });
 
 describe('canvas sizing', () => {
@@ -149,5 +154,62 @@ describe('hover tooltip placement', () => {
     await renderGraph();
     await hoverNode(GRAPH.nodes[0], { x: 100, y: 100 });
     expect(tooltipOf(screen.getByText('first'))).toHaveClass('pointer-coarse:hidden');
+  });
+});
+
+// Ported from BrainGraph via the graph3d extraction (#6828) — before this,
+// MemoryGraph never read the system preference at all, so the canvas always
+// ran its render loop and OrbitControls kept inertia regardless.
+describe('reduced motion', () => {
+  it('reads the system preference and renders the canvas on demand', async () => {
+    window.matchMedia = vi.fn(() => ({
+      matches: true,
+      addEventListener() {},
+      removeEventListener() {}
+    }));
+
+    await renderGraph();
+
+    expect(window.matchMedia).toHaveBeenCalledWith('(prefers-reduced-motion: reduce)');
+    expect(screen.getByTestId('graph-canvas')).toHaveAttribute('data-frameloop', 'demand');
+  });
+});
+
+// Ported from BrainGraph via the graph3d extraction (#6828) — before this,
+// MemoryGraph had no touch-pick wiring at all: a finger tap never selected a
+// node because the raw mesh raycast needs a hit on a ~10px sphere.
+describe('touch tap-to-select', () => {
+  it('selects the node the wrapper-owned screen-space pick resolves to', async () => {
+    await renderGraph();
+    const canvas = screen.getByTestId('graph-canvas');
+
+    // GraphScene never mounts in this suite (see the Canvas mock above), so
+    // its own pickRef effect (a real screen-space projection) never runs —
+    // stand in for it exactly as the scene would, via the same ref MemoryGraph
+    // handed it as a prop.
+    sceneElement.props.pickRef.current = () => GRAPH.nodes[1];
+
+    fireEvent.pointerDown(canvas, { pointerType: 'touch', isPrimary: true, clientX: 50, clientY: 50 });
+    fireEvent.pointerUp(canvas, { pointerType: 'touch', clientX: 52, clientY: 51 });
+    await act(async () => {});
+
+    expect(await screen.findByText('second')).toBeInTheDocument();
+  });
+});
+
+// Each page's edge callbacks preserve its own pre-extraction render (see
+// GraphEdges' `edgeColor`/`edgeIntensity` params) — MemoryGraph's flat
+// blue-linked/gray-everything-else, weight-scaled for BOTH edge kinds, unlike
+// BrainGraph's flat intensity for "linked" (BrainGraph.test.jsx).
+describe('edge appearance (graph3d extraction)', () => {
+  it('colors only linked edges blue; everything else gray', () => {
+    expect(memoryEdgeColor({ type: 'linked' })).toBe('#3b82f6');
+    expect(memoryEdgeColor({ type: 'similar' })).toBe('#6b7280');
+  });
+
+  it('scales both edge kinds by weight, unlike BrainGraph\'s flat linked intensity', () => {
+    expect(memoryEdgeIntensity({ type: 'linked', weight: 0.5 }, false)).toBeCloseTo(0.3);
+    expect(memoryEdgeIntensity({ type: 'similar', weight: 0.5 }, false)).toBeCloseTo(0.15);
+    expect(memoryEdgeIntensity({ type: 'linked', weight: 1 }, true)).toBe(0.06);
   });
 });
