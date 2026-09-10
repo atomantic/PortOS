@@ -62,7 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_sync_sequence ON memories (sync_sequence
 -- Versioned DB-migration tracker (#1029). Records which ordered migration files
 -- in server/scripts/db-migrations/ have been applied on THIS install. Part of
 -- the base schema (mirrored in db.js ensureSchema, parity-locked by
--- db.catalogDdlParity.test.js) so the boot-time runner can always read it.
+-- db.ddlParity.test.js) so the boot-time runner can always read it.
 CREATE TABLE IF NOT EXISTS schema_migrations (
   id TEXT PRIMARY KEY,
   applied_at TIMESTAMPTZ DEFAULT NOW()
@@ -1833,7 +1833,7 @@ CREATE INDEX IF NOT EXISTS idx_beeper_outbox_conversation_state ON beeper_outbox
 -- raw DELETE, a manual psql session). row_snapshot keeps the OLD row JSON so a
 -- wrongful delete is recoverable from the log alone. Local-only (not federated).
 -- Mirrors the record_audit block in server/lib/db.js (parity-locked by
--- db.catalogDdlParity.test.js).
+-- db.ddlParity.test.js).
 CREATE TABLE IF NOT EXISTS record_audit (
   id BIGSERIAL PRIMARY KEY,
   table_name TEXT NOT NULL,

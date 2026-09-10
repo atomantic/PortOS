@@ -2,7 +2,7 @@
 // trigger function, the list of audited tables, and the trigger builder.
 // Extracted verbatim from ensureSchemaImpl() in server/lib/db.js (#2832) with
 // zero behavior change. Parity-locked against server/scripts/init-db.sql by
-// db.catalogDdlParity.test.js — keep auditedTables in sync with the
+// db.ddlParity.test.js — keep auditedTables in sync with the
 // AUDITED_RECORD_TABLES list there.
 export const auditDdl = [
     // ─── Deletion audit log (incident #1248-follow-up) ──────────────────────
@@ -15,7 +15,7 @@ export const auditDdl = [
     // wrongful delete is recoverable from the log alone. Local-only, never
     // federated (no sync_sequence) — each install audits its own mutations.
     // Mirrors the record_audit block in init-db.sql (parity-locked by
-    // db.catalogDdlParity.test.js).
+    // db.ddlParity.test.js).
     `CREATE TABLE IF NOT EXISTS record_audit (
       id BIGSERIAL PRIMARY KEY,
       table_name TEXT NOT NULL,
