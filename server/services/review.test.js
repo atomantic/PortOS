@@ -181,6 +181,26 @@ describe('review service', () => {
     });
   });
 
+  it('keeps archived items editable, dismissible, and deletable through the public service', async () => {
+    const files = {
+      'items.json': [{ id: 'live', type: 'todo', status: 'pending' }],
+      'archive.json': [{ id: 'old', type: 'todo', title: 'Old', status: 'completed' }]
+    };
+    const filename = path => String(path).split(/[\\/]/).at(-1);
+    readFile.mockImplementation(async path => JSON.stringify(files[filename(path)]));
+    atomicWrite.mockImplementation(async (path, items) => { files[filename(path)] = structuredClone(items); });
+    try {
+      await updateItem('old', { title: 'Edited' });
+      await dismissItem('old');
+      expect(await getItems({ status: 'dismissed' })).toMatchObject([{ id: 'old', title: 'Edited' }]);
+      await deleteItem('old');
+      expect(await getItems()).toMatchObject([{ id: 'live', status: 'pending' }]);
+      expect(files['archive.json']).toEqual([]);
+    } finally {
+      atomicWrite.mockResolvedValue(undefined);
+    }
+  });
+
   describe('getBriefing', () => {
     it('returns latest CoS briefing content', async () => {
       readdir.mockResolvedValue(['2026-03-17-briefing.md', '2026-03-18-briefing.md']);

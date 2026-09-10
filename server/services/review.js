@@ -187,6 +187,14 @@ async function saveItems(items) {
   itemsCache = null;
 }
 
+/** Resolve an existing item's owning collection without treating a failed archive read as empty. */
+async function loadItemCollection(id) {
+  const items = await loadItems();
+  if (items.some(item => item.id === id)) return { items, save: saveItems };
+  const archived = await loadArchive();
+  return { items: archived, save: items => atomicWrite(ARCHIVE_FILE, items) };
+}
+
 /**
  * Get all review items, sorted by type then creation date (newest first).
  * A completed/dismissed or unfiltered query also merges in archive.json —
@@ -284,7 +292,7 @@ async function updateItemStatus(id, status) {
     throw err;
   }
 
-  const items = await loadItems();
+  const { items, save } = await loadItemCollection(id);
   const item = items.find(i => i.id === id);
   if (!item) {
     const err = new Error(`Review item not found: ${id}`);
@@ -294,7 +302,7 @@ async function updateItemStatus(id, status) {
 
   item.status = status;
   item.updatedAt = new Date().toISOString();
-  await saveItems(items);
+  await save(items);
   console.log(`📋 Review item ${status}: ${item.type} — ${item.title}`);
   reviewEvents.emit('item:updated', item);
   return item;
@@ -355,7 +363,7 @@ export async function bulkUpdateStatus({ ids, status }) {
  * Update an item's title and/or description
  */
 export async function updateItem(id, { title, description }) {
-  const items = await loadItems();
+  const { items, save } = await loadItemCollection(id);
   const item = items.find(i => i.id === id);
   if (!item) {
     const err = new Error(`Review item not found: ${id}`);
@@ -366,7 +374,7 @@ export async function updateItem(id, { title, description }) {
   if (title !== undefined) item.title = title;
   if (description !== undefined) item.description = description;
   item.updatedAt = new Date().toISOString();
-  await saveItems(items);
+  await save(items);
   reviewEvents.emit('item:updated', item);
   return item;
 }
@@ -375,7 +383,7 @@ export async function updateItem(id, { title, description }) {
  * Delete a review item
  */
 export async function deleteItem(id) {
-  const items = await loadItems();
+  const { items, save } = await loadItemCollection(id);
   const index = items.findIndex(i => i.id === id);
   if (index === -1) {
     const err = new Error(`Review item not found: ${id}`);
@@ -384,7 +392,7 @@ export async function deleteItem(id) {
   }
 
   const [removed] = items.splice(index, 1);
-  await saveItems(items);
+  await save(items);
   console.log(`📋 Review item deleted: ${removed.type} — ${removed.title}`);
   reviewEvents.emit('item:deleted', removed);
   return removed;
