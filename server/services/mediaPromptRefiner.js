@@ -1,5 +1,5 @@
 import { ServerError } from '../lib/errorHandler.js';
-import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
+import { extractNonPlaceholderJson } from '../lib/jsonExtract.js';
 import { clampToCharLimit } from '../lib/textUtils.js';
 import { resolveEffectiveModel, runPromptThroughProvider } from './promptRunner.js';
 import { getProviderById } from './providers.js';
@@ -16,52 +16,6 @@ const cleanChanges = (changes) => (
     ? changes.map((c) => trimString(c, 240)).filter(Boolean).slice(0, MAX_CHANGES)
     : []
 );
-
-// The prompt template uses `<...>` markers for every field placeholder. If a
-// JSON block's `prompt` is still wrapped in angle brackets, the model parroted
-// the schema example back instead of producing a real refinement — skip it so
-// Codex's habit of replaying its stdin to stdout doesn't poison the result.
-const isPlaceholderPrompt = (s) => typeof s === 'string' && /^\s*<.+>\s*$/.test(s);
-
-// Codex CLI prepends a banner like `OpenAI Codex CLI...` and `[workdir, /…]`
-// metadata before the model's JSON output, AND echoes the input prompt to
-// stdout (which contains the schema example {…}). Walk braces with string-
-// awareness via the shared lib, skip any block whose `prompt` is a
-// placeholder, and return the first remaining block that parses as an
-// object with a `prompt` field.
-function extractRefinementJson(raw) {
-  if (typeof raw !== 'string' || !raw.trim()) throw new Error('Empty AI response');
-  let s = raw.trim();
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) s = fence[1].trim();
-
-  const candidates = findBalancedBlocks(s);
-  if (!candidates.length) candidates.push(s);
-
-  // Walk every balanced block ourselves rather than calling the shared
-  // extractJson — we need a tri-state outcome (real refinement, placeholder
-  // echo, or parse error) to surface the "schema placeholder" error message
-  // that helps users pick a stronger model. extractJson's shape predicate
-  // collapses placeholder-vs-real into a single fallback path.
-  let placeholderSeen = false;
-  let lastErr;
-  for (const block of candidates) {
-    const result = tryParseWithRepair(block);
-    if (result.error) {
-      lastErr = result.error;
-      continue;
-    }
-    const { value } = result;
-    if (value && typeof value === 'object' && typeof value.prompt === 'string') {
-      if (isPlaceholderPrompt(value.prompt)) { placeholderSeen = true; }
-      else return value;
-    }
-  }
-  if (placeholderSeen) {
-    throw new Error('AI returned the schema placeholder instead of a real refinement — try a stronger model or rerun');
-  }
-  throw new Error(`Invalid JSON in AI response${lastErr ? `: ${lastErr.message}` : ''}`);
-}
 
 export function buildMediaPromptRefinePrompt({ kind, prompt, negativePrompt, feedback, renderConfig = {}, maxPromptLength }) {
   const kindLabel = kind === 'video' ? 'video' : 'image';
@@ -209,7 +163,7 @@ export async function refineMediaPrompt({
 
   let parsed;
   try {
-    parsed = extractRefinementJson(text || '');
+    parsed = extractNonPlaceholderJson(text || '', { field: 'prompt' });
   } catch (e) {
     // Log only the response size + error reason, not the raw body. The body
     // can contain user prompts or other sensitive content; the persisted
