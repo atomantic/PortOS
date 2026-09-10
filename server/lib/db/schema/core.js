@@ -1,7 +1,7 @@
 // Core base-schema DDL — memory sync columns + the versioned db-migration
 // tracker. Extracted from ensureSchemaImpl() in server/lib/db.js (#2832) with
 // zero behavior change; every statement is idempotent and runs on every boot.
-// Parity-locked against server/scripts/init-db.sql by db.catalogDdlParity.test.js.
+// Parity-locked against server/scripts/init-db.sql by db.ddlParity.test.js.
 export const coreDdl = [
     `CREATE TABLE IF NOT EXISTS app_quality_measurements (
       app_id TEXT NOT NULL,
@@ -19,7 +19,7 @@ export const coreDdl = [
     // Versioned DB-migration tracker (#1029). Records which ordered migration
     // files in server/scripts/db-migrations/ have been applied on THIS install.
     // It's part of the base schema (created here AND in init-db.sql, parity-
-    // locked by db.catalogDdlParity.test.js) so the runner — which executes
+    // locked by db.ddlParity.test.js) so the runner — which executes
     // AFTER ensureSchema() at boot — can always read it. ensureSchema()'s
     // additive CREATE/ADD IF NOT EXISTS gates handle fresh-install schema; the
     // runner handles DELTAS that those gates can't express (renames, type

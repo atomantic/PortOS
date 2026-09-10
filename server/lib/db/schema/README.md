@@ -14,7 +14,12 @@ original post-media position), so if you add a table, append it in the domain
 module and keep the composer order in `index.js` intact.
 
 Parity with `server/scripts/init-db.sql` (the fresh-install path) is locked by
-`server/lib/db.catalogDdlParity.test.js`, which reads these module sources.
+`server/lib/db.ddlParity.test.js`, which auto-discovers every table declared in both
+sources and compares its columns, index definitions (UNIQUE, access method, column
+list, partial predicate), non-audit triggers and CHECK literal sets. Two tolerance
+lists hold the one-sided tables: `SQL_ONLY_TOLERATED` for tables in init-db.sql but
+not JS (the memory system, #1337), and `BOOT_BACKFILL_ONLY` for tables in JS but not
+init-db.sql, each with a one-line reason.
 
 | Module | Export(s) | Domain |
 |---|---|---|

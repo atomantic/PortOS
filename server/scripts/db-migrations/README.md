@@ -8,7 +8,7 @@ schema.
 
 | Change | Where it goes |
 | --- | --- |
-| New table / new column / new index (additive, fresh-install) | `ensureSchema()` in `server/lib/db.js` **and** `server/scripts/init-db.sql` (parity-locked by `db.catalogDdlParity.test.js`) |
+| New table / new column / new index (additive, fresh-install) | `ensureSchema()` in `server/lib/db.js` **and** `server/scripts/init-db.sql` (parity-locked by `db.ddlParity.test.js`) |
 | Column **rename**, **type change**, data **transform**, **embedding-dimension** change, dropping a column | A migration file here |
 
 `ensureSchema()`'s `CREATE/ADD IF NOT EXISTS` gates can only express additive
