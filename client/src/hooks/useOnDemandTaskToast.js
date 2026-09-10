@@ -1,5 +1,5 @@
 import { createElement, useEffect } from 'react';
-import MaintenanceRunStatus from '../components/cos/tabs/schedule/MaintenanceRunStatus';
+import MaintenanceRunStatus, { maintenanceRunProgress } from '../components/cos/tabs/schedule/MaintenanceRunStatus';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { timeUntil } from '../utils/formatters';
@@ -51,7 +51,8 @@ export function useOnDemandTaskToast() {
     socket.on('connect', subscribe);
     const maintenanceStates = new Map();
     const handleMaintenance = run => {
-      const label = `Maintenance · ${Object.keys(run.completed || {}).length}/${run.steps?.length || 0} · ${run.status}`;
+      const { current, total } = maintenanceRunProgress(run);
+      const label = `Maintenance · ${current}/${total} · ${run.status}`;
       const signature = JSON.stringify([run.status, run.completed, run.active, run.reason]);
       if (maintenanceStates.get(run.id) === signature) return;
       maintenanceStates.set(run.id, signature);
