@@ -318,7 +318,7 @@ export const updateTelegramMethod = (method, options) => request('/telegram/meth
 });
 
 // Browser - CDP browser management
-export const getBrowserStatus = () => request('/browser');
+export const getBrowserStatus = (options) => request('/browser', options);
 export const getBrowserConfig = () => request('/browser/config');
 export const updateBrowserConfig = (config, options = {}) => request('/browser/config', {
   method: 'PUT',
