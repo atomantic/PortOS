@@ -51,6 +51,14 @@ const reviewOverridePayload = (reviewOverrides) => Object.fromEntries(
     .map(([pickerKey, payloadKey]) => [payloadKey, reviewOverrides[pickerKey]])
 );
 
+// A picker whose only real choice is one model (Grok listing grok-4.6, a
+// sentinel-stripped catalog of one) should pin that model rather than leave
+// "Select model..." as a required extra click.
+const soleSelectableModel = (provider, selectedModel = '') => {
+  const models = resolveProviderModelOptions(provider, selectedModel).models;
+  return models.length === 1 ? models[0] : '';
+};
+
 const readTaskDescriptionDraft = (defaultApp) => {
   const raw = safeReadStorage(TASK_DESCRIPTION_DRAFT_KEY);
   if (raw === null) return { description: '', app: defaultApp };
@@ -176,8 +184,10 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
       const roleData = prev[roleKey] || {};
       let updatedRole = { ...roleData, [field]: val };
       if (field === 'provider') {
-        updatedRole.model = '';
-        updatedRole.effort = '';
+        const prov = providers?.find((p) => p.id === val);
+        const sole = soleSelectableModel(prov);
+        updatedRole.model = sole;
+        updatedRole.effort = sole ? effortSurvivingModel(prov, sole, '') : '';
       } else if (field === 'model') {
         const prov = providers?.find((p) => p.id === roleData.provider);
         updatedRole.effort = effortSurvivingModel(prov, val, roleData.effort);
@@ -411,6 +421,25 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
   // other state falls back to the shipped list, and the note below says which.
   const { models: availableModels, source: modelSource, unlistedSelection } =
     resolveProviderModelOptions(selectedProvider, newTask.model);
+  const soleAvailableModel = availableModels.length === 1 ? availableModels[0] : '';
+  const selectedModelOrSole = newTask.model || soleAvailableModel;
+
+  // Pin the only listed model as soon as a provider has a one-option catalog
+  // (provider change, template, or a Codex account catalog that resolved to
+  // a single id). Leave a deliberate multi-model pick, including empty
+  // "Select model...", alone when there is more than one choice.
+  useEffect(() => {
+    if (!soleAvailableModel) return;
+    setNewTask((t) => {
+      if (!t.provider || t.model === soleAvailableModel) return t;
+      if (t.model) return t;
+      return {
+        ...t,
+        model: soleAvailableModel,
+        effort: effortSurvivingModel(selectedProvider, soleAvailableModel, t.effort),
+      };
+    });
+  }, [soleAvailableModel, selectedProvider]);
   const NO_ACCOUNT_MODELS_NOTE = 'Your signed-in ChatGPT account exposes no models.';
   const modelSourceNote = (() => {
     if (!isCodexSubscriptionProvider(selectedProvider)) return '';
@@ -555,7 +584,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
       name: templateNameInput.trim(),
       description: newTask.description,
       provider: newTask.provider,
-      model: newTask.model,
+      model: newTask.model || soleAvailableModel,
       effort: newTask.effort,
       app: newTask.app,
       ...(planOnly ? {
@@ -580,7 +609,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
         .then(data => setTemplates(data.templates || []))
         .catch(err => console.warn('refresh templates:', err?.message ?? String(err)));
     }
-  }, [newTask, planOnly, templateNameInput, showTemplateSave]);
+  }, [newTask, planOnly, soleAvailableModel, templateNameInput, showTemplateSave]);
 
   // Delete a user template
   const deleteTemplate = useCallback(async (templateId, e) => {
@@ -653,7 +682,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
 
     const result = await api.addCosTask({
       description: finalDescription,
-      model: newTask.model || undefined,
+      model: selectedModelOrSole || undefined,
       provider: newTask.provider || undefined,
       effort: newTask.effort || undefined,
       orchestrationMode: orchestrationMode === 'orchestrated' ? 'orchestrated' : undefined,
@@ -1138,12 +1167,12 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
 
                       <select
                         aria-label={`${label} model`}
-                        value={roleData.model || ''}
+                        value={roleData.model || (models.length === 1 ? models[0] : '')}
                         disabled={!selectedProv || models.length === 0}
                         onChange={(e) => updateOrchestrationRoleField(key, 'model', e.target.value)}
                         className="px-2 py-1.5 bg-port-bg border border-port-border rounded-lg text-white text-xs disabled:opacity-50"
                       >
-                        <option value="">Default Model</option>
+                        {models.length !== 1 && <option value="">Default Model</option>}
                         {models.map((m) => (
                           <option key={m} value={m}>{m.replace('claude-', '').replace(/-\d+$/, '')}</option>
                         ))}
@@ -1173,7 +1202,19 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
               <select
                 id="task-provider"
                 value={newTask.provider}
-                onChange={e => setNewTask(t => ({ ...t, provider: e.target.value, model: '', effort: '', temperature: '', thinking: '' }))}
+                onChange={e => {
+                  const provider = e.target.value;
+                  const prov = providers?.find(p => p.id === provider);
+                  const model = soleSelectableModel(prov);
+                  setNewTask(t => ({
+                    ...t,
+                    provider,
+                    model,
+                    effort: model ? effortSurvivingModel(prov, model, '') : '',
+                    temperature: '',
+                    thinking: '',
+                  }));
+                }}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
                 disabled={!providersLoaded}
               >
@@ -1190,7 +1231,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                 <label htmlFor="task-model" className="sr-only">AI model</label>
                 <select
                   id="task-model"
-                  value={newTask.model}
+                  value={selectedModelOrSole}
                   onChange={e => setNewTask(t => ({
                     ...t,
                     model: e.target.value,
@@ -1200,7 +1241,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
                   }))}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
                 >
-                  <option value="">Select model...</option>
+                  {availableModels.length !== 1 && <option value="">Select model...</option>}
                   {availableModels.map(m => (
                     <option key={m} value={m}>
                       {unlistedSelection && m === newTask.model
@@ -1220,7 +1261,7 @@ export default function TaskAddForm({ providers, providersLoaded = true, apps, o
             ) : null}
             <EffortSelect
               provider={selectedProvider}
-              model={effectiveModelFor(selectedProvider, newTask.model)}
+              model={effectiveModelFor(selectedProvider, selectedModelOrSole)}
               value={newTask.effort}
               onChange={effort => setNewTask(t => ({ ...t, effort }))}
               className="@lg:w-40 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
