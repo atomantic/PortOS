@@ -1,14 +1,13 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls } from '@react-three/drei';
-import * as THREE from 'three';
 import { Info } from 'lucide-react';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { buildGraph } from '../../../lib/graphSimulation';
+import GraphScene, { graphMotionSettings } from '../../graph3d/GraphScene';
+import useGraphCanvasInteraction from '../../graph3d/useGraphCanvasInteraction';
 import BrailleSpinner from '../../BrailleSpinner';
-import useHoverTooltip from '../../../hooks/useHoverTooltip';
-import useFirstTouchHint from '../../../hooks/useFirstTouchHint';
+import usePrefersReducedMotion from '../../../hooks/usePrefersReducedMotion';
 import { formatDateNumeric } from '../../../utils/formatters';
 
 // Widest the hover tooltip renders. Single source for both its max-width and
@@ -25,100 +24,15 @@ const TYPE_HEX = {
   context: '#6b7280'
 };
 
-// --- Three.js scene components ---
-
-function GraphEdges({ simEdges, selectedId }) {
-  const geoRef = useRef();
-
-  useEffect(() => {
-    const geo = geoRef.current;
-    if (!geo || !simEdges.length) return;
-
-    const count = simEdges.length;
-    const positions = new Float32Array(count * 6);
-    const colors = new Float32Array(count * 6);
-    const tmpColor = new THREE.Color();
-
-    simEdges.forEach((e, i) => {
-      const a = e.sourceNode, b = e.targetNode;
-      const off = i * 6;
-      positions[off] = a.x; positions[off + 1] = a.y; positions[off + 2] = a.z;
-      positions[off + 3] = b.x; positions[off + 4] = b.y; positions[off + 5] = b.z;
-
-      const dimmed = selectedId && e.source !== selectedId && e.target !== selectedId;
-      tmpColor.set(e.type === 'linked' ? '#3b82f6' : '#6b7280');
-      const intensity = dimmed ? 0.06 : (e.type === 'linked' ? 0.6 * e.weight : 0.3 * e.weight);
-      const r = tmpColor.r * intensity, g = tmpColor.g * intensity, bl = tmpColor.b * intensity;
-      colors[off] = r; colors[off + 1] = g; colors[off + 2] = bl;
-      colors[off + 3] = r; colors[off + 4] = g; colors[off + 5] = bl;
-    });
-
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geo.computeBoundingSphere();
-  }, [simEdges, selectedId]);
-
-  return (
-    <lineSegments>
-      <bufferGeometry ref={geoRef} />
-      <lineBasicMaterial vertexColors />
-    </lineSegments>
-  );
-}
-
-function GraphScene({ graph, selectedId, adjacentIds, onSelect, onHover }) {
-  const sphereGeo = useMemo(() => new THREE.SphereGeometry(1, 16, 12), []);
-
-  const selNode = selectedId ? graph.idMap.get(selectedId) : null;
-  const selRadius = selNode ? 0.4 + (selNode.importance ?? 0.5) * 0.8 : 0;
-
-  return (
-    <>
-      <ambientLight intensity={0.4} />
-      <pointLight position={[50, 50, 50]} intensity={0.8} />
-      <pointLight position={[-30, -30, -30]} intensity={0.3} />
-
-      <GraphEdges simEdges={graph.simEdges} selectedId={selectedId} />
-
-      {graph.simNodes.map(node => {
-        const radius = 0.4 + (node.importance ?? 0.5) * 0.8;
-        const color = TYPE_HEX[node.type] || '#6b7280';
-        const isSelected = node.id === selectedId;
-        const isConnected = adjacentIds?.has(node.id);
-        const dimmed = selectedId && !isSelected && !isConnected;
-
-        return (
-          <mesh
-            key={node.id}
-            geometry={sphereGeo}
-            scale={radius}
-            position={[node.x, node.y, node.z]}
-            onClick={(e) => { e.stopPropagation(); onSelect(node); }}
-            // Pass the enter event's coordinates up: the wrapper's onPointerMove
-            // only tracks the cursor WHILE a node is hovered, so the tooltip's
-            // first frame has to be placed from this event.
-            onPointerOver={(e) => { e.stopPropagation(); onHover(node, { x: e.clientX, y: e.clientY }); }}
-            onPointerOut={() => onHover(null)}
-          >
-            <meshStandardMaterial
-              color={dimmed ? '#1a1a1a' : color}
-              emissive={color}
-              emissiveIntensity={isSelected ? 0.6 : (dimmed ? 0.03 : 0.2)}
-            />
-          </mesh>
-        );
-      })}
-
-      {selNode && (
-        <mesh geometry={sphereGeo} position={[selNode.x, selNode.y, selNode.z]} scale={selRadius + 0.2}>
-          <meshBasicMaterial color="#ffffff" transparent opacity={0.15} wireframe />
-        </mesh>
-      )}
-
-      <OrbitControls enableDamping dampingFactor={0.05} minDistance={10} maxDistance={200} />
-    </>
-  );
-}
+// Scene-appearance callbacks handed to the shared graph3d/GraphScene —
+// exported so the extraction's behavior split from BrainGraph's own
+// per-edge-type palette and weight fallback is pinned directly (see
+// MemoryGraph.test.jsx). Unlike BrainGraph, every edge kind here scales by
+// weight (including "linked", which BrainGraph holds at a flat intensity).
+export const memoryNodeColor = (node) => TYPE_HEX[node.type] || '#6b7280';
+export const memoryEdgeColor = (edge) => (edge.type === 'linked' ? '#3b82f6' : '#6b7280');
+export const memoryEdgeIntensity = (edge, dimmed) =>
+  dimmed ? 0.06 : (edge.type === 'linked' ? 0.6 * edge.weight : 0.3 * edge.weight);
 
 // --- Outer component ---
 
@@ -127,16 +41,13 @@ export default function MemoryGraph() {
   const [loading, setLoading] = useState(true);
   const [selectedNode, setSelectedNode] = useState(null);
   const [fullMemory, setFullMemory] = useState(null);
-  // Hover tooltip state + the ref-gated pointer tracking that keeps a plain
-  // mouse move from re-rendering this component when nothing can paint.
-  const { hoveredNode, tooltipPos, handleHover, handlePointerMove } = useHoverTooltip();
-  const { visible: touchHintVisible, showOnFirstTouch } = useFirstTouchHint();
   const [layoutKey, setLayoutKey] = useState(0);
   // Mobile-only: the legend auto-shows on a roomy viewport (CSS, not this flag).
   const [legendOpen, setLegendOpen] = useState(false);
+  const reducedMotion = usePrefersReducedMotion();
+  const motionSettings = graphMotionSettings(reducedMotion);
 
   const graphRef = useRef(null);
-  const dragStartRef = useRef(null);
 
   useEffect(() => {
     api.getMemoryGraph().then(setGraphData).catch(() => setGraphData(null)).finally(() => setLoading(false));
@@ -182,17 +93,27 @@ export default function MemoryGraph() {
     return () => { cancelled = true; };
   }, [selectedNode]);
 
+  // A null node clears the selection (an empty-space tap, or a touch pick
+  // that landed on nothing — see useGraphCanvasInteraction); re-selecting the
+  // current node toggles it off.
   const handleSelect = useCallback((node) => {
-    setSelectedNode(prev => prev?.id === node.id ? null : node);
+    setSelectedNode(prev => (node && prev?.id !== node.id ? node : null));
   }, []);
 
-  const handlePointerMissed = useCallback((e) => {
-    const start = dragStartRef.current;
-    if (!start) return;
-    if (Math.abs(e.clientX - start.x) < 5 && Math.abs(e.clientY - start.y) < 5) {
-      setSelectedNode(null);
-    }
-  }, []);
+  // Pointer/tap/tooltip wiring shared with BrainGraph — see
+  // graph3d/useGraphCanvasInteraction.js.
+  const {
+    pickRef,
+    touchGestureRef,
+    hoveredNode,
+    tooltipPos,
+    handleHover,
+    handlePointerMove,
+    touchHintVisible,
+    handlePointerDown,
+    handlePointerUp,
+    handlePointerMissed
+  } = useGraphCanvasInteraction({ onSelect: handleSelect });
 
   if (loading) {
     return (
@@ -232,15 +153,14 @@ export default function MemoryGraph() {
           desktop, floors at 240px so it stays usable on a short viewport. */}
       <div
         className="relative bg-port-card border border-port-border rounded-lg overflow-hidden h-[clamp(240px,45vh,500px)]"
-        onPointerDown={(e) => {
-          dragStartRef.current = { x: e.clientX, y: e.clientY };
-          if (e.target?.tagName === 'CANVAS') showOnFirstTouch(e);
-        }}
+        onPointerDown={handlePointerDown}
+        onPointerUp={handlePointerUp}
         onPointerMove={handlePointerMove}
       >
         {graph && (
           <Canvas
             camera={{ position: [0, 0, 80], fov: 50 }}
+            frameloop={motionSettings.frameloop}
             dpr={[1, 1.5]}
             style={{ background: 'rgb(var(--port-bg))' }}
             gl={{ antialias: true }}
@@ -250,8 +170,14 @@ export default function MemoryGraph() {
               graph={graph}
               selectedId={selectedNode?.id}
               adjacentIds={adjacentIds}
+              nodeColor={memoryNodeColor}
+              edgeColor={memoryEdgeColor}
+              edgeIntensity={memoryEdgeIntensity}
               onSelect={handleSelect}
               onHover={handleHover}
+              pickRef={pickRef}
+              touchGestureRef={touchGestureRef}
+              reducedMotion={reducedMotion}
             />
           </Canvas>
         )}
