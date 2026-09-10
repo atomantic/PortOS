@@ -20,7 +20,7 @@ import {
 } from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
 import {
-  deriveAvailableBackends, IMAGE_GEN_MODE, MODE_LABELS, RENDER_TARGET, imageModeCandidates, pickUsableMode,
+  deriveAvailableBackends, IMAGE_GEN_MODE, RENDER_TARGET, imageModeCandidates, modeLabel, pickUsableMode,
 } from '../../../lib/imageGenBackends';
 import BackendChipStrip from '../../media/BackendChipStrip';
 import ProviderModelSelector from '../../ProviderModelSelector';
@@ -82,14 +82,15 @@ const loadLookups = () => {
 // candidate order is `[series pin, pipeline-visual renderDefaults pin,
 // settings.imageGen.mode]`, exactly matching
 // `pipeline/visualStageHelpers.js#resolveMode`. Local diffusion gets a
-// friendlier display name here than `MODE_LABELS` (used by the terser chip
-// strip), plus the "(not configured)" suffix when it has no pythonPath.
+// friendlier display name here than the shared `modeLabel` (used by the
+// terser chip strip), plus the "(not configured)" suffix when it has no
+// pythonPath.
 const AUTO_LOCAL_LABEL = 'Local diffusion';
 const autoModeLabel = (mode, s) => {
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     return s?.imageGen?.local?.pythonPath ? AUTO_LOCAL_LABEL : `${AUTO_LOCAL_LABEL} (not configured)`;
   }
-  return MODE_LABELS[mode] || mode;
+  return modeLabel(mode);
 };
 
 const summarizeMode = (cfg, autoResolution) => {
@@ -233,7 +234,7 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
 // so the "Auto →" label honors a series-level render pin (#6815) the same way
 // the server's resolver does. Optional: omit it for a caller with no series in
 // scope, which just means that candidate never contributes a pin.
-function useVisualGenSettings(value, stageLabel, refreshOnMount = false, series = null) {
+function useVisualGenSettings(value, stageLabel, { refreshOnMount = false, series = null } = {}) {
   const cfg = { ...DEFAULT_CONFIG, ...(value || {}) };
   const [systemSettings, setSystemSettings] = useState(null);
   const [imageModels, setImageModels] = useState([]);
@@ -284,7 +285,7 @@ function useVisualGenSettings(value, stageLabel, refreshOnMount = false, series 
 export function VisualGenSettingsPanel({
   value, onChange, stageLabel = 'Visual stage', series = null,
 }) {
-  const bag = useVisualGenSettings(value, stageLabel, true, series);
+  const bag = useVisualGenSettings(value, stageLabel, { refreshOnMount: true, series });
   const update = (patch) => onChange?.({ ...bag.cfg, ...patch });
   return <VisualGenSettingsBody {...bag} update={update} />;
 }
@@ -305,7 +306,7 @@ export function summarizeGenConfig(cfg) {
 export default function VisualGenSettings({
   value, onChange, stageLabel = 'Visual stage', series = null,
 }) {
-  const bag = useVisualGenSettings(value, stageLabel, false, series);
+  const bag = useVisualGenSettings(value, stageLabel, { series });
   const update = (patch) => onChange?.({ ...bag.cfg, ...patch });
   const [open, setOpen] = useState(false);
 
