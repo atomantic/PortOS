@@ -1,7 +1,7 @@
 /** Machine-local, DB-primary audit measurements. Reads never dispatch AI work. */
 import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
-import { tryReadFile } from '../lib/fileCore.js';
+import { tryReadFile } from '../lib/jsonIo.js';
 import { parseAuditQualityReport, summarizeAppQuality, buildAppQualityHistory, AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
 
 export async function recordAuditQuality({ task, taskType, agentId, workspacePath, success, assessedAt }, deps = {}) {
