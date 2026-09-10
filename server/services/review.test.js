@@ -585,19 +585,20 @@ describe('review service', () => {
       }
     });
 
-    it('does not write a duplicate archive entry when the same id is archived twice', async () => {
+    it('upserts by id when the same item is archived twice — one archive entry, the live copy winning', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24 * 600);
 
       const now = Date.now();
       const old = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString();
       const fixture = [
-        { id: 'c-old', type: 'todo', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }
+        { id: 'c-old', type: 'todo', title: 'edited live copy', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }
       ];
       // Models the crash-recovery case: a prior retention pass wrote the
       // archive but items.json was never rewritten, so the same eligible
-      // item resurfaces in items.json on this pass.
-      const existingArchive = [{ id: 'c-old', type: 'todo', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }];
+      // item resurfaces in items.json on this pass — edited since, so the
+      // archived snapshot is the stale one.
+      const existingArchive = [{ id: 'c-old', type: 'todo', title: 'stale snapshot', status: 'completed', metadata: {}, createdAt: old, updatedAt: old }];
 
       stat.mockResolvedValue({ mtimeMs: 821001, size: 1 });
       readFile.mockImplementation((path) =>
@@ -605,9 +606,13 @@ describe('review service', () => {
 
       await createItem({ type: 'todo', title: 'trigger a save' });
 
-      // c-old is already archived — no second archive write for the same id.
+      // One archive entry for c-old, and it is the live (newer) copy — not a
+      // second entry, and not the stale archived snapshot.
       const archiveWrites = atomicWrite.mock.calls.filter(([path]) => String(path).endsWith('archive.json'));
-      expect(archiveWrites).toHaveLength(0);
+      expect(archiveWrites).toHaveLength(1);
+      const archivedCopies = archiveWrites[0][1].filter(i => i.id === 'c-old');
+      expect(archivedCopies).toHaveLength(1);
+      expect(archivedCopies[0].title).toBe('edited live copy');
       // It is still dropped from items.json — it is archived either way, so
       // there is no reason to keep the stale live-side copy around.
       const itemsWrite = atomicWrite.mock.calls.find(([path]) => String(path).endsWith('items.json'));

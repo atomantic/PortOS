@@ -120,9 +120,10 @@ async function loadArchiveOrEmpty(context) {
  * items.json and into archive.json, at most once per `RETENTION_INTERVAL_MS`.
  * Writes the archive FIRST and only then returns the trimmed list for
  * `saveItems` to persist — so a crash between the two writes can duplicate an
- * item across both files, never lose one. The dedupe-by-id below then makes
- * that duplication self-heal on the very next retention pass instead of
- * accumulating a second archive.json copy forever.
+ * item across both files, never lose one. The archive write below upserts by
+ * id with the live copy winning, so that duplication self-heals on the very
+ * next retention pass — one archive entry per id, and never a stale archived
+ * snapshot shadowing a live copy that was edited in the meantime.
  *
  * Both the archive READ and the archive WRITE are isolated to THIS function
  * rather than left to throw: `saveItems` calls this on every
@@ -156,20 +157,15 @@ async function applyRetention(items) {
   });
   if (!archive) return items;
 
-  const archivedIds = new Set(archive.map(i => i.id));
-  const fresh = toArchive.filter(i => !archivedIds.has(i.id));
-  if (fresh.length === 0) {
-    lastRetentionAt = now;
-    return remaining;
-  }
-
-  const archived = await atomicWrite(ARCHIVE_FILE, [...archive, ...fresh]).then(() => true).catch((err) => {
+  const merged = new Map(archive.map(i => [i.id, i]));
+  for (const item of toArchive) merged.set(item.id, item); // live copy wins
+  const archived = await atomicWrite(ARCHIVE_FILE, [...merged.values()]).then(() => true).catch((err) => {
     console.error(`⚠️ Failed to write review archive, skipping retention this cycle: ${err.message}`);
     return false;
   });
   if (!archived) return items;
 
-  console.log(`📦 Review items archived: ${fresh.length}`);
+  console.log(`📦 Review items archived: ${toArchive.length}`);
   lastRetentionAt = now;
   return remaining;
 }
