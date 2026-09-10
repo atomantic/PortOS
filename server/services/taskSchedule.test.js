@@ -2664,6 +2664,29 @@ describe('taskSchedule', () => {
     })
 
     describe('getUpcomingTasks — per-app cron overrides', () => {
+      it.each([false, true])('preserves a future deadline alongside a ready app (reverse=%s)', async (reverse) => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-01-01T16:00:00Z'))
+        const actual = await vi.importActual('./eventScheduler.js')
+        const actualTimezone = await vi.importActual('../lib/timezone.js')
+        parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
+        getLocalParts.mockImplementation(actualTimezone.getLocalParts)
+        const apps = [{ id: 'ready' }, { id: 'future' }]
+        getActiveApps.mockResolvedValueOnce(reverse ? apps.reverse() : apps)
+        const cron = id => id === 'ready' ? '0 8 * * *' : '5 8 * * *'
+        for (const app of apps) {
+          getAppTaskTypeInterval.mockResolvedValueOnce(cron(app.id))
+          getAppTaskTypeOverrides.mockResolvedValueOnce({
+            'release-check': { enabled: true, interval: cron(app.id) }
+          })
+        }
+        mockSchedule({ tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } } })
+        const upcoming = await getUpcomingTasks(50)
+        expect(upcoming.find(t => t.taskType === 'release-check')).toMatchObject({
+          status: 'ready', nextScheduledAt: new Date('2026-01-01T16:05:00Z').getTime()
+        })
+      })
+
       it('surfaces an enabled app cron boundary even when the global task is on-demand', async () => {
         vi.useFakeTimers()
         vi.setSystemTime(new Date('2026-01-01T16:00:00Z')) // 08:00 in the mocked America/Los_Angeles zone

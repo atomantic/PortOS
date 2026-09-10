@@ -1482,16 +1482,16 @@ export async function getUpcomingTasks(limit = 10) {
       ? await mapWithConcurrency(scheduledApps, 8, (app) =>
         shouldRunTask(taskType, app.id, { featureEnabled }).catch(() => null))
       : [];
-    const appUpcoming = appChecks.reduce((soonest, appCheck) => {
-      if (!appCheck) return soonest;
-      if (appCheck.shouldRun) return { status: 'ready', eligibleAt: now };
-      const eligibleAt = Date.parse(appCheck.nextRunAt);
-      if (!Number.isFinite(eligibleAt) || eligibleAt <= now) return soonest;
-      if (!soonest || soonest.status !== 'scheduled' || eligibleAt < soonest.eligibleAt) {
-        return { status: 'scheduled', eligibleAt };
-      }
-      return soonest;
-    }, null);
+    const appReady = appChecks.some(appCheck => appCheck?.shouldRun);
+    const futureAppTimes = appChecks.map(appCheck => Date.parse(appCheck?.nextRunAt))
+      .filter(time => Number.isFinite(time) && time > now);
+    const nextAppAt = futureAppTimes.length ? Math.min(...futureAppTimes) : null;
+    const appUpcoming = appReady
+      ? { status: 'ready', eligibleAt: now }
+      : nextAppAt !== null ? { status: 'scheduled', eligibleAt: nextAppAt } : null;
+    const futureTimes = [Date.parse(check.nextRunAt), nextAppAt]
+      .filter(time => Number.isFinite(time) && time > now);
+    const nextScheduledAt = futureTimes.length ? Math.min(...futureTimes) : null;
 
     // On-demand tasks have no wall-clock position — unless they are perpetual,
     // whose park/recheck boundary IS the schedule the daemon must wake on, or
@@ -1539,6 +1539,7 @@ export async function getUpcomingTasks(limit = 10) {
     upcoming.push({
       taskType,
       intervalType: interval.type,
+      nextScheduledAt,
       status: taskStatus,
       eligibleAt,
       eligibleIn: eligibleAt - now,

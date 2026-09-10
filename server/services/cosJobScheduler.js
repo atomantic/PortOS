@@ -472,12 +472,16 @@ export async function scheduleNextImprovementCheck() {
   let delayMs = MAX_CHECK_INTERVAL;
   let description = 'Periodic improvement check (1h)';
 
-  // Pick the soonest *scheduled* task (status='scheduled' with positive eligibleIn).
+  // Keep future app deadlines even when another app makes the same task ready.
   // Ready tasks don't gate the delay — they'll be queued on whatever the next check
   // ends up being. Cron tasks DO gate the delay, because their firing window is a
   // single minute; missing it pushes the next attempt out by a full period.
+  const now = Date.now();
   const nextScheduled = upcoming
-    .filter(t => t.status === 'scheduled' && t.eligibleIn > 0)
+    .map(t => ({ ...t, eligibleIn: t.nextScheduledAt > now
+      ? t.nextScheduledAt - now
+      : t.status === 'scheduled' ? t.eligibleIn : 0 }))
+    .filter(t => t.eligibleIn > 0)
     .sort((a, b) => a.eligibleIn - b.eligibleIn)[0];
 
   if (nextScheduled && nextScheduled.eligibleIn < MAX_CHECK_INTERVAL) {
