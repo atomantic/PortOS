@@ -115,7 +115,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 
 // recoverStuckClassifications() resolves this instance's id to skip peer-origin
 // entries; stub it to a stable id.
-vi.mock('./instances.js', () => ({
+vi.mock('./instanceIdentity.js', () => ({
   getInstanceId: () => Promise.resolve('local-instance'),
   ensureInstanceId: () => Promise.resolve('local-instance'),
   UNKNOWN_INSTANCE_ID: 'unknown',

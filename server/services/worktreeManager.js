@@ -20,7 +20,7 @@ import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
-import { ensureInstanceId } from './instances.js';
+import { ensureInstanceId } from './instanceIdentity.js';
 
 export { isHumanClaimWorktree } from '../lib/worktreeOwnership.js';
 

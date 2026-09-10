@@ -40,7 +40,7 @@ import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBu
 import { applyLegacySeriesCanonToUniverse } from '../pipeline/migrateSeriesCanon.js';
 import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
 import { adoptImportedSubscription, withReexportSuppressed } from './subscriptions.js';
-import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
 import { isStr, preserveLegacyCharacterFields } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';

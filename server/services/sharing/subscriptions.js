@@ -38,7 +38,7 @@ import {
 // stable; the canonical implementation now lives in recordEvents.js.
 export { withReexportSuppressed };
 import { subscriptionFilename, legacySubscriptionFilename } from './manifest.js';
-import { getInstanceId } from '../instances.js';
+import { getInstanceId } from '../instanceIdentity.js';
 
 // Re-export from the canonical source so other modules can import the
 // filename helper from either side without forcing a manifest.js import.

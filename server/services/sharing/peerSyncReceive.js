@@ -19,7 +19,7 @@ import {
   formatVersionGap,
   getPortosVersion,
 } from '../../lib/schemaVersions.js';
-import { UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
 import { mergeIssuesFromSync } from '../pipeline/issues.js';

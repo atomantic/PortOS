@@ -1,6 +1,6 @@
 import { assertVideoOwner, applyVideoReviewAction, videoReviewStages } from '../../lib/creativeDirectorVideoReview.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getInstanceId } from '../instances.js';
+import { getInstanceId } from '../instanceIdentity.js';
 import { getProject, mutateVideoProject } from './local.js';
 
 export async function getVideoReview(projectId) {

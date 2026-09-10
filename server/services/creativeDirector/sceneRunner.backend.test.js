@@ -21,7 +21,7 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   getJob: vi.fn(() => null),
   mediaJobEvents: { on: vi.fn(), off: vi.fn() },
 }));
-vi.mock('../instances.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: vi.fn() }));
 vi.mock('../settings.js', () => ({
   getSettings: vi.fn(),

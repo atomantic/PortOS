@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// `instances.js` pulls in the socket relay / Tailscale graph; the only things
-// this module and `peerSyncShared` need from it are `getPeers` and the
-// UNKNOWN_INSTANCE_ID sentinel. Mocking it lets the REAL `findPeerById` /
+// `instances.js` pulls in the socket relay / Tailscale graph; the only thing
+// this module and `peerSyncShared` need from it is `getPeers` (the
+// UNKNOWN_INSTANCE_ID sentinel this module reads now comes from the real,
+// unmocked `instanceIdentity.js` leaf — #6836 — a pure constant, so reading
+// it for real costs nothing). Mocking instances.js lets the REAL `findPeerById` /
 // `peerAllowsOutbound` / `peerHasCategory` run — which is the point: the test
 // asserts pull agrees with push because both use those same predicates.
 const peers = [];

@@ -21,7 +21,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 // getInstanceId is used by create()/backfill; stub to a stable id.
-vi.mock('./instances.js', () => ({
+vi.mock('./instanceIdentity.js', () => ({
   getInstanceId: () => Promise.resolve('local-instance'),
 }));
 

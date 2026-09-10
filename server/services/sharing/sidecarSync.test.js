@@ -10,11 +10,14 @@ vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerSocketOptions: {},
 }));
 
-// Mock instances.js so backfillMissingSidecars can be tested without live peers.
+// Mock instances.js / instanceIdentity.js so backfillMissingSidecars can be
+// tested without live peers.
 vi.mock('../instances.js', async () => ({
+  getPeers: vi.fn(),
+}));
+vi.mock('../instanceIdentity.js', async () => ({
   UNKNOWN_INSTANCE_ID: 'unknown',
   getInstanceId: vi.fn().mockResolvedValue('test-instance'),
-  getPeers: vi.fn(),
 }));
 
 // Mock peerUrl so base URL generation is deterministic in tests.

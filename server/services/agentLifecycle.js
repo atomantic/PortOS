@@ -74,7 +74,7 @@ import { formatPublicReviewInputPrompt } from '../lib/modelAbuseGuard.js';
 import { validatePublicReviewModel } from './modelAbuseGuard.js';
 import { loadPublicReviewSpawnInput } from './publicReviewSpawnInput.js';
 import { releaseAppReviewMarker } from './appActivity.js';
-import { ensureInstanceId } from './instances.js';
+import { ensureInstanceId } from './instanceIdentity.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from './cosTaskClaim.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';
 import { runnerAgents, pausedAgents, consumePausedAgentExit, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';

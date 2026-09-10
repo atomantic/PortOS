@@ -19,7 +19,7 @@ import { join, basename, sep } from 'path';
 import { processManifest, processBacklog, handleUnshare, sharingEvents } from './importer.js';
 import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
 import { isManifestPruning, pruneBucketManifests } from './manifest.js';
-import { getInstanceId } from '../instances.js';
+import { getInstanceId } from '../instanceIdentity.js';
 
 const watchers = new Map(); // bucketId → chokidar instance
 const backlogQueues = new Map(); // bucketId → { running: Promise, queued: Promise|null }

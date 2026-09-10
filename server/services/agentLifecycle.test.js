@@ -772,9 +772,9 @@ describe('runAgentSpawn source — permanent provider-config failure blocks the 
 // record) BEFORE the agent is registered — otherwise two peers spawn for the
 // same task. These orderings live inside runAgentSpawn with no behavioral seam.
 describe('runAgentSpawn source — instance provenance + claim ordering (#1563)', () => {
-  it('imports the identity resolver from the instances service', () => {
+  it('imports the identity resolver from the instance identity leaf', () => {
     expect(AGENT_LIFECYCLE_SRC).toMatch(
-      /import\s*\{\s*ensureInstanceId\s*\}\s*from\s*'\.\/instances\.js';/
+      /import\s*\{\s*ensureInstanceId\s*\}\s*from\s*'\.\/instanceIdentity\.js';/
     );
   });
 

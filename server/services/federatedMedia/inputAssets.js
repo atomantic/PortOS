@@ -195,7 +195,7 @@ function createInputAssetStager({ requestJson, emitStatus }) {
     // this module, and a static edge to the peer registry would drag it (and
     // its settings/DB dependencies) into every route suite's module graph.
     // Same reason remoteSubmission.js defers the same import.
-    const { getInstanceId } = await import('../instances.js');
+    const { getInstanceId } = await import('../instanceIdentity.js');
     const assetId = federatedMediaAssetId(await getInstanceId(), digest);
 
     // Ask before sending. The id is fully derivable from our own instance id and

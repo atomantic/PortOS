@@ -85,7 +85,7 @@ export { runHealthCheck, getHealthStatus };
 import { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
 export { getPendingTaskIds } from './cosTaskStore.js';
 export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
-import { ensureInstanceId } from './instances.js';
+import { ensureInstanceId } from './instanceIdentity.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, getSkipReason } from './cosTaskClaim.js';
 import { retryTasksResolvedByInvestigation } from './investigationRetry.js';
 import { notifyIfPrLeftOrphaned } from './orphanedPrNotifier.js';

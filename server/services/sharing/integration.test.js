@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
-import { makePathsProxy, mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
+import { makePathsProxy, mockNoPeerSync, mockNoPeers, mockTestIdentity } from '../../lib/mockPathsDataRoot.js';
 
 const fileUtilsMock = vi.hoisted(() => ({ atomicWrite: vi.fn(), realAtomicWrite: null }));
 
@@ -43,11 +43,11 @@ const fileUtilsActual = await vi.importActual('../../lib/fileUtils.js');
 fileUtilsMock.realAtomicWrite = fileUtilsActual.atomicWrite;
 fileUtilsMock.atomicWrite.mockImplementation((...args) => fileUtilsMock.realAtomicWrite(...args));
 
-// Stub instances.getInstanceId so the exporter doesn't try to read the
+// Stub instanceIdentity.getInstanceId so the exporter doesn't try to read the
 // real identity.json. Returns a fixed id for assertions.
-vi.mock('../instances.js', () => mockNoPeers({}, {
+vi.mock('../instances.js', () => mockNoPeers());
+vi.mock('../instanceIdentity.js', () => mockTestIdentity({
   getInstanceId: () => Promise.resolve('test-instance-id'),
-  UNKNOWN_INSTANCE_ID: 'unknown',
 }));
 vi.mock('./peerSync.js', () => mockNoPeerSync());
 

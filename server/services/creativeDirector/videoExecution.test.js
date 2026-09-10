@@ -8,7 +8,7 @@ vi.mock('./local.js', () => ({
     return output;
   }),
 }));
-vi.mock('../instances.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => state.settings) }));
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: vi.fn(async () => {}) }));
 vi.mock('./agentBridge.js', () => ({ getStageAssignment: vi.fn(async () => ({ providerId: 'example-agent', provider: 'example-agent', model: 'example-model' })) }));

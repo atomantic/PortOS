@@ -51,7 +51,7 @@ vi.mock('../lib/db.js', () => ({
   arrayToPgvector: vi.fn((a) => a),
 }));
 
-vi.mock('./instances.js', () => ({ getInstanceId: vi.fn(async () => 'inst-test') }));
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'inst-test') }));
 
 import { query } from '../lib/db.js';
 import { normalizeTags, upsertTagFromPeer } from './catalogDB.js';

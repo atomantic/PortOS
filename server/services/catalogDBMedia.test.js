@@ -49,8 +49,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   };
 });
 
-// instances.getInstanceId is pulled in transitively by catalogDB — stub it.
-vi.mock('./instances.js', () => ({ getInstanceId: vi.fn(async () => 'inst-1') }));
+// instanceIdentity.getInstanceId is pulled in transitively by catalogDB — stub it.
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'inst-1') }));
 
 const catalogDB = await import('./catalogDB.js');
 

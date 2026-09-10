@@ -55,7 +55,7 @@ import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safet
 import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { getSkipReason } from './cosTaskClaim.js';
-import { ensureInstanceId } from './instances.js';
+import { ensureInstanceId } from './instanceIdentity.js';
 import { PR_COMPLETION_VALUES } from '../lib/prDisposition.js';
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 import {

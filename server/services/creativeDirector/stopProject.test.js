@@ -14,7 +14,7 @@ vi.mock('./local.js', () => ({
   updatePlanStep: (...a) => updatePlanStepMock(...a),
 }));
 
-vi.mock('../instances.js', () => ({ getInstanceId: async () => 'example-owner' }));
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'example-owner' }));
 
 const getActiveAgentsMock = vi.fn(() => []);
 const killAgentMock = vi.fn(async () => ({ success: true }));

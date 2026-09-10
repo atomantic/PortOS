@@ -34,7 +34,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: () => getTempRoot() });
 });
 
-vi.mock('./instances.js', () => ({
+vi.mock('./instanceIdentity.js', () => ({
   getInstanceId: () => Promise.resolve('local-instance'),
 }));
 

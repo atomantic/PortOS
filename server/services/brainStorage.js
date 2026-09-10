@@ -38,7 +38,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
 import { atomicWrite, ensureDir, readJSONFile, safeJSONParse, safeDate, PATHS } from '../lib/fileUtils.js';
-import { getInstanceId } from './instances.js';
+import { getInstanceId } from './instanceIdentity.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import { linkIsRepo, normalizeRepoLinkFields } from '../lib/repoLinkFields.js';

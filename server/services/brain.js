@@ -10,7 +10,7 @@
 
 import * as storage from './brainStorage.js';
 import { brainEvents } from './brainStorage.js';
-import { getInstanceId, ensureInstanceId, UNKNOWN_INSTANCE_ID } from './instances.js';
+import { getInstanceId, ensureInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';

@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import * as instances from '../services/instances.js';
+import { getSelf, updateSelf } from '../services/instanceIdentity.js';
 import { getSyncStatus, syncWithPeer } from '../services/syncOrchestrator.js';
 import { getFullSyncCoverageForPeer } from '../services/sharing/peerSync.js';
 import { provisionTailscaleCert } from '../services/certProvisioner.js';
@@ -123,7 +124,7 @@ const reciprocalSyncSchema = z.object({
 // GET /api/instances — list self + all peers
 router.get('/', asyncHandler(async (req, res) => {
   const [self, peers, syncStatus] = await Promise.all([
-    instances.getSelf(),
+    getSelf(),
     instances.getPeers(),
     getSyncStatus({ includeChecksums: true })
   ]);
@@ -208,7 +209,7 @@ router.post('/provision-cert', asyncHandler(async (req, res) => {
 
 // GET /api/instances/self — get this instance's identity
 router.get('/self', asyncHandler(async (req, res) => {
-  const self = await instances.getSelf();
+  const self = await getSelf();
   res.json(self);
 }));
 
@@ -222,7 +223,7 @@ const updateSelfSchema = z.object({
 });
 router.put('/self', asyncHandler(async (req, res) => {
   const data = updateSelfSchema.parse(req.body);
-  const updated = await instances.updateSelf(data.name, { defaultPeerFullSync: data.defaultPeerFullSync });
+  const updated = await updateSelf(data.name, { defaultPeerFullSync: data.defaultPeerFullSync });
   if (!updated) throw new ServerError('Self identity not initialized', { status: 500 });
   res.json(updated);
 }));
@@ -244,7 +245,7 @@ router.post('/peers/announce', asyncHandler(async (req, res) => {
     host: data.host
   });
 
-  const self = await instances.getSelf();
+  const self = await getSelf();
   res.status(result.created ? 201 : 200).json({
     self: { instanceId: self?.instanceId, name: self?.name },
     // Strip our locally-stored proxy credential before echoing the matched

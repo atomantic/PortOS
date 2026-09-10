@@ -8,7 +8,7 @@ vi.mock('./local.js', () => ({
     return result;
   }),
 }));
-vi.mock('../instances.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'example-owner') }));
 vi.mock('./completionHook.js', () => ({ startCreativeDirectorProject: mocks.start }));
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: vi.fn() }));
 import { getVideoReview, reviewVideo, videoReviewAllowsDispatch } from './videoReview.js';

@@ -71,7 +71,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // import of the instances service; stub it so the header assertions don't
 // depend on (or create) a real instance identity on disk.
 let selfInstanceId = 'self-instance-id';
-vi.mock('../services/instances.js', () => ({
+vi.mock('../services/instanceIdentity.js', () => ({
   getInstanceId: async () => selfInstanceId,
   UNKNOWN_INSTANCE_ID: 'unknown',
 }));

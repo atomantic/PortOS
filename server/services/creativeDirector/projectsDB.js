@@ -34,7 +34,7 @@ export async function listProjectsByCommissionId(commissionId) {
 export async function createProject(input) {
   const seeded = { ...input };
   if (input.workspace === 'video') {
-    const { ensureInstanceId } = await import('../instances.js');
+    const { ensureInstanceId } = await import('../instanceIdentity.js');
     seeded.videoOwnerInstanceId = await ensureInstanceId();
   }
   return store.createProject(seeded, async ({ id }) => {

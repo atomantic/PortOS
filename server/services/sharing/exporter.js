@@ -31,7 +31,7 @@ import { getStoredOutline } from '../pipeline/reverseOutline.js';
 import { getUniverse } from '../universeBuilder.js';
 import { findCollectionByUniverseId, findCollectionBySeriesId } from '../mediaCollections.js';
 import { getJob } from '../mediaJobQueue/index.js';
-import { getInstanceId } from '../instances.js';
+import { getInstanceId } from '../instanceIdentity.js';
 import { getSettings } from '../settings.js';
 import { getProducedByVersion } from './version.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
