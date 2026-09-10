@@ -28,7 +28,7 @@ it('allows one category and recovers from launch failure without reporting a run
   startMaintenanceRun.mockRejectedValue(new Error('Provider unavailable'));
   render(<MemoryRouter><AppQualityRunner app={app} /></MemoryRouter>);
   fireEvent.change(screen.getByLabelText('Checks'), { target: { value: 'performance' } });
-  const button = screen.getByRole('button', { name: 'Run 1 checks now' });
+  const button = screen.getByRole('button', { name: 'Run now' });
   await waitFor(() => expect(button).toBeEnabled());
   fireEvent.click(button);
   expect(await screen.findByRole('alert')).toHaveTextContent('Provider unavailable');

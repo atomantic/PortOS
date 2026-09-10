@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { it, expect, vi } from 'vitest';
 import AppQuality from './AppQuality';
@@ -51,4 +51,20 @@ it('identifies federated evidence and incomplete scores without linking to a loc
   expect(screen.getByText(/1 peers unavailable or incompatible/)).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'View instances' })).toHaveAttribute('href', '/instances');
   expect(screen.queryByRole('link', { name: 'Audit run' })).not.toBeInTheDocument();
+});
+
+it('opens the shared runner beside unavailable category evidence while preserving URL filters', async () => {
+  const app = { id: 'example', quality: { categories: [
+    { id: 'security', label: 'Security', score: null, coverage: 'unavailable' },
+    { id: 'ux', label: 'UX', score: null, coverage: 'unavailable' },
+  ] } };
+  render(<MemoryRouter initialEntries={['/apps/example/quality?period=30']}><AppQuality app={app} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  const link = screen.getByRole('link', { name: 'Configure and run Security' });
+  expect(link).toHaveAttribute('href', '/apps/example/quality?period=30&qualityCheck=security#quality-runner');
+  fireEvent.click(link);
+  const table = screen.getByRole('table');
+  expect(within(table).getByText('Runner')).toBeInTheDocument();
+  expect(screen.getAllByText('Runner')).toHaveLength(1);
+  expect(screen.getAllByText('unavailable')).toHaveLength(2);
 });
