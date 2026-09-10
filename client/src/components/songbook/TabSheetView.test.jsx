@@ -28,7 +28,9 @@ describe('TabSheetView', () => {
 
   it('renders the lyric line under the chords', () => {
     render(<TabSheetView text={SAMPLE} />);
-    expect(screen.getByText('Nonsense lyric line')).toBeTruthy();
+    expect([...document.querySelectorAll('[data-chord-lyric-pair]')][0].querySelectorAll('[data-chord-lyric-chunk]')[0].lastChild.textContent).toBe('Nonsense ');
+    expect(screen.getByText('lyric')).toBeTruthy();
+    expect(screen.getByText('line')).toBeTruthy();
   });
 
   it('groups consecutive tabstaff lines into one horizontally-scrollable block', () => {
@@ -70,15 +72,34 @@ describe('TabSheetView', () => {
     expect(screen.queryByRole('button', { name: 'Legend' })).toBeNull();
   });
 
-  it('renders chordlyric lines as a chord row above the bare lyric', () => {
-    const { container } = render(<TabSheetView text={SAMPLE} />);
-    // Bare lyric (brackets stripped)
-    expect(screen.getByText('Hello world')).toBeTruthy();
-    // Chord row: names padded out to their col offsets ("C" at 0, "G" at 6).
-    const chordRow = [...container.querySelectorAll('.whitespace-pre')]
-      .find((el) => /^C\s+G$/.test(el.textContent));
-    expect(chordRow).toBeTruthy();
-    expect(chordRow.textContent.indexOf('G')).toBe(6);
+  it('wraps ChordPro words with their chord row at the original columns', () => {
+    const { container } = render(<TabSheetView text="[C]Hello [G]world" />);
+    const chunks = [...container.querySelectorAll('[data-chord-lyric-chunk]')];
+    expect(chunks.map((chunk) => [chunk.firstChild.textContent, chunk.lastChild.textContent]))
+      .toEqual([['C     ', 'Hello '], ['G', 'world']]);
+  });
+
+  it('keeps mid-word chords, rhythm marks and trailing changes intact in pasted pairs', () => {
+    const { container } = render(<TabSheetView text={'  Am     | G/B          F\nPaper lanterns glow'} />);
+    const chunks = [...container.querySelectorAll('[data-chord-lyric-chunk]')];
+    expect(chunks.map((chunk) => chunk.lastChild.textContent).join('')).toBe('Paper lanterns glow');
+    expect(chunks.map((chunk) => chunk.firstChild.textContent).join('')).toBe('  Am     | G/B          F');
+    expect(screen.getByRole('button', { name: 'Am' }).closest('[data-chord-lyric-chunk]').lastChild.textContent).toBe('Paper ');
+    expect(screen.getByRole('button', { name: 'G/B' }).closest('[data-chord-lyric-chunk]').lastChild.textContent).toBe('lanterns ');
+    fireEvent.click(screen.getByRole('button', { name: 'G/B' }));
+    const dialog = screen.getByRole('dialog', { name: 'G/B chord voicing' });
+    expect(dialog.parentElement).toBe(document.body);
+    expect(dialog.querySelector('svg')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close chord diagram' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'G/B' }));
+  });
+
+  it('makes room for adjacent ChordPro changes without moving their syllables apart', () => {
+    const { container } = render(<TabSheetView text="[Cmaj7]a[Am]b glows" />);
+    const chunks = [...container.querySelectorAll('[data-chord-lyric-chunk]')];
+    expect(chunks[0].firstChild.textContent).toBe('Cmaj7 Am');
+    expect(chunks[0].lastChild.textContent).toBe(`a${'\u00a0'.repeat(5)}b `);
   });
 
   it('applies the font size scale', () => {
@@ -168,7 +189,7 @@ describe('TabSheetView', () => {
       expect(screen.queryByText('e|--3--2--|')).toBeNull();
       // The 2-line SAMPLE staff isn't identifiably guitar — generic label.
       expect(screen.getByText(/tablature — switch to Guitar or Ukulele view/)).toBeTruthy();
-      const expand = screen.getByRole('button', { name: 'Show tablature staff (section 4)' });
+      const expand = screen.getByRole('button', { name: 'Show tablature staff (section 3)' });
       const staffId = expand.getAttribute('aria-controls');
       expect(expand.getAttribute('aria-expanded')).toBe('false');
       expect(document.getElementById(staffId)).toBeNull();

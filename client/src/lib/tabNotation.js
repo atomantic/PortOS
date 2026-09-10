@@ -521,3 +521,63 @@ export const transposeText = (text, n) => {
     })
     .join('\n');
 };
+
+// Split a chords line into plain/chord segments using the parser's col offsets.
+// Chord segments carry their index within the line's `chords` array — the other
+// half of the `{ lineIndex, chordIndex }` coordinate the play-along highlight
+// addresses tokens by.
+export const chordLineSegments = (text, chords) => {
+  const segments = [];
+  let cursor = 0;
+  chords.forEach(({ name, col }, chordIndex) => {
+    if (col > cursor) segments.push({ text: text.slice(cursor, col), chord: false });
+    segments.push({ text: text.slice(col, col + name.length), chord: true, chordIndex });
+    cursor = col + name.length;
+  });
+  if (cursor < text.length) segments.push({ text: text.slice(cursor), chord: false });
+  return segments;
+};
+
+// Wrap only at word boundaries that do not cut through a chord or rhythm mark.
+// Each flex item owns BOTH rows, so browser reflow (including font-size changes)
+// cannot separate a chord from the syllable at its original column.
+export const pairedLineChunks = (lyric, chordText, chords) => {
+  const length = Math.max(lyric.length, chordText.length);
+  const chunks = [];
+  let start = 0;
+  for (let end = 1; end <= length; end += 1) {
+    const wordBoundary = /[ \t]/.test(lyric[end - 1] ?? ' ') && !/[ \t]/.test(lyric[end] ?? ' ');
+    const chordBoundary = /\s/.test(chordText[end - 1] ?? ' ') || /\s/.test(chordText[end] ?? ' ');
+    if (end !== length && !(wordBoundary && chordBoundary)) continue;
+    const localChords = chords.flatMap((chord, chordIndex) =>
+      chord.col >= start && chord.col < end ? [{ ...chord, col: chord.col - start, chordIndex }] : []);
+    const segments = chordLineSegments(chordText.slice(start, end), localChords)
+      .map((segment) => segment.chord
+        ? { ...segment, chordIndex: localChords[segment.chordIndex].chordIndex }
+        : segment);
+    chunks.push({ lyric: lyric.slice(start, end), segments });
+    start = end;
+  }
+  return chunks;
+};
+
+// Adjacent ChordPro symbols may share a lyric column. Insert matching space in
+// both rows when their names collide, keeping subsequent anchors aligned.
+// Nonbreaking lyric padding prevents a new wrap point inside the original word.
+export const chordLyricRows = (line) => {
+  let lyric = line.text;
+  let chordText = '';
+  let shift = 0;
+  const chords = line.chords.map((chord) => {
+    let col = chord.col + shift;
+    if (chordText.length > col) {
+      const pad = chordText.length + 1 - col;
+      lyric = lyric.slice(0, col) + '\u00a0'.repeat(pad) + lyric.slice(col);
+      shift += pad;
+      col += pad;
+    }
+    chordText = chordText.padEnd(col) + chord.name;
+    return { ...chord, col };
+  });
+  return { lyric, chordText, chords };
+};
