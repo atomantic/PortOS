@@ -41,7 +41,7 @@ import { isTruthyMeta } from './agentState.js';
 import { resolveReviewLoopOptions } from './codeReview.js';
 import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from './agentWorktreeCleanup.js';
 import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
-import { resolveOwnsPrWorkflow } from '../lib/slashdoInvocation.js';
+import { resolvePrOpenedBy, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
 
 const ROOT_DIR = PATHS.root;
@@ -222,9 +222,9 @@ export async function handlePipelineProgression(task, agentId, success) {
  * (`runSpawnerCompletionCleanup`). It used to be three inline copies, and the
  * reviewer-resolve hardening below reached only one of them.
  *
- * `taskOpenPR` / `agentOwnsPR` are the CALLER's: the spawners read them off the
- * live provider descriptor (`resolvePrOwnership`), the runner path off the
- * persisted agent record (`resolveOwnsPrWorkflow`) — see #3358 for why the two
+ * `taskOpenPR` / `agentOpensOwnPr` are the CALLER's: the spawners read them off
+ * the live provider descriptor (`resolvePrOwnership`), the runner path off the
+ * persisted agent record (`resolvePrOpenedBy`) — see #3358 for why the two
  * sources exist. `prClaimVerified` likewise carries whether finalize's check
  * ACTUALLY produced a forge answer for this run, which is a different question
  * from whether one was expected.
@@ -237,11 +237,11 @@ export async function handlePipelineProgression(task, agentId, success) {
  *
  * @returns {Promise<Object>} the third argument to `cleanupAgentWorktree`
  */
-async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, taskOpenPR, agentOwnsPR, prClaimVerified = false, noChangesToShip = false }) {
+async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, taskOpenPR, agentOpensOwnPr, prClaimVerified = false, noChangesToShip = false }) {
   // `if-missing` for an agent-owned PR that finalize did NOT verify: cleanup
   // asks the forge once and only stands down when a PR actually exists, so a
   // harness that skipped its completion workflow can't strand the branch.
-  const prCreation = resolvePrCreation({ taskOpenPR, agentOwnsPr: agentOwnsPR, prClaimVerified, noChangesToShip });
+  const prCreation = resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, noChangesToShip });
   // Merge per-task reviewer metadata with the user's Code Review Defaults
   // (Settings → Code Reviewers page). Settings I/O is cached inside the
   // resolver, so this is effectively free even when invoked from a tight CoS
@@ -259,9 +259,9 @@ async function resolveWorktreeCleanupOptions({ agentId, task, outputBuffer, task
     ...reviewOptions,
     // Review-loop follow-up agents already merged via `gh pr merge` in the agent
     // body — re-merging the worktree branch into the source workspace would
-    // duplicate the squashed commits — and a harness that owns its PR workflow
-    // lands its own PR; suppress the auto-merge fallback for both.
-    skipMerge: isTruthyMeta(task?.metadata?.reviewLoopFollowUp) || agentOwnsPR,
+    // duplicate the squashed commits — and a harness that opens its own PR
+    // lands it too; suppress the auto-merge fallback for both.
+    skipMerge: isTruthyMeta(task?.metadata?.reviewLoopFollowUp) || agentOpensOwnPr,
     description: task?.description,
     agentOutput: outputBuffer,
     originalTask: task,
@@ -433,17 +433,20 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
     //
     // Read off the PERSISTED record (#3358): the in-memory `runnerAgents` entry
     // carries only `providerId`, so a lean `--bare` or path-configured provider
-    // would be misjudged from it. `resolveOwnsPrWorkflow` owns the stamped-vs-
-    // derived fallback for pre-#3733 records, alongside the predicate itself.
+    // would be misjudged from it. `resolvePrOpenedBy` owns the stamped-vs-
+    // derived fallback, including the legacy `ownsPrWorkflow` boolean records
+    // written before #6869 and the pre-#3733 records that carry nothing.
     const providerDescriptor = {
       providerId: agentState?.metadata?.providerId ?? agent.providerId,
       providerCommand: agentState?.metadata?.providerCommand ?? agent.providerCommand ?? null,
       leanMode: (agentState?.metadata?.leanMode ?? agent.leanMode) === true,
     };
-    const agentOwnsPR = taskOpenPR && resolveOwnsPrWorkflow({
-      persisted: agentState?.metadata?.ownsPrWorkflow ?? agent.ownsPrWorkflow,
+    const prOpenedBy = resolvePrOpenedBy({
+      persistedPrOpenedBy: agentState?.metadata?.prOpenedBy ?? agent.prOpenedBy,
+      persistedOwnsPrWorkflow: agentState?.metadata?.ownsPrWorkflow ?? agent.ownsPrWorkflow,
       ...providerDescriptor,
     });
+    const agentOpensOwnPr = taskOpenPR && prOpenedBy !== PR_OPENED_BY.PORTOS;
     // `prClaimVerified` is the caller's — it carries whether finalize's check
     // ACTUALLY produced a forge answer for this run. Re-deriving it here from
     // `canTypeSlashCommands` would answer a different question ("was one
@@ -454,7 +457,7 @@ async function runCompletionCleanupSteps({ agentId, task, agent, agentState, eff
       task,
       outputBuffer,
       taskOpenPR,
-      agentOwnsPR,
+      agentOpensOwnPr,
       prClaimVerified,
       noChangesToShip,
     }));
@@ -525,7 +528,7 @@ export async function runSpawnerCompletionCleanup({ agentId, task, success, prOw
       task,
       outputBuffer,
       taskOpenPR: prOwnership.taskOpenPR,
-      agentOwnsPR: prOwnership.agentOwnsPR,
+      agentOpensOwnPr: prOwnership.agentOpensOwnPr,
       prClaimVerified,
       noChangesToShip,
     });

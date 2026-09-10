@@ -75,6 +75,7 @@ export {
   buildReadOnlyCompletionSection,
   buildResumeSection,
   inlinePrLifecycleSection,
+  promptOpensOwnPr,
 } from './promptSections/completion.js';
 export { buildReviewLoopFollowUpSection } from './promptSections/reviewLifecycle.js';
 export { createJiraTicketForTask, generateJiraTitle, getAppDataForTask, getAppWorkspace } from './promptSections/appContext.js';
@@ -458,7 +459,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     ? worktreeCommitGuidance({
         isTui,
         canTypeSlashCommands: false,
-        ownsPrWorkflow: false,
+        rendersInlinePrLifecycle: false,
         isWorktreeOnExistingBranch,
         willOpenPR,
         discardWorktree,
@@ -1020,7 +1021,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     providerType: isTui ? PROVIDER_TYPES.TUI : PROVIDER_TYPES.CLI,
     providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
   });
-  const ownsPrWorkflow = inlineSection !== null;
+  const rendersInlinePrLifecycle = inlineSection !== null;
   // Slashdo already partitions reviewers. Plain-git completion prompts need the
   // same split spelled out: local CLIs/local LLMs inspect the committed branch
   // before it is public; Copilot and @login reviewers can only run after a PR.
@@ -1102,7 +1103,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
 
   // --- Worktree / pipeline / JIRA context --------------------------------
   contractSections.push(...buildLightTaskContextSections({
-    task, worktreeInfo, isWorktreeOnExistingBranch, isTui, mode: completionMode, canTypeSlashCommands: canTypeSlash, ownsPrWorkflow,
+    task, worktreeInfo, isWorktreeOnExistingBranch, isTui, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle,
     willOpenPR, discardWorktree, claimFlow, noChangeSuccess,
   }));
 
@@ -1112,15 +1113,15 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // `mode` and adapts the workflow itself. Likewise the three commit/push
   // modes: `buildCliCompletionSection` already reads `worktreeInfo`/`willOpenPR`.
   const pushTuiCompletion = () => contractSections.push(buildTuiCompletionSection({
-    willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, mode: completionMode, ownsPrWorkflow, portosMergesBranch,
+    willOpenPR, prCompletion, simplifyEnabled, noChangeSuccess, mode: completionMode, rendersInlinePrLifecycle, portosMergesBranch,
     sentinelPath: lightSentinelPath(),
     branchName: worktreeInfo?.branchName || null,
     baseBranch: worktreeInfo?.baseBranch || null,
     leavePrOpen: leavesPrForHuman(task),
     reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies,
-    forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null
+    forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null
   }));
-  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, ownsPrWorkflow, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: ownsPrWorkflow ? runsPrSideReviewLoop : null }));
+  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, leavePrOpen: leavesPrForHuman(task), reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewerMaxRounds: lightReviewerMaxRounds, reviewerModels: lightReviewerModels, reviewerEfforts: lightReviewerEfforts, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null }));
 
   ({
     [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
@@ -1155,7 +1156,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // section it is a step of. Gated on the SAME value that made that step emit,
   // so a dangling "step 4" cross-reference and an orphaned Review Loop section
   // are both unrepresentable.
-  if (ownsPrWorkflow) {
+  if (rendersInlinePrLifecycle) {
     contractSections.push(buildInlineReviewLoopSection({
       taskId: task.id,
       branchName: worktreeInfo?.branchName || null,
@@ -1196,7 +1197,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
  * `buildLightContextSections`.
  */
 function buildLightTaskContextSections({
-  task, worktreeInfo, isWorktreeOnExistingBranch, isTui, mode, canTypeSlashCommands, ownsPrWorkflow,
+  task, worktreeInfo, isWorktreeOnExistingBranch, isTui, mode, canTypeSlashCommands, rendersInlinePrLifecycle,
   willOpenPR, discardWorktree, claimFlow, noChangeSuccess,
 }) {
   const sections = [];
@@ -1208,7 +1209,7 @@ function buildLightTaskContextSections({
       `- **Path**: \`${worktreeInfo.worktreePath}\``,
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
-      worktreeCommitGuidance({ isTui, mode, canTypeSlashCommands, ownsPrWorkflow, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
+      worktreeCommitGuidance({ isTui, mode, canTypeSlashCommands, rendersInlinePrLifecycle, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
       'Do NOT manually switch branches or modify the worktree configuration.',
       // Resuming a previous failed agent's branch: establish what's already done
       // before writing code (see buildResumeSection). '' when not a resume.

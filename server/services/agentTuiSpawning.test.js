@@ -248,6 +248,7 @@ import * as agentErrorAnalysis from './agentErrorAnalysis.js';
 import * as cosAgentLifecycle from './cosAgentLifecycle.js';
 import * as gitService from './git.js';
 import { probePrForBranch } from './prProbe.js';
+import { promptOpensOwnPr } from './promptSections/completion.js';
 import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit } from './agentState.js';
 import {
   SELF_CLEARING_RESUBMIT_INTERVAL_MS,
@@ -633,6 +634,23 @@ describe('spawnTuiAgent runtime', () => {
     promptDelayMs: 100,
   };
 
+  // The stamp `agentLifecycle` would write for this run, derived through the
+  // REAL predicate rather than hand-written. The old `!leanMode` default pinned
+  // `true` for every non-lean host, a value the spawn path never produced for a
+  // slashdo-capable one (#6869), so the suite agreed with itself and not with
+  // production. A worktree is assumed unless a case says otherwise: a PR-opening
+  // TUI run always has one.
+  function stampPrOpenedBy(overrides, task, provider) {
+    return promptOpensOwnPr(task, {
+      providerType: provider?.type ?? 'tui',
+      providerId: provider?.id ?? null,
+      providerCommand: provider?.command ?? null,
+      leanMode: overrides.leanMode ?? false,
+      worktreeInfo: overrides.worktreeInfo ?? { branchName: 'agent/t', worktreePath: '/tmp/ws', baseBranch: 'main' },
+      isTruthyMetaFn: (v) => v === true || v === 'true',
+    });
+  }
+
   function runSpawn(overrides = {}) {
     const agentId = overrides.agentId ?? 'agent-1';
     const task = overrides.task ?? { id: 'task-1', description: 'do the thing', metadata: {} };
@@ -658,7 +676,7 @@ describe('spawnTuiAgent runtime', () => {
       agentDir,
       executionId,
       laneName,
-      ownsPrWorkflow: overrides.ownsPrWorkflow ?? !overrides.leanMode,
+      prOpenedBy: overrides.prOpenedBy ?? stampPrOpenedBy(overrides, task, provider),
       leanMode: overrides.leanMode ?? false,
       useDurableRunner: overrides.useDurableRunner ?? false,
       safetyProfile: overrides.safetyProfile ?? null,
@@ -967,7 +985,7 @@ describe('spawnTuiAgent runtime', () => {
       agentId: 'agent-1',
       task,
       success: true,
-      prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: false },
+      prOwnership: { taskOpenPR: true, prOpenedBy: 'agent-inline', agentOpensOwnPr: true, prClaimExpected: false },
       prClaimVerified: false,
     }));
     // …and finalize was told not to verify a claim this session cannot make —
@@ -994,7 +1012,7 @@ describe('spawnTuiAgent runtime', () => {
     // Neither predicate holds for a `--bare` session, so the dispatch opens the
     // PR itself (`always`) and may auto-merge the branch.
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
-      prOwnership: { taskOpenPR: true, agentOwnsPR: false, prClaimExpected: false },
+      prOwnership: { taskOpenPR: true, prOpenedBy: 'portos', agentOpensOwnPr: false, prClaimExpected: false },
     }));
   });
 
@@ -1038,7 +1056,7 @@ describe('spawnTuiAgent runtime', () => {
     // finalize ran `verifyPrClaim` for a slashdo-capable session and the verdict
     // reaches the dispatch as verified, so it never queries the forge again.
     expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
-      prOwnership: { taskOpenPR: true, agentOwnsPR: true, prClaimExpected: true },
+      prOwnership: { taskOpenPR: true, prOpenedBy: 'agent-slashdo', agentOpensOwnPr: true, prClaimExpected: true },
       prClaimVerified: true,
     }));
     expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({ prExpected: true }));
@@ -2853,7 +2871,6 @@ describe('spawnTuiAgent runtime', () => {
       withSentinel('## Summary\nFinished the analysis.');
       const spawnPromise = runSpawn({
         task: { ...openPrTask, metadata: { openPR: true, readOnly: true } },
-        ownsPrWorkflow: false,
       });
       await flushMicrotasks();
       sentinelExists = true;
@@ -2863,7 +2880,7 @@ describe('spawnTuiAgent runtime', () => {
       expect(probePrForBranch).not.toHaveBeenCalled();
       expect(shellService.pasteToSession).not.toHaveBeenCalled();
       expect(runSpawnerCompletionCleanup).toHaveBeenCalledWith(expect.objectContaining({
-        prOwnership: expect.objectContaining({ taskOpenPR: true, agentOwnsPR: false }),
+        prOwnership: expect.objectContaining({ taskOpenPR: true, prOpenedBy: 'portos', agentOpensOwnPr: false }),
       }));
     });
 

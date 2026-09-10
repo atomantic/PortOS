@@ -97,16 +97,16 @@ export const PR_CREATION = Object.freeze({
  *
  * @param {Object} opts
  * @param {boolean} opts.taskOpenPR - the task asked for a PR at all
- * @param {boolean} opts.agentOwnsPr - the prompt told the agent to open it
+ * @param {boolean} opts.agentOpensOwnPr - the prompt told the agent to open it
  * @param {boolean} opts.prClaimVerified - finalize ran `verifyPrClaim` for this
  *   run (i.e. `prExpected` was true), so cleanup must not ask a second time
  * @param {boolean} [opts.noChangesToShip] - finalize verified an opted-in audit
  *   left no commits and no change request, so cleanup must not create an empty PR
  * @returns {string} a `PR_CREATION` value
  */
-export function resolvePrCreation({ taskOpenPR, agentOwnsPr, prClaimVerified, noChangesToShip = false }) {
+export function resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, noChangesToShip = false }) {
   if (!taskOpenPR || noChangesToShip) return PR_CREATION.NEVER;
-  if (!agentOwnsPr) return PR_CREATION.ALWAYS;
+  if (!agentOpensOwnPr) return PR_CREATION.ALWAYS;
   return prClaimVerified ? PR_CREATION.NEVER : PR_CREATION.IF_MISSING;
 }
 

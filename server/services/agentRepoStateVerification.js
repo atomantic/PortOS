@@ -6,8 +6,9 @@
  * asked for?
  *
  * Cleanup reports only what it TRIED and failed to do. The case this exists for
- * is an agent that owns its own PR workflow (`ownsPrWorkflow`), merges the PR
- * itself, and exits before deleting the branch — or exits with the PR still open.
+ * is an agent that opens its own PR (`metadata.prOpenedBy` naming the agent),
+ * merges it itself, and exits before deleting the branch — or exits with the PR
+ * still open.
  * Cleanup stands down for exactly those runs, so nothing checked, and the branch
  * plus its worktree persist through every later sweep that treats "an agent owns
  * it" as a reason to skip. (`removeWorktree` also only `console.log`s a failed

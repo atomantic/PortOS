@@ -115,7 +115,7 @@ vi.mock('./agentPromptBuilder.js', () => ({
   getAppWorkspace: vi.fn(),
   // Read by the `registerAgent` projection on the way to the dispatch; the real
   // predicates are pinned in agentPromptBuilder's own suite.
-  inlinePrLifecycleSection: vi.fn(() => null),
+  promptOpensOwnPr: vi.fn(() => 'portos'),
   isClaimFlowTask: vi.fn(() => false),
 }));
 // Dynamically imported mid-spawn purely to snapshot workspace context. Stubbed

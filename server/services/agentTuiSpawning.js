@@ -25,7 +25,7 @@ import { PTY_UNAVAILABLE_PREFIX } from '../lib/ptySpawnDiagnostics.js';
 import { finalizeAgentRunCommon, shouldAbandonAgentRun } from './agentRunFinalize.js';
 import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
 import { prClaimWasVerified, leavesPrForHuman } from '../lib/prDisposition.js';
-import { resolvePrOwnership } from '../lib/slashdoInvocation.js';
+import { resolvePrOwnership, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { mergeGateOwed, resolveMergeGateVerdict, buildMergeGateReprompt } from '../lib/mergeGateContract.js';
 import { probePrForBranch } from './prProbe.js';
 import * as git from './git.js';
@@ -669,7 +669,7 @@ export async function spawnTuiAgent({
   executionId,
   laneName,
   isTruthyMetaFn,
-  ownsPrWorkflow,
+  prOpenedBy,
   leanMode = false,
   useDurableRunner = false,
   // The public-content execution profile this run enforces (null for an
@@ -707,26 +707,29 @@ export async function spawnTuiAgent({
   const doneSentinelPath = resolveDoneSentinelPath(cwd, agentId);
   // Every TUI that is a real coding harness drives its own push → PR → review
   // → merge, whether or not it can type `/do:pr` (#3733) — a Claude TUI runs
-  // the slashdo command, codex/antigravity/grok/OpenCode run the plain
-  // `git`/`gh` equivalent from the same prompt. Only a lean `--bare` session
-  // still hands the lifecycle back to PortOS. Resolved once up front (rather
-  // than inside finish()) so the merge-gate contract check below and the
-  // completion dispatch finish() hands off to read the same answer.
+  // the slashdo command (`prOpenedBy: 'agent-slashdo'`),
+  // codex/antigravity/grok/OpenCode run the plain `git`/`gh` equivalent from
+  // the same prompt (`'agent-inline'`). A lean `--bare` session, and any task
+  // shape whose prompt says "do NOT open a PR", hands the lifecycle back to
+  // PortOS (`'portos'`). Resolved once up front (rather than inside finish())
+  // so the merge-gate contract check below and the completion dispatch
+  // finish() hands off to read the same answer.
   const prOwnership = resolvePrOwnership({
     task,
     isTruthyMeta: isTruthyMetaFn,
-    persisted: ownsPrWorkflow,
+    persistedPrOpenedBy: prOpenedBy,
     providerId: provider?.id,
     providerCommand: provider?.command,
     leanMode,
   });
-  // Does this run's own task shape say it owed a merge (#5876)? A run PortOS
-  // still backstops (no PR at all, or a lean session) or one whose prompt
-  // hands the PR to a human (JIRA, claim flow) never owed one, so the
-  // contract check below is inert for those — see mergeGateContract.js.
+  // Does this run's own task shape say it owed a merge (#5876)? Only the inline
+  // prompt carries a **Merge Gate** section to hold it to — a `/do:pr` run
+  // merges inside that one command, and a run PortOS backstops or that hands
+  // the PR to a human (JIRA, claim flow) never owed one. So the contract check
+  // below is inert for all three — see mergeGateContract.js.
   const mergeGateIsOwed = mergeGateOwed({
     taskOpenPR: prOwnership.taskOpenPR,
-    ownsPrWorkflow: prOwnership.agentOwnsPR,
+    rendersInlinePrLifecycle: prOwnership.prOpenedBy === PR_OPENED_BY.AGENT_INLINE,
     leaveOpen: leavesPrForHuman(task),
   });
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
@@ -1198,7 +1201,7 @@ export async function spawnTuiAgent({
     // `prOwnership` was resolved once, up front, near `doneSentinelPath`, so the
     // merge-gate contract check above and the completion dispatch below read the
     // same answer (#3733); see `resolvePrOwnership` for why finalize's
-    // `prClaimExpected` and cleanup's `agentOwnsPR` are two predicates (#3358).
+    // `prClaimExpected` and cleanup's `agentOpensOwnPr` are two predicates (#3358).
     //
     // Whether finalize's check ACTUALLY produced a forge answer, filled in from
     // its return below. Deliberately not `prClaimExpected`: finalize substitutes
