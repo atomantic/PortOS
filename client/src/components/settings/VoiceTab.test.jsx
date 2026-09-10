@@ -91,7 +91,9 @@ describe('VoiceTab TTS engine registry', () => {
     expect(engineSelect).toHaveValue('qwen3-tts');
     expect(screen.getByRole('option', { name: 'Qwen3-TTS (Voice design, cloning, and streaming)' })).toBeTruthy();
 
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Voice' }), {
+    // The selector mounts before its async voice catalog has loaded.
+    await screen.findByRole('option', { name: /Expressive Alto/ });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Voice' }), {
       target: { value: 'expressive-alto' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save & Reconcile' }));
