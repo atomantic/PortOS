@@ -9,9 +9,15 @@ export async function recordAuditQuality({ task, taskType, agentId, workspacePat
   const contents = await (deps.readFile || tryReadFile)(doneSentinelPath(workspacePath, agentId));
   const { summary } = parseSentinelPayload(contents);
   const report = parseAuditQualityReport(summary, taskType);
-  if (!report) return false;
+  if (!report) {
+    console.warn(`⚠️ Audit quality report missing or invalid for ${agentId} (${taskType})`);
+    return false;
+  }
   // Immutable run measurements make completion replay idempotent.
-  if (!Number.isFinite(Date.parse(assessedAt))) return false;
+  if (!Number.isFinite(Date.parse(assessedAt))) {
+    console.warn(`⚠️ Audit quality skipped for ${agentId}: no valid run start time`);
+    return false;
+  }
   await (deps.ensureSchema || ensureSchema)();
   await (deps.query || query)(
     `INSERT INTO app_quality_measurements (app_id, category, agent_id, assessed_at, report)

@@ -32,12 +32,17 @@ describe('scheduled audit measurement workflow', () => {
   });
 
   it('rejects malformed, cross-category, duplicate and dishonest coverage reports and failed runs without writing', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const query = vi.fn();
     const run = { task, taskType: 'better-complexity', agentId: 'agent-1', workspacePath: '/repo', success: true, assessedAt };
     for (const contents of ['', sentinel(report({ score: 101 })), sentinel(report({ score: '35' })), sentinel(report({ category: 'security' })), sentinel(report({ scannedFiles: 3 })), sentinel(report({ coverage: 'unavailable' })), sentinel(report()) + sentinel(report())]) {
       expect(await recordAuditQuality(run, { readFile: async () => contents, query })).toBe(false);
     }
     expect(await recordAuditQuality({ ...run, success: false }, { readFile: async () => sentinel(report()), query })).toBe(false);
+    expect(warning).toHaveBeenCalledWith('⚠️ Audit quality report missing or invalid for agent-1 (better-complexity)');
+    expect(await recordAuditQuality({ ...run, assessedAt: undefined }, { readFile: async () => sentinel(report()), query })).toBe(false);
+    expect(warning).toHaveBeenLastCalledWith('⚠️ Audit quality skipped for agent-1: no valid run start time');
+    warning.mockRestore();
     expect(query).not.toHaveBeenCalled();
     expect(parseAuditQualityReport(sentinel(report({ score: 0 })), 'better-complexity')?.score).toBe(0);
   });
