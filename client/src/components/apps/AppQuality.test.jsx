@@ -21,3 +21,22 @@ it('links an unassessed tile to its app overview without inventing a score', () 
   render(<MemoryRouter><AppQuality app={{ id: 'other' }} /></MemoryRouter>);
   expect(screen.getByRole('link', { name: 'Quality: not assessed' })).toHaveAttribute('href', '/apps/other/overview');
 });
+
+it('explains why completed maintenance can still have no saved assessment', async () => {
+  render(<MemoryRouter><AppQuality app={{ id: 'example', quality: { score: null, categories: [] } }} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  expect(screen.getByText(/Earlier runs are not scored retroactively/)).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /Configure or run scheduled audits/ })).toHaveAttribute('href', '/apps/example/tasks');
+});
+
+it('distinguishes saved but excluded evidence from an app that was never assessed', async () => {
+  const app = { id: 'example', quality: { score: null, ratedCategories: 0, totalCategories: 25, categories: [
+    { id: 'security', label: 'Security', score: 60, coverage: 'partial', confidence: 'high', assessedAt: '2026-09-10T00:00:00Z' },
+  ] } };
+  const { rerender } = render(<MemoryRouter><AppQuality app={app} /></MemoryRouter>);
+  expect(screen.getByRole('link', { name: 'Quality: no qualifying score' })).toBeInTheDocument();
+  rerender(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  expect(screen.getByText(/Saved assessments do not currently qualify/)).toBeInTheDocument();
+  expect(screen.getByText('60/100')).toBeInTheDocument();
+});

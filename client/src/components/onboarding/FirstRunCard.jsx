@@ -67,6 +67,11 @@ export default function FirstRunCard() {
     setSessionDismissed(true);
   }, []);
 
+  const persistChoice = useCallback(() => (
+    api.updateSettings({ [FIRST_RUN_HIDE_SETTING]: true }, { silent: true })
+      .then(() => setHideSetting(true))
+  ), []);
+
   useEscapeKey(visible && !busy, hideForSession);
 
   const pickMission = (mission) => {
@@ -83,18 +88,32 @@ export default function FirstRunCard() {
       .catch((err) => {
         toast.error(err.message || 'Could not enable those features');
       })
+      .then(persistChoice)
+      .catch((err) => {
+        toast.error(err.message || 'Could not save that preference');
+      })
       .finally(() => {
         hideForSession();
         navigate(mission.to);
       });
   };
 
+  const exploreOnOwn = () => {
+    if (busy) return;
+    setBusy(true);
+    persistChoice()
+      .then(hideForSession)
+      .catch((err) => {
+        toast.error(err.message || 'Could not save that preference');
+      })
+      .finally(() => setBusy(false));
+  };
+
   const hideForever = () => {
     if (busy) return;
     setBusy(true);
-    api.updateSettings({ [FIRST_RUN_HIDE_SETTING]: true }, { silent: true })
+    persistChoice()
       .then(() => {
-        setHideSetting(true);
         hideForSession();
       })
       .catch((err) => {
@@ -108,7 +127,7 @@ export default function FirstRunCard() {
   return (
     <section
       aria-labelledby="first-run-heading"
-      className="bg-port-card border border-port-accent/40 rounded-xl p-4 sm:p-5"
+      className="bg-port-card border border-port-accent/40 rounded-xl p-3 sm:p-5"
     >
       <div className="flex items-start gap-2 sm:gap-3">
         <Sparkles size={18} className="text-port-accent shrink-0 mt-0.5" />
@@ -116,9 +135,10 @@ export default function FirstRunCard() {
           <h3 id="first-run-heading" className="text-base font-semibold text-white">
             Where do you want to start?
           </h3>
-          <p className="mt-1 text-sm text-gray-400">
+          <p className="hidden sm:block mt-1 text-sm text-gray-400">
             Pick a mission to turn on that slice of PortOS and jump in. Exploring
-            on your own, or pressing escape, just hides this for the session.
+            on your own or picking a mission hides this on future visits. Pressing
+            escape just hides it for this session.
           </p>
         </div>
         <button
@@ -133,7 +153,7 @@ export default function FirstRunCard() {
         </button>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="mt-2 sm:mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-1.5 sm:gap-3">
         {FIRST_RUN_MISSIONS.map((mission) => {
           const Icon = MISSION_ICONS[mission.icon] || Sparkles;
           return (
@@ -142,12 +162,12 @@ export default function FirstRunCard() {
               type="button"
               onClick={() => pickMission(mission)}
               disabled={busy}
-              className="flex items-start gap-2 text-left p-3 rounded-lg border border-port-border hover:border-port-accent transition-colors disabled:opacity-50 min-h-[40px]"
+              className="flex items-center sm:items-start gap-2 text-left p-2 sm:p-3 rounded-lg border border-port-border hover:border-port-accent transition-colors disabled:opacity-50 min-h-[40px]"
             >
               <Icon size={16} className="text-port-accent shrink-0 mt-0.5" />
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-medium text-white">{mission.label}</span>
-                <span className="block text-xs text-gray-500 mt-0.5">{mission.description}</span>
+                <span className="hidden sm:block text-xs text-gray-500 mt-0.5">{mission.description}</span>
               </span>
               <ArrowRight size={14} className="text-port-accent shrink-0 mt-0.5" />
             </button>
@@ -155,10 +175,10 @@ export default function FirstRunCard() {
         })}
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+      <div className="mt-2 sm:mt-4 flex flex-wrap items-center gap-3 text-sm">
         <button
           type="button"
-          onClick={hideForSession}
+          onClick={exploreOnOwn}
           disabled={busy}
           className="text-gray-400 hover:text-white disabled:opacity-50"
         >
