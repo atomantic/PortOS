@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   emit: vi.fn(),
   emitLog: vi.fn(),
   recordDecision: vi.fn(async () => {}),
+  cooldownAppId: null,
 }));
 
 vi.mock('./cosEvents.js', () => ({
@@ -47,6 +48,10 @@ vi.mock('./instances.js', async (importActual) => ({
 vi.mock('./decisionLog.js', async (importActual) => ({
   ...(await importActual()),
   recordDecision: (...args) => mocks.recordDecision(...args),
+}));
+vi.mock('./appActivity.js', async (importActual) => ({
+  ...(await importActual()),
+  isAppOnCooldown: async (appId) => appId === mocks.cooldownAppId,
 }));
 vi.mock('./prWatcher.js', async (importActual) => ({
   ...(await importActual()),
@@ -117,6 +122,7 @@ function resetFixtures(mode = 'execute') {
     awaitingApproval: [],
     grouped: { pending: [], blocked: [] },
   };
+  mocks.cooldownAppId = null;
 }
 
 beforeEach(() => {
@@ -165,4 +171,29 @@ describe.each(engines)('%s Priority-2 public boundary', (_name, run) => {
     expect(readyIds()).toEqual([]);
     expect(dryRunIds()).toEqual(executeIds);
   });
+});
+
+it('keeps cooldown decision logging in the evaluate adapter only', async () => {
+  const blockedTask = { ...ordinaryTask('cooldown-task', 'enabled'), metadata: { analysisType: 'enabled', app: 'app-a' } };
+  mocks.cooldownAppId = 'app-a';
+  mocks.cosTaskData.autoApproved = [blockedTask];
+
+  await evaluateTasks();
+
+  expect(readyIds()).toEqual([]);
+  expect(mocks.recordDecision).toHaveBeenCalledWith(
+    'cooldown_active',
+    expect.stringContaining('cooldown-task'),
+    expect.objectContaining({ taskId: 'cooldown-task', appId: 'app-a' }),
+  );
+
+  vi.clearAllMocks();
+  resetFixtures();
+  mocks.cooldownAppId = 'app-a';
+  mocks.cosTaskData.autoApproved = [blockedTask];
+
+  await dequeueNextTask();
+
+  expect(readyIds()).toEqual([]);
+  expect(mocks.recordDecision).not.toHaveBeenCalled();
 });

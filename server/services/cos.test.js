@@ -1595,6 +1595,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     // (issue #2530) — both still live in the cos.js module, so scope to it.
     const dequeueSrc = COS_SRC;
     const dequeueP2 = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority2AutoApproved'));
+    const budgetResolver = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function resolveAutonomyBudget'));
     // evaluateTasks resolves the mode in `resolveAutonomyBudget` and fences each
     // autonomous tier inside its spawnPriority* helper (issue #1082) — both still
     // live in the cosTaskGenerator module, so scope to the whole engine source.
@@ -1602,8 +1603,8 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     expect(dequeueP2, 'dequeue Priority 2 must call the shared budget resolver').toMatch(/resolveAutonomyBudget\(/);
     expect(evalFn, 'evaluateTasks must call the shared budget resolver').toMatch(/resolveAutonomyBudget\(/);
-    expect(GEN_SRC, 'the one budget resolver must read the CoS autonomy mode')
-      .toMatch(/export async function resolveAutonomyBudget[\s\S]*getDomainMode\(state\.config, 'cos'\)/);
+    expect(budgetResolver, 'the one budget resolver must read the CoS autonomy mode')
+      .toMatch(/getDomainMode\(state\.config, 'cos'\)/);
     // evaluateTasks fences autonomous spawns inline on `cosAutonomyMode === 'execute'`.
     expect(evalFn, `evaluateTasks must fence autonomous spawns on cosAutonomyMode === 'execute'`).toMatch(/cosAutonomyMode\s*===\s*['"]execute['"]/);
     // Dequeue's mission/idle tiers gate through the shared predicates, and its

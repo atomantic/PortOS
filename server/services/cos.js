@@ -21,7 +21,7 @@ import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
-import { isAppOnCooldown, clearStaleActiveAgents } from './appActivity.js';
+import { clearStaleActiveAgents } from './appActivity.js';
 // The single Priority-0 on-demand loop body, shared with the evaluateTasks
 // engine in cosTaskGenerator.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';

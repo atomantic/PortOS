@@ -215,12 +215,22 @@ describe('claim reviewer resolution', () => {
 // these source-level guards pin that both engines route through the ONE shared
 // Priority-2 pass, whose dry-run hook set matches its own execute gates.
 describe('dry-run hook wiring matches the shared execute path', () => {
+  const between = (src, startMarker, endMarker) => {
+    const start = src.indexOf(startMarker);
+    expect(start, `missing start marker: ${startMarker}`).toBeGreaterThan(-1);
+    const end = src.indexOf(endMarker, start);
+    expect(end, `missing end marker: ${endMarker}`).toBeGreaterThan(start);
+    return src.slice(start, end);
+  };
+
   const callSite = () => {
     // Anchor on the CALL (`await selectDryRunAutoApproved(`), not the function
     // definition (`export async function selectDryRunAutoApproved(`).
     const start = GEN_SRC.indexOf('await selectDryRunAutoApproved(');
     expect(start, 'selectDryRunAutoApproved must be called').toBeGreaterThan(-1);
-    return GEN_SRC.slice(start, GEN_SRC.indexOf('});', start) + 3);
+    const end = GEN_SRC.indexOf('});', start);
+    expect(end, 'selectDryRunAutoApproved call must close').toBeGreaterThan(start);
+    return GEN_SRC.slice(start, end + 3);
   };
 
   it('the shared pass applies cooldown exemption and disabled-analysis-type gates', () => {
@@ -233,9 +243,9 @@ describe('dry-run hook wiring matches the shared execute path', () => {
   });
 
   it('both engines delegate Priority 2 to admitAutoApprovedSystemTasks', () => {
-    expect(COS_SRC.slice(COS_SRC.indexOf('async function spawnDequeuePriority2AutoApproved'), COS_SRC.indexOf('/**\n * Priority 3', COS_SRC.indexOf('async function spawnDequeuePriority2AutoApproved'))))
+    expect(between(COS_SRC, 'async function spawnDequeuePriority2AutoApproved', '/**\n * Priority 3'))
       .toContain('admitAutoApprovedSystemTasks(');
-    expect(GEN_SRC.slice(GEN_SRC.indexOf('async function spawnPriority2AutoApproved'), GEN_SRC.indexOf('/**\n * Background:', GEN_SRC.indexOf('async function spawnPriority2AutoApproved'))))
+    expect(between(GEN_SRC, 'async function spawnPriority2AutoApproved', '/**\n * Background:'))
       .toContain('admitAutoApprovedSystemTasks(');
   });
 

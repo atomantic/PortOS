@@ -767,7 +767,10 @@ const analysisTypeForTask = (task) => task.metadata?.analysisType || task.metada
 
 function isDisabledAnalysisType(task, taskSchedule) {
   const analysisType = analysisTypeForTask(task);
-  return Boolean(analysisType) && !taskSchedule.tasks[analysisType]?.enabled;
+  // The shared drain contract always supplies a schedule. If that contract is
+  // ever violated, fail closed for scheduled analysis work without aborting the
+  // rest of the evaluation cycle.
+  return Boolean(analysisType) && taskSchedule?.tasks?.[analysisType]?.enabled !== true;
 }
 
 /**
