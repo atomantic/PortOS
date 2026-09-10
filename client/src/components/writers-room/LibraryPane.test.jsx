@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 
@@ -17,17 +18,24 @@ vi.mock('../../services/apiWritersRoom', () => ({
 
 import LibraryPane from './LibraryPane';
 
-const renderPane = (props = {}) => render(
-  <LibraryPane
-    folders={[]}
-    works={[]}
-    activeWorkId={null}
-    onSelectWork={() => {}}
-    onRefresh={() => {}}
-    onCollapse={() => {}}
-    {...props}
-  />,
-);
+function LibraryPaneHarness(props) {
+  const [creatingWork, setCreatingWork] = useState(null);
+  return (
+    <LibraryPane
+      folders={[]}
+      works={[]}
+      activeWorkId={null}
+      onSelectWork={() => {}}
+      onRefresh={() => {}}
+      onCollapse={() => {}}
+      creatingWork={creatingWork}
+      onCreatingWorkChange={setCreatingWork}
+      {...props}
+    />
+  );
+}
+
+const renderPane = (props = {}) => render(<LibraryPaneHarness {...props} />);
 
 // Tailwind arbitrary-value floors are what the rest of the app uses (see
 // Drawer.jsx's close button), so assert on the classes rather than on computed
@@ -40,9 +48,9 @@ const expectTouchTarget = (el) => {
 describe('LibraryPane header actions (#3569)', () => {
   it('meets the 44px touch floor on New folder, New work and Hide library', () => {
     renderPane();
-    for (const name of ['New folder', 'New work', 'Hide library']) {
-      expectTouchTarget(screen.getByRole('button', { name }));
-    }
+    expectTouchTarget(screen.getByRole('button', { name: 'New folder' }));
+    expectTouchTarget(screen.getAllByRole('button', { name: 'New work' })[0]);
+    expectTouchTarget(screen.getByRole('button', { name: 'Hide library' }));
   });
 
   it('keeps the Hide library button desktop-only without losing its flex centering', () => {
@@ -70,10 +78,17 @@ describe('LibraryPane header actions (#3569)', () => {
 
   it('gives the new-work form tappable controls', () => {
     renderPane();
-    fireEvent.click(screen.getByRole('button', { name: 'New work' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'New work' })[0]);
     expect(screen.getByPlaceholderText('Title').className).toContain('min-h-[44px]');
     expect(screen.getByRole('combobox').className).toContain('min-h-[44px]');
     expect(screen.getByRole('button', { name: 'Create' }).className).toContain('min-h-[44px]');
     expectTouchTarget(screen.getByRole('button', { name: 'Cancel' }));
+  });
+
+  it('offers a direct New work action when the library is empty', () => {
+    renderPane();
+    fireEvent.click(screen.getAllByRole('button', { name: 'New work' })[1]);
+    expect(screen.getByRole('textbox', { name: 'Work title' })).toBeInTheDocument();
+    expect(screen.queryByText(/Click .* to start/)).toBeNull();
   });
 });
