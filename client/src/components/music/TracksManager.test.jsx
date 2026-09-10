@@ -249,6 +249,8 @@ describe('<TracksManager> generative workflow hand-off', () => {
     }]);
     musicGenProps.current = null;
     renderAt('track-1');
+    // Wait for form hydration before interacting with the selected track.
+    await screen.findByDisplayValue('Current source');
 
     fireEvent.click(await screen.findByRole('button', { name: 'Remix render-explicit' }));
     await waitFor(() => expect(musicGenProps.current?.remix).toEqual(expect.objectContaining({ instrumentalOnly: true })));
