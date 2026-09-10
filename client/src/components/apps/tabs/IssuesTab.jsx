@@ -21,8 +21,7 @@ import { enabledProcessProviderFilter } from '../../../utils/providers';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 
-function ClaimReviewOverride({ defaults, overrides, onChange }) {
-  const modelOptions = useReviewerModelOptions();
+function ClaimReviewOverride({ defaults, overrides, onChange, modelOptions }) {
   return (
     <ReviewerPicker
       {...defaults}
@@ -273,6 +272,9 @@ export default function IssuesTab({ appId, appName }) {
   // `GET /apps/:id/claim-reviewers`). Untouched fields remain inherited.
   const claimReviewers = useClaimReviewers(appId);
   const [reviewOverrides, setReviewOverrides] = useState({});
+  const reviewerModelOptions = useReviewerModelOptions();
+  const invalidReviewOverride = Array.isArray(reviewOverrides.reviewers)
+    && !reviewOverrides.reviewers.some(reviewer => reviewer !== 'copilot');
   const [showReviewOverride, setShowReviewOverride] = useState(false);
   useEffect(() => {
     setReviewOverrides({});
@@ -433,6 +435,7 @@ export default function IssuesTab({ appId, appName }) {
   // content reach a replan exactly as they reach a claim.
   const handleRun = async (issue, action) => {
     const spec = ISSUE_ACTIONS[action];
+    if (action === 'claim' && invalidReviewOverride) return;
     const key = runKey(action, issue.number);
     replaceRuns(prev => ({ ...prev, [key]: { status: 'queuing', taskId: null } }));
     const trimmedOverrideContext = overrideContext.trim();
@@ -602,14 +605,26 @@ export default function IssuesTab({ appId, appName }) {
             />
           </div>
         </div>
-        {claimReviewers && !Object.keys(reviewOverrides).length && (
+        {claimReviewers && !invalidReviewOverride && (
           <div className="flex flex-col sm:flex-row sm:items-center gap-2">
             <span className="flex items-center gap-1.5 text-xs text-gray-500 uppercase tracking-wide shrink-0">
               <ClipboardCheck size={14} /> Reviewed by
             </span>
             <p className="flex-1 text-xs text-gray-400">
-              <code className="text-gray-300">{claimReviewers.csv}</code>
-              <ClaimReviewerSource source={claimReviewers.source} />
+              {Object.keys(reviewOverrides).length ? (
+                <>
+                  <code className="text-gray-300">{[
+                    ...(reviewOverrides.reviewers ?? claimReviewers.reviewers),
+                    ...(reviewOverrides.usernames ?? claimReviewers.usernames ?? []).map(username => `@${username}`),
+                  ].join(', ')}</code>
+                  {' — run override; expand below for model, effort, and round limits.'}
+                </>
+              ) : (
+                <>
+                  <code className="text-gray-300">{claimReviewers.csv}</code>
+                  <ClaimReviewerSource source={claimReviewers.source} />
+                </>
+              )}
             </p>
           </div>
         )}
@@ -623,9 +638,12 @@ export default function IssuesTab({ appId, appName }) {
             >
               Code-review override{Object.keys(reviewOverrides).length > 0 ? ' (active)' : ''}
             </button>
+            {invalidReviewOverride && (
+              <p className="text-xs text-port-warning" role="alert">Claims require at least one non-Copilot reviewer. Add one or use configured reviewers.</p>
+            )}
             {showReviewOverride && (
               <>
-                <ClaimReviewOverride defaults={claimReviewers} overrides={reviewOverrides} onChange={setReviewOverrides} />
+                <ClaimReviewOverride defaults={claimReviewers} overrides={reviewOverrides} onChange={setReviewOverrides} modelOptions={reviewerModelOptions} />
                 <p className="text-xs text-gray-500">Applies to Claims launched below. Replan only reviews the issue plan.</p>
                 <button type="button" onClick={() => setReviewOverrides({})} className="text-xs text-port-accent hover:underline">
                   Use configured reviewers
@@ -775,7 +793,7 @@ export default function IssuesTab({ appId, appName }) {
                         <button
                           key={action}
                           onClick={() => handleRun(issue, action)}
-                          disabled={state === 'queuing'}
+                          disabled={state === 'queuing' || (action === 'claim' && invalidReviewOverride)}
                           title={spec.title(issue.number, appName)}
                           className={`px-3 py-1.5 ${spec.tone} border border-port-border rounded-lg text-xs flex items-center gap-1.5 disabled:opacity-50 transition-colors`}
                         >

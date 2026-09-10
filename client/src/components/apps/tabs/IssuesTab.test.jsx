@@ -357,21 +357,31 @@ describe('IssuesTab', () => {
     expect(payload).not.toHaveProperty('stopMode');
   });
 
-  it('overrides claim reviewers, leaves replans alone, and restores inheritance', async () => {
+  it('blocks an empty claim review chain, leaves replans alone, and restores inheritance', async () => {
     await renderTab();
     fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
     fireEvent.click(await screen.findByRole('button', { name: /Remove Antigravity/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
-    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalledWith(
-      'next', 'app-1', expect.objectContaining({ reviewers: [] }), { silent: true }
-    ));
-    api.createSlashdoTask.mockClear();
+    expect(screen.getByRole('button', { name: /Claim/ })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Claims require at least one non-Copilot reviewer');
     fireEvent.click(screen.getByRole('button', { name: /Replan/ }));
     await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
     expect(api.createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewers');
     fireEvent.click(screen.getByRole('button', { name: 'Use configured reviewers' }));
     expect(screen.getByText('Reviewed by')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Remove Antigravity/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Claim/ })).toBeEnabled();
+  });
+
+  it('clears review overrides when switching apps', async () => {
+    const view = await renderTab();
+    fireEvent.click(await screen.findByRole('button', { name: 'Code-review override' }));
+    fireEvent.change(await screen.findByLabelText('Reasoning effort for Antigravity'), { target: { value: 'high' } });
+    view.rerender(<MemoryRouter><IssuesTab appId="app-2" appName="Other" /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Code-review override' });
+    fireEvent.click(screen.getByRole('button', { name: /Claim/ }));
+    await waitFor(() => expect(api.createSlashdoTask).toHaveBeenCalled());
+    expect(api.createSlashdoTask.mock.calls[0][1]).toBe('app-2');
+    expect(api.createSlashdoTask.mock.calls[0][2]).not.toHaveProperty('reviewerEfforts');
   });
 
   it('sends optional override context with the selected claim', async () => {
