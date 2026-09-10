@@ -23,8 +23,8 @@
  * `lmstudio`) are checked too — AI Assignments' curated provider payload
  * omits `endpoint`, and a renamed display name would otherwise miss detection.
  *
- * Client mirror of `localBackendForProvider` in
- * server/lib/localProviderRuntime.js — keep in lockstep. The SERVER copy is
+ * A deliberately CHEAPER client labeler than `localBackendForProvider` in
+ * server/lib/localProviderRuntime.js — not a mirror (#6818). The SERVER copy is
  * authoritative and stricter: it parses the endpoint as a URL and requires a
  * loopback/bind-all host, so a peer machine's daemon on the same port is not
  * claimed as local. This one only labels UI, so it stays a cheap regex; if it
