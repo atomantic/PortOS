@@ -185,6 +185,11 @@ describe('ManuscriptCommentCard finding categories (#6770)', () => {
       other: 'Note',
     });
   });
+
+  it('falls back to a legacy category that matches an Object prototype key', () => {
+    render(<Badge comment={{ severity: 'low', category: 'constructor' }} />);
+    expect(screen.getByText('constructor')).toBeTruthy();
+  });
 });
 
 describe('ManuscriptCommentCard — accept toast offers Undo (#1609)', () => {

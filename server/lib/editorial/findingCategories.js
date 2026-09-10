@@ -5,7 +5,7 @@
  * dependency-free. Completeness-only categories remain here alongside the
  * categories declared by built-in editorial checks.
  */
-export const FINDING_CATEGORY_LABELS = Object.freeze({
+export const FINDING_CATEGORY_LABELS = Object.freeze(Object.assign(Object.create(null), {
   'missing-content': 'Missing content',
   'arc-gap': 'Arc gap',
   arc: 'Character arc',
@@ -28,4 +28,4 @@ export const FINDING_CATEGORY_LABELS = Object.freeze({
   cliche: 'Cliché',
   prose: 'Prose',
   other: 'Note',
-});
+}));
