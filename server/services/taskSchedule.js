@@ -27,7 +27,7 @@ import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { parseCronToNextRun } from './eventScheduler.js';
 import { isAuditTaskType, defaultFileIssuesFor, auditDoWorkRequiresWorktree, getAuditScheduleMetadata, AUDIT_RUN_GUIDANCE, AUDIT_SUGGESTED_AFTER } from '../lib/auditCatalog.js';
-import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js';
+import { DEFAULT_TASK_PROMPTS, stampPromptWrite } from './taskPromptDefaults.js';
 import {
   DEFAULT_PERPETUAL_RECHECK_MS,
   INTERVAL_TYPES,
@@ -191,10 +191,6 @@ export async function updateTaskInterval(taskType, settings) {
       schedule.tasks[taskType] = { type: INTERVAL_TYPES.ON_DEMAND, perpetual: false, enabled: false, providerId: null, model: null, createdAt: new Date().toISOString() };
     }
 
-    // Normalize empty/whitespace prompts to null (treated as "use default")
-    if ('prompt' in settings && typeof settings.prompt === 'string' && !settings.prompt.trim()) {
-      settings.prompt = null;
-    }
     // The description is display-only schedule metadata. Keep it separate from
     // the prompt so custom card copy never becomes agent instructions.
     if ('description' in settings) {
@@ -202,24 +198,8 @@ export async function updateTaskInterval(taskType, settings) {
         ? settings.description.trim().slice(0, 240) || null
         : null;
     }
-    // If user is setting a custom prompt, mark it so auto-upgrade won't overwrite it.
-    // If user clears the prompt (null), remove the customized flag to resume defaults.
-    //
-    // `promptSource: 'user'` records that this write was an EXPLICIT user action,
-    // which is what the store's self-heal reads to leave the pin alone (#5432).
-    // Without it, pasting an older SHIPPED body into Settings → Scheduled Tasks was
-    // un-pinnable: the self-heal saw a body matching a retired default, cleared the
-    // flag on the next load, and the next PROMPT_VERSIONS bump overwrote the text.
-    //
-    // A body identical to the CURRENT default is not a pin. The editor prefills its
-    // textarea from the stored prompt, so re-saving an untouched default would
-    // otherwise stamp a permanent pin and freeze that type off every future prompt
-    // upgrade — which is exactly the mis-flag the self-heal existed to undo, now
-    // beyond its reach. Retired shipped bodies still pin: that is the #5432 case.
     if ('prompt' in settings) {
-      settings.promptCustomized = settings.prompt != null
-        && settings.prompt !== DEFAULT_TASK_PROMPTS[taskType];
-      settings.promptSource = settings.promptCustomized ? 'user' : null;
+      Object.assign(settings, stampPromptWrite(settings.prompt, taskType));
     }
 
     schedule.tasks[taskType] = {

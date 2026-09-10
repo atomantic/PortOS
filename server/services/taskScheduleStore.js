@@ -15,8 +15,7 @@ import {
 } from './taskScheduleRegistry.js';
 import {
   DEFAULT_TASK_PROMPTS,
-  PROMPT_VERSIONS,
-  promptMatchesShippedDefault
+  reconcileStoredPrompt
 } from './taskPromptDefaults.js';
 
 const DATA_DIR = PATHS.cos;
@@ -252,85 +251,13 @@ async function readSchedule() {
       config.createdAt = new Date().toISOString();
       needsSave = true;
     }
-    if (!config.prompt && DEFAULT_TASK_PROMPTS[taskType]) {
-      // No prompt set — initialize with current default and version
-      config.prompt = DEFAULT_TASK_PROMPTS[taskType];
-      config.promptVersion = PROMPT_VERSIONS[taskType] || 1;
-      // A prompt-less config pins nothing, so drop any stale provenance rather
-      // than let it freeze the freshly-installed default off the upgrade path.
-      if (config.promptSource) config.promptSource = null;
+    const { changed, ...promptFields } = reconcileStoredPrompt(config, taskType);
+    if (changed) {
+      if (config.prompt && config.prompt !== promptFields.prompt) {
+        emitLog('info', `Upgrading ${taskType} prompt to v${promptFields.promptVersion}`, { taskType }, '📅 TaskSchedule');
+      }
+      Object.assign(config, promptFields);
       needsSave = true;
-    } else {
-      // Legacy migration: infer customization when promptVersion is missing
-      if (
-        config.prompt &&
-        config.promptVersion === undefined &&
-        DEFAULT_TASK_PROMPTS[taskType]
-      ) {
-        if (config.prompt === DEFAULT_TASK_PROMPTS[taskType]) {
-          // Matches current default — assign current version (no upgrade needed)
-          config.promptVersion = PROMPT_VERSIONS[taskType] || 1;
-          needsSave = true;
-        } else if (promptMatchesShippedDefault(config.prompt, taskType)) {
-          // Matches a known previous default — assign version 1 so auto-upgrade triggers
-          config.promptVersion = 1;
-          needsSave = true;
-        } else {
-          // Prompt differs from all known defaults — treat as user-customized.
-          // Stamp the provenance as INFERRED, not 'user': this branch is a guess
-          // made from a body we don't recognize, so the self-heal below must stay
-          // free to undo it once the body turns out to be a retired default.
-          config.promptCustomized = true;
-          config.promptSource = 'legacy-inferred';
-          config.promptVersion = PROMPT_VERSIONS[taskType] || 1;
-          needsSave = true;
-        }
-      }
-
-      // Self-heal a mis-flagged customization: a prompt marked promptCustomized
-      // that nonetheless matches a shipped default was never user-edited — it
-      // was flagged by an earlier legacy migration that ran before this task
-      // carried a retired-default history entry (the basic self-improvement
-      // prompts that hardcoded the app name as "PortOS", and both
-      // pre-unification generations — `[Self-Improvement] …` and
-      // `[App Improvement: …]` — that the schedule unification replaced without
-      // preserving). Clear the flag so the auto-upgrade below can replace the
-      // stale default.
-      //
-      // Clearing the flag is NOT enough on its own. That legacy migration
-      // stamped `promptVersion = PROMPT_VERSIONS[taskType]` alongside the flag,
-      // so an install flagged after a type was versioned carries the CURRENT
-      // version while holding a RETIRED body — the upgrade below then sees
-      // `storedVersion < current` as false and leaves the stale prompt in place
-      // forever, now un-flagged so nothing else notices. Reset the version to 1
-      // whenever the body is a prior default rather than the current one, which
-      // is the same stamp the version-inference branch above applies.
-      //
-      // Gated on provenance (#5432): a user who deliberately pastes an older
-      // SHIPPED body into Settings → Scheduled Tasks also byte-matches a shipped
-      // default, and clearing THAT flag would let the next PROMPT_VERSIONS bump
-      // overwrite their chosen text. `promptSource === 'user'` marks an explicit
-      // write through updateTaskInterval and is left alone; 'legacy-inferred' and
-      // absent (every install upgrading into this field) self-heal exactly as
-      // they do today.
-      if (config.promptSource !== 'user'
-        && config.promptCustomized
-        && promptMatchesShippedDefault(config.prompt, taskType)) {
-        config.promptCustomized = false;
-        if (config.prompt !== DEFAULT_TASK_PROMPTS[taskType]) config.promptVersion = 1;
-        needsSave = true;
-      }
-
-      if (PROMPT_VERSIONS[taskType] && !config.promptCustomized) {
-        // Auto-upgrade non-customized prompts when code version is newer
-        const storedVersion = config.promptVersion || 1;
-        if (storedVersion < PROMPT_VERSIONS[taskType]) {
-          emitLog('info', `Upgrading ${taskType} prompt v${storedVersion} → v${PROMPT_VERSIONS[taskType]}`, { taskType }, '📅 TaskSchedule');
-          config.prompt = DEFAULT_TASK_PROMPTS[taskType];
-          config.promptVersion = PROMPT_VERSIONS[taskType];
-          needsSave = true;
-        }
-      }
     }
   }
 
