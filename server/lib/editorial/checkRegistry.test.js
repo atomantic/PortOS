@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
+import { FINDING_CATEGORY_LABELS } from './findingCategories.js';
 import {
   EDITORIAL_CHECKS,
   EDITORIAL_SOURCES,
@@ -108,6 +109,15 @@ describe('editorial check registry — shape invariants', () => {
       if (check.sources.includes('manuscript')) {
         expect(check.needsManuscript, `${check.id} manuscript source ⇒ needsManuscript`).toBe(true);
       }
+    }
+  });
+
+  it('gives every built-in finding category a manuscript display label', () => {
+    for (const check of EDITORIAL_CHECKS) {
+      expect(
+        Object.hasOwn(FINDING_CATEGORY_LABELS, check.category),
+        `${check.id} category "${check.category}"`,
+      ).toBe(true);
     }
   });
 

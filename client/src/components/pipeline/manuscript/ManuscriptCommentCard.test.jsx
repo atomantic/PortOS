@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import ManuscriptCommentCard, { Badge } from './ManuscriptCommentCard';
+import { CATEGORY_LABEL } from './constants';
 import { Toaster, toast } from '../../ui/Toast';
 import {
   acceptPipelineManuscriptFix,
@@ -151,6 +152,38 @@ describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
     const textarea = screen.getByLabelText(/Replacement \(editable\)/i);
     fireEvent.keyDown(textarea, { key: 'd' });
     expect(patchPipelineManuscriptComment).not.toHaveBeenCalled();
+  });
+});
+
+describe('ManuscriptCommentCard finding categories (#6770)', () => {
+  it('humanizes every editorial category added after the original manuscript map', () => {
+    const categories = {
+      dialogue: 'Dialogue',
+      naming: 'Naming',
+      world: 'World',
+      character: 'Character',
+      emotion: 'Emotion',
+      opening: 'Opening',
+      cliche: 'Cliché',
+      prose: 'Prose',
+    };
+
+    render(<>{Object.keys(categories).map((category) => (
+      <Badge key={category} comment={{ severity: 'low', category }} />
+    ))}</>);
+
+    for (const label of Object.values(categories)) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+  });
+
+  it('keeps manuscript-completeness category labels in the shared map', () => {
+    expect(CATEGORY_LABEL).toMatchObject({
+      'missing-content': 'Missing content',
+      'arc-gap': 'Arc gap',
+      'character-gap': 'Character gap',
+      other: 'Note',
+    });
   });
 });
 
