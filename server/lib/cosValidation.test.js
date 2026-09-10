@@ -336,3 +336,12 @@ describe('cosValidation job shell-only fields cleared on an agent job', () => {
     expect(updateCosJobSchema.safeParse({ triggerAction: 42 }).success).toBe(false);
   });
 });
+
+describe('scheduled slashdo metadata', () => {
+  it('preserves the validated command and exact reviewer arguments through sanitization', () => {
+    const metadata = { slashdoCommand: 'release', slashdoArgs: '--review-with codex[gpt-6-astra]~opt~max=1~effort=low' };
+    expect(sanitizeTaskMetadata(metadata)).toEqual(metadata);
+    expect(sanitizeTaskMetadata({ slashdoCommand: '../../release', slashdoArgs: 42 })).toBeNull();
+    expect(sanitizeTaskMetadata({ slashdoArgs: 'x'.repeat(4001) })).toBeNull();
+  });
+});

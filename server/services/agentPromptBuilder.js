@@ -38,6 +38,7 @@ import {
   buildActionOutputCompletionSection,
   buildAuditOutputCompletionSection,
   buildClaimFlowCompletionSection,
+  buildReleaseFlowCompletionSection,
   buildCliCompletionSection,
   buildCompletionGuidelineBullet,
   buildFallbackCompletionInstructions,
@@ -455,27 +456,6 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // below; the flag is read up here because it is an input to the mode decision.
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = isPrBranchWorktree(task, worktreeInfo);
-  const worktreeCommitNote = worktreeInfo
-    ? worktreeCommitGuidance({
-        isTui,
-        canTypeSlashCommands: false,
-        rendersInlinePrLifecycle: false,
-        isWorktreeOnExistingBranch,
-        willOpenPR,
-        discardWorktree,
-        claimFlow,
-        noChangeSuccess,
-      })
-    : '';
-  const worktreeSection = worktreeInfo ? `
-## Git Worktree Context
-You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
-- **Branch**: \`${worktreeInfo.branchName}\`${isWorktreeOnExistingBranch ? ' *(pre-existing PR branch)*' : ''}
-- **Worktree Path**: \`${worktreeInfo.worktreePath}\`
-${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
-
-**Important**: ${worktreeCommitNote} Do NOT manually switch branches or modify the worktree configuration.
-${buildResumeSection(task, worktreeInfo)}` : '';
 
   // Build pipeline context section if this is a pipeline stage
   const pipelineCtx = task.metadata?.pipeline;
@@ -500,10 +480,6 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   // latent local `claude` the way a blank CLI/TUI provider is.
   const canRunSlashCommands = canTypeSlashCommands({
     providerId, providerCommand, leanMode, assumeClaudeWhenUnknown: false,
-  });
-  const simplifySection = buildSimplifySection({
-    canRunSlashCommands, simplifyEnabled, isTui, discardWorktree, claimFlow,
-    worktreeInfo, willOpenPR, portosMergesBranch,
   });
 
   // Resolve the user's ordered reviewer list + flags (task metadata wins; else the
@@ -550,7 +526,34 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
   const completionMode = resolveCompletionMode({
     toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
     isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands, portosMergesBranch,
-    worktreeInfo, willOpenPR,
+    worktreeInfo, willOpenPR, slashdoCommand: task.metadata?.slashdoCommand,
+  });
+  const worktreeCommitNote = worktreeInfo
+    ? worktreeCommitGuidance({
+        isTui,
+        mode: completionMode,
+        canTypeSlashCommands: false,
+        rendersInlinePrLifecycle: false,
+        isWorktreeOnExistingBranch,
+        willOpenPR,
+        discardWorktree,
+        claimFlow,
+        noChangeSuccess,
+      })
+    : '';
+  const worktreeSection = worktreeInfo ? `
+## Git Worktree Context
+You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
+- **Branch**: \`${worktreeInfo.branchName}\`${isWorktreeOnExistingBranch ? ' *(pre-existing PR branch)*' : ''}
+- **Worktree Path**: \`${worktreeInfo.worktreePath}\`
+${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
+
+**Important**: ${worktreeCommitNote} ${completionMode === COMPLETION_MODES.RELEASE_FLOW ? 'Follow the release workflow branch instructions while preserving unrelated work.' : 'Do NOT manually switch branches or modify the worktree configuration.'}
+${buildResumeSection(task, worktreeInfo)}` : '';
+
+  const simplifySection = buildSimplifySection({
+    mode: completionMode, canRunSlashCommands, simplifyEnabled, isTui, discardWorktree, claimFlow,
+    worktreeInfo, willOpenPR, portosMergesBranch,
   });
   // Step 4, the Git Hygiene bullet and the commit-target bullet as ONE record,
   // so the three cannot contradict each other the way they did (#6616).
@@ -602,6 +605,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
     [COMPLETION_MODES.CLAIM_FLOW]: () => buildClaimFlowCompletionSection({
       isTui, sentinelPath, reviewersCsv: claimReviewersCsv(task, codeReviewDefaults, defaultReviewers),
     }),
+    [COMPLETION_MODES.RELEASE_FLOW]: () => buildReleaseFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: buildFullPathTuiCompletion,
     [COMPLETION_MODES.TUI]: buildFullPathTuiCompletion,
   }[completionMode] || (() => ''))();
@@ -704,14 +708,14 @@ async function loadDeveloperContext(task, config, workspaceDir, skipDevContext) 
  * describing the same pass. Empty for the contracts that never commit.
  */
 function buildSimplifySection({
-  canRunSlashCommands, simplifyEnabled, isTui, discardWorktree, claimFlow,
+  mode, canRunSlashCommands, simplifyEnabled, isTui, discardWorktree, claimFlow,
   worktreeInfo, willOpenPR, portosMergesBranch,
 }) {
   const simplifyInstruction = canRunSlashCommands
     ? 'run `/simplify` to review the changed code for reuse, quality, and efficiency'
     : SIMPLIFY_INLINE_REVIEW;
   // Discard tasks don't commit, so the simplify-before-commit step is moot.
-  const simplifySection = simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
+  const simplifySection = mode !== COMPLETION_MODES.RELEASE_FLOW && simplifyEnabled && !isTui && !discardWorktree && !claimFlow ? `
 ## Simplify Step
 After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : portosMergesBranch ? 'commit your changes (do NOT push — PortOS merges this branch back into the source checkout after you exit; a pushed copy would only be left behind on origin)' : 'commit and push using `/do:push`'}.
 ` : '';
@@ -1007,7 +1011,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const completionMode = resolveCompletionMode({
     toolFreeReasoning, sentinelPayloadOutput, noCodeOutput, discardWorktree, claimFlow,
     isReadOnly, isReviewLoopFollowUp, isTui, canRunSlashCommands: canTypeSlash,
-    portosMergesBranch, worktreeInfo, willOpenPR,
+    portosMergesBranch, worktreeInfo, willOpenPR, slashdoCommand: task.metadata?.slashdoCommand,
   });
   // Does this session drive commit → push → PR → review → merge itself?
   //
@@ -1017,7 +1021,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // a JIRA run be told to open a PR whose merge section was suppressed — and
   // PortOS opened that PR too. `inlineSection` also names WHICH section follows,
   // so the completion step's cross-reference can't name the wrong one.
-  const inlineSection = claimFlow ? null : inlinePrLifecycleSection(task, {
+  const inlineSection = claimFlow || completionMode === COMPLETION_MODES.RELEASE_FLOW ? null : inlinePrLifecycleSection(task, {
     providerType: isTui ? PROVIDER_TYPES.TUI : PROVIDER_TYPES.CLI,
     providerId, providerCommand, leanMode, worktreeInfo, isTruthyMetaFn,
   });
@@ -1148,6 +1152,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
         ...buildSentinelWriteSteps(1, lightSentinelPath(), sentinelTail)
       ].join('\n'));
     },
+    [COMPLETION_MODES.RELEASE_FLOW]: () => contractSections.push(buildReleaseFlowCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.TUI_SLASHDO_FREE]: pushTuiCompletion,
     [COMPLETION_MODES.TUI]: pushTuiCompletion,
   }[completionMode] || pushCliCompletion)();
@@ -1210,7 +1215,9 @@ function buildLightTaskContextSections({
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
       worktreeCommitGuidance({ isTui, mode, canTypeSlashCommands, rendersInlinePrLifecycle, isWorktreeOnExistingBranch, willOpenPR, discardWorktree, claimFlow, noChangeSuccess }),
-      'Do NOT manually switch branches or modify the worktree configuration.',
+      mode === COMPLETION_MODES.RELEASE_FLOW
+        ? 'Follow the release workflow branch instructions while preserving unrelated work.'
+        : 'Do NOT manually switch branches or modify the worktree configuration.',
       // Resuming a previous failed agent's branch: establish what's already done
       // before writing code (see buildResumeSection). '' when not a resume.
       buildResumeSection(task, worktreeInfo) || null

@@ -1030,6 +1030,15 @@ export function sanitizeTaskMetadata(raw) {
     clean.prCompletion = raw.prCompletion;
     hasKeys = true;
   }
+  // Schedule dispatch must preserve the workflow and its reviewer pin. Reuse
+  // the task-input schemas so command paths and argument bounds stay identical.
+  for (const key of ['slashdoCommand', 'slashdoArgs']) {
+    const parsed = createCosTaskSchema.shape[key].safeParse(raw[key]);
+    if (parsed.success && parsed.data !== undefined) {
+      clean[key] = parsed.data;
+      hasKeys = true;
+    }
+  }
   // `reviewer` is a legacy single constrained string.
   const normalizedReviewer = REVIEWER_ALIASES[raw.reviewer] || raw.reviewer;
   if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && isReviewer(normalizedReviewer)) {

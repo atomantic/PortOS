@@ -65,6 +65,8 @@ export const COMPLETION_MODES = Object.freeze({
   READ_ONLY: 'read-only',
   /** Pushes fixes straight to an existing PR branch; opens no new PR. */
   REVIEW_LOOP_FOLLOW_UP: 'review-loop-follow-up',
+  /** The bundled release workflow owns delivery and final verification. */
+  RELEASE_FLOW: 'release-flow',
   /** TUI host that cannot type a `/do:*` command — commit, then hand off. */
   TUI_SLASHDO_FREE: 'tui-slashdo-free',
   /** TUI host that drives its own `/do:pr` | `/do:push` completion workflow. */
@@ -108,6 +110,7 @@ const COMPLETION_MODE_RULES = Object.freeze([
   [COMPLETION_MODES.CLAIM_FLOW, (f) => f.claimFlow],
   [COMPLETION_MODES.READ_ONLY, (f) => f.isReadOnly],
   [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP, (f) => f.isReviewLoopFollowUp],
+  [COMPLETION_MODES.RELEASE_FLOW, (f) => f.slashdoCommand === 'release'],
   [COMPLETION_MODES.TUI_SLASHDO_FREE, (f) => f.isTui && !f.canRunSlashCommands],
   [COMPLETION_MODES.TUI, (f) => f.isTui],
   [COMPLETION_MODES.PORTOS_MERGES, (f) => f.portosMergesBranch],
@@ -125,6 +128,7 @@ const COMPLETION_MODE_RULES = Object.freeze([
  * @param {boolean} [flags.claimFlow]
  * @param {boolean} [flags.isReadOnly]
  * @param {boolean} [flags.isReviewLoopFollowUp]
+ * @param {string} [flags.slashdoCommand]
  * @param {boolean} [flags.isTui]
  * @param {boolean} [flags.canRunSlashCommands] - Defaults to `true`; only a TUI
  *   host that demonstrably cannot type `/do:*` takes the slashdo-free contract.

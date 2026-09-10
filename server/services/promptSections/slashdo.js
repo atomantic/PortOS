@@ -153,7 +153,9 @@ export async function applySlashdoInvocation(task, {
   providerId = null, providerCommand = null, leanMode = false, hasFileTools = false,
   defaultReviewers = null, codeReviewDefaults = null,
 } = {}) {
-  const command = task.metadata?.slashdoCommand;
+  // Older queued release checks lost this key in metadata sanitization.
+  const taskType = task.metadata?.analysisType || task.metadata?.taskAnalysisType;
+  const command = task.metadata?.slashdoCommand || (taskType === 'release-check' ? 'release' : null);
   const resolved = resolveSlashdoInvocation({
     command,
     args: task.metadata?.slashdoArgs || '',
@@ -198,5 +200,5 @@ export async function applySlashdoInvocation(task, {
     includeTaskContext,
     explicitReviewWith,
   });
-  return { ...task, description: `${task.description}\n\n${section}` };
+  return { ...task, metadata: { ...task.metadata, slashdoCommand: command }, description: `${task.description}\n\n${section}` };
 }

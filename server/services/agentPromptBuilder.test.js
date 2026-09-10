@@ -123,6 +123,7 @@ import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { loadSlashdoFile, loadSlashdoLib, loadSlashdoBundle, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js'; // mocked above — control the inlined body
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
+import { sanitizeTaskMetadata } from '../lib/cosValidation.js';
 import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../lib/agentSentinel.js';
@@ -3426,6 +3427,39 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
       stripFrontmatter: true,
       skipIncludes: expect.arrayContaining(['copilot-review-loop']),
     });
+  });
+
+  it.each([
+    ['tui', 'codex-tui', 'codex'],
+    ['cli', 'codex', 'codex'],
+    ['tui', 'claude-code-tui', 'claude'],
+    ['api', 'test-api', null],
+  ])('keeps scheduled release attachment and completion aligned on %s/%s', async (providerType, providerId, providerCommand) => {
+    vi.mocked(loadSlashdoFile).mockResolvedValue('# Release\n\nCanonical release procedure.');
+    const scheduledMetadata = sanitizeTaskMetadata({
+      useWorktree: false, openPR: false, worktreeChangesExpected: false,
+      slashdoCommand: 'release', slashdoArgs: '--review-with codex[gpt-6-astra]~opt~max=1~effort=low'
+    });
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: scheduledMetadata }), {}, '/r', null, isTruthyMeta,
+      { providerType, providerId, providerCommand, agentId: 'release-test' });
+    expect(prompt).toContain('Canonical release procedure.');
+    expect(prompt).toContain('--review-with codex[gpt-6-astra]~opt~max=1~effort=low');
+    expect(prompt).toContain('Release Workflow Handoff');
+    expect(prompt).toContain('first unverified checkpoint');
+    expect(prompt).not.toMatch(/Do NOT push|do NOT push|Commit only|commit only|PortOS will (?:push|merge)/);
+    expect(prompt).not.toContain('## Completion Workflow');
+    if (providerType === 'tui') expect(prompt).toContain('.agent-done-release-test');
+  });
+
+  it('recovers the bundled release for an older queued task whose command was stripped', async () => {
+    vi.mocked(loadSlashdoFile).mockResolvedValue('# Release\n\nCanonical release procedure.');
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: { analysisType: 'release-check', openPR: false } }),
+      {}, '/r', null, isTruthyMeta, { providerType: 'tui', providerId: 'codex-tui', providerCommand: 'codex' });
+    expect(prompt).toContain('Canonical release procedure.');
+    expect(prompt).toContain('Release Workflow Handoff');
+    expect(prompt).not.toContain('Do NOT push');
   });
 
   it('uses explicit slashdoArgs when present', async () => {
