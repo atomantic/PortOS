@@ -1258,7 +1258,19 @@ describe('pipeline stage navigation tools', () => {
     it('refuses to advance past audio (last navigable stage)', async () => {
       const r = await dispatchTool('pipeline_next_stage', {}, makeCtx('/pipeline/issues/x/audio'));
       expect(r.ok).toBe(false);
-      expect(r.summary).toMatch(/last stage/);
+      expect(r.summary).toBe("Already on Audio — that's the last stage.");
+    });
+
+    it('advances from prose to the Nouns tab', async () => {
+      const r = await dispatchTool('pipeline_next_stage', {}, makeCtx('/pipeline/issues/x/prose'));
+      expect(r.stage).toBe('nouns');
+      expect(r.path).toBe('/pipeline/issues/x/nouns');
+    });
+
+    it('advances from teleplay to storyboards without visiting hidden comic pages', async () => {
+      const r = await dispatchTool('pipeline_next_stage', {}, makeCtx('/pipeline/issues/x/teleplay'));
+      expect(r.stage).toBe('storyboards');
+      expect(r.path).toBe('/pipeline/issues/x/storyboards');
     });
 
     it('refuses when not on a pipeline issue page', async () => {
@@ -1300,12 +1312,22 @@ describe('pipeline stage navigation tools', () => {
       expect(ctx.sideEffects).toEqual([{ type: 'navigate', path: '/pipeline/issues/iss-x/storyboards' }]);
     });
 
-    it('resolves spoken aliases (teleplay → teleplay, pages → comicPages, video → episodeVideo)', async () => {
+    it('opens the UI-only Nouns tab and Audio stage by name', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-x/idea');
+      const nouns = await dispatchTool('pipeline_open_stage', { stage: 'nouns' }, ctx);
+      const audio = await dispatchTool('pipeline_open_stage', { stage: 'audio' }, ctx);
+      expect(nouns.path).toBe('/pipeline/issues/iss-x/nouns');
+      expect(nouns.summary).toBe('Opened Nouns.');
+      expect(audio.path).toBe('/pipeline/issues/iss-x/audio');
+      expect(audio.summary).toBe('Opened Audio.');
+    });
+
+    it('resolves spoken aliases to visible tabs', async () => {
       const ctx = makeCtx('/pipeline/issues/iss-x/idea');
       const r1 = await dispatchTool('pipeline_open_stage', { stage: 'teleplay' }, ctx);
       expect(r1.stage).toBe('teleplay');
       const r2 = await dispatchTool('pipeline_open_stage', { stage: 'pages' }, ctx);
-      expect(r2.stage).toBe('comicPages');
+      expect(r2.stage).toBe('comicScript');
       const r3 = await dispatchTool('pipeline_open_stage', { stage: 'video' }, ctx);
       expect(r3.stage).toBe('episodeVideo');
     });
@@ -1325,9 +1347,9 @@ describe('pipeline stage navigation tools', () => {
       // at "Unknown stage" with the user staring at a working group.
       const ctx = makeCtx('/pipeline/issues/iss-x/idea');
       const r1 = await dispatchTool('pipeline_open_stage', { stage: 'comic page' }, ctx);
-      expect(r1.stage).toBe('comicPages');
+      expect(r1.stage).toBe('comicScript');
       const r2 = await dispatchTool('pipeline_open_stage', { stage: 'page' }, ctx);
-      expect(r2.stage).toBe('comicPages');
+      expect(r2.stage).toBe('comicScript');
     });
 
     it('rejects an unknown stage with a suggestion list', async () => {
@@ -1347,14 +1369,21 @@ describe('pipeline stage navigation tools', () => {
       expect(r.ok).toBe(true);
       // If the query bled into the issueId or stage, the navigate path
       // would carry "?foo=bar" or fall back to 'idea' as the current stage.
-      expect(ctx.sideEffects[0].path).toBe('/pipeline/issues/iss-abc/comicScript');
+      expect(ctx.sideEffects[0].path).toBe('/pipeline/issues/iss-abc/nouns');
     });
 
     it('strips a hash anchor from the path before parsing the id', async () => {
       const ctx = makeCtx('/pipeline/issues/iss-abc/prose#anchor');
       const r = await dispatchTool('pipeline_next_stage', {}, ctx);
       expect(r.ok).toBe(true);
-      expect(ctx.sideEffects[0].path).toBe('/pipeline/issues/iss-abc/comicScript');
+      expect(ctx.sideEffects[0].path).toBe('/pipeline/issues/iss-abc/nouns');
+    });
+
+    it('normalizes a legacy comicPages URL to the merged Comic tab', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-abc/comicPages');
+      const r = await dispatchTool('pipeline_next_stage', {}, ctx);
+      expect(r.stage).toBe('teleplay');
+      expect(ctx.sideEffects[0].path).toBe('/pipeline/issues/iss-abc/teleplay');
     });
 
     it('tolerates a missing UI state', async () => {
@@ -1392,6 +1421,9 @@ describe('pipeline stage navigation tools', () => {
       expect(classifyIntent('open episode').has('pipeline')).toBe(true);
       expect(classifyIntent('open video').has('pipeline')).toBe(true);
       expect(classifyIntent('back to story').has('pipeline')).toBe(true);
+      expect(classifyIntent('open nouns').has('pipeline')).toBe(true);
+      expect(classifyIntent('open audio').has('pipeline')).toBe(true);
+      expect(classifyIntent('open voice over').has('pipeline')).toBe(true);
     });
   });
 });

@@ -75,7 +75,7 @@ const NARROWED = [
   ['lib/slashdoInvocation.js', 'lib/tuiHandshake.js',
     'needs inferTuiCommand, which providerVendors.js declares'],
   ['services/voice/tools/pipeline.js', 'services/pipeline/issues.js',
-    'needs NAVIGABLE_STAGE_IDS, which issuesShared.js declares'],
+    'needs only the pure pipelineStages.js identity leaf'],
   ['services/cosTaskIntake.js', 'lib/validation.js',
     'needs SWARM_COUNT_* and the reviewer normalizers, which cosValidation.js / reviewerConfig.js declare'],
 ];
@@ -100,7 +100,7 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('services/memoryEmbeddings.js', 'services/memoryConfig.js')).toBe(true);
     expect(reaches('lib/llmRoutePin.js', 'lib/textUtils.js')).toBe(true);
     expect(reaches('lib/slashdoInvocation.js', 'lib/providerVendors.js')).toBe(true);
-    expect(reaches('services/voice/tools/pipeline.js', 'services/pipeline/issuesShared.js')).toBe(true);
+    expect(reaches('services/voice/tools/pipeline.js', 'lib/pipelineStages.js')).toBe(true);
   });
 
   // And a control on the other side: the barrels themselves still reach what
