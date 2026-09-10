@@ -83,7 +83,7 @@ export function summarizeAppQuality(records = [], now = Date.now()) {
     const assessedAt = record?.assessedAt;
     const age = now - Date.parse(assessedAt);
     const stale = valid && (!Number.isFinite(age) || age < 0 || age > AUDIT_FRESHNESS_MS);
-    return { id, label: definition.label, ...(valid ? report.data : { score: null, coverage: 'unavailable' }), assessedAt: assessedAt || null, agentId: record?.agentId || null, stale };
+    return { id, label: definition.label, ...(valid ? report.data : { score: null, coverage: 'unavailable' }), assessedAt: assessedAt || null, agentId: record?.agentId || null, sourcePeerId: record?.sourcePeerId || null, sourcePeerName: record?.sourcePeerName || null, stale };
   });
   const rated = categories.filter(c => !c.stale && c.coverage === 'broad' && c.confidence !== 'low' && c.score !== null);
   return {
@@ -101,7 +101,7 @@ export function buildAppQualityHistory(records, days, now = Date.now()) {
   const dayMs = 86400000;
   const today = Math.floor(now / dayMs) * dayMs;
   const sorted = records.filter(r => Number.isFinite(Date.parse(r.assessedAt)))
-    .sort((a, b) => Date.parse(a.assessedAt) - Date.parse(b.assessedAt));
+    .sort(compareQualityRecords);
   const latest = new Map();
   let cursor = 0;
   const points = [];
@@ -119,4 +119,16 @@ export function buildAppQualityHistory(records, days, now = Date.now()) {
       }])) });
   }
   return { days, totalCategories: Object.keys(AUDIT_DEFINITIONS).length, points };
+}
+
+/** One newest measurement per category, with a stable run tie-break across all installs. */
+export function latestQualityRecords(records) {
+  const latest = new Map();
+  for (const record of [...records].sort(compareQualityRecords)) latest.set(record.category, record);
+  return [...latest.values()];
+}
+
+export function compareQualityRecords(a, b) {
+  return Date.parse(a.assessedAt) - Date.parse(b.assessedAt)
+    || (a.measurementId || a.agentId || '').localeCompare(b.measurementId || b.agentId || '');
 }

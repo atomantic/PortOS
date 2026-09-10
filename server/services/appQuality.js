@@ -1,8 +1,10 @@
-/** Machine-local, DB-primary audit measurements. Reads never dispatch AI work. */
+/** DB-primary audit measurements with read-through PortOS federation. Reads never dispatch AI work. */
 import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { tryReadFile } from '../lib/jsonIo.js';
-import { parseAuditQualityReport, summarizeAppQuality, buildAppQualityHistory, AUDIT_FRESHNESS_MS } from '../lib/auditQuality.js';
+import { parseAuditQualityReport, summarizeAppQuality, buildAppQualityHistory, latestQualityRecords } from '../lib/auditQuality.js';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
+import { collectPortosQuality, qualityRecord, readQualityRecords } from './appQualityFederation.js';
 
 export async function recordAuditQuality({ task, taskType, agentId, workspacePath, success, assessedAt }, deps = {}) {
   if (!success || !workspacePath || !task?.metadata?.app || !agentId) return false;
@@ -38,29 +40,23 @@ export async function enrichAppsWithQuality(apps, deps = {}) {
     console.error(`❌ App quality unavailable: ${err.message}`);
     return null;
   });
+  const shared = apps.some(app => app.id === PORTOS_APP_ID)
+    ? await collectPortosQuality(30, deps).catch(() => ({ records: [], federation: { failed: true } })) : null;
   return apps.map(app => ({
     ...app,
-    quality: result ? summarizeAppQuality(result.rows.filter(row => row.app_id === app.id).map(row => ({
-      category: row.category, agentId: row.agent_id,
-      assessedAt: new Date(row.assessed_at).toISOString(), report: row.report,
-    }))) : { ...summarizeAppQuality(), unavailable: true },
+    quality: result ? { ...summarizeAppQuality(latestQualityRecords([
+      ...result.rows.filter(row => row.app_id === app.id).map(qualityRecord),
+      ...(app.id === PORTOS_APP_ID ? shared.records : []),
+    ]), deps.now ?? Date.now()), ...(app.id === PORTOS_APP_ID ? { federation: shared.federation } : {}) }
+      : { ...summarizeAppQuality(), unavailable: true },
   }));
 }
 
 export async function getAppQualityHistory(appId, days, deps = {}) {
   const now = deps.now ?? Date.now();
-  const start = new Date(now);
-  start.setUTCHours(0, 0, 0, 0);
-  start.setUTCDate(start.getUTCDate() - days + 1);
-  // Last measurement per UTC day/category bounds the payload regardless of run frequency.
-  const result = await (deps.query || query)(
-    `SELECT DISTINCT ON (category, (assessed_at AT TIME ZONE 'UTC')::date)
-       category, agent_id, assessed_at, report FROM app_quality_measurements
-     WHERE app_id = $1 AND assessed_at >= $2 AND assessed_at <= $3
-     ORDER BY category, (assessed_at AT TIME ZONE 'UTC')::date, assessed_at DESC, agent_id DESC`,
-    [appId, new Date(start.getTime() - AUDIT_FRESHNESS_MS), new Date(now)]
-  );
-  return buildAppQualityHistory(result.rows.map(row => ({ category: row.category,
-    agentId: row.agent_id, assessedAt: new Date(row.assessed_at).toISOString(), report: row.report,
-  })), days, now);
+  const records = await readQualityRecords(appId, days, now, deps);
+  const shared = appId === PORTOS_APP_ID ? await collectPortosQuality(days, deps)
+    .catch(() => ({ records: [], federation: { failed: true } })) : null;
+  return { ...buildAppQualityHistory([...records, ...(shared?.records || [])], days, now),
+    ...(shared ? { federation: shared.federation } : {}) };
 }

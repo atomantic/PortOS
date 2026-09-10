@@ -40,3 +40,14 @@ it('distinguishes saved but excluded evidence from an app that was never assesse
   expect(screen.getByText(/Saved assessments do not currently qualify/)).toBeInTheDocument();
   expect(screen.getByText('60/100')).toBeInTheDocument();
 });
+
+it('identifies federated evidence and incomplete scores without linking to a local audit run', async () => {
+  const app = { id: 'portos-default', quality: { score: 80, federation: { available: 1, unavailable: 1 }, categories: [
+    { id: 'security', label: 'Security', score: 80, coverage: 'broad', sourcePeerId: 'peer-a', agentId: 'remote-run' },
+  ] } };
+  render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
+  await screen.findByText(/No scored assessments/);
+  expect(screen.getByText(/1 peers unavailable or incompatible/)).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'View instances' })).toHaveAttribute('href', '/instances');
+  expect(screen.queryByRole('link', { name: 'Audit run' })).not.toBeInTheDocument();
+});

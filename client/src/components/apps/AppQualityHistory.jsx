@@ -43,6 +43,7 @@ export default function AppQualityHistory({ appId, categories = [] }) {
         <button type="button" className="text-port-accent hover:underline" onClick={() => setRefresh(n => n + 1)}>Refresh history</button>
       </div>
       <p className="text-xs text-gray-400">Daily snapshots (UTC), higher is healthier. Scores carry forward for up to 30 days; gaps mean no fresh evidence. Coverage changes can move the overall mean. Category views include provisional assessments.</p>
+      {state.data?.federation && <p className="text-xs text-gray-400">Unified history includes {state.data.federation.available ?? 0} available full-sync peers. {state.data.federation.failed ? 'Peer quality could not be loaded; history may be incomplete.' : state.data.federation.unavailable > 0 ? `${state.data.federation.unavailable} peers unavailable or incompatible; history may be incomplete.` : 'Peer availability can change historical coverage.'}</p>}
       {state.loading ? <p role="status">Loading quality history…</p> : state.error ? <p role="alert">Quality history could not be loaded. Use Refresh history to retry.</p> : !measured.length ? <p className="text-sm text-gray-400">No scored assessments in this period. Run an audit to start the history.</p> : <>
         <div className="h-56 w-full" role="img" aria-label="Daily quality scores from 0 to 100; values and evidence are available in the history table below">
           <ResponsiveContainer width="100%" height="100%">
