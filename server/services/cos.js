@@ -20,9 +20,8 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { isAutoApprovableInvestigation } from '../lib/investigationTasks.js';
 import { isRetryHeld, isStaleRetryHold } from '../lib/taskRetryHold.js';
-import { isAppOnCooldown, clearStaleActiveAgents } from './appActivity.js';
+import { clearStaleActiveAgents } from './appActivity.js';
 // The single Priority-0 on-demand loop body, shared with the evaluateTasks
 // engine in cosTaskGenerator.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
@@ -38,14 +37,12 @@ import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
-import { normalizeDomainBudgets, remainingActionBudget } from '../lib/domainBudgets.js';
+import { normalizeDomainBudgets } from '../lib/domainBudgets.js';
 import { mergePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { mergePersistentMindProfile, normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
 import { mergePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { mergePersistentMindPlaybook } from '../lib/persistentMindPlaybook.js';
 import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkingPresets.js';
-import { getDomainBudgetStatus } from './domainUsage.js';
-import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 // Dependency-free leaf holding the shared agent maps + the runner-mode flag,
 // read by `isRunnerHolding` below.
 import { useRunner } from './agentState.js';
@@ -136,8 +133,8 @@ import {
   queueEligibleImprovementTasks,
   recordDeferredPerpetualDispatch,
   blockIfExceedsMaxSpawns,
-  selectDryRunAutoApproved,
-  isCooldownExemptTask,
+  admitAutoApprovedSystemTasks,
+  resolveAutonomyBudget,
   countRunningAgentsByProject,
   isWithinProjectLimit,
   checkStagePrecondition,
@@ -1058,106 +1055,29 @@ async function spawnDequeuePriority2AutoApproved(ctx) {
   const { state, instanceId, capacity } = ctx;
 
   const cosTaskData = await getCosTasks();
-  const autoApproved = [
-    ...(cosTaskData.autoApproved || []),
-    ...(state.config.autoApproveInvestigations
-      ? (cosTaskData.grouped?.pending || []).filter((task) => isAutoApprovableInvestigation(task, state.config))
-      : [])
-  ];
-  let cosAutonomyMode = getDomainMode(state.config, 'cos');
-
-  // Daily CoS budget (#711) — same enforcement as the periodic evaluator
-  // (cosTaskGenerator.evaluateTasks). This is the event-driven primary spawn
-  // path, so the budget MUST be applied here too. Minutes is a binary off-gate
-  // (a run's duration is unknown at spawn); actions cap THIS cycle's autonomous
-  // admissions to the remaining daily allowance (completed + in-flight runs),
-  // surfaced as `autonomousSpawnCeiling` below. On-demand (Priority 0) and user
-  // (Priority 1) tasks are already spawned above and never count against it.
-  const cosBudget = await getDomainBudgetStatus('cos');
-  let autonomousActionsRemaining = Infinity;
-  if (cosAutonomyMode !== 'off') {
-    if (cosBudget.exceeded === 'minutes') {
-      emitLog('info', `CoS auto-run paused — daily minutes budget reached`, { domainBudget: 'cos', exceeded: 'minutes' });
-      cosAutonomyMode = 'off';
-    } else if (cosBudget.budget?.maxActionsPerDay != null) {
-      const runningAutonomous = Object.values(state.agents).filter(
-        (a) => a.status === 'running' && a.metadata?.taskType && a.metadata.taskType !== 'user'
-      ).length;
-      autonomousActionsRemaining = remainingActionBudget(
-        cosBudget.budget,
-        cosBudget.usage,
-        runningAutonomous + pendingCosActionReservations()
-      );
-      if (autonomousActionsRemaining === 0) {
-        emitLog('info', `CoS auto-run paused — daily actions budget reached`, { domainBudget: 'cos', exceeded: 'actions' });
-        cosAutonomyMode = 'off';
-      }
-    }
-  }
+  const runningAgentEntries = Object.values(state.agents).filter((agent) => agent.status === 'running');
+  const { cosAutonomyMode, autonomousActionsRemaining } = await resolveAutonomyBudget(state, runningAgentEntries);
   const autonomousSpawnCeiling = Math.min(capacity.availableSlots, capacity.spawned + autonomousActionsRemaining);
   ctx.cosAutonomyMode = cosAutonomyMode;
   ctx.autonomousSpawnCeiling = autonomousSpawnCeiling;
 
-  // Engine-specific gate shared by execute and dry-run: improvement tasks whose
-  // task type was disabled after queuing are skipped.
-  const isDisabledAnalysisType = (task) => {
-    const analysisType = task.metadata?.analysisType || task.metadata?.selfImprovementType;
-    return Boolean(analysisType) && !ctx.taskSchedule.tasks[analysisType]?.enabled;
-  };
-
-  if (cosAutonomyMode !== 'execute') {
-    // off/dry-run withhold the unattended spawn; dry-run logs only the tasks
-    // execute mode would ACTUALLY spawn — applying the same max-spawns /
-    // disabled-type / cooldown / per-project gates against virtual capacity —
-    // rather than every auto-approved task regardless of eligibility.
-    if (cosAutonomyMode === 'dry-run') {
-      const wouldSpawn = await selectDryRunAutoApproved(autoApproved, {
-        availableSlots: autonomousSpawnCeiling,
-        alreadySpawned: capacity.spawned,
-        perProjectLimit: capacity.perProjectLimit,
-        spawnProjectCounts: capacity.spawnProjectCounts,
-        isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
-        cooldownExempt: isCooldownExemptTask,
-        extraSkip: isDisabledAnalysisType,
-        notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null
-      });
-      for (const task of wouldSpawn) {
-        emitLog('info', `[dry-run] CoS auto-run would spawn system task: ${task.id}`, { taskId: task.id, domainAutonomy: 'cos' });
-      }
-    }
-  } else {
-    for (const task of autoApproved) {
-      if (capacity.spawned >= autonomousSpawnCeiling) break;
-      // Pinned to another instance (#4520), or a federated peer holds a live
-      // lease on it (#1650) — skip it during candidate selection so it doesn't
-      // consume an autonomous slot the spawn guard would just reject.
-      const skipReason = getSkipReason(task.metadata, instanceId);
-      if (skipReason) {
-        emitLog('debug', `Skipping system task ${task.id} — ${skipReason}`, { taskId: task.id });
-        continue;
-      }
-      if (await blockIfExceedsMaxSpawns(task, 'internal')) continue;
-      // Skip improvement tasks whose type was disabled after queuing
-      if (isDisabledAnalysisType(task)) {
-        const analysisType = task.metadata?.analysisType || task.metadata?.selfImprovementType;
-        emitLog('info', `System task skipped — task type '${analysisType}' is disabled`, { taskId: task.id });
-        continue;
-      }
-      // Pipeline continuations AND perpetual drains bypass the per-app cooldown
-      // (see isCooldownExemptTask) — otherwise a perpetual task the refill just
-      // queued is skipped here until the 30-min window expires, stalling the
-      // manually-triggered back-to-back drain one item in.
-      const appId = task.metadata?.app;
-      if (appId && !isCooldownExemptTask(task)) {
-        const onCooldown = await isAppOnCooldown(appId, state.config.appReviewCooldownMs);
-        if (onCooldown) continue;
-      }
-      const sysTask = { ...task, taskType: 'internal' };
-      if (!capacity.canSpawn(sysTask, autonomousSpawnCeiling)) continue;
-      cosEvents.emit('task:ready', sysTask);
-      capacity.trackSpawn(sysTask);
-    }
-  }
+  return admitAutoApprovedSystemTasks({
+    state,
+    cosTaskData,
+    taskSchedule: ctx.taskSchedule,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
+    alreadySpawned: capacity.spawned,
+    perProjectLimit: capacity.perProjectLimit,
+    spawnProjectCounts: capacity.spawnProjectCounts,
+    instanceId,
+  }, {
+    canSpawn: (task, ceiling) => capacity.canSpawn(task, ceiling),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+    emitSpawn: (task) => {
+      cosEvents.emit('task:ready', task);
+    },
+  });
 }
 
 /**
@@ -1270,7 +1190,7 @@ const scheduleDequeue = (options = {}) => setImmediate(() => {
  * charge the finished run twice. Only the completion continuation passes it; every
  * other caller runs outside that window and correctly leaves it null.
  */
-async function dequeueNextTask({ ignoreTaskId = null } = {}) {
+export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
   if (!isDaemonRunning()) return;
 
   // In runner mode the cos-runner app owns every agent process, so a cycle run

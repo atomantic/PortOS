@@ -212,43 +212,52 @@ describe('claim reviewer resolution', () => {
 });
 
 // The unit tests above exercise selectDryRunAutoApproved with synthetic hooks;
-// these source-level guards pin that each ENGINE wires the hook set matching
-// its own execute path — so a future edit can't silently swap or drop a hook.
-// Both engines now share the `isCooldownExemptTask` predicate (pipeline
-// continuations AND perpetual drains bypass the cooldown), so a dry-run plan
-// matches its execute path; the only remaining asymmetry is `extraSkip`
-// (dequeue's disabled-analysis-type gate), which evaluateTasks does not have.
-describe('dry-run hook wiring matches each engine execute path', () => {
-  // Isolate each engine's selectDryRunAutoApproved call site.
-  const callSite = (src) => {
-    // Anchor on the CALL (`await selectDryRunAutoApproved(`), not the function
-    // definition (`export async function selectDryRunAutoApproved(`).
-    const start = src.indexOf('await selectDryRunAutoApproved(');
-    expect(start, 'selectDryRunAutoApproved must be called').toBeGreaterThan(-1);
-    return src.slice(start, src.indexOf('});', start) + 3);
+// these source-level guards pin that both engines route through the ONE shared
+// Priority-2 pass, whose dry-run hook set matches its own execute gates.
+describe('dry-run hook wiring matches the shared execute path', () => {
+  const between = (src, startMarker, endMarker) => {
+    const start = src.indexOf(startMarker);
+    expect(start, `missing start marker: ${startMarker}`).toBeGreaterThan(-1);
+    const end = src.indexOf(endMarker, start);
+    expect(end, `missing end marker: ${endMarker}`).toBeGreaterThan(start);
+    return src.slice(start, end);
   };
 
-  it('dequeueNextTask (cos.js) passes the shared cooldownExempt AND extraSkip (disabled-analysis-type)', () => {
-    const site = callSite(COS_SRC);
-    expect(site).toContain('extraSkip: isDisabledAnalysisType');
+  const callSite = () => {
+    // Anchor on the CALL (`await selectDryRunAutoApproved(`), not the function
+    // definition (`export async function selectDryRunAutoApproved(`).
+    const start = GEN_SRC.indexOf('await selectDryRunAutoApproved(');
+    expect(start, 'selectDryRunAutoApproved must be called').toBeGreaterThan(-1);
+    const end = GEN_SRC.indexOf('});', start);
+    expect(end, 'selectDryRunAutoApproved call must close').toBeGreaterThan(start);
+    return GEN_SRC.slice(start, end + 3);
+  };
+
+  it('the shared pass applies cooldown exemption and disabled-analysis-type gates', () => {
+    const site = callSite();
+    expect(site).toContain('extraSkip: disabledAnalysisType');
     // dequeue must exempt perpetual/pipeline tasks from cooldown in its dry-run
     // plan too, mirroring its execute gate — otherwise the plan over-reports a
     // perpetual drain as "would skip (cooldown)" that execute actually spawns.
     expect(site).toContain('cooldownExempt: isCooldownExemptTask');
   });
 
-  it('evaluateTasks (cosTaskGenerator.js) passes the shared cooldownExempt but NOT extraSkip', () => {
-    const site = callSite(GEN_SRC);
-    expect(site).toContain('cooldownExempt: isCooldownExemptTask');
-    expect(site).not.toContain('extraSkip');
+  it('both engines delegate Priority 2 to admitAutoApprovedSystemTasks', () => {
+    expect(between(COS_SRC, 'async function spawnDequeuePriority2AutoApproved', '/**\n * Priority 3'))
+      .toContain('admitAutoApprovedSystemTasks(');
+    expect(between(GEN_SRC, 'async function spawnPriority2AutoApproved', '/**\n * Background:'))
+      .toContain('admitAutoApprovedSystemTasks(');
   });
 
-  it('both engines gate their EXECUTE cooldown check on isCooldownExemptTask', () => {
+  it('the shared EXECUTE loop gates cooldown on isCooldownExemptTask', () => {
     // The spawn gate (not just the dry-run planner) must consult the shared
     // predicate, or a perpetual task the refill queued is skipped at spawn time
     // until the 30-min window expires — the manually-triggered-drain stall.
-    expect(COS_SRC).toMatch(/if\s*\(appId\s*&&\s*!isCooldownExemptTask\(task\)\)/);
-    expect(GEN_SRC).toMatch(/if\s*\(appId\s*&&\s*!isCooldownExemptTask\(task\)\)/);
+    const sharedPass = GEN_SRC.slice(
+      GEN_SRC.indexOf('export async function admitAutoApprovedSystemTasks'),
+      GEN_SRC.indexOf('async function recordAutoApprovedDeferral')
+    );
+    expect(sharedPass).toMatch(/appId\s*&&\s*!isCooldownExemptTask\(task\)/);
   });
 });
 
@@ -409,19 +418,16 @@ describe('not-runnable-here skip during candidate selection (#1650, #4520)', () 
     expect(GEN_SRC).toContain('const instanceId = await ensureInstanceId();');
   });
 
-  it('both engines skip not-runnable-here tasks in their EXECUTE candidate loops', () => {
-    // Each engine must have the skip in BOTH the user-task and the auto-approved
-    // tiers — at least two execute-path skip sites per engine.
+  it('both engines keep user-task skips and share the auto-approved execute skip', () => {
     const cosSkips = COS_SRC.match(/getSkipReason\(task\.metadata,\s*instanceId\);\n\s*if \(skipReason\)/g) || [];
     const genSkips = GEN_SRC.match(/getSkipReason\(task\.metadata,\s*instanceId\);\n\s*if \(skipReason\)/g) || [];
-    expect(cosSkips.length).toBeGreaterThanOrEqual(2);
+    expect(cosSkips.length).toBeGreaterThanOrEqual(1);
     expect(genSkips.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('both engines pass notRunnableHere into their dry-run plan so it matches execute', () => {
+  it('the shared pass supplies notRunnableHere so both dry-run adapters match execute', () => {
     // Covers BOTH reasons this instance passes over a task at spawn time: a
     // peer's live lease (#1650) and a pin to another instance (#4520).
-    expect(COS_SRC).toContain('notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null');
     expect(GEN_SRC).toContain('notRunnableHere: (task) => getSkipReason(task.metadata, instanceId) !== null');
   });
 });

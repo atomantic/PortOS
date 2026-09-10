@@ -1575,12 +1575,13 @@ describe('cos.js source — priority + capacity invariants', () => {
     // The generator engine's tiers are decomposed into named spawnPriority*
     // helpers (issue #1082), so its gate lives in `spawnPriority4IdleReview`
     // — scope to the whole cosTaskGenerator module (the engine).
-    const evalFn    = GEN_SRC;
+    const evalIdleTier = extractFnBody(GEN_SRC, GEN_SRC.indexOf('async function spawnPriority4IdleReview'));
 
     expect(idleTier, 'idle tier must call the shared isIdleTierEligible predicate').toMatch(/isIdleTierEligible\(/);
     expect(idleTier, 'idle tier must pass state.config.idleReviewEnabled into the predicate').toMatch(/idleReviewEnabled:\s*state\.config\.idleReviewEnabled/);
     expect(idlePred, 'isIdleTierEligible must fence on spawned === 0 && idleReviewEnabled').toMatch(/spawned\s*===\s*0\s*&&\s*!!idleReviewEnabled/);
-    expect(evalFn).toMatch(/tasksToSpawn\.length\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
+    expect(evalIdleTier, 'evaluate idle tier must call the shared predicate').toMatch(/isIdleTierEligible\(/);
+    expect(evalIdleTier).toMatch(/spawned:\s*tasksToSpawn\.length/);
   });
 
   it('CoS auto-run domain gate (#711) fences autonomous spawns in BOTH engines', () => {
@@ -1593,22 +1594,25 @@ describe('cos.js source — priority + capacity invariants', () => {
     // and fences its mission/idle tiers through the shared eligibility predicates
     // (issue #2530) — both still live in the cos.js module, so scope to it.
     const dequeueSrc = COS_SRC;
+    const dequeueP2 = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority2AutoApproved'));
+    const budgetResolver = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function resolveAutonomyBudget'));
     // evaluateTasks resolves the mode in `resolveAutonomyBudget` and fences each
     // autonomous tier inside its spawnPriority* helper (issue #1082) — both still
     // live in the cosTaskGenerator module, so scope to the whole engine source.
     const evalFn    = GEN_SRC;
 
-    for (const [name, fnBody] of [['dequeueNextTask (cos.js)', dequeueSrc], ['evaluateTasks (cosTaskGenerator)', evalFn]]) {
-      expect(fnBody, `${name} must resolve the cos autonomy mode`).toMatch(/getDomainMode\(\s*state\.config\s*,\s*['"]cos['"]\s*\)/);
-    }
+    expect(dequeueP2, 'dequeue Priority 2 must call the shared budget resolver').toMatch(/resolveAutonomyBudget\(/);
+    expect(evalFn, 'evaluateTasks must call the shared budget resolver').toMatch(/resolveAutonomyBudget\(/);
+    expect(budgetResolver, 'the one budget resolver must read the CoS autonomy mode')
+      .toMatch(/getDomainMode\(state\.config, 'cos'\)/);
     // evaluateTasks fences autonomous spawns inline on `cosAutonomyMode === 'execute'`.
     expect(evalFn, `evaluateTasks must fence autonomous spawns on cosAutonomyMode === 'execute'`).toMatch(/cosAutonomyMode\s*===\s*['"]execute['"]/);
-    // dequeueNextTask's autonomous tiers gate through the shared predicates, which
-    // enforce `autonomyMode === 'execute'` in cosDequeue.js; the auto-approved tier
-    // withholds spawns unless the mode is execute (`cosAutonomyMode !== 'execute'`).
+    // Dequeue's mission/idle tiers gate through the shared predicates, and its
+    // auto-approved tier delegates to the same pass as evaluateTasks.
     expect(dequeueSrc, `dequeueNextTask must gate mission/idle via the eligibility predicates`).toMatch(/isMissionTierEligible\(/);
     expect(dequeueSrc, `dequeueNextTask must gate the idle tier via the eligibility predicate`).toMatch(/isIdleTierEligible\(/);
-    expect(dequeueSrc, `dequeueNextTask auto-approved tier must withhold spawns unless mode is execute`).toMatch(/cosAutonomyMode\s*!==\s*['"]execute['"]/);
+    expect(dequeueP2, 'dequeue auto-approved tier must call the shared pass').toMatch(/admitAutoApprovedSystemTasks\(/);
+    expect(GEN_SRC, 'the shared pass must withhold spawns unless mode is execute').toMatch(/cosAutonomyMode\s*!==\s*['"]execute['"]/);
     expect(DEQ_SRC, `cosDequeue predicates must enforce autonomyMode === 'execute'`).toMatch(/autonomyMode\s*===\s*['"]execute['"]/);
   });
 
