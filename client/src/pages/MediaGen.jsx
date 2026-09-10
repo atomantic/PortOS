@@ -26,7 +26,9 @@ export const TABS = buildPageNavTabs(getPageNavTabs('media'), TAB_PRESENTATION, 
 export default function MediaGen() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const activeTab = pathname.split('/')[2] || 'image';
+  // Generate Video lives at `/video/generate` (sibling of the Video workspace),
+  // not `/media/video`. The tab id is still `video`.
+  const activeTab = pathname.startsWith('/video/generate') ? 'video' : (pathname.split('/')[2] || 'image');
 
   return (
     <div className="flex min-w-0 flex-col h-full">

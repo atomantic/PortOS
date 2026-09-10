@@ -588,7 +588,6 @@ const FULL_WIDTH_PATH_PREFIXES = [
   // so they need the bare full-width main — same as when they lived
   // under the /media tabs.
   '/creative-director',
-  '/video',
   '/brain',
   '/digital-twin',
   '/feature-agents',
@@ -648,6 +647,13 @@ const FULL_WIDTH_PATH_REGEXES = [
   // scrolling body. Keep this boundary-specific so `/music-video` retains its
   // own route classification.
   /^\/music(?:\/|$)/,
+  // Video workspace (`/video`) owns its own header+scroll shell. Generate
+  // Video (`/video/generate`) uses the MediaGen tab shell (header + tabs +
+  // overflow-auto body), so it must stay full-width with that shell — taking
+  // it off full-width double-pads; leaving it full-width without the shell
+  // clips the form. Boundary-specific so `/video-gen` (legacy redirect) is
+  // not swallowed the way a `/video` prefix would.
+  /^\/video(?:\/|$)/,
   // Only Game DETAIL workspaces own an internal scroll region; the
   // bare /game index stays on the normal padded page layout.
   /^\/game\/[^/]+\/?$/,

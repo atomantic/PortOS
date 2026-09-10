@@ -18,6 +18,17 @@ describe('<MediaGen>', () => {
     expect(within(select).getAllByRole('option')).toHaveLength(TABS.length);
     expect(select).toHaveValue('image');
   });
+
+  it('marks the Video tab active on /video/generate', () => {
+    const { container } = render(
+      <MemoryRouter initialEntries={['/video/generate']}>
+        <MediaGen />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('combobox', { name: 'Media Gen sections' })).toHaveValue('video');
+    expect(container.querySelector('.flex-1.overflow-auto')).toBeTruthy();
+  });
 });
 
 // Media Gen derives its tab bar from the nav manifest's `tabGroup: 'media'`
