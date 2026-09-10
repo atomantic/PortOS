@@ -197,9 +197,11 @@ export default function ProviderModelSelector({
       : surviving;
     if (filteredSurviving !== effort) onEffortChange(filteredSurviving);
   };
-  // `row` was sized for two selects; the effort control makes it three, which is
-  // unreadable at phone width — stack until `sm` when it's showing.
-  const rowClass = showEffort ? 'flex flex-col sm:flex-row sm:items-center gap-2' : 'flex items-center gap-2';
+  // Use available container space, including narrow drawers on desktop. Bound
+  // labeled fields so a lone provider does not stretch across the whole page.
+  const rowClass = compact
+    ? (showEffort ? 'flex flex-col sm:flex-row sm:items-center gap-2' : 'flex items-center gap-2')
+    : 'grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),24rem))] items-start gap-2';
   const wrapperClass = layout === 'stacked' ? 'flex flex-col gap-1' : rowClass;
   return (
     <div className={wrapperClass}>
