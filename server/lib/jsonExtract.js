@@ -8,14 +8,8 @@
  * emit trailing commas, `[...]` placeholder elisions, and the Codex
  * `}}]` orphan-brace corruption pattern.
  *
- * This module collapses three near-identical extractors that all solved
- * the same problem:
- *   - universeBuilderExpand.js — string-aware brace walker + repair passes
- *   - mediaPromptRefiner.js#extractRefinementJson — brace walker without repairs
- *   - stageRunner.js#extractJson — greedy regex
- *
- * The richest implementation (universeBuilderExpand) is promoted here and
- * the three callers import from this file with optional shape predicates.
+ * Callers share the brace walkers and repair passes; refinement callers
+ * additionally reject echoed schema placeholders with extractNonPlaceholderJson.
  */
 
 import { stripCodeFences } from './llmText.js';
@@ -513,4 +507,44 @@ export function extractJson(text, { shapePredicate, blockType = 'object', skipIn
     lastError: lastError || new Error('No matching JSON block found'),
     lastPreview,
   };
+}
+
+/**
+ * Extract a refinement with a string field, skipping echoed <...> schema
+ * placeholders. Keeps placeholder-only failures distinct from parse failures;
+ * unlike extractJson, never falls back to an object with the wrong shape.
+ * Preserves the refiners' first-inner-fence heuristic.
+ */
+export function extractNonPlaceholderJson(raw, { field }) {
+  if (typeof raw !== 'string' || !raw.trim()) throw new Error('Empty AI response');
+  let s = raw.trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) s = fence[1].trim();
+
+  const candidates = findBalancedBlocks(s);
+  if (!candidates.length) candidates.push(s);
+
+  // Walk every balanced block ourselves rather than calling the shared
+  // extractJson — we need a tri-state outcome (real refinement, placeholder
+  // echo, or parse error) to surface the "schema placeholder" error message
+  // that helps users pick a stronger model. extractJson's shape predicate
+  // collapses placeholder-vs-real into a single fallback path.
+  let placeholderSeen = false;
+  let lastErr;
+  for (const block of candidates) {
+    const result = tryParseWithRepair(block);
+    if (result.error) {
+      lastErr = result.error;
+      continue;
+    }
+    const { value } = result;
+    if (value && typeof value === 'object' && typeof value[field] === 'string') {
+      if (/^\s*<.+>\s*$/.test(value[field])) { placeholderSeen = true; }
+      else return value;
+    }
+  }
+  if (placeholderSeen) {
+    throw new Error('AI returned the schema placeholder instead of a real refinement — try a stronger model or rerun');
+  }
+  throw new Error(`Invalid JSON in AI response${lastErr ? `: ${lastErr.message}` : ''}`);
 }
