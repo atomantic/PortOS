@@ -387,19 +387,19 @@ describe('review service', () => {
       expect(readFile).toHaveBeenCalledTimes(2);
     });
 
-    it('reflects a write in the very next read without a second parse', async () => {
+    it('invalidates the cache on a write, so the very next read re-parses the file', async () => {
       stat.mockResolvedValueOnce({ mtimeMs: 814001, size: 1 }); // loadItems() inside createItem
       readFile.mockResolvedValueOnce('[]');
-      stat.mockResolvedValueOnce({ mtimeMs: 814002, size: 2 }); // saveItems' post-write stat
-      stat.mockResolvedValueOnce({ mtimeMs: 814002, size: 2 }); // getPendingCounts' loadItems — same identity
+      stat.mockResolvedValueOnce({ mtimeMs: 814002, size: 2 }); // getPendingCounts' loadItems after the write
+      readFile.mockResolvedValueOnce(JSON.stringify([{ id: 'a', type: 'todo', status: 'pending' }]));
 
       await createItem({ type: 'todo', title: 'First item' });
       const counts = await getPendingCounts();
 
       expect(counts.total).toBe(1);
-      // Only createItem's own cache-miss read — getPendingCounts hit the
-      // cache saveItems seeded from the write, not a re-parse.
-      expect(readFile).toHaveBeenCalledTimes(1);
+      // createItem's own cache-miss read plus the re-parse the write forces —
+      // never the pre-write cached list.
+      expect(readFile).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -533,11 +533,14 @@ describe('review service', () => {
       expect(survivingIds).not.toEqual(expect.arrayContaining(['c-old']));
       expect(survivingIds).not.toEqual(expect.arrayContaining(['d-old']));
 
-      // getPendingCounts must still be correct post-retention, and served
-      // from the cache saveItems just seeded rather than a fresh parse.
+      // The write invalidated the cache: the next read re-parses items.json —
+      // now holding exactly what retention left behind — so the counts reflect
+      // the trimmed list, not the pre-retention fixture.
+      readFile.mockImplementation((path) =>
+        Promise.resolve(String(path).endsWith('archive.json') ? JSON.stringify(archiveData) : JSON.stringify(itemsData)));
       const counts = await getPendingCounts();
       expect(counts.total).toBe(2); // p1 + the new item createItem just added
-      expect(readFile).toHaveBeenCalledTimes(2); // items.json once + archive.json once — no third parse
+      expect(readFile).toHaveBeenCalledTimes(3); // items.json + archive.json during the save, items.json again after it
     });
 
     it('does not block a live write when archive.json is unreadable — retention is skipped, items.json still saves', async () => {
@@ -673,18 +676,6 @@ describe('review service', () => {
       expect(original).toBeTruthy();
       expect(original.injected).toBeUndefined();
       expect(original.metadata.injected).toBeUndefined();
-    });
-
-    it('does not let a caller mutating a createItem() result pollute the cache seeded by that save', async () => {
-      stat.mockResolvedValue({ mtimeMs: 829001, size: 1 });
-      readFile.mockResolvedValue('[]');
-
-      const created = await createItem({ type: 'todo', title: 'Original title' });
-      created.title = 'mutated after return';
-
-      // Same file identity → cache hit: the cached copy must not carry the mutation.
-      const [cached] = await getItems({ status: 'pending' });
-      expect(cached.title).toBe('Original title');
     });
   });
 

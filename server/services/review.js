@@ -37,8 +37,13 @@ const ARCHIVE_ELIGIBLE_STATUSES = new Set(['completed', 'dismissed']);
 // `review` as archivable/deletable, so `data/review/` can be archived or
 // deleted out from under this process while it runs, and a flag-based cache
 // would keep serving a since-deleted file's contents forever. `saveItems`
-// re-stats after every write and seeds the cache directly from what it just
-// wrote, so a read immediately following a write is a cache hit, not a re-parse.
+// INVALIDATES the cache after every write rather than seeding it from what it
+// wrote: two saveItems calls can interleave (a route and a cosEvents handler
+// — the same window as the documented lost-update race), and a post-write
+// stat could then pin one writer's content under the other writer's identity
+// and serve it until the next write. Invalidation keeps the invariant simple —
+// the cache only ever holds content read from the file under its own identity
+// — at the cost of one re-parse per write.
 //
 // `loadItems()` hands every caller a fresh shallow clone (see `cloneItems`),
 // never the cached array/objects themselves — `getItems` is a public export
@@ -48,9 +53,9 @@ const ARCHIVE_ELIGIBLE_STATUSES = new Set(['completed', 'dismissed']);
 // `saveItems` call. The internal mutation paths below (createItem/
 // updateItemStatus/bulkUpdateStatus/updateItem/deleteItem/
 // updateStatusByReferenceId) mutate the clone `loadItems()` gave them and
-// then immediately call `saveItems` with it — `saveItems` seeds the cache
-// from a clone of what it wrote, so the objects those paths return to their
-// callers are theirs to mutate too.
+// then immediately call `saveItems` with it — nothing they hold is ever
+// cached, so the objects those paths return to their callers are theirs to
+// mutate too.
 let itemsCache = null; // { mtimeMs, size, items }
 let lastRetentionAt = 0; // 0 so the first save after boot always evaluates retention
 
@@ -171,18 +176,15 @@ async function applyRetention(items) {
 }
 
 /**
- * Save items to file atomically, applying retention first and re-priming the
- * read cache from what was actually written.
+ * Save items to file atomically, applying retention first and invalidating
+ * the read cache (see the cache comment above for why it is not re-seeded
+ * from what was written).
  */
 async function saveItems(items) {
   await ensureDir(DATA_DIR);
   const retained = await applyRetention(items);
   await atomicWrite(ITEMS_FILE, retained);
-  const stats = await stat(ITEMS_FILE).catch(() => null);
-  // Seed from a clone, not the caller's array: the mutation paths return the
-  // objects they just saved to their callers, and the cache must never share
-  // a reference with anything outside this module (see the cache comment).
-  itemsCache = stats ? { mtimeMs: stats.mtimeMs, size: stats.size, items: cloneItems(retained) } : null;
+  itemsCache = null;
 }
 
 /**
