@@ -1725,7 +1725,7 @@ describe('pr-reviewer security preflight wiring', () => {
  */
 describe('automated drain refills do not clear their own convergence brakes', () => {
   it('the refill stamps origin: refill', () => {
-    expect(COS_SRC).toMatch(/triggerOnDemandTask\(plan\.taskType, plan\.appId, \{\s*emit: false, origin: taskScheduleMod\.ON_DEMAND_ORIGINS\.REFILL\s*\}\)/);
+    expect(COS_SRC).toMatch(/queuePerpetualRefill\(plan\.taskType, plan\.appId\)/);
   });
 
   // A drain path calling the reset primitives directly is the exact regression,

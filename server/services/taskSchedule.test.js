@@ -140,6 +140,7 @@ import {
   getPerpetualDrainState,
   recordPerpetualDispatch,
   applyOnDemandRunResets,
+  queuePerpetualRefill,
   isRefillRequest,
   ON_DEMAND_ORIGINS,
   recordTaskTypeFailure,
@@ -2125,6 +2126,20 @@ describe('taskSchedule', () => {
       mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } } })
       const refill = await triggerOnDemandTask('branch-reconcile', 'app-1', { emit: false, origin: ON_DEMAND_ORIGINS.REFILL })
       expect(refill.origin).toBe(ON_DEMAND_ORIGINS.REFILL)
+    })
+
+    it('queues a perpetual refill with its non-emitting automated origin', async () => {
+      mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true } } })
+
+      const refill = await queuePerpetualRefill('branch-reconcile', 'app-1')
+
+      expect(refill).toMatchObject({
+        taskType: 'branch-reconcile',
+        appId: 'app-1',
+        origin: ON_DEMAND_ORIGINS.REFILL,
+      })
+      expect(cosEvents.emit).not.toHaveBeenCalled()
+      expect(recordUserAction).not.toHaveBeenCalled()
     })
 
     // Operator-action ledger (#5594). Only a human pressing Run Now is an

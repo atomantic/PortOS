@@ -1512,14 +1512,12 @@ async function refillPerpetualForCompletedAgent(agent) {
       emitLog('debug', `Perpetual refill for ${plan.taskType} skipped: parked until its recheck cadence`, { appId: plan.appId });
       return;
     }
-    // `origin: 'refill'` — this re-issue borrows the on-demand LANE but is not a
-    // human pressing Run, so the drain engines must leave the park, the
-    // convergence signature, and the dispatch counter intact. Without it the
-    // refill wipes its own convergence state on every hop and the drain never
-    // parks while one actionable item remains.
-    await taskScheduleMod.triggerOnDemandTask(plan.taskType, plan.appId, {
-      emit: false, origin: taskScheduleMod.ON_DEMAND_ORIGINS.REFILL
-    });
+    // `queuePerpetualRefill` stamps the automated `origin: 'refill'` pair — this
+    // re-issue borrows the on-demand LANE but is not a human pressing Run, so
+    // the drain engines must leave the park, convergence signature, and dispatch
+    // counter intact. Without that pair the refill wipes its own convergence
+    // state on every hop and the drain never parks while one actionable item remains.
+    await taskScheduleMod.queuePerpetualRefill(plan.taskType, plan.appId);
     return;
   }
 
