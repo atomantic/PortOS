@@ -19,7 +19,9 @@ import {
   getSettings, listImageModels, getProviders,
 } from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
-import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../../lib/imageGenBackends';
+import {
+  deriveAvailableBackends, IMAGE_GEN_MODE, MODE_LABELS, RENDER_TARGET, imageModeCandidates, pickUsableMode,
+} from '../../../lib/imageGenBackends';
 import BackendChipStrip from '../../media/BackendChipStrip';
 import ProviderModelSelector from '../../ProviderModelSelector';
 
@@ -41,7 +43,7 @@ const DEFAULT_CONFIG = Object.freeze({
 
 // "auto" is the default sentinel — the backend strip displays it as a
 // dedicated chip that means "follow the server's resolver". The actual
-// dispatch happens server-side in visualStages.js#resolveMode.
+// dispatch happens server-side in pipeline/visualStageHelpers.js#resolveMode.
 const AUTO_BACKEND = Object.freeze({ id: 'auto', label: 'Auto', icon: Sparkles });
 
 const MODE_BLURB = {
@@ -73,32 +75,21 @@ const loadLookups = () => {
   return promise;
 };
 
-// Mirror of server-side `visualStages.js#resolveMode`. The "Auto →" label in
-// this panel must match what the server will actually dispatch — otherwise
-// the modal tells the user "Auto is currently Codex" while the render flows
-// to local diffusion (or vice versa). Priority:
-//   1. settings.imageGen.mode pinned to 'codex'/'grok' AND enabled  → that backend
-//   2. settings.imageGen.mode pinned to 'local'                      → 'local'
-//   3. codex enabled, else grok enabled (auto-default)               → that backend
-//   4. local pythonPath configured                                   → 'local'
-//   5. otherwise                                                     → not configured
-// Mirrors the server's resolveMode in pipeline/visualStageHelpers.js — a
-// cloud backend is gated on its enabled flag at every step, so a stale pin
-// from before a toggle was turned off resolves as local, not that backend.
-const resolveAutoLabel = (s) => {
-  const codexEnabled = s?.imageGen?.codex?.enabled === true;
-  const grokEnabled = s?.imageGen?.grok?.enabled === true;
-  const agyEnabled = s?.imageGen?.agy?.enabled === true;
-  const pinned = s?.imageGen?.mode;
-  if (pinned === IMAGE_GEN_MODE.CODEX && codexEnabled) return 'Codex';
-  if (pinned === IMAGE_GEN_MODE.GROK && grokEnabled) return 'Grok';
-  if (pinned === IMAGE_GEN_MODE.AGY && agyEnabled) return 'Agy';
-  if (pinned === IMAGE_GEN_MODE.LOCAL) return 'Local diffusion';
-  if (codexEnabled) return 'Codex';
-  if (grokEnabled) return 'Grok';
-  if (agyEnabled) return 'Agy';
-  if (s?.imageGen?.local?.pythonPath) return 'Local diffusion';
-  return 'Local diffusion (not configured)';
+// The "Auto →" label in this panel resolves through the SAME shared ladder
+// the server dispatches through — `pickUsableMode` + `imageModeCandidates`
+// (server/lib/renderModeLadder.js, re-exported via imageGenBackends.js) —
+// instead of a hand-copied mirror that can drift from it (#6815): the
+// candidate order is `[series pin, pipeline-visual renderDefaults pin,
+// settings.imageGen.mode]`, exactly matching
+// `pipeline/visualStageHelpers.js#resolveMode`. Local diffusion gets a
+// friendlier display name here than `MODE_LABELS` (used by the terser chip
+// strip), plus the "(not configured)" suffix when it has no pythonPath.
+const AUTO_LOCAL_LABEL = 'Local diffusion';
+const autoModeLabel = (mode, s) => {
+  if (mode === IMAGE_GEN_MODE.LOCAL) {
+    return s?.imageGen?.local?.pythonPath ? AUTO_LOCAL_LABEL : `${AUTO_LOCAL_LABEL} (not configured)`;
+  }
+  return MODE_LABELS[mode] || mode;
 };
 
 const summarizeMode = (cfg, autoResolution) => {
@@ -238,7 +229,11 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
 // (mounted inside a Modal that is freshly constructed each open) so users who
 // enable Codex or swap providers in Settings see the change immediately on the
 // next modal open without reloading the SPA.
-function useVisualGenSettings(value, stageLabel, refreshOnMount = false) {
+// `series` — the owning series record, threaded through to `imageModeCandidates`
+// so the "Auto →" label honors a series-level render pin (#6815) the same way
+// the server's resolver does. Optional: omit it for a caller with no series in
+// scope, which just means that candidate never contributes a pin.
+function useVisualGenSettings(value, stageLabel, refreshOnMount = false, series = null) {
   const cfg = { ...DEFAULT_CONFIG, ...(value || {}) };
   const [systemSettings, setSystemSettings] = useState(null);
   const [imageModels, setImageModels] = useState([]);
@@ -269,7 +264,8 @@ function useVisualGenSettings(value, stageLabel, refreshOnMount = false) {
     return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
   }, [providers, cfg.refineProvider]);
 
-  const autoResolution = resolveAutoLabel(systemSettings);
+  const autoMode = pickUsableMode(systemSettings, imageModeCandidates(systemSettings, RENDER_TARGET.PIPELINE_VISUAL, series));
+  const autoResolution = autoModeLabel(autoMode, systemSettings);
   const summary = summarizeMode(cfg, autoResolution);
   const blurb = cfg.imageMode === 'auto'
     ? `Auto follows the server default — currently ${autoResolution}.`
@@ -285,8 +281,10 @@ function useVisualGenSettings(value, stageLabel, refreshOnMount = false) {
  * Chromeless settings panel — just the controls, no accordion wrapper.
  * Use when embedding inside a Modal or other parent-owned container.
  */
-export function VisualGenSettingsPanel({ value, onChange, stageLabel = 'Visual stage' }) {
-  const bag = useVisualGenSettings(value, stageLabel, true);
+export function VisualGenSettingsPanel({
+  value, onChange, stageLabel = 'Visual stage', series = null,
+}) {
+  const bag = useVisualGenSettings(value, stageLabel, true, series);
   const update = (patch) => onChange?.({ ...bag.cfg, ...patch });
   return <VisualGenSettingsBody {...bag} update={update} />;
 }
@@ -304,8 +302,10 @@ export function summarizeGenConfig(cfg) {
   return summarizeMode(merged, 'server default');
 }
 
-export default function VisualGenSettings({ value, onChange, stageLabel = 'Visual stage' }) {
-  const bag = useVisualGenSettings(value, stageLabel);
+export default function VisualGenSettings({
+  value, onChange, stageLabel = 'Visual stage', series = null,
+}) {
+  const bag = useVisualGenSettings(value, stageLabel, false, series);
   const update = (patch) => onChange?.({ ...bag.cfg, ...patch });
   const [open, setOpen] = useState(false);
 
