@@ -45,6 +45,24 @@ const mountWith = async (providers, options = { withEffort: true }) => {
 describe('useProviderModels — Antigravity base models', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('preselects the active provider default for session overrides and preserves deliberate Auto', async () => {
+    api.getProviders.mockResolvedValue({ activeProvider: 'codex', providers: [AGY, CODEX] });
+    const { result } = renderHook(() => useProviderModels({ allowDefault: true, preselectDefaults: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.selectedProviderId).toBe('codex');
+    expect(result.current.selectedModel).toBe(CODEX.defaultModel);
+    act(() => result.current.setSelectedProviderId(''));
+    expect(result.current.selectedProviderId).toBe('');
+    expect(result.current.selectedModel).toBe('');
+  });
+
+  it('does not substitute another provider when the active default is filtered out', async () => {
+    api.getProviders.mockResolvedValue({ activeProvider: 'missing', providers: [CODEX] });
+    const { result } = renderHook(() => useProviderModels({ allowDefault: true, preselectDefaults: true }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.selectedProviderId).toBe('');
+  });
+
   it('collapses the effort-suffixed catalog into base models', async () => {
     const { result } = await mountWith([AGY]);
     expect(result.current.availableModels).toEqual([

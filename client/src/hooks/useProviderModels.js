@@ -36,6 +36,9 @@ const sourceModels = (provider, withEffort) => {
  *   the model to `''` (the "default model" sentinel) rather than the provider's
  *   `defaultModel`. Pair with the `emptyProviderOption`/`emptyModelOption` props on
  *   `ProviderModelSelector`.
+ * @param {boolean} [options.preselectDefaults] - Seed a session override with the
+ *   active provider and its configured model. If the active provider is excluded
+ *   by the picker policy, leave Auto selected rather than choosing another.
  * @param {boolean} [options.silent] - Suppress the default error toast when the
  *   provider fetch fails (the empty-list fallback still applies). Use when the
  *   picker is a secondary control whose failure shouldn't interrupt the page.
@@ -65,7 +68,7 @@ const sourceModels = (provider, withEffort) => {
  *   Disabled pickers keep an empty catalog and do not issue a provider request.
  * @returns {{ providers, activeProviderId, selectedProviderId, selectedModel, availableModels, selectedProvider, setSelectedProviderId, setSelectedModel, loading }}
  */
-export default function useProviderModels({ filter, allowDefault = false, silent = false, modelFilter, withEffort = false, enabled = true } = {}) {
+export default function useProviderModels({ filter, allowDefault = false, preselectDefaults = false, silent = false, modelFilter, withEffort = false, enabled = true } = {}) {
   const [providers, setProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState('');
   const [selectedProviderId, setSelectedProviderId] = useState('');
@@ -129,13 +132,18 @@ export default function useProviderModels({ filter, allowDefault = false, silent
       .filter(isProviderHardwareCompatible)
       .filter(filterFn);
     setProviders(filtered);
-    if (!allowDefault && filtered.length > 0 && !hasSetInitialRef.current) {
+    if ((!allowDefault || preselectDefaults) && filtered.length > 0 && !hasSetInitialRef.current) {
       hasSetInitialRef.current = true;
-      setSelectedProviderId(filtered[0].id);
-      setSelectedModel(pickInitialModelRef.current(filtered[0]));
+      const initial = preselectDefaults
+        ? filtered.find(provider => provider.id === data.activeProvider)
+        : filtered[0];
+      if (initial) {
+        setSelectedProviderId(initial.id);
+        setSelectedModel(pickInitialModelRef.current(initial));
+      }
     }
     setLoading(false);
-  }, [filter, allowDefault, silent]);
+  }, [filter, allowDefault, preselectDefaults, silent]);
 
   useEffect(() => {
     if (!enabled) {

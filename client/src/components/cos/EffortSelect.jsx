@@ -77,7 +77,7 @@ export default function EffortSelect({
       title="Thinking effort — how hard the model reasons per turn"
       aria-label={label ? undefined : 'Thinking effort'}
     >
-      <option value="">Default effort</option>
+      <option value="">{provider?.effort ? `Default effort — ${resolveCliEffort(provider.effort, provider, model) || provider.effort}` : 'Default effort'}</option>
       {outOfLadder && (
         <option
           value={outOfLadder}
