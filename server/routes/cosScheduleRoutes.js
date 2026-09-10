@@ -50,7 +50,7 @@ const maintenanceRunStartSchema = z.object({
 
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'autoStart', 'perpetual', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'description', 'labels', 'dataInputs', 'taskMetadata', 'runAfter',
   // Advisory run order — which OTHER scheduled tasks a user should generally run
   // first. Editable and unenforced; `runAfter` above is the enforced gate.
   'suggestedAfter',
@@ -75,6 +75,9 @@ function pickScheduleSettings(body, taskType) {
   }
   if (settings.enabled !== undefined && typeof settings.enabled !== 'boolean') {
     throw new ServerError('enabled must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (settings.autoStart !== undefined && typeof settings.autoStart !== 'boolean') {
+    throw new ServerError('autoStart must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (settings.perpetual !== undefined && typeof settings.perpetual !== 'boolean') {
     throw new ServerError('perpetual must be a boolean', { status: 400, code: 'VALIDATION_ERROR' });
@@ -358,7 +361,7 @@ router.get('/schedule/interval-types', (req, res) => {
       cron: 'Scheduled on a cron expression (minute hour dayOfMonth month dayOfWeek)'
     },
     // `perpetual` is an orthogonal flag, not a type — it applies to either.
-    perpetual: 'Drains actionable work back-to-back until none remains, then rechecks on a cadence (its own cron expression when scheduled, else recheckCron / recheckIntervalMs, default daily)'
+    perpetual: 'Drains actionable work back-to-back until none remains. On-demand tasks with autoStart false wait for another explicit trigger; otherwise rechecks on a cadence (its own cron expression when scheduled, else recheckCron / recheckIntervalMs, default daily)'
   });
 });
 

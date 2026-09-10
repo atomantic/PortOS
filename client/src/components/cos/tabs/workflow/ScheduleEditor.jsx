@@ -43,12 +43,13 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
       // because recheckCron takes precedence over recheckIntervalMs.
       recheckCron: schedule.recheckCron || '',
       perpetual: !!schedule.perpetual,
+      autoStart: schedule.autoStart ?? !!schedule.perpetual,
       interval: node.kind === 'job' ? (schedule.type || 'daily') : 'daily',
       scheduledTime: schedule.scheduledTime || '',
       weekdaysOnly: !!schedule.weekdaysOnly,
       runAfter: [...(node.runAfter || [])]
     });
-  }, [node, schedule.cronExpression, schedule.cronSchedule, schedule.perpetual, schedule.recheckCron, schedule.scheduledTime, schedule.type, schedule.weekdaysOnly]);
+  }, [node, schedule.autoStart, schedule.cronExpression, schedule.cronSchedule, schedule.perpetual, schedule.recheckCron, schedule.scheduledTime, schedule.type, schedule.weekdaysOnly]);
 
   const dependencyOptions = useMemo(() => {
     if (!node) return [];
@@ -73,6 +74,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
   const setMode = (mode) => setForm(current => ({
     ...current,
     mode,
+    autoStart: mode === 'on-demand' ? false : current.autoStart,
     cronExpression: mode === 'cron' && !current.cronExpression ? DEFAULT_CRON : current.cronExpression
   }));
   const validateCron = (value) => String(value || '').trim().split(/\s+/).length === 5;
@@ -83,7 +85,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
       toast.error('Cron schedules need five fields');
       return;
     }
-    if (node.kind === 'task' && form.perpetual && form.mode === 'on-demand' && form.recheckCron && !validateCron(form.recheckCron)) {
+    if (node.kind === 'task' && form.perpetual && form.autoStart && form.mode === 'on-demand' && form.recheckCron && !validateCron(form.recheckCron)) {
       toast.error('The perpetual recheck schedule needs five fields');
       return;
     }
@@ -96,6 +98,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
         type: form.mode,
         cronExpression: form.mode === 'cron' ? String(form.cronExpression || '').trim() || null : null,
         perpetual: form.perpetual,
+        autoStart: form.autoStart,
         recheckCron: form.recheckCron.trim() || null,
         runAfter: form.runAfter
       };
@@ -162,7 +165,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
           <label htmlFor="workflow-task-cadence" className="block text-xs text-gray-400">
             Scheduling behavior
             <select id="workflow-task-cadence" value={form.mode} onChange={event => setMode(event.target.value)} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white">
-              {TASK_MODES.map(([value, label]) => <option key={value} value={value}>{value === 'on-demand' && form.perpetual ? ON_DEMAND_PERPETUAL_LABEL : label}</option>)}
+              {TASK_MODES.map(([value, label]) => <option key={value} value={value}>{value === 'on-demand' && form.perpetual && form.autoStart ? ON_DEMAND_PERPETUAL_LABEL : label}</option>)}
             </select>
           </label>
         ) : (
@@ -178,7 +181,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
           </div>
         )}
 
-        {node.kind === 'task' && form.mode === 'on-demand' && form.perpetual && (
+        {node.kind === 'task' && form.mode === 'on-demand' && form.perpetual && form.autoStart && (
           <p className="text-xs text-gray-400">{ON_DEMAND_PERPETUAL_DESCRIPTION}</p>
         )}
 
@@ -219,6 +222,16 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
         )}
 
         {node.kind === 'task' && form.perpetual && form.mode === 'on-demand' && (
+          <label className="flex items-center justify-between gap-3 text-sm text-gray-300">
+            Automatic starts and rechecks
+            <input type="checkbox" checked={form.autoStart} onChange={event => set('autoStart', event.target.checked)} />
+          </label>
+        )}
+        {node.kind === 'task' && form.perpetual && !form.autoStart && form.mode === 'on-demand' && (
+          <p className="text-xs text-gray-400">Run Now starts a drain until no actionable work remains. No timer starts or resumes it.</p>
+        )}
+
+        {node.kind === 'task' && form.perpetual && form.autoStart && form.mode === 'on-demand' && (
           <div className="space-y-2 rounded border border-port-warning/20 bg-port-warning/5 p-3">
             <p className="text-xs text-gray-400">
               Drains work back-to-back. Once parked, this is its reset/recheck time — leave blank to keep the default interval-based recheck cadence.

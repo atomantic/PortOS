@@ -69,7 +69,7 @@ export default function TaskHeader({ taskType, config, orderStep }) {
               {stages.length}
             </span>
           )}
-          <IntervalBadge type={config.type} cronExpression={config.cronExpression} perpetual={config.perpetual} />
+          <IntervalBadge type={config.type} cronExpression={config.cronExpression} perpetual={config.perpetual} autoStart={config.autoStart} />
         </div>
       </div>
       {config.description && (

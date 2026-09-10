@@ -157,6 +157,7 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
       schedule: {
         type: info.type,
         perpetual: info.perpetual === true,
+        autoStart: info.autoStart ?? (info.perpetual === true),
         intervalMs: info.intervalMs ?? null,
         effectiveIntervalMs: info.adjustedIntervalMs ?? info.intervalMs ?? null,
         cronExpression: info.cronExpression ?? null,
@@ -294,6 +295,7 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
 
   for (const node of nodes.filter(item => item.enabled)) {
     const schedule = node.schedule || {};
+    if (node.kind === 'task' && schedule.type === 'on-demand' && schedule.autoStart === false) continue;
     if (node.kind === 'task' && schedule.perpetual) {
       projectPerpetual(node, startMs, endMs, timezone, occurrences, windows);
       continue;

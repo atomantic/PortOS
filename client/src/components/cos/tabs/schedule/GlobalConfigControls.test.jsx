@@ -296,11 +296,23 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
     expect(onUpdate).toHaveBeenCalledWith('feature-ideas', { perpetual: true });
   });
 
+  it('lets on-demand tasks drain manually without exposing a recheck timer', async () => {
+    const onUpdate = renderControls({ config: { type: 'on-demand', perpetual: false } });
+    await act(async () => fireEvent.click(screen.getByLabelText('Enable perpetual drain')));
+    expect(onUpdate).toHaveBeenCalledWith('feature-ideas', { perpetual: true, autoStart: false });
+    cleanup();
+    renderControls({ config: { type: 'on-demand', perpetual: true, autoStart: false } });
+    expect(screen.getByRole('option', { name: 'On Demand (manual trigger only)' }).selected).toBe(true);
+    expect(screen.getByLabelText('Automatic starts and rechecks')).not.toBeChecked();
+    expect(screen.queryByText('Recheck Cadence')).not.toBeInTheDocument();
+    expect(screen.getByText(/No timer starts or resumes it/)).toBeInTheDocument();
+  });
+
   it('explains automatic rechecks without claiming manual-only execution', () => {
     renderControls({ config: { type: 'on-demand', cronExpression: null, perpetual: true } });
     expect(screen.getByText('Recheck Cadence')).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Automatic drain' }).selected).toBe(true);
-    expect(screen.getByText(/Turn Perpetual off for manual-only runs/)).toBeInTheDocument();
+    expect(screen.getByText(/Turn automatic starts off/)).toBeInTheDocument();
     expect(screen.queryByText('Only runs when manually triggered')).not.toBeInTheDocument();
 
     cleanup();

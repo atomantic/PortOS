@@ -10,7 +10,7 @@ const DAY_MS = 24 * HOUR_MS;
 /**
  * The cadence model is exactly two variants. `perpetual` is an ORTHOGONAL
  * boolean on the same record, not a type — so a task can be on-demand+perpetual
- * (drain whenever unparked) or cron+perpetual (a cron slot INITIATES a drain,
+ * (manual start when autoStart is false, otherwise drain whenever unparked) or cron+perpetual (a cron slot INITIATES a drain,
  * and the same expression gates the next attempt once it parks).
  */
 export const INTERVAL_TYPES = {

@@ -60,6 +60,7 @@ describe('ScheduleEditor task cadence', () => {
       type: 'cron',
       cronExpression: '0 9 * * *',
       perpetual: true,
+      autoStart: false,
       recheckCron: null,
       runAfter: [],
     }, { silent: true });
@@ -70,14 +71,15 @@ describe('ScheduleEditor task cadence', () => {
     renderEditor(taskNode({ perpetual: true, recheckCron: '0 11 * * *' }));
 
     fireEvent.change(screen.getByLabelText('Scheduling behavior'), { target: { value: 'on-demand' } });
-    expect(screen.getByRole('option', { name: 'Automatic drain' }).selected).toBe(true);
-    expect(screen.getByText(/Turn Perpetual off for manual-only runs/)).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'On Demand' }).selected).toBe(true);
+    expect(screen.getByText(/No timer starts or resumes it/)).toBeInTheDocument();
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Save schedule' })));
 
     expect(api.updateCosTaskInterval).toHaveBeenCalledWith('review', expect.objectContaining({
       type: 'on-demand',
       cronExpression: null,
       perpetual: true,
+      autoStart: false,
       recheckCron: '0 11 * * *',
     }), { silent: true });
   });

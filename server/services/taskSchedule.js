@@ -12,7 +12,9 @@
  *   actionable, then PARK on a recheck cadence. An on-demand+perpetual task
  *   rechecks on `recheckCron` / `recheckIntervalMs` (default daily); a
  *   cron+perpetual task's cron slot INITIATES the drain and the same expression
- *   gates the next attempt once it parks.
+ *   gates the next attempt once it parks. With `autoStart: false`, on-demand
+ *   drains start only on explicit dispatch and never wake on a recheck timer.
+ *   Omitted autoStart preserves legacy automatic on-demand drains.
  *   See server/services/perpetualWork.js for the detector registry and the
  *   perpetual gate in cosTaskGenerator.generateManagedAppImprovementTaskForType.
  */
@@ -868,7 +870,7 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
   // A perpetual task's park record is the drain's brake: the work-detector at
   // DISPATCH time writes `parkedUntil` when nothing is actionable, and this only
   // READS it (so readiness checks never do network I/O). Shared by both cadence
-  // variants — an on-demand+perpetual task is due whenever it isn't parked, a
+  // variants — an automatic on-demand drain is due whenever it is not parked; a
   // cron+perpetual task additionally needs a cron slot to initiate a drain.
   const perpetualParkResult = () => {
     const parkUntil = parkedUntilMs(appExecution);
@@ -888,7 +890,9 @@ async function evaluateTaskReadiness(taskType, appId, { featureEnabled, continui
     case INTERVAL_TYPES.ON_DEMAND:
       // Drain-until-done when perpetual; otherwise a manual trigger is the only
       // way this ever runs.
-      result = isPerpetual
+      // Missing autoStart preserves existing automatic drains across upgrades.
+      // Manual drains only refill after their own successful completion.
+      result = isPerpetual && (interval.autoStart !== false || continuingPerpetualDrain)
         ? (perpetualParkResult() || { shouldRun: true, reason: 'perpetual-drain' })
         : { shouldRun: false, reason: 'on-demand-only' };
       break;
@@ -1452,7 +1456,7 @@ export async function getUpcomingTasks(limit = 10) {
     if (getTaskTypeInvocation(taskType).visibility === 'hidden') continue;
     // On-demand tasks have no wall-clock position — unless they are perpetual,
     // whose park/recheck boundary IS the schedule the daemon must wake on.
-    if (interval.type === INTERVAL_TYPES.ON_DEMAND && !interval.perpetual) continue;
+    if (interval.type === INTERVAL_TYPES.ON_DEMAND && (!interval.perpetual || interval.autoStart === false)) continue;
 
     const check = await shouldRunTask(taskType, null, { featureEnabled });
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0 };

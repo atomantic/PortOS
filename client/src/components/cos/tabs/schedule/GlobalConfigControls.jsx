@@ -117,7 +117,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     setCronEditing(false);
     setUpdating(true);
     setSelectedType(newType);
-    await onUpdate(taskType, { type: newType, cronExpression: null }).catch(() => {
+    await onUpdate(taskType, { type: newType, cronExpression: null, autoStart: false }).catch(() => {
       setSelectedType(config.type);
     });
     setUpdating(false);
@@ -129,7 +129,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   // handleToggleEnabled rather than attaching its own rejection handler.
   const handlePerpetualToggle = async () => {
     setUpdating(true);
-    await onUpdate(taskType, { perpetual: !config.perpetual });
+    await onUpdate(taskType, { perpetual: !config.perpetual, ...(config.type === 'on-demand' && !config.perpetual ? { autoStart: config.autoStart ?? false } : {}) });
     setUpdating(false);
   };
 
@@ -293,7 +293,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           disabled={updating}
           className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
         >
-          <option value="on-demand">{config.perpetual ? ON_DEMAND_PERPETUAL_LABEL : 'On Demand (manual trigger only)'}</option>
+          <option value="on-demand">{config.perpetual && config.autoStart !== false ? ON_DEMAND_PERPETUAL_LABEL : 'On Demand (manual trigger only)'}</option>
           <option value="cron">Scheduled (cron)</option>
         </select>
         {(selectedType === 'cron' && (cronEditing || config.type === 'cron')) ? (
@@ -304,7 +304,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             className="mt-2"
           />
         ) : (
-          <p className="text-xs text-gray-500 mt-1">{selectedType === 'on-demand' && config.perpetual ? ON_DEMAND_PERPETUAL_DESCRIPTION : INTERVAL_DESCRIPTIONS[selectedType]}</p>
+          <p className="text-xs text-gray-500 mt-1">{selectedType === 'on-demand' && config.perpetual && config.autoStart !== false ? ON_DEMAND_PERPETUAL_DESCRIPTION : INTERVAL_DESCRIPTIONS[selectedType]}</p>
         )}
       </FormField>
 
@@ -313,7 +313,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <span className="text-sm text-gray-400">Perpetual</span>
           <InfoTooltip label="What does Perpetual do?">
             {PERPETUAL_DESCRIPTION}. It applies to either cadence: an On-Demand
-            perpetual task drains whenever it isn&apos;t parked, and a Scheduled
+            perpetual task starts manually when automatic starts are off, and a Scheduled
             one starts its drain on the cron slot and rechecks on the same schedule.
           </InfoTooltip>
         </div>
@@ -333,6 +333,20 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       )}
 
       {config.perpetual && selectedType === 'on-demand' && (
+        <label className="flex items-center justify-between gap-3 text-sm text-gray-400">
+          Automatic starts and rechecks
+          <input type="checkbox" checked={config.autoStart !== false} disabled={updating}
+            onChange={async event => {
+              setUpdating(true);
+              await onUpdate(taskType, { autoStart: event.target.checked }).catch(() => {}).finally(() => setUpdating(false));
+            }} />
+        </label>
+      )}
+      {config.perpetual && selectedType === 'on-demand' && config.autoStart === false && (
+        <p className="text-xs text-gray-500">Run Now starts a drain until no actionable work remains. No timer starts or resumes it.</p>
+      )}
+
+      {config.perpetual && selectedType === 'on-demand' && config.autoStart !== false && (
         <div>
           <span className="text-sm text-gray-400 block mb-2">Recheck Cadence</span>
           {(recheckEditing || config.recheckCron) ? (
