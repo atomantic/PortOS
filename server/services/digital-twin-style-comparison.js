@@ -16,7 +16,7 @@
 
 import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { callProviderAI } from './digital-twin-helpers.js';
 import { getAllTwinContent } from './digital-twin-analysis.js';
 
@@ -78,7 +78,7 @@ export async function compareSpokenWrittenStyle({ spokenTranscript, writtenSampl
     return { error: result.error || 'Failed to analyze spoken-vs-written style' };
   }
 
-  return { ...parseStyleComparison(result.text), writtenSource };
+  return { ...parseStyleComparison(result.text, prompt), writtenSource };
 }
 
 /**
@@ -87,23 +87,24 @@ export async function compareSpokenWrittenStyle({ spokenTranscript, writtenSampl
  * analyzers). Arrays default to [] and objects to null so the client can
  * distinguish "absent" from "present-but-empty".
  */
-export function parseStyleComparison(response) {
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  const jsonStr = jsonMatch
-    ? jsonMatch[1]
-    : (response.trim().startsWith('{') ? response.trim() : null);
-
-  if (!jsonStr) {
+export function parseStyleComparison(response, promptToStrip = '') {
+  const source = promptToStrip && typeof response === 'string' && response.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  if (typeof source === 'string' && /^\s*(?:```(?:json)?\s*)?\[/.test(source)) {
+    return { error: 'Failed to parse comparison response - invalid JSON', rawResponse: response };
+  }
+  const result = extractJson(source, {
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && ['spokenProfile', 'writtenProfile', 'differences', 'summary', 'suggestedCommunicationProfile']
+        .some((key) => key in value),
+  });
+  const parsed = result.value;
+  if (parsed === undefined && !/[{[]/.test(source || '')) {
     return { error: 'Failed to parse comparison response - no JSON found', rawResponse: response };
   }
-
-  const parsed = safeJSONParse(jsonStr, null, {
-    allowArray: false,
-    logError: true,
-    context: 'spoken-written comparison'
-  });
-
-  if (!parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { error: 'Failed to parse comparison response - invalid JSON', rawResponse: response };
   }
 

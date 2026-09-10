@@ -56,6 +56,11 @@ describe('SHAPERS.cuts', () => {
     expect(shaped.findings).toEqual([]);
     expect(shaped.fatPercentage).toBe(0);
   });
+
+  it('accepts the parsed object returned by a returnsJson staged pass', () => {
+    const shaped = SHAPERS.cuts({ fat_percentage: 4, findings: [] });
+    expect(shaped).toMatchObject({ fatPercentage: 4, findings: [] });
+  });
 });
 
 describe('SHAPERS.revise', () => {

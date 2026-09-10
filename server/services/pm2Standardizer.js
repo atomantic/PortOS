@@ -4,7 +4,8 @@ import { join, basename, relative } from 'path';
 import { exec, spawn } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { tryReadFile } from '../lib/fileUtils.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { getReservedPorts, getAllApps } from './apps.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
@@ -381,24 +382,26 @@ async function executeAnalysis(provider, prompt, cwd) {
 /**
  * Parse LLM response to extract JSON
  */
-function parseAnalysisResponse(response) {
-  let jsonStr = response.trim();
-
-  // Remove markdown code blocks if present
-  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
+function parseAnalysisResponse(response, promptToStrip = '') {
+  const source = promptToStrip && typeof response === 'string' && response.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  if (typeof source === 'string' && /^\s*(?:```(?:json)?\s*)?\[/.test(source)) {
+    throw new Error('Failed to parse LLM analysis response: expected an object');
   }
-
-  // Try to find JSON object
-  const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
-  if (objectMatch) {
-    jsonStr = objectMatch[0];
+  const { value, lastError } = extractJson(source, {
+    // The standardization prompt contains a JSON schema example; avoid the
+    // first fenced block heuristic and select the process-plan shape.
+    skipInnerFence: true,
+    shapePredicate: (candidate) => candidate && typeof candidate === 'object'
+      && !Array.isArray(candidate) && Array.isArray(candidate.processes),
+  });
+  // Preserve the legacy parser's falsy-value failure contract (null, false,
+  // zero, and empty strings are not usable analysis objects).
+  if (!value) {
+    throw new Error(`Failed to parse LLM analysis response${lastError ? `: ${lastError.message}` : ''}`);
   }
-
-  const parsed = safeJSONParse(jsonStr, null, { logError: true, context: 'PM2 standardizer analysis' });
-  if (!parsed) throw new Error('Failed to parse LLM analysis response');
-  return parsed;
+  return value;
 }
 
 /**
@@ -511,7 +514,7 @@ export async function analyzeApp(repoPath, providerId = null) {
   console.log(`✅ Analysis response received in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
   // Parse response
-  const analysis = parseAnalysisResponse(response);
+  const analysis = parseAnalysisResponse(response, prompt);
 
   // Deterministic safety net: even if the LLM ignored the avoid-list, remap any
   // port that still collides with a taken/duplicate port before generating the file.

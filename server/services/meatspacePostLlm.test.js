@@ -1028,6 +1028,25 @@ describe('AI response parsing', () => {
     expect(result.questions[0].prompt).toBe('world');
   });
 
+  it('skips an echoed generation schema before the real response', async () => {
+    const provider = {
+      id: 'test', enabled: true, type: 'api',
+      endpoint: 'http://localhost:9999', defaultModel: 'test'
+    };
+    getActiveProvider.mockResolvedValue(provider);
+    runPromptThroughProvider.mockImplementation(async ({ prompt }) => ({
+      // Some CLI providers echo the complete prompt, including its valid
+      // looking schema example, before printing the actual answer.
+      text: `${prompt}\n${JSON.stringify({
+        questions: [{ prompt: 'real-word', hints: 'real hint' }]
+      })}`,
+      runId: 'test-run', model: 'test-model'
+    }));
+
+    const result = await generateWordAssociation({ count: 1 });
+    expect(result.questions[0]).toEqual({ prompt: 'real-word', hints: 'real hint' });
+  });
+
   it('throws on empty AI response', async () => {
     const provider = {
       id: 'test', enabled: true, type: 'api',

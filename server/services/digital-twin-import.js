@@ -1,6 +1,7 @@
 import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { extractJson } from '../lib/jsonExtract.js';
 import { callProviderAI, now } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { createDocument, updateDocument } from './digital-twin-documents.js';
@@ -288,7 +289,7 @@ async function analyzeWithPrompt(prompt, providerId, model, source, parsedData) 
 
   const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
-    return parseImportAnalysisResponse(result.text, source, parsedData);
+    return parseImportAnalysisResponse(result.text, source, parsedData, prompt);
   }
 
   return { error: result.error || 'Provider request failed' };
@@ -297,28 +298,31 @@ async function analyzeWithPrompt(prompt, providerId, model, source, parsedData) 
 /**
  * Parse AI response for import analysis
  */
-function parseImportAnalysisResponse(response, source, parsedData) {
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-  if (jsonMatch) {
-    const parsed = safeJSONParse(jsonMatch[1], null, { logError: true, context: 'import analysis' });
-    if (parsed) {
-      return {
-        source,
-        itemCount: Array.isArray(parsedData) ? parsedData.length : (parsedData.artists?.length || 0),
-        ...parsed
-      };
-    }
+function parseImportAnalysisResponse(response, source, parsedData, promptToStrip = '') {
+  const responseSource = promptToStrip && typeof response === 'string' && response.includes(promptToStrip)
+    ? response.replace(promptToStrip, '')
+    : response;
+  if (typeof responseSource === 'string' && /^\s*(?:```(?:json)?\s*)?\[/.test(responseSource)) {
+    return {
+      source,
+      itemCount: Array.isArray(parsedData) ? parsedData.length : (parsedData.artists?.length || 0),
+      insights: { patterns: [], preferences: [] },
+      rawSummary: response
+    };
   }
-
-  if (response.trim().startsWith('{')) {
-    const parsed = safeJSONParse(response, null, { logError: true, context: 'import analysis fallback' });
-    if (parsed) {
-      return {
-        source,
-        itemCount: Array.isArray(parsedData) ? parsedData.length : (parsedData.artists?.length || 0),
-        ...parsed
-      };
-    }
+  const { value: parsed } = extractJson(responseSource, {
+    // Import prompts contain a fenced response shape. Walk all balanced
+    // candidates and prefer an analysis-shaped object after any prompt echo.
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && ('insights' in value || 'suggestedDocuments' in value || 'rawSummary' in value),
+  });
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return {
+      source,
+      itemCount: Array.isArray(parsedData) ? parsedData.length : (parsedData.artists?.length || 0),
+      ...parsed
+    };
   }
 
   return {
@@ -521,7 +525,7 @@ export async function analyzeAssessment(content, providerId, model) {
     return { error: aiResponse.error };
   }
 
-  const parsed = parseTraitsResponse(aiResponse.text);
+  const parsed = parseTraitsResponse(aiResponse.text, analysisPrompt);
   if (parsed.error) {
     return { error: parsed.error };
   }

@@ -6,6 +6,7 @@
  */
 
 import * as lmStudio from './lmStudioManager.js'
+import { extractJson } from '../lib/jsonExtract.js'
 
 
 // Task complexity thresholds for escalation
@@ -100,15 +101,16 @@ Respond with:
 
   stats.localSuccesses++
 
-  // Parse local model response
-  let analysis
-  try {
-    // Extract JSON from response
-    const jsonMatch = result.content.match(/\{[\s\S]*\}/)
-    analysis = jsonMatch ? JSON.parse(jsonMatch[0]) : null
-  } catch (err) {
-    analysis = null
-  }
+  // Parse local model response. The prompt is echoed by some local/CLI
+  // providers, so use the shared balanced walker and prefer the analysis shape.
+  const analysisSource = typeof result.content === 'string' && result.content.includes(analysisPrompt)
+    ? result.content.replace(analysisPrompt, '')
+    : result.content
+  const { value: analysis } = extractJson(analysisSource, {
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && typeof value.complexity === 'number',
+  })
 
   if (!analysis) {
     return {
@@ -248,20 +250,32 @@ Respond with JSON only:
     return { success: false, error: result.error }
   }
 
-  try {
-    const jsonMatch = result.content.match(/\{[\s\S]*\}/)
-    const classification = jsonMatch ? JSON.parse(jsonMatch[0]) : null
+  const classificationSource = typeof result.content === 'string' && result.content.includes(classifyPrompt)
+    ? result.content.replace(classifyPrompt, '')
+    : result.content
+  const { value: classification } = extractJson(classificationSource, {
+    skipInnerFence: true,
+    shapePredicate: (value) => value && typeof value === 'object' && !Array.isArray(value)
+      && typeof value.type === 'string' && typeof value.category === 'string'
+      && Array.isArray(value.tags) && typeof value.importance === 'number',
+  })
 
+  // Preserve the historical distinction: prose with no object braces returned
+  // a bare success, while an actually malformed object entered the parse
+  // failure branch with the raw response attached.
+  if (classification !== undefined) {
     return {
       success: true,
       ...classification
     }
-  } catch (err) {
-    return {
-      success: false,
-      error: 'Could not parse classification',
-      rawResponse: result.content
-    }
+  }
+  if (!/[{]/.test(result.content || '')) {
+    return { success: true }
+  }
+  return {
+    success: false,
+    error: 'Could not parse classification',
+    rawResponse: result.content
   }
 }
 

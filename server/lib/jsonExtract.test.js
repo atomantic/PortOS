@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { findAllBalancedBlocks, findBalancedBlocks, tryParseWithRepair, extractJson } from './jsonExtract.js';
+import { BRAIN_DIGEST_ECHO_FIXTURE } from '../test/fixtures/brainDigestEcho.js';
 
 describe('jsonExtract.findBalancedBlocks', () => {
   it('returns the single top-level brace-balanced block', () => {
@@ -231,6 +232,15 @@ describe('jsonExtract.extractJson', () => {
       && (typeof o.stylePrompt === 'string' || typeof o.negativePrompt === 'string');
     const { value } = extractJson(raw, { shapePredicate: isExpansion });
     expect(value.stylePrompt).toBe('painterly');
+  });
+
+  it('skips a fenced echoed schema before the real caller response', () => {
+    const { value } = extractJson(BRAIN_DIGEST_ECHO_FIXTURE.raw, {
+      skipInnerFence: true,
+      shapePredicate: (candidate) => candidate && typeof candidate === 'object'
+        && Array.isArray(candidate.topActions),
+    });
+    expect(value).toEqual(BRAIN_DIGEST_ECHO_FIXTURE.actual);
   });
 
   it('falls back to the first parseable block when shapePredicate matches nothing', () => {
