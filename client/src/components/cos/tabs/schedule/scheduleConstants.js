@@ -18,6 +18,10 @@ export const INTERVAL_DESCRIPTIONS = {
   cron: 'Runs on a cron schedule'
 };
 
+export const ON_DEMAND_PERPETUAL_LABEL = 'Automatic drain';
+export const ON_DEMAND_PERPETUAL_DESCRIPTION =
+  'Perpetual runs this task automatically while work remains, then resumes on the recheck cadence. Turn Perpetual off for manual-only runs.';
+
 export const PERPETUAL_LABEL = 'Perpetual';
 export const PERPETUAL_DESCRIPTION =
   'Drains actionable work back-to-back until none remains, then rechecks on a cadence';

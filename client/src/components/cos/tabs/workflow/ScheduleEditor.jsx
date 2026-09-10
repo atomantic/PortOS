@@ -4,7 +4,7 @@ import toast from '../../../ui/Toast';
 import * as api from '../../../../services/api';
 import { DEFAULT_CRON, buildCronFromRecurrence, parseCronToRecurrence } from '../../../../utils/cronHelpers';
 import CronSchedulePicker from '../../../CronSchedulePicker';
-import { PERPETUAL_DESCRIPTION } from '../schedule/scheduleConstants';
+import { PERPETUAL_DESCRIPTION, ON_DEMAND_PERPETUAL_LABEL, ON_DEMAND_PERPETUAL_DESCRIPTION } from '../schedule/scheduleConstants';
 
 const TASK_MODES = [
   ['on-demand', 'On Demand'],
@@ -162,7 +162,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
           <label htmlFor="workflow-task-cadence" className="block text-xs text-gray-400">
             Scheduling behavior
             <select id="workflow-task-cadence" value={form.mode} onChange={event => setMode(event.target.value)} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white">
-              {TASK_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              {TASK_MODES.map(([value, label]) => <option key={value} value={value}>{value === 'on-demand' && form.perpetual ? ON_DEMAND_PERPETUAL_LABEL : label}</option>)}
             </select>
           </label>
         ) : (
@@ -176,6 +176,10 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
               ))}
             </div>
           </div>
+        )}
+
+        {node.kind === 'task' && form.mode === 'on-demand' && form.perpetual && (
+          <p className="text-xs text-gray-400">{ON_DEMAND_PERPETUAL_DESCRIPTION}</p>
         )}
 
         {form.mode === 'cron' && (
