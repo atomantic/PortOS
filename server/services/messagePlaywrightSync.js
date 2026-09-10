@@ -508,13 +508,24 @@ export async function sendPlaywright(account, draft) {
 }
 
 /**
- * Test selectors against the current page
+ * Test selectors against the live provider page.
+ * Reuses the same page as a real sync (`findOrOpenPage`, so a not-yet-open tab
+ * is opened rather than failing outright — a tab already open for this
+ * provider is reused, never re-navigated) and the same auth check
+ * (`isAuthPage`), so a stale login redirect is reported as `auth-required`
+ * instead of silently evaluating to zero matches and reading as a broken
+ * selector.
  */
 export async function testSelectors(provider) {
   const targetUrl = provider === 'teams' ? TEAMS_URL : OUTLOOK_URL;
-  const pages = await getPages().catch(() => []);
-  const page = pages.find(p => p.url?.includes(new URL(targetUrl).hostname));
-  if (!page) return { provider, results: {}, status: 'no_page', error: 'No browser tab open for this provider' };
+  const page = await findOrOpenPage(targetUrl).catch(() => null);
+  if (!page) {
+    return { provider, results: {}, status: 'no-browser', error: 'Failed to open a browser tab — is portos-browser running?' };
+  }
+
+  if (isAuthPage(page)) {
+    return { provider, results: {}, status: 'auth-required', error: 'Login required — sign into the provider first' };
+  }
 
   const allSelectors = await getSelectors();
   const sels = allSelectors[provider] || {};

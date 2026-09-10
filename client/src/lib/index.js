@@ -67,6 +67,7 @@ export * from './reviewerPins.js';
 export * from './loraEffect.js';
 export * from './loraTriggers.js';
 export * from './runnerFamilies.js';
+export * from './selectorTestFailureTask.js';
 export * from './slashdoCatalog.js';
 export * from './videoFinish.js';
 export * from './videoGenParams.js';
