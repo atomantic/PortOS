@@ -461,6 +461,7 @@ export * from './providerRouteRecipes.js';
 export * from './providerRouteSettings.js';
 export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
+export * from './pipelineStages.js';
 export * from './postAdaptive.js';
 export * from './postAppliedNumeracy.js';
 export * from './postMultiplicationLadder.js';
