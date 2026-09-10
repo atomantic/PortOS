@@ -41,7 +41,7 @@ import usePreviewRoute from '../hooks/usePreviewRoute';
 import useMounted from '../hooks/useMounted';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
-  AlertTriangle, X, Film,
+  AlertTriangle, ChevronDown, X, Film,
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { universeStylePreset } from '../lib/universeStylePreset';
@@ -156,6 +156,9 @@ export default function ImageGen() {
 
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState(DEFAULT_NEGATIVE_PROMPT);
+  const [optionsOpen, setOptionsOpen] = useState(() => (
+    window.matchMedia?.('(min-width: 1024px)').matches ?? false
+  ));
   const [stylePreset, setStylePreset] = useState(null);
   const [selectedUniverse, setSelectedUniverse] = useState(null);
   const [modelId, setModelId] = useState('');
@@ -236,6 +239,15 @@ export default function ImageGen() {
   const [stage, setStage] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const desktopOptions = window.matchMedia?.('(min-width: 1024px)');
+    if (!desktopOptions) return undefined;
+    const syncOptionsToViewport = () => setOptionsOpen(desktopOptions.matches);
+    syncOptionsToViewport();
+    desktopOptions.addEventListener('change', syncOptionsToViewport);
+    return () => desktopOptions.removeEventListener('change', syncOptionsToViewport);
+  }, []);
   const { attach: attachJobEvents, eventSourceRef } = useMediaJobSse('image');
 
   // External-mode socket-driven progress (kept for backward compat with
@@ -1340,6 +1352,87 @@ export default function ImageGen() {
 
       <form onSubmit={handleGenerate} className="grid min-w-0 max-w-full grid-cols-1 gap-4 lg:grid-cols-[3fr_2fr]">
         <div className="min-w-0 bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3">
+          <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+            <AutoSizeTextarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={3}
+              className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
+              placeholder="Describe the image you want to generate..."
+            />
+          </FormField>
+
+          <div
+            className="sticky top-0 z-10 -mx-3 flex flex-wrap items-center gap-2 border-y border-port-border bg-port-card/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none"
+            data-testid="image-primary-actions"
+          >
+            <button
+              type="submit"
+              // The probe decides WHICH backend can run, not what the user may
+              // type — so it gates submit and backend selection only. Every form
+              // control stays live while the status pill is still checking.
+              disabled={remoteTargetActive
+                ? remoteBlocked !== null
+                : (localBackendPending || notConnected || editImageMissing || cloudNeedsPrompt)}
+              title={localBackendPending
+                ? 'Checking the image backend…'
+                : remoteBlocked || (editImageMissing ? 'This image-edit model needs a source image — open Options and upload one first' : cloudNeedsPrompt ? cloudPromptHint : undefined)}
+              className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
+              {isAsyncMode && batchCount > 1 && <span className="text-xs opacity-80">× {batchCount}</span>}
+            </button>
+            {editImageMissing && (
+              <span className="text-xs text-port-warning">Open Options to upload a source image for this edit model</span>
+            )}
+            {cloudNeedsPrompt && (
+              <span className="text-xs text-port-warning">{cloudPromptHint}</span>
+            )}
+            {isAsyncMode && (
+              <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
+                <span className="select-none">×</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={batchCount}
+                  onChange={(e) => setBatchCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+                  className="w-14 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                />
+              </label>
+            )}
+            {generating && (
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="flex min-h-[44px] items-center gap-2 rounded-lg bg-port-error px-3 py-2 text-sm font-medium text-white hover:bg-port-error/80"
+              >
+                <X className="w-4 h-4" /> Cancel current
+              </button>
+            )}
+            {pendingQueued > 0 && (
+              <span className="text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent border border-port-accent/30">
+                +{pendingQueued} queued
+              </span>
+            )}
+            {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
+            {(generating || error) && (
+              <span className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
+                {error ? String(error).split('\n')[0] : (stage ? (STAGE_LABELS[stage.name] || stage.name) : statusMsg) || 'Working...'}
+              </span>
+            )}
+          </div>
+
+          <details
+            open={optionsOpen}
+            onToggle={(event) => setOptionsOpen(event.currentTarget.open)}
+            className="group min-w-0"
+          >
+            <summary className="flex min-h-[44px] cursor-pointer list-none items-center justify-between rounded-lg border border-port-border px-3 py-2 text-sm font-medium text-gray-300 hover:bg-port-border/30 lg:hidden">
+              Options
+              <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" aria-hidden="true" />
+            </summary>
+            <div className="mt-3 min-w-0 space-y-3 lg:mt-0">
           <UniverseStylePicker
             value={selectedUniverse?.id || ''}
             onChange={setSelectedUniverse}
@@ -1348,26 +1441,15 @@ export default function ImageGen() {
             value={stylePreset?.id || ''}
             onChange={setStylePreset}
           />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <FormField label="Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <AutoSizeTextarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                rows={3}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
-                placeholder="Describe the image you want to generate..."
-              />
-            </FormField>
-            <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <AutoSizeTextarea
-                value={negativePrompt}
-                onChange={(e) => setNegativePrompt(e.target.value)}
-                rows={3}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
-                placeholder="What to avoid..."
-              />
-            </FormField>
-          </div>
+          <FormField label="Negative Prompt" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+            <AutoSizeTextarea
+              value={negativePrompt}
+              onChange={(e) => setNegativePrompt(e.target.value)}
+              rows={3}
+              className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 min-h-[80px]"
+              placeholder="What to avoid..."
+            />
+          </FormField>
 
           <PromptEnhancer
             kind="image"
@@ -1514,64 +1596,6 @@ export default function ImageGen() {
             </p>
           )}
 
-          <div className="flex items-center gap-2 pt-1 flex-wrap">
-            <button
-              type="submit"
-              // The probe decides WHICH backend can run, not what the user may
-              // type — so it gates submit and backend selection only. Every form
-              // control above stays live while the status pill is still checking.
-              disabled={remoteTargetActive
-                ? remoteBlocked !== null
-                : (localBackendPending || notConnected || editImageMissing || cloudNeedsPrompt)}
-              title={localBackendPending
-                ? 'Checking the image backend…'
-                : remoteBlocked || (editImageMissing ? 'This image-edit model needs a source image — upload one below first' : cloudNeedsPrompt ? cloudPromptHint : undefined)}
-              className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
-            >
-              <Sparkles className="w-4 h-4" /> {localBackendPending ? 'Checking…' : generating ? 'Queue' : 'Generate'}
-              {isAsyncMode && batchCount > 1 && <span className="text-xs opacity-80">× {batchCount}</span>}
-            </button>
-            {editImageMissing && (
-              <span className="text-xs text-port-warning">Upload a source image to use this edit model</span>
-            )}
-            {cloudNeedsPrompt && (
-              <span className="text-xs text-port-warning">{cloudPromptHint}</span>
-            )}
-            {isAsyncMode && (
-              <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
-                <span className="select-none">×</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={batchCount}
-                  onChange={(e) => setBatchCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
-                  className="w-14 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                />
-              </label>
-            )}
-            {generating && (
-              <button
-                type="button"
-                onClick={handleCancel}
-                className="flex items-center gap-2 px-3 py-2 bg-port-error hover:bg-port-error/80 text-white text-sm font-medium rounded-lg min-h-[40px]"
-              >
-                <X className="w-4 h-4" /> Cancel current
-              </button>
-            )}
-            {pendingQueued > 0 && (
-              <span className="text-xs px-2 py-1 rounded bg-port-accent/20 text-port-accent border border-port-accent/30">
-                +{pendingQueued} queued
-              </span>
-            )}
-            {progressPct != null && <span className="text-xs text-port-accent">{progressPct}%</span>}
-            {(generating || error) && (
-              <span className={`text-xs truncate ${error ? 'text-port-error' : 'text-gray-400'}`}>
-                {error ? String(error).split('\n')[0] : (stage ? (STAGE_LABELS[stage.name] || stage.name) : statusMsg) || 'Working...'}
-              </span>
-            )}
-          </div>
-
           <div className="flex flex-col gap-1 text-xs text-gray-400">
             <label
               className="flex items-center gap-2 cursor-pointer select-none"
@@ -1608,6 +1632,8 @@ export default function ImageGen() {
               </span>
             </label>
           </div>
+            </div>
+          </details>
 
           {error && (
             <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error space-y-2">
