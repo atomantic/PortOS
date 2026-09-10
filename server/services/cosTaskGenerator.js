@@ -40,7 +40,7 @@ import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { pendingCosActionReservations } from './cosAdmissionReservations.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { addTask, updateTask, getAllTasks, getCosTasks, firstLine } from './cosTaskStore.js';
+import { addTask, updateTask, getAllTasks, getCosTasks } from './cosTaskStore.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
@@ -1373,17 +1373,6 @@ export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null }
   return { existingTaskTypes, appsWithPendingImprovement, blockedTaskTypes, appsWithBlockedImprovement };
 }
 
-function prepareQueuedImprovementTask(task) {
-  // Queued tasks round-trip through COS-TASKS.md, whose task description field
-  // is single-line. Preserve the full prompt in metadata so the agent receives
-  // it after the task is re-read from disk.
-  if (typeof task.description === 'string' && task.description.includes('\n')) {
-    task.metadata = task.metadata || {};
-    task.metadata.prompt = task.description;
-    task.description = firstLine(task.description);
-  }
-  return task;
-}
 
 export async function queueDueInstallWideImprovementTasks({
   dueTasks,
@@ -1421,7 +1410,6 @@ export async function queueDueInstallWideImprovementTasks({
     task.priority = 'LOW';
     task.priorityValue = PRIORITY_VALUES.LOW;
     task.id = `sys-install-${taskType}-${Date.now().toString(36)}`;
-    prepareQueuedImprovementTask(task);
 
     const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
     if (newTask?.duplicate) continue;
@@ -1560,38 +1548,10 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     task.priorityValue = PRIORITY_VALUES.LOW;
     task.id = `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
 
-    // Move the generator's multi-line prompt into `metadata.prompt` so it
-    // survives the COS-TASKS.md round-trip. The on-demand path dispatches the
-    // in-memory task immediately (cosEvents.emit('task:ready', task) with the
-    // unparsed object), so it never round-trips through the markdown — but
-    // the queue path persists first and re-reads from disk on the next
-    // `dequeueNextTask` tick. `generateTasksMarkdown` interpolates the full
-    // `task.description` onto a single line (taskParser.js:268) and
-    // `parseTasksMarkdown` only matches the first line of a `- [ ]` block —
-    // so any newline in `description` corrupts the file (stray `## Phase`
-    // lines become section headers, `- ` lines become new tasks) AND silently
-    // strips the Phase 1–7 instructions on the re-read. Task metadata is
-    // newline-escaped via `escapeNewlines`/`unescapeNewlines` (JSON-sentinel
-    // encoding) so it round-trips losslessly. The agent prompt builder
-    // (`cos-agent-briefing.md` + the built-in fallback in
-    // `agentPromptBuilder.js`) renders both `task.description` AND the task's
-    // context block into the agent's prompt, so the agent still sees the full
-    // Phase 1–7 body.
-    //
-    // The payload lands in `metadata.prompt`, NOT `metadata.context` (#4153):
-    // `context` is the one-line human note, and overloading it made a
-    // multi-thousand-character agent prompt indistinguishable from one. Readers
-    // go through `getTaskPrompt` (server/lib/cosTaskPrompt.js), which falls back
-    // to `metadata.context` for tasks written before the split.
-    // Keep the queue-path normalization visible here as well as in the
-    // install-wide helper: COS-TASKS.md is a single-line format, and the
-    // queue contract is source-checked by the scheduler tests.
-    if (typeof task.description === 'string' && task.description.includes('\n')) {
-      task.metadata = task.metadata || {};
-      task.metadata.prompt = task.description;
-      task.description = firstLine(task.description);
-    }
-
+    // Queue path: addTask's raw branch persists the task through COS-TASKS.md,
+    // which folds multi-line descriptions to first line + full body in
+    // metadata.prompt (#4153). On-demand path: emits unpersisted task on
+    // task:ready, renders full description via getTaskPrompt.
     const newTask = await addTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true });
     if (newTask?.duplicate) continue;
     await recordDeferredPerpetualDispatch(task, taskSchedule);
