@@ -45,6 +45,7 @@ const renderCard = async (path = '/') => {
 };
 
 beforeEach(() => {
+  sessionStorage.clear();
   vi.clearAllMocks();
   __resetInstanceFeatureCache();
   mock.getSettings.mockResolvedValue({});
@@ -72,10 +73,26 @@ describe('FirstRunCard show/hide', () => {
     expect(screen.queryByRole('heading', { name: heading })).not.toBeInTheDocument();
   });
 
-  it('hides for the rest of the session after explore / escape / the X', async () => {
+  it('persists Explore on my own for future sessions', async () => {
     await renderCard('/');
     expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Explore on my own' }));
+    await waitFor(() => {
+      expect(mock.updateSettings).toHaveBeenCalledWith(
+        { [FIRST_RUN_HIDE_SETTING]: true },
+        { silent: true },
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: heading })).not.toBeInTheDocument();
+    });
+    expect(sessionStorage.getItem(FIRST_RUN_SESSION_KEY)).toBe('1');
+  });
+
+  it('keeps the X dismissal session-only', async () => {
+    await renderCard('/');
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss for this session' }));
     expect(screen.queryByRole('heading', { name: heading })).not.toBeInTheDocument();
     expect(sessionStorage.getItem(FIRST_RUN_SESSION_KEY)).toBe('1');
     expect(mock.updateSettings).not.toHaveBeenCalled();
@@ -130,6 +147,10 @@ describe('FirstRunCard mission feature writes', () => {
     });
     expect(mock.updateInstanceFeature).toHaveBeenCalledTimes(1);
     expect(mock.updateInstanceFeature.mock.calls.every(([id]) => id === 'health')).toBe(true);
+    expect(mock.updateSettings).toHaveBeenCalledWith(
+      { [FIRST_RUN_HIDE_SETTING]: true },
+      { silent: true },
+    );
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/brain/inbox');
     });
@@ -143,5 +164,25 @@ describe('FirstRunCard mission feature writes', () => {
       expect(router.state.location.pathname).toBe('/start-story');
     });
     expect(mock.updateInstanceFeature).not.toHaveBeenCalled();
+    expect(mock.updateSettings).toHaveBeenCalledWith(
+      { [FIRST_RUN_HIDE_SETTING]: true },
+      { silent: true },
+    );
+  });
+
+  it('persists the mission choice even when its feature cannot be enabled', async () => {
+    mock.updateInstanceFeature.mockRejectedValue(new Error('feature unavailable'));
+    const router = await renderCard('/');
+    expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Personal knowledge/ }));
+    await waitFor(() => {
+      expect(mock.updateSettings).toHaveBeenCalledWith(
+        { [FIRST_RUN_HIDE_SETTING]: true },
+        { silent: true },
+      );
+    });
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/brain/inbox');
+    });
   });
 });
