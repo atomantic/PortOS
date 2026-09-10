@@ -2435,6 +2435,23 @@ describe('taskSchedule', () => {
     })
 
     describe('shouldContinuePerpetualDrain', () => {
+      it('only continues an explicitly started manual drain and never schedules its recheck', async () => {
+        mockSchedule({ tasks: {
+          ...PAUSED_SHIPPED_DRAINS,
+          'claim-issue': { type: 'on-demand', perpetual: true, autoStart: false, enabled: true }
+        } })
+        expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: false, reason: 'on-demand-only' })
+        expect(await shouldContinuePerpetualDrain('claim-issue')).toMatchObject({ shouldRun: true, reason: 'perpetual-drain' })
+        expect(await getDueTasks()).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskType: 'claim-issue' })]))
+        expect(await getDueTasks(null, { continuingTaskType: 'claim-issue' })).toEqual(expect.arrayContaining([expect.objectContaining({ taskType: 'claim-issue' })]))
+        await parkPerpetual('claim-issue', null, { reason: 'no-actionable-work', actionableCount: 0 })
+        expect(await shouldContinuePerpetualDrain('claim-issue')).toMatchObject({ shouldRun: false, reason: 'perpetual-parked' })
+        expect(await getUpcomingTasks()).not.toEqual(expect.arrayContaining([expect.objectContaining({ taskType: 'claim-issue' })]))
+        vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 2 * 86400000)
+        expect(await shouldRunTask('claim-issue')).toMatchObject({ shouldRun: false, reason: 'on-demand-only' })
+        vi.restoreAllMocks()
+      })
+
       it('does not force a non-perpetual task past its normal cadence', async () => {
         cronNotDueYet()
         mockSchedule({

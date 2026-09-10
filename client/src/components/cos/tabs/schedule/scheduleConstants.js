@@ -20,11 +20,11 @@ export const INTERVAL_DESCRIPTIONS = {
 
 export const ON_DEMAND_PERPETUAL_LABEL = 'Automatic drain';
 export const ON_DEMAND_PERPETUAL_DESCRIPTION =
-  'Perpetual runs this task automatically while work remains, then resumes on the recheck cadence. Turn Perpetual off for manual-only runs.';
+  'Perpetual runs this task automatically while work remains, then resumes on the recheck cadence. Turn automatic starts off to start each drain manually.';
 
 export const PERPETUAL_LABEL = 'Perpetual';
 export const PERPETUAL_DESCRIPTION =
-  'Drains actionable work back-to-back until none remains, then rechecks on a cadence';
+  'Drains actionable work back-to-back until none remains, then waits for the next manual or automatic start';
 
 // `cyan` is kept as a raw Tailwind hue (not a port-* token) on purpose: it is
 // the 'cron' cadence tone in INTERVAL_BADGE_VARIANT below, and every other tone
@@ -145,7 +145,7 @@ export const STATUS_GROUPS = {
 export function getTaskStatusGroup(config) {
   if (!config?.enabled) return 'disabled';
   if (config.status?.reason === 'waiting-on-dependencies') return 'waiting';
-  if (config.type === 'on-demand' && !config.perpetual) return 'on-demand';
+  if (config.type === 'on-demand' && (!config.perpetual || config.autoStart === false)) return 'on-demand';
   return 'active';
 }
 

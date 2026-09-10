@@ -539,6 +539,15 @@ describe('CoS Schedule Routes', () => {
       }));
     });
 
+    it('accepts manual perpetual starts and rejects malformed start flags', async () => {
+      const settings = { type: 'on-demand', perpetual: true, autoStart: false };
+      const response = await request(app).put('/api/cos/schedule/task/security').send(settings);
+      expect(response.status).toBe(200);
+      expect(taskSchedule.updateTaskInterval).toHaveBeenCalledWith('security', settings);
+      const invalid = await request(app).put('/api/cos/schedule/task/security').send({ autoStart: 'false' });
+      expect(invalid.status).toBe(400);
+    });
+
     it('rejects an unrecognized cadence name rather than silently making it manual-only', async () => {
       const response = await request(app).put('/api/cos/schedule/task/security').send({ type: 'hourly-ish' });
       expect(response.status).toBe(400);
