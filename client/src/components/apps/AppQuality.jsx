@@ -5,8 +5,10 @@ import { formatDateShort } from '../../utils/formatters';
 export default function AppQuality({ app, detail = false }) {
   const quality = app.quality;
   const score = quality?.score;
+  const hasAssessments = quality?.categories?.some(category => category.assessedAt);
+  const unscoredLabel = hasAssessments ? 'Quality: no qualifying score' : 'Quality: not assessed';
   const label = quality?.unavailable ? 'Quality unavailable'
-    : score == null ? 'Quality: not assessed' : `Quality: ${score}/100`;
+    : score == null ? unscoredLabel : `Quality: ${score}/100`;
   if (!detail) return (
     <Link to={`/apps/${app.id}/overview`} className="text-xs text-port-accent hover:underline" title="View audit scores and coverage">
       {label}{score != null && ` · ${quality.ratedCategories}/${quality.totalCategories} categories`}
@@ -19,6 +21,13 @@ export default function AppQuality({ app, detail = false }) {
         Assessments describe the code before fixes. The overall score is the equal-weight mean of broad, medium/high-confidence assessments from the last 30 days.
         {' '}{quality?.ratedCategories ?? 0}/{quality?.totalCategories ?? 0} categories contribute. Missing, partial, low-confidence and stale assessments are excluded, not counted as perfect.
       </p>
+      {score == null && !quality?.unavailable && (
+        <p className="text-sm text-gray-400">
+          {hasAssessments
+            ? 'Saved assessments do not currently qualify for an overall score. Check the category breakdown for coverage, confidence and age.'
+            : 'No audit assessment has been saved. Completed maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively; run a scheduled audit to collect an assessment.'}
+        </p>
+      )}
       <Link to={`/apps/${app.id}/tasks`} className="inline-block text-sm text-port-accent hover:underline">Configure or run scheduled audits</Link>
       <AppQualityHistory appId={app.id} categories={quality?.categories} />
       {!!quality?.categories?.length && (
