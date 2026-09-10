@@ -1,9 +1,10 @@
 /**
  * Merge Gate contract check (#5876)
  *
- * A worktree agent told to own its own PR lifecycle (`ownsPrWorkflow`) is
- * handed a "Merge Gate" section that ends with "Confirm the merge before
- * exiting: … must return MERGED". Nothing verified that it actually did —
+ * A worktree agent handed the INLINE PR lifecycle — the plain `git`/`gh` steps,
+ * because its host cannot type `/do:pr` — gets a "Merge Gate" section that ends
+ * with "Confirm the merge before exiting: … must return MERGED". Nothing
+ * verified that it actually did —
  * the completion sentinel was accepted on its face, and only the post-
  * teardown `agentRepoStateVerification.js` audit ever caught a run that quit
  * with the PR still open, at the cost of a whole cold recovery agent to
@@ -19,20 +20,24 @@
  */
 
 /**
- * Did this run's own task shape ask it to own the merge?
+ * Did this run's own prompt ask it to work a Merge Gate?
  *
- * Only the AND of all three counts: a run PortOS itself opens or merges the
- * PR for (`taskOpenPR` false, or `ownsPrWorkflow` false — a lean `--bare`
- * session, a read-only/no-code-output run, or an HTTP `api` provider) never
- * owed one, and neither does a run whose prompt explicitly hands the PR to a
- * human (`leaveOpen` true — JIRA hand-off, claim flow, or an exempt task
- * type; see `leavesPrForHuman` in `prDisposition.js`).
+ * Only the AND of all three counts, and `rendersInlinePrLifecycle` is the
+ * narrow one: there is a gate to hold the agent to only when the prompt
+ * actually rendered that section. A run PortOS opens or merges the PR for
+ * (`taskOpenPR` false, or a lean `--bare` session / read-only / no-code-output
+ * run / HTTP `api` provider) never owed one; nor does a run whose prompt hands
+ * the PR to a human (`leaveOpen` true — JIRA hand-off, claim flow, or an exempt
+ * task type; see `leavesPrForHuman` in `prDisposition.js`); nor does a
+ * slashdo-capable run, whose `/do:pr` merges inside that one command and whose
+ * prompt therefore carries no Merge Gate steps for the re-prompt to point back
+ * at. Callers pass `prOpenedBy === 'agent-inline'` (#6869).
  *
- * @param {{taskOpenPR: boolean, ownsPrWorkflow: boolean, leaveOpen: boolean}} params
+ * @param {{taskOpenPR: boolean, rendersInlinePrLifecycle: boolean, leaveOpen: boolean}} params
  * @returns {boolean}
  */
-export function mergeGateOwed({ taskOpenPR, ownsPrWorkflow, leaveOpen }) {
-  return !!taskOpenPR && !!ownsPrWorkflow && !leaveOpen;
+export function mergeGateOwed({ taskOpenPR, rendersInlinePrLifecycle, leaveOpen }) {
+  return !!taskOpenPR && !!rendersInlinePrLifecycle && !leaveOpen;
 }
 
 // What the Merge Gate's own step 4 asks the agent to say when it deliberately

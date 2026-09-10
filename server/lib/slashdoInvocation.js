@@ -503,10 +503,12 @@ const HARNESS_PROVIDER_TYPES = new Set([PROVIDER_TYPES.CLI, PROVIDER_TYPES.TUI])
  * behind `claude --bare` fumbles multi-step flows, and a half-run merge
  * procedure is worse than a clean handoff.
  *
- * The prompt builder, `agentCompletionCleanup`, and the spawners must all agree
- * on this answer or PortOS double-fires `gh pr create` — so the spawn path
- * persists the resolved value on the agent record (`metadata.ownsPrWorkflow`)
- * and cleanup reads it back rather than re-deriving it.
+ * This is the HOST half of the question only. Whether a given run's prompt
+ * actually handed it the PR depends on the task shape too, and that combined
+ * answer is stamped on the agent record as `metadata.prOpenedBy` — see
+ * `promptOpensOwnPr` in `services/promptSections/completion.js`, which is the
+ * predicate the prompt itself is rendered from, and `resolvePrOpenedBy` below,
+ * which reads the stamp back at cleanup time.
  *
  * @param {Object} [opts]
  * @param {string|null} [opts.providerType] - `'tui' | 'cli' | 'api'`
@@ -519,63 +521,119 @@ export function agentOwnsPrWorkflow({ providerType = null, leanMode = false } = 
 }
 
 /**
- * The same answer for a COMPLETED agent, read off its record.
+ * WHO opens a run's pull request, per the prompt that run was actually given.
+ * Stamped on the agent record at spawn time as `metadata.prOpenedBy` and read
+ * back by cleanup; `promptOpensOwnPr` (services/promptSections/completion.js)
+ * is the single producer.
  *
- * `metadata.ownsPrWorkflow` is stamped at spawn time from the resolved provider,
- * and is authoritative: cleanup must act on what the prompt actually said, not
- * on a fresh derivation that could disagree with it.
+ * Three values rather than a boolean because the two agent-owned cases behave
+ * differently downstream and a boolean kept collapsing them:
+ * - `agent-slashdo` — the completion section handed it `/do:pr`, which pushes,
+ *   opens, reviews and merges the PR in one command.
+ * - `agent-inline`  — the completion section handed it the plain `git`/`gh`
+ *   steps plus the inline Review Loop / **Merge Gate** section. Only this value
+ *   owes the #5876 merge-gate check, because only this prompt has that section.
+ * - `portos`        — the prompt told the agent NOT to open a PR; the
+ *   post-completion cleanup opens it.
+ */
+export const PR_OPENED_BY = Object.freeze({
+  AGENT_SLASHDO: 'agent-slashdo',
+  AGENT_INLINE: 'agent-inline',
+  PORTOS: 'portos',
+});
+
+const PR_OPENED_BY_VALUES = new Set(Object.values(PR_OPENED_BY));
+
+/**
+ * The stamp for a COMPLETED agent, read off its record — accepting every shape
+ * a record can carry, because other installs upgrade on their own schedule and
+ * their older records keep arriving here.
  *
- * A record written before #3733 carries no such key. Those runs really were
- * prompted by the old builder, whose gate was `canTypeSlashCommands` — so that
- * is the correct answer for them, and it lives here next to the predicate rather
- * than inline in a service, where the next caller would miss it.
+ * 1. `metadata.prOpenedBy` (this version) is authoritative: cleanup must act on
+ *    what the prompt actually said, not on a fresh derivation that could
+ *    disagree with it.
+ * 2. A slashdo-capable host resolves to `agent-slashdo` whatever else the record
+ *    carries. This is where #6869 lands on legacy data: the #3733 boolean
+ *    `metadata.ownsPrWorkflow` answered "did the prompt render the INLINE PR
+ *    section", which is `false` for exactly the hosts that run `/do:pr` — so
+ *    reading that boolean at face value for a Claude record is what had cleanup
+ *    re-push and re-create a PR the agent had already opened.
+ * 3. Otherwise the #3733 boolean, when the record has one: a slashdo-free
+ *    harness stamped `true` really was told to run `gh pr create` itself.
+ * 4. Otherwise `portos` — which for a record written before #3733 (no key at
+ *    all) is the same answer the old `canTypeSlashCommands` fallback gave, since
+ *    rule 2 already claimed every slashdo-capable one.
  *
  * @param {Object} opts
- * @param {boolean|undefined} opts.persisted - `metadata.ownsPrWorkflow`
+ * @param {string|undefined} opts.persistedPrOpenedBy - `metadata.prOpenedBy`
+ * @param {boolean|undefined} [opts.persistedOwnsPrWorkflow] - the legacy
+ *   `metadata.ownsPrWorkflow` boolean (#3733)
  * @param {string|null} [opts.providerId]
  * @param {string|null} [opts.providerCommand]
  * @param {boolean} [opts.leanMode]
- * @returns {boolean}
+ * @returns {string} a `PR_OPENED_BY` value
  */
-export function resolveOwnsPrWorkflow({ persisted, providerId = null, providerCommand = null, leanMode = false }) {
-  if (typeof persisted === 'boolean') return persisted;
-  return canTypeSlashCommands({ providerId, providerCommand, leanMode });
+export function resolvePrOpenedBy({
+  persistedPrOpenedBy,
+  persistedOwnsPrWorkflow,
+  providerId = null,
+  providerCommand = null,
+  leanMode = false,
+}) {
+  if (PR_OPENED_BY_VALUES.has(persistedPrOpenedBy)) return persistedPrOpenedBy;
+  if (canTypeSlashCommands({ providerId, providerCommand, leanMode })) return PR_OPENED_BY.AGENT_SLASHDO;
+  if (persistedOwnsPrWorkflow === true) return PR_OPENED_BY.AGENT_INLINE;
+  return PR_OPENED_BY.PORTOS;
 }
 
 /**
- * The three PR answers a spawned run needs, from ONE reading of the task and
- * the persisted prompt verdict and provider descriptor. Both in-process spawners
+ * The PR answers a spawned run needs, from ONE reading of the task, the
+ * persisted prompt verdict and the provider descriptor. Both in-process spawners
  * call this once — the TUI `finish()` path up front, because its merge-gate contract check (#5876)
- * reads `agentOwnsPR` before the run completes; the direct-CLI `close` handler
+ * reads the ownership answer before the run completes; the direct-CLI `close` handler
  * at exit — and hand the result to `runSpawnerCompletionCleanup`, so the
  * ownership question and the cleanup that acts on it can never read different
  * answers (#3733).
  *
- * `agentOwnsPR` (does the harness drive its own push → PR → merge?) and
- * `prClaimExpected` (does finalize verify a PR claim for it?) are deliberately
- * two predicates: a harness that owns the workflow but cannot TYPE `/do:pr` is
- * backstopped by cleanup, which re-checks the forge and opens the PR itself
- * when the agent skipped it — failing it at finalize for a PR that is about to
- * exist would turn a recovered hand-off into a false needs-attention (#3358).
- *
- * Like the runner-event path, ownership reads the prompt's persisted,
- * task-shape-aware verdict first, falling back to the slash-command gate only
- * for legacy runs without a stamp.
+ * `agentOpensOwnPr` (did the prompt hand this run its own push → PR → merge?)
+ * and `prClaimExpected` (does finalize verify a PR claim for it?) are
+ * deliberately two predicates: a harness that owns the workflow but cannot TYPE
+ * `/do:pr` is backstopped by cleanup, which re-checks the forge and opens the PR
+ * itself when the agent skipped it — failing it at finalize for a PR that is
+ * about to exist would turn a recovered hand-off into a false needs-attention
+ * (#3358). `prClaimExpected` therefore stays the raw slash-command capability,
+ * matching the runner path's own derivation in `agentLifecycle.js`; it asks
+ * "will a PR already be there when finalize looks?", not "who was told to open
+ * one".
  *
  * @param {Object} opts
  * @param {Object} opts.task
  * @param {(value: unknown) => boolean} opts.isTruthyMeta
- * @param {boolean|undefined} opts.persisted - `metadata.ownsPrWorkflow`
+ * @param {string|undefined} opts.persistedPrOpenedBy - `metadata.prOpenedBy`
+ * @param {boolean|undefined} [opts.persistedOwnsPrWorkflow] - the legacy
+ *   `metadata.ownsPrWorkflow` boolean (#3733)
  * @param {string|null} [opts.providerId]
  * @param {string|null} [opts.providerCommand]
  * @param {boolean} [opts.leanMode]
- * @returns {{ taskOpenPR: boolean, agentOwnsPR: boolean, prClaimExpected: boolean }}
+ * @returns {{ taskOpenPR: boolean, prOpenedBy: string, agentOpensOwnPr: boolean, prClaimExpected: boolean }}
  */
-export function resolvePrOwnership({ task, isTruthyMeta, persisted, providerId = null, providerCommand = null, leanMode = false }) {
+export function resolvePrOwnership({
+  task,
+  isTruthyMeta,
+  persistedPrOpenedBy,
+  persistedOwnsPrWorkflow,
+  providerId = null,
+  providerCommand = null,
+  leanMode = false,
+}) {
   const taskOpenPR = isTruthyMeta(task?.metadata?.openPR);
+  const prOpenedBy = resolvePrOpenedBy({
+    persistedPrOpenedBy, persistedOwnsPrWorkflow, providerId, providerCommand, leanMode,
+  });
   return {
     taskOpenPR,
-    agentOwnsPR: taskOpenPR && resolveOwnsPrWorkflow({ persisted, providerId, providerCommand, leanMode }),
+    prOpenedBy,
+    agentOpensOwnPr: taskOpenPR && prOpenedBy !== PR_OPENED_BY.PORTOS,
     prClaimExpected: taskOpenPR && canTypeSlashCommands({ providerId, providerCommand, leanMode }),
   };
 }

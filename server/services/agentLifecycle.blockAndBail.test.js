@@ -111,7 +111,7 @@ vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn(async () => ({ a
 vi.mock('./agentPromptBuilder.js', () => ({
   buildAgentPrompt: vi.fn(),
   getAppWorkspace: vi.fn(),
-  inlinePrLifecycleSection: vi.fn(() => null),
+  promptOpensOwnPr: vi.fn(() => 'portos'),
   isClaimFlowTask: vi.fn(() => false),
 }));
 vi.mock('./workspaceContext.js', () => ({ snapshotOnRepoSwitch: vi.fn().mockResolvedValue(null) }));

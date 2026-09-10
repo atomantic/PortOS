@@ -164,7 +164,7 @@ export async function spawnDirectly({
   executionId,
   laneName,
   isTruthyMetaFn,
-  ownsPrWorkflow,
+  prOpenedBy,
   safetyProfile = null,
 }) {
   const fullCommand = `${cliConfig.command} ${cliConfig.args.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
@@ -739,11 +739,11 @@ export async function spawnDirectly({
     // Resolved from the live provider descriptor — the same reading the TUI
     // path takes up front — so PortOS doesn't double-fire push+PR creation; see
     // `resolvePrOwnership` for why finalize's `prClaimExpected` and cleanup's
-    // `agentOwnsPR` are two predicates (#3358).
+    // `agentOpensOwnPr` are two predicates (#3358).
     const prOwnership = resolvePrOwnership({
       task,
       isTruthyMeta: isTruthyMetaFn,
-      persisted: ownsPrWorkflow,
+      persistedPrOpenedBy: prOpenedBy,
       providerId: provider?.id,
       providerCommand: provider?.command,
       leanMode: isOllamaClaudeProvider(provider),

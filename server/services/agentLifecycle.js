@@ -55,7 +55,7 @@ import { createAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
 import { capturePrimaryCheckoutState } from '../lib/primaryCheckoutGuard.js';
-import { buildAgentPrompt, getAppWorkspace, inlinePrLifecycleSection, isClaimFlowTask } from './agentPromptBuilder.js';
+import { buildAgentPrompt, getAppWorkspace, isClaimFlowTask, promptOpensOwnPr } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { canTypeSlashCommands } from '../lib/slashdoInvocation.js';
 import { prClaimWasVerified } from '../lib/prDisposition.js';
@@ -642,14 +642,18 @@ async function runAgentSpawn(task) {
       ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR)
       : null;
 
-    const ownsPrWorkflow = inlinePrLifecycleSection(task, {
+    // WHO opens this run's PR, per the prompt just built for it — the SAME
+    // predicate that decided what the completion section says, so the record and
+    // the prompt cannot disagree (#6869). Read back at cleanup by
+    // `resolvePrOpenedBy`.
+    const prOpenedBy = promptOpensOwnPr(task, {
       providerType: provider.type,
       providerId: provider.id,
       providerCommand: provider.command,
       leanMode,
       worktreeInfo,
       isTruthyMetaFn: isTruthyMeta,
-    }) !== null;
+    });
     // Evaluated once: `configClaimFlow` and `configCodingOnMain` below are two
     // faces of the same fact, and two separate calls could drift on the
     // `isTruthyMetaFn` argument — which is exactly the split that made a claim
@@ -678,7 +682,7 @@ async function runAgentSpawn(task) {
       providerEndpoint: providerBaseUrl(provider),
       localPromptBudget,
       leanMode,
-      ownsPrWorkflow,
+      prOpenedBy,
       claimFlowTask,
       selectedModel,
       modelSelection,
@@ -813,7 +817,7 @@ async function runAgentSpawn(task) {
         laneName,
         isTruthyMetaFn: isTruthyMeta,
         leanMode,
-        ownsPrWorkflow,
+        prOpenedBy,
         useDurableRunner: dispatchUseRunner,
         safetyProfile,
       });
@@ -835,7 +839,7 @@ async function runAgentSpawn(task) {
       executionId: toolExecution.id,
       laneName,
       isTruthyMetaFn: isTruthyMeta,
-      ownsPrWorkflow,
+      prOpenedBy,
       safetyProfile,
     });
   } catch (err) {
@@ -1345,16 +1349,17 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // PR is created by `runAgentCompletionCleanup` below, i.e. AFTER finalize, so
     // verifying here would fail every correct run.
     //
-    // Deliberately the SLASH-command predicate, not `agentOwnsPrWorkflow` — since
-    // #3733 a slashdo-free harness also opens its own PR, but cleanup re-checks
-    // the forge and opens one itself when it didn't, so failing the run here for
-    // a PR that is about to exist would turn a recovered handoff into a false
-    // needs-attention.
+    // Deliberately the SLASH-command predicate, not the `prOpenedBy` ownership
+    // stamp — since #3733 a slashdo-free harness also opens its own PR, but
+    // cleanup re-checks the forge and opens one itself when it didn't, so
+    // failing the run here for a PR that is about to exist would turn a
+    // recovered handoff into a false needs-attention. `resolvePrOwnership`'s
+    // `prClaimExpected` is the same expression, for the same reason.
     //
     // `persistedAgent` is the record read once at the top of this callback — see
     // the note there for why the metadata must come off disk rather than the
     // in-memory entry.
-    const runnerAgentOwnsPR = isTruthyMeta(task?.metadata?.openPR) && canTypeSlashCommands({
+    const runnerPrClaimExpected = isTruthyMeta(task?.metadata?.openPR) && canTypeSlashCommands({
       providerId: persistedAgent?.metadata?.providerId ?? agent.providerId,
       providerCommand: persistedAgent?.metadata?.providerCommand ?? null,
       leanMode: persistedAgent?.metadata?.leanMode === true,
@@ -1409,7 +1414,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         errorAnalysis,
         isTruthyMetaFn: isTruthyMeta,
         workspacePath: agent.workspacePath || null,
-        prExpected: runnerAgentOwnsPR,
+        prExpected: runnerPrClaimExpected,
         // The run window the commit criterion is evaluated against (#3637).
         startedAt: Number.isFinite(runStartedAt) ? runStartedAt : null,
       });

@@ -3,23 +3,23 @@ import { mergeGateOwed, summaryStatesLeaveOpen, resolveMergeGateVerdict, buildMe
 
 describe('mergeGateOwed', () => {
   it('is owed only when the task asked for a PR, the agent owns the workflow, and nobody hands it to a human', () => {
-    expect(mergeGateOwed({ taskOpenPR: true, ownsPrWorkflow: true, leaveOpen: false })).toBe(true);
+    expect(mergeGateOwed({ taskOpenPR: true, rendersInlinePrLifecycle: true, leaveOpen: false })).toBe(true);
   });
 
   it('is not owed when the task never asked for a PR (PortOS still backstops it)', () => {
-    expect(mergeGateOwed({ taskOpenPR: false, ownsPrWorkflow: true, leaveOpen: false })).toBe(false);
+    expect(mergeGateOwed({ taskOpenPR: false, rendersInlinePrLifecycle: true, leaveOpen: false })).toBe(false);
   });
 
   it('is not owed when the agent does not own the PR workflow (a lean --bare session)', () => {
-    expect(mergeGateOwed({ taskOpenPR: true, ownsPrWorkflow: false, leaveOpen: false })).toBe(false);
+    expect(mergeGateOwed({ taskOpenPR: true, rendersInlinePrLifecycle: false, leaveOpen: false })).toBe(false);
   });
 
   it('is not owed when the task hands the PR to a human (JIRA, claim flow)', () => {
-    expect(mergeGateOwed({ taskOpenPR: true, ownsPrWorkflow: true, leaveOpen: true })).toBe(false);
+    expect(mergeGateOwed({ taskOpenPR: true, rendersInlinePrLifecycle: true, leaveOpen: true })).toBe(false);
   });
 
   it('is not owed for a read-only / no-code-output run (neither openPR nor ownership)', () => {
-    expect(mergeGateOwed({ taskOpenPR: false, ownsPrWorkflow: false, leaveOpen: false })).toBe(false);
+    expect(mergeGateOwed({ taskOpenPR: false, rendersInlinePrLifecycle: false, leaveOpen: false })).toBe(false);
   });
 });
 
