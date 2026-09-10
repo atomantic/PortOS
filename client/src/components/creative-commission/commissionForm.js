@@ -14,6 +14,19 @@ import { describeRecurrence } from '../../utils/cronHelpers.js';
 export {
   COMMISSION_BRIEF_TAG_MAX, COMMISSION_INTENT_MAX, COMMISSION_NAME_MAX, COMMISSION_STYLE_SPEC_MAX,
 } from '../../../../server/lib/creativeBriefLimits.js';
+// The generation-key spec (type/bounds/values/default) is the server's own too
+// (server/lib/creativeCommissionSpec.js, #6816) — a zod-free leaf, like the brief
+// caps above, so this form derives every bound/default/option value from it
+// instead of hand-copying (the drift that left durationMode's default and the
+// video/image backend enums disagreeing with the server for months).
+import {
+  GENERATION_KEY_DEFS, ABILITY_GENERATION_SPEC,
+} from '../../../../server/lib/creativeCommissionSpec.js';
+// The NODE-SAFE half of imageGenBackends.js (no lucide-react import) — this
+// module is imported from a server-workspace parity test
+// (creativeCommissionSpec.parity.test.js), which fails with ERR_MODULE_NOT_FOUND
+// if anything here pulls in a browser-only package.
+import { RENDER_TARGET_BACKEND_AUTO as RENDER_BACKEND_AUTO, MODE_LABELS } from '../../lib/imageGenModes.js';
 
 // Pause and Delete are real STOPS, not just "skip the next tick": the server also
 // tears down the Creative Director projects the commission already spawned
@@ -44,80 +57,96 @@ export const ABILITY_OPTIONS = [
   { id: 'series', label: 'Series' },
 ];
 
-const QUALITY_FIELD = { key: 'quality', label: 'Quality', type: 'select', options: [['draft', 'Draft'], ['standard', 'Standard'], ['high', 'High']] };
-const ASPECT_FIELD = { key: 'aspectRatio', label: 'Aspect ratio', type: 'select', options: [['16:9', '16:9'], ['9:16', '9:16'], ['1:1', '1:1']] };
-const DURATION_FIELD = { key: 'targetDurationSeconds', label: 'Duration (sec)', type: 'number', min: 5, max: 600 };
-const DURATION_MODE_FIELD = { key: 'durationMode', label: 'Video length', type: 'select', options: [['auto', 'Creative Director chooses'], ['manual', 'Set a specific length']] };
+// Re-exported so the commission form and the Settings Defaults tab (#3231)
+// can never disagree on the "no pin" protocol value.
+export { RENDER_BACKEND_AUTO };
 
-// Render-backend pin (#3135) — the client mirror of the server's
-// CREATIVE_COMMISSION_IMAGE_MODES / _VIDEO_MODES. `auto` is the default and means
-// "no pin": the scheduled fire resolves the install-wide default exactly as it did
-// before the pin existed. `type: 'backend'` fields render as a mode picker plus a
-// conditional model picker (see CommissionConfigForm's RenderBackendSection),
-// mirroring the pipeline's VisualGenSettings UX; the generic field renderer in
-// GenerationSection skips them.
-// Re-exported from the shared lib so the commission form and the Settings
-// Defaults tab (#3231) can never disagree on the "no pin" protocol value.
-export { RENDER_TARGET_BACKEND_AUTO as RENDER_BACKEND_AUTO } from '../../lib/imageGenBackends';
-import { RENDER_TARGET_BACKEND_AUTO as RENDER_BACKEND_AUTO } from '../../lib/imageGenBackends';
-
-export const IMAGE_BACKEND_OPTIONS = [
-  [RENDER_BACKEND_AUTO, 'Auto (install default)'],
-  ['local', 'Local diffusion'],
-  ['codex', 'Codex'],
-  ['grok', 'Grok'],
-];
-
-export const VIDEO_BACKEND_OPTIONS = [
-  [RENDER_BACKEND_AUTO, 'Auto (install default)'],
-  ['local', 'Local (MLX)'],
-  ['grok', 'Grok'],
-];
-
-// `modelKind` names which media-model catalog the conditional model picker reads,
-// and `modelModes` lists the modes that HAVE a model knob — the cloud CLIs pick
-// their own model, so the picker only appears for local.
-const IMAGE_BACKEND_FIELD = {
-  key: 'imageMode', modelKey: 'imageModelId', label: 'Image backend', type: 'backend',
-  options: IMAGE_BACKEND_OPTIONS, modelKind: 'image', modelModes: ['local'],
-  modelLabel: 'Local image model',
+// Presentation-only metadata for each generation key: the server spec
+// (server/lib/creativeCommissionSpec.js, GENERATION_KEY_DEFS) owns every
+// enumerable VALUE, bound, and default — this map adds only the display label
+// and, for the two render-backend-pin keys, the conditional-model-picker
+// wiring. `type: 'backend'` fields render as a mode picker plus a conditional
+// model picker (see CommissionConfigForm's RenderBackendSection), mirroring
+// the pipeline's VisualGenSettings UX; the generic field renderer in
+// GenerationSection skips them. `modelKind` names which media-model catalog
+// the conditional picker reads, and `modelModes` lists the modes that HAVE a
+// model knob — the cloud CLIs pick their own model, so the picker only
+// appears for local.
+const FIELD_LABELS = {
+  quality: 'Quality',
+  aspectRatio: 'Aspect ratio',
+  targetDurationSeconds: 'Duration (sec)',
+  durationMode: 'Video length',
+  imageCount: 'Image count',
+  lengthSeconds: 'Length (sec)',
+  episodeCount: 'Episodes',
+  imageMode: 'Image backend',
+  videoMode: 'Video backend',
 };
-const VIDEO_BACKEND_FIELD = {
-  key: 'videoMode', modelKey: 'videoModelId', label: 'Video backend', type: 'backend',
-  options: VIDEO_BACKEND_OPTIONS, modelKind: 'video', modelModes: ['local'],
-  modelLabel: 'Local video model',
+const OPTION_LABELS = {
+  quality: { draft: 'Draft', standard: 'Standard', high: 'High' },
+  durationMode: { auto: 'Creative Director chooses', manual: 'Set a specific length' },
+};
+const BACKEND_FIELD_META = {
+  imageMode: { modelKey: 'imageModelId', modelKind: 'image', modelModes: ['local'], modelLabel: 'Local image model' },
+  videoMode: { modelKey: 'videoModelId', modelKind: 'video', modelModes: ['local'], modelLabel: 'Local video model' },
 };
 
-// Per-ability generation field descriptors — the client mirror of the server's
-// GENERATION_KEY_DEFS / ABILITY_GENERATION_SPEC (server/lib/creativeCommissionValidation.js).
-// The config form renders exactly these fields for the selected type. The server
-// module pulls `zod`, so the browser cannot import the spec until it moves to a
-// pure leaf (as the brief caps did, creativeBriefLimits.js); until then keep this
-// in sync with the server spec BY HAND when a key/bound/default changes;
-// commissionForm.test.js asserts only the
-// client-internal invariant (every field has a matching default), not server↔client
-// parity.
+// A render-backend mode's display label. Every real backend reads from the
+// shared MODE_LABELS (client/src/lib/imageGenModes.js) so a backend added
+// there (fal, reactor, agy, …) is labeled here automatically — the drift that
+// left the video/image backend pickers behind generationModes.js for months.
+const backendOptionLabel = (mode) => (mode === RENDER_BACKEND_AUTO ? 'Auto (install default)' : (MODE_LABELS[mode] || mode));
+
+// Build one field descriptor from a generation key's spec descriptor
+// (type/bounds/values) plus its presentation metadata above. `type: 'id'` keys
+// (imageModelId/videoModelId) never build their own field — they're the
+// model-id half of their backend field's `modelKey` — so callers only ever
+// list an ability's non-id keys below.
+function buildGenerationField(key) {
+  const def = GENERATION_KEY_DEFS[key];
+  const label = FIELD_LABELS[key] || key;
+  if (def.type === 'int') return { key, label, type: 'number', min: def.min, max: def.max };
+  const backend = BACKEND_FIELD_META[key];
+  if (backend) {
+    return {
+      key, label, type: 'backend', options: def.values.map((v) => [v, backendOptionLabel(v)]), ...backend,
+    };
+  }
+  return { key, label, type: 'select', options: def.values.map((v) => [v, OPTION_LABELS[key]?.[v] || v]) };
+}
+
+// Per-ability generation field descriptors, built from the server's
+// per-key spec (server/lib/creativeCommissionSpec.js) so a new backend enum
+// member or a bound change needs no edit here. The per-ability KEY LIST and
+// its display ORDER stay hand-declared — `durationMode` before
+// `targetDurationSeconds` so "how the length is chosen" reads before "the
+// length itself" (GenerationSection hides the latter in auto mode) — and the
+// required parity test (creativeCommissionSpec.parity.test.js) fails if this
+// ever drops a key the server ability actually carries.
 export const GENERATION_FIELDS_BY_ABILITY = {
-  video: [QUALITY_FIELD, ASPECT_FIELD, DURATION_MODE_FIELD, DURATION_FIELD, VIDEO_BACKEND_FIELD],
-  image: [QUALITY_FIELD, ASPECT_FIELD, { key: 'imageCount', label: 'Image count', type: 'number', min: 1, max: 6 }, IMAGE_BACKEND_FIELD],
-  music: [{ key: 'lengthSeconds', label: 'Length (sec)', type: 'number', min: 5, max: 600 }],
-  'music-video': [QUALITY_FIELD, ASPECT_FIELD, DURATION_MODE_FIELD, DURATION_FIELD, VIDEO_BACKEND_FIELD, IMAGE_BACKEND_FIELD],
-  series: [{ key: 'episodeCount', label: 'Episodes', type: 'number', min: 1, max: 6 }],
+  video: ['quality', 'aspectRatio', 'durationMode', 'targetDurationSeconds', 'videoMode'].map(buildGenerationField),
+  image: ['quality', 'aspectRatio', 'imageCount', 'imageMode'].map(buildGenerationField),
+  music: ['lengthSeconds'].map(buildGenerationField),
+  'music-video': ['quality', 'aspectRatio', 'durationMode', 'targetDurationSeconds', 'videoMode', 'imageMode'].map(buildGenerationField),
+  series: ['episodeCount'].map(buildGenerationField),
 };
 
-// Per-ability generation defaults (mirror of the server spec defaults). Used to
-// project a stored record into the form and to seed the fields when the user
-// switches output type.
-export const GENERATION_DEFAULTS_BY_ABILITY = {
-  video: { quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10, durationMode: 'auto', videoMode: RENDER_BACKEND_AUTO, videoModelId: null },
-  image: { quality: 'standard', aspectRatio: '16:9', imageCount: 1, imageMode: RENDER_BACKEND_AUTO, imageModelId: null },
-  music: { lengthSeconds: 30 },
-  'music-video': {
-    quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10, durationMode: 'auto',
-    videoMode: RENDER_BACKEND_AUTO, videoModelId: null, imageMode: RENDER_BACKEND_AUTO, imageModelId: null,
-  },
-  series: { episodeCount: 1 },
-};
+export const IMAGE_BACKEND_OPTIONS = GENERATION_FIELDS_BY_ABILITY.image.find((f) => f.key === 'imageMode').options;
+export const VIDEO_BACKEND_OPTIONS = GENERATION_FIELDS_BY_ABILITY.video.find((f) => f.key === 'videoMode').options;
+
+// Per-ability generation defaults for seeding a BRAND-NEW commission/form —
+// each key's spec `default` (#4494's `durationMode: 'auto'` product choice,
+// now declared once in GENERATION_KEY_DEFS instead of hand-copied here).
+// Projecting a REAL fetched record's own gaps is a different reading — see
+// generationToForm below, which prefers a key's `legacyAbsent` when the spec
+// declares one.
+export const GENERATION_DEFAULTS_BY_ABILITY = Object.fromEntries(
+  Object.entries(ABILITY_GENERATION_SPEC).map(([ability, spec]) => [
+    ability,
+    Object.fromEntries(spec.keys.map((k) => [k, GENERATION_KEY_DEFS[k].default])),
+  ]),
+);
 
 export const MUSIC_TASTE_DEFAULTS = Object.freeze({
   enabled: false,
@@ -139,16 +168,20 @@ function abilityOr(ability) {
   return GENERATION_DEFAULTS_BY_ABILITY[ability] ? ability : 'video';
 }
 
-// Project a stored generation object into the form for a given ability: fill each
-// of the ability's fields from the record, falling back to the default. Only the
+// Project a stored generation object into the form for a given ability: fill
+// each of the ability's fields from the record, falling back to the LEGACY-AWARE
+// default (ABILITY_GENERATION_SPEC's `defaults`, not GENERATION_DEFAULTS_BY_ABILITY)
+// — a key absent from a REAL record prefers its spec `legacyAbsent` reading over
+// the fresh-commission `default` (only `durationMode` differs today: an existing
+// record with no key means 'manual', matching abilityAdapters.js). Only the
 // ability's own keys appear, so switching types never carries a stale key.
 export function generationToForm(ability, generation) {
   const a = abilityOr(ability);
-  const defaults = GENERATION_DEFAULTS_BY_ABILITY[a];
+  const legacyDefaults = ABILITY_GENERATION_SPEC[a].defaults;
   const out = {};
-  for (const key of Object.keys(defaults)) {
+  for (const key of Object.keys(legacyDefaults)) {
     const v = generation?.[key];
-    out[key] = v === undefined || v === null ? defaults[key] : v;
+    out[key] = v === undefined || v === null ? legacyDefaults[key] : v;
   }
   return out;
 }
@@ -237,17 +270,17 @@ export function toForm(c) {
       timezone: c.schedule?.timezone || null,
     },
     // Per-ability generation (#2769): only the selected type's fields, filled
-    // from the record or the type's defaults.
-    generation: (() => {
-      const generation = generationToForm(c.targetAbility || 'video', c.generation);
-      // Records written before durationMode existed are legacy pinned-length
-      // commissions; only new blank forms default to Creative Director choice.
-      if ((c.targetAbility === 'video' || c.targetAbility === 'music-video' || !c.targetAbility)
-        && !Object.hasOwn(c.generation || {}, 'durationMode') && c.generation?.targetDurationSeconds != null) {
-        generation.durationMode = 'manual';
-      }
-      return generation;
-    })(),
+    // from the record or the type's defaults. A BLANK/new commission (no
+    // `generation` object at all — e.g. `blankForm()`'s `toForm({})`) seeds
+    // every key's fresh-commission default; a REAL record (however old)
+    // projects through generationToForm, which resolves an absent key to its
+    // spec `legacyAbsent` reading when the key has one — durationMode's is
+    // 'manual', so an existing record with no key still projects as a fixed
+    // length, matching abilityAdapters.js, while a brand-new commission seeds
+    // 'auto' (the #4494 product choice).
+    generation: c.generation == null
+      ? { ...GENERATION_DEFAULTS_BY_ABILITY[abilityOr(c.targetAbility || 'video')] }
+      : generationToForm(c.targetAbility || 'video', c.generation),
     // Which AI provider/model processes the commission's CD stages. Empty
     // providerId → the install's default AI Assignment.
     assignment: {

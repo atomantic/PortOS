@@ -213,6 +213,19 @@ describe('commissionForm helpers', () => {
       expect(toForm({ targetAbility: 'video', generation: { targetDurationSeconds: 20 } }).generation.durationMode).toBe('manual');
     });
 
+    it('generationToForm itself resolves an absent durationMode to its legacy reading', () => {
+      // Distinct from the toForm-level case above: this pins generationToForm's
+      // OWN contract (used directly by mergeGenerationForAbility on an ability
+      // switch too) — a regression that made it fall back to
+      // GENERATION_DEFAULTS_BY_ABILITY's plain 'auto' instead of the spec's
+      // legacyAbsent 'manual' would slip past a toForm-only test.
+      expect(generationToForm('video', {}).durationMode).toBe('manual');
+      expect(generationToForm('music-video', { quality: 'high' }).durationMode).toBe('manual');
+      // A key with no `legacyAbsent` (aspectRatio) is unaffected: it still falls
+      // back to the plain default either way.
+      expect(generationToForm('video', {}).aspectRatio).toBe('16:9');
+    });
+
     it('toPayload round-trips a non-video commission', () => {
       const form = toForm({ name: 'Daily Stills', targetAbility: 'image', brief: { intent: 'x' }, generation: { imageCount: 2 } });
       const payload = toPayload(form);
