@@ -189,7 +189,7 @@ import { loadState } from './cosState.js'
 
 import { readJSONFile } from '../lib/fileUtils.js'
 import { writeFile } from 'fs/promises'
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js'
+import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeOverrides, getActiveApps, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js'
 import { getLocalParts } from '../lib/timezone.js'
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun } from './eventScheduler.js'
@@ -2660,6 +2660,33 @@ describe('taskSchedule', () => {
         const upcoming = await getUpcomingTasks(50)
         const claim = upcoming.find(t => t.taskType === 'claim-issue')
         expect(claim.status).toBe('ready')
+      })
+    })
+
+    describe('getUpcomingTasks — per-app cron overrides', () => {
+      it('surfaces an enabled app cron boundary even when the global task is on-demand', async () => {
+        vi.useFakeTimers()
+        vi.setSystemTime(new Date('2026-01-01T16:00:00Z')) // 08:00 in the mocked America/Los_Angeles zone
+        const actual = await vi.importActual('./eventScheduler.js')
+        const actualTimezone = await vi.importActual('../lib/timezone.js')
+        parseCronToNextRun.mockImplementation(actual.parseCronToNextRun)
+        getLocalParts.mockImplementation(actualTimezone.getLocalParts)
+        getActiveApps.mockResolvedValueOnce([{ id: 'app-1', name: 'Acme' }])
+        isTaskTypeEnabledForApp.mockResolvedValueOnce(true)
+        getAppTaskTypeInterval.mockResolvedValueOnce('15 9 * * *')
+        getAppTaskTypeOverrides.mockResolvedValueOnce({
+          'release-check': { enabled: true, interval: '15 9 * * *' }
+        })
+        mockSchedule({
+          tasks: { 'release-check': { type: 'on-demand', enabled: true, runAfter: [] } }
+        })
+        const upcoming = await getUpcomingTasks(50)
+        const release = upcoming.find(t => t.taskType === 'release-check')
+
+        expect(release).toMatchObject({
+          status: 'scheduled',
+          eligibleAt: new Date('2026-01-01T17:15:00Z').getTime()
+        })
       })
     })
 

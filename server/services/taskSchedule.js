@@ -1449,20 +1449,57 @@ export async function getUpcomingTasks(limit = 10) {
   const now = Date.now();
   const upcoming = [];
   const featureEnabled = createFeatureGate();
+  // The improvement daemon queues per-app work, so its wake-up preview must
+  // include app-scoped cadence overrides. In particular, an app can opt into a
+  // cron expression while the global task remains on-demand; omitting that
+  // boundary leaves the hourly fallback as the only chance to notice the slot.
+  const activeApps = await getActiveApps().catch(() => []);
+  const activeAppOverrides = activeApps.length > 0
+    ? await mapWithConcurrency(activeApps, 8, (app) =>
+      getAppTaskTypeOverrides(app.id).catch(() => ({})))
+    : [];
 
   for (const [taskType, interval] of Object.entries(schedule.tasks)) {
     if (!interval.enabled) continue;
     if (!(await featureEnabled(interval))) continue;
     if (getTaskTypeInvocation(taskType).visibility === 'hidden') continue;
-    // On-demand tasks have no wall-clock position — unless they are perpetual,
-    // whose park/recheck boundary IS the schedule the daemon must wake on.
-    if (interval.type === INTERVAL_TYPES.ON_DEMAND && (!interval.perpetual || interval.autoStart === false)) continue;
 
     const check = await shouldRunTask(taskType, null, { featureEnabled });
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0 };
 
-    let eligibleAt = now;
-    let taskStatus = 'ready';
+    // `shouldRunTask(taskType, appId)` resolves the same effective cadence used
+    // by the queue path, including an app's raw cron override and its own last
+    // run. A due app makes the task ready; otherwise the soonest app boundary
+    // is the wake-up deadline. This also handles a globally on-demand task that
+    // has no global candidate but is cron-scheduled for one managed app.
+    const scheduledApps = activeApps.filter((app, index) => {
+      const override = activeAppOverrides[index]?.[taskType];
+      if (override?.enabled !== true) return false;
+      const decoded = decodeIntervalType(override.interval, { intervalMs: override.intervalMs });
+      return decoded.type === INTERVAL_TYPES.CRON && isCronExpression(decoded.cronExpression);
+    });
+    const appChecks = scheduledApps.length > 0
+      ? await mapWithConcurrency(scheduledApps, 8, (app) =>
+        shouldRunTask(taskType, app.id, { featureEnabled }).catch(() => null))
+      : [];
+    const appUpcoming = appChecks.reduce((soonest, appCheck) => {
+      if (!appCheck) return soonest;
+      if (appCheck.shouldRun) return { status: 'ready', eligibleAt: now };
+      const eligibleAt = Date.parse(appCheck.nextRunAt);
+      if (!Number.isFinite(eligibleAt) || eligibleAt <= now) return soonest;
+      if (!soonest || soonest.status !== 'scheduled' || eligibleAt < soonest.eligibleAt) {
+        return { status: 'scheduled', eligibleAt };
+      }
+      return soonest;
+    }, null);
+
+    // On-demand tasks have no wall-clock position — unless they are perpetual,
+    // whose park/recheck boundary IS the schedule the daemon must wake on, or
+    // an enabled managed app supplies a scheduled override.
+    if (interval.type === INTERVAL_TYPES.ON_DEMAND && (!interval.perpetual || interval.autoStart === false) && !appUpcoming) continue;
+
+    let eligibleAt = null;
+    let taskStatus = null;
 
     if (check.shouldRun) {
       eligibleAt = now;
@@ -1471,6 +1508,21 @@ export async function getUpcomingTasks(limit = 10) {
       eligibleAt = new Date(check.nextRunAt).getTime();
       taskStatus = 'scheduled';
     }
+
+    if (appUpcoming) {
+      if (appUpcoming.status === 'ready') {
+        taskStatus = 'ready';
+        eligibleAt = now;
+      } else if (taskStatus !== 'ready' && (eligibleAt === null || appUpcoming.eligibleAt < eligibleAt)) {
+        taskStatus = 'scheduled';
+        eligibleAt = appUpcoming.eligibleAt;
+      }
+    }
+
+    // No global or per-app wall-clock candidate (for example a plain
+    // on-demand task, or a task blocked by a weekday/dependency gate) has no
+    // place in an upcoming schedule preview.
+    if (!taskStatus) continue;
 
     // Perpetual tasks park per-app, so the global `check` above can't see the
     // recheck boundary — re-derive status/eligibility from the park records so

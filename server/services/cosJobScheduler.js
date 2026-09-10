@@ -466,8 +466,8 @@ export async function scheduleNextImprovementCheck() {
   const upcoming = await taskSchedule.getUpcomingTasks(50);
 
   // Default: check again in 1 hour if nothing scheduled
-  // Cap at 1 hour so per-app cron tasks (e.g. feature-ideas at 1am) are always checked
-  // on time — getUpcomingTasks only sees global tasks, not per-app schedules
+  // Cap at 1 hour as a fallback for work whose next boundary is not known;
+  // getUpcomingTasks also includes per-app cron overrides.
   const MAX_CHECK_INTERVAL = 60 * 60 * 1000;
   let delayMs = MAX_CHECK_INTERVAL;
   let description = 'Periodic improvement check (1h)';
