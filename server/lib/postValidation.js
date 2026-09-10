@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES } from './postDrillTypes.js';
+import { CACHEABLE_TYPES, COGNITIVE_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from './postDrillTypes.js';
 import { TOPIC_IDS } from './postTopics.js';
 import { HHMM_STRICT_RE } from './timezone.js';
 import { POST_LLM_MAX_SEMANTIC_CANDIDATES, postLlmEvaluationSchema } from './postLlmContracts.js';
@@ -99,13 +99,8 @@ const llmResponseSchema = z.object({
 const MATH_DRILL_TYPES = ['doubling-chain', 'serial-subtraction', 'multiplication', 'powers', 'estimation', 'applied-numeracy'];
 const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', 'wit-comeback', 'pun-wordplay', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist', 'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'];
 const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
-// Memory drills supported by the POST runner (client-side scoring with string
-// comparison) — trusted for score + schedule/mastery advancement on session
-// submit (issue #2099). Currently identical to MEMORY_DRILL_TYPES; kept as a
-// separate list (rather than aliasing MEMORY_DRILL_TYPES directly) so a FUTURE
-// memory drill type can ship generation-only, ahead of its scoring support,
-// without silently trusting a client-supplied score for it.
-const POST_SUPPORTED_MEMORY_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
+// POST_SUPPORTED_MEMORY_TYPES lives in ./postDrillTypes.js (a zod-free leaf,
+// re-exported by the client's meatspace/post/constants.js) — imported above.
 // Canonical set of coarse "module" tags a scored POST task/session can carry
 // (mental-math / llm-drills / cognitive drills / memory drills). Shared by the
 // session-submit schema (below) and sessionModules config so a typo'd module

@@ -1,19 +1,22 @@
 export const LLM_DRILL_TYPES = ['word-association', 'story-recall', 'verbal-fluency', 'wit-comeback', 'pun-wordplay', 'compound-chain', 'bridge-word', 'double-meaning', 'idiom-twist', 'what-if', 'alternative-uses', 'story-prompt', 'invention-pitch', 'reframe'];
-// Mirrors the server's POST_SUPPORTED_MEMORY_TYPES (server/lib/postValidation.js)
-// — all three memory drill types are now fully scored in a POST session (issue
+// All three memory drill types are now fully scored in a POST session (issue
 // #2099/#2116): usePostSession.finishDrill uses this to tag the result's
 // module as `memory` (not `mental-math`) and preserve memoryItemId so the
-// server's schedule/mastery advancement fires.
-export const MEMORY_DRILL_TYPES = ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'];
-// Deterministic cognitive drills (no LLM). Mirror the server's
-// COGNITIVE_DRILL_TYPES in server/lib/postDrillTypes.js (re-exported by
-// server/services/meatspacePostCognitive.js, which owns the generators).
-export const COGNITIVE_DRILL_TYPES = ['n-back', 'digit-span', 'stroop', 'schulte-table', 'mental-rotation', 'reaction-time', 'task-switching', 'go-no-go', 'flanker'];
+// server's schedule/mastery advancement fires. Re-exported from the server's
+// POST_SUPPORTED_MEMORY_TYPES (server/lib/postDrillTypes.js) under its
+// established client name.
+export { POST_SUPPORTED_MEMORY_TYPES as MEMORY_DRILL_TYPES } from '../../../../../server/lib/postDrillTypes.js';
+// Deterministic cognitive drills (no LLM), backed by generators in
+// server/services/meatspacePostCognitive.js.
+export { COGNITIVE_DRILL_TYPES } from '../../../../../server/lib/postDrillTypes.js';
 
-// Cognitive drills that have a progressive difficulty ladder. Mirror of the
-// COGNITIVE_LADDERS keys in server/lib/postProgression.js — reaction-time is the
-// one cognitive drill with no ladder, so its stored config always runs as-is.
-export const COGNITIVE_LADDER_TYPES = ['n-back', 'digit-span', 'schulte-table', 'mental-rotation', 'stroop', 'task-switching', 'go-no-go', 'flanker'];
+// Cognitive drills that have a progressive difficulty ladder — reaction-time is
+// the one cognitive drill with no ladder, so its stored config always runs
+// as-is. Re-exported from the COGNITIVE_LADDERS keys in
+// server/lib/postProgression.js. (Imported, not re-exported directly, because
+// cognitiveRungPending below reads it too.)
+import { COGNITIVE_LADDER_TYPES } from '../../../../../server/lib/postProgression.js';
+export { COGNITIVE_LADDER_TYPES };
 
 /**
  * Whether this drill's effective config is still UNKNOWN: a laddered drill left
@@ -441,24 +444,7 @@ export const getDifficultyColor = (difficulty) => {
   return 'bg-port-success/20 text-port-success';
 };
 
-// Balanced (signal-detection) accuracy for n-back questions, derived from only
-// `answered` + `correct` — the fields BOTH legacy stored sessions and pre-save
-// client results carry. `correct` has always been computed as
-// "(pressed ? match : no-match) === expected", so `isTarget = pressed === correct`
-// is an identity across old and new scorers; legacy raw `correct` flags must
-// NOT be averaged directly (a never-press run would still read ~70%). A missing
-// signal class counts as chance (0.5). Mirrors `nBackBalancedAccuracy` in
-// server/services/meatspacePost.js — keep the two in sync (issue #2094).
-export function nBackBalancedAccuracy(questions) {
-  let hits = 0, misses = 0, falseAlarms = 0, correctRejections = 0;
-  for (const q of Array.isArray(questions) ? questions : []) {
-    const pressed = q?.answered === 'match';
-    const isTarget = pressed === !!q?.correct;
-    if (isTarget) { if (pressed) hits += 1; else misses += 1; }
-    else if (pressed) falseAlarms += 1;
-    else correctRejections += 1;
-  }
-  const hitRate = hits + misses ? hits / (hits + misses) : null;
-  const crRate = correctRejections + falseAlarms ? correctRejections / (correctRejections + falseAlarms) : null;
-  return hitRate == null && crRate == null ? null : ((hitRate ?? 0.5) + (crRate ?? 0.5)) / 2;
-}
+// Balanced (signal-detection) accuracy for n-back questions (issue #2094).
+// Re-exported from the leaf both server/services/meatspacePost.js and this
+// file used to carry separate copies of.
+export { nBackBalancedAccuracy } from '../../../../../server/lib/postScoring.js';
