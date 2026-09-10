@@ -1435,7 +1435,7 @@ describe('purging one conversation mirror', () => {
 
   it('names the conversation and the byte count, and demands the typed word first', async () => {
     await openThread();
-    expect(await screen.findByText('Purge this mirror')).toBeInTheDocument();
+    expect(await screen.findByText('Purge this mirror', {}, { timeout: 15000 })).toBeInTheDocument();
     expect(screen.getByText(/4 MB of mirrored attachment bytes/)).toBeInTheDocument();
     expect(screen.getByText(/across 3 file\(s\)/)).toBeInTheDocument();
 

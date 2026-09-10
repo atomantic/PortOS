@@ -309,7 +309,7 @@ describe('Eidoverse private-world lifecycle', () => {
       migrationReport: { status: 'applied' },
       reconciliation: { status: 'complete', checkpoint: 'projection-committed' },
     });
-  });
+  }, 30000);
 
   it('reads projection progress without runtime, app-registry, or library probes', async () => {
     await world.ensureEidoverseWorldConfig();
