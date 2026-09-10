@@ -191,6 +191,13 @@ export const WINDOWS_CONTRACT_TESTS = [
 // documentation-only ones, where the alternative is reasoning per-scope about
 // what can reach it.
 export const ALWAYS_RUN_TESTS = [
+  // Doc-parity guards: each compares a .md next to it against source it reads
+  // rather than imports. The .md is documentation-only to the planner and the
+  // source has no import edge to the guard, so neither side of the comparison
+  // can select it — a docs-only PR that documented a removed endpoint would
+  // otherwise merge green.
+  'docs/api-doc.test.js',
+  'docs/deps-doc.test.js',
   'scripts/agent-instructions-files.test.js',
   // The union-merged catalogs are `.md` to the planner — documentation-only —
   // so a rebase that doubled a row would otherwise never be re-checked.
@@ -284,6 +291,9 @@ const RUNNER_ROOTS = {
     'scripts/',
     'lib/',
     'autofixer/',
+    // server/vitest.config.js globs ../docs/**/*.test.js for the doc-parity
+    // guards colocated with the documents they check.
+    'docs/',
   ],
   client: ['client/src/'],
 };

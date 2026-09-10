@@ -53,6 +53,11 @@ server job with those files selected. Two kinds of test qualify:
   file is always some *other* file the guard sees only as a path string. Left
   off the list they are structurally unselectable and can sit red on `main`
   while every PR reports green (issue #5055).
+- **Doc-parity guards** — `docs/api-doc.test.js` and `docs/deps-doc.test.js`
+  compare the `.md` beside them with source they read rather than import
+  (the route graph, the dependency manifests). The `.md` is documentation-only
+  to the planner and the source has no import edge to the guard, so a docs-only
+  PR is exactly the one that could document a removed endpoint and merge green.
 
 `scripts/repo-scan-guards.test.js` keeps the second half honest: it re-derives
 the scanner set from the tree and fails when a new scanner is added without
