@@ -30,6 +30,9 @@
  *   - `createTempDataRoot()` — returns `{ tempRoot }` allocated under os.tmpdir().
  *   - `mockNoPeers(actual?, overrides?)` — shared `instances.js` mock guard
  *     for record-creating tests that should never auto-subscribe to live peers.
+ *   - `mockTestIdentity(overrides?)` — shared `instanceIdentity.js` mock guard
+ *     with deterministic self-identity values (id/name), for suites that
+ *     double the federation identity leaf instead of the real data file.
  *   - `mockNoPeerSync(actual?, overrides?)` — shared `peerSync.js` mock guard
  *     that makes fire-and-forget record auto-subscribe a clean no-op in tests.
  *
@@ -165,14 +168,41 @@ export function makePathsProxy(actual, { dataRoot, extraOverrides = null, overri
  * record creation. In tests, that background path can outlive local fileUtils
  * mocks and read the real peer registry unless `getPeers` is explicitly
  * guarded. Pass the real module as `actual` when a suite needs the other
- * exports, and pass `overrides` for test-specific exports like getInstanceId.
+ * exports, and pass `overrides` for test-specific peer exports.
+ *
+ * Identity (`getInstanceId`, `UNKNOWN_INSTANCE_ID`, …) is NOT this helper's
+ * concern since #6836 split it into `services/instanceIdentity.js` — use
+ * `mockTestIdentity()` below for a suite that needs to double identity too.
  */
 export function mockNoPeers(actual = {}, overrides = {}) {
   return {
-    UNKNOWN_INSTANCE_ID: 'unknown',
-    getInstanceId: () => Promise.resolve('test-instance'),
     ...actual,
     getPeers: () => Promise.resolve([]),
+    ...overrides,
+  };
+}
+
+/**
+ * Build an `instanceIdentity.js` mock with deterministic test values.
+ *
+ * Sibling to `mockNoPeers()` — this install's federation identity moved to
+ * its own leaf module (#6836) so a caller that only needs an id read no
+ * longer statically loads the peer-orchestration closure. A suite that
+ * doubles `services/instances.js` AND relies on identity values from that
+ * double (directly, or via `mockNoPeers(actual, overrides)`'s old identity
+ * defaults) must add a sibling `vi.mock('.../instanceIdentity.js', () =>
+ * mockTestIdentity({ ...the identity overrides it used... }))` — see
+ * `server/AGENTS.md` "Narrowing an import must not step around a barrel a
+ * suite mocks."
+ */
+export function mockTestIdentity(overrides = {}) {
+  return {
+    UNKNOWN_INSTANCE_ID: 'unknown',
+    getInstanceId: () => Promise.resolve('test-instance'),
+    ensureInstanceId: () => Promise.resolve('test-instance'),
+    getSelf: () => Promise.resolve({ instanceId: 'test-instance', name: 'test-instance' }),
+    ensureSelf: () => Promise.resolve({ instanceId: 'test-instance', name: 'test-instance' }),
+    updateSelf: () => Promise.resolve({ instanceId: 'test-instance', name: 'test-instance' }),
     ...overrides,
   };
 }

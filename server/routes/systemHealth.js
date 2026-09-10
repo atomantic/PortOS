@@ -4,7 +4,7 @@ import { statfs } from 'fs/promises';
 import { listProcesses } from '../services/pm2.js';
 import * as apps from '../services/apps.js';
 import * as cos from '../services/cos.js';
-import { getSelf } from '../services/instances.js';
+import { getSelf } from '../services/instanceIdentity.js';
 import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';

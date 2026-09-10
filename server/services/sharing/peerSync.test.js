@@ -4,7 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 // We test peerSync.js by stubbing the external dependencies:
-//   - getPeers / getInstanceId from services/instances
+//   - getPeers from services/instances, getInstanceId from services/instanceIdentity
 //   - merge*FromSync + getUniverse + getSeries + issue lookup/list helpers
 //   - peerFetch (network)
 // All other logic (subscription store, asset manifest, diff, cursor advance)
@@ -13,17 +13,21 @@ import { tmpdir } from 'os';
 import { PATHS } from '../../lib/fileUtils.js';
 import { RECORD_KIND_SCHEMA_CATEGORIES, PORTOS_SCHEMA_VERSIONS, NON_RECORD_SCHEMA_CATEGORIES } from '../../lib/schemaVersions.js';
 
-// instances.js mock: aligns with mockNoPeers() contract (getPeers → [], getInstanceId
-// → 'test-instance' by default) while keeping vi.fn() wrappers so per-test
-// overrides via vi.mocked(getPeers).mockResolvedValue([...]) still work.
-// A plain mockNoPeers() call would return static functions that vi.mocked()
-// cannot spy on — so we construct vi.fn() variants here and match the same defaults.
+// instances.js / instanceIdentity.js mocks: align with mockNoPeers() /
+// mockTestIdentity() (#6836 split identity out of instances.js) while keeping
+// vi.fn() wrappers so per-test overrides via vi.mocked(getPeers)
+// .mockResolvedValue([...]) still work. A plain mockNoPeers()/mockTestIdentity()
+// call would return static functions that vi.mocked() cannot spy on — so we
+// construct vi.fn() variants here and match the same defaults.
 vi.mock('../instances.js', () => ({
-  UNKNOWN_INSTANCE_ID: 'unknown',
   DEFAULT_SYNC_CATEGORIES: {},
-  getInstanceId: vi.fn().mockResolvedValue('test-instance'),
   getPeers: vi.fn().mockResolvedValue([]),
   enqueueReciprocalSync: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
+vi.mock('../instanceIdentity.js', () => ({
+  UNKNOWN_INSTANCE_ID: 'unknown',
+  getInstanceId: vi.fn().mockResolvedValue('test-instance'),
 }));
 
 vi.mock('../universeBuilder.js', async () => ({
@@ -225,7 +229,8 @@ import {
   __drainForTests,
 } from './peerSync.js';
 
-import { getInstanceId, getPeers } from '../instances.js';
+import { getPeers } from '../instances.js';
+import { getInstanceId } from '../instanceIdentity.js';
 import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeBuilder.js';
 import { getSeries, mergeSeriesFromSync, listSeries } from '../pipeline/series.js';
 import { getIssue, listAllIssues, listIssues, listIssuesForSeries, mergeIssuesFromSync } from '../pipeline/issues.js';

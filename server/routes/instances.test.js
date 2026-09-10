@@ -15,6 +15,13 @@ vi.mock('../services/instances.js', () => ({
   sanitizePeerForClient: vi.fn((peer) => peer),
   getAssignableInstances: vi.fn(),
 }));
+// This suite's routes/instances.js import pulls getSelf/updateSelf from the
+// identity leaf (#6836) — double it too so an untested route (e.g. GET /
+// self-view) can never fall through to a real data/instances.json read.
+vi.mock('../services/instanceIdentity.js', () => ({
+  getSelf: vi.fn(),
+  updateSelf: vi.fn(),
+}));
 vi.mock('../services/sharing/peerSync.js', () => ({
   getFullSyncCoverageForPeer: vi.fn(),
 }));

@@ -38,7 +38,7 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { findPeerById, peerAllowsOutbound, peerOutboundEligible, peerAllowsCategoryPull, peerHasCategory } from './peerSyncShared.js';
 import { getSettings } from '../settings.js';
-import { UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 
 // Lower-cased because Node/Express normalize incoming header names. The
 // outbound spelling (`X-PortOS-Instance-Id`) lives in lib/peerHttpClient.js.

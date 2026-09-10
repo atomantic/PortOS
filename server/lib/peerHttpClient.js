@@ -34,17 +34,19 @@ export function peerAuthHeaders(peer) {
 }
 
 // Our own federation instance id, memoized after the first successful read.
-// Resolved through a DYNAMIC import because `services/instances.js` imports
-// this module — a static import back would close an evaluation-order cycle.
-// A failed/absent identity yields no header at all rather than the
+// Resolved through a dynamic import of the identity leaf (#6836): harmless to
+// static-import now (services/instanceIdentity.js is a leaf with no edge back
+// to this module — the old cycle ran through services/instances.js, which
+// still imports peerFetch), kept lazy here to match this file's peer-registry
+// call shape. A failed/absent identity yields no header at all rather than the
 // `UNKNOWN_INSTANCE_ID` sentinel, so a receiver sees "unidentified" instead of
 // a bogus id it would then fail to resolve in its peer registry.
 let cachedSelfInstanceId = null;
 async function selfInstanceHeader() {
   if (!cachedSelfInstanceId) {
-    const instances = await import('../services/instances.js').catch(() => null);
-    const id = await instances?.getInstanceId?.().catch(() => null);
-    if (typeof id === 'string' && id && id !== instances?.UNKNOWN_INSTANCE_ID) cachedSelfInstanceId = id;
+    const instanceIdentity = await import('../services/instanceIdentity.js').catch(() => null);
+    const id = await instanceIdentity?.getInstanceId?.().catch(() => null);
+    if (typeof id === 'string' && id && id !== instanceIdentity?.UNKNOWN_INSTANCE_ID) cachedSelfInstanceId = id;
   }
   return cachedSelfInstanceId ? { 'X-PortOS-Instance-Id': cachedSelfInstanceId } : {};
 }

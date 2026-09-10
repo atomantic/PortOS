@@ -3,7 +3,8 @@ import express from 'express';
 import { once } from 'node:events';
 
 const mocks = vi.hoisted(() => ({ peers: [], feature: true, protocol: true, connections: [], admission: vi.fn() }));
-vi.mock('./instances.js', () => ({ getPeers: async () => mocks.peers, getInstanceId: async () => 'origin-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
+vi.mock('./instances.js', () => ({ getPeers: async () => mocks.peers }));
+vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'origin-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./instanceFeatures.js', () => ({ getInstanceFeatures: async () => ({ features: [{ id: 'eidoverse', enabled: mocks.feature }] }) }));
 vi.mock('./eidoverseHost.js', () => ({ ensureEidoverseHost: async () => ({ protocol: 'http', port: 5563, running: true }) }));
 vi.mock('./eidoverseWorld.js', () => ({ supportsEidoverseGuestEntry: async () => mocks.protocol, getEidoverseWorldStatus: async () => ({ setup: { installed: true, runtimeStatus: 'online', worldDataReady: true }, cos: { enabled: true } }), admitEidoverseGuest: (...args) => mocks.admission(...args) }));

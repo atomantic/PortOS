@@ -82,7 +82,7 @@ async function resolveChoices(project) {
 
 export async function getVideoExecutionPreview(projectId) {
   const { getProject } = await import('./local.js');
-  const { getInstanceId } = await import('../instances.js');
+  const { getInstanceId } = await import('../instanceIdentity.js');
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const owner = await getInstanceId();
@@ -115,7 +115,7 @@ export async function getVideoExecutionPreview(projectId) {
 
 async function ownedMutation(projectId, mutate) {
   const { mutateVideoProject } = await import('./local.js');
-  const { getInstanceId } = await import('../instances.js');
+  const { getInstanceId } = await import('../instanceIdentity.js');
   const owner = await getInstanceId();
   return mutateVideoProject(projectId, project => { assertVideoOwner(project, owner); return mutate(project); });
 }
@@ -244,7 +244,7 @@ export async function settleVideoAttempt(projectId, attemptId, patch) {
 /** Checked at the worker boundary, after the queue wait and immediately before provider work. */
 export async function assertVideoAttemptDispatch(projectId, attemptId, { jobId } = {}) {
   const { getProject } = await import('./local.js');
-  const { getInstanceId } = await import('../instances.js');
+  const { getInstanceId } = await import('../instanceIdentity.js');
   const project = await getProject(projectId);
   assertVideoOwner(project, await getInstanceId());
   const execution = project.videoExecution;

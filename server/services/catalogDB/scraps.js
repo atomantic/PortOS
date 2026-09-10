@@ -8,7 +8,7 @@
 
 import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';
 import { chunkRawText } from '../../lib/catalogChunking.js';
-import { getInstanceId } from '../instances.js';
+import { getInstanceId } from '../instanceIdentity.js';
 import { newScrapId, rowToScrap } from './shared.js';
 
 // `{ client }` is optional — when supplied, the INSERT runs on the caller's

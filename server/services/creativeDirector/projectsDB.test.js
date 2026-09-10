@@ -1,4 +1,4 @@
-vi.mock('../instances.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
+vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
 /**
  * Postgres-backed round-trip for the Creative Director DB store.
  *

@@ -20,7 +20,7 @@ import {
   buildPortosMeta,
   formatVersionGap,
 } from '../../lib/schemaVersions.js';
-import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { getUniverse } from '../universeBuilder.js';
 import { getSeries } from '../pipeline/series.js';
 import { listIssuesForSeries } from '../pipeline/issues.js';

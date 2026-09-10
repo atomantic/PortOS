@@ -2,7 +2,7 @@ import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { makePathsProxy, mockNoPeers, mockNoPeerSync } from '../../lib/mockPathsDataRoot.js';
+import { makePathsProxy, mockNoPeers, mockTestIdentity, mockNoPeerSync } from '../../lib/mockPathsDataRoot.js';
 
 const tempRoot = mkdtempSync(join(tmpdir(), 'sharing-state-concurrency-'));
 const bucketPath = join(tempRoot, 'bucket');
@@ -10,8 +10,9 @@ const exportRecord = vi.fn();
 vi.mock('../../lib/fileUtils.js', async () =>
   makePathsProxy(await vi.importActual('../../lib/fileUtils.js'), { dataRoot: tempRoot }));
 vi.mock('./exporter.js', () => ({ exportSeries: exportRecord, exportUniverse: exportRecord }));
-vi.mock('../instances.js', () => mockNoPeers({}, {
-  getInstanceId: async () => 'local-instance', UNKNOWN_INSTANCE_ID: 'unknown',
+vi.mock('../instances.js', () => mockNoPeers());
+vi.mock('../instanceIdentity.js', () => mockTestIdentity({
+  getInstanceId: async () => 'local-instance',
 }));
 vi.mock('./peerSync.js', () => mockNoPeerSync());
 vi.mock('../mediaJobQueue/index.js', () => ({ getJob: () => null }));

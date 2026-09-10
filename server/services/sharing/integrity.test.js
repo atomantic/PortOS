@@ -13,9 +13,13 @@ vi.mock('../../lib/peerUrl.js', async () => ({
 
 // Mock instances.js — peer list is controlled per test.
 vi.mock('../instances.js', async () => ({
+  getPeers: vi.fn(),
+}));
+
+// Mock instanceIdentity.js — deterministic local id for manifest assertions.
+vi.mock('../instanceIdentity.js', async () => ({
   UNKNOWN_INSTANCE_ID: 'unknown',
   getInstanceId: vi.fn().mockResolvedValue('local-instance'),
-  getPeers: vi.fn(),
 }));
 
 // Mock peerSync.js — we test integrity.js logic, not asset hashing.

@@ -9,13 +9,13 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 // peerUsage resolves this machine's identity through a dynamic import of
-// instances.js (kept off dataSync's module graph); the digest itself is
-// whatever usage.js currently holds.
+// instanceIdentity.js (#6836; kept off dataSync's module graph); the digest
+// itself is whatever usage.js currently holds.
 const self = { instanceId: 'inst-self', name: 'Workshop' };
 // importActual so UNKNOWN_INSTANCE_ID stays the REAL sentinel — a hand-written
 // copy here would let the real one drift and silently stop being filtered.
-vi.mock('./instances.js', async () => ({
-  ...(await vi.importActual('./instances.js')),
+vi.mock('./instanceIdentity.js', async () => ({
+  ...(await vi.importActual('./instanceIdentity.js')),
   getSelf: vi.fn(async () => self),
 }));
 

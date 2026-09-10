@@ -3,7 +3,7 @@ import express from 'express';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
 import { enqueueJob } from '../../services/mediaJobQueue/index.js';
-import { mockNoPeers, mockNoPeerSync } from '../../lib/mockPathsDataRoot.js';
+import { mockNoPeers, mockTestIdentity, mockNoPeerSync } from '../../lib/mockPathsDataRoot.js';
 import * as canonSvc from '../../services/universeCanon.js';
 
 const fileStore = new Map();
@@ -95,6 +95,10 @@ vi.mock('../../services/universeStyleReference.js', () => ({
 
 // Both mocks needed: vitest.setup.js's global `instances.js` mock uses importOriginal, which leaves the per-file `peerSync.js` mock unable to suppress the createUniverse dynamic-import hoist error alone.
 vi.mock('../../services/instances.js', () => mockNoPeers());
+// Deterministic identity (#6836) — also keeps the real instanceIdentity.js
+// module (whose dataPath() call this file's exhaustive fileUtils mock can't
+// serve) from ever loading in this suite's route graph.
+vi.mock('../../services/instanceIdentity.js', () => mockTestIdentity());
 vi.mock('../../services/sharing/peerSync.js', () => mockNoPeerSync());
 
 let uuidCounter = 0;

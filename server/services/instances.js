@@ -1,15 +1,16 @@
 /**
  * Instances Service
  *
- * Manages PortOS federation — self identity, peer registration, health probing, and query proxying.
+ * Manages PortOS peer orchestration — peer registration, health probing,
+ * query proxying, and reciprocal sync. This install's own federation identity
+ * (instanceId/name) and the data/instances.json file I/O + mutex live in
+ * services/instanceIdentity.js; this module is a consumer of that leaf.
  * Data persists to data/instances.json.
  */
 
-import os from 'os';
 import net from 'net';
 import crypto from 'crypto';
-import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
-import { createMutex } from '../lib/asyncMutex.js';
+import { loadData, withData, UNKNOWN_INSTANCE_ID, getInstanceId, getSelf } from './instanceIdentity.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { instanceEvents } from './instanceEvents.js';
@@ -32,7 +33,6 @@ import {
   formatProbeDiagnosticLog,
 } from '../lib/peerProbeDiagnostics.js';
 
-const INSTANCES_FILE = dataPath('instances.json');
 const PROBE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 30000;
 const INITIAL_PROBE_DELAY_MS = 2000;
@@ -40,14 +40,6 @@ const INITIAL_PROBE_DELAY_MS = 2000;
 // Tailscale on this cadence and start polling the moment it comes up — so the
 // user just has to connect Tailscale, no manual "sync now" required.
 const TAILSCALE_RECHECK_MS = 60_000;
-
-// Sentinel returned by getInstanceId() and stamped onto sender/peer fields when
-// the local identity hasn't been initialized yet. Every consumer that fans
-// instance-keyed state out to peers (sharing/annotationsSync.flushAll,
-// mediaAnnotations.mergePeerAnnotations, manifest builders) must refuse this
-// value — without that guard, every uninitialized peer would collide in the
-// same bucket and clobber each other on merge.
-export const UNKNOWN_INSTANCE_ID = 'unknown';
 
 // Backoff tiers for consecutive probe failures (in ms)
 // 30s → 1m → 5m → 15m → 1h → 24h
@@ -60,7 +52,6 @@ const BACKOFF_TIERS_MS = [
   86_400_000   // tier 5: 24 hours (max)
 ];
 
-const withLock = createMutex();
 let pollTimer = null;
 // Set while we're waiting for Tailscale to connect before starting the real
 // probe loop (see startPolling). Kept separate from pollTimer so stopPolling can
@@ -177,87 +168,6 @@ export function sanitizePeerForClient(peer) {
   return { ...safePeer, auth, syncCategories: resolveEffectiveCategories(peer, { masterSwitch: false }) };
 }
 
-// Default data shape
-const DEFAULT_DATA = {
-  self: null,
-  peers: []
-};
-
-// --- File I/O ---
-
-// STRICT (#4115): every mutation runs through `withData`, which writes whatever
-// this read returned straight back. Swallowing an unreadable instances.json into
-// DEFAULT_DATA therefore hands `ensureSelf` an identity-less record — it mints a
-// BRAND-NEW instanceId and `saveData` persists it over the real file, rotating
-// this node's federation identity and wiping every peer. ENOENT (never
-// federated) stays the trustworthy first-run empty.
-async function loadData() {
-  return await readJSONFile(INSTANCES_FILE, DEFAULT_DATA, { strict: true });
-}
-
-async function saveData(data) {
-  await ensureDir(PATHS.data);
-  await atomicWrite(INSTANCES_FILE, data);
-}
-
-async function withData(fn) {
-  return withLock(async () => {
-    const data = await loadData();
-    const result = await fn(data);
-    await saveData(data);
-    return result;
-  });
-}
-
-// --- Self Identity ---
-
-export async function ensureSelf() {
-  return withData(async (data) => {
-    if (!data.self) {
-      data.self = {
-        instanceId: crypto.randomUUID(),
-        name: os.hostname()
-      };
-      console.log(`🌐 Instance identity created: ${data.self.name} (${data.self.instanceId})`);
-    }
-    return data.self;
-  });
-}
-
-export async function getSelf() {
-  const data = await loadData();
-  return data.self;
-}
-
-let cachedInstanceId = null;
-export async function getInstanceId() {
-  if (!cachedInstanceId) {
-    const id = (await getSelf())?.instanceId;
-    if (id) cachedInstanceId = id;
-    return id ?? UNKNOWN_INSTANCE_ID;
-  }
-  return cachedInstanceId;
-}
-
-/**
- * Resolve this machine's real federation instance id, creating the local
- * identity on the cold path. `getInstanceId()` returns the
- * `UNKNOWN_INSTANCE_ID` sentinel (and never throws) before the identity exists
- * — which can happen on a boot-time always-on auto-start that runs before the
- * startup chain's `ensureSelf()` does. Callers that stamp the id onto durable
- * records (agent provenance, worktree metadata) or compare it for cross-machine
- * task claims (#1563) must never persist/compare the sentinel, so this creates
- * (or loads) the real identity before returning. The warm path is the cheap
- * cached `getInstanceId()` read; `ensureSelf()` only runs the once.
- */
-export async function ensureInstanceId() {
-  let instanceId = await getInstanceId();
-  if (instanceId === UNKNOWN_INSTANCE_ID) {
-    instanceId = (await ensureSelf())?.instanceId || instanceId;
-  }
-  return instanceId;
-}
-
 /**
  * The instances this install can direct a CoS task at (#4520): this machine
  * plus every peer that can actually RECEIVE the task. Two filters, both of
@@ -286,23 +196,6 @@ export async function getAssignableInstances() {
     assignable.push({ instanceId: peer.instanceId, name: peer.name || peer.address || peer.instanceId, isSelf: false });
   }
   return assignable;
-}
-
-export async function updateSelf(name, { defaultPeerFullSync } = {}) {
-  return withData(async (data) => {
-    if (!data.self) return null;
-    if (typeof name === 'string' && name.trim()) {
-      data.self.name = name.trim();
-      console.log(`🌐 Instance name updated: ${data.self.name}`);
-    }
-    // The default full-sync ("mirror everything") mode applied to NEW peers as
-    // they're added. Existing peers are untouched — this only seeds addPeer.
-    if (typeof defaultPeerFullSync === 'boolean') {
-      data.self.defaultPeerFullSync = defaultPeerFullSync;
-      console.log(`🌐 New-peer full-sync default: ${defaultPeerFullSync ? 'on' : 'off'}`);
-    }
-    return data.self;
-  });
 }
 
 // --- Peer CRUD ---

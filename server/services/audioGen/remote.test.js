@@ -31,6 +31,9 @@ vi.mock('../federatedMediaConsumer.js', () => ({
 
 vi.mock('../instances.js', () => ({
   getPeers: vi.fn(async () => federation.peers),
+}));
+
+vi.mock('../instanceIdentity.js', () => ({
   // Used to derive the consumer's own half of a content-addressed asset id, so it
   // can ask the peer whether bytes are already staged before re-sending them.
   getInstanceId: vi.fn(async () => 'consumer-instance'),

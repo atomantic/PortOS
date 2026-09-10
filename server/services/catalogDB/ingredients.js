@@ -13,7 +13,7 @@ import {
   currentPayloadSchemaVersion,
   defaultTagsForType,
 } from '../../lib/catalogTypes.js';
-import { getInstanceId } from '../instances.js';
+import { getInstanceId } from '../instanceIdentity.js';
 import {
   newIngredientId,
   newRevisionId,

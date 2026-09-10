@@ -18,7 +18,7 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { eidoverseLabelCapabilities, normalizeEidoverseLabelAliases } from '../lib/eidoverseWorldLabels.js';
 import { canonicalStringify } from '../lib/objects.js';
-import { getSelf, ensureSelf, getInstanceId } from './instances.js';
+import { getSelf, ensureSelf, getInstanceId } from './instanceIdentity.js';
 import { getInstanceFeatures } from './instanceFeatures.js';
 import { getEidoverseStatus, EIDOVERSE_PORT } from './eidoverse.js';
 import { getCurrentVersion } from './updateChecker.js';

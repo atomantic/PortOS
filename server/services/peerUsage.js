@@ -141,13 +141,15 @@ function sanitizeDigest(raw) {
 const withLock = createMutex();
 
 /**
- * This machine's federation identity. Dynamically imported so `dataSync` →
- * `peerUsage` doesn't drag `services/instances.js` (peer socket relay,
- * federated-media consumer, tailscale) into dataSync's module-load path — the
- * same reason dataSync defers `sharing/peerSync.js`.
+ * This machine's federation identity, read from the identity leaf
+ * (services/instanceIdentity.js, #6836) rather than services/instances.js —
+ * that module still drags the peer socket relay / federated-media consumer /
+ * tailscale into dataSync's module-load path, the same reason dataSync defers
+ * `sharing/peerSync.js`. Kept as a dynamic import to match that call shape,
+ * though the leaf itself would no longer need the deferral.
  */
 async function readSelfIdentity() {
-  const { getSelf, UNKNOWN_INSTANCE_ID } = await import('./instances.js');
+  const { getSelf, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
   const self = await getSelf().catch(() => null);
   const instanceId = isNonEmptyStr(self?.instanceId) && self.instanceId !== UNKNOWN_INSTANCE_ID
     ? self.instanceId

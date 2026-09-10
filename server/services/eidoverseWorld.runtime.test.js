@@ -49,10 +49,13 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
 });
 
 vi.mock('./instances.js', () => ({
+  getPeers: vi.fn(async () => []),
+}));
+
+vi.mock('./instanceIdentity.js', () => ({
   getSelf: vi.fn(async () => mocks.self),
   ensureSelf: vi.fn(async () => mocks.self),
   getInstanceId: vi.fn(async () => mocks.self?.instanceId ?? 'unknown-instance'),
-  getPeers: vi.fn(async () => []),
 }));
 
 vi.mock('./apps.js', () => ({

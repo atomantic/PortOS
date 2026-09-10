@@ -23,7 +23,7 @@ import { isPlainObject } from '../../lib/objects.js';
 import { SHARING_SCHEMA_VERSION, getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
 import { universeCollectionNameFor, seriesCollectionNameFor } from '../mediaCollections.js';
-import { UNKNOWN_INSTANCE_ID } from '../instances.js';
+import { UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 
 export const MANIFEST_KIND = Object.freeze(['series', 'universe', 'media', 'media-annotations']);
 

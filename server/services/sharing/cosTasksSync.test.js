@@ -10,11 +10,14 @@ import { createHash } from 'crypto';
 // cosHistorySync.test.js does, purely so importing peerSync.js stays offline.
 
 vi.mock('../instances.js', () => ({
-  UNKNOWN_INSTANCE_ID: 'unknown',
   DEFAULT_SYNC_CATEGORIES: {},
-  getInstanceId: vi.fn().mockResolvedValue('test-instance'),
   getPeers: vi.fn().mockResolvedValue([]),
   enqueueReciprocalSync: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
+vi.mock('../instanceIdentity.js', () => ({
+  UNKNOWN_INSTANCE_ID: 'unknown',
+  getInstanceId: vi.fn().mockResolvedValue('test-instance'),
 }));
 vi.mock('../universeBuilder.js', async () => ({ getUniverse: vi.fn(), mergeUniversesFromSync: vi.fn(), listUniverses: vi.fn() }));
 vi.mock('../pipeline/series.js', async () => ({ getSeries: vi.fn(), mergeSeriesFromSync: vi.fn(), listSeries: vi.fn() }));

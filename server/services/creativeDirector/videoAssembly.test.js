@@ -17,7 +17,7 @@ vi.mock('./local.js', () => ({
   mutateVideoProject: async (_id, mutate) => { const outcome = mutate(structuredClone(state.project)); if (!outcome.skipPersist) state.project = outcome.project; return outcome; },
 }));
 vi.mock('../videoGen/local.js', () => ({ loadHistory: async () => state.history, mutateVideoHistory: async mutate => { state.history = mutate(state.history); return state.history; } }));
-vi.mock('../instances.js', () => ({ getInstanceId: async () => 'example-owner' }));
+vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'example-owner' }));
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: async () => {} }));
 vi.mock('../mediaCollections.js', () => ({ addItem: async (_id, item) => { state.collection.push(item); } }));
 vi.mock('../tracks/index.js', () => ({ getTrack: async id => state.tracks.find(track => track.id === id) }));

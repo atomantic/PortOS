@@ -119,7 +119,7 @@ vi.mock('./agentErrorAnalysis.js', () => ({
   analyzeAgentFailure: vi.fn().mockReturnValue({ category: 'startup-failure', actionable: false }),
 }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./instances.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
+vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
 vi.mock('./toolStateMachine.js', () => ({
   createToolExecution: vi.fn(() => ({ id: 'exec-1' })),
   startExecution: vi.fn(),

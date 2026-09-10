@@ -8,6 +8,9 @@ vi.mock('./instances.js', async () => ({
   ...(await vi.importActual('./instances.js')),
   getPeers: vi.fn(),
   updatePeer: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('./instanceIdentity.js', () => ({
+  UNKNOWN_INSTANCE_ID: 'unknown',
   // forPeer scoping resolves our own instanceId; the orchestrator catches a
   // throw/UNKNOWN and just omits the query param, so the default mock returns
   // a stable id to exercise the scoped path.
@@ -323,9 +326,9 @@ describe('syncOrchestrator', () => {
 
     it('omits forPeer when our instanceId is UNKNOWN (older/uninitialized install)', async () => {
       const dataSync = await import('./dataSync.js');
-      const instances = await import('./instances.js');
+      const instanceIdentity = await import('./instanceIdentity.js');
       dataSync.getSupportedCategories.mockReturnValue(['universe', 'character']);
-      instances.getInstanceId.mockResolvedValueOnce('unknown'); // === UNKNOWN_INSTANCE_ID
+      instanceIdentity.getInstanceId.mockResolvedValueOnce('unknown'); // === UNKNOWN_INSTANCE_ID
       const peerWithCats = { ...mockPeer, syncCategories: { universe: true, character: true } };
       mockFetch.mockResolvedValue({ ok: true, json: async () => ({ checksum: 'x', data: null }) });
       await syncWithPeer(peerWithCats);

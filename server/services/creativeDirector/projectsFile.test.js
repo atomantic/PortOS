@@ -1,4 +1,4 @@
-vi.mock('../instances.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
+vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'example-owner'), getInstanceId: vi.fn(async () => 'example-owner') }));
 /**
  * Creative Director file-backend federation merge (#1564) — soft-delete,
  * LWW merge, tombstone prune, and the conflict-journal + base-hash wiring.

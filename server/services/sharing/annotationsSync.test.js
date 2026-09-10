@@ -32,7 +32,7 @@ vi.mock('./buckets.js', () => ({
   listBuckets: vi.fn(async () => []),
 }));
 
-vi.mock('../instances.js', () => ({
+vi.mock('../instanceIdentity.js', () => ({
   getInstanceId: vi.fn(async () => 'local-instance'),
   UNKNOWN_INSTANCE_ID: 'unknown',
 }));

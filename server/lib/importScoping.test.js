@@ -25,7 +25,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { dirname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { staticImportClosure, staticImportSpecifiers } from './staticImportGraph.js';
 
@@ -78,6 +78,16 @@ const NARROWED = [
     'needs only the pure pipelineStages.js identity leaf'],
   ['services/cosTaskIntake.js', 'lib/validation.js',
     'needs SWARM_COUNT_* and the reviewer normalizers, which cosValidation.js / reviewerConfig.js declare'],
+  ['services/brainStorage.js', 'services/instances.js',
+    'needs getInstanceId, which instanceIdentity.js declares'],
+  ['services/memoryDB.js', 'services/instances.js',
+    'needs getInstanceId, which instanceIdentity.js declares'],
+  ['services/worktreeManager.js', 'services/instances.js',
+    'needs getInstanceId, which instanceIdentity.js declares'],
+  ['services/catalogDB/ingredients.js', 'services/instances.js',
+    'needs getInstanceId, which instanceIdentity.js declares'],
+  ['routes/systemHealth.js', 'services/instances.js',
+    'needs getInstanceId, which instanceIdentity.js declares'],
 ];
 
 describe('narrowed imports stay narrow (#6009)', () => {
@@ -101,6 +111,7 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('lib/llmRoutePin.js', 'lib/textUtils.js')).toBe(true);
     expect(reaches('lib/slashdoInvocation.js', 'lib/providerVendors.js')).toBe(true);
     expect(reaches('services/voice/tools/pipeline.js', 'lib/pipelineStages.js')).toBe(true);
+    expect(reaches('services/instances.js', 'services/instanceIdentity.js')).toBe(true);
   });
 
   // And a control on the other side: the barrels themselves still reach what
@@ -130,6 +141,35 @@ describe('Tailcat shared owners stay independent of forwarding (#6570)', () => {
     }
     expect(reaches('services/tailcatRuntime.js', 'lib/tailcatVersion.js')).toBe(true);
     expect(reaches('services/tailcatPeer.js', 'services/instances.js')).toBe(true);
+  });
+});
+
+// This install's federation identity moved out of services/instances.js into
+// its own leaf (#6836) so a one-line id read no longer statically loads the
+// peer-orchestration closure — the Tailscale status parser, the
+// federated-media probe, and the socket relay — that instances.js pulls in.
+describe('instance identity stays a leaf (#6836)', () => {
+  it('reaches no server/services/* module besides itself', () => {
+    const closure = staticImportClosure(abs('services/instanceIdentity.js')).files;
+    const servicesLeaks = [...closure]
+      .filter((file) => file !== abs('services/instanceIdentity.js'))
+      .filter((file) => relative(SERVER_DIR, file).startsWith(`services${sep}`));
+    expect(servicesLeaks, `instanceIdentity.js must stay a leaf — also reaches: ${servicesLeaks.map((f) => relative(SERVER_DIR, f)).join(', ')}`).toEqual([]);
+  });
+
+  it('reaches none of the peer-orchestration modules the pre-split id read used to drag in', () => {
+    const closure = staticImportClosure(abs('services/instanceIdentity.js')).files;
+    expect(closure.has(abs('lib/tailscale.js'))).toBe(false);
+    expect(closure.has(abs('lib/peerHttpClient.js'))).toBe(false);
+    expect(closure.has(abs('services/peerSocketRelay.js'))).toBe(false);
+    expect(closure.has(abs('services/federatedMediaConsumer.js'))).toBe(false);
+  });
+
+  // Positive control: without this, a broken resolver could make the leaf
+  // closure look empty and the negatives above would pass vacuously.
+  it('still reaches the file I/O + mutex helpers it declares', () => {
+    expect(reaches('services/instanceIdentity.js', 'lib/fileUtils.js')).toBe(true);
+    expect(reaches('services/instanceIdentity.js', 'lib/asyncMutex.js')).toBe(true);
   });
 });
 
@@ -340,7 +380,18 @@ describe('deferred imports stay deferred (#6156)', () => {
 // `validation.js`'s flat re-export, per the #6617 note above), so the new leaf
 // contributes +1 to each of those ~230 closures and pulls in nothing new.
 // Measured against current main: 103,076 -> 103,308. Restore the ~1.5k allowance.
-const MAX_STATIC_INSTANTIATIONS = 104808;
+//
+// #6836 is the opposite shape — a DECREASE, not a new leaf's small additive
+// cost: this install's federation identity (UNKNOWN_INSTANCE_ID, ensureSelf,
+// getSelf, getInstanceId, ensureInstanceId, updateSelf, the data/instances.json
+// file I/O + mutex) moved out of services/instances.js into the dependency-free
+// services/instanceIdentity.js leaf above. The 22 callers that only needed an
+// id read no longer statically load instances.js's peer-orchestration closure
+// (the Tailscale status parser, the federated-media probe, the socket relay,
+// ~30 modules). Measured against current main: 103,462 -> 101,702 (-1,760);
+// suites whose closure reaches services/instances.js: 181 -> 33. Lower the
+// ceiling to the new measured total plus the standard ~1.5k allowance.
+const MAX_STATIC_INSTANTIATIONS = 103202;
 
 
 const SKIP_DIRS = new Set(['node_modules', 'coverage', 'dist', 'data']);
@@ -392,6 +443,22 @@ const closureSize = (entry) => {
   return seen.size;
 };
 
+// Same memoized walk as closureSize, but stops the moment it finds `target`
+// instead of counting the whole closure — used by the #6836 reach-count test
+// below, which only needs a yes/no per file, not a total.
+const closureReaches = (entry, target) => {
+  const seen = new Set();
+  const stack = [entry];
+  while (stack.length) {
+    const file = stack.pop();
+    if (file === target) return true;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const dep of resolvedDeps(file)) if (!seen.has(dep)) stack.push(dep);
+  }
+  return false;
+};
+
 describe('server suite import budget (#6156)', () => {
   it('memoized closure walk agrees with staticImportClosure', () => {
     // A spread of entry points: two modules this PR touched, one heavy suite,
@@ -418,6 +485,23 @@ describe('server suite import budget (#6156)', () => {
       total,
       `Static module instantiations across the server suite rose to ${total.toLocaleString()}. Something added an eager import into a heavy subtree from a widely-reached module — narrow it, defer it with a call-site await import(), or raise the budget deliberately. See the "Import scoping" section of server/AGENTS.md.`,
     ).toBeLessThanOrEqual(MAX_STATIC_INSTANTIATIONS);
+  }, 60_000);
+
+  // #6836: before the identity leaf split, 181 of these files' closures reached
+  // services/instances.js — for most of them (the 22 direct identity-only
+  // callers plus everything downstream of the 46 test doubles) only because a
+  // static id-read reachability chain touched it, not because the suite
+  // actually exercises peer orchestration. Reuses the same memoized dep cache
+  // as the instantiation-count walk above, so the extra pass costs a graph
+  // traversal, not re-parsing.
+  it('keeps fewer than 60 server test files statically reaching services/instances.js', () => {
+    const files = serverTestFiles();
+    const target = abs('services/instances.js');
+    const reachingCount = files.filter((file) => closureReaches(file, target)).length;
+    expect(
+      reachingCount,
+      `${reachingCount} server test files still statically reach services/instances.js (was 181 before #6836's instanceIdentity.js leaf split). If this crept back up, check for a caller that only needs identity (getInstanceId/ensureInstanceId/getSelf/ensureSelf/updateSelf/UNKNOWN_INSTANCE_ID) re-widening its import back onto instances.js instead of instanceIdentity.js.`,
+    ).toBeLessThan(60);
   }, 60_000);
 });
 

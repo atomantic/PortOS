@@ -21,7 +21,7 @@ vi.mock('fs/promises', () => ({
   // adoptWorktree ensures the worktrees root exists before moving a tree into it.
   mkdir: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('./instances.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
+vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
 const getDefaultBranchMock = vi.fn().mockResolvedValue('main');
 const hasBranchMergeEvidenceMock = vi.fn().mockResolvedValue(false);
 vi.mock('./git.js', () => ({
