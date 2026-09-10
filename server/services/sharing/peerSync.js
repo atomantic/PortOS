@@ -80,10 +80,12 @@ export {
 export {
   buildAssetManifest,
   collectCollectionAssetReferences,
-  assetIntegrityForRecord,
-  assetShaListForRecord,
   diffAssetManifestAgainstLocal,
 } from './peerSyncAssets.js';
+export {
+  assetIntegrityForRecord,
+  assetShaListForRecord,
+} from './recordKinds.js';
 export { pushRecordToPeer } from './peerSyncPush.js';
 export { applyIncomingPush } from './peerSyncReceive.js';
 export {

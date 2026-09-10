@@ -20,44 +20,19 @@ import {
   formatVersionGap,
 } from '../../lib/schemaVersions.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
-import { getUniverse } from '../universeBuilder.js';
-import { getSeries } from '../pipeline/series.js';
 import { listIssuesForSeries } from '../pipeline/issues.js';
 import {
-  getCollection,
   findCollectionByUniverseId,
   findCollectionBySeriesId,
 } from '../mediaCollections.js';
-import { getAuthor } from '../authors/index.js';
-import { getArtist } from '../artists/index.js';
-import { getAlbum } from '../albums/index.js';
 import { getTrack } from '../tracks/index.js';
-import { getProject } from '../creativeDirector/local.js';
-import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
-import { getBoard } from '../moodBoard/index.js';
-import { getLoom } from '../fableLoom/index.js';
-import {
-  getWorkForSync,
-  buildWorkBodyManifest,
-  getFolderForSync,
-  getExerciseForSync,
-} from '../writersRoom/sync.js';
-import { getCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
-import { getCommissionForSync } from '../creativeCommissions/store.js';
+import { buildWorkBodyManifest } from '../writersRoom/sync.js';
 import { ackDeletesUpTo } from './peerTombstoneCursors.js';
 import {
   buildAssetManifestWithCollection,
   buildAssetManifestForSeries,
-  buildCollectionAssetManifest,
-  buildAuthorAssetManifest,
-  buildArtistAssetManifest,
-  buildAlbumAssetManifest,
-  buildTrackAssetManifest,
-  buildProjectAssetManifest,
-  buildBoardAssetManifest,
-  buildFableLoomAssetManifest,
-  buildMusicVideoAssetManifest,
 } from './peerSyncAssets.js';
+import { RECORD_KINDS } from './recordKinds.js';
 import {
   peerAllowsOutbound,
   peerHasCategory,
@@ -98,71 +73,10 @@ import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 const SCHEMA_BLOCK_RETRY_COOLDOWN_MS = 5 * 60_000;
 
 async function isSubscriptionRecordTombstone(sub) {
-  if (sub.recordKind === 'universe') {
-    const record = await getUniverse(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'series') {
-    const record = await getSeries(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'mediaCollection') {
-    const record = await getCollection(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'author') {
-    const record = await getAuthor(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'artist') {
-    const record = await getArtist(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'album') {
-    const record = await getAlbum(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'track') {
-    const record = await getTrack(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'creativeDirectorProject') {
-    const record = await getProject(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'moodBoard') {
-    const record = await getBoard(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'fableLoom') {
-    const record = await getLoom(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'writersRoomWork') {
-    const record = await getWorkForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'writersRoomFolder') {
-    const record = await getFolderForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'writersRoomExercise') {
-    const record = await getExerciseForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'musicVideoProject') {
-    const record = await getMusicVideoProject(sub.recordId, { includeDeleted: true }).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'commissionFeedback') {
-    const record = await getCommissionFeedbackForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  if (sub.recordKind === 'creativeCommission') {
-    const record = await getCommissionForSync(sub.recordId).catch(() => null);
-    return record?.deleted === true;
-  }
-  return false;
+  const desc = RECORD_KINDS[sub.recordKind];
+  if (!desc) return false;
+  const record = await desc.load(sub.recordId).catch(() => null);
+  return record?.deleted === true;
 }
 
 export async function pushRecordToPeer(sub, options = {}) {
@@ -629,241 +543,180 @@ async function clearSchemaVersionBlock(subId) {
   peerSyncEvents.emit('subscription-unblocked', { subId, peerId: clearedPeerId });
 }
 
+/**
+ * Universe push hook — bundle-aware, so it can't route through the generic
+ * `buildPushPayload` path (its manifest builder needs a second `linkedCollection`
+ * argument the generic one-record builders don't take). Extracted out of
+ * `buildPushPayload`'s own body (#6843) alongside the series hook below, so
+ * the two genuinely-special kinds don't inflate the dispatcher's complexity.
+ */
+async function buildUniversePushPayload(sub, sourceInstanceId, portosMeta) {
+  const record = await RECORD_KINDS.universe.load(sub.recordId).catch(() => null);
+  if (!record) return null;
+  const sanitized = sanitizeRecordForWire('universe', record);
+  if (!sanitized) return null;
+  // Look up the linked media collection (auto-managed "Universe: X" bucket)
+  // and bundle it in the payload. Without this, collection-only edits (a
+  // new image added to the universe's gallery) wouldn't move the universe
+  // record itself, so the lastPushedHash short-circuit would treat the
+  // push as "unchanged" and the receiver's collection would diverge
+  // permanently. Tombstone pushes skip the collection bundle — a deleted
+  // universe's collection gets unlinked + orphaned locally, and shipping
+  // it would re-create an empty bucket on the receiver.
+  const linkedCollection = record.deleted === true
+    ? null
+    : await findCollectionByUniverseId(sub.recordId).catch(() => null);
+  // Tombstone push: deleted records carry no on-disk assets the receiver
+  // should pull. Sending an empty manifest avoids triggering
+  // pullMissingAssetsFromPeer for a record we're telling the peer to
+  // delete — both wasteful (network + disk for bytes the receiver will
+  // immediately orphan) and privacy-sensitive (e.g. a record deleted
+  // BECAUSE the user wanted the assets off-peer would otherwise still
+  // ship them with the tombstone push).
+  const assetManifest = record.deleted === true
+    ? []
+    : await buildAssetManifestWithCollection(record, linkedCollection);
+  // Bundle the catalog rows referenced by this universe (ingredients + the
+  // universe→ingredient ref links). The embedded canon already replicates
+  // via the universe record, but the catalog row's enrichments (tags,
+  // embedding, payload.summary) live ONLY in Postgres — without this bundle
+  // the receiver re-derives a strictly-lossy view on its first backfill.
+  // Skip for tombstone pushes (the universe is being deleted; its ref rows
+  // tombstone locally and ride a later catalog-sync cycle if needed).
+  const catalogBundle = record.deleted === true
+    ? null
+    : await buildCatalogBundleForRef('universe', sub.recordId);
+  // The bundled collection goes through the SAME wire projection as a
+  // standalone `mediaCollection` push (below) — the raw service record would
+  // otherwise smuggle peer-local fields (the `source` provenance stamp,
+  // #3311) past the receiver's insert path and leave the bundled and
+  // standalone forms of the same record disagreeing byte-for-byte.
+  const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
+  return {
+    kind: 'universe',
+    record: sanitized,
+    assetManifest,
+    sourceInstanceId,
+    portosMeta,
+    ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
+    ...(catalogBundle ? { catalogBundle } : {}),
+  };
+}
+
+/**
+ * Series push hook — bundle-aware like the universe hook above (its manifest
+ * builder needs the child-issues + linkedCollection args), plus the two
+ * sibling docs (manuscript review, reverse outline) that ride a series push
+ * but nothing else. Extracted out of `buildPushPayload`'s own body (#6843).
+ */
+async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
+  const record = await RECORD_KINDS.series.load(sub.recordId).catch(() => null);
+  if (!record) return null;
+  const sanitized = sanitizeRecordForWire('series', record);
+  if (!sanitized) return null;
+  // Bundle child issues — the series + its issues form one unit of edit
+  // for downstream consumers (panels, comic pages), so the receiver
+  // applies them atomically per merge cycle.
+  const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true }).catch(() => []);
+  const sanitizedIssues = childIssues
+    .map((i) => sanitizeRecordForWire('issue', i))
+    .filter(Boolean);
+  // Drop ephemeral child issues BEFORE feeding into the asset-manifest
+  // builder. sanitizedIssues above already filters them via
+  // sanitizeRecordForWire's ephemeral check, but the asset-manifest builder
+  // takes the raw `childIssues` array — without the parallel filter here,
+  // ephemeral issues' image / video / image-ref filenames would still
+  // appear in the manifest the receiver pulls. The user-visible effect:
+  // private/scratch image bytes for an issue the user said "don't sync"
+  // would land on every peer's disk via pullMissingAssetsFromPeer.
+  // ALSO drop deleted child issues from the manifest input — their
+  // tombstones still ride along in `sanitizedIssues` (so the receiver
+  // can finish its delete cascade), but shipping the deleted issues'
+  // asset filenames would trigger needless / privacy-sensitive pulls
+  // for bytes that are about to be orphaned on the receiver.
+  // Tombstoned ephemeral issues (deleted=true + ephemeral=true) ALSO
+  // stay out of the manifest input by this filter.
+  const manifestIssues = childIssues.filter(
+    (i) => i?.deleted !== true && i?.ephemeral !== true,
+  );
+  // Same collection-bundle reasoning as the universe branch: a "Series: X"
+  // collection's item changes don't move the series record, so without
+  // bundling the collection here the per-record push would short-circuit
+  // and the receiver's collection would diverge.
+  const linkedCollection = record.deleted === true
+    ? null
+    : await findCollectionBySeriesId(sub.recordId).catch(() => null);
+  // Tombstone push at the series level: same reasoning as universe above.
+  // When the series itself is deleted, send an empty asset manifest so
+  // the receiver doesn't pull bytes for a record it's about to tombstone.
+  const assetManifest = record.deleted === true
+    ? []
+    : await buildAssetManifestForSeries(record, manifestIssues, linkedCollection);
+  // Bundle the manuscript-review sibling doc (the "Finish the draft" comment
+  // set) so review-only edits — which don't move the series record — still
+  // propagate. Same reasoning as the linkedCollection bundle above: the
+  // review rides the payload AND the push hash, defeating the lastPushedHash
+  // short-circuit. Skip for tombstones (a deleted series ships no review).
+  // Dynamic import keeps manuscriptReview's arcPlanner graph off peerSync's
+  // boot load path (matches the catalogBundle pattern).
+  const manuscriptReview = record.deleted === true
+    ? null
+    : await import('../pipeline/manuscriptReview.js')
+      .then(({ getReview }) => getReview(sub.recordId))
+      .catch(() => null);
+  // Bundle the reverse-outline sibling doc (the scene-by-scene segmentation)
+  // on the same terms as the review above: a regenerate-only change doesn't
+  // move the series record, so without bundling it the per-record push would
+  // short-circuit and the receiver's outline would diverge. Only a `complete`
+  // outline is worth shipping. Skip for tombstones. Dynamic import keeps
+  // reverseOutline's arcPlanner graph off peerSync's boot load path.
+  const reverseOutline = record.deleted === true
+    ? null
+    : await import('../pipeline/reverseOutline.js')
+      .then(({ getStoredOutline }) => getStoredOutline(sub.recordId))
+      .catch(() => null);
+  // Same wire projection as the universe branch — see the note there.
+  const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
+  return {
+    kind: 'series',
+    record: sanitized,
+    issues: sanitizedIssues,
+    assetManifest,
+    sourceInstanceId,
+    portosMeta,
+    ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
+    ...(manuscriptReview && manuscriptReview.comments?.length ? { manuscriptReview } : {}),
+    ...(reverseOutline && reverseOutline.status === 'complete' ? { reverseOutline } : {}),
+  };
+}
+
+/**
+ * Load the live record, sanitize for wire, build the asset manifest, and
+ * assemble the push envelope `buildPortosMeta`/`pushRecordToPeer` sends.
+ * Universe and series are bundle-aware (their manifest builders need extra
+ * args the generic one-record builders don't take) and dispatch to their own
+ * hooks above; the other 14 kinds share one generic load -> sanitize -> asset
+ * manifest -> envelope path, with two post-hooks (musicVideoProject,
+ * writersRoomWork) that bundle one extra field onto the generic envelope.
+ */
 export async function buildPushPayload(sub, sourceInstanceId) {
   const portosMeta = await buildPortosMeta();
-  if (sub.recordKind === 'universe') {
-    const record = await getUniverse(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('universe', record);
-    if (!sanitized) return null;
-    // Look up the linked media collection (auto-managed "Universe: X" bucket)
-    // and bundle it in the payload. Without this, collection-only edits (a
-    // new image added to the universe's gallery) wouldn't move the universe
-    // record itself, so the lastPushedHash short-circuit would treat the
-    // push as "unchanged" and the receiver's collection would diverge
-    // permanently. Tombstone pushes skip the collection bundle — a deleted
-    // universe's collection gets unlinked + orphaned locally, and shipping
-    // it would re-create an empty bucket on the receiver.
-    const linkedCollection = record.deleted === true
-      ? null
-      : await findCollectionByUniverseId(sub.recordId).catch(() => null);
-    // Tombstone push: deleted records carry no on-disk assets the receiver
-    // should pull. Sending an empty manifest avoids triggering
-    // pullMissingAssetsFromPeer for a record we're telling the peer to
-    // delete — both wasteful (network + disk for bytes the receiver will
-    // immediately orphan) and privacy-sensitive (e.g. a record deleted
-    // BECAUSE the user wanted the assets off-peer would otherwise still
-    // ship them with the tombstone push).
-    const assetManifest = record.deleted === true
-      ? []
-      : await buildAssetManifestWithCollection(record, linkedCollection);
-    // Bundle the catalog rows referenced by this universe (ingredients + the
-    // universe→ingredient ref links). The embedded canon already replicates
-    // via the universe record, but the catalog row's enrichments (tags,
-    // embedding, payload.summary) live ONLY in Postgres — without this bundle
-    // the receiver re-derives a strictly-lossy view on its first backfill.
-    // Skip for tombstone pushes (the universe is being deleted; its ref rows
-    // tombstone locally and ride a later catalog-sync cycle if needed).
-    const catalogBundle = record.deleted === true
-      ? null
-      : await buildCatalogBundleForRef('universe', sub.recordId);
-    // The bundled collection goes through the SAME wire projection as a
-    // standalone `mediaCollection` push (below) — the raw service record would
-    // otherwise smuggle peer-local fields (the `source` provenance stamp,
-    // #3311) past the receiver's insert path and leave the bundled and
-    // standalone forms of the same record disagreeing byte-for-byte.
-    const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
-    return {
-      kind: 'universe',
-      record: sanitized,
-      assetManifest,
-      sourceInstanceId,
-      portosMeta,
-      ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
-      ...(catalogBundle ? { catalogBundle } : {}),
-    };
-  }
-  if (sub.recordKind === 'series') {
-    const record = await getSeries(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('series', record);
-    if (!sanitized) return null;
-    // Bundle child issues — the series + its issues form one unit of edit
-    // for downstream consumers (panels, comic pages), so the receiver
-    // applies them atomically per merge cycle.
-    const childIssues = await listIssuesForSeries(sub.recordId, { includeDeleted: true }).catch(() => []);
-    const sanitizedIssues = childIssues
-      .map((i) => sanitizeRecordForWire('issue', i))
-      .filter(Boolean);
-    // Drop ephemeral child issues BEFORE feeding into the asset-manifest
-    // builder. sanitizedIssues above already filters them via
-    // sanitizeRecordForWire's ephemeral check, but the asset-manifest builder
-    // takes the raw `childIssues` array — without the parallel filter here,
-    // ephemeral issues' image / video / image-ref filenames would still
-    // appear in the manifest the receiver pulls. The user-visible effect:
-    // private/scratch image bytes for an issue the user said "don't sync"
-    // would land on every peer's disk via pullMissingAssetsFromPeer.
-    // ALSO drop deleted child issues from the manifest input — their
-    // tombstones still ride along in `sanitizedIssues` (so the receiver
-    // can finish its delete cascade), but shipping the deleted issues'
-    // asset filenames would trigger needless / privacy-sensitive pulls
-    // for bytes that are about to be orphaned on the receiver.
-    // Tombstoned ephemeral issues (deleted=true + ephemeral=true) ALSO
-    // stay out of the manifest input by this filter.
-    const manifestIssues = childIssues.filter(
-      (i) => i?.deleted !== true && i?.ephemeral !== true,
-    );
-    // Same collection-bundle reasoning as the universe branch: a "Series: X"
-    // collection's item changes don't move the series record, so without
-    // bundling the collection here the per-record push would short-circuit
-    // and the receiver's collection would diverge.
-    const linkedCollection = record.deleted === true
-      ? null
-      : await findCollectionBySeriesId(sub.recordId).catch(() => null);
-    // Tombstone push at the series level: same reasoning as universe above.
-    // When the series itself is deleted, send an empty asset manifest so
-    // the receiver doesn't pull bytes for a record it's about to tombstone.
-    const assetManifest = record.deleted === true
-      ? []
-      : await buildAssetManifestForSeries(record, manifestIssues, linkedCollection);
-    // Bundle the manuscript-review sibling doc (the "Finish the draft" comment
-    // set) so review-only edits — which don't move the series record — still
-    // propagate. Same reasoning as the linkedCollection bundle above: the
-    // review rides the payload AND the push hash, defeating the lastPushedHash
-    // short-circuit. Skip for tombstones (a deleted series ships no review).
-    // Dynamic import keeps manuscriptReview's arcPlanner graph off peerSync's
-    // boot load path (matches the catalogBundle pattern).
-    const manuscriptReview = record.deleted === true
-      ? null
-      : await import('../pipeline/manuscriptReview.js')
-        .then(({ getReview }) => getReview(sub.recordId))
-        .catch(() => null);
-    // Bundle the reverse-outline sibling doc (the scene-by-scene segmentation)
-    // on the same terms as the review above: a regenerate-only change doesn't
-    // move the series record, so without bundling it the per-record push would
-    // short-circuit and the receiver's outline would diverge. Only a `complete`
-    // outline is worth shipping. Skip for tombstones. Dynamic import keeps
-    // reverseOutline's arcPlanner graph off peerSync's boot load path.
-    const reverseOutline = record.deleted === true
-      ? null
-      : await import('../pipeline/reverseOutline.js')
-        .then(({ getStoredOutline }) => getStoredOutline(sub.recordId))
-        .catch(() => null);
-    // Same wire projection as the universe branch — see the note there.
-    const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
-    return {
-      kind: 'series',
-      record: sanitized,
-      issues: sanitizedIssues,
-      assetManifest,
-      sourceInstanceId,
-      portosMeta,
-      ...(bundledCollection ? { linkedCollection: bundledCollection } : {}),
-      ...(manuscriptReview && manuscriptReview.comments?.length ? { manuscriptReview } : {}),
-      ...(reverseOutline && reverseOutline.status === 'complete' ? { reverseOutline } : {}),
-    };
-  }
-  if (sub.recordKind === 'mediaCollection') {
-    const record = await getCollection(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('mediaCollection', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildCollectionAssetManifest(record);
-    return { kind: 'mediaCollection', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'author') {
-    const record = await getAuthor(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('author', record);
-    if (!sanitized) return null;
-    // Tombstone push ships no assets — the receiver is about to delete the
-    // record, so pulling its headshot would be wasteful + privacy-sensitive
-    // (same reasoning as the universe/series branches above).
-    const assetManifest = record.deleted === true ? [] : await buildAuthorAssetManifest(record);
-    return { kind: 'author', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'artist') {
-    const record = await getArtist(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('artist', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildArtistAssetManifest(record);
-    return { kind: 'artist', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'album') {
-    const record = await getAlbum(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('album', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildAlbumAssetManifest(record);
-    return { kind: 'album', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'track') {
-    const record = await getTrack(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('track', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildTrackAssetManifest(record);
-    return { kind: 'track', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'creativeDirectorProject') {
-    const record = await getProject(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('creativeDirectorProject', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildProjectAssetManifest(record);
-    return { kind: 'creativeDirectorProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'moodBoard') {
-    const record = await getBoard(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('moodBoard', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildBoardAssetManifest(record);
-    return { kind: 'moodBoard', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'fableLoom') {
-    const record = await getLoom(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('fableLoom', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildFableLoomAssetManifest(record);
-    return { kind: 'fableLoom', record: sanitized, assetManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'writersRoomWork') {
-    const record = await getWorkForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('writersRoomWork', record);
-    if (!sanitized) return null;
-    // The work manifest carries draft-version METADATA; the file-primary `.md`
-    // prose bodies ride a separate `draftBodyManifest` (SHA256 per draft) the
-    // receiver diffs + pulls. A tombstone ships neither asset manifest.
-    const draftBodyManifest = record.deleted === true ? [] : await buildWorkBodyManifest(record);
-    return { kind: 'writersRoomWork', record: sanitized, assetManifest: [], draftBodyManifest, sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'writersRoomFolder') {
-    // Body-less (#1645) — no asset/body manifest, just the LWW record envelope.
-    const record = await getFolderForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('writersRoomFolder', record);
-    if (!sanitized) return null;
-    return { kind: 'writersRoomFolder', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
-  }
-  if (sub.recordKind === 'writersRoomExercise') {
-    const record = await getExerciseForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('writersRoomExercise', record);
-    if (!sanitized) return null;
-    return { kind: 'writersRoomExercise', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
-  }
+  const desc = RECORD_KINDS[sub.recordKind];
+  if (!desc) return null;
+  if (sub.recordKind === 'universe') return buildUniversePushPayload(sub, sourceInstanceId, portosMeta);
+  if (sub.recordKind === 'series') return buildSeriesPushPayload(sub, sourceInstanceId, portosMeta);
+  const record = await desc.load(sub.recordId).catch(() => null);
+  if (!record) return null;
+  const sanitized = sanitizeRecordForWire(sub.recordKind, record);
+  if (!sanitized) return null;
+  // Tombstone push ships no assets — the receiver is about to delete the
+  // record, so pulling its bytes would be wasteful + privacy-sensitive (same
+  // reasoning as the universe/series hooks above).
+  const assetManifest = record.deleted === true
+    ? []
+    : (desc.buildAssetManifest ? await desc.buildAssetManifest(record) : []);
+  const envelope = { kind: sub.recordKind, record: sanitized, assetManifest, sourceInstanceId, portosMeta };
   if (sub.recordKind === 'musicVideoProject') {
-    // #1770 ships the record (metadata + beat-aligned scenes) as the LWW
-    // envelope; #1772 bundles its referenced media. A tombstone ships no bytes.
-    const record = await getMusicVideoProject(sub.recordId, { includeDeleted: true }).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('musicVideoProject', record);
-    if (!sanitized) return null;
-    const assetManifest = record.deleted === true ? [] : await buildMusicVideoAssetManifest(record);
     // #1858: bundle the LINKED TRACK RECORD (create-UI projects store `trackId`,
     // not `uploadedAudioFilename`). The audio BYTES ride `assetManifest` above,
     // but the receiver's `resolveMasterAudioPath()` looks the track up by id
@@ -882,30 +735,16 @@ export async function buildPushPayload(sub, sourceInstanceId) {
       // it without includeDeleted), so only the tombstone record rides.
       if (track) linkedTrack = sanitizeRecordForWire('track', track);
     }
-    return {
-      kind: 'musicVideoProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta,
-      ...(linkedTrack ? { linkedTrack } : {}),
-    };
+    return { ...envelope, ...(linkedTrack ? { linkedTrack } : {}) };
   }
-  if (sub.recordKind === 'commissionFeedback') {
-    // Body-less (#2686) — no asset manifest, just the LWW record envelope
-    // (one taste reaction). A tombstone ships the same shape (deleted:true).
-    const record = await getCommissionFeedbackForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('commissionFeedback', record);
-    if (!sanitized) return null;
-    return { kind: 'commissionFeedback', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
+  if (sub.recordKind === 'writersRoomWork') {
+    // The work manifest carries draft-version METADATA; the file-primary `.md`
+    // prose bodies ride a separate `draftBodyManifest` (SHA256 per draft) the
+    // receiver diffs + pulls. A tombstone ships neither asset manifest.
+    const draftBodyManifest = record.deleted === true ? [] : await buildWorkBodyManifest(record);
+    return { ...envelope, draftBodyManifest };
   }
-  if (sub.recordKind === 'creativeCommission') {
-    // The commission BRIEF (#2686). sanitizeRecordForWire strips the machine-local
-    // schedule/runs/assignment, so only the federatable brief travels. No assets.
-    const record = await getCommissionForSync(sub.recordId).catch(() => null);
-    if (!record) return null;
-    const sanitized = sanitizeRecordForWire('creativeCommission', record);
-    if (!sanitized) return null;
-    return { kind: 'creativeCommission', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
-  }
-  return null;
+  return envelope;
 }
 
 /**

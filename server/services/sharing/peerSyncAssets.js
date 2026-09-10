@@ -25,8 +25,6 @@ import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { pullSidecarForImage } from './sidecarSync.js';
 import { parseKey } from '../../lib/mediaItemKey.js';
-import { listIssuesForSeries } from '../pipeline/issues.js';
-import { findCollectionBySeriesId } from '../mediaCollections.js';
 import { headshotImageFilename } from '../authors/index.js';
 import { portraitImageFilename } from '../artists/index.js';
 import { coverImageFilename } from '../albums/index.js';
@@ -38,7 +36,7 @@ import { WORK_ID_RE, DRAFT_ID_RE, wrWorkDir, wrDraftPath } from '../writersRoom/
 import { getWorkForSync } from '../writersRoom/sync.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { peerSyncEvents, findPeerById } from './peerSyncShared.js';
-import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
+import { isStr } from '../../lib/textUtils.js';
 
 
 // --- Asset manifest -----------------------------------------------------
@@ -125,60 +123,10 @@ export async function buildCollectionAssetManifest(collection) {
   return out;
 }
 
-function summarizeAssetManifest(manifest) {
-  const entries = Array.isArray(manifest) ? manifest : [];
-  return {
-    assetHashes: entries.map((e) => e.sha256).filter(Boolean).sort(),
-    metadataMissing: entries.some((e) => e?.kind === 'image' && !isNonBlankStr(e.sidecarSha256)),
-  };
-}
-
-async function buildIntegrityAssetManifest(kind, record) {
-  if (kind === 'mediaCollection') return buildCollectionAssetManifest(record);
-  if (kind === 'author') return buildAuthorAssetManifest(record);
-  if (kind === 'artist') return buildArtistAssetManifest(record);
-  if (kind === 'album') return buildAlbumAssetManifest(record);
-  if (kind === 'track') return buildTrackAssetManifest(record);
-  if (kind === 'creativeDirectorProject') return buildProjectAssetManifest(record);
-  if (kind === 'musicVideoProject') return buildMusicVideoAssetManifest(record);
-  if (kind === 'moodBoard') return buildBoardAssetManifest(record);
-  if (kind === 'fableLoom') return buildFableLoomAssetManifest(record);
-  if (kind === 'series') {
-    const childIssues = await listIssuesForSeries(record?.id, { includeDeleted: true }).catch(() => []);
-    const manifestIssues = childIssues.filter(
-      (i) => i?.deleted !== true && i?.ephemeral !== true,
-    );
-    const linkedCollection = await findCollectionBySeriesId(record?.id).catch(() => null);
-    return buildAssetManifestForSeries(record, manifestIssues, linkedCollection);
-  }
-  return buildAssetManifest(record);
-}
-
-/**
- * Returns the integrity-facing asset summary for a record: sorted file hashes
- * plus whether any hashed image lacks a gen-params sidecar. `series` mirrors
- * the push manifest path so child issue assets participate in integrity.
- *
- * @param {'universe'|'series'|'mediaCollection'} kind
- * @param {object} record
- * @returns {Promise<{assetHashes:string[], metadataMissing:boolean}>}
- */
-export async function assetIntegrityForRecord(kind, record) {
-  const manifest = await buildIntegrityAssetManifest(kind, record);
-  return summarizeAssetManifest(manifest);
-}
-
-/**
- * Back-compat helper for callers/tests that only need hashes.
- *
- * @param {'universe'|'series'|'mediaCollection'} kind
- * @param {object} record
- * @returns {Promise<string[]>} sorted sha256 strings (falsy hashes omitted)
- */
-export async function assetShaListForRecord(kind, record) {
-  const { assetHashes } = await assetIntegrityForRecord(kind, record);
-  return assetHashes;
-}
+// assetIntegrityForRecord / assetShaListForRecord (per-kind integrity-hash
+// dispatch) moved to recordKinds.js (#6843) — its dispatch reads RECORD_KINDS,
+// and this module must never import that table (recordKinds.js ->
+// peerSyncAssets.js is the only allowed direction between the two).
 
 export async function hashImageForManifest(filename) {
   // Sanitize before join — a record with `imageRefs` containing a path-

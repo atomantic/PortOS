@@ -100,6 +100,8 @@ import { pruneTombstonedProjects as pruneTombstonedMusicVideoProjects } from '..
 import { pruneTombstonedBoards } from '../moodBoard/index.js';
 import { pruneTombstonedLooms } from '../fableLoom/index.js';
 import { pruneTombstonedWorks, pruneTombstonedFolders, pruneTombstonedExercises } from '../writersRoom/sync.js';
+import { pruneTombstonedCommissionFeedback } from '../creativeCommissions/feedbackStore.js';
+import { pruneTombstonedCommissions } from '../creativeCommissions/store.js';
 import { pruneOrphanedBaseHashes } from '../../lib/conflictJournal.js';
 import { listPeerSubscriptions, pruneOrphanedPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
@@ -146,7 +148,7 @@ describe('TOMBSTONE_GRACE_MS', () => {
 });
 
 describe('sweepTombstones — no peers subscribed', () => {
-  it('uses now-GRACE as the cutoff for all kinds when nobody is subscribed', async () => {
+  it('uses now-GRACE as the cutoff for all 16 subscribable kinds when nobody is subscribed (#6843: every cutoff variable, including the 6 renamed to match their kind id, reaches its prune call)', async () => {
     await sweepTombstones({ now: NOW });
     const expectedCutoff = NOW - TOMBSTONE_GRACE_MS + 1;
     expect(pruneTombstonedUniverses).toHaveBeenCalledWith(expectedCutoff);
@@ -158,6 +160,36 @@ describe('sweepTombstones — no peers subscribed', () => {
     expect(pruneTombstonedArtists).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedAlbums).toHaveBeenCalledWith(expectedCutoff);
     expect(pruneTombstonedTracks).toHaveBeenCalledWith(expectedCutoff);
+    // The remaining 7 kinds were never asserted here before #6843 — this is
+    // the ONLY place a mismatched rename (e.g. writersRoomFolderCutoff
+    // accidentally threaded into pruneTombstonedWorks instead of
+    // pruneTombstonedFolders) would surface, since refusedFromCutoffs itself
+    // can only ever refuse the 4 snapshot-category kinds above (creativeDirectorProject
+    // /musicVideoProject/moodBoard/writersRoomWork/writersRoomFolder/writersRoomExercise/
+    // commissionFeedback/creativeCommission have no snapshot category, so their
+    // cutoff can never be null — see snapshotCategoryForKind).
+    expect(pruneTombstonedProjects).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedMusicVideoProjects).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedBoards).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedWorks).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedFolders).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedExercises).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedCommissionFeedback).toHaveBeenCalledWith(expectedCutoff);
+    expect(pruneTombstonedCommissions).toHaveBeenCalledWith(expectedCutoff);
+  });
+
+  it('refusedFromCutoffs iterates PEER_SUBSCRIBABLE_KINDS (#6843) — refused stays scoped to the 4 kinds whose cutoff can actually be null', async () => {
+    // Documents the finding above as a standing regression guard: only
+    // snapshotCategoryForKind's 4 kinds (universe/series/issue/mediaCollection)
+    // can appear in `refused` through the real cutoff policy. Every OTHER
+    // kind must therefore be ABSENT from `refused` even in the maximally
+    // refusing scenario (a full-sync peer with no per-record subscriptions).
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: true, syncEnabled: true, fullSync: true, syncCategories: {} },
+    ]);
+    mockSubs({});
+    const res = await sweepTombstones({ now: NOW });
+    expect(res.refused.sort()).toEqual(['issue', 'mediaCollection', 'series', 'universe']);
   });
 });
 
