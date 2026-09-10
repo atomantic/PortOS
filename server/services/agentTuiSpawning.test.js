@@ -1920,6 +1920,32 @@ describe('spawnTuiAgent runtime', () => {
     expect(pasteWrites()).toHaveLength(1);
   });
 
+  it('Grok collapsed paste: submits its size chip once without retrying the hidden prompt', async () => {
+    // agent-5ffe35b5 rendered this chip, but its truncated preview could not
+    // satisfy prefix verification. Retrying expanded/duplicated the input.
+    runSpawn({
+      provider: { id: 'grok-tui', name: 'Grok TUI', type: 'tui', envVars: {} },
+      tuiConfig: { ...defaultTuiConfig, command: 'grok', commandLine: 'grok' },
+      prompt: 'A long UX audit prompt whose full prefix is hidden by the collapsed preview.',
+    });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('Grok Build 1.0.25 [stable]'));
+    await vi.advanceTimersByTimeAsync(2000);
+    const writes = () => vi.mocked(shellService.writeToSession).mock.calls
+      .filter(([id]) => id === SESSION_ID);
+    expect(pasteCount()).toBe(1);
+    expect(writes().filter(([, data]) => data === '\r')).toHaveLength(0);
+
+    // ANSI styling and PTY chunk boundaries match the real size chip.
+    await capturedOnData(Buffer.from('\x1b[38;2;65;65;65m[\x1b[38;2;200;200;200mPasted: 31'));
+    await capturedOnData(Buffer.from(' KB\x1b[38;2;65;65;65m] Enter:send'));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(writes().some(([, data]) => data === '\r')).toBe(true);
+    await vi.advanceTimersByTimeAsync(20000);
+    expect(pasteCount()).toBe(1);
+    expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
+  });
+
   // ── 1c2. The readiness probe's own echo must not seed the startup-idle clock ──
   // shell.js's waitForPromptReady round-trips a shell-level probe (posix printf /
   // PowerShell Write-Output) BEFORE injecting the real CLI command, and fires

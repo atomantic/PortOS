@@ -35,7 +35,8 @@ export const PASTE_DEADLINE_MS = 10000;
 export const TUI_INPUT_READY_DEADLINE_MS = 45000;
 
 // Claude Code emits `[Pasted text #N +M lines]`, Codex emits
-// `[Pasted Content N chars]`, and OpenCode emits `[Pasted ~N lines]` after
+// `[Pasted Content N chars]`, OpenCode emits `[Pasted ~N lines]`, and
+// Grok Build emits `[Pasted: 31 KB]` after
 // committing a paste. Watch for any of these markers (or fall back after
 // PASTE_TO_ENTER_FALLBACK_MS) before sending `\r` so Enter doesn't get
 // swallowed mid-paste-commit.
@@ -64,7 +65,7 @@ export const PASTE_RETRY_MAX_ATTEMPTS = 3;
 export const PASTE_RETRY_BASE_DELAY_MS = 800;
 // Minimum prefix length for verification (shorter prompts verify whole-text)
 const MIN_VERIFIABLE_PREFIX_LEN = 15;
-export const PASTE_MARKER_PATTERN = /\[Pasted\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars|~\s*\d+\s*lines?)\]/i;
+export const PASTE_MARKER_PATTERN = /\[Pasted\s*(?:text\s*#\d+[^\]]*|content\s*\d+\s*chars|~\s*\d+\s*lines?|:\s*\d+(?:\.\d+)?\s*(?:B|KB|MB))\]/i;
 export const PASTE_TO_ENTER_MIN_DELAY_MS = 200;
 export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 
@@ -126,7 +127,7 @@ export function verifyPasteRendered(strippedBuffer, prefix) {
 }
 
 /**
- * Count paste-commit markers from Claude Code, Codex, or OpenCode in
+ * Count paste-commit markers from Claude Code, Codex, OpenCode, or Grok in
  * `strippedText`.
  * Callers MUST pass ANSI-STRIPPED output (see PASTE_MARKER_PATTERN above for why
  * the raw stream never matches). Shared by both TUI consumers so the
