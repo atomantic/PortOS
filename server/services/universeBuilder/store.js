@@ -97,7 +97,7 @@ function makeFileBackend(dir) {
     // "unparseable deletedAt is kept" rule.
     listLiveIds: async () => {
       const records = await listRaw();
-      return records.filter((r) => r?.deleted !== true).map((r) => r.id);
+      return records.filter((r) => r && r.deleted !== true).map((r) => r.id);
     },
     listTombstoneIdsBefore: async (beforeMs) => {
       const records = await listRaw();

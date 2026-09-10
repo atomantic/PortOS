@@ -1009,20 +1009,22 @@ export function initSyncOrchestrator() {
  * Stamps `lastTombstoneSweepAt` BEFORE awaiting the sweep (not after) so a
  * slow sweep still under way can't have its claimed slot re-entered by a
  * later tick once the hour rolls over — the same reasoning as the module-
- * level doc comment. A sweep that FAILS resets the stamp back to 0, though,
- * so a transient error (e.g. the DB blips) retries on the very next tick
- * instead of going quiet for a full hour.
+ * level doc comment. Either the dynamic import OR the sweep itself FAILING
+ * resets the stamp back to 0, though, so a transient error (the DB blips, or
+ * the GC module briefly fails to load) retries on the very next tick instead
+ * of going quiet for a full hour.
  */
 async function runTombstoneSweep() {
   const now = Date.now();
   if (lastTombstoneSweepAt !== 0 && now - lastTombstoneSweepAt < TOMBSTONE_SWEEP_INTERVAL_MS) return;
   lastTombstoneSweepAt = now;
-  const { sweepTombstones } = await import('./sharing/tombstoneGc.js');
-  const result = await sweepTombstones().catch((err) => {
-    console.error(`❌ Tombstone sweep failed: ${err.message}`);
-    lastTombstoneSweepAt = 0;
-    return null;
-  });
+  const result = await import('./sharing/tombstoneGc.js')
+    .then(({ sweepTombstones }) => sweepTombstones())
+    .catch((err) => {
+      console.error(`❌ Tombstone sweep failed: ${err.message}`);
+      lastTombstoneSweepAt = 0;
+      return null;
+    });
   if (result && (result.universes > 0 || result.series > 0 || result.issues > 0 || result.collections > 0)) {
     // "series" is already its own plural so no s-suffix toggle needed there.
     const universes = `${result.universes} universe${result.universes === 1 ? '' : 's'}`;
