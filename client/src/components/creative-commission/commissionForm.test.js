@@ -199,6 +199,17 @@ describe('commissionForm helpers', () => {
       expect(mergeGenerationForAbility('music', { imageCount: 4 })).toEqual({ lengthSeconds: 30 });
     });
 
+    it('mergeGenerationForAbility seeds a key the switch introduces with the FRESH default, not the legacy reading', () => {
+      // image → video: durationMode never existed on this generation, so it
+      // seeds #4494's 'auto' (what a blank video form gets). Only a REAL record
+      // with the key missing reads as legacy 'manual' — that is generationToForm's
+      // contract, and the two must not collapse into one another.
+      expect(mergeGenerationForAbility('video', { quality: 'high', aspectRatio: '9:16', imageCount: 2 }).durationMode).toBe('auto');
+      expect(generationToForm('video', { quality: 'high', aspectRatio: '9:16' }).durationMode).toBe('manual');
+      // A value already present survives the switch untouched.
+      expect(mergeGenerationForAbility('music-video', { durationMode: 'manual', targetDurationSeconds: 20 }).durationMode).toBe('manual');
+    });
+
     it('generationToPayload emits only the ability keys and coerces numbers', () => {
       // number inputs arrive as strings from the DOM.
       expect(generationToPayload('image', { quality: 'standard', aspectRatio: '1:1', imageCount: '3' }))

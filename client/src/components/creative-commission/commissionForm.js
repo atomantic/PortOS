@@ -168,30 +168,40 @@ function abilityOr(ability) {
   return GENERATION_DEFAULTS_BY_ABILITY[ability] ? ability : 'video';
 }
 
-// Project a stored generation object into the form for a given ability: fill
-// each of the ability's fields from the record, falling back to the LEGACY-AWARE
-// default (ABILITY_GENERATION_SPEC's `defaults`, not GENERATION_DEFAULTS_BY_ABILITY)
-// — a key absent from a REAL record prefers its spec `legacyAbsent` reading over
-// the fresh-commission `default` (only `durationMode` differs today: an existing
-// record with no key means 'manual', matching abilityAdapters.js). Only the
-// ability's own keys appear, so switching types never carries a stale key.
-export function generationToForm(ability, generation) {
-  const a = abilityOr(ability);
-  const legacyDefaults = ABILITY_GENERATION_SPEC[a].defaults;
+// Fill an ability's keys from `generation`, falling back to `defaults` for any
+// key that is absent or null. Only the ability's own keys appear, so switching
+// types never carries a stale key. The two exported projections below differ
+// ONLY in which defaults they fall back to.
+function fillGeneration(defaults, generation) {
   const out = {};
-  for (const key of Object.keys(legacyDefaults)) {
+  for (const key of Object.keys(defaults)) {
     const v = generation?.[key];
-    out[key] = v === undefined || v === null ? legacyDefaults[key] : v;
+    out[key] = v === undefined || v === null ? defaults[key] : v;
   }
   return out;
 }
 
-// When the user switches output type, seed the new type's fields with the type's
-// defaults but carry over any overlapping value the user already set (e.g. keep
-// their quality/aspectRatio when going video → image). This is exactly the
-// project-a-record projection — carrying over an overlapping key IS falling back
-// to the default only when absent — so it delegates to generationToForm.
-export const mergeGenerationForAbility = generationToForm;
+// Project a stored generation object into the form for a given ability, falling
+// back to the LEGACY-AWARE default (ABILITY_GENERATION_SPEC's `defaults`, not
+// GENERATION_DEFAULTS_BY_ABILITY) — a key absent from a REAL record prefers its
+// spec `legacyAbsent` reading over the fresh-commission `default` (only
+// `durationMode` differs today: an existing record with no key means 'manual',
+// matching abilityAdapters.js).
+export function generationToForm(ability, generation) {
+  return fillGeneration(ABILITY_GENERATION_SPEC[abilityOr(ability)].defaults, generation);
+}
+
+// When the user switches output type, seed the new type's fields with the
+// type's FRESH defaults (GENERATION_DEFAULTS_BY_ABILITY — the same seeds a blank
+// form gets) but carry over any overlapping value the user already set (e.g.
+// keep their quality/aspectRatio when going video → image). A key the switch
+// introduces was never on this record at all, so `legacyAbsent` does not
+// describe it: an image commission that becomes a video one never rendered a
+// fixed-length video, and #4494's "Creative Director chooses" seed applies to
+// it exactly as it does to a new commission.
+export function mergeGenerationForAbility(ability, generation) {
+  return fillGeneration(GENERATION_DEFAULTS_BY_ABILITY[abilityOr(ability)], generation);
+}
 
 // Build the API generation payload for the current ability: emit only that
 // ability's keys, coercing number fields (form <input type=number> values are
