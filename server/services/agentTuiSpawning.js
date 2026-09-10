@@ -1193,7 +1193,7 @@ export async function spawnTuiAgent({
     // best-effort posture).
     let cleanupSuccess = finalSuccess;
     try {
-      const finalized = await finalizeAgent({
+      const finalizeVerdict = await finalizeAgent({
         agentId,
         task,
         runId,
@@ -1212,9 +1212,9 @@ export async function spawnTuiAgent({
         // The run window the commit criterion is evaluated against (#3637).
         startedAt: agentData?.startedAt ?? null,
       });
-      if (finalized && typeof finalized.success === 'boolean') cleanupSuccess = finalized.success;
-      prClaimVerified = prClaimWasVerified(finalized?.prVerdict);
-      noChangesToShip = finalized?.prVerdict?.noChangesToShip === true;
+      if (finalizeVerdict && typeof finalizeVerdict.success === 'boolean') cleanupSuccess = finalizeVerdict.success;
+      prClaimVerified = prClaimWasVerified(finalizeVerdict?.prVerdict);
+      noChangesToShip = finalizeVerdict?.prVerdict?.noChangesToShip === true;
     } finally {
       await releaseRunResources({ agentData, cleanupSuccess, prOwnership, prClaimVerified, noChangesToShip });
     }
