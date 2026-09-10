@@ -19,7 +19,7 @@ import PromptEditor from './PromptEditor';
 import TaskDependencyPicker from './TaskDependencyPicker';
 import RunTaskButton from './RunTaskButton';
 import TaskDataInputs from '../../TaskDataInputs';
-import { INTERVAL_DESCRIPTIONS, PERPETUAL_DESCRIPTION, toggleMetadataField, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata } from './scheduleConstants';
+import { INTERVAL_DESCRIPTIONS, PERPETUAL_DESCRIPTION, ON_DEMAND_PERPETUAL_LABEL, ON_DEMAND_PERPETUAL_DESCRIPTION, toggleMetadataField, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata } from './scheduleConstants';
 
 // Shown for the unpinned ('' → inherit) choice: the task type is global, so the
 // policy is whatever each target app configured, and PortOS's own self-improvement
@@ -293,7 +293,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           disabled={updating}
           className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
         >
-          <option value="on-demand">On Demand (manual trigger only)</option>
+          <option value="on-demand">{config.perpetual ? ON_DEMAND_PERPETUAL_LABEL : 'On Demand (manual trigger only)'}</option>
           <option value="cron">Scheduled (cron)</option>
         </select>
         {(selectedType === 'cron' && (cronEditing || config.type === 'cron')) ? (
@@ -304,7 +304,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             className="mt-2"
           />
         ) : (
-          <p className="text-xs text-gray-500 mt-1">{INTERVAL_DESCRIPTIONS[selectedType]}</p>
+          <p className="text-xs text-gray-500 mt-1">{selectedType === 'on-demand' && config.perpetual ? ON_DEMAND_PERPETUAL_DESCRIPTION : INTERVAL_DESCRIPTIONS[selectedType]}</p>
         )}
       </FormField>
 

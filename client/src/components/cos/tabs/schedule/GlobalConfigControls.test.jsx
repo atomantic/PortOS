@@ -296,9 +296,18 @@ describe('GlobalConfigControls — cadence + perpetual', () => {
     expect(onUpdate).toHaveBeenCalledWith('feature-ideas', { perpetual: true });
   });
 
-  it('shows a recheck-cadence control only for an ON-DEMAND perpetual task', () => {
+  it('explains automatic rechecks without claiming manual-only execution', () => {
     renderControls({ config: { type: 'on-demand', cronExpression: null, perpetual: true } });
     expect(screen.getByText('Recheck Cadence')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Automatic drain' }).selected).toBe(true);
+    expect(screen.getByText(/Turn Perpetual off for manual-only runs/)).toBeInTheDocument();
+    expect(screen.queryByText('Only runs when manually triggered')).not.toBeInTheDocument();
+
+    cleanup();
+    renderControls({ config: { type: 'on-demand', cronExpression: null, perpetual: false, recheckCron: '0 9 * * *' } });
+    expect(screen.getByRole('option', { name: 'On Demand (manual trigger only)' }).selected).toBe(true);
+    expect(screen.queryByText('Recheck Cadence')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save schedule' })).not.toBeInTheDocument();
 
     cleanup();
     // A cron+perpetual task rechecks on its OWN expression, so it needs none.
