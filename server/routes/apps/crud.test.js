@@ -1,3 +1,5 @@
+vi.mock('../../services/appQualityFederation.js', () => ({ exportPortosQuality: vi.fn() }));
+import { exportPortosQuality } from '../../services/appQualityFederation.js';
 vi.mock('../../services/appQuality.js', () => ({ getAppQualityHistory: vi.fn(async () => ({ points: [], days: 90 })), enrichAppsWithQuality: vi.fn(async apps => apps.map(app => ({ ...app, quality: { score: 75 } }))) }));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
@@ -54,6 +56,17 @@ describe('Apps CRUD Routes', () => {
     app.use(express.json());
     app.use('/api/apps', crudRoutes);
     vi.clearAllMocks();
+  });
+
+  it('serves numeric federation before app lookup, validates days and refuses unapproved peers', async () => {
+    exportPortosQuality.mockResolvedValue({ schemaVersion: 1, measurements: [] });
+    const result = await request(app).get('/api/apps/quality-federation?days=30').set('X-PortOS-Instance-Id', 'peer');
+    expect(result.status).toBe(200);
+    expect(exportPortosQuality).toHaveBeenCalledWith('peer', 30);
+    expect(appsService.getAppById).not.toHaveBeenCalled();
+    expect((await request(app).get('/api/apps/quality-federation?days=999')).status).toBe(400);
+    exportPortosQuality.mockResolvedValue(null);
+    expect((await request(app).get('/api/apps/quality-federation')).status).toBe(403);
   });
 
   describe('GET /api/apps', () => {

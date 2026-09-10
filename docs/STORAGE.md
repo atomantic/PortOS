@@ -389,6 +389,8 @@ only currently registered apps. PostgreSQL stores the bounded JSON report and
 agent provenance; no asset bytes or new JSON store. Additive `CREATE TABLE IF
 NOT EXISTS` in boot schema and init-db.sql provisions both existing and new
 installs without transforming existing records. No seed or backfill fabricates
-scores. The mandatory Postgres backup includes the table. These assessments
-remain machine-local: they describe this install's checkout and agent evidence,
-and are not included in peer sync or capability/status payloads.
+scores. The mandatory Postgres backup includes the table. Assessment rows and their prose remain machine-local. The PortOS baseline app
+also exposes a numeric-only projection through `GET /api/apps/quality-federation`
+(`days=30|90|365`), gated on an identified, registered, enabled full-sync peer
+with outbound sharing allowed. The ordinary app list and capability/status
+payloads still carry no assessment data. See [quality federation](decisions/2026-09-10-portos-quality-federation.md).

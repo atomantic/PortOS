@@ -1,4 +1,5 @@
 import { appQualityQuerySchema, appQualityHistoryQuerySchema } from '../../lib/auditQuality.js';
+import { exportPortosQuality } from '../../services/appQualityFederation.js';
 import { enrichAppsWithQuality, getAppQualityHistory } from '../../services/appQuality.js';
 /**
  * App CRUD + status enrichment + archive lifecycle.
@@ -29,6 +30,14 @@ import { enrichAppsWithPm2Status } from '../../services/appListEnrichment.js';
 import { loadApp, pathExists, deriveAppPorts, computeOverallStatus } from './shared.js';
 
 const router = Router();
+
+// Numeric local evidence only. This endpoint never invokes aggregate reads or forwards peer data.
+router.get('/quality-federation', asyncHandler(async (req, res) => {
+  const { days } = validateRequest(appQualityHistoryQuerySchema, req.query);
+  const payload = await exportPortosQuality(req.get('X-PortOS-Instance-Id'), days);
+  if (!payload) throw new ServerError('Quality sharing requires a registered enabled full-sync peer and a known repository', { status: 403 });
+  res.json(payload);
+}));
 
 // GET /api/apps - List all apps. The route fetches the raw records; the
 // appListEnrichment service owns the PM2 status/port/process enrichment.

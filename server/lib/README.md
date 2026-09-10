@@ -632,4 +632,4 @@ pm` default, `NPM_CONFIG_PREFIX`, nvm/Volta) installed `codex` successfully and 
 | `videoTimelineFades.js` | Browser-safe `fitFades()` proportionally fits a fade pair to its visible duration. Shared by timeline normalization/export and the editor preview/trim controls; legacy import paths re-export it. |
 | `voiceEngines.js` | Shared TTS engine IDs, display metadata, supported-engine set, and persisted configuration keys. |
 
-| `auditQuality.js` | Category discovery strategies, assessment prompt and strict schema, sentinel parsing, and freshness-aware app quality aggregation. |
+| `auditQuality.js` | Category discovery strategies, assessment prompt and strict schema, sentinel parsing, and freshness-aware app quality aggregation with deterministic latest-per-category selection across peers. |

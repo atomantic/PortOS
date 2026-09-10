@@ -32,6 +32,8 @@ import { join } from 'path';
 import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
 
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
+  // Numeric-only PortOS audit evidence; read-through, never imported into local records.
+  appQuality: 1,
   // Type-level (storage layout) version for `data/universes/{id}/index.json`.
   // v5 = post-split. Migration 034 introduced it. The independent per-record
   // shape is currently v5 (stamped inside each record by `sanitizeTemplate`).

@@ -21,6 +21,14 @@ export default function AppQuality({ app, detail = false }) {
         Assessments describe the code before fixes. The overall score is the equal-weight mean of broad, medium/high-confidence assessments from the last 30 days.
         {' '}{quality?.ratedCategories ?? 0}/{quality?.totalCategories ?? 0} categories contribute. Missing, partial, low-confidence and stale assessments are excluded, not counted as perfect.
       </p>
+      {quality?.federation && (
+        <p className="text-xs text-gray-400">
+          Unified PortOS score: newest assessment per category across this install and {quality.federation.available ?? 0} available full-sync peers with the same repository. Versions may differ.
+          {' '}Peer evidence is fetched when viewed; offline peers do not contribute.
+          {quality.federation.failed && ' Peer quality could not be loaded; the score may be incomplete.'}
+          {quality.federation.unavailable > 0 && ` ${quality.federation.unavailable} peers unavailable or incompatible; the score may be incomplete.`}
+        </p>
+      )}
       {score == null && !quality?.unavailable && (
         <p className="text-sm text-gray-400">
           {hasAssessments
@@ -45,7 +53,8 @@ export default function AppQuality({ app, detail = false }) {
                     {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}</div>
                   {category.summary && <p className="mt-1 break-words">{category.summary}</p>}
                   {category.totalFiles > 0 && <div>{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</div>}
-                  {category.agentId && <Link className="text-port-accent hover:underline" to={`/cos/agents/${category.agentId}`}>Audit run</Link>}
+                  {category.sourcePeerId && <div>Source: {category.sourcePeerName || 'federated peer'} · <Link className="text-port-accent hover:underline" to="/instances">View instances</Link></div>}
+                  {!category.sourcePeerId && category.agentId && <Link className="text-port-accent hover:underline" to={`/cos/agents/${category.agentId}`}>Audit run</Link>}
                 </td>
               </tr>
             ))}</tbody>
