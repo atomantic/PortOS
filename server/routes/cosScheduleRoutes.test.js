@@ -93,6 +93,10 @@ describe('CoS Schedule Routes', () => {
       expect(maintenance.startMaintenanceRun).toHaveBeenCalledWith(body);
       expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ ...body, claimHandler: { providerId: 'claude' } })).status).toBe(400);
       expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ ...body, mode: 'unknown' })).status).toBe(400);
+      for (const taskTypes of [[], ['claim-issue'], ['unknown']]) {
+        expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ ...body, taskTypes })).status).toBe(400);
+      }
+      expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ ...body, taskTypes: ['security'] })).status).toBe(201);
       expect((await request(app).post('/api/cos/schedule/maintenance-runs').send({ ...body, claimBetweenAudits: 'false' })).status).toBe(400);
     });
     it('starts a run from a validated body and reports the first dispatch', async () => {

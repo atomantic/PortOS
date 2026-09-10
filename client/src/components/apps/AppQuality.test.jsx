@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { it, expect, vi } from 'vitest';
 import AppQuality from './AppQuality';
+vi.mock('./AppQualityRunner', () => ({ default: () => <div>Runner</div> }));
 vi.mock('../../services/apiApps', () => ({ getAppQualityHistory: vi.fn().mockResolvedValue({ points: [], totalCategories: 25 }) }));
 
 it('shows zero as a real score and explains excluded categories in the breakdown', async () => {
@@ -14,7 +15,7 @@ it('shows zero as a real score and explains excluded categories in the breakdown
   expect(screen.getByRole('heading', { name: 'Quality: 0/100' })).toBeInTheDocument();
   expect(screen.getByText('Stale · partial')).toBeInTheDocument();
   expect(screen.getByText(/1\/25 categories contribute/)).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: /Configure/ })).toHaveAttribute('href', '/apps/portos-default/tasks');
+  expect(screen.getByRole('link', { name: /Scheduled audit runners/ })).toHaveAttribute('href', '/cos/schedule');
 });
 
 it('links an unassessed tile to its app quality tab without inventing a score', () => {
@@ -26,7 +27,7 @@ it('explains why completed maintenance can still have no saved assessment', asyn
   render(<MemoryRouter><AppQuality app={{ id: 'example', quality: { score: null, categories: [] } }} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
   expect(screen.getByText(/Earlier runs are not scored retroactively/)).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: /Configure or run scheduled audits/ })).toHaveAttribute('href', '/apps/example/tasks');
+  expect(screen.getByRole('link', { name: /Scheduled audit runners/ })).toHaveAttribute('href', '/cos/schedule');
 });
 
 it('distinguishes saved but excluded evidence from an app that was never assessed', async () => {

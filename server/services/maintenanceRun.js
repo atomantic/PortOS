@@ -138,7 +138,7 @@ async function assertNoRunningRun(appId) {
  * The first evaluation runs before this returns, so the caller learns whether
  * step one actually went out (or why it is holding) in the same response.
  */
-export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null }) {
+export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, mode = 'file-issues', claimBetweenAudits = true, claimHandler = null, taskTypes = null }) {
   const [{ getAppById }, { getProviderById }, { resolveBurnProvider }] = await Promise.all([
     import('./apps.js'), import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
   ]);
@@ -148,7 +148,7 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const pinned = familyId ? await resolveBurnProvider({ job: { providerId }, family: { id: familyId } }) : null;
   if (!pinned) throw new ServerError(`provider "${providerId}" is not an enabled subscription CLI/TUI provider`, { status: 400, code: 'MAINTENANCE_RUN_PROVIDER_UNAVAILABLE' });
   // File-only runs never validate or retain a hidden claim selection.
-  const effectiveClaimHandler = mode === 'fix' || claimBetweenAudits ? claimHandler : null;
+  const effectiveClaimHandler = !taskTypes && (mode === 'fix' || claimBetweenAudits) ? claimHandler : null;
   let claimFamilyId = familyId;
   if (effectiveClaimHandler) {
     claimFamilyId = familyForProvider(await getProviderById(effectiveClaimHandler.providerId));
@@ -163,7 +163,7 @@ export async function startMaintenanceRun({ appId, providerId, model = null, eff
   const run = await insertRun({
     id, appId, familyId, claimFamilyId, ...pins,
     status: MAINTENANCE_RUN_STATUS.RUNNING,
-    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler }),
+    steps: buildMaintenanceSteps({ appId, idPrefix: id, ...pins, mode, claimBetweenAudits, claimHandler: effectiveClaimHandler, taskTypes }),
     completed: {},
     active: null,
     reason: null,

@@ -1,3 +1,4 @@
+import AppQualityRunner from './AppQualityRunner';
 import AppQualityHistory from './AppQualityHistory';
 import { Link } from 'react-router';
 import { formatDateShort } from '../../utils/formatters';
@@ -36,22 +37,26 @@ export default function AppQuality({ app, detail = false }) {
             : 'No audit assessment has been saved. Completed maintenance tasks only supply a score when they return a valid quality report. Earlier runs are not scored retroactively; run a scheduled audit to collect an assessment.'}
         </p>
       )}
-      <Link to={`/apps/${app.id}/tasks`} className="inline-block text-sm text-port-accent hover:underline">Configure or run scheduled audits</Link>
-      <AppQualityHistory appId={app.id} categories={quality?.categories} />
+      <div className="flex flex-wrap gap-4 text-sm text-port-accent"><Link to="/cos/schedule" className="hover:underline">Scheduled audit runners</Link><Link to="/cos/agents" className="hover:underline">View agents</Link></div>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
+      <div className="min-w-0 space-y-4">
+        <AppQualityHistory appId={app.id} categories={quality?.categories} />
+        <AppQualityRunner key={app.id} app={app} />
+      </div>
       {!!quality?.categories?.length && (
-        <details>
-          <summary className="cursor-pointer text-sm text-port-accent">Category breakdown</summary>
-          <div className="overflow-x-auto">
+        <section aria-label="Category breakdown" className="min-w-0">
+          <h4 className="text-sm font-medium mb-2">Category breakdown</h4>
+          <div className="overflow-auto xl:max-h-[calc(100vh-19rem)]">
           <table className="w-full text-sm text-left">
-            <thead className="text-gray-400"><tr><th className="py-2 pr-3">Category</th><th className="pr-3">Score</th><th>Evidence</th></tr></thead>
+            <thead className="text-gray-400 sticky top-0 bg-port-card"><tr><th className="py-2 pr-3">Category</th><th className="pr-3">Score</th><th>Evidence</th></tr></thead>
             <tbody>{quality.categories.map(category => (
               <tr key={category.id} className="border-t border-port-border align-top">
-                <th scope="row" className="py-2 pr-3 font-medium">{category.label}</th>
+                <th scope="row" className="py-2 pr-3 font-medium">{category.label}<Link className="block text-xs font-normal text-port-accent hover:underline" to={`/cos/schedule?task=${encodeURIComponent(category.id)}`} aria-label={`${category.label} runner`}>Runner settings</Link></th>
                 <td className="py-2 pr-3 whitespace-nowrap">{category.score == null ? '—' : `${category.score}/100`}</td>
                 <td className="py-2 text-xs text-gray-400">
                   <div>{category.stale ? 'Stale · ' : ''}{category.coverage}{category.confidence && ` · ${category.confidence} confidence`}
                     {category.assessedAt && ` · ${formatDateShort(category.assessedAt)}`}</div>
-                  {category.summary && <p className="mt-1 break-words">{category.summary}</p>}
+                  {category.summary && <details className="mt-1"><summary className="cursor-pointer text-port-accent">Assessment details</summary><p className="break-words">{category.summary}</p></details>}
                   {category.totalFiles > 0 && <div>{category.scannedFiles}/{category.totalFiles} files scanned · Worst severity: {category.worstSeverity}/10</div>}
                   {category.sourcePeerId && <div>Source: {category.sourcePeerName || 'federated peer'} · <Link className="text-port-accent hover:underline" to="/instances">View instances</Link></div>}
                   {!category.sourcePeerId && category.agentId && <Link className="text-port-accent hover:underline" to={`/cos/agents/${category.agentId}`}>Audit run</Link>}
@@ -60,8 +65,9 @@ export default function AppQuality({ app, detail = false }) {
             ))}</tbody>
           </table>
           </div>
-        </details>
+        </section>
       )}
+      </div>
     </section>
   );
 }

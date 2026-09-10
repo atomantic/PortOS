@@ -52,6 +52,19 @@ beforeEach(async () => {
 afterAll(cleanup);
 
 describe('manual maintenance run', () => {
+  it.each(['file-issues', 'fix'])('runs only selected quality checks in %s mode with pinned overrides', async (mode) => {
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', effort: 'high', mode, taskTypes: ['security', 'documentation'] });
+    expect(run.steps.map(step => step.taskRef.taskType)).toEqual(['security', 'documentation']);
+    for (const step of run.steps) {
+      expect(step.drain).toBe(false);
+      expect(step.overrides).toMatchObject({ providerId: 'codex', model: 'gpt-5', effort: 'high', params: { fileIssues: mode === 'file-issues' } });
+    }
+    await __onMaintenanceAgentCompleted(agentFor(run, 0));
+    await __onMaintenanceAgentCompleted(agentFor(run, 1));
+    expect(dispatchedTypes()).toEqual(['security', 'documentation']);
+    expect((await getMaintenanceRun(run.id)).status).toBe('completed');
+  });
+
   it('dispatches an edited stage through its own provider family', async () => {
     const { run } = await start();
     const { getProviderById } = await import('./providers.js');
